@@ -91,6 +91,28 @@ mod tests {
     }
 
     #[test]
+    fn allow_without_updated_input_approves_the_original_tool_input() {
+        let mut output = Vec::new();
+        write_response(
+            PermissionRequestDecision::Allow {
+                updated_input: None,
+            },
+            &mut output,
+        )
+        .expect("response should be written");
+
+        assert_eq!(
+            serde_json::from_slice::<Value>(&output).expect("response should be JSON"),
+            json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "decision": { "behavior": "allow" },
+                },
+            }),
+        );
+    }
+
+    #[test]
     fn allow_returns_updated_question_answers() {
         let mut output = Vec::new();
         write_response(

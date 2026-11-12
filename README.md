@@ -843,6 +843,13 @@ Add the following to your Claude Code settings (`~/.claude/settings.json`):
         "hooks": [{ "type": "command", "command": "a agent hook notification" }]
       }
     ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          { "type": "command", "command": "a agent hook permission-request" }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [{ "type": "command", "command": "a agent hook stop" }]
@@ -872,7 +879,7 @@ The pane is normally found by walking the hook process's ancestry up to it. A Co
 
 `a agent hook <event> --engine <claude|codex>` (default: `claude`) records which coding agent CLI fired the hook; this is the engine `a agent resume` reads back to pick which binary to relaunch (see `--engine` on `new` above). Event names and JSON payload shape are the same regardless of engine: an allowed `stop` resolves to `Stopped` ("waiting for the next prompt"), while an unclassified stop remains `Running` until the agent reports its status. Both `permission-request` and `notification` with `notification_type: "permission_prompt"` resolve to `WaitingInput` ("waiting for tool-call approval") -- so a Codex hook configuration that maps Codex's own hook events onto these same `--event` values and payload fields gets the same approval-wait/input-wait distinction in `a agent list` for free.
 
-Claude Code's `PermissionRequest` hook waits for a watch-web decision. Approve returns an allow decision, while reject and question skip return a deny decision with `interrupt: false`; answering a question returns the selected label through `updatedInput`. If the terminal resolves the request first, the hook exits without a decision.
+Claude Code's `PermissionRequest` hook waits for a watch-web decision on main-thread requests. Approve returns an allow decision, while reject and question skip return a deny decision with `interrupt: false`; answering a question returns the selected answer through `updatedInput`. Subagent permission requests remain available in the terminal. If the terminal resolves a main-thread request first, the hook exits without a decision.
 
 Register these in Codex's `hooks.json` (each command with `--engine codex`) to track Codex sessions the same way as Claude Code sessions:
 
@@ -1181,16 +1188,16 @@ Answer a question with:
 curl -X POST http://127.0.0.1:4317/api/sessions/example-session/answer \
   -H 'Origin: http://127.0.0.1:4317' \
   -H 'Content-Type: application/json' \
-  -d '{"choice":1}'
+  -d '{"question":"Which display mode?","choice":1}'
 ```
 
-Skip a question by sending Escape:
+Skip a question without interrupting the turn:
 
 ```sh
 curl -X POST http://127.0.0.1:4317/api/sessions/example-session/answer \
   -H 'Origin: http://127.0.0.1:4317' \
   -H 'Content-Type: application/json' \
-  -d '{"skip":true}'
+  -d '{"question":"Which display mode?","skip":true}'
 ```
 
 ```sh

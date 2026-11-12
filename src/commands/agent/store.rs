@@ -22,10 +22,11 @@ mod queued_prompts;
 pub(crate) use archive::{ArchiveLogContext, archive_codex_thread_before_delete_with};
 pub(crate) use database::set_watch_web_compacting;
 pub(crate) use database::{
-    AgentDecision, AgentDecisionCounts, AgentProposal, PermissionRequestData,
-    PermissionRequestDecision, PermissionRequestWait, PermissionRequestWaiter, SessionLock,
-    SessionStoreChanges, WakeLock, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
-    WatchWebSessionState, permission_request_data, resolve_permission_request, serialize_session,
+    AgentDecision, AgentDecisionCounts, AgentProposal, PermissionQuestionAnswerStatus,
+    PermissionRequestData, PermissionRequestDecision, PermissionRequestWait,
+    PermissionRequestWaiter, SessionLock, SessionStoreChanges, WakeLock, WatchWebPeerOutMessage,
+    WatchWebQueuedPrompt, WatchWebSessionState, permission_request_data,
+    record_permission_question_answer, resolve_permission_request, serialize_session,
 };
 pub(crate) use peer_out_messages::{
     insert_watch_web_peer_out_message, watch_web_peer_out_messages_from,

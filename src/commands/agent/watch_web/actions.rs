@@ -293,59 +293,64 @@ async fn answer_question(
     })
     .await?
     .ok_or_else(|| ApiError::conflict("question request is no longer pending"))?;
-    let decision = if request.skip {
+    let question_data = question_request_data(&request_data, question)?;
+    if request.skip {
         if request.choice.is_some() || request.answer.is_some() {
             return Err(ApiError::bad_request(
                 "an answer cannot be provided when skipping a question",
             ));
         }
-        PermissionRequestDecision::Deny {
+        let decision = PermissionRequestDecision::Deny {
             message: "Question skipped from watch-web.".to_string(),
             interrupt: false,
-        }
-    } else {
-        let response = match (request.choice, request.answer.as_deref()) {
-            (Some(_), Some(_)) => {
-                return Err(ApiError::bad_request(
-                    "choice and answer cannot both be provided",
-                ));
-            }
-            (Some(choice), None) => QuestionResponse::Choice(choice),
-            (None, Some(answer)) => QuestionResponse::Text(answer),
-            (None, None) => {
-                return Err(ApiError::bad_request(
-                    "choice or answer is required unless skipping a question",
-                ));
-            }
         };
-        question_answer_decision(&request_data, question, response)?
-    };
-    if request_data.tool_name.as_deref() != Some("AskUserQuestion")
-        || !request_data
-            .tool_input
-            .get("questions")
-            .and_then(serde_json::Value::as_array)
-            .is_some_and(|questions| {
-                questions.iter().any(|item| {
-                    item.get("question").and_then(serde_json::Value::as_str) == Some(question)
-                })
-            })
-    {
-        return Err(ApiError::conflict("question request is no longer pending"));
+        let session_id = session.session_id.clone();
+        let request_id = request_id.to_string();
+        let resolved = run_blocking(move || {
+            store::resolve_permission_request(
+                &sessions_dir,
+                &session_id,
+                MAIN_THREAD_AGENT_KEY,
+                &request_id,
+                &decision,
+            )
+        })
+        .await?;
+        if !resolved {
+            return Err(ApiError::conflict("question request is no longer pending"));
+        }
+        return Ok(Json(Success::new()));
     }
+    let response = match (request.choice, request.answer.as_deref()) {
+        (Some(_), Some(_)) => {
+            return Err(ApiError::bad_request(
+                "choice and answer cannot both be provided",
+            ));
+        }
+        (Some(choice), None) => QuestionResponse::Choice(choice),
+        (None, Some(answer)) => QuestionResponse::Text(answer),
+        (None, None) => {
+            return Err(ApiError::bad_request(
+                "choice or answer is required unless skipping a question",
+            ));
+        }
+    };
+    let answer = question_answer_text(question_data, response)?;
     let session_id = session.session_id.clone();
     let request_id = request_id.to_string();
-    let resolved = run_blocking(move || {
-        store::resolve_permission_request(
+    let question = question.to_string();
+    let answer_status = run_blocking(move || {
+        store::record_permission_question_answer(
             &sessions_dir,
             &session_id,
             MAIN_THREAD_AGENT_KEY,
             &request_id,
-            &decision,
+            &question,
+            &answer,
         )
     })
     .await?;
-    if !resolved {
+    if answer_status == store::PermissionQuestionAnswerStatus::Finished {
         return Err(ApiError::conflict("question request is no longer pending"));
     }
     Ok(Json(Success::new()))
@@ -428,12 +433,11 @@ fn pending_main_permission_request_id(session: &Session) -> Option<&str> {
         .map(String::as_str)
 }
 
-fn question_answer_decision(
-    request: &store::PermissionRequestData,
+fn question_request_data<'a>(
+    request: &'a store::PermissionRequestData,
     question: &str,
-    response: QuestionResponse<'_>,
-) -> Result<PermissionRequestDecision, ApiError> {
-    if request.tool_name.as_deref() != Some("AskUserQuestion") {
+) -> Result<&'a serde_json::Value, ApiError> {
+    if request.tool_name.as_deref() != Some("AskUserQuestion") || !request.pending {
         return Err(ApiError::conflict("question request is no longer pending"));
     }
     let Some(questions) = request
@@ -449,6 +453,13 @@ fn question_answer_decision(
     else {
         return Err(ApiError::conflict("question request is no longer pending"));
     };
+    Ok(question_data)
+}
+
+fn question_answer_text(
+    question_data: &serde_json::Value,
+    response: QuestionResponse<'_>,
+) -> Result<String, ApiError> {
     let answer = match response {
         QuestionResponse::Choice(choice) => {
             if !(1..=9).contains(&choice) {
@@ -475,12 +486,7 @@ fn question_answer_decision(
             answer
         }
     };
-    Ok(PermissionRequestDecision::Allow {
-        updated_input: Some(serde_json::json!({
-            "questions": questions,
-            "answers": { question: answer },
-        })),
-    })
+    Ok(answer.to_string())
 }
 
 async fn interrupt(
@@ -1165,6 +1171,112 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn answer_question_waits_for_every_question_before_resolving_the_hook(
+        action_context: ActionContext,
+    ) {
+        let mut session = session("sample-session");
+        session.current_tool = Some("AskUserQuestion".to_string());
+        let questions = json!([
+            {
+                "question": "Which display mode?",
+                "options": [{ "label": "Compact" }],
+            },
+            {
+                "question": "Include a legend?",
+                "options": [{ "label": "Yes" }],
+            },
+        ]);
+        action_context.save_pending_request(
+            &mut session,
+            "AskUserQuestion",
+            json!({ "questions": questions }),
+        );
+        let router = action_context.router();
+        let first_response = router
+            .clone()
+            .oneshot(post(
+                "/sessions/sample-session/answer",
+                json!({ "question": "Include a legend?", "choice": 1 }),
+            ))
+            .await
+            .unwrap();
+        let first_response = response_snapshot(first_response, &action_context).await;
+        let partial_request = store::permission_request_data(
+            &action_context.temp_dir.path().join("sessions"),
+            "sample-session",
+            "request-cobalt",
+        )
+        .unwrap()
+        .unwrap();
+        let mut waiter =
+            store::PermissionRequestWaiter::open(&action_context.temp_dir.path().join("sessions"))
+                .unwrap();
+        let partial_wait = waiter
+            .poll("sample-session", MAIN_THREAD_AGENT_KEY, "request-cobalt")
+            .unwrap();
+
+        let second_response = router
+            .oneshot(post(
+                "/sessions/sample-session/answer",
+                json!({ "question": "Which display mode?", "choice": 1 }),
+            ))
+            .await
+            .unwrap();
+        let second_response = response_snapshot(second_response, &action_context).await;
+        let final_wait = waiter
+            .poll("sample-session", MAIN_THREAD_AGENT_KEY, "request-cobalt")
+            .unwrap();
+        let final_decision = match final_wait {
+            PermissionRequestWait::Decision(decision) => serde_json::to_value(decision).unwrap(),
+            PermissionRequestWait::Pending | PermissionRequestWait::Finished => Value::Null,
+        };
+
+        assert_eq!(
+            json!({
+                "firstResponse": first_response,
+                "partialAnswers": partial_request.answers,
+                "partialWaitPending": partial_wait == PermissionRequestWait::Pending,
+                "secondResponse": second_response,
+                "finalDecision": final_decision,
+            }),
+            json!({
+                "firstResponse": {
+                    "status": StatusCode::OK.as_u16(),
+                    "body": { "ok": true },
+                    "calls": [],
+                },
+                "partialAnswers": { "Include a legend?": "Yes" },
+                "partialWaitPending": true,
+                "secondResponse": {
+                    "status": StatusCode::OK.as_u16(),
+                    "body": { "ok": true },
+                    "calls": [],
+                },
+                "finalDecision": {
+                    "behavior": "allow",
+                    "updated_input": {
+                        "questions": [
+                            {
+                                "question": "Which display mode?",
+                                "options": [{ "label": "Compact" }],
+                            },
+                            {
+                                "question": "Include a legend?",
+                                "options": [{ "label": "Yes" }],
+                            },
+                        ],
+                        "answers": {
+                            "Include a legend?": "Yes",
+                            "Which display mode?": "Compact",
+                        },
+                    },
+                },
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn answer_question_skips_without_interrupting_the_turn(action_context: ActionContext) {
         let mut session = session("sample-session");
         session.current_tool = Some("AskUserQuestion".to_string());
@@ -1250,6 +1362,64 @@ mod tests {
                 "status": StatusCode::BAD_REQUEST.as_u16(),
                 "body": { "error": error },
                 "calls": [],
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn answer_question_rejects_a_question_outside_the_pending_request(
+        action_context: ActionContext,
+    ) {
+        let mut session = session("sample-session");
+        session.current_tool = Some("AskUserQuestion".to_string());
+        action_context.save_pending_request(
+            &mut session,
+            "AskUserQuestion",
+            json!({
+                "questions": [{
+                    "question": "Which display mode?",
+                    "options": [{ "label": "Compact" }],
+                }],
+            }),
+        );
+
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/answer",
+                json!({ "question": "Which fictional theme?", "choice": 1 }),
+            ))
+            .await
+            .unwrap();
+        let response = response_snapshot(response, &action_context).await;
+        let request = store::permission_request_data(
+            &action_context.temp_dir.path().join("sessions"),
+            "sample-session",
+            "request-cobalt",
+        )
+        .unwrap();
+        let mut waiter =
+            store::PermissionRequestWaiter::open(&action_context.temp_dir.path().join("sessions"))
+                .unwrap();
+        let wait = waiter
+            .poll("sample-session", MAIN_THREAD_AGENT_KEY, "request-cobalt")
+            .unwrap();
+
+        assert_eq!(
+            json!({
+                "response": response,
+                "requestPending": request.is_some_and(|request| request.pending),
+                "hookWaitPending": wait == PermissionRequestWait::Pending,
+            }),
+            json!({
+                "response": {
+                    "status": StatusCode::CONFLICT.as_u16(),
+                    "body": { "error": "question request is no longer pending" },
+                    "calls": [],
+                },
+                "requestPending": true,
+                "hookWaitPending": true,
             }),
         );
     }

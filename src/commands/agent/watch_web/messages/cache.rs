@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -23,6 +23,7 @@ pub(super) struct MessageCacheKey {
     pub(super) transcript_fingerprint: Option<TranscriptFingerprint>,
     pub(super) parent: Option<ParentSession>,
     pub(super) pending_permission_agent_ids: BTreeSet<String>,
+    pub(super) pending_permission_request: Option<PendingPermissionRequestCacheKey>,
     pub(super) current_tool: Option<String>,
     pub(super) last_message: Option<String>,
     pub(super) user_marker: Option<String>,
@@ -32,16 +33,24 @@ pub(super) struct MessageCacheKey {
     pub(super) proposals: Vec<AgentProposal>,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct PendingPermissionRequestCacheKey {
+    pub(super) answers: BTreeMap<String, String>,
+    pub(super) pending: bool,
+}
+
+pub(super) struct MessageCacheInputs {
+    pub(super) parent: Option<ParentSession>,
+    pub(super) pending_permission_request: Option<PendingPermissionRequestCacheKey>,
+    pub(super) user_marker: Option<String>,
+    pub(super) decisions: Vec<AgentDecision>,
+    pub(super) queued_prompts: Vec<WatchWebQueuedPrompt>,
+    pub(super) peer_out_messages: Vec<WatchWebPeerOutMessage>,
+    pub(super) proposals: Vec<AgentProposal>,
+}
+
 impl MessageCacheKey {
-    pub(super) fn new(
-        session: &Session,
-        parent: Option<ParentSession>,
-        user_marker: Option<String>,
-        decisions: Vec<AgentDecision>,
-        queued_prompts: Vec<WatchWebQueuedPrompt>,
-        peer_out_messages: Vec<WatchWebPeerOutMessage>,
-        proposals: Vec<AgentProposal>,
-    ) -> anyhow::Result<Self> {
+    pub(super) fn new(session: &Session, inputs: MessageCacheInputs) -> anyhow::Result<Self> {
         Ok(Self {
             engine: session.engine,
             transcript_path: session.transcript_path.clone(),
@@ -49,15 +58,16 @@ impl MessageCacheKey {
                 session.engine,
                 session.transcript_path.as_deref(),
             )?,
-            parent,
+            parent: inputs.parent,
             pending_permission_agent_ids: session.pending_permission_agent_ids.clone(),
+            pending_permission_request: inputs.pending_permission_request,
             current_tool: session.current_tool.clone(),
             last_message: session.last_message.clone(),
-            user_marker,
-            decisions,
-            queued_prompts,
-            peer_out_messages,
-            proposals,
+            user_marker: inputs.user_marker,
+            decisions: inputs.decisions,
+            queued_prompts: inputs.queued_prompts,
+            peer_out_messages: inputs.peer_out_messages,
+            proposals: inputs.proposals,
         })
     }
 }

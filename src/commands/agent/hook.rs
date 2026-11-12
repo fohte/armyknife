@@ -112,25 +112,20 @@ pub fn run(args: &HookArgs) -> Result<()> {
     input.engine = args.engine;
     let session_id = input.session_id.clone();
     let permission_agent_key =
-        (event == HookEvent::PermissionRequest && args.engine == Engine::Claude).then(|| {
-            input
-                .agent_id
-                .clone()
-                .unwrap_or_else(|| MAIN_THREAD_AGENT_KEY.to_string())
-        });
+        permission_request_agent_key(event, args.engine, input.agent_id.as_deref());
     let result = process_hook_event(event, input)?;
     if let Some(agent_key) = permission_agent_key {
         let sessions_dir = store::sessions_dir()?;
         let Some(session) = store::load_session_from(&sessions_dir, &session_id)? else {
             return Ok(());
         };
-        let Some(request_id) = session.pending_permission_request_ids.get(&agent_key) else {
+        let Some(request_id) = session.pending_permission_request_ids.get(agent_key) else {
             return Ok(());
         };
         return permission_request::wait_and_write(
             &sessions_dir,
             &session_id,
-            &agent_key,
+            agent_key,
             request_id,
             io::stdout().lock(),
         );
@@ -339,6 +334,15 @@ fn ensure_watch_web_user_marker(
         session_lock.ensure_watch_web_user_marker()?;
     }
     Ok(())
+}
+
+fn permission_request_agent_key(
+    event: HookEvent,
+    engine: Engine,
+    agent_id: Option<&str>,
+) -> Option<&'static str> {
+    (event == HookEvent::PermissionRequest && engine == Engine::Claude && agent_id.is_none())
+        .then_some(MAIN_THREAD_AGENT_KEY)
 }
 
 fn startup_metadata_for_resume(sessions_dir: &Path, input: &HookInput) -> Result<Option<Session>> {
@@ -943,6 +947,7 @@ fn process_hook_event_impl_with_settings(
     ensure_watch_web_user_marker(&session_lock, event, input.engine)?;
     if event == HookEvent::PermissionRequest
         && input.engine == Engine::Claude
+        && input.agent_id.is_none()
         && let Some(request_id) = session
             .pending_permission_request_ids
             .get(&permission_agent_key)
@@ -1823,6 +1828,8 @@ mod tests {
                         "options": [{ "label": "Option A" }],
                     }],
                 }),
+                answers: Default::default(),
+                pending: true,
             }),
         );
     }
@@ -2109,6 +2116,33 @@ mod tests {
     #[case::session_end("session-end", HookEvent::SessionEnd)]
     fn test_hook_event_parsing(#[case] event: &str, #[case] expected: HookEvent) {
         assert_eq!(HookEvent::from_str(event).expect("valid event"), expected);
+    }
+
+    #[rstest]
+    #[case::main_claude(
+        HookEvent::PermissionRequest,
+        Engine::Claude,
+        None,
+        Some(MAIN_THREAD_AGENT_KEY)
+    )]
+    #[case::subagent_claude(
+        HookEvent::PermissionRequest,
+        Engine::Claude,
+        Some("agent-fixture"),
+        None
+    )]
+    #[case::main_codex(HookEvent::PermissionRequest, Engine::Codex, None, None)]
+    #[case::other_claude_event(HookEvent::PostToolUse, Engine::Claude, None, None)]
+    fn permission_request_waits_only_for_main_thread_claude_requests(
+        #[case] event: HookEvent,
+        #[case] engine: Engine,
+        #[case] agent_id: Option<&str>,
+        #[case] expected_agent_key: Option<&str>,
+    ) {
+        assert_eq!(
+            permission_request_agent_key(event, engine, agent_id),
+            expected_agent_key,
+        );
     }
 
     #[test]

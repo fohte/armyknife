@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
@@ -19,7 +19,8 @@ use serde_json::Value;
 
 use crate::commands::agent::proposal::{ProposalAnswer, ProposalOption};
 use crate::commands::agent::store::{
-    AgentDecision, AgentProposal, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
+    AgentDecision, AgentProposal, PermissionRequestData, WatchWebPeerOutMessage,
+    WatchWebQueuedPrompt,
 };
 use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 use crate::commands::agent::user_turn::is_ask_user_question;
@@ -35,7 +36,10 @@ use self::proposals::proposal_chat_item;
 use self::range::MessageRange;
 
 mod cache;
-use self::cache::{MessageCache, MessageCacheKey, RunningBackgroundTaskCache};
+use self::cache::{
+    MessageCache, MessageCacheInputs, MessageCacheKey, PendingPermissionRequestCacheKey,
+    RunningBackgroundTaskCache,
+};
 mod session_titles;
 use self::session_titles::{parent_session, resolve_peer_session_titles};
 
@@ -60,6 +64,8 @@ type QueuedPromptLoader = Arc<dyn Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> 
 type PeerOutMessageLoader = Arc<dyn Fn(&str) -> Result<Vec<WatchWebPeerOutMessage>> + Send + Sync>;
 type QueuedPromptDeleter = Arc<dyn Fn(&str, &[i64]) -> Result<()> + Send + Sync>;
 type ProposalLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentProposal>> + Send + Sync>;
+type PermissionRequestDataLoader =
+    Arc<dyn Fn(&str, &str) -> Result<Option<PermissionRequestData>> + Send + Sync>;
 
 #[derive(Clone)]
 pub(super) struct RouteLoaders {
@@ -68,6 +74,7 @@ pub(super) struct RouteLoaders {
     peer_out_messages: PeerOutMessageLoader,
     delete_queued_prompts: QueuedPromptDeleter,
     proposals: ProposalLoader,
+    permission_request_data: PermissionRequestDataLoader,
     message_cache: MessageCache,
     running_background_task_cache: RunningBackgroundTaskCache,
 }
@@ -89,9 +96,21 @@ impl RouteLoaders {
             peer_out_messages: Arc::new(load_peer_out_messages),
             delete_queued_prompts: Arc::new(delete_queued_prompts),
             proposals: Arc::new(load_proposals),
+            permission_request_data: Arc::new(|_, _| Ok(None)),
             message_cache: MessageCache::default(),
             running_background_task_cache: RunningBackgroundTaskCache::default(),
         }
+    }
+
+    pub(super) fn with_permission_request_data_loader(
+        mut self,
+        load_permission_request_data: impl Fn(&str, &str) -> Result<Option<PermissionRequestData>>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.permission_request_data = Arc::new(load_permission_request_data);
+        self
     }
 
     pub(super) fn running_background_task_session_ids(
@@ -245,17 +264,44 @@ fn load_conversation_with_queued_prompts(
         .pending_permission_agent_ids
         .contains(MAIN_THREAD_AGENT_KEY);
     let main_permission_is_question = is_ask_user_question(&session);
+    let pending_question_data = if main_permission_pending
+        && main_permission_is_question
+        && session.engine == Engine::Claude
+    {
+        session
+            .pending_permission_request_ids
+            .get(MAIN_THREAD_AGENT_KEY)
+            .map(|request_id| (loaders.permission_request_data)(session_id, request_id))
+            .transpose()?
+            .flatten()
+    } else {
+        None
+    };
+    let pending_permission_answers = pending_question_data
+        .as_ref()
+        .map(|data| data.answers.clone())
+        .unwrap_or_default();
+    let pending_permission_request =
+        pending_question_data
+            .as_ref()
+            .map(|data| PendingPermissionRequestCacheKey {
+                answers: pending_permission_answers.clone(),
+                pending: data.pending,
+            });
     let pending_tool = (main_permission_pending && !main_permission_is_question)
         .then_some(session.current_tool.as_deref())
         .flatten();
     let cache_key = MessageCacheKey::new(
         &session,
-        parent.clone(),
-        user_marker.clone(),
-        decisions.clone(),
-        queued_prompts.clone(),
-        peer_out_messages.clone(),
-        proposals.clone(),
+        MessageCacheInputs {
+            parent: parent.clone(),
+            pending_permission_request,
+            user_marker: user_marker.clone(),
+            decisions: decisions.clone(),
+            queued_prompts: queued_prompts.clone(),
+            peer_out_messages: peer_out_messages.clone(),
+            proposals: proposals.clone(),
+        },
     )?;
     if let Some(mut cached) = loaders.message_cache.get(session_id, &cache_key) {
         let elapsed = cached.cached_at.elapsed().as_secs();
@@ -288,6 +334,7 @@ fn load_conversation_with_queued_prompts(
                 proposals: &proposal_items,
             },
         })?;
+    apply_pending_question_answers(&mut conversation.messages, &pending_permission_answers);
     resolve_peer_session_titles(&mut conversation.messages, &mut load_session)?;
 
     let messages = &mut conversation.messages;
@@ -330,6 +377,12 @@ fn load_conversation_with_queued_prompts(
     }
 
     conversation.update_metadata();
+    if pending_question_data
+        .as_ref()
+        .is_some_and(|request| !request.pending)
+    {
+        conversation.active_question_index = None;
+    }
 
     cache::delete_resolved_queued_prompts(loaders, session_id, &resolved_queued_prompt_ids);
     loaders.message_cache.insert(
@@ -339,6 +392,19 @@ fn load_conversation_with_queued_prompts(
         resolved_queued_prompt_ids,
     );
     Ok(Some(conversation))
+}
+
+fn apply_pending_question_answers(messages: &mut [ChatItem], answers: &BTreeMap<String, String>) {
+    for (question, answer) in answers {
+        if let Some(ChatItem::Question {
+            answer: current_answer,
+            ..
+        }) = messages.iter_mut().rev().find(|message| {
+            matches!(message, ChatItem::Question { question: current, .. } if current == question)
+        }) {
+            *current_answer = Some(answer.clone());
+        }
+    }
 }
 
 pub(in crate::commands::agent::watch_web::messages) struct TranscriptInput<'a> {
@@ -691,6 +757,8 @@ struct ParentSession {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -724,6 +792,62 @@ mod tests {
             "last_message": null,
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn pending_question_answers_activate_the_last_unanswered_question() {
+        let mut response = super::ConversationResponse {
+            messages: vec![
+                super::ChatItem::Question {
+                    header: None,
+                    question: "Which display mode?".to_string(),
+                    choices: Vec::new(),
+                    multi_select: false,
+                    answer: None,
+                },
+                super::ChatItem::Question {
+                    header: None,
+                    question: "Include a legend?".to_string(),
+                    choices: Vec::new(),
+                    multi_select: false,
+                    answer: None,
+                },
+            ],
+            ..super::ConversationResponse::default()
+        };
+        super::apply_pending_question_answers(
+            &mut response.messages,
+            &BTreeMap::from([("Include a legend?".to_string(), "Yes".to_string())]),
+        );
+        response.update_metadata();
+
+        assert_eq!(
+            serde_json::to_value(response).unwrap(),
+            json!({
+                "messages": [
+                    {
+                        "type": "question",
+                        "question": "Which display mode?",
+                        "choices": [],
+                        "multi_select": false,
+                        "answer": null,
+                    },
+                    {
+                        "type": "question",
+                        "question": "Include a legend?",
+                        "choices": [],
+                        "multi_select": false,
+                        "answer": "Yes",
+                    },
+                ],
+                "backgroundTasks": [],
+                "start": 0,
+                "total": 2,
+                "decisions": [],
+                "hasUnansweredProposal": false,
+                "activeQuestionIndex": 0,
+            }),
+        );
     }
 
     fn background_task_output_router(transcript_path: &Path, output_path: &Path) -> Router {

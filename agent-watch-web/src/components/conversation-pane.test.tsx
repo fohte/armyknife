@@ -985,16 +985,22 @@ it('keeps a freeform question answer draft when submission fails', async () => {
     await Promise.resolve()
   })
 
-  expect(onAction.mock.calls).toEqual([
-    [
-      'answer',
-      {
-        question: 'Which retry policy should be used?',
-        answer: 'Use a fictional format',
-      },
+  const snapshot = () => ({
+    actionCalls: onAction.mock.calls,
+    draft: textarea.value,
+  })
+  expect(snapshot()).toEqual({
+    actionCalls: [
+      [
+        'answer',
+        {
+          question: 'Which retry policy should be used?',
+          answer: 'Use a fictional format',
+        },
+      ],
     ],
-  ])
-  expect(textarea.value).toBe('Use a fictional format')
+    draft: 'Use a fictional format',
+  })
 })
 
 it('does not answer a choice shortcut while a freeform answer is sending', async () => {
