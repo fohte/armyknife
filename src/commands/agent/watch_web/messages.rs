@@ -677,11 +677,11 @@ struct ConversationResponse {
     has_unanswered_proposal: bool,
     active_question_index: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tail_start: Option<usize>,
+    stable_start: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tail_end: Option<usize>,
+    stable_end: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tail_digest: Option<String>,
+    stable_digest: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -746,7 +746,6 @@ mod tests {
     use axum::http::{Request, Response, StatusCode};
     use rstest::rstest;
     use serde_json::json;
-    use sha2::{Digest, Sha256};
     use tower::ServiceExt;
 
     use super::cache::TranscriptChange;
@@ -1638,7 +1637,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn messages_route_uses_tail_digest_only_when_the_prefix_matches() {
+    async fn messages_route_reuses_stable_range_digest_and_falls_back_when_changed() {
         let session = Session {
             engine: Engine::Codex,
             ..stored_session()
@@ -1646,40 +1645,47 @@ mod tests {
         let original_decisions = (1..=22).map(fixture_decision).collect::<Vec<_>>();
         let mut changed_decisions = original_decisions.clone();
         changed_decisions[0].title = "Updated fixture decision".to_string();
-        let prefix = original_decisions[..2]
-            .iter()
-            .cloned()
-            .map(ChatItem::from)
-            .collect::<Vec<_>>();
-        let changed_prefix = changed_decisions[..2]
-            .iter()
-            .cloned()
-            .map(ChatItem::from)
-            .collect::<Vec<_>>();
-        let digest =
-            crate::shared::hex::encode(&Sha256::digest(serde_json::to_vec(&prefix).unwrap()));
-        let changed_digest = crate::shared::hex::encode(&Sha256::digest(
-            serde_json::to_vec(&changed_prefix).unwrap(),
-        ));
         let request_count = Arc::new(AtomicUsize::new(0));
         let request_count_for_loader = Arc::clone(&request_count);
-        let decisions_for_loader = [original_decisions.clone(), changed_decisions.clone()];
+        let decisions_for_loader = [
+            original_decisions.clone(),
+            original_decisions.clone(),
+            changed_decisions.clone(),
+        ];
         let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
             move |_| {
                 let index = request_count_for_loader.fetch_add(1, Ordering::SeqCst);
-                Ok(decisions_for_loader[index.min(1)].clone())
+                Ok(decisions_for_loader[index.min(2)].clone())
             },
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
         );
-        let mut responses = Vec::new();
-        for query in [
-            format!("?from=0&tailStart=0&tailEnd=2&tailDigest={digest}"),
-            format!("?from=0&tailStart=0&tailEnd=2&tailDigest={digest}"),
-        ] {
+        let first_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages?limit=100")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let mut responses = vec![response_json_snapshot(first_response).await];
+        let (stable_start, stable_end, stable_digest) = {
+            let first_body = &responses[0].2;
+            (
+                first_body["stableStart"].as_u64().unwrap(),
+                first_body["stableEnd"].as_u64().unwrap(),
+                first_body["stableDigest"].as_str().unwrap().to_string(),
+            )
+        };
+        for _ in 0..2 {
+            let query = format!(
+                "?from=0&stableStart={stable_start}&stableEnd={stable_end}&stableDigest={stable_digest}"
+            );
             let response = router
                 .clone()
                 .oneshot(
@@ -1696,37 +1702,38 @@ mod tests {
         let original_json = (1..=22).map(fixture_decision_json).collect::<Vec<_>>();
         let mut changed_json = original_json.clone();
         changed_json[0]["title"] = json!("Updated fixture decision");
-        let response = |start: usize,
-                        messages: Vec<serde_json::Value>,
-                        decisions: Vec<serde_json::Value>,
-                        digest: String| {
-            (
-                StatusCode::OK,
-                Some("application/json".to_string()),
-                json!({
-                    "messages": messages,
-                    "backgroundTasks": [],
-                    "start": start,
-                    "total": 22,
-                    "decisions": decisions,
-                    "hasUnansweredProposal": false,
-                    "activeQuestionIndex": null,
-                    "tailStart": 0,
-                    "tailEnd": 2,
-                    "tailDigest": digest,
-                }),
-            )
-        };
+        for (_, _, body) in &mut responses {
+            body["stableDigest"] = json!("fixture-digest");
+        }
+        let response =
+            |start: usize, messages: Vec<serde_json::Value>, decisions: Vec<serde_json::Value>| {
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({
+                        "messages": messages,
+                        "backgroundTasks": [],
+                        "start": start,
+                        "total": 22,
+                        "decisions": decisions,
+                        "hasUnansweredProposal": false,
+                        "activeQuestionIndex": null,
+                        "stableStart": 0,
+                        "stableEnd": 2,
+                        "stableDigest": "fixture-digest",
+                    }),
+                )
+            };
         assert_eq!(
             responses,
             vec![
+                response(0, original_json.clone(), original_json.clone(),),
                 response(
                     2,
                     (3..=22).map(fixture_decision_json).collect::<Vec<_>>(),
                     original_json,
-                    digest,
                 ),
-                response(0, changed_json.clone(), changed_json, changed_digest,),
+                response(0, changed_json.clone(), changed_json),
             ],
         );
     }
@@ -1737,11 +1744,11 @@ mod tests {
     #[case::before_and_from_are_exclusive(
         "/sessions/fixture-session/messages?before=2&from=1&limit=1"
     )]
-    #[case::tail_start_must_match_from(
-        "/sessions/fixture-session/messages?from=0&tailStart=1&tailEnd=2&tailDigest=fixture"
+    #[case::stable_start_must_match_from(
+        "/sessions/fixture-session/messages?from=0&stableStart=1&stableEnd=2&stableDigest=fixture"
     )]
-    #[case::tail_end_must_not_precede_start(
-        "/sessions/fixture-session/messages?from=1&tailStart=1&tailEnd=0&tailDigest=fixture"
+    #[case::stable_end_must_not_precede_start(
+        "/sessions/fixture-session/messages?from=1&stableStart=1&stableEnd=0&stableDigest=fixture"
     )]
     #[tokio::test]
     async fn messages_route_rejects_incompatible_range_parameters(#[case] uri: &str) {

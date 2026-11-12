@@ -218,11 +218,11 @@ function isSkillSuggestion(value: unknown): value is SkillSuggestion {
 export function isConversationResponse(
   value: unknown,
 ): value is ConversationResponse {
-  const hasTailDigest =
+  const hasStableDigest =
     isRecord(value) &&
-    value['tailStart'] !== undefined &&
-    value['tailEnd'] !== undefined &&
-    value['tailDigest'] !== undefined
+    value['stableStart'] !== undefined &&
+    value['stableEnd'] !== undefined &&
+    value['stableDigest'] !== undefined
   return (
     isRecord(value) &&
     Array.isArray(value['messages']) &&
@@ -238,19 +238,19 @@ export function isConversationResponse(
     typeof value['total'] === 'number' &&
     Number.isInteger(value['total']) &&
     value['total'] >= value['start'] + value['messages'].length &&
-    ((value['tailStart'] === undefined &&
-      value['tailEnd'] === undefined &&
-      value['tailDigest'] === undefined) ||
-      (hasTailDigest &&
-        typeof value['tailStart'] === 'number' &&
-        Number.isInteger(value['tailStart']) &&
-        value['tailStart'] >= 0 &&
-        value['tailStart'] <= value['total'] &&
-        typeof value['tailEnd'] === 'number' &&
-        Number.isInteger(value['tailEnd']) &&
-        value['tailEnd'] >= value['tailStart'] &&
-        value['tailEnd'] <= value['total'] &&
-        typeof value['tailDigest'] === 'string')) &&
+    ((value['stableStart'] === undefined &&
+      value['stableEnd'] === undefined &&
+      value['stableDigest'] === undefined) ||
+      (hasStableDigest &&
+        typeof value['stableStart'] === 'number' &&
+        Number.isInteger(value['stableStart']) &&
+        value['stableStart'] >= 0 &&
+        value['stableStart'] <= value['total'] &&
+        typeof value['stableEnd'] === 'number' &&
+        Number.isInteger(value['stableEnd']) &&
+        value['stableEnd'] >= value['stableStart'] &&
+        value['stableEnd'] <= value['total'] &&
+        typeof value['stableDigest'] === 'string')) &&
     Array.isArray(value['decisions']) &&
     value['decisions'].every(
       (decision) => isChatItem(decision) && decision.type === 'decision',

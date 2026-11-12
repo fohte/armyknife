@@ -7,6 +7,7 @@ import {
   recordRecentSessionId,
 } from '#command-palette-model'
 import { getCommandPaletteShortcut } from '#command-palette-shortcut'
+import { useSessionConversationCache } from '#components/session-conversation-cache'
 import {
   closeDoneSessions as closeDoneSessionsRequest,
   openSessionInTerminal,
@@ -53,6 +54,7 @@ export function useCommandPaletteController({
   isMobile,
   conversationOpen,
 }: CommandPaletteControllerOptions) {
+  const sessionConversationCache = useSessionConversationCache()
   const [isOpen, setIsOpen] = useState(false)
   const [recentSessionIds, setRecentSessionIds] = useState(() =>
     readRecentSessionIds(getRecentSessionStorage()),
@@ -77,6 +79,7 @@ export function useCommandPaletteController({
       if (newDoneSessions.length === 0) return
 
       for (const session of newDoneSessions) {
+        sessionConversationCache?.clearCachedConversation(session.id)
         pendingCloseSessionIds.current.add(session.id)
       }
 
@@ -120,7 +123,11 @@ export function useCommandPaletteController({
 
       await batchComplete
     },
-    [setCloseRetrySessionId, setError],
+    [
+      sessionConversationCache?.clearCachedConversation,
+      setCloseRetrySessionId,
+      setError,
+    ],
   )
   const recordRecentSession = useCallback((id: string) => {
     recordRecentSessionId(getRecentSessionStorage(), id)

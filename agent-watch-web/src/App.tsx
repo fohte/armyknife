@@ -9,6 +9,7 @@ import { CommandPalette } from '#components/command-palette'
 import { InboxConversationPanes } from '#components/inbox-conversation-panes'
 import { LaterMenu } from '#components/later-menu'
 import { ResizableColumns } from '#components/resizable-columns'
+import { SessionConversationCacheProvider } from '#components/session-conversation-cache'
 import {
   filterInboxSessions,
   formatInboxFilterQuery,
@@ -29,6 +30,14 @@ import { useSavedInboxViews } from '#use-saved-inbox-views'
 import { useSessionRefreshRevisions } from '#use-session-refresh-revisions'
 
 export function App() {
+  return (
+    <SessionConversationCacheProvider>
+      <AppContent />
+    </SessionConversationCacheProvider>
+  )
+}
+
+function AppContent() {
   useEffect(() => {
     const preventFileNavigation = (event: DragEvent) => {
       if (!Array.from(event.dataTransfer?.types ?? []).includes('Files')) {

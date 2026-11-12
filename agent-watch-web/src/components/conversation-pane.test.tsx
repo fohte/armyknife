@@ -10,7 +10,7 @@ import { ConversationPane } from '#components/conversation-pane'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { InboxConversationPanes } from '#components/inbox-conversation-panes'
 import { formatMessageTime } from '#components/message-time'
-import { clearCachedConversations } from '#components/session-conversation-cache'
+import { SessionConversationCacheProvider } from '#components/session-conversation-cache'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import { useSessionPullRequests } from '#components/use-session-pull-requests'
@@ -432,19 +432,21 @@ function renderInboxPanes(
   }
   act(() => {
     root?.render(
-      <InboxConversationPanes
-        inboxProps={inboxProps}
-        sessions={sessions}
-        selectedSession={selectedSession}
-        sessionRefreshRevisions={sessionRefreshRevisions}
-        isMobile={false}
-        showMobileConversation={false}
-        statusPanelOpen
-        onBack={() => undefined}
-        onLater={() => undefined}
-        onCloseSession={() => undefined}
-        onSelectSession={() => undefined}
-      />,
+      <SessionConversationCacheProvider>
+        <InboxConversationPanes
+          inboxProps={inboxProps}
+          sessions={sessions}
+          selectedSession={selectedSession}
+          sessionRefreshRevisions={sessionRefreshRevisions}
+          isMobile={false}
+          showMobileConversation={false}
+          statusPanelOpen
+          onBack={() => undefined}
+          onLater={() => undefined}
+          onCloseSession={() => undefined}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
     )
   })
 }
@@ -855,7 +857,6 @@ function dispatchKeyInAct(
 }
 
 beforeEach(() => {
-  clearCachedConversations()
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   optimizeImageAttachmentMock.mockReset()
   optimizeImageAttachmentMock.mockImplementation((file) =>
@@ -7116,9 +7117,9 @@ it('reuses a cached conversation across an A to B to A session switch', async ()
   ] satisfies ChatItem[]
   const initialFirstResponse = {
     ...messagesResponse(firstMessages, [], { start: 0, total: 21 }),
-    tailStart: 0,
-    tailEnd: 1,
-    tailDigest: 'digest-a',
+    stableStart: 0,
+    stableEnd: 1,
+    stableDigest: 'digest-a',
   }
   const initialSecondResponse = messagesResponse(secondMessages)
   const refreshedFirstMessages = [
@@ -7139,7 +7140,7 @@ it('reuses a cached conversation across an A to B to A session switch', async ()
     }
     if (
       url.includes(
-        '/sessions/cache-session-a/messages?from=0&tailStart=0&tailEnd=1&tailDigest=digest-a',
+        '/sessions/cache-session-a/messages?from=0&stableStart=0&stableEnd=1&stableDigest=digest-a',
       )
     ) {
       return delayedFirstRefresh
@@ -7161,7 +7162,7 @@ it('reuses a cached conversation across an A to B to A session switch', async ()
   renderInboxPanes([firstSession, secondSession], firstSession)
   await waitForState(() =>
     fetcher.mock.calls.some(([input]) =>
-      requestUrl(input).includes('&tailDigest=digest-a'),
+      requestUrl(input).includes('&stableDigest=digest-a'),
     ),
   )
   const cachedMessageWasShown = container.textContent.includes('A message 1')
@@ -7189,7 +7190,7 @@ it('reuses a cached conversation across an A to B to A session switch', async ()
       '/api/sessions/cache-session-a/actions',
       '/api/sessions/cache-session-b/messages?limit=100',
       '/api/sessions/cache-session-b/actions',
-      '/api/sessions/cache-session-a/messages?from=0&tailStart=0&tailEnd=1&tailDigest=digest-a',
+      '/api/sessions/cache-session-a/messages?from=0&stableStart=0&stableEnd=1&stableDigest=digest-a',
       '/api/sessions/cache-session-a/actions',
     ],
     messages: [

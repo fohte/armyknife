@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 
 use super::{ChatItem, ConversationResponse};
 
-const UNVERIFIED_TAIL_MESSAGES: usize = 20;
+const RECENT_TAIL_MESSAGE_COUNT: usize = 20;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -11,9 +11,9 @@ pub(super) struct MessageRange {
     limit: Option<usize>,
     before: Option<usize>,
     from: Option<usize>,
-    tail_start: Option<usize>,
-    tail_end: Option<usize>,
-    tail_digest: Option<String>,
+    stable_start: Option<usize>,
+    stable_end: Option<usize>,
+    stable_digest: Option<String>,
 }
 
 impl MessageRange {
@@ -23,9 +23,9 @@ impl MessageRange {
                 self.limit,
                 self.before,
                 self.from,
-                self.tail_start,
-                self.tail_end,
-                self.tail_digest.as_deref(),
+                self.stable_start,
+                self.stable_end,
+                self.stable_digest.as_deref(),
             ),
             (None, None, None, None, None, None)
                 | (Some(_), None, None, None, None, None)
@@ -33,8 +33,8 @@ impl MessageRange {
                 | (None, None, Some(_), None, None, None)
                 | (None, None, Some(_), Some(_), Some(_), Some(_))
         ) && self
-            .tail_start
-            .zip(self.tail_end)
+            .stable_start
+            .zip(self.stable_end)
             .is_none_or(|(start, end)| self.from == Some(start) && start <= end)
     }
 }
@@ -66,9 +66,9 @@ impl ConversationResponse {
 
     pub(super) fn apply_range(&mut self, range: MessageRange) {
         let digest_matches = range
-            .tail_start
-            .zip(range.tail_end)
-            .zip(range.tail_digest.as_deref())
+            .stable_start
+            .zip(range.stable_end)
+            .zip(range.stable_digest.as_deref())
             .is_some_and(|((start, end), digest)| {
                 start <= end
                     && end <= self.messages.len()
@@ -80,7 +80,7 @@ impl ConversationResponse {
         } else if let Some(from) = range.from {
             (
                 if digest_matches {
-                    range.tail_end.unwrap_or(from).min(self.total)
+                    range.stable_end.unwrap_or(from).min(self.total)
                 } else {
                     from.min(self.total)
                 },
@@ -92,17 +92,17 @@ impl ConversationResponse {
             (0, self.total)
         };
 
-        let digest_start = range.from.unwrap_or(start).min(self.total);
-        let digest_end = self.total.saturating_sub(UNVERIFIED_TAIL_MESSAGES);
-        let tail_digest = (range.before.is_none() && digest_start < digest_end)
-            .then(|| message_digest(&self.messages[digest_start..digest_end]))
+        let stable_start = range.from.unwrap_or(start).min(self.total);
+        let stable_end = self.total.saturating_sub(RECENT_TAIL_MESSAGE_COUNT);
+        let stable_digest = (range.before.is_none() && stable_start < stable_end)
+            .then(|| message_digest(&self.messages[stable_start..stable_end]))
             .flatten();
 
         self.messages = self.messages[start..end].to_vec();
         self.start = start;
-        self.tail_start = tail_digest.as_ref().map(|_| digest_start);
-        self.tail_end = tail_digest.as_ref().map(|_| digest_end);
-        self.tail_digest = tail_digest;
+        self.stable_start = stable_digest.as_ref().map(|_| stable_start);
+        self.stable_end = stable_digest.as_ref().map(|_| stable_end);
+        self.stable_digest = stable_digest;
     }
 }
 

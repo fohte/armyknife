@@ -16,10 +16,7 @@ import type {
   PermissionRequestIdentity,
 } from '#components/permission-card'
 import { ResizableColumns } from '#components/resizable-columns'
-import {
-  getCachedConversation,
-  setCachedConversation,
-} from '#components/session-conversation-cache'
+import { useSessionConversationCache } from '#components/session-conversation-cache'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import {
@@ -63,7 +60,6 @@ type ConversationPaneProps = {
     state: SessionTreeViewState,
   ) => void
   refreshKey: number
-  useConversationCache?: boolean
   onSelectSession: (id: string) => void
   isMobile?: boolean
   statusPanelOpen?: boolean
@@ -89,7 +85,6 @@ export function ConversationPane({
   onSessionTreeRequestFailed,
   onSessionTreeViewStateChange,
   refreshKey,
-  useConversationCache = false,
   onSelectSession,
   isMobile = false,
   statusPanelOpen = false,
@@ -101,8 +96,12 @@ export function ConversationPane({
   isToday = false,
   onToggleToday = () => undefined,
 }: ConversationPaneProps) {
+  const sessionConversationCache = useSessionConversationCache()
+  const setCachedConversation = sessionConversationCache?.setCachedConversation
+  const touchCachedConversation =
+    sessionConversationCache?.touchCachedConversation
   const [initialCachedConversation] = useState(() =>
-    useConversationCache ? getCachedConversation(session.id) : undefined,
+    sessionConversationCache?.conversations.get(session.id),
   )
   const [conversation, setConversation] = useState<ConversationResponse>(
     initialCachedConversation?.conversation ?? EMPTY_CONVERSATION,
@@ -147,7 +146,7 @@ export function ConversationPane({
       conversationRef.current = next
       setConversation(next)
       if (
-        useConversationCache &&
+        setCachedConversation &&
         conversationSessionId.current === session.id
       ) {
         const loadedAt = messagesLoadedAtRef.current
@@ -159,7 +158,7 @@ export function ConversationPane({
         }
       }
     },
-    [session.id, useConversationCache],
+    [session.id, setCachedConversation],
   )
   const markMessagesLoaded = useCallback(() => {
     const loadedAt = Date.now()
@@ -173,9 +172,9 @@ export function ConversationPane({
     updateConversation({
       ...current,
       start: current.start + dropCount,
-      tailStart: undefined,
-      tailEnd: undefined,
-      tailDigest: undefined,
+      stableStart: undefined,
+      stableEnd: undefined,
+      stableDigest: undefined,
       messages: current.messages.slice(dropCount),
     })
   }, [updateConversation])
@@ -194,17 +193,17 @@ export function ConversationPane({
       conversationSessionId.current === session.id
         ? conversationRef.current
         : null
-    const tailDigestQuery =
+    const stableDigestQuery =
       loadedConversation !== null &&
-      loadedConversation.tailStart === loadedConversation.start &&
-      loadedConversation.tailEnd !== undefined &&
-      loadedConversation.tailDigest !== undefined
-        ? `&tailStart=${String(loadedConversation.tailStart)}&tailEnd=${String(loadedConversation.tailEnd)}&tailDigest=${loadedConversation.tailDigest}`
+      loadedConversation.stableStart === loadedConversation.start &&
+      loadedConversation.stableEnd !== undefined &&
+      loadedConversation.stableDigest !== undefined
+        ? `&stableStart=${String(loadedConversation.stableStart)}&stableEnd=${String(loadedConversation.stableEnd)}&stableDigest=${loadedConversation.stableDigest}`
         : ''
     const messagesRequest = requestJson(
       loadedConversation === null
         ? `${sessionPath}/messages?limit=${String(INITIAL_MESSAGE_LIMIT)}`
-        : `${sessionPath}/messages?from=${String(loadedConversation.start)}${tailDigestQuery}`,
+        : `${sessionPath}/messages?from=${String(loadedConversation.start)}${stableDigestQuery}`,
       isConversationResponse,
     ).match(
       (value) => ok(value),
@@ -295,6 +294,12 @@ export function ConversationPane({
   }, [markMessagesLoaded, session.id, updateConversation])
 
   useEffect(() => {
+    if (initialCachedConversation !== undefined) {
+      touchCachedConversation?.(session.id)
+    }
+  }, [initialCachedConversation, session.id, touchCachedConversation])
+
+  useEffect(() => {
     refresh()
     return () => {
       requestGeneration.current += 1
@@ -343,9 +348,9 @@ export function ConversationPane({
         markMessagesLoaded()
         updateConversation({
           ...response,
-          tailStart: undefined,
-          tailEnd: undefined,
-          tailDigest: undefined,
+          stableStart: undefined,
+          stableEnd: undefined,
+          stableDigest: undefined,
           messages: shareUnchangedMessages(
             latest.messages,
             messages,
