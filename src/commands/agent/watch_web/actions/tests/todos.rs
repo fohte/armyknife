@@ -66,6 +66,55 @@ async fn completing_a_todo_notifies_the_session_before_persisting(action_context
 
 #[rstest]
 #[tokio::test]
+async fn failed_session_notification_does_not_complete_the_todo(action_context: ActionContext) {
+    action_context.save_session(&session("sample-session"));
+    let sessions_dir = action_context.temp_dir.path().join("sessions");
+    store::add_agent_todo_in(&sessions_dir, "sample-session", "Check the page", None).unwrap();
+    action_context.set_message_error("peer notify failed");
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            "/sessions/sample-session/todos/1/complete",
+            json!({ "comment": "The header fits." }),
+        ))
+        .await
+        .unwrap();
+    let todos = store::agent_todos_from(&sessions_dir, "sample-session").unwrap();
+
+    assert_eq!(
+        (
+            response_snapshot(response, &action_context).await,
+            todos
+                .iter()
+                .map(|todo| (
+                    todo.title.as_str(),
+                    todo.completed_at.is_some(),
+                    todo.comment.as_deref(),
+                ))
+                .collect::<Vec<_>>(),
+        ),
+        (
+            json!({
+                "status": StatusCode::BAD_GATEWAY.as_u16(),
+                "body": { "error": "peer notify failed" },
+                "calls": [{
+                    "kind": "message",
+                    "sessionId": "sample-session",
+                    "content": indoc! {"
+                        ユーザーが todo『Check the page』を済にした。
+
+                        The header fits.
+                    "}.trim_end(),
+                }],
+            }),
+            vec![("Check the page", false, None)],
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn completed_todos_cannot_be_completed_again(action_context: ActionContext) {
     action_context.save_session(&session("sample-session"));
     let sessions_dir = action_context.temp_dir.path().join("sessions");

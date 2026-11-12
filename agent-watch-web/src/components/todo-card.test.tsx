@@ -140,3 +140,29 @@ it('shows an already completed task without a completion action', () => {
     buttonCount: 0,
   })
 })
+
+it('shows the persisted comment when a pending task becomes completed', () => {
+  renderCard(props())
+  renderCard(
+    props({
+      completed: true,
+      defaultComment: 'The task was completed in another tab.',
+    }),
+  )
+
+  const snapshot = () => ({
+    comment:
+      container.querySelector<HTMLTextAreaElement>('.chat-todo-comment')?.value,
+    commentDisabled:
+      container.querySelector<HTMLTextAreaElement>('.chat-todo-comment')
+        ?.disabled,
+    completionLabel: container.querySelector('.chat-todo-completed-label')
+      ?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    comment: 'The task was completed in another tab.',
+    commentDisabled: true,
+    completionLabel: 'Done',
+  })
+})

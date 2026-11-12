@@ -2523,6 +2523,90 @@ it('posts a proposal answer to its sequence route and refreshes the conversation
   })
 })
 
+it('posts a todo completion to its sequence route with the comment', async () => {
+  const todo: ChatItem = {
+    type: 'todo',
+    seq: 4,
+    title: 'Check the page on a phone',
+    detail: 'Confirm the action remains visible.',
+    completed: false,
+    comment: null,
+  }
+  const completedTodo: ChatItem = {
+    ...todo,
+    completed: true,
+    comment: 'The page is readable.',
+  }
+  const requests: Array<{
+    url: string
+    method: string
+    body: string | null
+  }> = []
+  let completed = false
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    const method = init?.method ?? 'GET'
+    requests.push({
+      url,
+      method,
+      body: typeof init?.body === 'string' ? init.body : null,
+    })
+    if (method === 'POST') completed = true
+    return Promise.resolve(
+      method === 'POST'
+        ? new Response(null, { status: 204 })
+        : url.split('?')[0]?.endsWith('/messages') === true
+          ? jsonResponse(messagesResponse([completed ? completedTodo : todo]))
+          : jsonResponse(actions),
+    )
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  expect(
+    await waitForState(
+      () => container.querySelector('.chat-todo-card') !== null,
+    ),
+  ).toBe(true)
+
+  setTextareaValue(
+    requireElement(
+      container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+    ),
+    'The page is readable.',
+  )
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.chat-todo-footer .aw-button--primary',
+      ),
+    ).click()
+  })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('.chat-todo-completed-label')?.textContent ===
+        'Done',
+    ),
+  ).toBe(true)
+
+  expect(requests.filter((request) => request.method === 'POST')).toEqual([
+    {
+      url: '/api/sessions/sample-session/todos/4/complete',
+      method: 'POST',
+      body: '{"comment":"The page is readable."}',
+    },
+  ])
+})
+
 it('accepts a subagent report without a description from the messages endpoint', async () => {
   const jsonResponse = (body: unknown) =>
     new Response(JSON.stringify(body), {

@@ -1,7 +1,7 @@
 import '#components/todo-card.css'
 
 import { Button } from '@fohte/ui/button'
-import { useId, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 
 type TodoCardProps = {
   title: string
@@ -23,6 +23,10 @@ export function TodoCard({
   const [completedLocally, setCompletedLocally] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const isCompleted = completed || completedLocally
+
+  useEffect(() => {
+    if (completed) setComment(defaultComment)
+  }, [completed, defaultComment])
 
   const completeTodo = () => {
     if (isCompleted || isSubmitting) return

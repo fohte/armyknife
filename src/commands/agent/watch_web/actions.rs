@@ -19,6 +19,7 @@ use super::messages::RouteLoaders;
 mod api_error;
 mod close;
 mod decisions;
+mod keyed_mutex_registry;
 mod messages;
 mod proposal_answer_locks;
 mod proposals;

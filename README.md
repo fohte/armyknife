@@ -621,7 +621,7 @@ JSON
 Recorded proposal 1
 ```
 
-Run `a agent todo add` from a tracked Claude Code or Codex session and pipe a JSON object to stdin. The required field is `title`; `detail` is optional. The todo appears in watch-web until the user marks it done. Use a proposal when the user should choose from options. The command prints `Recorded todo <seq>` after saving the todo.
+Run `a agent todo add` from a tracked Claude Code or Codex session and pipe a JSON object to stdin. The required field is `title`; `detail` is optional. The todo stays in the watch-web conversation after completion and is shown as done. Use a proposal when the user should choose from options. The command prints `Recorded todo <seq>` after saving the todo.
 
 ```console
 $ cat <<'JSON' | a agent todo add
