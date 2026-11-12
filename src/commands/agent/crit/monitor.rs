@@ -440,42 +440,6 @@ fn drop_port_from_session_in(
     Ok(Some(session))
 }
 
-pub(super) fn live_ports() -> Result<std::collections::HashSet<u16>> {
-    let status = crit_status()?;
-    live_ports_from_status(&status, process::is_process_alive)
-}
-
-fn live_ports_from_status(
-    status: &serde_json::Value,
-    is_process_alive: impl Fn(u32) -> bool,
-) -> Result<std::collections::HashSet<u16>> {
-    let sessions = status
-        .get("sessions")
-        .and_then(serde_json::Value::as_array)
-        .context("crit status JSON is missing the sessions array")?;
-    sessions.iter().try_fold(
-        std::collections::HashSet::new(),
-        |mut live_ports, session| {
-            let port = session
-                .get("port")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|port| u16::try_from(port).ok())
-                .filter(|port| *port != 0)
-                .context("crit status JSON contains an invalid session port")?;
-            let pid = session
-                .get("pid")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|pid| u32::try_from(pid).ok())
-                .filter(|pid| *pid != 0)
-                .context("crit status JSON contains an invalid session PID")?;
-            if is_process_alive(pid) {
-                live_ports.insert(port);
-            }
-            Ok(live_ports)
-        },
-    )
-}
-
 fn crit_status() -> Result<serde_json::Value> {
     let mut command = ExternalTool::Crit.command();
     command.args(["status", "--json"]);
@@ -529,23 +493,8 @@ fn unix_time_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
-    use std::collections::HashSet;
 
     use super::*;
-
-    #[test]
-    fn live_ports_requires_a_valid_pid_that_is_still_alive() {
-        let status = serde_json::json!({
-            "sessions": [
-                { "port": 43210, "pid": 321 },
-                { "port": 43211, "pid": 654 },
-            ]
-        });
-        let actual = live_ports_from_status(&status, |pid| pid == 321)
-            .expect("valid crit status should be parsed");
-
-        assert_eq!(actual, HashSet::from([43210]));
-    }
 
     #[test]
     fn retries_database_cleanup_before_returning_success() {
