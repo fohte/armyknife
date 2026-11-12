@@ -14,6 +14,22 @@ export type VisibleSessionTreeRow = {
   needsActionDescendantCount: number
 }
 
+export function expandSessionAncestors(
+  sessions: readonly SessionTreeNode[],
+  selectedId: string,
+  viewState: SessionTreeViewState,
+): SessionTreeViewState {
+  const byId = new Map(sessions.map((session) => [session.id, session]))
+  const expanded = new Set(viewState.expandedSessionIds)
+  let current = byId.get(selectedId)
+  while (current !== undefined && current.parentId !== null) {
+    expanded.add(current.parentId)
+    current = byId.get(current.parentId)
+  }
+  if (expanded.size === viewState.expandedSessionIds.length) return viewState
+  return { ...viewState, expandedSessionIds: [...expanded] }
+}
+
 function childrenByParent(sessions: readonly SessionTreeNode[]) {
   const sessionIds = new Set(sessions.map((session) => session.id))
   const children = new Map<string | null, SessionTreeNode[]>()

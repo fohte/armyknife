@@ -1,11 +1,12 @@
 import type { ComponentProps } from 'react'
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 
 import { ConversationPane } from '#components/conversation-pane'
 import { InboxView } from '#components/inbox-view'
 import { ResizableColumns } from '#components/resizable-columns'
 import {
   defaultExpandedSessionIds,
+  expandSessionAncestors,
   type SessionTreeViewState,
 } from '#session-tree-model'
 import type { Session, SessionTreeNode } from '#types'
@@ -16,6 +17,18 @@ type SessionTreeCacheEntry = {
   requestSequence: number
   refreshError: string | null
   viewState: SessionTreeViewState
+}
+
+function replaceTreeCacheEntry(
+  current: ReadonlyMap<string, SessionTreeCacheEntry>,
+  existing: SessionTreeCacheEntry,
+  replacement: SessionTreeCacheEntry,
+) {
+  const next = new Map(current)
+  for (const node of existing.sessions) {
+    if (current.get(node.id) === existing) next.set(node.id, replacement)
+  }
+  return next
 }
 
 type InboxConversationPanesProps = {
@@ -55,6 +68,7 @@ export function InboxConversationPanes({
     ReadonlyMap<string, SessionTreeCacheEntry>
   >(() => new Map())
   const nextTreeRequestSequence = useRef(0)
+  const previousSelectedSessionId = useRef(selectedSession?.id)
   const cacheSessionTree = useCallback(
     (
       tree: readonly SessionTreeNode[],
@@ -63,14 +77,19 @@ export function InboxConversationPanes({
       requestSequence: number,
     ) => {
       setSessionTrees((current) => {
-        const existing = current.get(selectedSessionId)
         if (
-          existing !== undefined &&
-          (existing.refreshKey > requestRefreshKey ||
-            existing.requestSequence > requestSequence)
+          tree.some((node) => {
+            const cached = current.get(node.id)
+            return (
+              cached !== undefined &&
+              (cached.refreshKey > requestRefreshKey ||
+                cached.requestSequence > requestSequence)
+            )
+          })
         ) {
           return current
         }
+        const existing = current.get(selectedSessionId)
         const nodeIds = new Set(tree.map((node) => node.id))
         const viewState =
           existing === undefined
@@ -122,17 +141,13 @@ export function InboxConversationPanes({
           existing !== undefined &&
           existing.refreshKey <= requestRefreshKey
         ) {
-          const entry = {
+          const replacement = {
             ...existing,
             refreshKey: requestRefreshKey,
             requestSequence,
             refreshError: null,
           }
-          const next = new Map(current)
-          for (const node of existing.sessions) {
-            if (current.get(node.id) === existing) next.set(node.id, entry)
-          }
-          return next
+          return replaceTreeCacheEntry(current, existing, replacement)
         }
         return current
       })
@@ -162,11 +177,7 @@ export function InboxConversationPanes({
           requestSequence,
           refreshError: message,
         }
-        const next = new Map(current)
-        for (const node of existing.sessions) {
-          if (current.get(node.id) === existing) next.set(node.id, entry)
-        }
-        return next
+        return replaceTreeCacheEntry(current, existing, entry)
       })
     },
     [],
@@ -177,11 +188,7 @@ export function InboxConversationPanes({
         const existing = current.get(selectedSessionId)
         if (existing === undefined) return current
         const entry = { ...existing, viewState }
-        const next = new Map(current)
-        for (const node of existing.sessions) {
-          if (current.get(node.id) === existing) next.set(node.id, entry)
-        }
-        return next
+        return replaceTreeCacheEntry(current, existing, entry)
       })
     },
     [],
@@ -192,6 +199,26 @@ export function InboxConversationPanes({
   const skipSessionTreeFetch =
     selectedTreeCache !== undefined &&
     selectedTreeCache.refreshKey === refreshKey
+  useLayoutEffect(() => {
+    const selectedSessionId = selectedSession?.id
+    if (previousSelectedSessionId.current === selectedSessionId) return
+    previousSelectedSessionId.current = selectedSessionId
+    if (selectedSessionId === undefined) return
+    setSessionTrees((current) => {
+      const existing = current.get(selectedSessionId)
+      if (existing === undefined) return current
+      const viewState = expandSessionAncestors(
+        existing.sessions,
+        selectedSessionId,
+        existing.viewState,
+      )
+      if (viewState === existing.viewState) return current
+      return replaceTreeCacheEntry(current, existing, {
+        ...existing,
+        viewState,
+      })
+    })
+  }, [selectedSession?.id])
   const conversationPane =
     selectedSession != null && (!isMobile || showMobileConversation) ? (
       <ConversationPane

@@ -8,7 +8,6 @@ import {
 import {
   isConversationResponse,
   isSessionActions,
-  isSessionTreeResponse,
 } from '#components/conversation-pane-response'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { requestAction, requestJson } from '#components/conversation-requests'
@@ -19,6 +18,10 @@ import type {
 import { ResizableColumns } from '#components/resizable-columns'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
+import {
+  type SessionTreeCallbacks,
+  useSessionTree,
+} from '#components/use-session-tree'
 import type { SessionTreeViewState } from '#session-tree-model'
 import type {
   ConversationResponse,
@@ -50,22 +53,6 @@ type ConversationPaneProps = {
   initialSessionTreeError?: string | null
   initialSessionTreeViewState?: SessionTreeViewState | null
   shouldSkipSessionTreeFetch?: boolean
-  onSessionTreeLoaded?: (
-    tree: readonly SessionTreeNode[],
-    selectedSessionId: string,
-    refreshKey: number,
-    requestSequence: number,
-  ) => void
-  onSessionTreeRequestStarted?: (
-    selectedSessionId: string,
-    refreshKey: number,
-  ) => number
-  onSessionTreeRequestFailed?: (
-    selectedSessionId: string,
-    refreshKey: number,
-    requestSequence: number,
-    message: string,
-  ) => void
   onSessionTreeViewStateChange?: (
     selectedSessionId: string,
     state: SessionTreeViewState,
@@ -81,7 +68,7 @@ type ConversationPaneProps = {
   onArchive?: () => void
   isToday?: boolean
   onToggleToday?: (isToday: boolean) => void
-}
+} & SessionTreeCallbacks
 
 export function ConversationPane({
   session,
@@ -114,12 +101,16 @@ export function ConversationPane({
   const loadingOlderRef = useRef(false)
   const [messagesLoadedAt, setMessagesLoadedAt] = useState<number | null>(null)
   const [actions, setActions] = useState<SessionActions | null>(null)
-  const [sessionTree, setSessionTree] = useState<
-    readonly SessionTreeNode[] | null
-  >(initialSessionTree)
-  const [sessionTreeError, setSessionTreeError] = useState<string | null>(
+  const { sessionTree, sessionTreeError } = useSessionTree({
+    session,
+    initialSessionTree,
     initialSessionTreeError,
-  )
+    shouldSkipSessionTreeFetch,
+    refreshKey,
+    onSessionTreeLoaded,
+    onSessionTreeRequestStarted,
+    onSessionTreeRequestFailed,
+  })
   const [actionsReady, setActionsReady] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -256,78 +247,6 @@ export function ConversationPane({
       requestGeneration.current += 1
     }
   }, [refresh, refreshKey])
-
-  useEffect(() => {
-    if (initialSessionTree !== null) setSessionTree(initialSessionTree)
-  }, [initialSessionTree])
-
-  useEffect(() => {
-    if (session.hasSessionTree !== true) {
-      setSessionTree(null)
-      setSessionTreeError(null)
-      return
-    }
-    if (shouldSkipSessionTreeFetch) {
-      setSessionTreeError(initialSessionTreeError)
-      return
-    }
-    let current = true
-    setSessionTreeError(null)
-    const requestSequence =
-      onSessionTreeRequestStarted?.(session.id, refreshKey) ?? 0
-    void requestJson(
-      `/api/sessions/${encodeURIComponent(session.id)}/tree`,
-      isSessionTreeResponse,
-    ).match(
-      (response) => {
-        if (response.sessions.some((node) => node.id === session.id)) {
-          onSessionTreeLoaded?.(
-            response.sessions,
-            session.id,
-            refreshKey,
-            requestSequence,
-          )
-          if (current) {
-            setSessionTree(response.sessions)
-            setSessionTreeError(null)
-          }
-        } else {
-          const errorMessage =
-            'The session tree does not contain the selected session.'
-          onSessionTreeRequestFailed?.(
-            session.id,
-            refreshKey,
-            requestSequence,
-            errorMessage,
-          )
-          if (current) {
-            setSessionTreeError(errorMessage)
-          }
-        }
-      },
-      (treeError) => {
-        onSessionTreeRequestFailed?.(
-          session.id,
-          refreshKey,
-          requestSequence,
-          treeError.message,
-        )
-        if (current) setSessionTreeError(treeError.message)
-      },
-    )
-    return () => {
-      current = false
-    }
-  }, [
-    initialSessionTreeError,
-    onSessionTreeLoaded,
-    onSessionTreeRequestFailed,
-    onSessionTreeRequestStarted,
-    refreshKey,
-    session.hasSessionTree,
-    session.id,
-    shouldSkipSessionTreeFetch,
-  ])
 
   useEffect(() => {
     setPendingPermissionAction(null)
