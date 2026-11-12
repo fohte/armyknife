@@ -6,7 +6,7 @@ import type { ChatItem, Session, SessionActions } from '#types'
 
 const session: Session = {
   id: 'sample-session',
-  engine: 'Claude',
+  engine: 'claude',
   category: 'needs_action',
   isPaused: false,
   kind: 'Question',
@@ -196,8 +196,8 @@ export const PausedSessionIsVisibleOnIPhone: Story = {
   decorators: [iPhoneViewportDecorator],
 }
 
-export const TodayCanBeChangedFromTheIPhoneConversation: Story = {
-  name: 'The iPhone conversation header shows the active TODAY toggle',
+export const StarredCanBeChangedFromTheIPhoneConversation: Story = {
+  name: 'The iPhone conversation header shows the active Starred toggle',
   args: {
     isMobile: true,
     isToday: true,
@@ -237,7 +237,7 @@ export const IPhoneConversationShowsTheStatusPanel: Story = {
           },
           {
             id: 'decisions',
-            label: '◇ Decisions',
+            label: 'Decisions',
             count: 1,
             content: <div className="session-tree-feedback">Decisions</div>,
           },
@@ -451,7 +451,7 @@ export const IPhoneReviewHeaderOffersStatusPanel: Story = {
 export const CodexOnlyOpensInTerminal: Story = {
   name: 'A Codex session sends questions and permissions to the terminal',
   args: {
-    session: { ...session, engine: 'Codex' },
+    session: { ...session, engine: 'codex' },
     messages: [
       {
         type: 'question',
@@ -553,7 +553,6 @@ export const DoneSessionNeedsDecisionReview: Story = {
       decisionCount: 2,
       unreviewedDecisionCount: 1,
     },
-    decisionsPanelOpen: true,
     selectedDecisionSeq: 1,
     messages: [
       {
@@ -567,6 +566,39 @@ export const DoneSessionNeedsDecisionReview: Story = {
         createdAt: '2026-11-11T03:25:59Z',
       },
     ],
+  },
+}
+
+export const DesktopHeaderShowsClosedStatusPanelAndStarredControl: Story = {
+  name: 'The desktop header shows closed status and Starred controls',
+  args: {
+    backgroundTasks: [
+      {
+        id: 'sample-background-task',
+        description: 'Inspect the request flow',
+        elapsedSeconds: 12,
+        kind: 'subagent',
+        agentType: 'Inspector',
+      },
+    ],
+    isToday: false,
+  },
+}
+
+export const DesktopHeaderShowsOpenStatusPanelAndStarredControl: Story = {
+  name: 'The desktop header shows open status and an active Starred control',
+  args: {
+    backgroundTasks: [
+      {
+        id: 'sample-background-task',
+        description: 'Inspect the request flow',
+        elapsedSeconds: 12,
+        kind: 'subagent',
+        agentType: 'Inspector',
+      },
+    ],
+    isToday: true,
+    statusPanelOpen: true,
   },
 }
 
@@ -682,6 +714,28 @@ export const OlderMessagesAreLoading: Story = {
       {
         type: 'assistant',
         text: 'The earlier part of the conversation is available on demand.',
+      },
+    ],
+  },
+}
+
+export const CompactBoundarySeparatesConversation: Story = {
+  name: 'A divider marks where the conversation was compacted',
+  args: {
+    messages: [
+      {
+        type: 'assistant',
+        text: 'The earlier part of the conversation is summarized.',
+      },
+      {
+        type: 'event',
+        kind: 'compact_boundary',
+        text: 'Context compacted',
+        failed: false,
+      },
+      {
+        type: 'assistant',
+        text: 'The assistant continues after the conversation is compacted.',
       },
     ],
   },

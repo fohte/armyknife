@@ -40,6 +40,13 @@
   padding: 16px;
 }
 
+.decisions-panel-empty {
+  margin: auto;
+  color: var(--aw-text-secondary);
+  font-size: 12px;
+  text-align: center;
+}
+
 .decisions-panel-footer {
   display: flex;
   min-height: 36px;

@@ -6,6 +6,17 @@
   align-items: center;
 }
 
+.conversation-open-in-terminal-button {
+  display: inline-flex;
+  width: 28px;
+  min-width: 28px;
+  height: 26px;
+  min-height: 26px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
 .conversation-terminal-action-status {
   position: absolute;
   z-index: 20;

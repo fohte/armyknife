@@ -4,6 +4,8 @@ pub(super) mod codex;
 pub(super) mod decision_position;
 pub(super) mod queue;
 pub(super) mod skill_suggestions;
+mod time_placed;
+mod todos;
 
 use std::io::BufRead;
 use std::path::Path;
@@ -393,6 +395,7 @@ fn append_classification(
             if !text.trim().is_empty() {
                 let kind = match kind {
                     classifier::EventKind::Armyknife => super::EventKind::Armyknife,
+                    classifier::EventKind::CompactBoundary => super::EventKind::CompactBoundary,
                     classifier::EventKind::System => super::EventKind::System,
                     classifier::EventKind::Hook => super::EventKind::Hook,
                 };

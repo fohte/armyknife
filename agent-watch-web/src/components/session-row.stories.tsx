@@ -65,13 +65,19 @@ export const NeedsActionIsUnread: Story = {
   name: 'An unread question waits for a response',
 }
 
+export const PausedNeedsActionKeepsItsRequestStatus: Story = {
+  name: 'A paused question keeps its request status',
+  args: {
+    session: { ...session, isPaused: true },
+  },
+}
+
 export const SessionIsStarredForToday: Story = {
-  name: 'A starred session stays on the TODAY list',
+  name: 'A starred session stays in the Starred list',
   args: {
     session: { ...session, isToday: true },
     onLater: () => undefined,
     onToggleToday: () => undefined,
-    actionsVisible: true,
   },
 }
 
@@ -205,7 +211,7 @@ export const WorkShowsDecisionCount: Story = {
 }
 
 export const SessionIsPaused: Story = {
-  name: 'A paused session stays in Done and shows its paused state',
+  name: 'A paused session keeps the completed row status',
   args: {
     session: {
       ...session,

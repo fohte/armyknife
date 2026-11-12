@@ -346,6 +346,7 @@ fn load_conversation_with_queued_prompts(
                 queued_prompts: &queued_prompts,
                 peer_out_messages: &peer_out_messages,
                 proposals: &proposal_items,
+                todos: &todos,
             },
         })?;
     resolve_peer_session_titles(&mut conversation.messages, &mut load_session)?;
@@ -386,21 +387,6 @@ fn load_conversation_with_queued_prompts(
             .any(|message| matches!(message, ChatItem::Proposal { seq: existing, .. } if existing == &proposal.seq))
         {
             messages.push(proposal.item.clone());
-        }
-    }
-
-    for todo in &todos {
-        if !messages
-            .iter()
-            .any(|message| matches!(message, ChatItem::Todo { seq, .. } if *seq == todo.seq))
-        {
-            messages.push(ChatItem::Todo {
-                seq: todo.seq,
-                title: todo.title.clone(),
-                detail: todo.detail.clone(),
-                completed: todo.completed_at.is_some(),
-                comment: todo.comment.clone(),
-            });
         }
     }
 
@@ -547,8 +533,12 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript(
                     Vec::new(),
                 ));
             };
-            let (messages, skills) =
-                parser::codex::parse_with_skills(reader, parent, additions.decisions)?;
+            let (messages, skills) = parser::codex::parse_with_skills(
+                reader,
+                parent,
+                additions.decisions,
+                additions.todos,
+            )?;
             Ok((
                 ConversationResponse {
                     messages,
@@ -748,6 +738,7 @@ enum PeerDirection {
 #[serde(rename_all = "snake_case")]
 enum EventKind {
     Armyknife,
+    CompactBoundary,
     System,
     Hook,
 }

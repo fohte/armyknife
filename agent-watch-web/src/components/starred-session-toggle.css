@@ -1,0 +1,27 @@
+.starred-session-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--aw-border);
+  color: var(--aw-text-body);
+  font-size: 16px;
+}
+
+.starred-session-toggle[data-size='desktop'] {
+  min-width: 26px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0 4px;
+}
+
+.starred-session-toggle[data-size='mobile'] {
+  width: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0;
+  border-color: var(--aw-border-control);
+}
+
+.starred-session-toggle[aria-pressed='true'] {
+  color: var(--aw-color-warning);
+}

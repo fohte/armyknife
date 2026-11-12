@@ -21,7 +21,7 @@ const session: Session = {
   pullRequest: null,
 }
 
-const decisions: Decision[] = [
+const decisions: [Decision, Decision] = [
   {
     type: 'decision',
     seq: 1,
@@ -71,6 +71,22 @@ export const PendingDecisionIsSelected: Story = {
   name: 'The panel expands the selected decision and shows review progress',
 }
 
+export const UnreviewedDecisionsAppearFirst: Story = {
+  name: 'Unreviewed decisions appear before change requests',
+  args: {
+    decisions: [
+      decisions[1],
+      { ...decisions[0], review: 'change' },
+      {
+        ...decisions[0],
+        seq: 3,
+        title: 'Keep the retry budget fixed',
+      },
+    ],
+    selectedSeq: 3,
+  },
+}
+
 export const AnotherDecisionIsSelected: Story = {
   name: 'The panel keeps other decisions collapsed around the selection',
   args: { selectedSeq: 2 },
@@ -83,8 +99,8 @@ export const ChangeIsSentToTheSession: Story = {
   },
 }
 
-export const EveryDecisionIsReviewed: Story = {
-  name: 'The panel shows the reviewed count when no action is pending',
+export const EveryDecisionIsApproved: Story = {
+  name: 'The panel confirms when all decisions are approved',
   args: {
     decisions: decisions.map((decision) => ({ ...decision, review: 'ok' })),
     selectedSeq: 2,

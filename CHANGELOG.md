@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.1.650](https://github.com/fohte/armyknife/compare/v0.1.649...v0.1.650) (2026-11-12)
+
+
+### Features
+
+* **agent-watch-web:** clarify header actions ([#1673](https://github.com/fohte/armyknife/issues/1673)) ([a4840a2](https://github.com/fohte/armyknife/commit/a4840a22c6e508eef4eb4de7b01a1c9740390c79))
+
+## [0.1.649](https://github.com/fohte/armyknife/compare/v0.1.648...v0.1.649) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** keep card drafts on updates ([#1671](https://github.com/fohte/armyknife/issues/1671)) ([682f938](https://github.com/fohte/armyknife/commit/682f938aa3e8a836f4ff11c02fe8a4105fb12e99))
+
+## [0.1.648](https://github.com/fohte/armyknife/compare/v0.1.647...v0.1.648) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align todo and action UI ([#1669](https://github.com/fohte/armyknife/issues/1669)) ([a9f2e96](https://github.com/fohte/armyknife/commit/a9f2e9613c1bde1e6d9c45f1fba1dd0aa763bed2))
+
+## [0.1.647](https://github.com/fohte/armyknife/compare/v0.1.646...v0.1.647) (2026-11-12)
+
+
+### Features
+
+* **agent-watch-web:** label Starred, show states ([#1666](https://github.com/fohte/armyknife/issues/1666)) ([2bda142](https://github.com/fohte/armyknife/commit/2bda142295cc9238189e52aa2a82593b58c2a9f2))
+
+## [0.1.646](https://github.com/fohte/armyknife/compare/v0.1.645...v0.1.646) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show inbox stars at rest ([#1664](https://github.com/fohte/armyknife/issues/1664)) ([e82f878](https://github.com/fohte/armyknife/commit/e82f8781d6a0f18212858ed9b9bd9405a0e8e079))
+
+## [0.1.645](https://github.com/fohte/armyknife/compare/v0.1.644...v0.1.645) (2026-11-12)
+
+
+### Bug Fixes
+
+* **watch-web:** hide paused badges in inbox ([#1659](https://github.com/fohte/armyknife/issues/1659)) ([1df9429](https://github.com/fohte/armyknife/commit/1df942992d8debecdaca386768637096984a1550))
+
+## [0.1.644](https://github.com/fohte/armyknife/compare/v0.1.643...v0.1.644) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** match API engine values ([#1657](https://github.com/fohte/armyknife/issues/1657)) ([420f6f4](https://github.com/fohte/armyknife/commit/420f6f48c4eef30719834fc63e5392742f499e27))
+
 ## [0.1.643](https://github.com/fohte/armyknife/compare/v0.1.642...v0.1.643) (2026-11-12)
 
 
