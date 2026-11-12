@@ -6,7 +6,7 @@ import type { ChatItem, Session, SessionActions } from '#types'
 
 const session: Session = {
   id: 'sample-session',
-  engine: 'Claude',
+  engine: 'claude',
   category: 'needs_action',
   isPaused: false,
   kind: 'Question',
@@ -451,7 +451,7 @@ export const IPhoneReviewHeaderOffersStatusPanel: Story = {
 export const CodexOnlyOpensInTerminal: Story = {
   name: 'A Codex session sends questions and permissions to the terminal',
   args: {
-    session: { ...session, engine: 'Codex' },
+    session: { ...session, engine: 'codex' },
     messages: [
       {
         type: 'question',

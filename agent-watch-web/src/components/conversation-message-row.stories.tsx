@@ -34,7 +34,7 @@ const meta = {
     } satisfies ChatItem,
     pendingAction: null,
     openInTerminalStatus: null,
-    sessionEngine: 'Claude',
+    sessionEngine: 'claude',
     sessions,
     ...callbacks,
   },

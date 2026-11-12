@@ -2292,7 +2292,7 @@ it('shows the linked task count in a peer session card', async () => {
     title: 'Review task links',
     preview: 'Check the linked task summary.',
     elapsedSeconds: 120,
-    engine: 'Claude',
+    engine: 'claude',
     workType: 'PM',
     task: {
       id: 'fixture-task-one',
@@ -2357,7 +2357,7 @@ it('shows the linked task count in a peer session card', async () => {
     document.querySelector<HTMLElement>('.session-link-card'),
   )
   expect(card.textContent).toBe(
-    `Review task linksPM · ClaudeReview · Check the linked task summary. · 2m` +
+    `Review task linksPM · claudeReview · Check the linked task summary. · 2m` +
       `P1 #71Review the linked task +2sample-org/example-repo` +
       `Click to open · ${openBesideModifier}-click to open beside`,
   )
@@ -3953,7 +3953,7 @@ it('directs Codex questions and permissions to the terminal', () => {
   }
   renderView(
     onAction,
-    { ...session, engine: 'Codex' },
+    { ...session, engine: 'codex' },
     undefined,
     [
       question,
@@ -5495,7 +5495,7 @@ it('shows terminal switch progress and success without reloading messages', asyn
   act(() => {
     root?.render(
       <ConversationPane
-        session={{ ...session, engine: 'Codex' }}
+        session={{ ...session, engine: 'codex' }}
         refreshKey={0}
         onSelectSession={() => undefined}
       />,
@@ -5607,7 +5607,7 @@ it('shows the server reason beside every terminal action when switching fails', 
   act(() => {
     root?.render(
       <ConversationPane
-        session={{ ...session, engine: 'Codex' }}
+        session={{ ...session, engine: 'codex' }}
         refreshKey={0}
         onSelectSession={() => undefined}
       />,
@@ -5670,7 +5670,7 @@ it('ignores a terminal result after the conversation switches sessions', async (
   act(() => {
     root?.render(
       <ConversationPane
-        session={{ ...session, engine: 'Codex' }}
+        session={{ ...session, engine: 'codex' }}
         refreshKey={0}
         onSelectSession={() => undefined}
       />,
@@ -5692,7 +5692,7 @@ it('ignores a terminal result after the conversation switches sessions', async (
           ...session,
           id: 'next-session',
           title: 'A later session',
-          engine: 'Codex',
+          engine: 'codex',
         }}
         refreshKey={0}
         onSelectSession={() => undefined}
@@ -5738,7 +5738,7 @@ it('hides successful terminal feedback after three seconds', async () => {
   act(() => {
     root?.render(
       <ConversationPane
-        session={{ ...session, engine: 'Codex' }}
+        session={{ ...session, engine: 'codex' }}
         refreshKey={0}
         onSelectSession={() => undefined}
       />,
@@ -5804,7 +5804,7 @@ it('clears terminal feedback timers when the session changes or unmounts', async
   act(() => {
     root?.render(
       <ConversationPane
-        session={{ ...session, engine: 'Codex' }}
+        session={{ ...session, engine: 'codex' }}
         refreshKey={0}
         onSelectSession={() => undefined}
       />,
@@ -5831,7 +5831,7 @@ it('clears terminal feedback timers when the session changes or unmounts', async
           ...session,
           id: 'next-session',
           title: 'A later session',
-          engine: 'Codex',
+          engine: 'codex',
         }}
         refreshKey={0}
         onSelectSession={() => undefined}
@@ -6863,7 +6863,7 @@ it('skips committing an unchanged memoized conversation row', () => {
     message,
     pendingAction: null,
     openInTerminalStatus: null,
-    sessionEngine: 'Claude' as const,
+    sessionEngine: 'claude' as const,
     sessions,
     onAction,
     onOpenInTerminal,
