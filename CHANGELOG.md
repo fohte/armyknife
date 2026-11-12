@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.619](https://github.com/fohte/armyknife/compare/v0.1.618...v0.1.619) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent:** limit Codex history to lineage ([#1605](https://github.com/fohte/armyknife/issues/1605)) ([857cfe6](https://github.com/fohte/armyknife/commit/857cfe6fc529b762eb699b272fd58b5c683d2e8e))
+
 ## [0.1.618](https://github.com/fohte/armyknife/compare/v0.1.617...v0.1.618) (2026-11-12)
 
 
