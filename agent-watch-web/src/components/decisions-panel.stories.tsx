@@ -71,6 +71,19 @@ export const PendingDecisionIsSelected: Story = {
   name: 'The panel expands the selected decision and shows review progress',
 }
 
+export const UnreviewedDecisionsAppearFirst: Story = {
+  name: 'Unreviewed decisions appear before change requests',
+  args: {
+    decisions: decisions
+      .slice()
+      .reverse()
+      .map((decision) =>
+        decision.seq === 2 ? { ...decision, review: 'change' } : decision,
+      ),
+    selectedSeq: 1,
+  },
+}
+
 export const AnotherDecisionIsSelected: Story = {
   name: 'The panel keeps other decisions collapsed around the selection',
   args: { selectedSeq: 2 },

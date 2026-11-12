@@ -49,17 +49,29 @@ export function DecisionsPanel({
   onChange,
 }: DecisionsPanelProps) {
   const [editingSeq, setEditingSeq] = useState<number | null>(null)
+  const displayedDecisions = useMemo(
+    () => decisions.filter((decision) => decision.review !== 'ok'),
+    [decisions],
+  )
   const selectedDecision =
-    decisions.find((decision) => decision.seq === selectedSeq) ??
-    decisions.find((decision) => decision.review === null) ??
-    decisions[0]
-  const reviewedCount = decisions.filter(
+    displayedDecisions.find((decision) => decision.seq === selectedSeq) ??
+    displayedDecisions.find((decision) => decision.review === null) ??
+    displayedDecisions[0]
+  const reviewedCount = displayedDecisions.filter(
     (decision) => decision.review !== null,
   ).length
   const targetName = changeTargetName(session)
+  const orderedDecisions = useMemo(
+    () =>
+      [...displayedDecisions].sort(
+        (left, right) =>
+          Number(left.review !== null) - Number(right.review !== null),
+      ),
+    [displayedDecisions],
+  )
   const pendingSeqs = useMemo(
-    () => decisions.filter((decision) => decision.review === null),
-    [decisions],
+    () => orderedDecisions.filter((decision) => decision.review === null),
+    [orderedDecisions],
   )
 
   useEffect(() => {
@@ -139,11 +151,11 @@ export function DecisionsPanel({
       <header className="decisions-panel-header">
         <h2>Decisions in this session</h2>
         <span>
-          {String(reviewedCount)} / {String(decisions.length)} reviewed
+          {String(reviewedCount)} / {String(displayedDecisions.length)} reviewed
         </span>
       </header>
       <div className="decisions-panel-list">
-        {decisions.map((decision) => {
+        {orderedDecisions.map((decision) => {
           const selected = decision.seq === selectedDecision?.seq
           return (
             <DecisionCard

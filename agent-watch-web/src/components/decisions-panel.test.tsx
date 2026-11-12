@@ -115,6 +115,74 @@ it('uses Y to approve the selected decision and select the next pending one', as
   headerButton.remove()
 })
 
+it('hides ok decisions and keeps change requests visible', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <DecisionsPanel
+        decisions={decisions.map((decision, index) =>
+          index === 0
+            ? { ...decision, review: 'ok' }
+            : { ...decision, review: 'change' },
+        )}
+        session={session}
+        selectedSeq={2}
+        onSelect={vi.fn()}
+        onOk={vi.fn(() => Promise.resolve(true))}
+        onChange={vi.fn(() => Promise.resolve(true))}
+      />,
+    )
+  })
+
+  const snapshot = Array.from(
+    container.querySelectorAll('.decision-card--panel'),
+    (card) => card.getAttribute('data-review'),
+  )
+  const visibleState = () => ({
+    cards: snapshot,
+    reviewProgress: container.querySelector('.decisions-panel-header span')
+      ?.textContent,
+    changeFeedback: container.querySelector('.decision-card-review-state')
+      ?.textContent,
+  })
+  expect(visibleState()).toEqual({
+    cards: ['change'],
+    reviewProgress: '1 / 1 reviewed',
+    changeFeedback: 'Change requested',
+  })
+})
+
+it('shows unreviewed decisions before change requests', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <DecisionsPanel
+        decisions={decisions.map((decision, index) =>
+          index === 0 ? { ...decision, review: 'change' } : decision,
+        )}
+        session={session}
+        selectedSeq={2}
+        onSelect={vi.fn()}
+        onOk={vi.fn(() => Promise.resolve(true))}
+        onChange={vi.fn(() => Promise.resolve(true))}
+      />,
+    )
+  })
+
+  const snapshot = () => ({
+    reviews: Array.from(
+      container.querySelectorAll('.decision-card--panel'),
+      (card) => card.getAttribute('data-review'),
+    ),
+    progress: container.querySelector('.decisions-panel-header span')
+      ?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    reviews: ['unreviewed', 'change'],
+    progress: '1 / 2 reviewed',
+  })
+})
+
 it('keeps the selected decision when the Y action fails', async () => {
   const onOk = vi.fn(() => Promise.resolve(false))
   const onSelect = vi.fn()
