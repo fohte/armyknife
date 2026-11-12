@@ -34,6 +34,14 @@ function snapshot() {
       }))
 }
 
+function imageAttributes() {
+  const image = container.querySelector('img')
+  return {
+    loading: image?.getAttribute('loading'),
+    decoding: image?.getAttribute('decoding'),
+  }
+}
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
@@ -146,6 +154,15 @@ it('explains when an image fails to load', () => {
       source: null,
     },
   ])
+})
+
+it('loads user images lazily and decodes them asynchronously', () => {
+  render({
+    type: 'user_with_content',
+    content: [{ type: 'image', source: imageSource, available: true }],
+  })
+
+  expect(imageAttributes()).toEqual({ loading: 'lazy', decoding: 'async' })
 })
 
 it('explains when an image is already unavailable', () => {

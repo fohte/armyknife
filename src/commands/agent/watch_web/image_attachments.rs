@@ -8,7 +8,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::extract::{Path as AxumPath, State};
 use axum::http::StatusCode;
-use axum::http::header::{CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS};
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use std::sync::Arc;
@@ -140,6 +140,7 @@ async fn get_image(
             StatusCode::OK,
             [
                 (CONTENT_TYPE, mime_type),
+                (CACHE_CONTROL, "private, max-age=31536000, immutable"),
                 (X_CONTENT_TYPE_OPTIONS, "nosniff"),
             ],
             Body::from(bytes),
@@ -577,6 +578,7 @@ mod tests {
         let actual = (
             response.status(),
             response.headers().get("content-type").cloned(),
+            response.headers().get("cache-control").cloned(),
             to_bytes(response.into_body(), usize::MAX)
                 .await
                 .unwrap()
@@ -588,6 +590,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some(expected_mime_type.parse().unwrap()),
+                Some("private, max-age=31536000, immutable".parse().unwrap()),
                 bytes.to_vec(),
             ),
         );
@@ -631,6 +634,7 @@ mod tests {
         let actual = (
             response.status(),
             response.headers().get("content-type").cloned(),
+            response.headers().get("cache-control").cloned(),
             to_bytes(response.into_body(), usize::MAX)
                 .await
                 .unwrap()
@@ -642,6 +646,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("image/png".parse().unwrap()),
+                Some("private, max-age=31536000, immutable".parse().unwrap()),
                 image_bytes.to_vec(),
             ),
         );
@@ -659,6 +664,7 @@ mod tests {
         let actual = (
             response.status(),
             response.headers().get("content-type").cloned(),
+            response.headers().get("cache-control").cloned(),
             to_bytes(response.into_body(), usize::MAX)
                 .await
                 .unwrap()
@@ -670,6 +676,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("image/jpeg".parse().unwrap()),
+                Some("private, max-age=31536000, immutable".parse().unwrap()),
                 uploaded_image_bytes.to_vec(),
             ),
         );
