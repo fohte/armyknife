@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.651](https://github.com/fohte/armyknife/compare/v0.1.650...v0.1.651) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** fit long content in panels ([#1663](https://github.com/fohte/armyknife/issues/1663)) ([2e27e3c](https://github.com/fohte/armyknife/commit/2e27e3c9063928b7e961b38b0140107f0bc8f635))
+
 ## [0.1.650](https://github.com/fohte/armyknife/compare/v0.1.649...v0.1.650) (2026-11-12)
 
 
