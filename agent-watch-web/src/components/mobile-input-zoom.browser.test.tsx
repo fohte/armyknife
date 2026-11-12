@@ -43,6 +43,13 @@ it('sets mobile text controls to 16px and keeps desktop sizing unchanged', async
         <input className="test-control" type="checkbox" />
         <input className="test-control" type="radio" />
         <input className="test-control" type="button" />
+        <input className="test-control" type="submit" />
+        <input className="test-control" type="reset" />
+        <input className="test-control" type="image" />
+        <input className="test-control" type="range" />
+        <input className="test-control" type="color" />
+        <input className="test-control" type="file" />
+        <input className="test-control" type="hidden" />
       </>,
     )
   })
@@ -73,8 +80,22 @@ it('sets mobile text controls to 16px and keeps desktop sizing unchanged', async
         "12px",
         "12px",
         "12px",
+        "12px",
+        "12px",
+        "12px",
+        "12px",
+        "12px",
+        "12px",
+        "12px",
       ],
       [
+        "12px",
+        "12px",
+        "12px",
+        "12px",
+        "12px",
+        "12px",
+        "12px",
         "12px",
         "12px",
         "12px",
