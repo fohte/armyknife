@@ -55,7 +55,7 @@ fn is_hashed_asset(path: &str) -> bool {
         return false;
     };
 
-    hash.len() >= 8
+    hash.len() == 8
         && hash
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || "_-".contains(character))
