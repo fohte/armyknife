@@ -1,7 +1,5 @@
 import { useEffect, useState } from 'react'
 
-import { isSessionPullRequestListResponse } from '#components/conversation-pane-response'
-import { requestJson } from '#components/conversation-requests'
 import { CritPane } from '#components/crit-pane'
 import type { Decision } from '#components/decision-card'
 import { DecisionsPanel } from '#components/decisions-panel'
@@ -9,19 +7,12 @@ import { PullRequestListPanel } from '#components/pull-request-list-panel'
 import { RunningTasksPanel } from '#components/running-tasks-panel'
 import type { SessionStatusPanelTab } from '#components/session-status-panel'
 import { SessionTreePanel } from '#components/session-tree-panel'
+import { useSessionPullRequests } from '#components/use-session-pull-requests'
 import {
   needsActionDescendantCount,
   type SessionTreeViewState,
 } from '#session-tree-model'
-import type {
-  BackgroundTask,
-  ChatItem,
-  Session,
-  SessionPullRequest,
-  SessionTreeNode,
-} from '#types'
-
-const PULL_REQUEST_REFRESH_INTERVAL = 30_000
+import type { BackgroundTask, ChatItem, Session, SessionTreeNode } from '#types'
 
 type UseConversationStatusPanelOptions = {
   session: Session
@@ -58,12 +49,6 @@ export function useConversationStatusPanel({
   onToggleStatusPanel,
 }: UseConversationStatusPanelOptions) {
   const [activePanelTabId, setActivePanelTabId] = useState<string | null>(null)
-  const [pullRequestListState, setPullRequestListState] = useState<{
-    sessionId: string | null
-    pullRequests: SessionPullRequest[]
-    loading: boolean
-    error: string | null
-  }>({ sessionId: null, pullRequests: [], loading: false, error: null })
   const [selectedDecisionSeq, setSelectedDecisionSeq] = useState<number | null>(
     null,
   )
@@ -75,10 +60,6 @@ export function useConversationStatusPanel({
   const decisionCount = session.decisionCount ?? decisions.length
   const pullRequestListAvailable =
     session.task !== null || session.hasSessionTree === true
-  const pullRequestList =
-    pullRequestListState.sessionId === session.id
-      ? pullRequestListState
-      : { pullRequests: [], loading: pullRequestListAvailable, error: null }
   const selectedDecision =
     decisions.find((decision) => decision.seq === selectedDecisionSeq) ??
     decisions.find((decision) => decision.review === null) ??
@@ -99,6 +80,29 @@ export function useConversationStatusPanel({
     (sessionTreeError !== null ||
       sessionTree === null ||
       sessionTree.length > 1)
+  const availableTabIds = [
+    ...(backgroundTasks.length > 0 ? ['running'] : []),
+    ...(!treeAvailable ? [] : ['tree']),
+    ...(!pullRequestListAvailable ? [] : ['pull-requests']),
+    ...(decisionCount > 0 ? ['decisions'] : []),
+    ...(critUrl === null ? [] : ['crit']),
+  ]
+  const defaultPanelTabId = availableTabIds.includes('crit')
+    ? 'crit'
+    : availableTabIds.includes('running')
+      ? 'running'
+      : (availableTabIds[0] ?? null)
+  const activeTabId =
+    activePanelTabId !== null && availableTabIds.includes(activePanelTabId)
+      ? activePanelTabId
+      : defaultPanelTabId
+  const pullRequestList = useSessionPullRequests({
+    session,
+    enabled:
+      statusPanelOpen &&
+      pullRequestListAvailable &&
+      activeTabId === 'pull-requests',
+  })
   const tabs: readonly SessionStatusPanelTab[] = [
     ...(backgroundTasks.length > 0
       ? [
@@ -206,79 +210,6 @@ export function useConversationStatusPanel({
           },
         ]),
   ]
-  const defaultPanelTabId =
-    tabs.find((tab) => tab.id === 'crit')?.id ??
-    tabs.find((tab) => tab.id === 'running')?.id ??
-    tabs[0]?.id ??
-    null
-  const activeTabId = tabs.some((tab) => tab.id === activePanelTabId)
-    ? activePanelTabId
-    : defaultPanelTabId
-  useEffect(() => {
-    if (
-      !statusPanelOpen ||
-      !pullRequestListAvailable ||
-      activeTabId !== 'pull-requests'
-    ) {
-      return
-    }
-
-    let current = true
-    let inFlight = false
-    const refresh = async () => {
-      if (inFlight) return
-      inFlight = true
-      setPullRequestListState((state) => ({
-        sessionId: session.id,
-        pullRequests: state.sessionId === session.id ? state.pullRequests : [],
-        loading: true,
-        error: null,
-      }))
-      await requestJson(
-        `/api/sessions/${encodeURIComponent(session.id)}/pull-requests`,
-        isSessionPullRequestListResponse,
-      ).match(
-        (response) => {
-          if (current) {
-            setPullRequestListState({
-              sessionId: session.id,
-              pullRequests: response.pullRequests,
-              loading: false,
-              error: response.error,
-            })
-          }
-          inFlight = false
-        },
-        (error) => {
-          if (current) {
-            setPullRequestListState((state) => ({
-              sessionId: session.id,
-              pullRequests:
-                state.sessionId === session.id ? state.pullRequests : [],
-              loading: false,
-              error: error.message,
-            }))
-          }
-          inFlight = false
-        },
-      )
-    }
-    void refresh()
-    const interval = window.setInterval(
-      () => void refresh(),
-      PULL_REQUEST_REFRESH_INTERVAL,
-    )
-    return () => {
-      current = false
-      window.clearInterval(interval)
-    }
-  }, [
-    activeTabId,
-    pullRequestListAvailable,
-    session.id,
-    session.task?.id,
-    statusPanelOpen,
-  ])
   useEffect(() => {
     if (activePanelTabId !== activeTabId) setActivePanelTabId(activeTabId)
   }, [activePanelTabId, activeTabId])
