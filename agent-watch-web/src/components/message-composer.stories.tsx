@@ -131,7 +131,7 @@ export const MobileComposerWithAttachment: Story = {
 }
 
 export const MobileComposerWithAttachmentAndInterrupt: Story = {
-  name: 'The mobile composer keeps attachment and interrupt beside sending',
+  name: 'The mobile composer shows an attachment below the text and action controls',
   args: {
     isMobile: true,
     canInterrupt: true,
