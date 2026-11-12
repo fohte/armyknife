@@ -330,6 +330,24 @@ pub(crate) fn record_codex_failure_status_if_unchanged(
     agent_config: &AgentConfig,
     cause: &str,
 ) -> Result<bool> {
+    record_codex_failure_status_if_unchanged_with_notifier(
+        sessions_dir,
+        args,
+        agent_config,
+        cause,
+        |delegator_id, message| {
+            super::super::peer::notify::notify(delegator_id, message, None, None).map(|_| ())
+        },
+    )
+}
+
+fn record_codex_failure_status_if_unchanged_with_notifier(
+    sessions_dir: &Path,
+    args: &StatusInferenceArgs,
+    agent_config: &AgentConfig,
+    cause: &str,
+    notify: impl FnOnce(&str, &str) -> Result<()>,
+) -> Result<bool> {
     let Some(config) = agent_config.configured_codex_status_inference() else {
         return Ok(false);
     };
@@ -384,7 +402,51 @@ pub(crate) fn record_codex_failure_status_if_unchanged(
             "session_changed"
         },
     );
+    if recorded {
+        notify_codex_inference_failure(sessions_dir, &args.session, cause, notify);
+    }
     Ok(recorded)
+}
+
+fn notify_codex_inference_failure(
+    sessions_dir: &Path,
+    session_id: &str,
+    cause: &str,
+    notify: impl FnOnce(&str, &str) -> Result<()>,
+) {
+    let session = match store::load_session_from(sessions_dir, session_id) {
+        Ok(Some(session)) => session,
+        Ok(None) => {
+            tracing::warn!(
+                event = "agent.status_inference.failure_notification_skipped",
+                session = session_id,
+                reason = "session_not_found",
+            );
+            return;
+        }
+        Err(error) => {
+            tracing::warn!(
+                event = "agent.status_inference.failure_notification_skipped",
+                session = session_id,
+                reason = "session_read_failed",
+                error = %format!("{error:#}"),
+            );
+            return;
+        }
+    };
+    let Some(delegator_id) = session.ancestor_session_ids.last() else {
+        return;
+    };
+
+    let message = format!("Codex status inference failed for session {session_id}: {cause}");
+    if let Err(error) = notify(delegator_id, &message) {
+        tracing::warn!(
+            event = "agent.status_inference.failure_notification_failed",
+            session = session_id,
+            delegator = delegator_id,
+            error = %format!("{error:#}"),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -729,6 +791,188 @@ mod tests {
         assert_eq!(
             (stored_session(&context), classifier_called),
             (session_value(&expected), expects_classifier_call),
+        );
+    }
+
+    #[rstest]
+    fn recorded_codex_failure_notifies_the_direct_delegator(
+        inference_worker_context: InferenceWorkerContext,
+    ) {
+        let mut context = inference_worker_context;
+        context.session.ancestor_session_ids = vec![
+            "fixture-root-session".to_string(),
+            "fixture-direct-delegator".to_string(),
+        ];
+        store::save_session_to(&context.sessions_dir, &context.session)
+            .expect("session ancestors should be saved");
+        enable_codex_inference(&mut context.agent_config, false);
+        let args = args_for(&context.session);
+        let mut notifications = Vec::new();
+
+        let result = record_codex_failure_status_if_unchanged_with_notifier(
+            &context.sessions_dir,
+            &args,
+            &context.agent_config,
+            "Codex history request timed out",
+            |delegator_id, message| {
+                notifications.push((delegator_id.to_string(), message.to_string()));
+                Ok(())
+            },
+        );
+
+        let mut expected_session = context.session.clone();
+        expected_session.agent_status = Some(AgentStatus {
+            kind: "needs_user".to_string(),
+            note: "status inference failure investigation".to_string(),
+        });
+        assert_eq!(
+            (
+                result.map_err(|error| format!("{error:#}")),
+                stored_session(&context),
+                notifications,
+            ),
+            (
+                Ok(true),
+                session_value(&expected_session),
+                vec![(
+                    "fixture-direct-delegator".to_string(),
+                    "Codex status inference failed for session fixture-session: Codex history request timed out"
+                        .to_string(),
+                )],
+            ),
+        );
+    }
+
+    #[rstest]
+    fn codex_failure_without_a_delegator_does_not_notify(
+        inference_worker_context: InferenceWorkerContext,
+    ) {
+        let mut context = inference_worker_context;
+        enable_codex_inference(&mut context.agent_config, false);
+        let args = args_for(&context.session);
+        let mut notified = false;
+
+        let result = record_codex_failure_status_if_unchanged_with_notifier(
+            &context.sessions_dir,
+            &args,
+            &context.agent_config,
+            "Codex history request timed out",
+            |_, _| {
+                notified = true;
+                Ok(())
+            },
+        );
+
+        let mut expected_session = context.session.clone();
+        expected_session.agent_status = Some(AgentStatus {
+            kind: "needs_user".to_string(),
+            note: "status inference failure investigation".to_string(),
+        });
+        assert_eq!(
+            (
+                result.map_err(|error| format!("{error:#}")),
+                stored_session(&context),
+                notified,
+            ),
+            (Ok(true), session_value(&expected_session), false),
+        );
+    }
+
+    #[rstest]
+    fn discarded_codex_failure_status_does_not_notify(
+        inference_worker_context: InferenceWorkerContext,
+    ) {
+        let mut context = inference_worker_context;
+        context.session.ancestor_session_ids = vec!["fixture-delegator".to_string()];
+        store::save_session_to(&context.sessions_dir, &context.session)
+            .expect("session ancestor should be saved");
+        enable_codex_inference(&mut context.agent_config, false);
+        let mut args = args_for(&context.session);
+        args.updated_at += chrono::Duration::seconds(1);
+        let mut notified = false;
+
+        let result = record_codex_failure_status_if_unchanged_with_notifier(
+            &context.sessions_dir,
+            &args,
+            &context.agent_config,
+            "Codex history request timed out",
+            |_, _| {
+                notified = true;
+                Ok(())
+            },
+        );
+
+        assert_eq!(
+            (
+                result.map_err(|error| format!("{error:#}")),
+                stored_session(&context),
+                notified,
+            ),
+            (Ok(false), session_value(&context.session), false),
+        );
+    }
+
+    #[rstest]
+    fn shadow_codex_failure_does_not_notify(inference_worker_context: InferenceWorkerContext) {
+        let mut context = inference_worker_context;
+        context.session.ancestor_session_ids = vec!["fixture-delegator".to_string()];
+        store::save_session_to(&context.sessions_dir, &context.session)
+            .expect("session ancestor should be saved");
+        enable_codex_inference(&mut context.agent_config, true);
+        let args = args_for(&context.session);
+        let mut notified = false;
+
+        let result = record_codex_failure_status_if_unchanged_with_notifier(
+            &context.sessions_dir,
+            &args,
+            &context.agent_config,
+            "Codex history request timed out",
+            |_, _| {
+                notified = true;
+                Ok(())
+            },
+        );
+
+        assert_eq!(
+            (
+                result.map_err(|error| format!("{error:#}")),
+                stored_session(&context),
+                notified,
+            ),
+            (Ok(false), session_value(&context.session), false),
+        );
+    }
+
+    #[rstest]
+    fn failed_codex_failure_notification_does_not_fail_status_recording(
+        inference_worker_context: InferenceWorkerContext,
+    ) {
+        let mut context = inference_worker_context;
+        context.session.ancestor_session_ids = vec!["fixture-delegator".to_string()];
+        store::save_session_to(&context.sessions_dir, &context.session)
+            .expect("session ancestor should be saved");
+        enable_codex_inference(&mut context.agent_config, false);
+        let args = args_for(&context.session);
+
+        let result = record_codex_failure_status_if_unchanged_with_notifier(
+            &context.sessions_dir,
+            &args,
+            &context.agent_config,
+            "Codex history request timed out",
+            |_, _| Err(anyhow!("fixture peer delivery failed")),
+        );
+
+        let mut expected_session = context.session.clone();
+        expected_session.agent_status = Some(AgentStatus {
+            kind: "needs_user".to_string(),
+            note: "status inference failure investigation".to_string(),
+        });
+        assert_eq!(
+            (
+                result.map_err(|error| format!("{error:#}")),
+                stored_session(&context),
+            ),
+            (Ok(true), session_value(&expected_session)),
         );
     }
 
