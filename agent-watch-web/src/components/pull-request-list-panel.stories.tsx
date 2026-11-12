@@ -56,3 +56,8 @@ export const PullRequestLoadingFailed: Story = {
   name: 'The panel shows an error when pull requests cannot be loaded.',
   args: { pullRequests: [], error: 'Pull requests could not be loaded.' },
 }
+
+export const PartialLookupFailureKeepsLinkedPullRequestsVisible: Story = {
+  name: 'The panel keeps linked pull requests visible after a partial failure.',
+  args: { error: 'Some linked pull requests could not be loaded.' },
+}

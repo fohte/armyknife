@@ -922,7 +922,7 @@ it('loads and shows the session tree from the tree endpoint', async () => {
   })
 })
 
-it('loads task-linked pull requests in the session status panel', async () => {
+it('shows linked pull requests alongside partial lookup errors', async () => {
   const taskSession: Session = {
     ...session,
     task: {
@@ -953,7 +953,7 @@ it('loads task-linked pull requests in the session status panel', async () => {
               reviewStatus: 'done',
             },
           ],
-          error: null,
+          error: 'Some linked pull requests could not be loaded.',
         }),
       )
     }
@@ -994,6 +994,7 @@ it('loads task-linked pull requests in the session status panel', async () => {
         status: item.querySelector('.pull-request-list-meta')?.textContent,
       }),
     ),
+    error: container.querySelector('.pull-request-list-error')?.textContent,
   })
 
   expect(snapshot()).toEqual({
@@ -1006,6 +1007,7 @@ it('loads task-linked pull requests in the session status panel', async () => {
         status: 'OpenCI: PassingReview: Done',
       },
     ],
+    error: 'Some linked pull requests could not be loaded.',
   })
 })
 

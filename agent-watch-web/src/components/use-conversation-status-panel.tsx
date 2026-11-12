@@ -82,10 +82,10 @@ export function useConversationStatusPanel({
       sessionTree === null ||
       sessionTree.length > 1)
   const availableTabIds = [
-    ...(backgroundTasks.length > 0 ? ['running'] : []),
-    ...(!treeAvailable ? [] : ['tree']),
-    ...(!pullRequestListAvailable ? [] : ['pull-requests']),
-    ...(decisionCount > 0 ? ['decisions'] : []),
+    ...(backgroundTasks.length === 0 ? [] : ['running']),
+    ...(treeAvailable ? ['tree'] : []),
+    ...(pullRequestListAvailable ? ['pull-requests'] : []),
+    ...(decisionCount === 0 ? [] : ['decisions']),
     ...(critUrl === null ? [] : ['crit']),
   ]
   const defaultPanelTabId = availableTabIds.includes('crit')
@@ -105,7 +105,7 @@ export function useConversationStatusPanel({
       activeTabId === 'pull-requests',
   })
   const tabs: readonly SessionStatusPanelTab[] = [
-    ...(backgroundTasks.length > 0
+    ...(availableTabIds.includes('running')
       ? [
           {
             id: 'running',
@@ -120,9 +120,8 @@ export function useConversationStatusPanel({
           },
         ]
       : []),
-    ...(!treeAvailable
-      ? []
-      : [
+    ...(availableTabIds.includes('tree')
+      ? [
           {
             id: 'tree',
             label: 'Tree',
@@ -160,10 +159,10 @@ export function useConversationStatusPanel({
                 </>
               ),
           },
-        ]),
-    ...(!pullRequestListAvailable
-      ? []
-      : [
+        ]
+      : []),
+    ...(availableTabIds.includes('pull-requests')
+      ? [
           {
             id: 'pull-requests',
             label: 'PRs',
@@ -178,8 +177,9 @@ export function useConversationStatusPanel({
               />
             ),
           },
-        ]),
-    ...(decisionCount > 0
+        ]
+      : []),
+    ...(availableTabIds.includes('decisions')
       ? [
           {
             id: 'decisions',
@@ -203,16 +203,19 @@ export function useConversationStatusPanel({
           },
         ]
       : []),
-    ...(critUrl === null
-      ? []
-      : [
+    ...(availableTabIds.includes('crit')
+      ? [
           {
             id: 'crit',
             label: 'crit',
             count: 1,
-            content: <CritPane url={critUrl} onClose={onCloseStatusPanel} />,
+            content:
+              critUrl === null ? null : (
+                <CritPane url={critUrl} onClose={onCloseStatusPanel} />
+              ),
           },
-        ]),
+        ]
+      : []),
   ]
   useEffect(() => {
     if (activePanelTabId !== activeTabId) setActivePanelTabId(activeTabId)
