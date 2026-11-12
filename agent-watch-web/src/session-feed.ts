@@ -14,6 +14,16 @@ type SessionFeedDependencies = {
   createEventSource?: (url: string) => SessionEventSource
   reloadPage?: () => void
   requestRetryDelayMs?: number
+  visibilityTarget?: SessionFeedVisibilityTarget
+}
+
+type SessionFeedVisibilityTarget = {
+  visibilityState: DocumentVisibilityState
+  addEventListener: (type: 'visibilitychange', listener: EventListener) => void
+  removeEventListener: (
+    type: 'visibilitychange',
+    listener: EventListener,
+  ) => void
 }
 
 type SessionsFeedResponse =
@@ -248,9 +258,11 @@ export function startSessionFeed(
       window.location.reload()
     },
     requestRetryDelayMs = 2_000,
+    visibilityTarget = typeof document === 'undefined' ? undefined : document,
   }: SessionFeedDependencies = {},
 ) {
   let active = true
+  let visible = visibilityTarget?.visibilityState !== 'hidden'
   let requestPending = false
   let refreshQueued = false
   let requestError = false
@@ -259,6 +271,8 @@ export function startSessionFeed(
   let currentSessions: CurrentSessions | null = null
   let requestRetryTimer: ReturnType<typeof setTimeout> | null = null
   let reconnectPollTimer: ReturnType<typeof setInterval> | null = null
+  let eventSource: SessionEventSource | null = null
+  let reloadOnNextOpen = !visible
 
   const reportStatus = () => {
     if (requestError) {
@@ -287,7 +301,7 @@ export function startSessionFeed(
   }
 
   const reportRequestError = () => {
-    if (active) {
+    if (active && visible) {
       requestError = true
       reportStatus()
       scheduleRequestRetry()
@@ -334,6 +348,9 @@ export function startSessionFeed(
   }
 
   const refresh = () => {
+    if (!active || !visible) {
+      return
+    }
     refreshQueued = true
     if (!requestPending) {
       requestPending = true
@@ -341,11 +358,13 @@ export function startSessionFeed(
     }
   }
 
-  const eventSource = createEventSource('/api/events')
   const onSessionsEvent: EventListener = () => {
     refresh()
   }
   const onConnectionError: EventListener = () => {
+    if (!active || !visible) {
+      return
+    }
     streamError = true
     reportStatus()
     if (reconnectPollTimer === null) {
@@ -356,8 +375,12 @@ export function startSessionFeed(
     restartPending = true
   }
   const onConnectionOpen: EventListener = () => {
-    const restartDetected = restartPending
+    if (!active || !visible) {
+      return
+    }
+    const restartDetected = restartPending || reloadOnNextOpen
     restartPending = false
+    reloadOnNextOpen = false
     streamError = false
     if (reconnectPollTimer !== null) {
       clearInterval(reconnectPollTimer)
@@ -371,11 +394,59 @@ export function startSessionFeed(
     refresh()
   }
 
-  eventSource.addEventListener('sessions', onSessionsEvent)
-  eventSource.addEventListener('restart', onServerRestart)
-  eventSource.addEventListener('error', onConnectionError)
-  eventSource.addEventListener('open', onConnectionOpen)
-  refresh()
+  const startEventSource = () => {
+    if (!active || !visible || eventSource !== null) {
+      return
+    }
+    eventSource = createEventSource('/api/events')
+    eventSource.addEventListener('sessions', onSessionsEvent)
+    eventSource.addEventListener('restart', onServerRestart)
+    eventSource.addEventListener('error', onConnectionError)
+    eventSource.addEventListener('open', onConnectionOpen)
+  }
+
+  const stopEventSource = () => {
+    if (eventSource === null) {
+      return
+    }
+    eventSource.removeEventListener('sessions', onSessionsEvent)
+    eventSource.removeEventListener('restart', onServerRestart)
+    eventSource.removeEventListener('error', onConnectionError)
+    eventSource.removeEventListener('open', onConnectionOpen)
+    eventSource.close()
+    eventSource = null
+  }
+
+  const onVisibilityChange: EventListener = () => {
+    const nextVisible = visibilityTarget?.visibilityState !== 'hidden'
+    if (!active || nextVisible === visible) {
+      return
+    }
+
+    visible = nextVisible
+    if (!visible) {
+      reloadOnNextOpen = true
+      refreshQueued = false
+      clearRequestRetry()
+      if (reconnectPollTimer !== null) {
+        clearInterval(reconnectPollTimer)
+        reconnectPollTimer = null
+      }
+      requestError = false
+      streamError = false
+      reportStatus()
+      stopEventSource()
+      return
+    }
+
+    startEventSource()
+  }
+
+  visibilityTarget?.addEventListener('visibilitychange', onVisibilityChange)
+  if (visible) {
+    startEventSource()
+    refresh()
+  }
 
   return () => {
     active = false
@@ -384,10 +455,10 @@ export function startSessionFeed(
       clearInterval(reconnectPollTimer)
       reconnectPollTimer = null
     }
-    eventSource.removeEventListener('sessions', onSessionsEvent)
-    eventSource.removeEventListener('restart', onServerRestart)
-    eventSource.removeEventListener('error', onConnectionError)
-    eventSource.removeEventListener('open', onConnectionOpen)
-    eventSource.close()
+    visibilityTarget?.removeEventListener(
+      'visibilitychange',
+      onVisibilityChange,
+    )
+    stopEventSource()
   }
 }

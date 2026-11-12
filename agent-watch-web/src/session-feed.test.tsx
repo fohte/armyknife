@@ -2,7 +2,10 @@ import { afterEach, expect, it, vi } from 'vitest'
 
 import { startSessionFeed } from '#session-feed'
 
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+})
 
 class FakeEventSource {
   private listeners = new Map<string, EventListenerOrEventListenerObject>()
@@ -28,6 +31,26 @@ class FakeEventSource {
       listener(new Event(type))
     } else {
       listener?.handleEvent(new Event(type))
+    }
+  }
+}
+
+class FakeVisibilityTarget {
+  visibilityState: DocumentVisibilityState = 'visible'
+  private listeners = new Set<EventListener>()
+
+  addEventListener(_type: 'visibilitychange', listener: EventListener) {
+    this.listeners.add(listener)
+  }
+
+  removeEventListener(_type: 'visibilitychange', listener: EventListener) {
+    this.listeners.delete(listener)
+  }
+
+  setVisibility(visibilityState: DocumentVisibilityState) {
+    this.visibilityState = visibilityState
+    for (const listener of this.listeners) {
+      listener(new Event('visibilitychange'))
     }
   }
 }
@@ -718,4 +741,137 @@ it('retries a failed session request and clears the error after success', async 
     2,
     true,
   ])
+})
+
+it('stops stream retries and clears connection errors while hidden', async () => {
+  vi.useFakeTimers()
+  const source = new FakeEventSource()
+  const visibilityTarget = new FakeVisibilityTarget()
+  const failureReported = deferred<undefined>()
+  const errors: (string | null)[] = []
+  const fetcher = vi.fn().mockRejectedValue(new Error('offline'))
+  const stop = startSessionFeed(
+    () => {},
+    (message) => {
+      errors.push(message)
+      if (message === 'Unable to load sessions. Retrying…') {
+        failureReported.resolve(undefined)
+      }
+    },
+    {
+      fetcher,
+      createEventSource: () => source,
+      requestRetryDelayMs: 100,
+      visibilityTarget,
+    },
+  )
+
+  await failureReported.promise
+  source.emit('error')
+  visibilityTarget.setVisibility('hidden')
+  await vi.advanceTimersByTimeAsync(500)
+  stop()
+
+  const snapshot = () => ({
+    errors,
+    requests: fetcher.mock.calls.length,
+    sourceClosed: source.closed,
+  })
+  expect(snapshot()).toEqual({
+    errors: [
+      'Unable to load sessions. Retrying…',
+      'Unable to load sessions. Retrying…',
+      null,
+    ],
+    requests: 1,
+    sourceClosed: true,
+  })
+})
+
+it('reconnects when visible and reloads after being hidden', async () => {
+  const visibilityTarget = new FakeVisibilityTarget()
+  const sources: FakeEventSource[] = []
+  const received = deferred<undefined>()
+  const reloads: string[] = []
+  const fetcher = vi
+    .fn()
+    .mockResolvedValue(jsonResponse({ revision: 1, sessions: [] }))
+  const stop = startSessionFeed(
+    () => {
+      received.resolve(undefined)
+    },
+    () => {},
+    {
+      fetcher,
+      createEventSource: () => {
+        const source = new FakeEventSource()
+        sources.push(source)
+        return source
+      },
+      reloadPage: () => {
+        reloads.push('reloaded')
+      },
+      visibilityTarget,
+    },
+  )
+
+  await received.promise
+  visibilityTarget.setVisibility('hidden')
+  visibilityTarget.setVisibility('visible')
+  sources[1]?.emit('open')
+  stop()
+
+  const snapshot = () => ({
+    connections: sources.length,
+    closed: sources.map((source) => source.closed),
+    requests: fetcher.mock.calls.length,
+    reloads,
+  })
+  expect(snapshot()).toEqual({
+    connections: 2,
+    closed: [true, true],
+    requests: 1,
+    reloads: ['reloaded'],
+  })
+})
+
+it('does not run a queued session refresh after a request finishes while hidden', async () => {
+  const visibilityTarget = new FakeVisibilityTarget()
+  const sources: FakeEventSource[] = []
+  const firstRequestStarted = deferred<undefined>()
+  const firstResponse = deferred<Response>()
+  const firstResponseApplied = deferred<undefined>()
+  const fetcher = vi.fn().mockImplementationOnce(() => {
+    firstRequestStarted.resolve(undefined)
+    return firstResponse.promise
+  })
+  const stop = startSessionFeed(
+    () => {
+      firstResponseApplied.resolve(undefined)
+    },
+    () => {},
+    {
+      fetcher,
+      createEventSource: () => {
+        const source = new FakeEventSource()
+        sources.push(source)
+        return source
+      },
+      visibilityTarget,
+    },
+  )
+
+  await firstRequestStarted.promise
+  sources[0]?.emit('sessions')
+  visibilityTarget.setVisibility('hidden')
+  firstResponse.resolve(jsonResponse({ revision: 1, sessions: [] }))
+  await firstResponseApplied.promise
+  await Promise.resolve()
+  stop()
+
+  const snapshot = () => ({
+    requests: fetcher.mock.calls.length,
+    closed: sources.map((source) => source.closed),
+  })
+  expect(snapshot()).toEqual({ requests: 1, closed: [true] })
 })
