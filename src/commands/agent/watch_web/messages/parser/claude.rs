@@ -6,7 +6,6 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 mod background_tasks;
-pub(super) mod decision_position;
 mod proposals;
 mod questions;
 mod transcript_branch;
@@ -23,9 +22,9 @@ use super::super::parser::{
     for_each_jsonl_record, record_timestamp, tool_target,
 };
 use super::super::proposals::ProposalItem;
+use super::decision_position::{DecisionTimeline, insert_time_placed_decisions};
 use crate::commands::agent::store::{AgentDecision, WatchWebPeerOutMessage, WatchWebQueuedPrompt};
 use background_tasks::{BackgroundTaskTracker, task_notification_envelope, task_notification_text};
-use decision_position::insert_time_placed_decisions;
 use proposals::ProposalTimeline;
 use questions::{
     append_questions, apply_question_answers, parse_question_answers, tool_use_result_answers,
@@ -262,12 +261,7 @@ fn parse_with_background_tasks_and_image_directory(
     let mut question_uses = HashMap::<String, Vec<usize>>::new();
     let mut matched_peer_out_message_ids = HashSet::new();
     let mut background_tasks = BackgroundTaskTracker::default();
-    let mut unplaced_decisions = context
-        .decisions
-        .iter()
-        .cloned()
-        .map(|decision| (decision.seq, decision))
-        .collect::<BTreeMap<_, _>>();
+    let mut decision_timeline = DecisionTimeline::new(context.decisions);
     let mut proposal_timeline = ProposalTimeline::new(context.proposals);
     let mut skills = Vec::new();
 
@@ -294,7 +288,7 @@ fn parse_with_background_tasks_and_image_directory(
         }
         insert_time_placed_decisions(
             record_timestamp(&record),
-            &mut unplaced_decisions,
+            &mut decision_timeline,
             &mut tools,
             &mut items,
         );
@@ -549,7 +543,7 @@ fn parse_with_background_tasks_and_image_directory(
     }
     let resolved_queued_prompt_ids = queue.resolved_queued_prompt_ids();
     items.extend(queue.pending_items(parent, user_marker, context.image_directory));
-    items.extend(unplaced_decisions.into_values().map(Into::into));
+    decision_timeline.append_remaining(&mut items);
     proposal_timeline.append_remaining(&mut items);
     let background_tasks = background_tasks.into_api_tasks(now);
     Ok((items, background_tasks, resolved_queued_prompt_ids, skills))
