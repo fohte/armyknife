@@ -351,7 +351,7 @@ pub struct ToolInput {
     pub pattern: Option<String>,
     /// Whether a Bash command was launched without waiting for completion.
     pub run_in_background: bool,
-    /// Original arguments needed by PermissionRequest's updatedInput response.
+    /// Original arguments retained for watch-web permission inspection.
     pub raw: serde_json::Value,
 }
 
