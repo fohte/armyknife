@@ -78,7 +78,6 @@ export const SessionIsStarredForToday: Story = {
     session: { ...session, isToday: true },
     onLater: () => undefined,
     onToggleToday: () => undefined,
-    actionsVisible: true,
   },
 }
 

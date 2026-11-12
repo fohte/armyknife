@@ -88,7 +88,9 @@ export function SessionRow({
   return (
     <li className="session-list-item">
       <div
-        className={`session-row-layout${actionsVisible ? ' actions-visible' : ''}`}
+        className={`session-row-layout${actionsVisible ? ' actions-visible' : ''}${
+          session.isToday === true ? ' is-starred' : ''
+        }`}
       >
         <Button
           type="button"

@@ -99,6 +99,20 @@
     opacity: 1;
     pointer-events: auto;
   }
+
+  .session-row-layout.is-starred .session-row-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .session-row-layout.is-starred:not(:hover):not(:focus-within):not(
+      .actions-visible
+    )
+    .session-row-actions
+    > :not([aria-pressed='true']) {
+    opacity: 0;
+    pointer-events: none;
+  }
 }
 
 .session-action-button {
