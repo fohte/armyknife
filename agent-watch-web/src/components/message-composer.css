@@ -1,9 +1,59 @@
 .conversation-composer {
+  position: relative;
   width: min(712px, calc(100% - 48px));
   margin: 0 auto 20px;
   border: 1px solid var(--aw-border-control);
   border-radius: var(--aw-radius);
   background: var(--aw-bg-surface);
+}
+
+.composer-skill-suggestions {
+  position: absolute;
+  z-index: 2;
+  right: 0;
+  bottom: calc(100% - 4px);
+  left: 0;
+  max-height: min(320px, 40dvh);
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px;
+  border: 1px solid var(--aw-border-control);
+  border-radius: var(--aw-radius);
+  background: var(--aw-bg-surface);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+  list-style: none;
+}
+
+.composer-skill-option {
+  display: flex;
+  width: 100%;
+  min-height: 44px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: calc(var(--aw-radius) * 0.7);
+  background: transparent;
+  color: var(--aw-text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.composer-skill-option[aria-selected='true'],
+.composer-skill-option:hover {
+  background: var(--aw-bg-app);
+}
+
+.composer-skill-option small {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .conversation-composer textarea {
@@ -106,6 +156,11 @@
   border-top: 1px solid var(--aw-border);
   border-radius: var(--aw-radius);
   background: var(--aw-bg-surface);
+}
+
+.conversation-composer[data-mobile='true'] .composer-skill-suggestions {
+  bottom: calc(100% - 10px);
+  max-height: min(40dvh, 280px);
 }
 
 .conversation-composer[data-mobile='true'] textarea {

@@ -43,6 +43,18 @@ export const ComposerWithDraft: Story = {
   },
 }
 
+export const ComposerWithSkillSuggestions: Story = {
+  name: 'The composer filters skills after the slash trigger',
+  args: {
+    draft: '/deb',
+    engine: 'Claude',
+    skills: [
+      { name: 'design-flow', description: 'Help shape a design.' },
+      { name: 'debug-flow', description: 'Investigate and fix errors.' },
+    ],
+  },
+}
+
 export const ComposerWithImageAttachment: Story = {
   name: 'The composer shows a pasted image before sending',
   args: {

@@ -2,6 +2,7 @@ pub(super) mod classifier;
 pub(super) mod claude;
 pub(super) mod codex;
 pub(super) mod queue;
+pub(super) mod skill_suggestions;
 
 use std::io::BufRead;
 use std::path::Path;

@@ -15,6 +15,7 @@ mod user_input;
 use super::super::BackgroundTask;
 use super::super::ChatItem;
 use super::super::ParentSession;
+use super::super::SkillSuggestion;
 use super::super::parser::{
     ToolSummary, append_classification_with_image_directory,
     append_record_with_user_marker_and_image_directory, append_text_with_image_directory,
@@ -33,6 +34,13 @@ use transcript_branch::{BranchMembership, TranscriptNode, is_inactive_branch, ma
 use user_input::{
     content_blocks, is_tool_result_only_user_record, slash_command_text, user_content,
 };
+
+pub(in crate::commands::agent::watch_web::messages) type ParsedTranscript = (
+    Vec<ChatItem>,
+    Vec<BackgroundTask>,
+    Vec<i64>,
+    Vec<SkillSuggestion>,
+);
 
 #[cfg(test)]
 fn parse(
@@ -73,7 +81,7 @@ fn parse_with_image_directory(
             proposals: &[],
         },
     )
-    .map(|(messages, _, _)| messages)
+    .map(|(messages, _, _, _)| messages)
 }
 
 #[cfg(test)]
@@ -159,6 +167,25 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_with_queued_prompts
     now: DateTime<Utc>,
     additions: ParserAdditions<'_>,
 ) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>)> {
+    parse_with_queued_prompts_and_peer_out_messages_and_proposals_and_skills(
+        reader,
+        parent,
+        pending_tool,
+        user_marker,
+        now,
+        additions,
+    )
+    .map(|(messages, tasks, resolved_ids, _)| (messages, tasks, resolved_ids))
+}
+
+pub(in crate::commands::agent::watch_web::messages) fn parse_with_queued_prompts_and_peer_out_messages_and_proposals_and_skills(
+    reader: impl BufRead + Seek,
+    parent: Option<&ParentSession>,
+    pending_tool: Option<&str>,
+    user_marker: Option<&str>,
+    now: DateTime<Utc>,
+    additions: ParserAdditions<'_>,
+) -> std::io::Result<ParsedTranscript> {
     let image_directory = super::super::super::image_attachments::storage_directory().ok();
     parse_with_background_tasks_and_image_directory(
         reader,
@@ -200,7 +227,7 @@ fn parse_with_background_tasks_and_image_directory(
     user_marker: Option<&str>,
     now: DateTime<Utc>,
     context: ParseContext<'_>,
-) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>)> {
+) -> std::io::Result<ParsedTranscript> {
     let mut transcript_nodes = BTreeMap::new();
     let mut latest_uuid = None;
     let mut decision_tool_uses = Vec::new();
@@ -254,8 +281,14 @@ fn parse_with_background_tasks_and_image_directory(
         .map(|decision| (decision.seq, decision))
         .collect::<BTreeMap<_, _>>();
     let mut proposal_timeline = ProposalTimeline::new(context.proposals);
+    let mut skills = Vec::new();
 
     for_each_jsonl_record(&mut reader, |record| {
+        if let Some(attachment) = record.get("attachment")
+            && attachment.get("type").and_then(Value::as_str) == Some("skill_listing")
+        {
+            skills = super::skill_suggestions::parse_claude_listing(attachment.get("content"));
+        }
         let task_notification = task_notification_text(&record);
         if let Some(uuid) = record.get("uuid").and_then(Value::as_str) {
             let membership = transcript_nodes.get(uuid).map(|node| node.membership);
@@ -582,7 +615,7 @@ fn parse_with_background_tasks_and_image_directory(
     items.extend(unplaced_decisions.into_values().map(Into::into));
     proposal_timeline.append_remaining(&mut items);
     let background_tasks = background_tasks.into_api_tasks(now);
-    Ok((items, background_tasks, resolved_queued_prompt_ids))
+    Ok((items, background_tasks, resolved_queued_prompt_ids, skills))
 }
 
 fn recorded_proposal_seq(text: &str) -> Option<i64> {
@@ -698,14 +731,53 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ProposalItem, parse, parse_with_decisions_and_queued_prompts, parse_with_image_directory,
+        ParserAdditions, ProposalItem, parse, parse_with_decisions_and_queued_prompts,
+        parse_with_image_directory,
+        parse_with_queued_prompts_and_peer_out_messages_and_proposals_and_skills,
         parse_with_queued_prompts_and_proposals, recorded_proposal_seq,
     };
     use crate::commands::agent::store::AgentDecision;
     use crate::commands::agent::watch_web::messages::{
-        ChatItem, ParentSession, PeerDirection, ProposalOption, QuestionChoice, ToolOperation,
-        UserContentPart,
+        ChatItem, ParentSession, PeerDirection, ProposalOption, QuestionChoice, SkillSuggestion,
+        ToolOperation, UserContentPart,
     };
+
+    #[test]
+    fn uses_the_latest_skill_listing_from_the_transcript() {
+        let transcript = indoc! {r#"
+            {"attachment":{"type":"skill_listing","content":"- legacy-tool: An older entry."}}
+            {"attachment":{"type":"skill_listing","content":"- design-flow: Help shape a design.\n- debug-flow: Investigate a failure."}}
+        "#};
+        let (_, _, _, skills) =
+            parse_with_queued_prompts_and_peer_out_messages_and_proposals_and_skills(
+                Cursor::new(transcript),
+                None,
+                None,
+                None,
+                Utc::now(),
+                ParserAdditions {
+                    decisions: &[],
+                    queued_prompts: &[],
+                    peer_out_messages: &[],
+                    proposals: &[],
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            skills,
+            vec![
+                SkillSuggestion {
+                    name: "design-flow".to_string(),
+                    description: "Help shape a design.".to_string(),
+                },
+                SkillSuggestion {
+                    name: "debug-flow".to_string(),
+                    description: "Investigate a failure.".to_string(),
+                },
+            ],
+        );
+    }
 
     #[rstest]
     #[case::exact_output("Recorded proposal 12", Some(12))]
