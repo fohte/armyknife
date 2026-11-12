@@ -453,29 +453,24 @@ it('selects the final skill with ArrowUp and Tab', () => {
   })
 })
 
-it('does not complete Codex slash commands', () => {
-  renderFreshComposer({
-    engine: 'Codex',
+it.each([
+  {
+    reason: 'Codex slash commands',
+    engine: 'Codex' as const,
     skills: skillSuggestions,
-  })
+    draft: 'Run /de',
+  },
+  {
+    reason: 'a missing transcript catalog',
+    engine: 'Claude' as const,
+    skills: [],
+    draft: 'Run /de',
+  },
+])('does not show suggestions for $reason', ({ engine, skills, draft }) => {
+  renderFreshComposer({ engine, skills })
   setTextareaValue(
     requireElement(container.querySelector<HTMLTextAreaElement>('textarea')),
-    'Run /de',
-  )
-
-  const snapshot = () => ({
-    suggestions: container.querySelectorAll('[role="option"]').length,
-  })
-  expect(snapshot()).toEqual({ suggestions: 0 })
-})
-
-it('does not complete when the transcript has no skills', () => {
-  renderFreshComposer({
-    engine: 'Claude',
-  })
-  setTextareaValue(
-    requireElement(container.querySelector<HTMLTextAreaElement>('textarea')),
-    'Run /de',
+    draft,
   )
 
   const snapshot = () => ({
@@ -543,7 +538,6 @@ it('selects a matching skill after the caret moves to a narrower query', () => {
   const onKeyDown = vi.fn()
   renderFreshComposer({
     engine: 'Codex',
-    initialDraft: '$d then $deb',
     skills: skillSuggestions,
     onKeyDown,
   })
@@ -551,6 +545,11 @@ it('selects a matching skill after the caret moves to a narrower query', () => {
     container.querySelector<HTMLTextAreaElement>('textarea'),
   )
   setTextareaValue(textarea, '$d then $deb', '$d'.length)
+  act(() => {
+    textarea.setSelectionRange('$d'.length, '$d'.length)
+    textarea.dispatchEvent(new Event('select', { bubbles: true }))
+  })
+  const initialOptions = container.querySelectorAll('[role="option"]').length
   act(() => {
     textarea.dispatchEvent(
       new KeyboardEvent('keydown', {
@@ -561,8 +560,10 @@ it('selects a matching skill after the caret moves to a narrower query', () => {
     )
   })
   act(() => {
+    textarea.focus()
     textarea.setSelectionRange('$d then $deb'.length, '$d then $deb'.length)
     textarea.dispatchEvent(new Event('select', { bubbles: true }))
+    document.dispatchEvent(new Event('selectionchange'))
   })
   act(() => {
     textarea.dispatchEvent(
@@ -575,11 +576,13 @@ it('selects a matching skill after the caret moves to a narrower query', () => {
   })
 
   const snapshot = () => ({
+    initialOptions,
     draft: textarea.value,
     delegatedKeydowns: onKeyDown.mock.calls.length,
     suggestions: container.querySelectorAll('[role="option"]').length,
   })
   expect(snapshot()).toEqual({
+    initialOptions: 2,
     draft: '$d then $debug-flow ',
     delegatedKeydowns: 0,
     suggestions: 0,
