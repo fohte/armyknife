@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.615](https://github.com/fohte/armyknife/compare/v0.1.614...v0.1.615) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent:** explain when to retry a busy close ([#1597](https://github.com/fohte/armyknife/issues/1597)) ([f1016e5](https://github.com/fohte/armyknife/commit/f1016e51cb18c739a8d48752223f64f14a46fc05))
+
 ## [0.1.614](https://github.com/fohte/armyknife/compare/v0.1.613...v0.1.614) (2026-11-12)
 
 
