@@ -414,7 +414,7 @@ mod tests {
             ),
             (
                 Err(format!(
-                    "Agent session `{}` is running or waiting for input; pass --force to close it",
+                    "Agent session `{}` is running or waiting for input; complete any requested input and wait for the current turn to finish, then retry this command",
                     session.session_id,
                 )),
                 vec![],
