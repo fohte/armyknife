@@ -1412,7 +1412,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn permission_action_for_expired_request_guides_user_to_terminal() {
+    async fn permission_action_after_hook_auto_deny_returns_conflict() {
         let action_context = action_context();
         let mut session = session("sample-session");
         action_context.save_pending_permission_request(
@@ -1425,7 +1425,12 @@ mod tests {
             store::PermissionRequestWaiter::open(&action_context.temp_dir.path().join("sessions"))
                 .unwrap();
         waiter
-            .expire("sample-session", "main", "permission-request-main")
+            .expire_with_deny(
+                "sample-session",
+                "main",
+                "permission-request-main",
+                "automatic denial fixture",
+            )
             .unwrap();
 
         let response = action_context

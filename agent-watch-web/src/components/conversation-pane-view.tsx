@@ -2,9 +2,14 @@ import '#components/conversation-pane.css'
 import '#components/conversation-pane-view.css'
 
 import { Button } from '@fohte/ui/button'
-import { ChevronLeft } from 'lucide-react'
-import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { useCallback, useMemo, useRef } from 'react'
+import { ChevronLeft, PanelRightOpen } from 'lucide-react'
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+  useCallback,
+  useMemo,
+  useRef,
+} from 'react'
 
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
 import { MessageComposer } from '#components/message-composer'
@@ -61,6 +66,7 @@ type ConversationPaneViewProps = {
   onSelectSession: (id: string) => void
   isMobile?: boolean
   statusPanelOpen?: boolean
+  mobileStatusPanel?: ReactNode
   decisionsPanelOpen?: boolean
   selectedDecisionSeq?: number | null
   onToggleStatusPanel?: () => void
@@ -99,6 +105,7 @@ export function ConversationPaneView({
   onSelectSession,
   isMobile = false,
   statusPanelOpen = false,
+  mobileStatusPanel = null,
   decisionsPanelOpen = false,
   selectedDecisionSeq = null,
   onToggleStatusPanel = () => undefined,
@@ -190,7 +197,6 @@ export function ConversationPaneView({
     sessions: sessionLinkTargets,
   })
   const parent = session.parent
-  const isReview = session.kind === 'Review'
   const linkedTasks =
     session.tasks ?? (session.task === null ? [] : [session.task])
 
@@ -289,6 +295,24 @@ export function ConversationPaneView({
                 <span>{session.repo.split('/').at(-1)}</span>
               </div>
             </div>
+            <Button
+              className="mobile-conversation-status-toggle"
+              type="button"
+              variant="plain"
+              aria-label="Toggle session status panel"
+              aria-expanded={statusPanelOpen}
+              aria-controls="session-status-panel"
+              onClick={() => {
+                onToggleStatusPanel()
+              }}
+            >
+              <PanelRightOpen aria-hidden="true" size={18} />
+              {backgroundTasks.length > 0 ? (
+                <span className="conversation-status-panel-count">
+                  {backgroundTasks.length}
+                </span>
+              ) : null}
+            </Button>
             <Button
               className="mobile-conversation-later cursor-pointer"
               type="button"
@@ -428,12 +452,6 @@ export function ConversationPaneView({
         )}
       </header>
 
-      {isMobile && isReview ? (
-        <p className="mobile-review-note">
-          Open this session on your Mac to review it in crit.
-        </p>
-      ) : null}
-
       <div
         ref={conversationScrollRef}
         className="conversation-scroll"
@@ -521,6 +539,9 @@ export function ConversationPaneView({
           void onAction('interrupt')
         }}
       />
+      {isMobile && statusPanelOpen && mobileStatusPanel !== null ? (
+        <div className="mobile-session-status-overlay">{mobileStatusPanel}</div>
+      ) : null}
     </section>
   )
 

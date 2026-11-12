@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.1.634](https://github.com/fohte/armyknife/compare/v0.1.633...v0.1.634) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent/hook:** deny expired permission requests ([#1636](https://github.com/fohte/armyknife/issues/1636)) ([df9344d](https://github.com/fohte/armyknife/commit/df9344d08c61902913b3dd9fc4aef4ee3f6312f9))
+
+## [0.1.633](https://github.com/fohte/armyknife/compare/v0.1.632...v0.1.633) (2026-11-12)
+
+
+### Features
+
+* **agent-watch-web:** support mobile status panel ([#1632](https://github.com/fohte/armyknife/issues/1632)) ([9c0d05a](https://github.com/fohte/armyknife/commit/9c0d05a2a23bb5797162cb1a51ab6f50143630af))
+
+## [0.1.632](https://github.com/fohte/armyknife/compare/v0.1.631...v0.1.632) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** prevent input zoom on mobile ([#1633](https://github.com/fohte/armyknife/issues/1633)) ([1c71c5e](https://github.com/fohte/armyknife/commit/1c71c5ec9296a1a18b062d4c62ab6ab8452d7032))
+
+## [0.1.631](https://github.com/fohte/armyknife/compare/v0.1.630...v0.1.631) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** close iPhone Inbox top gap ([#1630](https://github.com/fohte/armyknife/issues/1630)) ([3b1608a](https://github.com/fohte/armyknife/commit/3b1608adf0b875ac17ef30464aebf0a8547e30f9))
+
 ## [0.1.630](https://github.com/fohte/armyknife/compare/v0.1.629...v0.1.630) (2026-11-12)
 
 

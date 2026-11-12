@@ -5,6 +5,7 @@
 @import './design-tokens.css';
 @import '@fontsource-variable/jetbrains-mono';
 @import './components/mobile-layout.css';
+@import './components/mobile-input-zoom.css';
 @import '@fontsource-variable/noto-sans-jp/wght.css';
 
 @source '../node_modules/@fohte/ui/src';
