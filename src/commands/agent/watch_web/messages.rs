@@ -27,12 +27,14 @@ use crate::commands::agent::user_turn::is_ask_user_question;
 
 mod background_task_outputs;
 mod background_tasks;
+mod incremental;
 mod parser;
 mod proposals;
 mod questions;
 mod range;
 mod subagent_reports;
 
+use self::incremental::parse_session_transcript_incrementally;
 use self::proposals::proposal_chat_item;
 #[cfg(test)]
 use self::questions::QuestionChoice;
@@ -42,10 +44,7 @@ use self::questions::{
 use self::range::MessageRange;
 
 mod cache;
-use self::cache::{
-    CachedTranscriptParser, IncrementalTranscriptParser, MessageCache, MessageCacheKey,
-    MessageCacheRecords, RunningBackgroundTaskCache, TranscriptChange, TranscriptFingerprint,
-};
+use self::cache::{MessageCache, MessageCacheKey, MessageCacheRecords, RunningBackgroundTaskCache};
 mod session_titles;
 use self::session_titles::{parent_session, resolve_peer_session_titles};
 
@@ -535,150 +534,6 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript(
     }
 }
 
-fn parse_session_transcript_incrementally(
-    session_id: &str,
-    input: TranscriptInput<'_>,
-    fingerprint: Option<TranscriptFingerprint>,
-    cache: &MessageCache,
-) -> Result<(ConversationResponse, Vec<i64>)> {
-    let (Some(path), Some(fingerprint)) = (input.path, fingerprint) else {
-        return parse_session_transcript(input);
-    };
-    if fingerprint.is_compressed() {
-        return parse_session_transcript(input);
-    }
-
-    let parser_slot = cache.transcript_parser_slot(session_id);
-    let mut cached = parser_slot
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let parent_session_id = input.parent.map(|parent| parent.session_id.clone());
-    let mut restart = true;
-    if let Some(entry) = cached.as_mut()
-        && entry.engine == input.engine
-        && entry.parent_session_id == parent_session_id
-        && matches!(
-            (&entry.parser, input.engine),
-            (IncrementalTranscriptParser::Claude(_), Engine::Claude)
-                | (IncrementalTranscriptParser::Codex(_), Engine::Codex)
-        )
-    {
-        let (change, suffix) = fingerprint.read_delta_from(&entry.fingerprint)?;
-        match change {
-            TranscriptChange::Unchanged => restart = false,
-            TranscriptChange::Appended => {
-                let append = match &mut entry.parser {
-                    IncrementalTranscriptParser::Claude(parser) => {
-                        matches!(
-                            parser.append_bytes(&suffix, chrono::Utc::now())?,
-                            parser::claude::IncrementalAppend::Applied
-                        )
-                    }
-                    IncrementalTranscriptParser::Codex(parser) => {
-                        parser.append(Cursor::new(suffix.as_slice()))?;
-                        true
-                    }
-                };
-                if append {
-                    entry.fingerprint = fingerprint.clone();
-                    restart = false;
-                }
-            }
-            TranscriptChange::Rewritten => {}
-        }
-    }
-
-    if !restart
-        && let Some(entry) = cached.as_mut()
-        && let Some(conversation) = render_incremental_parser(entry, path, &input)?
-    {
-        return Ok(conversation);
-    } else if !restart {
-        restart = true;
-    }
-
-    if restart {
-        let parser = match input.engine {
-            Engine::Claude => {
-                let reader = open_seekable_transcript(path)?
-                    .unwrap_or_else(|| Box::new(Cursor::new(Vec::new())));
-                let parser = parser::claude::IncrementalClaudeParser::new(
-                    reader,
-                    input.parent,
-                    input.pending_tool,
-                    input.watch_web_user_marker,
-                    chrono::Utc::now(),
-                    input.additions,
-                )?;
-                IncrementalTranscriptParser::Claude(Box::new(parser))
-            }
-            Engine::Codex => {
-                let mut parser = parser::codex::CodexParserState::new(input.parent);
-                if let Some(reader) = open_transcript(path, false)? {
-                    parser.append(reader)?;
-                }
-                IncrementalTranscriptParser::Codex(parser)
-            }
-        };
-        *cached = Some(CachedTranscriptParser {
-            fingerprint,
-            engine: input.engine,
-            parent_session_id,
-            parser,
-        });
-    }
-
-    let entry = cached
-        .as_mut()
-        .ok_or_else(|| anyhow::anyhow!("incremental transcript parser was not initialized"))?;
-    render_incremental_parser(entry, path, &input)?
-        .ok_or_else(|| anyhow::anyhow!("Claude transcript parser requires a full restart"))
-}
-
-fn render_incremental_parser(
-    entry: &mut CachedTranscriptParser,
-    path: &Path,
-    input: &TranscriptInput<'_>,
-) -> Result<Option<(ConversationResponse, Vec<i64>)>> {
-    match &mut entry.parser {
-        IncrementalTranscriptParser::Claude(parser) => {
-            let parsed = match parser.snapshot_with(
-                chrono::Utc::now(),
-                input.parent,
-                input.pending_tool,
-                input.watch_web_user_marker,
-                input.additions,
-            )? {
-                parser::claude::IncrementalClaudeSnapshot::Parsed(parsed) => parsed,
-                parser::claude::IncrementalClaudeSnapshot::RestartRequired => return Ok(None),
-            };
-            let (mut messages, background_tasks, resolved_queued_prompt_ids, skills) = parsed;
-            subagent_reports::add_descriptions(path, &mut messages);
-            Ok(Some((
-                ConversationResponse {
-                    messages,
-                    background_tasks,
-                    skills,
-                    ..ConversationResponse::default()
-                },
-                resolved_queued_prompt_ids,
-            )))
-        }
-        IncrementalTranscriptParser::Codex(parser) => {
-            let (messages, skills) = parser
-                .render_with_decisions_and_todos(input.additions.decisions, input.additions.todos);
-            Ok(Some((
-                ConversationResponse {
-                    messages,
-                    skills,
-                    ..ConversationResponse::default()
-                },
-                Vec::new(),
-            )))
-        }
-    }
-}
-
 trait SeekableBufRead: BufRead + Seek {}
 
 impl<T: BufRead + Seek> SeekableBufRead for T {}
@@ -935,6 +790,7 @@ struct ParentSession {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
+    use std::io::Write;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
@@ -1072,6 +928,107 @@ mod tests {
                 ),
             ),
         );
+    }
+
+    #[rstest]
+    #[case::claude(false)]
+    #[case::codex(true)]
+    #[tokio::test]
+    async fn messages_route_parses_appended_transcript_records(#[case] use_codex_transcript: bool) {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("fixture.jsonl");
+        let (first_record, appended_record) = if use_codex_transcript {
+            (
+                json!({
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "First response."}],
+                    },
+                }),
+                json!({
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Appended response."}],
+                    },
+                }),
+            )
+        } else {
+            (
+                json!({
+                    "uuid": "fixture-first-record",
+                    "parentUuid": null,
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "First response."}]},
+                }),
+                json!({
+                    "uuid": "fixture-appended-record",
+                    "parentUuid": "fixture-first-record",
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "Appended response."}]},
+                }),
+            )
+        };
+        std::fs::write(&transcript_path, format!("{}\n", first_record)).unwrap();
+
+        let mut session = stored_session();
+        session.engine = if use_codex_transcript {
+            Engine::Codex
+        } else {
+            Engine::Claude
+        };
+        session.transcript_path = Some(transcript_path.clone());
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+        );
+
+        let first = message_response(&router).await;
+        let mut transcript = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&transcript_path)
+            .unwrap();
+        writeln!(transcript, "{appended_record}").unwrap();
+        let appended = message_response(&router).await;
+
+        let expected_first = (
+            StatusCode::OK,
+            Some("application/json".to_string()),
+            json!({
+                "messages": [{"type": "assistant", "text": "First response."}],
+                "backgroundTasks": [],
+                "start": 0,
+                "total": 1,
+                "decisions": [],
+                "hasUnansweredProposal": false,
+                "activeQuestionIndex": null,
+            }),
+        );
+        let expected_appended = (
+            StatusCode::OK,
+            Some("application/json".to_string()),
+            json!({
+                "messages": [
+                    {"type": "assistant", "text": "First response."},
+                    {"type": "assistant", "text": "Appended response."},
+                ],
+                "backgroundTasks": [],
+                "start": 0,
+                "total": 2,
+                "decisions": [],
+                "hasUnansweredProposal": false,
+                "activeQuestionIndex": null,
+            }),
+        );
+
+        assert_eq!((first, appended), (expected_first, expected_appended));
     }
 
     #[rstest]

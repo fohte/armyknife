@@ -29,12 +29,11 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_with_skills(
 ) -> std::io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
     let mut parser = CodexParserState::new(parent);
     parser.append(reader)?;
-    let rendered = if todos.is_empty() {
+    if todos.is_empty() {
         parser.render_with_decisions(decisions)
     } else {
         parser.render_with_decisions_and_todos(decisions, todos)
-    };
-    Ok(rendered)
+    }
 }
 
 #[derive(Clone, Default)]
@@ -55,19 +54,50 @@ struct TimedCodexEvent {
 #[derive(Clone)]
 enum CodexEffect {
     AssistantMessage {
-        text: String,
+        text: CodexText,
         timestamp: Option<DateTime<Utc>>,
     },
     UserMessage {
-        text: String,
+        text: CodexText,
         timestamp: Option<DateTime<Utc>>,
     },
     ArmyknifeEvent {
-        text: String,
+        text: CodexText,
         timestamp: Option<DateTime<Utc>>,
     },
     ToolAction(CodexToolSummaryRecord),
     EditedFiles(Vec<String>),
+}
+
+#[derive(Clone)]
+enum CodexText {
+    Plain(String),
+    Compressed(Vec<u8>),
+}
+
+impl CodexText {
+    fn new(text: String) -> io::Result<Self> {
+        if text.len() < 256 {
+            return Ok(Self::Plain(text));
+        }
+        let compressed = zstd::stream::encode_all(text.as_bytes(), 1)?;
+        if compressed.len() < text.len() {
+            Ok(Self::Compressed(compressed))
+        } else {
+            Ok(Self::Plain(text))
+        }
+    }
+
+    fn decode(&self) -> io::Result<String> {
+        match self {
+            Self::Plain(text) => Ok(text.clone()),
+            Self::Compressed(bytes) => {
+                let bytes = zstd::stream::decode_all(bytes.as_slice())?;
+                String::from_utf8(bytes)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+            }
+        }
+    }
 }
 
 impl CodexParserState {
@@ -92,7 +122,7 @@ impl CodexParserState {
             }
             self.partial_line.extend_from_slice(&line);
             if line.last() == Some(&b'\n') {
-                self.process_pending_line();
+                self.process_pending_line()?;
             }
         }
         Ok(())
@@ -101,7 +131,7 @@ impl CodexParserState {
     pub(in crate::commands::agent::watch_web::messages) fn render_with_decisions(
         &self,
         decisions: &[AgentDecision],
-    ) -> (Vec<ChatItem>, Vec<SkillSuggestion>) {
+    ) -> io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
         self.render_with_decisions_and_todos(decisions, &[])
     }
 
@@ -109,25 +139,26 @@ impl CodexParserState {
         &self,
         decisions: &[AgentDecision],
         todos: &[AgentTodo],
-    ) -> (Vec<ChatItem>, Vec<SkillSuggestion>) {
+    ) -> io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
         if self.partial_line.is_empty() {
             return self.render_events(decisions, todos);
         }
         let mut parser = self.clone();
-        parser.process_pending_line();
+        parser.process_pending_line()?;
         parser.render_events(decisions, todos)
     }
 
-    fn process_pending_line(&mut self) {
+    fn process_pending_line(&mut self) -> io::Result<()> {
         let line = std::mem::take(&mut self.partial_line);
         if let Ok(line) = std::str::from_utf8(&line)
             && let Ok(record) = serde_json::from_str(line)
         {
-            self.process_record(record);
+            self.process_record(record)?;
         }
+        Ok(())
     }
 
-    fn process_record(&mut self, record: Value) {
+    fn process_record(&mut self, record: Value) -> io::Result<()> {
         super::skill_suggestions::capture_codex_listing(&record, &mut self.skills);
         let timestamp = record_timestamp(&record);
         let mut effects = Vec::new();
@@ -146,7 +177,10 @@ impl CodexParserState {
                         if role == Some("assistant") {
                             let text = content_text(payload.get("content"));
                             if !text.is_empty() {
-                                effects.push(CodexEffect::AssistantMessage { text, timestamp });
+                                effects.push(CodexEffect::AssistantMessage {
+                                    text: CodexText::new(text)?,
+                                    timestamp,
+                                });
                             }
                         }
                     }
@@ -227,11 +261,14 @@ impl CodexParserState {
                                 && classifier::is_watch_web_action_tag(tag)
                             {
                                 effects.push(CodexEffect::ArmyknifeEvent {
-                                    text: body.to_owned(),
+                                    text: CodexText::new(body.to_owned())?,
                                     timestamp,
                                 });
                             } else {
-                                effects.push(CodexEffect::UserMessage { text, timestamp });
+                                effects.push(CodexEffect::UserMessage {
+                                    text: CodexText::new(text)?,
+                                    timestamp,
+                                });
                             }
                         }
                     }
@@ -267,13 +304,14 @@ impl CodexParserState {
             }
         }
         self.events.push(TimedCodexEvent { timestamp, effects });
+        Ok(())
     }
 
     fn render_events(
         &self,
         decisions: &[AgentDecision],
         todos: &[AgentTodo],
-    ) -> (Vec<ChatItem>, Vec<SkillSuggestion>) {
+    ) -> io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
         let mut items = Vec::new();
         let mut tools = ToolSummary::default();
         let mut decision_timeline = DecisionTimeline::new(decisions);
@@ -290,13 +328,13 @@ impl CodexParserState {
                 match effect {
                     CodexEffect::AssistantMessage { text, timestamp } => {
                         tools.flush_into(&mut items);
-                        append_text(&mut items, text.clone(), false, None, *timestamp);
+                        append_text(&mut items, text.decode()?, false, None, *timestamp);
                     }
                     CodexEffect::UserMessage { text, timestamp } => {
                         tools.flush_into(&mut items);
                         append_text(
                             &mut items,
-                            text.clone(),
+                            text.decode()?,
                             true,
                             self.parent.as_ref(),
                             *timestamp,
@@ -306,7 +344,7 @@ impl CodexParserState {
                         tools.flush_into(&mut items);
                         items.push(ChatItem::Event {
                             kind: EventKind::Armyknife,
-                            text: classifier::one_line(text),
+                            text: classifier::one_line(&text.decode()?),
                             failed: false,
                             timestamp: timestamp.map(|timestamp| timestamp.to_rfc3339()),
                         });
@@ -333,7 +371,7 @@ impl CodexParserState {
         }
         decision_timeline.append_remaining(&mut items);
         todo_timeline.append_remaining(&mut items);
-        (items, self.skills.clone())
+        Ok((items, self.skills.clone()))
     }
 }
 
@@ -483,8 +521,39 @@ mod tests {
         parser.append(Cursor::new(suffix)).unwrap();
 
         assert_eq!(
-            parser.render_with_decisions(&[]),
+            parser.render_with_decisions(&[]).unwrap(),
             parse_with_skills(Cursor::new(full_transcript), None, &[], &[]).unwrap(),
+        );
+    }
+
+    #[test]
+    fn compressed_message_text_preserves_the_conversation_output() {
+        let text = "A fictional transcript paragraph with repeated details. ".repeat(16);
+        let record = json!({
+            "type": "response_item",
+            "timestamp": "2026-06-01T12:00:00Z",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{ "type": "output_text", "text": text.clone() }],
+            },
+        });
+        let transcript = format!("{record}\n");
+        let mut parser = CodexParserState::new(None);
+        parser.append(Cursor::new(transcript.as_bytes())).unwrap();
+
+        let output = parser.render_with_decisions(&[]).unwrap();
+        let compressed = matches!(
+            &parser.events[0].effects[0],
+            super::CodexEffect::AssistantMessage {
+                text: super::CodexText::Compressed(_),
+                ..
+            }
+        );
+
+        assert_eq!(
+            (output, compressed),
+            ((vec![ChatItem::Assistant { text }], Vec::new()), true),
         );
     }
 
@@ -510,7 +579,9 @@ mod tests {
         parser.append(Cursor::new(transcript)).unwrap();
 
         assert_eq!(
-            parser.render_with_decisions(std::slice::from_ref(&decision)),
+            parser
+                .render_with_decisions(std::slice::from_ref(&decision))
+                .unwrap(),
             parse_with_skills(Cursor::new(transcript), None, &[decision], &[]).unwrap(),
         );
     }
@@ -526,7 +597,7 @@ mod tests {
         parser.append(Cursor::new(transcript)).unwrap();
 
         assert_eq!(
-            parser.render_with_decisions_and_todos(&[], &todos),
+            parser.render_with_decisions_and_todos(&[], &todos).unwrap(),
             parse_with_skills(Cursor::new(transcript), None, &[], &todos).unwrap(),
         );
     }
