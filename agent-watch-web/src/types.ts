@@ -29,6 +29,7 @@ export type SessionPullRequest = {
   number: number
   title: string
   url: string
+  headSha: string | null
   state: 'Open' | 'Closed' | 'Merged' | null
   ciState: 'Waiting' | 'InProgress' | 'Successful' | 'Unknown' | null
   reviewStatus:

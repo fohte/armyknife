@@ -20,6 +20,7 @@ mod api_error;
 mod close;
 mod decisions;
 mod keyed_mutex_registry;
+mod merge_pull_request;
 mod messages;
 mod proposal_answer_locks;
 mod proposals;
@@ -79,6 +80,10 @@ fn router_with_state(state: ActionState) -> Router {
         .route("/sessions/{id}/read", post(mark_read))
         .route("/sessions/{id}/primary-task", post(set_primary_task))
         .route("/sessions/{id}/close", post(close::close))
+        .route(
+            "/sessions/{id}/pull-requests/{number}/merge",
+            post(merge_pull_request::merge_pull_request),
+        )
         .with_state(state)
 }
 
@@ -109,6 +114,12 @@ trait ActionRuntime: Send + Sync {
         session: &'a Session,
         keep_worktree: bool,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+    fn merge_pull_request<'a>(
+        &'a self,
+        session: &'a Session,
+        pr_number: u64,
+        expected_head_sha: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<crate::commands::gh::WatchWebPrMergeResult>> + Send + 'a>>;
 }
 
 struct LiveActionRuntime;
@@ -174,9 +185,29 @@ impl ActionRuntime for LiveActionRuntime {
         keep_worktree: bool,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let session = session.clone();
-        Box::pin(close::run_close_on_blocking_worker(move || async move {
+        Box::pin(close::run_on_blocking_worker(move || async move {
             crate::commands::agent::close_from_watch_web(&session, keep_worktree).await
         }))
+    }
+
+    fn merge_pull_request<'a>(
+        &'a self,
+        session: &'a Session,
+        pr_number: u64,
+        expected_head_sha: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<crate::commands::gh::WatchWebPrMergeResult>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let repo = crate::infra::git::GitRepo::open_at(&session.cwd)?;
+            let (owner, repo_name) = crate::infra::git::github_owner_and_repo(&repo)?;
+            crate::commands::gh::run_watch_web_pr_merge(
+                &owner,
+                &repo_name,
+                pr_number,
+                expected_head_sha,
+            )
+            .await
+        })
     }
 }
 
@@ -499,6 +530,9 @@ mod tests {
     #[path = "todos.rs"]
     mod todos;
 
+    #[path = "merge_pull_request.rs"]
+    mod merge_pull_request;
+
     struct FakeRuntime {
         calls: Mutex<Vec<Value>>,
         message_error: Mutex<Option<String>>,
@@ -514,6 +548,8 @@ mod tests {
         pane_command_matches: Mutex<bool>,
         close_unmerged_worktree: Mutex<bool>,
         sessions_dir: Mutex<Option<PathBuf>>,
+        merge_error: Mutex<Option<String>>,
+        merge_result: Mutex<crate::commands::gh::WatchWebPrMergeResult>,
     }
 
     impl Default for FakeRuntime {
@@ -528,6 +564,8 @@ mod tests {
                 pane_command_matches: Mutex::new(true),
                 close_unmerged_worktree: Mutex::new(false),
                 sessions_dir: Mutex::new(None),
+                merge_error: Mutex::new(None),
+                merge_result: Mutex::new(crate::commands::gh::WatchWebPrMergeResult::Merged),
             }
         }
     }
@@ -628,6 +666,32 @@ mod tests {
                     })?;
                 }
                 Ok(())
+            })
+        }
+
+        fn merge_pull_request<'a>(
+            &'a self,
+            session: &'a Session,
+            pr_number: u64,
+            expected_head_sha: &'a str,
+        ) -> Pin<
+            Box<
+                dyn Future<Output = Result<crate::commands::gh::WatchWebPrMergeResult>> + Send + 'a,
+            >,
+        > {
+            self.calls.lock().unwrap().push(json!({
+                "kind": "merge-pull-request",
+                "sessionId": session.session_id,
+                "number": pr_number,
+                "expectedHeadSha": expected_head_sha,
+            }));
+            let error = self.merge_error.lock().unwrap().clone();
+            let result = self.merge_result.lock().unwrap().clone();
+            Box::pin(async move {
+                if let Some(error) = error {
+                    return Err(anyhow::anyhow!(error));
+                }
+                Ok(result)
             })
         }
     }

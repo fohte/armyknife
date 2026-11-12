@@ -21,6 +21,7 @@ pub(in crate::commands::agent) struct PullRequestListItem {
     pub number: u64,
     pub title: String,
     pub url: String,
+    pub head_sha: Option<String>,
     pub state: Option<PrState>,
     pub ci_state: Option<PrCiState>,
     pub review_status: String,

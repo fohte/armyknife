@@ -16,11 +16,25 @@ pub(super) async fn run_merge(
     repo: &str,
     pr_number: u64,
 ) -> anyhow::Result<MergeOutcome> {
+    run_merge_with_expected_head(client, hook_runner, owner, repo, pr_number, None).await
+}
+
+pub(super) async fn run_merge_with_expected_head(
+    client: &impl PrMergeClient,
+    hook_runner: &mut impl FnMut(&[(&str, &str)]) -> anyhow::Result<()>,
+    owner: &str,
+    repo: &str,
+    pr_number: u64,
+    expected_head_sha: Option<&str>,
+) -> anyhow::Result<MergeOutcome> {
     let initial = client.view_pr(owner, repo, pr_number)?;
     if initial.state == PrState::Merged {
         return Ok(MergeOutcome::AlreadyMerged(initial));
     }
     ensure_pr_is_open_and_safe(&initial, pr_number, None)?;
+    if expected_head_sha.is_some_and(|expected| expected != initial.head_sha) {
+        bail!("PR #{pr_number} head changed since confirmation.");
+    }
 
     let is_stacked = if let Some(stack) = client
         .get_stack_for_pull_request(owner, repo, pr_number)

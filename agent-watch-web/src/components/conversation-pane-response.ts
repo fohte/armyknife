@@ -307,6 +307,8 @@ export function isSessionPullRequestListResponse(
         pullRequest['number'] > 0 &&
         typeof pullRequest['title'] === 'string' &&
         typeof pullRequest['url'] === 'string' &&
+        (pullRequest['headSha'] === null ||
+          typeof pullRequest['headSha'] === 'string') &&
         (pullRequest['state'] === null ||
           pullRequest['state'] === 'Open' ||
           pullRequest['state'] === 'Closed' ||

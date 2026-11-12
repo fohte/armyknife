@@ -44,6 +44,7 @@ pub(in crate::commands::agent::tui) fn pull_request_list_items(
                 title: progress
                     .map_or_else(|| item.title.clone(), |pr| pr.pull_request.title.clone()),
                 url,
+                head_sha: progress.and_then(|progress| progress.head_sha.clone()),
                 state: progress
                     .map(|progress| progress.pull_request.state.clone())
                     .or_else(|| {
@@ -71,6 +72,7 @@ pub(in crate::commands::agent::tui) fn pull_request_list_items(
                     number: progress.pull_request.number,
                     title: progress.pull_request.title.clone(),
                     url: progress.pull_request.url.clone(),
+                    head_sha: progress.head_sha.clone(),
                     state: Some(progress.pull_request.state.clone()),
                     ci_state: Some(progress.ci_state),
                     review_status: stage_marks(&delegate.session, Some(progress), agent_config)
@@ -132,6 +134,7 @@ mod tests {
                         url: "https://github.com/example/project/pull/2046".to_string(),
                     },
                     ci_state: PrCiState::Successful,
+                    head_sha: None,
                 }),
                 lookup_unavailable: false,
             },
@@ -146,6 +149,7 @@ mod tests {
                         url: "https://github.com/example/project/pull/2048".to_string(),
                     },
                     ci_state: PrCiState::InProgress,
+                    head_sha: Some("confirmed-head".to_string()),
                 }),
                 lookup_unavailable: false,
             },
@@ -158,6 +162,7 @@ mod tests {
                     number: 2048,
                     title: "Add session pull request links".to_string(),
                     url: "https://github.com/example/project/pull/2048".to_string(),
+                    head_sha: Some("confirmed-head".to_string()),
                     state: Some(PrState::Open),
                     ci_state: Some(PrCiState::InProgress),
                     review_status: "done".to_string(),
@@ -166,6 +171,7 @@ mod tests {
                     number: 2046,
                     title: "Update workspace navigation".to_string(),
                     url: "https://github.com/example/project/pull/2046".to_string(),
+                    head_sha: None,
                     state: Some(PrState::Merged),
                     ci_state: Some(PrCiState::Successful),
                     review_status: "done".to_string(),
@@ -207,6 +213,7 @@ mod tests {
                 number: 2050,
                 title: "Add synthetic setting".to_string(),
                 url: "https://github.com/example/project/pull/2050".to_string(),
+                head_sha: None,
                 state: Some(PrState::Open),
                 ci_state: None,
                 review_status: "not_started".to_string(),

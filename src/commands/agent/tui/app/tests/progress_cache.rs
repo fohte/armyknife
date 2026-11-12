@@ -273,6 +273,7 @@ fn fetched_delegate(session: Session) -> FetchedDelegate {
                 url: "https://example.test/pull/7".to_string(),
             },
             ci_state: PrCiState::InProgress,
+            head_sha: None,
         }),
         lookup_unavailable: false,
     }

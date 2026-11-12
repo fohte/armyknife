@@ -23,6 +23,7 @@ use crate::shared::{
 mod checks;
 mod merge_flow;
 
+#[cfg(test)]
 use merge_flow::run_merge;
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -135,6 +136,14 @@ enum MergeOutcome {
     Enqueued(String),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "result", content = "message", rename_all = "camelCase")]
+pub(crate) enum WatchWebPrMergeResult {
+    Merged,
+    AlreadyMerged,
+    Enqueued(String),
+}
+
 fn unmerged_lower_pr(
     stack_pull_requests: &[PullRequestStackEntry],
     pull_request: u64,
@@ -162,7 +171,47 @@ where
     C: FnOnce(PrSnapshot) -> F,
     F: Future<Output = anyhow::Result<()>>,
 {
-    match run_merge(client, hook_runner, owner, repo, pr_number).await? {
+    run_merge_and_close_with_expected_head(
+        client,
+        hook_runner,
+        owner,
+        repo,
+        pr_number,
+        None,
+        close_worktree,
+    )
+    .await
+    .map(|_| ())
+}
+
+async fn run_merge_and_close_with_expected_head<C, F>(
+    client: &impl PrMergeClient,
+    hook_runner: &mut impl FnMut(&[(&str, &str)]) -> anyhow::Result<()>,
+    owner: &str,
+    repo: &str,
+    pr_number: u64,
+    expected_head_sha: Option<&str>,
+    close_worktree: C,
+) -> anyhow::Result<MergeOutcome>
+where
+    C: FnOnce(PrSnapshot) -> F,
+    F: Future<Output = anyhow::Result<()>>,
+{
+    let outcome = match expected_head_sha {
+        Some(expected_head_sha) => {
+            merge_flow::run_merge_with_expected_head(
+                client,
+                hook_runner,
+                owner,
+                repo,
+                pr_number,
+                Some(expected_head_sha),
+            )
+            .await?
+        }
+        None => merge_flow::run_merge(client, hook_runner, owner, repo, pr_number).await?,
+    };
+    match &outcome {
         MergeOutcome::Merged(merged) => {
             println!("PR #{pr_number} merged.");
             let _ = std::io::stdout().flush();
@@ -180,7 +229,32 @@ where
             println!("PR #{pr_number} was added to the merge queue and has not merged: {message}");
         }
     }
-    Ok(())
+    Ok(outcome)
+}
+
+pub(crate) async fn run_watch_web_pr_merge(
+    owner: &str,
+    repo: &str,
+    pr_number: u64,
+    expected_head_sha: &str,
+) -> anyhow::Result<WatchWebPrMergeResult> {
+    let client = GhCli;
+    let mut hook_runner = |env: &[(&str, &str)]| hooks::run_hook("pre-pr-merge", env);
+    match run_merge_and_close_with_expected_head(
+        &client,
+        &mut hook_runner,
+        owner,
+        repo,
+        pr_number,
+        Some(expected_head_sha),
+        |merged_pr| async move { close_merged_head_worktree(&merged_pr).await },
+    )
+    .await?
+    {
+        MergeOutcome::Merged(_) => Ok(WatchWebPrMergeResult::Merged),
+        MergeOutcome::AlreadyMerged(_) => Ok(WatchWebPrMergeResult::AlreadyMerged),
+        MergeOutcome::Enqueued(message) => Ok(WatchWebPrMergeResult::Enqueued(message)),
+    }
 }
 
 async fn close_merged_head_worktree(merged_pr: &PrSnapshot) -> anyhow::Result<()> {
@@ -1445,6 +1519,44 @@ mod tests {
         assert_eq!(
             (result.is_err(), events.borrow().clone()),
             (true, vec!["view".to_string()]),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn run_watch_web_merge_stops_when_the_confirmed_head_is_stale(
+        events: Rc<RefCell<Vec<String>>>,
+    ) {
+        let client = fake_client(
+            &[snapshot(PrState::Open, "current-head", "CLEAN")],
+            Rc::clone(&events),
+            false,
+            false,
+        );
+        let mut hook = |_: &[(&str, &str)]| {
+            events.borrow_mut().push("hook".to_string());
+            Ok(())
+        };
+
+        let result = merge_flow::run_merge_with_expected_head(
+            &client,
+            &mut hook,
+            "sample-org",
+            "sample-repo",
+            42,
+            Some("confirmed-head"),
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.map(|_| ()).map_err(|error| error.to_string()),
+                events.borrow().clone(),
+            ),
+            (
+                Err("PR #42 head changed since confirmation.".to_string()),
+                vec!["view".to_string()],
+            ),
         );
     }
 

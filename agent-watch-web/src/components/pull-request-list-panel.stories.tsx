@@ -5,13 +5,16 @@ import { PullRequestListPanel } from '#components/pull-request-list-panel'
 const meta = {
   component: PullRequestListPanel,
   args: {
+    sessionId: 'sample-session',
     loading: false,
     error: null,
+    onRefresh: () => undefined,
     pullRequests: [
       {
         number: 2048,
         title: 'Show linked work in the session sidebar',
         url: 'https://github.com/example/project/pull/2048',
+        headSha: 'confirmed-head',
         state: 'Open',
         ciState: 'Successful',
         reviewStatus: 'done',
@@ -20,6 +23,7 @@ const meta = {
         number: 2046,
         title: 'Update the workspace navigation',
         url: 'https://github.com/example/project/pull/2046',
+        headSha: null,
         state: 'Merged',
         ciState: 'Unknown',
         reviewStatus: 'not_started',
@@ -40,6 +44,11 @@ type Story = StoryObj<typeof meta>
 
 export const OpenPullRequestShowsChecksAndReview: Story = {
   name: 'An open pull request shows its CI and review status.',
+}
+
+export const MergeConfirmationShowsTheConfirmedHead: Story = {
+  name: 'The merge confirmation shows the head commit to be merged.',
+  args: { confirmingPullRequestNumber: 2048 },
 }
 
 export const NoPullRequestsAreLinked: Story = {

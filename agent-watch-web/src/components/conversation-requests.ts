@@ -75,3 +75,28 @@ export function requestAction(
     return errorFromResponse(response).andThen((error) => err(error))
   })
 }
+
+export function requestActionJson<T>(
+  sessionId: string,
+  path: string,
+  payload: Record<string, unknown>,
+  validate: (value: unknown) => value is T,
+) {
+  return ResultAsync.fromPromise(
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+    toError,
+  ).andThen((response) => {
+    if (!response.ok) {
+      return errorFromResponse(response).andThen((error) => err(error))
+    }
+    return ResultAsync.fromPromise(response.json(), toError).andThen((body) =>
+      validate(body)
+        ? ok(body)
+        : err(new Error('The server returned an invalid response')),
+    )
+  })
+}
