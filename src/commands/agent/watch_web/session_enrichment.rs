@@ -76,9 +76,12 @@ impl SessionEnrichmentCache {
         let fetch_session_ids = session_ids.clone();
         let fetcher = Arc::clone(&self.task_fetcher);
         self.tq
-            .get_or_refresh("tq", session_ids, move |previous| {
-                fetcher(fetch_session_ids, previous)
-            })
+            .get_or_refresh(
+                "tq",
+                session_ids,
+                move |previous| fetcher(fetch_session_ids, previous),
+                merge_session_task_metadata,
+            )
             .await
     }
 
@@ -94,10 +97,15 @@ impl SessionEnrichmentCache {
         let fetcher = Arc::clone(&self.pull_request_fetcher);
         let cached = self
             .pull_requests
-            .get_or_refresh("GitHub", query_keys, {
-                let sessions = sessions.to_vec();
-                move |_| fetcher(sessions)
-            })
+            .get_or_refresh(
+                "GitHub",
+                query_keys,
+                {
+                    let sessions = sessions.to_vec();
+                    move |_| fetcher(sessions)
+                },
+                merge_pull_request_results,
+            )
             .await;
 
         sessions
@@ -119,6 +127,108 @@ impl SessionEnrichmentCache {
     }
 }
 
+fn merge_pull_request_results(
+    cached: &mut HashMap<BranchPrKey, Option<PrInfo>>,
+    refreshed: HashMap<BranchPrKey, Option<PrInfo>>,
+    requested_keys: &HashSet<BranchPrKey>,
+) {
+    for key in requested_keys {
+        if let Some(pull_request) = refreshed.get(key) {
+            cached.insert(key.clone(), pull_request.clone());
+        }
+    }
+}
+
+fn merge_session_task_metadata(
+    cached: &mut SessionTaskMetadata,
+    mut refreshed: SessionTaskMetadata,
+    requested_session_ids: &HashSet<String>,
+) {
+    let previous_task_ids = cached
+        .links
+        .iter()
+        .filter(|(session_id, _)| requested_session_ids.contains(*session_id))
+        .flat_map(|(_, tasks)| tasks.iter().map(|task| task.task_id.clone()))
+        .collect::<HashSet<_>>();
+
+    for session_id in requested_session_ids {
+        cached.links.remove(session_id);
+        if let Some(tasks) = refreshed.links.remove(session_id) {
+            cached.links.insert(session_id.clone(), tasks);
+        }
+    }
+
+    let remaining_task_ids = cached
+        .links
+        .values()
+        .flatten()
+        .map(|task| task.task_id.clone())
+        .collect::<HashSet<_>>();
+    for task_id in previous_task_ids.difference(&remaining_task_ids) {
+        cached.priorities.remove(task_id);
+        cached.priority_order.remove(task_id);
+        cached.task_projects.remove(task_id);
+    }
+
+    let refreshed_task_ids = cached
+        .links
+        .iter()
+        .filter(|(session_id, _)| requested_session_ids.contains(*session_id))
+        .flat_map(|(_, tasks)| tasks.iter().map(|task| task.task_id.clone()))
+        .collect::<HashSet<_>>();
+    for task_id in &refreshed_task_ids {
+        cached.priority_order.remove(task_id);
+    }
+    let mut next_priority_order = cached
+        .priority_order
+        .values()
+        .copied()
+        .max()
+        .map_or(0, |order| order + 1);
+    let mut order_by_priority = cached
+        .priorities
+        .iter()
+        .filter_map(|(task_id, priority)| {
+            Some(((*priority)?, *cached.priority_order.get(task_id)?))
+        })
+        .collect::<HashMap<_, _>>();
+
+    for task_id in &refreshed_task_ids {
+        if let Some(priority) = refreshed.priorities.get(task_id) {
+            cached.priorities.insert(task_id.clone(), *priority);
+        } else {
+            cached.priorities.remove(task_id);
+        }
+        if let Some(project) = refreshed.task_projects.get(task_id) {
+            cached
+                .task_projects
+                .insert(task_id.clone(), project.clone());
+        } else {
+            cached.task_projects.remove(task_id);
+        }
+    }
+
+    let mut refreshed_order = refreshed
+        .priority_order
+        .iter()
+        .filter(|(task_id, _)| refreshed_task_ids.contains(*task_id))
+        .collect::<Vec<_>>();
+    refreshed_order.sort_by_key(|(task_id, order)| (**order, (*task_id).clone()));
+    for (task_id, _) in refreshed_order {
+        let Some(Some(priority)) = refreshed.priorities.get(task_id) else {
+            continue;
+        };
+        let order = *order_by_priority.entry(*priority).or_insert_with(|| {
+            let order = next_priority_order;
+            next_priority_order += 1;
+            order
+        });
+        cached.priority_order.insert(task_id.clone(), order);
+    }
+
+    order_tasks_by_priority(&mut cached.links, &cached.priority_order);
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct SessionTaskMetadata {
     pub(super) links: HashMap<String, Vec<SessionTask>>,
@@ -134,22 +244,21 @@ struct RefreshingCache<T, K> {
 }
 
 struct CacheState<T, K> {
-    value: Option<T>,
-    last_attempt: Option<Instant>,
-    attempted_keys: HashSet<K>,
+    value: T,
+    attempted_at: HashMap<K, Instant>,
     refresh_in_flight: bool,
 }
 
 impl<T, K> RefreshingCache<T, K>
 where
+    T: Default,
     K: Eq + Hash,
 {
     fn new(updates: EnrichmentUpdates, fetch_timeout: Duration) -> Self {
         Self {
             state: tokio::sync::Mutex::new(CacheState {
-                value: None,
-                last_attempt: None,
-                attempted_keys: HashSet::new(),
+                value: T::default(),
+                attempted_at: HashMap::new(),
                 refresh_in_flight: false,
             }),
             updates,
@@ -168,23 +277,26 @@ where
         resource: &'static str,
         keys: HashSet<K>,
         fetch: F,
+        merge: fn(&mut T, T, &HashSet<K>),
     ) -> T
     where
         F: FnOnce(T) -> Fut + Send + 'static,
         Fut: Future<Output = Result<T, String>> + Send + 'static,
     {
         let mut state = self.state.lock().await;
-        let cached = state.value.clone().unwrap_or_default();
-        let expired = state
-            .last_attempt
-            .is_none_or(|last_attempt| last_attempt.elapsed() >= CACHE_TTL)
-            || keys.iter().any(|key| !state.attempted_keys.contains(key));
+        let cached = state.value.clone();
+        let expired = keys.iter().any(|key| {
+            state
+                .attempted_at
+                .get(key)
+                .is_none_or(|last_attempt| last_attempt.elapsed() >= CACHE_TTL)
+        });
 
         if expired && !state.refresh_in_flight {
             state.refresh_in_flight = true;
-            state.attempted_keys = keys;
             let cache = Arc::clone(self);
             let previous = cached.clone();
+            let attempted_keys = keys.clone();
             let fetch_timeout = self.fetch_timeout;
             tokio::spawn(async move {
                 let result = match tokio::time::timeout(fetch_timeout, fetch(previous)).await {
@@ -192,10 +304,13 @@ where
                     Err(_) => Err(format!("lookup exceeded {fetch_timeout:?}")),
                 };
                 let mut state = cache.state.lock().await;
-                state.last_attempt = Some(Instant::now());
+                let attempted_at = Instant::now();
+                for key in attempted_keys {
+                    state.attempted_at.insert(key, attempted_at);
+                }
                 match result {
                     Ok(value) => {
-                        state.value = Some(value);
+                        merge(&mut state.value, value, &keys);
                     }
                     Err(error) => {
                         tracing::warn!(%error, resource, "Failed to refresh agent watch metadata; keeping cached values");
@@ -473,12 +588,16 @@ mod tests {
     }
 
     fn session_with_branch(session_id: &str) -> Session {
+        session_with_branch_name(session_id, "feature/example")
+    }
+
+    fn session_with_branch_name(session_id: &str, branch: &str) -> Session {
         session(
             session_id,
             Some(SessionPrContext {
                 owner: "example-owner".to_string(),
                 repo: "example-repository".to_string(),
-                branch: "feature/example".to_string(),
+                branch: branch.to_string(),
                 checklist_item_id: None,
             }),
         )
@@ -641,6 +760,44 @@ mod tests {
         assert_eq!(
             (initial, refreshed),
             (SessionTaskMetadata::default(), expected)
+        );
+    }
+
+    #[tokio::test]
+    async fn alternating_session_sets_keep_each_sessions_task_metadata() {
+        let updates = EnrichmentUpdates::new();
+        let mut receiver = updates.subscribe();
+        let task_fetcher: TaskMetadataFetcher =
+            Arc::new(|session_ids, _| Box::pin(async move { Ok(metadata(session_ids)) }));
+        let pull_request_fetcher: PullRequestFetcher =
+            Arc::new(|_| Box::pin(async { Ok(HashMap::new()) }));
+        let cache = cache_with_fetchers(updates, FETCH_TIMEOUT, task_fetcher, pull_request_fetcher);
+        let session_a = session("session-a", None);
+        let session_b = session("session-b", None);
+
+        let initial = cache.task_metadata(std::slice::from_ref(&session_a)).await;
+        wait_for_refresh(&mut receiver).await;
+        let cached_a = cache.task_metadata(std::slice::from_ref(&session_a)).await;
+        let cached_while_b_refreshes = cache.task_metadata(std::slice::from_ref(&session_b)).await;
+        wait_for_refresh(&mut receiver).await;
+        let cached_a_after_b_refresh = cache.task_metadata(std::slice::from_ref(&session_a)).await;
+
+        assert_eq!(
+            (
+                initial,
+                cached_a,
+                cached_while_b_refreshes,
+                cached_a_after_b_refresh,
+            ),
+            (
+                SessionTaskMetadata::default(),
+                metadata(HashSet::from(["session-a".to_string()])),
+                metadata(HashSet::from(["session-a".to_string()])),
+                metadata(HashSet::from([
+                    "session-a".to_string(),
+                    "session-b".to_string(),
+                ])),
+            )
         );
     }
 
@@ -892,6 +1049,78 @@ mod tests {
                 ]),
                 1,
             ),
+        );
+    }
+
+    #[tokio::test]
+    async fn alternating_branch_sets_keep_each_cached_pull_request() {
+        let updates = EnrichmentUpdates::new();
+        let mut receiver = updates.subscribe();
+        let pull_request_fetcher: PullRequestFetcher = Arc::new(|sessions| {
+            Box::pin(async move {
+                Ok(sessions
+                    .iter()
+                    .filter_map(|session| {
+                        let context = session.pr_context.as_ref()?;
+                        Some((
+                            (
+                                context.owner.clone(),
+                                context.repo.clone(),
+                                context.branch.clone(),
+                            ),
+                            Some(PrInfo {
+                                number: if context.branch == "branch-a" { 17 } else { 23 },
+                                title: format!("Change for {}", context.branch),
+                                state: crate::infra::github::PrState::Open,
+                                url: format!("https://example.test/{}", context.branch),
+                            }),
+                        ))
+                    })
+                    .collect())
+            })
+        });
+        let task_fetcher: TaskMetadataFetcher =
+            Arc::new(|_, previous| Box::pin(async move { Ok(previous) }));
+        let cache = cache_with_fetchers(updates, FETCH_TIMEOUT, task_fetcher, pull_request_fetcher);
+        let session_a = session_with_branch_name("session-a", "branch-a");
+        let session_b = session_with_branch_name("session-b", "branch-b");
+
+        let initial = cache.pull_requests(std::slice::from_ref(&session_a)).await;
+        wait_for_refresh(&mut receiver).await;
+        let cached_a = cache.pull_requests(std::slice::from_ref(&session_a)).await;
+        let cached_while_b_refreshes = cache.pull_requests(std::slice::from_ref(&session_b)).await;
+        wait_for_refresh(&mut receiver).await;
+        let cached_a_after_b_refresh = cache.pull_requests(std::slice::from_ref(&session_a)).await;
+
+        assert_eq!(
+            (
+                initial,
+                cached_a,
+                cached_while_b_refreshes,
+                cached_a_after_b_refresh,
+            ),
+            (
+                HashMap::from([("session-a".to_string(), None)]),
+                HashMap::from([(
+                    "session-a".to_string(),
+                    Some(PrInfo {
+                        number: 17,
+                        title: "Change for branch-a".to_string(),
+                        state: crate::infra::github::PrState::Open,
+                        url: "https://example.test/branch-a".to_string(),
+                    }),
+                )]),
+                HashMap::from([("session-b".to_string(), None)]),
+                HashMap::from([(
+                    "session-a".to_string(),
+                    Some(PrInfo {
+                        number: 17,
+                        title: "Change for branch-a".to_string(),
+                        state: crate::infra::github::PrState::Open,
+                        url: "https://example.test/branch-a".to_string(),
+                    }),
+                )]),
+            )
         );
     }
 }
