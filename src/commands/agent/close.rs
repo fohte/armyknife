@@ -414,11 +414,11 @@ fn ensure_session_is_idle(session: &Session, effective_status: SessionStatus) ->
     if session.has_active_work(effective_status) {
         match effective_status {
             SessionStatus::Running | SessionStatus::WaitingInput => bail!(
-                "Agent session `{}` is running or waiting for input; pass --force to close it",
+                "Agent session `{}` is running or waiting for input; wait for the current turn to finish, then retry this command",
                 session.session_id
             ),
             _ => bail!(
-                "Agent session `{}` has pending background or agent tasks; pass --force to close it",
+                "Agent session `{}` has pending background or agent tasks; wait for them to finish, then retry this command",
                 session.session_id
             ),
         }
@@ -678,9 +678,9 @@ mod tests {
             (result.unwrap_err().to_string(), runtime.calls.into_inner()),
             (
                 if status == SessionStatus::Running || status == SessionStatus::WaitingInput {
-                    "Agent session `session-1` is running or waiting for input; pass --force to close it"
+                    "Agent session `session-1` is running or waiting for input; wait for the current turn to finish, then retry this command"
                 } else {
-                    "Agent session `session-1` has pending background or agent tasks; pass --force to close it"
+                    "Agent session `session-1` has pending background or agent tasks; wait for them to finish, then retry this command"
                 }
                 .to_string(),
                 vec![
@@ -743,7 +743,7 @@ mod tests {
         assert_eq!(
             (result.unwrap_err().to_string(), runtime.calls.into_inner()),
             (
-                "Agent session `session-1` is running or waiting for input; pass --force to close it"
+                "Agent session `session-1` is running or waiting for input; wait for the current turn to finish, then retry this command"
                     .to_string(),
                 vec![
                     pane_exists_call(),
@@ -770,7 +770,7 @@ mod tests {
         assert_eq!(
             (result.unwrap_err().to_string(), runtime.calls.into_inner()),
             (
-                "Agent session `session-1` has pending background or agent tasks; pass --force to close it"
+                "Agent session `session-1` has pending background or agent tasks; wait for them to finish, then retry this command"
                     .to_string(),
                 vec![
                     pane_exists_call(),
@@ -799,7 +799,7 @@ mod tests {
         assert_eq!(
             (result.unwrap_err().to_string(), runtime.calls.into_inner()),
             (
-                "Agent session `session-1` is running or waiting for input; pass --force to close it"
+                "Agent session `session-1` is running or waiting for input; wait for the current turn to finish, then retry this command"
                     .to_string(),
                 vec![
                     pane_exists_call(),
