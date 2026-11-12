@@ -43,6 +43,8 @@
 }
 
 .decision-card-title {
+  max-width: 100%;
+  min-width: 0;
   overflow: hidden;
   color: var(--aw-text-primary);
   text-overflow: ellipsis;
