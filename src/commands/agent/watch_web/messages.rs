@@ -346,6 +346,7 @@ fn load_conversation_with_queued_prompts(
                 queued_prompts: &queued_prompts,
                 peer_out_messages: &peer_out_messages,
                 proposals: &proposal_items,
+                todos: &todos,
             },
         })?;
     resolve_peer_session_titles(&mut conversation.messages, &mut load_session)?;
@@ -547,8 +548,12 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript(
                     Vec::new(),
                 ));
             };
-            let (messages, skills) =
-                parser::codex::parse_with_skills(reader, parent, additions.decisions)?;
+            let (messages, skills) = parser::codex::parse_with_skills(
+                reader,
+                parent,
+                additions.decisions,
+                additions.todos,
+            )?;
             Ok((
                 ConversationResponse {
                     messages,

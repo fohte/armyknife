@@ -67,23 +67,23 @@ pub(super) fn classify_inbound(
 
     if let Some((tag, body)) = tagged {
         if let Some((session_id, peer_body)) = peer_message_parts(text) {
-            if let Some(user_body) = marked_user_body(peer_body, user_marker) {
-                return MessageKind::User { text: user_body };
+            if let Some(message) = marked_user_message(peer_body, user_marker, record) {
+                return message;
             }
             return MessageKind::PeerIn {
                 session_id: session_id.to_owned(),
                 text: peer_body.to_owned(),
             };
         }
-        if let Some(user_body) = marked_user_body(text, user_marker) {
-            return MessageKind::User { text: user_body };
+        if let Some(message) = marked_user_message(text, user_marker, record) {
+            return message;
         }
         return event(tag, body, record);
     }
 
     if let Some((session_id, peer_body)) = peer_message_parts(text) {
-        if let Some(user_body) = marked_user_body(peer_body, user_marker) {
-            return MessageKind::User { text: user_body };
+        if let Some(message) = marked_user_message(peer_body, user_marker, record) {
+            return message;
         }
         return MessageKind::PeerIn {
             session_id: session_id.to_owned(),
@@ -91,8 +91,8 @@ pub(super) fn classify_inbound(
         };
     }
 
-    if let Some(user_body) = marked_user_body(text, user_marker) {
-        return MessageKind::User { text: user_body };
+    if let Some(message) = marked_user_message(text, user_marker, record) {
+        return message;
     }
 
     if record.get("type").and_then(Value::as_str) == Some("system") {
@@ -471,6 +471,16 @@ pub(super) fn marked_user_body(text: &str, marker: Option<&str>) -> Option<Strin
     Some(without_peer_transport_notice(body).to_owned())
 }
 
+fn marked_user_message(text: &str, marker: Option<&str>, record: &Value) -> Option<MessageKind> {
+    let body = marked_user_body(text, marker)?;
+    match tagged_body(&body) {
+        Some((tag, event_body)) if tag.starts_with("armyknife-") => {
+            Some(event(tag, event_body, record))
+        }
+        _ => Some(MessageKind::User { text: body }),
+    }
+}
+
 fn without_peer_transport_notice(body: &str) -> &str {
     body.rsplit_once(concat!("\n", "\n", "This came from another Claude session"))
         .map_or(body, |(body, _)| body)
@@ -538,6 +548,30 @@ mod tests {
         }
     )]
     #[case::delegation_event(json!({"type":"user","isMeta":true}), "<delegation-update>Worker completed its fictional task.</delegation-update>", None, MessageKind::Event { kind: EventKind::Armyknife, text: "Worker completed its fictional task.".to_owned(), failed: false })]
+    #[case::marked_armyknife_action_is_an_event(
+        json!({"type":"user","isMeta":true,"origin":{"kind":"peer","from":"unknown"}}),
+        indoc! {"
+            ⟦armyknife-user:fixture-marker-cobalt⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            <armyknife-todo-completed>Fixture action text.
+
+            A fictional note.</armyknife-todo-completed>
+        "},
+        Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
+        MessageKind::Event { kind: EventKind::Armyknife, text: "Fixture action text. A fictional note.".to_owned(), failed: false },
+    )]
+    #[case::marked_decision_change_is_an_event(
+        json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
+        indoc! {"
+            ⟦armyknife-user:fixture-marker-cobalt⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            <armyknife-decision-change>Change requested for the fixture decision.
+
+            Please use the second fictional option.</armyknife-decision-change>
+        "},
+        Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
+        MessageKind::Event { kind: EventKind::Armyknife, text: "Change requested for the fixture decision. Please use the second fictional option.".to_owned(), failed: false },
+    )]
     #[case::unknown_tag_is_system(json!({"type":"user","isMeta":true}), "<future-notice>Future notice text.</future-notice>", None, MessageKind::Event { kind: EventKind::System, text: "Future notice text.".to_owned(), failed: false })]
     #[case::hook_output_is_one_line(json!({"type":"user"}), "<local-command-stdout>First line.\nSecond line.</local-command-stdout>", None, MessageKind::Event { kind: EventKind::Hook, text: "First line. Second line.".to_owned(), failed: false })]
     fn classifies_inbound_records(

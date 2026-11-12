@@ -4,6 +4,7 @@ pub(super) mod codex;
 pub(super) mod decision_position;
 pub(super) mod queue;
 pub(super) mod skill_suggestions;
+mod todos;
 
 use std::io::BufRead;
 use std::path::Path;

@@ -41,14 +41,31 @@ export function TodoCard({
       })
   }
 
+  if (isCompleted) {
+    const completionComment = completed ? defaultComment : comment.trim()
+
+    return (
+      <article
+        className="chat-todo-card"
+        aria-label="Completed user task"
+        data-completed="true"
+      >
+        <h2>To-do · done</h2>
+        <h3>{title}</h3>
+        {completionComment !== '' ? (
+          <p className="chat-todo-completed-comment">{completionComment}</p>
+        ) : null}
+      </article>
+    )
+  }
+
   return (
     <article
       className="chat-todo-card"
       aria-label="User task"
       aria-busy={isSubmitting}
-      data-completed={isCompleted ? 'true' : undefined}
     >
-      <h2>To-do · {isCompleted ? 'done' : 'pending'}</h2>
+      <h2>To-do · pending</h2>
       <h3>{title}</h3>
       {detail !== null ? <p className="chat-todo-detail">{detail}</p> : null}
       <label className="chat-todo-comment-label" htmlFor={commentId}>
@@ -59,25 +76,21 @@ export function TodoCard({
         className="chat-todo-comment"
         rows={2}
         value={comment}
-        disabled={isCompleted || isSubmitting}
+        disabled={isSubmitting}
         onChange={(event) => {
           setComment(event.currentTarget.value)
         }}
       />
       <footer className="chat-todo-footer">
-        {isCompleted ? (
-          <span className="chat-todo-completed-label">Done</span>
-        ) : (
-          <Button
-            type="button"
-            variant="plain"
-            className="aw-button aw-button--primary"
-            disabled={isSubmitting}
-            onClick={completeTodo}
-          >
-            Mark done
-          </Button>
-        )}
+        <Button
+          type="button"
+          variant="plain"
+          className="aw-button aw-button--primary"
+          disabled={isSubmitting}
+          onClick={completeTodo}
+        >
+          Mark done
+        </Button>
       </footer>
     </article>
   )

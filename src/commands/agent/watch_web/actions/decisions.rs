@@ -128,7 +128,7 @@ pub(super) async fn request_change(
 
 fn change_message(session: &Session, target: &Session, title: &str, comment: &str) -> String {
     let session_id = &session.session_id;
-    if session.session_id != target.session_id {
+    let message = if session.session_id != target.session_id {
         indoc::formatdoc! {"
             Decision from session {session_id}: {title}
 
@@ -140,5 +140,9 @@ fn change_message(session: &Session, target: &Session, title: &str, comment: &st
 
             {comment}
         "}
-    }
+    };
+    format!(
+        "<armyknife-decision-change>{}</armyknife-decision-change>",
+        message.trim_end()
+    )
 }

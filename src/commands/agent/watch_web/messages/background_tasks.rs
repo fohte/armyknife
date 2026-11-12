@@ -51,6 +51,7 @@ pub(super) fn running_background_task_session_ids(
                         queued_prompts: &queued_prompts,
                         peer_out_messages: &peer_out_messages,
                         proposals: &proposals,
+                        todos: &[],
                     },
                 }) {
                     Ok((conversation, _)) => {
