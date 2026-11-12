@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.638](https://github.com/fohte/armyknife/compare/v0.1.637...v0.1.638) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** cap graceful shutdown wait ([#1645](https://github.com/fohte/armyknife/issues/1645)) ([14225ba](https://github.com/fohte/armyknife/commit/14225ba487154c51f4d6dea491b87417783fac36))
+
 ## [0.1.637](https://github.com/fohte/armyknife/compare/v0.1.636...v0.1.637) (2026-11-12)
 
 
