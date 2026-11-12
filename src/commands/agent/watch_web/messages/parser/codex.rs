@@ -5,6 +5,7 @@ use serde_json::Value;
 use super::super::ChatItem;
 use super::super::ParentSession;
 use super::super::SkillSuggestion;
+use super::super::parser::classifier;
 use super::super::parser::todos::TodoTimeline;
 use super::super::parser::{
     ToolSummary, append_text, for_each_jsonl_record, operation_target, record_timestamp,
@@ -114,12 +115,12 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_with_skills(
                 Some("UserMessage") => {
                     if let Some(text) = item.get("content").and_then(value_text) {
                         tools.flush_into(&mut items);
-                        if let Some((tag, body)) = codex_tagged_body(&text)
-                            && super::super::parser::classifier::is_watch_web_action_tag(tag)
+                        if let Some((tag, body)) = classifier::tagged_body(&text)
+                            && classifier::is_watch_web_action_tag(tag)
                         {
                             items.push(ChatItem::Event {
                                 kind: EventKind::Armyknife,
-                                text: body.split_whitespace().collect::<Vec<_>>().join(" "),
+                                text: classifier::one_line(body),
                                 failed: false,
                                 timestamp: timestamp.map(|timestamp| timestamp.to_rfc3339()),
                             });
@@ -165,25 +166,6 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_with_skills(
     decision_timeline.append_remaining(&mut items);
     todo_timeline.append_remaining(&mut items);
     Ok((items, skills))
-}
-
-fn codex_tagged_body(text: &str) -> Option<(&str, &str)> {
-    let trimmed = text.trim();
-    let tag = trimmed.strip_prefix('<')?.split_once('>')?.0;
-    if tag.is_empty()
-        || !tag
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
-    {
-        return None;
-    }
-    let opening = format!("<{tag}>");
-    let closing = format!("</{tag}>");
-    let body = trimmed
-        .strip_prefix(&opening)?
-        .strip_suffix(&closing)?
-        .trim();
-    Some((tag, body))
 }
 
 fn codex_tool_failed(result: &Value) -> bool {

@@ -390,21 +390,6 @@ fn load_conversation_with_queued_prompts(
         }
     }
 
-    for todo in &todos {
-        if !messages
-            .iter()
-            .any(|message| matches!(message, ChatItem::Todo { seq, .. } if *seq == todo.seq))
-        {
-            messages.push(ChatItem::Todo {
-                seq: todo.seq,
-                title: todo.title.clone(),
-                detail: todo.detail.clone(),
-                completed: todo.completed_at.is_some(),
-                comment: todo.comment.clone(),
-            });
-        }
-    }
-
     for agent_id in session
         .pending_permission_agent_ids
         .iter()

@@ -383,7 +383,7 @@ fn is_failure(record: &Value, label: &str, text: &str) -> bool {
         })
 }
 
-fn one_line(text: &str) -> String {
+pub(super) fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -396,7 +396,7 @@ fn nested_tag_value<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
         .map(|(value, _)| value)
 }
 
-fn tagged_body(text: &str) -> Option<(&str, &str)> {
+pub(super) fn tagged_body(text: &str) -> Option<(&str, &str)> {
     let tag = outer_tag(text)?;
     let trimmed = text.trim();
     let opening = format!("<{tag}>");
