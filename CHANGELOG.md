@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.618](https://github.com/fohte/armyknife/compare/v0.1.617...v0.1.618) (2026-11-12)
+
+
+### Features
+
+* **agent-watch-web:** support skill completion ([#1602](https://github.com/fohte/armyknife/issues/1602)) ([d11d89e](https://github.com/fohte/armyknife/commit/d11d89ece72d2a4b36c38cb95e72d647568dbcad))
+
 ## [0.1.617](https://github.com/fohte/armyknife/compare/v0.1.616...v0.1.617) (2026-11-12)
 
 
