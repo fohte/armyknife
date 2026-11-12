@@ -30,7 +30,11 @@ use crate::commands::agent::store;
 use crate::commands::agent::types::Session;
 
 #[derive(Args, Clone, PartialEq, Eq)]
-pub struct WatchWebArgs {}
+pub struct WatchWebArgs {
+    /// Do not open the web UI in a browser
+    #[arg(long)]
+    no_open: bool,
+}
 
 const LISTEN_PORT: u16 = 4317;
 
@@ -60,15 +64,16 @@ impl EnrichmentUpdates {
     }
 }
 
-pub async fn run(_args: &WatchWebArgs) -> Result<()> {
+pub async fn run(args: &WatchWebArgs) -> Result<()> {
     let executable = std::env::current_exe()?;
     let mut executable_identity = restart::ExecutableIdentity::read(&executable)?;
-    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let restart_args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let address = SocketAddr::from((Ipv4Addr::LOCALHOST, LISTEN_PORT));
     let listener = TcpListener::bind(address).await?;
     let url = format!("http://{address}");
     println!("Agent Watch Web UI: {url}");
-    if !restart::is_restarted_process()
+    if !args.no_open
+        && !restart::is_restarted_process()
         && let Err(error) = browser::open_url(&url)
     {
         eprintln!("Could not open a browser automatically: {error}");
@@ -93,7 +98,7 @@ pub async fn run(_args: &WatchWebArgs) -> Result<()> {
             () = restart::wait_for_replacement(&executable, executable_identity, restart_retry_interval) => {
                 restart_sender.send_replace(true);
                 server.await?;
-                match restart::exec_replacement(&executable, executable_identity, &args) {
+                match restart::exec_replacement(&executable, executable_identity, &restart_args) {
                     Ok(_) => restart_retry_interval = restart::POLL_INTERVAL,
                     Err(error) => {
                         eprintln!("Could not restart the Agent Watch Web UI: {error}");
@@ -210,16 +215,35 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::header::{CONTENT_TYPE, HOST, ORIGIN};
     use axum::http::{Request, Response, StatusCode};
+    use clap::Parser;
     use include_dir::{Dir, include_dir};
     use rstest::rstest;
     use tokio::sync::watch;
     use tower::ServiceExt;
 
     use super::{app, app_with_assets, app_with_assets_and_loader};
+    use crate::cli::{Cli, Commands};
+    use crate::commands::agent::AgentCommands;
     use crate::commands::agent::types::Session;
 
     static TEST_DIST: Dir<'static> =
         include_dir!("$CARGO_MANIFEST_DIR/src/commands/agent/watch_web/test_assets");
+
+    #[rstest]
+    #[case::opens_browser_by_default(&["a", "agent", "watch-web"], false)]
+    #[case::does_not_open_browser_when_requested(
+        &["a", "agent", "watch-web", "--no-open"],
+        true
+    )]
+    fn test_no_open_flag(#[case] argv: &[&str], #[case] no_open: bool) {
+        let parsed = Cli::try_parse_from(argv).unwrap();
+        let parsed_no_open = match parsed.command {
+            Commands::Agent(AgentCommands::WatchWeb(args)) => Some(args.no_open),
+            _ => None,
+        };
+
+        assert_eq!(parsed_no_open, Some(no_open),);
+    }
 
     #[rstest]
     #[case::api_root(
