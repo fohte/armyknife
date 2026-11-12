@@ -29,20 +29,27 @@ function errorFromResponse(response: Response) {
   })
 }
 
+function jsonFromResponse<T>(
+  response: Response,
+  validate: (value: unknown) => value is T,
+) {
+  if (!response.ok) {
+    return errorFromResponse(response).andThen((error) => err<T, Error>(error))
+  }
+  return ResultAsync.fromPromise(response.json(), toError).andThen((body) =>
+    validate(body)
+      ? ok<T, Error>(body)
+      : err<T, Error>(new Error('The server returned an invalid response')),
+  )
+}
+
 export function requestJson<T>(
   url: string,
   validate: (value: unknown) => value is T,
 ) {
-  return ResultAsync.fromPromise(fetch(url), toError).andThen((response) => {
-    if (!response.ok) {
-      return errorFromResponse(response).andThen((error) => err(error))
-    }
-    return ResultAsync.fromPromise(response.json(), toError).andThen((body) =>
-      validate(body)
-        ? ok(body)
-        : err(new Error('The server returned an invalid response')),
-    )
-  })
+  return ResultAsync.fromPromise(fetch(url), toError).andThen((response) =>
+    jsonFromResponse(response, validate),
+  )
 }
 
 export function requestText(url: string) {
@@ -74,4 +81,20 @@ export function requestAction(
     if (response.ok) return ok(undefined)
     return errorFromResponse(response).andThen((error) => err(error))
   })
+}
+
+export function requestActionJson<T>(
+  sessionId: string,
+  path: string,
+  payload: Record<string, unknown>,
+  validate: (value: unknown) => value is T,
+) {
+  return ResultAsync.fromPromise(
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+    toError,
+  ).andThen((response) => jsonFromResponse(response, validate))
 }

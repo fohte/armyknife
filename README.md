@@ -1153,6 +1153,7 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 - `GET /api/sessions/{id}/actions`
 - `GET /api/sessions/{id}/tree` returns the ancestor-rooted session tree, excluding ended sessions.
 - `GET /api/sessions/{id}/pull-requests` returns PRs from the selected task's delegates and implementation checklist, or direct delegates when no task is selected.
+- `POST /api/sessions/{id}/pull-requests/{number}/merge` with `{"owner":"sample-owner","repo":"sample-repo","expectedHeadSha":"confirmed-head"}` merges a listed PR only if its head SHA still matches. It returns `merged`, `alreadyMerged`, or `enqueued`; the merge flow runs `pre-pr-merge` and closes the head worktree after a completed merge.
 - `GET /api/sessions/{id}/background-tasks/{task_id}/output` for the running task's output tail
 - `GET /api/images/{name}` for saved conversation images
 - `GET /api/sessions/later-options` for server-calculated return times

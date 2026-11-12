@@ -1,5 +1,7 @@
 pub mod issue_agent;
 mod pr_merge;
+
+pub(crate) use pr_merge::{WatchWebPrMergeResult, run_watch_web_pr_merge};
 pub mod pr_review;
 
 use clap::Subcommand;

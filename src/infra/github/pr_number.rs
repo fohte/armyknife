@@ -172,6 +172,7 @@ mod tests {
                         url: "https://github.com/sample-org/sample-project/pull/17".to_string(),
                     },
                     ci_state: PrCiState::Successful,
+                    head_sha: None,
                 }),
             )]),
         );
@@ -230,6 +231,7 @@ mod tests {
                                 .to_string(),
                         },
                         ci_state: PrCiState::Successful,
+                        head_sha: None,
                     }),
                 ),
             ]),

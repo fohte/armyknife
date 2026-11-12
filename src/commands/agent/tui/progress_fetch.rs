@@ -19,8 +19,11 @@ use super::progress_batches::{
 #[serde(rename_all = "camelCase")]
 pub(in crate::commands::agent) struct PullRequestListItem {
     pub number: u64,
+    pub owner: Option<String>,
+    pub repo: Option<String>,
     pub title: String,
     pub url: String,
+    pub head_sha: Option<String>,
     pub state: Option<PrState>,
     pub ci_state: Option<PrCiState>,
     pub review_status: String,

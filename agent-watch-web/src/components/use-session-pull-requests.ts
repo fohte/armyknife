@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import { isSessionPullRequestListResponse } from '#components/conversation-pane-response'
 import { requestJson } from '#components/conversation-requests'
@@ -29,6 +29,10 @@ export function useSessionPullRequests({
     loading: false,
     error: null,
   })
+  const [refreshVersion, setRefreshVersion] = useState(0)
+  const refreshNow = useCallback(() => {
+    setRefreshVersion((version) => version + 1)
+  }, [])
 
   useEffect(() => {
     if (!enabled) return
@@ -129,15 +133,16 @@ export function useSessionPullRequests({
       stopInterval()
       unsubscribeVisibility()
     }
-  }, [enabled, session.id, session.task?.id])
+  }, [enabled, session.id, session.task?.id, refreshVersion])
 
   if (state.sessionId === session.id) {
-    return state
+    return { ...state, refresh: refreshNow }
   }
   return {
     sessionId: session.id,
     pullRequests: [],
     loading: enabled,
     error: null,
+    refresh: refreshNow,
   }
 }
