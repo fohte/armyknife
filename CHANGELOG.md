@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.646](https://github.com/fohte/armyknife/compare/v0.1.645...v0.1.646) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show inbox stars at rest ([#1664](https://github.com/fohte/armyknife/issues/1664)) ([e82f878](https://github.com/fohte/armyknife/commit/e82f8781d6a0f18212858ed9b9bd9405a0e8e079))
+
 ## [0.1.645](https://github.com/fohte/armyknife/compare/v0.1.644...v0.1.645) (2026-11-12)
 
 
