@@ -155,13 +155,3 @@
   color: var(--aw-color-error);
   font-size: 11px;
 }
-
-.pull-request-list-refreshing {
-  position: sticky;
-  bottom: 0;
-  padding: 6px 14px;
-  background: var(--aw-bg-nav);
-  color: var(--aw-text-muted);
-  font-size: 10px;
-  text-align: center;
-}

@@ -50,11 +50,50 @@ export const OpenPullRequestShowsChecksAndReview: Story = {
   name: 'An open pull request shows its CI and review status.',
 }
 
+export const CompletedPullRequestsStartCollapsed: Story = {
+  name: 'Merged and closed pull requests stay collapsed by default.',
+  args: {
+    pullRequests: [
+      {
+        number: 43,
+        owner: null,
+        repo: null,
+        title: 'Keep active work visible',
+        url: 'https://github.com/sample-org/sample-project/pull/43',
+        headSha: null,
+        state: 'Open',
+        ciState: 'Successful',
+        reviewStatus: 'done',
+      },
+      {
+        number: 42,
+        owner: null,
+        repo: null,
+        title: 'Finish an earlier change',
+        url: 'https://github.com/sample-org/sample-project/pull/42',
+        headSha: null,
+        state: 'Merged',
+        ciState: 'Unknown',
+        reviewStatus: 'done',
+      },
+      {
+        number: 41,
+        owner: null,
+        repo: null,
+        title: 'Close an abandoned change',
+        url: 'https://github.com/sample-org/sample-project/pull/41',
+        headSha: null,
+        state: 'Closed',
+        ciState: 'Unknown',
+        reviewStatus: 'not_started',
+      },
+    ],
+  },
+}
 export const MergeConfirmationShowsTheConfirmedHead: Story = {
   name: 'The merge confirmation shows the head commit to be merged.',
   args: { confirmingPullRequestNumber: 2048 },
 }
-
 export const NoPullRequestsAreLinked: Story = {
   name: 'The panel explains when no pull requests are linked.',
   args: { pullRequests: [] },

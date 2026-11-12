@@ -2,6 +2,7 @@ import '#components/pull-request-list-panel.css'
 
 import { useState } from 'react'
 
+import { CompletedItemsToggle } from '#components/completed-items-toggle'
 import { requestActionJson } from '#components/conversation-requests'
 import type { SessionPullRequest } from '#types'
 
@@ -72,6 +73,7 @@ export function PullRequestListPanel({
   onRefresh,
   confirmingPullRequestNumber,
 }: PullRequestListPanelProps) {
+  const [showCompleted, setShowCompleted] = useState(false)
   const [pendingMerge, setPendingMerge] = useState<SessionPullRequest | null>(
     () =>
       pullRequests.find(
@@ -117,7 +119,6 @@ export function PullRequestListPanel({
     setPendingMerge(null)
     setMerging(false)
   }
-
   if (error !== null && pullRequests.length === 0) {
     return (
       <div className="pull-request-list-feedback" role="alert">
@@ -132,6 +133,18 @@ export function PullRequestListPanel({
       </div>
     )
   }
+
+  const activePullRequests = pullRequests.filter(
+    (pullRequest) =>
+      pullRequest.state !== 'Merged' && pullRequest.state !== 'Closed',
+  )
+  const completedPullRequests = pullRequests.filter(
+    (pullRequest) =>
+      pullRequest.state === 'Merged' || pullRequest.state === 'Closed',
+  )
+  const visiblePullRequests = showCompleted
+    ? [...activePullRequests, ...completedPullRequests]
+    : activePullRequests
 
   return (
     <div className="pull-request-list-panel">
@@ -149,7 +162,7 @@ export function PullRequestListPanel({
         </div>
       )}
       <ul className="pull-request-list">
-        {pullRequests.map((pullRequest) => (
+        {visiblePullRequests.map((pullRequest) => (
           <li
             className="pull-request-list-item"
             key={`${pullRequest.url}-${String(pullRequest.number)}`}
@@ -193,11 +206,16 @@ export function PullRequestListPanel({
           </li>
         ))}
       </ul>
-      {loading ? (
-        <div className="pull-request-list-refreshing" role="status">
-          Refreshing…
-        </div>
-      ) : null}
+      {completedPullRequests.length === 0 ? null : (
+        <CompletedItemsToggle
+          count={completedPullRequests.length}
+          expanded={showCompleted}
+          onToggle={() => {
+            setShowCompleted((expanded) => !expanded)
+          }}
+          placement="pull-request-list"
+        />
+      )}
       {pendingMerge === null ? null : (
         <div className="pull-request-list-confirm-backdrop">
           <section

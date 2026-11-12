@@ -12,6 +12,7 @@ import { InboxConversationPanes } from '#components/inbox-conversation-panes'
 import { formatMessageTime } from '#components/message-time'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
+import { useSessionPullRequests } from '#components/use-session-pull-requests'
 import type {
   BackgroundTask,
   ChatItem,
@@ -56,6 +57,30 @@ const session: Session = {
   parent: null,
   ancestorSessionIds: [],
   pullRequest: null,
+}
+
+function PullRequestHookTestView({
+  session: currentSession,
+  enabled,
+}: {
+  session: Session
+  enabled: boolean
+}) {
+  const state = useSessionPullRequests({
+    session: currentSession,
+    enabled,
+  })
+  return (
+    <div>
+      <span>
+        {state.pullRequests.map((pullRequest) => pullRequest.title).join(', ')}
+      </span>
+      <span>{state.loading ? 'Loading' : 'Ready'}</span>
+      <button type="button" onClick={state.refresh}>
+        Refresh pull requests
+      </button>
+    </div>
+  )
 }
 
 const actions: SessionActions = {
@@ -926,8 +951,9 @@ it('loads and shows the session tree from the tree endpoint', async () => {
 it('shows linked pull requests alongside partial lookup errors', async () => {
   const taskSession: Session = {
     ...session,
+    id: 'linked-pull-request-session',
     task: {
-      id: 'synthetic-task-id',
+      id: 'linked-pull-request-task',
       number: 2048,
       title: 'Show linked work in the sidebar',
       priority: null,
@@ -1002,7 +1028,7 @@ it('shows linked pull requests alongside partial lookup errors', async () => {
   })
 
   expect(snapshot()).toEqual({
-    requests: ['/api/sessions/sample-session/pull-requests'],
+    requests: ['/api/sessions/linked-pull-request-session/pull-requests'],
     tabs: [{ label: 'PRs1', selected: 'true' }],
     pullRequests: [
       {
@@ -1020,8 +1046,9 @@ it('pauses pull request refresh while hidden and refreshes when visible again', 
   setPageVisibility('hidden')
   const taskSession: Session = {
     ...session,
+    id: 'visibility-pull-request-session',
     task: {
-      id: 'synthetic-task-id',
+      id: 'visibility-pull-request-task',
       number: 2048,
       title: 'Show linked work in the sidebar',
       priority: null,
@@ -1091,11 +1118,387 @@ it('pauses pull request refresh while hidden and refreshes when visible again', 
   })
   expect(snapshot()).toEqual({
     hiddenBeforeFirstRequest: [],
-    visibleAfterResume: ['/api/sessions/sample-session/pull-requests'],
-    hiddenAfterRefreshInterval: ['/api/sessions/sample-session/pull-requests'],
+    visibleAfterResume: [
+      '/api/sessions/visibility-pull-request-session/pull-requests',
+    ],
+    hiddenAfterRefreshInterval: [
+      '/api/sessions/visibility-pull-request-session/pull-requests',
+    ],
     visibleAfterSecondResume: [
-      '/api/sessions/sample-session/pull-requests',
-      '/api/sessions/sample-session/pull-requests',
+      '/api/sessions/visibility-pull-request-session/pull-requests',
+      '/api/sessions/visibility-pull-request-session/pull-requests',
+    ],
+  })
+})
+
+it('reuses recent pull request lists after keyed session remounts', async () => {
+  vi.useFakeTimers()
+  setPageVisibility('visible')
+  const firstSession = { ...session, id: 'first-session' }
+  const secondSession = { ...session, id: 'second-session' }
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/pull-requests')) {
+      const sessionId = url.split('/')[3] ?? 'unknown-session'
+      return Promise.resolve(
+        jsonResponse({
+          pullRequests: [
+            {
+              number: 43,
+              owner: 'sample-owner',
+              repo: 'sample-repo',
+              title: `Request for ${sessionId}`,
+              url: 'https://github.com/sample-org/sample-project/pull/43',
+              headSha: 'sample-head',
+              state: 'Open',
+              ciState: 'Successful',
+              reviewStatus: 'done',
+            },
+          ],
+          error: null,
+        }),
+      )
+    }
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+
+  const render = (currentSession: Session, enabled: boolean) => {
+    act(() => {
+      root?.render(
+        <PullRequestHookTestView
+          key={currentSession.id}
+          session={currentSession}
+          enabled={enabled}
+        />,
+      )
+    })
+  }
+  const flushRequests = async () => {
+    await act(async () => {
+      for (let index = 0; index < 12; index += 1) await Promise.resolve()
+    })
+  }
+
+  render(firstSession, true)
+  await flushRequests()
+  const requestsAfterFirstLoad = fetcher.mock.calls
+    .map(([input]) => requestUrl(input))
+    .filter((url) => url.endsWith('/pull-requests'))
+
+  render(secondSession, true)
+  await flushRequests()
+  render(firstSession, true)
+  const restoredImmediately = {
+    title: container.querySelector('span')?.textContent,
+    requests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/pull-requests')),
+  }
+  await flushRequests()
+  const recentSessionSnapshot = {
+    title: container.querySelector('span')?.textContent,
+    state: container.querySelectorAll('span')[1]?.textContent,
+    requests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/pull-requests')),
+  }
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30_000)
+  })
+  const refreshedSessionSnapshot = {
+    title: container.querySelector('span')?.textContent,
+    requests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/pull-requests')),
+  }
+
+  const snapshot = () => ({
+    requestsAfterFirstLoad,
+    restoredImmediately,
+    recentSessionSnapshot,
+    refreshedSessionSnapshot,
+  })
+  expect(snapshot()).toEqual({
+    requestsAfterFirstLoad: ['/api/sessions/first-session/pull-requests'],
+    restoredImmediately: {
+      title: 'Request for first-session',
+      requests: [
+        '/api/sessions/first-session/pull-requests',
+        '/api/sessions/second-session/pull-requests',
+      ],
+    },
+    recentSessionSnapshot: {
+      title: 'Request for first-session',
+      state: 'Ready',
+      requests: [
+        '/api/sessions/first-session/pull-requests',
+        '/api/sessions/second-session/pull-requests',
+      ],
+    },
+    refreshedSessionSnapshot: {
+      title: 'Request for first-session',
+      requests: [
+        '/api/sessions/first-session/pull-requests',
+        '/api/sessions/second-session/pull-requests',
+        '/api/sessions/first-session/pull-requests',
+      ],
+    },
+  })
+})
+
+it('fetches a fresh pull request list when the selected task changes', async () => {
+  vi.useFakeTimers()
+  setPageVisibility('visible')
+  const firstTask = {
+    id: 'first-task',
+    number: 51,
+    title: 'First task',
+    priority: null,
+  }
+  const secondTask = {
+    id: 'second-task',
+    number: 52,
+    title: 'Second task',
+    priority: null,
+  }
+  let responseNumber = 0
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/pull-requests')) {
+      responseNumber += 1
+      return Promise.resolve(
+        jsonResponse({
+          pullRequests: [
+            {
+              number: 43,
+              owner: 'sample-owner',
+              repo: 'sample-repo',
+              title: `Request ${String(responseNumber)}`,
+              url: 'https://github.com/sample-org/sample-project/pull/43',
+              headSha: 'sample-head',
+              state: 'Open',
+              ciState: 'Successful',
+              reviewStatus: 'done',
+            },
+          ],
+          error: null,
+        }),
+      )
+    }
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+
+  const render = (task: Session['task']) => {
+    act(() => {
+      root?.render(
+        <PullRequestHookTestView
+          session={{ ...session, id: 'task-change-session', task }}
+          enabled={true}
+        />,
+      )
+    })
+  }
+  const flushRequests = async () => {
+    await act(async () => {
+      for (let index = 0; index < 12; index += 1) await Promise.resolve()
+    })
+  }
+
+  render(firstTask)
+  await flushRequests()
+  const titleAfterFirstTask = container.querySelector('span')?.textContent
+
+  render(secondTask)
+  await flushRequests()
+
+  const snapshot = () => ({
+    titleAfterFirstTask,
+    titleAfterTaskChange: container.querySelector('span')?.textContent,
+    requests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/pull-requests')),
+  })
+  expect(snapshot()).toEqual({
+    titleAfterFirstTask: 'Request 1',
+    titleAfterTaskChange: 'Request 2',
+    requests: [
+      '/api/sessions/task-change-session/pull-requests',
+      '/api/sessions/task-change-session/pull-requests',
+    ],
+  })
+})
+
+it('refreshes pull requests immediately when explicitly requested', async () => {
+  vi.useFakeTimers()
+  setPageVisibility('visible')
+  let responseNumber = 0
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/pull-requests')) {
+      responseNumber += 1
+      return Promise.resolve(
+        jsonResponse({
+          pullRequests: [
+            {
+              number: 43,
+              owner: 'sample-owner',
+              repo: 'sample-repo',
+              title: `Request ${String(responseNumber)}`,
+              url: 'https://github.com/sample-org/sample-project/pull/43',
+              headSha: 'sample-head',
+              state: 'Open',
+              ciState: 'Successful',
+              reviewStatus: 'done',
+            },
+          ],
+          error: null,
+        }),
+      )
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+
+  act(() => {
+    root?.render(
+      <PullRequestHookTestView
+        session={{ ...session, id: 'explicit-refresh-session' }}
+        enabled={true}
+      />,
+    )
+  })
+  const flushRequests = async () => {
+    await act(async () => {
+      for (let index = 0; index < 12; index += 1) await Promise.resolve()
+    })
+  }
+  await flushRequests()
+  const refreshButton = container.querySelector('button')
+  if (refreshButton === null) throw new Error('Refresh button is missing')
+  act(() => {
+    refreshButton.click()
+  })
+  await flushRequests()
+
+  const snapshot = () => ({
+    title: container.querySelector('span')?.textContent,
+    requests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/pull-requests')),
+  })
+  expect(snapshot()).toEqual({
+    title: 'Request 2',
+    requests: [
+      '/api/sessions/explicit-refresh-session/pull-requests',
+      '/api/sessions/explicit-refresh-session/pull-requests',
+    ],
+  })
+})
+
+it('keeps the newest pull request response when an older refresh finishes late', async () => {
+  vi.useFakeTimers()
+  setPageVisibility('visible')
+  let resolveOlder: ((response: Response) => void) | undefined
+  let resolveNewer: ((response: Response) => void) | undefined
+  const olderResponse = new Promise<Response>((resolve) => {
+    resolveOlder = resolve
+  })
+  const newerResponse = new Promise<Response>((resolve) => {
+    resolveNewer = resolve
+  })
+  const requests: string[] = []
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (!url.endsWith('/pull-requests'))
+      return Promise.resolve(jsonResponse({}))
+    requests.push(url)
+    return requests.length === 1 ? olderResponse : newerResponse
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  const firstSession = { ...session, id: 'out-of-order-pull-request-session' }
+  const secondSession = { ...session, id: 'other-out-of-order-session' }
+  const render = (currentSession: Session, key: string, enabled: boolean) => {
+    act(() => {
+      root?.render(
+        <PullRequestHookTestView
+          key={key}
+          session={currentSession}
+          enabled={enabled}
+        />,
+      )
+    })
+  }
+  const flushRequests = async () => {
+    await act(async () => {
+      for (let index = 0; index < 12; index += 1) await Promise.resolve()
+    })
+  }
+  const response = (title: string) =>
+    jsonResponse({
+      pullRequests: [
+        {
+          number: 43,
+          owner: 'sample-owner',
+          repo: 'sample-repo',
+          title,
+          url: 'https://github.com/sample-org/sample-project/pull/43',
+          headSha: 'sample-head',
+          state: 'Open',
+          ciState: 'Successful',
+          reviewStatus: 'done',
+        },
+      ],
+      error: null,
+    })
+
+  render(firstSession, 'first-pane', true)
+  await flushRequests()
+  const refreshButton = container.querySelector('button')
+  if (refreshButton === null) throw new Error('Refresh button is missing')
+  act(() => {
+    refreshButton.click()
+  })
+  await flushRequests()
+
+  await act(async () => {
+    resolveNewer?.(response('Newest response'))
+    await Promise.resolve()
+  })
+  await act(async () => {
+    resolveOlder?.(response('Older response'))
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  render(secondSession, 'second-pane', false)
+  render(firstSession, 'returned-pane', true)
+  await flushRequests()
+
+  const snapshot = () => ({
+    title: container.querySelector('span')?.textContent,
+    state: container.querySelectorAll('span')[1]?.textContent,
+    requests,
+  })
+  expect(snapshot()).toEqual({
+    title: 'Newest response',
+    state: 'Ready',
+    requests: [
+      '/api/sessions/out-of-order-pull-request-session/pull-requests',
+      '/api/sessions/out-of-order-pull-request-session/pull-requests',
     ],
   })
 })

@@ -43,6 +43,7 @@ const appTestFiles = [
   'src/design-tokens.browser.test.tsx',
   'src/components/session-row.test.tsx',
   'src/components/session-task-links.test.tsx',
+  'src/components/pull-request-list-panel.test.tsx',
   'src/components/inbox-view.test.tsx',
   'src/components/session-status-panel.test.tsx',
   'src/components/pull-request-list-panel.browser.test.tsx',
