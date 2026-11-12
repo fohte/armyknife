@@ -53,6 +53,7 @@ type ConversationPaneProps = {
   initialSessionTreeError?: string | null
   initialSessionTreeViewState?: SessionTreeViewState | null
   shouldSkipSessionTreeFetch?: boolean
+  sessionTreeRefreshKey: number
   onSessionTreeViewStateChange?: (
     selectedSessionId: string,
     state: SessionTreeViewState,
@@ -77,6 +78,7 @@ export function ConversationPane({
   initialSessionTreeError = null,
   initialSessionTreeViewState = null,
   shouldSkipSessionTreeFetch = false,
+  sessionTreeRefreshKey,
   onSessionTreeLoaded,
   onSessionTreeRequestStarted,
   onSessionTreeRequestFailed,
@@ -106,7 +108,7 @@ export function ConversationPane({
     initialSessionTree,
     initialSessionTreeError,
     shouldSkipSessionTreeFetch,
-    refreshKey,
+    refreshKey: sessionTreeRefreshKey,
     onSessionTreeLoaded,
     onSessionTreeRequestStarted,
     onSessionTreeRequestFailed,
