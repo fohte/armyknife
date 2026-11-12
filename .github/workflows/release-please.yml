@@ -78,24 +78,6 @@ jobs:
               exit 1
             fi
 
-            CHECKS_EXIT=0
-            CHECKS_JSON=$(gh pr checks "$PR_NUMBER" --required --json bucket,name -R "${{ github.repository }}" 2>&1) || CHECKS_EXIT=$?
-            if [[ "$CHECKS_EXIT" != "0" && "$CHECKS_EXIT" != "1" && "$CHECKS_EXIT" != "8" ]]; then
-              echo "$CHECKS_JSON"
-              echo "Failed to read required checks for release PR"
-              exit 1
-            fi
-            if ! jq -e 'type == "array"' <<<"$CHECKS_JSON" >/dev/null; then
-              echo "$CHECKS_JSON"
-              echo "Required checks returned invalid JSON"
-              exit 1
-            fi
-            FAILED_CHECKS=$(jq -r '[.[] | select(.bucket == "fail" or .bucket == "cancel") | .name] | join(", ")' <<<"$CHECKS_JSON")
-            if [[ -n "$FAILED_CHECKS" ]]; then
-              echo "Required checks failed: $FAILED_CHECKS"
-              exit 1
-            fi
-
             sleep 10
           done
 
