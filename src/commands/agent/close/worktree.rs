@@ -419,7 +419,7 @@ mod tests {
         false,
         false,
         Some(
-            "Agent session `session-1` is running or waiting for input; pass --force to close it"
+            "Agent session `session-1` is running or waiting for input; complete any requested input and wait for the current turn to finish, then retry this command"
         )
     )]
     #[case::waiting_for_input(
@@ -428,7 +428,7 @@ mod tests {
         false,
         false,
         Some(
-            "Agent session `session-1` is running or waiting for input; pass --force to close it"
+            "Agent session `session-1` is running or waiting for input; complete any requested input and wait for the current turn to finish, then retry this command"
         )
     )]
     #[case::pending_background_task(
@@ -437,7 +437,7 @@ mod tests {
         false,
         false,
         Some(
-            "Agent session `session-1` has pending background or agent tasks; pass --force to close it"
+            "Agent session `session-1` has pending background or agent tasks; wait for them to finish, then retry this command"
         )
     )]
     #[case::pending_agent_task(
@@ -446,7 +446,7 @@ mod tests {
         true,
         false,
         Some(
-            "Agent session `session-1` has pending background or agent tasks; pass --force to close it"
+            "Agent session `session-1` has pending background or agent tasks; wait for them to finish, then retry this command"
         )
     )]
     #[case::recent_activity(
@@ -887,7 +887,7 @@ mod tests {
                 calls.into_inner(),
             ),
             (
-                Err("Agent session `session-1` is running or waiting for input; pass --force to close it".to_string()),
+                Err("Agent session `session-1` is running or waiting for input; complete any requested input and wait for the current turn to finish, then retry this command".to_string()),
                 vec![],
             ),
         );
