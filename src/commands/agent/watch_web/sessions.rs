@@ -228,8 +228,26 @@ async fn list_sessions<S: SessionSource>(
         }
     };
 
-    let sessions_to_check = snapshot
-        .sessions
+    let mut response_sessions = snapshot.sessions.clone();
+    let mut response_session_ids = response_sessions
+        .iter()
+        .map(|session| session.session_id.clone())
+        .collect::<HashSet<_>>();
+    response_sessions.extend(
+        snapshot
+            .all_sessions
+            .iter()
+            .filter(|session| {
+                session.status == SessionStatus::Ended
+                    && snapshot
+                        .unanswered_todo_titles
+                        .contains_key(&session.session_id)
+            })
+            .filter(|session| response_session_ids.insert(session.session_id.clone()))
+            .cloned(),
+    );
+
+    let sessions_to_check = response_sessions
         .iter()
         .filter(|session| {
             session.engine == Engine::Claude && session.status == SessionStatus::Running
@@ -238,8 +256,7 @@ async fn list_sessions<S: SessionSource>(
         .collect::<Vec<_>>();
     let interrupted_sessions =
         tokio::task::spawn_blocking(move || interrupted_session_ids(sessions_to_check));
-    let stopped_claude_sessions = snapshot
-        .sessions
+    let stopped_claude_sessions = response_sessions
         .iter()
         .filter(|session| {
             session.engine == Engine::Claude && session.status == SessionStatus::Stopped
@@ -248,8 +265,8 @@ async fn list_sessions<S: SessionSource>(
         .collect::<Vec<_>>();
 
     let (task_metadata, pull_requests, running_background_task_sessions) = tokio::join!(
-        source.fetch_task_metadata(&snapshot.sessions),
-        source.fetch_pull_requests(&snapshot.sessions),
+        source.fetch_task_metadata(&response_sessions),
+        source.fetch_pull_requests(&response_sessions),
         source.running_background_task_session_ids(stopped_claude_sessions),
     );
     let running_background_task_sessions = running_background_task_sessions.map_err(|error| {
@@ -262,7 +279,7 @@ async fn list_sessions<S: SessionSource>(
     let interrupted_session_ids = interrupted_sessions
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let turn_kinds = user_turns(snapshot.sessions.iter(), &snapshot.agent_config)
+    let turn_kinds = user_turns(response_sessions.iter(), &snapshot.agent_config)
         .into_iter()
         .map(|turn| (turn.session.session_id.as_str(), turn.kind))
         .collect::<HashMap<_, _>>();
@@ -276,8 +293,7 @@ async fn list_sessions<S: SessionSource>(
     let unanswered_todo_titles = snapshot.unanswered_todo_titles;
     let tree_related_session_ids = session_tree_related_ids(&snapshot.all_sessions);
 
-    let mut sessions = snapshot
-        .sessions
+    let mut sessions = response_sessions
         .iter()
         .map(|session| {
             let tasks = task_metadata
@@ -1294,6 +1310,43 @@ mod tests {
             },
         );
         expected["sessions"][0]["activityStatus"] = serde_json::json!("working");
+        expected["sessions"][0]["preview"] = serde_json::json!("Check the page");
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn incomplete_todo_keeps_ended_session_available_for_conversation(
+        mut source: TestSessionSource,
+    ) {
+        source.sessions.clear();
+        source.all_sessions.truncate(1);
+        source.all_sessions[0].status = SessionStatus::Ended;
+        source
+            .unanswered_todo_titles
+            .insert("child-session".to_string(), "Check the page".to_string());
+
+        let mut expected = expected_response(
+            "needs_action",
+            Some("1970-01-01T01:18:20Z"),
+            true,
+            ExpectedSessionDetails {
+                kind: Some("Todo"),
+                category_when_not_later: "needs_action",
+                is_paused: false,
+                unread: false,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
         expected["sessions"][0]["preview"] = serde_json::json!("Check the page");
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
