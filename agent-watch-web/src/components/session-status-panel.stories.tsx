@@ -48,6 +48,28 @@ export const OneRunningItemIsAvailable: Story = {
   },
 }
 
+export const DecisionsShowUnreviewedCount: Story = {
+  name: 'The Decisions tab shows how many decisions need review',
+  args: {
+    tabs: [
+      {
+        id: 'decisions',
+        label: 'Decisions',
+        count: 2,
+        visible: true,
+        showCount: true,
+        countTone: 'warning',
+        content: (
+          <div className="session-status-preview">
+            Decisions waiting for review
+          </div>
+        ),
+      },
+    ],
+    activeTabId: 'decisions',
+  },
+}
+
 export const NoTabsAreAvailable: Story = {
   name: 'The panel shows an empty state when no tabs have items',
   args: {

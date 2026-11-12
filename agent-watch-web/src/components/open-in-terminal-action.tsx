@@ -1,6 +1,7 @@
 import '#components/open-in-terminal-action.css'
 
 import { Button } from '@fohte/ui/button'
+import { SquareTerminal } from 'lucide-react'
 
 import type { OpenInTerminalStatus } from '#types'
 
@@ -18,13 +19,16 @@ export function OpenInTerminalAction({
   return (
     <div className="conversation-open-in-terminal">
       <Button
+        className="conversation-open-in-terminal-button"
         type="button"
         variant="plain"
+        aria-label="Open in terminal"
+        title="Open in terminal"
         disabled={status?.state === 'sending'}
         aria-busy={status?.state === 'sending'}
         onClick={onClick}
       >
-        Open in terminal
+        <SquareTerminal aria-hidden="true" size={16} />
       </Button>
       <p
         className="conversation-terminal-action-status"

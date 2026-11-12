@@ -137,7 +137,9 @@
 }
 
 .conversation-header-actions
-  [data-slot='button']:not(.aw-button):not(.conversation-status-panel-toggle) {
+  [data-slot='button']:not(.aw-button):not(
+    .conversation-status-panel-toggle
+  ):not(.conversation-today-toggle):not(.conversation-open-in-terminal-button) {
   height: 26px;
   min-height: 26px;
   padding: 0 10px;
@@ -160,13 +162,8 @@
   font-size: 12px;
 }
 
-.conversation-status-panel-icon,
 .conversation-status-panel-count {
   color: var(--aw-color-working);
-}
-
-.conversation-status-panel-icon {
-  font-size: 13px;
 }
 
 .conversation-status-panel-toggle[aria-expanded='true'] {

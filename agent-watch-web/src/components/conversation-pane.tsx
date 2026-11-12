@@ -407,10 +407,8 @@ export function ConversationPane({
   }))
   const {
     activeTabId,
-    decisionsPanelOpen,
     onSelectDecision,
     onTabChange,
-    onToggleDecisionsPanel,
     selectedDecisionSeq,
     tabs: panelTabs,
   } = useConversationStatusPanel({
@@ -424,10 +422,8 @@ export function ConversationPane({
     onSessionTreeViewStateChange: (state) =>
       onSessionTreeViewStateChange?.(session.id, state),
     onSelectSession,
-    statusPanelOpen,
     onAction,
     onCloseStatusPanel,
-    onToggleStatusPanel,
   })
   const statusPanel = statusPanelOpen ? (
     <SessionStatusPanel
@@ -465,10 +461,8 @@ export function ConversationPane({
       onSelectSession={onSelectSession}
       isMobile={isMobile}
       statusPanelOpen={statusPanelOpen}
-      decisionsPanelOpen={decisionsPanelOpen}
       selectedDecisionSeq={selectedDecisionSeq}
       onToggleStatusPanel={onToggleStatusPanel}
-      onToggleDecisionsPanel={onToggleDecisionsPanel}
       onSelectDecision={onSelectDecision}
       mobileStatusPanel={statusPanel}
       onBack={onBack}
