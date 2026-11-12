@@ -9,7 +9,6 @@ import { ConversationMessageRow } from '#components/conversation-message-row'
 import { ConversationPane } from '#components/conversation-pane'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { InboxConversationPanes } from '#components/inbox-conversation-panes'
-import type { PendingPermissionAction } from '#components/permission-card'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import type {
@@ -19,6 +18,10 @@ import type {
   SessionActions,
   SessionTreeNode,
 } from '#types'
+
+type PendingPermissionAction = NonNullable<
+  Parameters<typeof ConversationPaneView>[0]['pendingPermissionActions']
+>[string]
 
 const { optimizeImageAttachmentMock } = vi.hoisted(() => ({
   optimizeImageAttachmentMock: vi.fn<(file: File) => Promise<File>>(),

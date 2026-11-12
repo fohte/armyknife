@@ -6,7 +6,7 @@ import { Button } from '@fohte/ui/button'
 import { OpenInTerminalAction } from '#components/open-in-terminal-action'
 import type { ChatItem, OpenInTerminalStatus, SessionActions } from '#types'
 
-export type PendingPermissionAction = {
+type PendingPermissionAction = {
   action: 'approve' | 'reject'
   status: 'sending' | 'sent'
   requestId: string
