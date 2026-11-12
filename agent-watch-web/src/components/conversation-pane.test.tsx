@@ -329,6 +329,7 @@ function renderInboxPanes(
   sessions: readonly Session[],
   selectedSession: Session,
   refreshKey = 0,
+  sessionRefreshRevisions?: ReadonlyMap<string, number>,
 ) {
   root ??= createRoot(container)
   const inboxProps = {
@@ -359,6 +360,9 @@ function renderInboxPanes(
         sessions={sessions}
         selectedSession={selectedSession}
         refreshKey={refreshKey}
+        {...(sessionRefreshRevisions === undefined
+          ? {}
+          : { sessionRefreshRevisions })}
         isMobile={false}
         showMobileConversation={false}
         statusPanelOpen
@@ -370,6 +374,90 @@ function renderInboxPanes(
     )
   })
 }
+
+it('refreshes a session tree only when a tree member changes', async () => {
+  const rootSession = treeSession('root-session', 'Root session')
+  const childSession = treeSession(
+    'child-session',
+    'Child session',
+    rootSession,
+  )
+  const unrelatedSession = treeSession('unrelated-session', 'Other session')
+  const sessions = [rootSession, childSession, unrelatedSession]
+  const tree = [
+    treeNode(rootSession.id, null, rootSession.title),
+    treeNode(childSession.id, rootSession.id, childSession.title),
+  ]
+  const fetcher = inboxFetch(() =>
+    Promise.resolve(jsonResponse({ revision: 1, sessions: tree })),
+  )
+  vi.stubGlobal('fetch', fetcher)
+
+  renderInboxPanes(
+    sessions,
+    rootSession,
+    1,
+    new Map([
+      [rootSession.id, 1],
+      [childSession.id, 1],
+    ]),
+  )
+  await waitForState(
+    () => container.querySelector('#session-tree-row-child-session') !== null,
+  )
+
+  renderInboxPanes(
+    sessions,
+    rootSession,
+    2,
+    new Map([
+      [rootSession.id, 1],
+      [childSession.id, 1],
+      [unrelatedSession.id, 2],
+    ]),
+  )
+  const requestsAfterUnrelatedChange = fetcher.mock.calls.map(([input]) =>
+    requestUrl(input),
+  )
+
+  renderInboxPanes(
+    sessions,
+    rootSession,
+    3,
+    new Map([
+      [rootSession.id, 1],
+      [childSession.id, 3],
+      [unrelatedSession.id, 2],
+    ]),
+  )
+  await waitForState(
+    () =>
+      fetcher.mock.calls.some(([input]) =>
+        requestUrl(input).endsWith('/tree'),
+      ) &&
+      fetcher.mock.calls.filter(([input]) =>
+        requestUrl(input).endsWith('/tree'),
+      ).length === 2,
+  )
+
+  const snapshot = () => ({
+    requestsAfterUnrelatedChange,
+    requests: fetcher.mock.calls.map(([input]) => requestUrl(input)),
+  })
+  expect(snapshot()).toEqual({
+    requestsAfterUnrelatedChange: [
+      '/api/sessions/root-session/tree',
+      '/api/sessions/root-session/messages?limit=100',
+      '/api/sessions/root-session/actions',
+    ],
+    requests: [
+      '/api/sessions/root-session/tree',
+      '/api/sessions/root-session/messages?limit=100',
+      '/api/sessions/root-session/actions',
+      '/api/sessions/root-session/tree',
+    ],
+  })
+})
 
 function todayToggleSnapshot(onToggleToday: ReturnType<typeof vi.fn>) {
   const toggle = container.querySelector<HTMLButtonElement>(

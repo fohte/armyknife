@@ -55,7 +55,10 @@ export function App() {
   const [workTypeNavLabels, setWorkTypeNavLabels] = useState<
     Record<string, string>
   >({})
-  const [sessionsRevision, setSessionsRevision] = useState(0)
+  const [sessionRefreshState, setSessionRefreshState] = useState({
+    revision: 0,
+    sessionRevisions: new Map<string, number>(),
+  })
   const [sessionsReceivedAt, setSessionsReceivedAt] = useState(() => Date.now())
   const [nowMs, setNowMs] = useState(() => Date.now())
   const {
@@ -311,7 +314,7 @@ export function App() {
 
   useEffect(
     () =>
-      startSessionFeed((response) => {
+      startSessionFeed((response, changedSessionIds) => {
         const receivedAt = Date.now()
         setWorkTypeNavLabels(response.workTypeNavLabels ?? {})
         setSessions(
@@ -323,7 +326,14 @@ export function App() {
               session.category === 'done',
           ),
         )
-        setSessionsRevision((revision) => revision + 1)
+        setSessionRefreshState((current) => {
+          const revision = current.revision + 1
+          const sessionRevisions = new Map(current.sessionRevisions)
+          for (const sessionId of changedSessionIds) {
+            sessionRevisions.set(sessionId, revision)
+          }
+          return { revision, sessionRevisions }
+        })
         setSessionsReceivedAt(receivedAt)
         setNowMs(receivedAt)
         setLoaded(true)
@@ -495,7 +505,8 @@ export function App() {
           inboxProps={inboxProps}
           sessions={sessionsWithElapsedTime}
           selectedSession={selectedSession}
-          refreshKey={sessionsRevision}
+          refreshKey={sessionRefreshState.revision}
+          sessionRefreshRevisions={sessionRefreshState.sessionRevisions}
           isMobile={isMobile}
           showMobileConversation={showMobileConversation}
           inboxCollapsed={inboxCollapsed}

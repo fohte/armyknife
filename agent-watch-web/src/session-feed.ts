@@ -239,7 +239,10 @@ function applySessionsFeedResponse(
 }
 
 export function startSessionFeed(
-  onSessions: (response: SessionsResponse) => void,
+  onSessions: (
+    response: SessionsResponse,
+    changedSessionIds: readonly string[],
+  ) => void,
   onError: (message: string | null) => void,
   {
     fetcher = fetch,
@@ -301,6 +304,9 @@ export function startSessionFeed(
       .match(
         (body) => {
           if (active) {
+            const previousSessionIds =
+              currentSessions?.response.sessions.map((session) => session.id) ??
+              []
             const applied = applySessionsFeedResponse(
               body,
               currentSessions,
@@ -312,7 +318,21 @@ export function startSessionFeed(
             }
 
             currentSessions = applied.value
-            onSessions(currentSessions.response)
+            const changedSessionIds =
+              body.mode === 'full'
+                ? [
+                    ...new Set([
+                      ...previousSessionIds,
+                      ...body.sessions.map((session) => session.id),
+                    ]),
+                  ]
+                : [
+                    ...new Set([
+                      ...body.updatedSessions.map((session) => session.id),
+                      ...body.removedSessionIds,
+                    ]),
+                  ]
+            onSessions(currentSessions.response, changedSessionIds)
             requestError = false
             clearRequestRetry()
             reportStatus()

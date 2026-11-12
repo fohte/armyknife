@@ -8,11 +8,17 @@ import { readSavedInboxViews } from '#saved-inbox-views'
 import type { Session, SessionsResponse } from '#types'
 
 const capturedFeed = vi.hoisted(() => ({
-  onSessions: null as ((response: unknown) => void) | null,
+  onSessions: null as
+    ((response: unknown, changedSessionIds: readonly string[]) => void) | null,
 }))
 
 vi.mock('#session-feed', () => ({
-  startSessionFeed: (onSessions: (response: unknown) => void) => {
+  startSessionFeed: (
+    onSessions: (
+      response: unknown,
+      changedSessionIds: readonly string[],
+    ) => void,
+  ) => {
     capturedFeed.onSessions = onSessions
     return () => {
       capturedFeed.onSessions = null
@@ -471,14 +477,17 @@ it('allows non-file drags to keep their default behavior', () => {
   expect(snapshot()).toEqual({ dragOverPrevented: false, dropPrevented: false })
 })
 
-function publishSessions(response: SessionsResponse) {
+function publishSessions(
+  response: SessionsResponse,
+  changedSessionIds = response.sessions.map((session) => session.id),
+) {
   const onSessions = capturedFeed.onSessions
   if (onSessions === null) {
     throw new Error('The session feed has not started')
   }
 
   act(() => {
-    onSessions({ workTypeNavLabels: {}, ...response })
+    onSessions({ workTypeNavLabels: {}, ...response }, changedSessionIds)
   })
 }
 
@@ -3630,7 +3639,7 @@ it('advances elapsed time for all rows with one shared timer', async () => {
   })
 })
 
-it('reloads the selected conversation when the session feed updates', async () => {
+it('reloads only the selected conversation when its session changes', async () => {
   let messageReadCount = 0
   const fetcher = vi.fn<typeof fetch>()
   fetcher.mockImplementation((input) => {
@@ -3680,16 +3689,44 @@ it('reloads the selected conversation when the session feed updates', async () =
     for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
 
-  publishSessions({
-    revision: 2,
-    sessions: [session('session-a', 'Updated session')],
+  publishSessions(
+    {
+      revision: 2,
+      sessions: [
+        session('session-a', 'First session'),
+        session('session-b', 'Updated unrelated session'),
+      ],
+    },
+    ['session-b'],
+  )
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
+  const requestsAfterUnrelatedChange = fetcher.mock.calls.map(([input]) =>
+    typeof input === 'string'
+      ? new URL(input, 'http://localhost').pathname
+      : input instanceof URL
+        ? input.pathname
+        : new URL(input.url).pathname,
+  )
+
+  publishSessions(
+    {
+      revision: 3,
+      sessions: [
+        session('session-a', 'Updated selected session'),
+        session('session-b', 'Updated unrelated session'),
+      ],
+    },
+    ['session-a'],
+  )
   await act(async () => {
     for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
 
   const snapshot = () => ({
     transcript: container.querySelector('.chat-assistant-message')?.textContent,
+    requestsAfterUnrelatedChange,
     requestPaths: fetcher.mock.calls.map(([input]) =>
       typeof input === 'string'
         ? new URL(input, 'http://localhost').pathname
@@ -3701,6 +3738,10 @@ it('reloads the selected conversation when the session feed updates', async () =
 
   expect(snapshot()).toEqual({
     transcript: 'After feed update',
+    requestsAfterUnrelatedChange: [
+      '/api/sessions/session-a/messages',
+      '/api/sessions/session-a/actions',
+    ],
     requestPaths: [
       '/api/sessions/session-a/messages',
       '/api/sessions/session-a/actions',
