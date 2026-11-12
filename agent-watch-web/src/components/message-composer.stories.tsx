@@ -9,6 +9,7 @@ const meta = {
     placeholder: 'Message session',
     disabled: false,
     isSending: false,
+    isProcessingAttachments: false,
     isMobile: false,
     canInterrupt: false,
     attachments: [],

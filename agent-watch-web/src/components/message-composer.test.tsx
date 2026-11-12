@@ -15,6 +15,7 @@ function requireElement<T extends Element>(element: T | null): T {
 
 function ComposerHarness({
   isMobile = false,
+  isProcessingAttachments = false,
   engine,
   skills = [],
   initialDraft = '',
@@ -24,6 +25,7 @@ function ComposerHarness({
   onRemoveAttachment = () => undefined,
 }: {
   isMobile?: boolean
+  isProcessingAttachments?: boolean
   engine?: 'Claude' | 'Codex'
   skills?: readonly SkillSuggestion[]
   initialDraft?: string
@@ -39,6 +41,7 @@ function ComposerHarness({
       placeholder="Message session"
       disabled={false}
       isSending={false}
+      isProcessingAttachments={isProcessingAttachments}
       isMobile={isMobile}
       engine={engine}
       skills={skills}
@@ -120,6 +123,29 @@ it.each([
     expect(snapshot()).toEqual({ rows: expectedRows })
   },
 )
+
+it('disables message sending while attachments are being prepared', () => {
+  renderFreshComposer({
+    isProcessingAttachments: true,
+    initialDraft: 'Inspect this photo.',
+  })
+
+  const snapshot = () => {
+    const sendButton = requireElement(
+      container.querySelector<HTMLButtonElement>('[aria-label="Send message"]'),
+    )
+    return {
+      disabled: sendButton.disabled,
+      formBusy: sendButton.form?.getAttribute('aria-busy'),
+      status: container.querySelector('[role="status"]')?.textContent,
+    }
+  }
+  expect(snapshot()).toEqual({
+    disabled: true,
+    formBusy: 'true',
+    status: 'Preparing attachments…',
+  })
+})
 
 it('grows with the draft and scrolls after reaching half the viewport', () => {
   const textarea = requireElement(
@@ -227,6 +253,7 @@ it('removes an attachment when its remove button is clicked', () => {
         placeholder="Message session"
         disabled={false}
         isSending={false}
+        isProcessingAttachments={false}
         isMobile={false}
         canInterrupt={false}
         attachments={[
@@ -265,6 +292,7 @@ it('shows the size of a non-image attachment', () => {
         placeholder="Message session"
         disabled={false}
         isSending={false}
+        isProcessingAttachments={false}
         isMobile={false}
         canInterrupt={false}
         attachments={[
@@ -303,6 +331,7 @@ it('shows the byte size of a small non-image attachment', () => {
         placeholder="Message session"
         disabled={false}
         isSending={false}
+        isProcessingAttachments={false}
         isMobile={false}
         canInterrupt={false}
         attachments={[

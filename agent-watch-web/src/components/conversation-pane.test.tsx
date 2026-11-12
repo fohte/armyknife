@@ -19,6 +19,14 @@ import type {
   SessionTreeNode,
 } from '#types'
 
+const { optimizeImageAttachmentMock } = vi.hoisted(() => ({
+  optimizeImageAttachmentMock: vi.fn<(file: File) => Promise<File>>(),
+}))
+
+vi.mock('#lib/image-attachment', () => ({
+  optimizeImageAttachment: optimizeImageAttachmentMock,
+}))
+
 vi.mock('#components/conversation-message', async (importOriginal) => {
   const original =
     await importOriginal<typeof import('#components/conversation-message')>()
@@ -513,6 +521,10 @@ function dispatchKeyInAct(
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  optimizeImageAttachmentMock.mockReset()
+  optimizeImageAttachmentMock.mockImplementation((file) =>
+    Promise.resolve(file),
+  )
   window.localStorage.clear()
   container = document.createElement('div')
   document.body.append(container)
@@ -1119,6 +1131,9 @@ afterEach(() => {
   container.remove()
   vi.useRealTimers()
   vi.restoreAllMocks()
+  optimizeImageAttachmentMock.mockImplementation((file) =>
+    Promise.resolve(file),
+  )
   vi.unstubAllGlobals()
   if (originalExecCommand === undefined) {
     Reflect.deleteProperty(document, 'execCommand')
@@ -4185,6 +4200,112 @@ it('shows a server attachment validation error and retains the rejected attachme
       ],
     }),
   })
+})
+
+it('waits for pasted image optimization and sends the optimized attachment', async () => {
+  const fetcher = vi.fn<typeof fetch>((input) =>
+    Promise.resolve(
+      requestUrl(input).endsWith('/actions')
+        ? jsonResponse({
+            message: true,
+            answerQuestion: false,
+            interrupt: false,
+            openInTerminal: true,
+          })
+        : jsonResponse(messagesResponse([])),
+    ),
+  )
+  vi.stubGlobal('fetch', fetcher)
+  const optimizedFile = new File(['optimized'], 'photo.jpg', {
+    type: 'image/jpeg',
+  })
+  let finishOptimization: ((file: File) => void) | undefined
+  optimizeImageAttachmentMock.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finishOptimization = resolve
+      }),
+  )
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector<HTMLTextAreaElement>('textarea')?.disabled ===
+        false,
+    ),
+  ).toBe(true)
+
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Inspect this photo.')
+  const file = new File(['source'], 'photo.heic', { type: 'image/heic' })
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(pasteEvent, 'clipboardData', {
+    value: { files: [file] },
+  })
+  act(() => {
+    void textarea.dispatchEvent(pasteEvent)
+  })
+  expect(
+    await waitForState(
+      () => optimizeImageAttachmentMock.mock.calls.length === 1,
+    ),
+  ).toBe(true)
+
+  const sendButton = requireElement(
+    container.querySelector<HTMLButtonElement>('[aria-label="Send message"]'),
+  )
+  expect(sendButton.disabled).toBe(true)
+  const form = requireElement(sendButton.closest('form'))
+  act(() => {
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+  })
+  expect(fetcher.mock.calls[2]).toBeUndefined()
+
+  const complete = finishOptimization
+  if (complete === undefined) throw new Error('Expected optimization to start')
+  await act(async () => {
+    complete(optimizedFile)
+    await Promise.resolve()
+  })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('.composer-attachment span')?.textContent ===
+          'photo.jpg' && !sendButton.disabled,
+    ),
+  ).toBe(true)
+  act(() => {
+    sendButton.click()
+  })
+  expect(
+    await waitForState(() => fetcher.mock.calls[2]?.[1]?.body !== undefined),
+  ).toBe(true)
+
+  const sentBody = () => fetcher.mock.calls[2]?.[1]?.body
+  expect(sentBody()).toEqual(
+    JSON.stringify({
+      content: 'Inspect this photo.',
+      attachments: [
+        {
+          name: 'photo.jpg',
+          mimeType: 'image/jpeg',
+          size: 9,
+          data: 'b3B0aW1pemVk',
+        },
+      ],
+    }),
+  )
 })
 
 it('clears the message draft after a successful send', async () => {

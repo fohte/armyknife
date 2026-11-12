@@ -2,6 +2,17 @@ import { ResultAsync } from 'neverthrow'
 
 const MAX_IMAGE_DIMENSION = 2048
 const JPEG_QUALITY = 0.9
+const SUPPORTED_IMAGE_MIME_TYPES = new Set([
+  'image/gif',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+])
+const PNG_PRESERVING_MIME_TYPES = new Set([
+  'image/gif',
+  'image/png',
+  'image/webp',
+])
 const IMAGE_EXTENSIONS = new Set([
   'avif',
   'gif',
@@ -25,10 +36,11 @@ type DecodedImage = {
 
 type ImageAttachmentBoundary = {
   decode: (file: File) => Promise<DecodedImage>
-  encodeJpeg: (
+  encode: (
     image: DecodedImage,
     width: number,
     height: number,
+    mimeType: string,
     quality: number,
   ) => Promise<Blob | null>
 }
@@ -65,7 +77,7 @@ const browserBoundary: ImageAttachmentBoundary = {
       }
       image.src = url
     }),
-  encodeJpeg: (image, width, height, quality) => {
+  encode: (image, width, height, mimeType, quality) => {
     const canvas = document.createElement('canvas')
     canvas.width = width
     canvas.height = height
@@ -73,7 +85,7 @@ const browserBoundary: ImageAttachmentBoundary = {
     if (context === null) return Promise.resolve(null)
     image.draw(context, width, height)
     return new Promise((resolve) => {
-      canvas.toBlob(resolve, 'image/jpeg', quality)
+      canvas.toBlob(resolve, mimeType, quality)
     })
   },
 }
@@ -84,9 +96,9 @@ function isImageFile(file: File) {
   return extension !== undefined && IMAGE_EXTENSIONS.has(extension)
 }
 
-function jpegFilename(name: string) {
+function imageFilename(name: string, mimeType: string) {
   const stem = name.replace(/\.[^.]*$/, '') || 'Pasted image'
-  return `${stem}.jpg`
+  return `${stem}.${mimeType === 'image/jpeg' ? 'jpg' : 'png'}`
 }
 
 export async function optimizeImageAttachment(
@@ -125,20 +137,24 @@ async function optimizeDecodedImage(
   const width = Math.max(1, Math.round(image.width * scale))
   const height = Math.max(1, Math.round(image.height * scale))
   const needsResize = width !== image.width || height !== image.height
-  if (file.type.toLowerCase() === 'image/jpeg' && !needsResize) return file
-
-  const blob = await boundary.encodeJpeg(image, width, height, JPEG_QUALITY)
-  if (blob === null || blob.type !== 'image/jpeg') return file
-  if (
-    file.type.toLowerCase() === 'image/png' &&
-    !needsResize &&
-    file.size <= blob.size
-  ) {
+  const sourceMimeType = file.type.toLowerCase()
+  if (!needsResize && SUPPORTED_IMAGE_MIME_TYPES.has(sourceMimeType))
     return file
-  }
 
-  return new File([blob], jpegFilename(file.name), {
-    type: 'image/jpeg',
+  const outputMimeType = PNG_PRESERVING_MIME_TYPES.has(sourceMimeType)
+    ? 'image/png'
+    : 'image/jpeg'
+  const blob = await boundary.encode(
+    image,
+    width,
+    height,
+    outputMimeType,
+    JPEG_QUALITY,
+  )
+  if (blob === null || blob.type !== outputMimeType) return file
+
+  return new File([blob], imageFilename(file.name, outputMimeType), {
+    type: outputMimeType,
     lastModified: file.lastModified,
   })
 }

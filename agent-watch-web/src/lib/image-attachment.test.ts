@@ -16,25 +16,32 @@ function decodedImage(width: number, height: number) {
   return { width, height, draw: () => undefined } satisfies TestDecodedImage
 }
 
-function jpegBoundary(width: number, height: number, blobSize = 128) {
-  const calls: { width: number; height: number; quality: number }[] = []
+function imageBoundary(width: number, height: number, blobSize = 128) {
+  const calls: {
+    width: number
+    height: number
+    mimeType: string
+    quality: number
+  }[] = []
   return {
     calls,
     decode: vi.fn(() => Promise.resolve(decodedImage(width, height))),
-    encodeJpeg: vi.fn(
+    encode: vi.fn(
       (
         _image: TestDecodedImage,
         outputWidth: number,
         outputHeight: number,
+        mimeType: string,
         quality: number,
       ) => {
         calls.push({
           width: outputWidth,
           height: outputHeight,
+          mimeType,
           quality,
         })
         return Promise.resolve(
-          new Blob([new Uint8Array(blobSize)], { type: 'image/jpeg' }),
+          new Blob([new Uint8Array(blobSize)], { type: mimeType }),
         )
       },
     ),
@@ -43,18 +50,21 @@ function jpegBoundary(width: number, height: number, blobSize = 128) {
 
 function attachmentSnapshot(
   file: File,
-  boundary: ReturnType<typeof jpegBoundary>,
+  boundary: ReturnType<typeof imageBoundary>,
 ) {
   return {
     name: file.name,
     type: file.type,
-    dimensions: boundary.calls.map(({ width, height }) => [width, height]),
+    encodings: boundary.calls.map(({ width, height, mimeType }) => ({
+      dimensions: [width, height],
+      mimeType,
+    })),
   }
 }
 
 function nonImageSnapshot(
   result: File,
-  boundary: ReturnType<typeof jpegBoundary>,
+  boundary: ReturnType<typeof imageBoundary>,
 ) {
   return { result, decodeCalls: boundary.decode.mock.calls }
 }
@@ -78,21 +88,21 @@ it.each([
   'converts an oversized $name image to a JPEG no larger than 2048 pixels',
   async ({ dimensions, output }) => {
     const file = new File(['source'], 'photo.heic', { type: 'image/heic' })
-    const boundary = jpegBoundary(dimensions[0], dimensions[1])
+    const boundary = imageBoundary(dimensions[0], dimensions[1])
 
     const result = await optimizeImageAttachment(file, boundary)
 
     expect(attachmentSnapshot(result, boundary)).toEqual({
       name: 'photo.jpg',
       type: 'image/jpeg',
-      dimensions: [output],
+      encodings: [{ dimensions: output, mimeType: 'image/jpeg' }],
     })
   },
 )
 
 it('converts a decodable HEIC image before it reaches the attachment payload', async () => {
   const file = new File(['source'], 'photo.heic', { type: 'image/heic' })
-  const boundary = jpegBoundary(1200, 900)
+  const boundary = imageBoundary(1200, 900)
 
   const result = await optimizeImageAttachment(file, boundary)
 
@@ -102,11 +112,37 @@ it('converts a decodable HEIC image before it reaches the attachment payload', a
   })
 })
 
-it('keeps a small PNG when JPEG encoding would make it larger', async () => {
+it('keeps a small PNG unchanged to preserve its transparency', async () => {
   const file = new File(['small png'], 'screenshot.png', {
     type: 'image/png',
   })
-  const boundary = jpegBoundary(800, 600, file.size + 1)
+  const boundary = imageBoundary(800, 600)
+
+  const result = await optimizeImageAttachment(file, boundary)
+
+  expect(result).toBe(file)
+})
+
+it('resizes an oversized PNG without removing its transparency', async () => {
+  const file = new File(['large png'], 'screenshot.png', {
+    type: 'image/png',
+  })
+  const boundary = imageBoundary(3000, 2000)
+
+  const result = await optimizeImageAttachment(file, boundary)
+
+  expect(attachmentSnapshot(result, boundary)).toEqual({
+    name: 'screenshot.png',
+    type: 'image/png',
+    encodings: [{ dimensions: [2048, 1365], mimeType: 'image/png' }],
+  })
+})
+
+it('keeps a bounded GIF animated by leaving its original bytes intact', async () => {
+  const file = new File(['animated gif'], 'animation.gif', {
+    type: 'image/gif',
+  })
+  const boundary = imageBoundary(640, 480)
 
   const result = await optimizeImageAttachment(file, boundary)
 
@@ -119,7 +155,7 @@ it('keeps the original file when the browser cannot decode it', async () => {
   })
   const boundary = {
     decode: vi.fn(() => Promise.reject(new Error('unsupported image'))),
-    encodeJpeg: vi.fn(),
+    encode: vi.fn(),
   }
 
   const result = await optimizeImageAttachment(file, boundary)
@@ -129,7 +165,7 @@ it('keeps the original file when the browser cannot decode it', async () => {
 
 it('leaves non-image attachments untouched', async () => {
   const file = new File(['document'], 'notes.txt', { type: 'text/plain' })
-  const boundary = jpegBoundary(800, 600)
+  const boundary = imageBoundary(800, 600)
 
   const result = await optimizeImageAttachment(file, boundary)
 

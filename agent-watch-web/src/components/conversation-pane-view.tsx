@@ -118,6 +118,7 @@ export function ConversationPaneView({
     attachments,
     error: attachmentError,
     isSending,
+    isProcessingAttachments,
     onPasteFiles,
     removeAttachment,
     sendMessage,
@@ -196,7 +197,7 @@ export function ConversationPaneView({
     session.tasks ?? (session.task === null ? [] : [session.task])
 
   const handlePasteFiles = (files: File[]) => {
-    void onPasteFiles(files)
+    onPasteFiles(files)
     onClearError()
   }
   const {
@@ -509,6 +510,7 @@ export function ConversationPaneView({
         }
         disabled={actions?.message !== true}
         isSending={isSending}
+        isProcessingAttachments={isProcessingAttachments}
         isMobile={isMobile}
         canInterrupt={actions?.interrupt === true}
         attachments={attachments}
