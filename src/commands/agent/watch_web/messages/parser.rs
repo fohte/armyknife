@@ -5,7 +5,6 @@ pub(super) mod decision_position;
 pub(super) mod queue;
 pub(super) mod skill_suggestions;
 
-use std::io::BufRead;
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
@@ -19,29 +18,6 @@ pub(super) fn record_timestamp(record: &Value) -> Option<DateTime<Utc>> {
         .and_then(Value::as_str)
         .and_then(|timestamp| DateTime::parse_from_rfc3339(timestamp).ok())
         .map(|timestamp| timestamp.with_timezone(&Utc))
-}
-
-pub(super) fn for_each_jsonl_record(
-    reader: impl BufRead,
-    mut visit: impl FnMut(serde_json::Value),
-) -> std::io::Result<()> {
-    let mut reader = reader;
-    let mut line = Vec::new();
-    loop {
-        line.clear();
-        match reader.read_until(b'\n', &mut line) {
-            Ok(0) => break,
-            Err(error) => return Err(error),
-            Ok(_) => {}
-        }
-        let Ok(line) = std::str::from_utf8(&line) else {
-            continue;
-        };
-        if let Ok(record) = serde_json::from_str(line) {
-            visit(record);
-        }
-    }
-    Ok(())
 }
 
 pub(super) fn tool_target(name: &str, input: Option<&serde_json::Value>) -> Option<String> {
@@ -66,7 +42,7 @@ pub(super) fn tool_target(name: &str, input: Option<&serde_json::Value>) -> Opti
     Some(target.to_owned())
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct ToolSummary {
     actions: usize,
     edited_files: Vec<String>,
@@ -94,63 +70,16 @@ impl ToolSummary {
         }
     }
 
-    pub(super) fn record_codex(
-        &mut self,
-        name: &str,
-        detail: Option<&serde_json::Value>,
-        failed: bool,
-    ) {
+    pub(super) fn record_codex_action(&mut self, action: CodexToolSummaryRecord) {
         self.actions += 1;
-        let tool = if matches!(name, "McpToolCall" | "mcpToolCall") {
-            detail
-                .and_then(|value| value.get("tool").or_else(|| value.get("name")))
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or(name)
-        } else {
-            name
-        };
-        self.operations.push(ToolOperation {
-            tool: tool.to_owned(),
-            target: operation_target(tool, detail),
-            failed,
-        });
-        self.record_codex_files(name, detail);
+        self.operations.push(action.operation);
+        self.record_codex_edited_files(action.edited_files);
     }
 
-    pub(super) fn record_codex_files(&mut self, name: &str, detail: Option<&serde_json::Value>) {
-        if matches!(
-            name,
-            "apply_patch" | "write_file" | "edit_file" | "FileChange" | "fileChange"
-        ) && let Some(detail) = detail
-        {
-            if let Some(path) = detail
-                .get("file_path")
-                .or_else(|| detail.get("path"))
-                .and_then(serde_json::Value::as_str)
-                && !self.edited_files.iter().any(|file| file == path)
-            {
-                self.edited_files.push(path.to_owned());
-            }
-            if let Some(changes) = detail.get("changes") {
-                match changes {
-                    serde_json::Value::Object(changes) => {
-                        for path in changes.keys() {
-                            if !self.edited_files.contains(path) {
-                                self.edited_files.push(path.clone());
-                            }
-                        }
-                    }
-                    serde_json::Value::Array(changes) => {
-                        for path in changes.iter().filter_map(|change| {
-                            change.get("path").and_then(serde_json::Value::as_str)
-                        }) {
-                            if !self.edited_files.iter().any(|file| file == path) {
-                                self.edited_files.push(path.to_owned());
-                            }
-                        }
-                    }
-                    _ => {}
-                }
+    pub(super) fn record_codex_edited_files(&mut self, paths: Vec<String>) {
+        for path in paths {
+            if !self.edited_files.contains(&path) {
+                self.edited_files.push(path);
             }
         }
     }
@@ -208,6 +137,80 @@ impl ToolSummary {
         });
         *self = Self::default();
     }
+}
+
+#[derive(Clone)]
+pub(super) struct CodexToolSummaryRecord {
+    operation: ToolOperation,
+    edited_files: Vec<String>,
+}
+
+pub(super) fn codex_tool_summary_record(
+    name: &str,
+    detail: Option<&serde_json::Value>,
+    failed: bool,
+) -> CodexToolSummaryRecord {
+    let tool = if matches!(name, "McpToolCall" | "mcpToolCall") {
+        detail
+            .and_then(|value| value.get("tool").or_else(|| value.get("name")))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(name)
+    } else {
+        name
+    };
+    CodexToolSummaryRecord {
+        operation: ToolOperation {
+            tool: tool.to_owned(),
+            target: operation_target(tool, detail),
+            failed,
+        },
+        edited_files: codex_edited_file_paths(name, detail),
+    }
+}
+
+pub(super) fn codex_edited_file_paths(
+    name: &str,
+    detail: Option<&serde_json::Value>,
+) -> Vec<String> {
+    let Some(detail) = detail.filter(|_| {
+        matches!(
+            name,
+            "apply_patch" | "write_file" | "edit_file" | "FileChange" | "fileChange"
+        )
+    }) else {
+        return Vec::new();
+    };
+    let mut paths = Vec::new();
+    if let Some(path) = detail
+        .get("file_path")
+        .or_else(|| detail.get("path"))
+        .and_then(serde_json::Value::as_str)
+    {
+        paths.push(path.to_owned());
+    }
+    if let Some(changes) = detail.get("changes") {
+        match changes {
+            serde_json::Value::Object(changes) => {
+                paths.extend(changes.keys().cloned());
+            }
+            serde_json::Value::Array(changes) => {
+                paths.extend(
+                    changes
+                        .iter()
+                        .filter_map(|change| change.get("path").and_then(serde_json::Value::as_str))
+                        .map(str::to_owned),
+                );
+            }
+            _ => {}
+        }
+    }
+    let mut unique = Vec::with_capacity(paths.len());
+    for path in paths {
+        if !unique.contains(&path) {
+            unique.push(path);
+        }
+    }
+    unique
 }
 
 fn is_file_edit_tool(name: &str) -> bool {

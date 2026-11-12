@@ -1,12 +1,14 @@
-use std::io::BufRead;
+use std::io::{self, BufRead};
 
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use super::super::ChatItem;
 use super::super::ParentSession;
 use super::super::SkillSuggestion;
 use super::super::parser::{
-    ToolSummary, append_text, for_each_jsonl_record, operation_target, record_timestamp,
+    CodexToolSummaryRecord, ToolSummary, append_text, codex_edited_file_paths,
+    codex_tool_summary_record, operation_target, record_timestamp,
 };
 use super::decision_position::{DecisionTimeline, insert_time_placed_decisions};
 use crate::commands::agent::store::AgentDecision;
@@ -21,133 +23,279 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_with_skills(
     parent: Option<&ParentSession>,
     decisions: &[AgentDecision],
 ) -> std::io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
-    let mut items = Vec::new();
-    let mut tools = ToolSummary::default();
-    let mut pending_tool_calls: Vec<PendingTool> = Vec::new();
-    let mut skills = Vec::new();
-    let mut decision_timeline = DecisionTimeline::new(decisions);
+    let mut parser = CodexParserState::new(parent);
+    parser.append(reader)?;
+    Ok(parser.render_with_decisions(decisions))
+}
 
-    for_each_jsonl_record(reader, |record| {
-        super::skill_suggestions::capture_codex_listing(&record, &mut skills);
+#[derive(Clone, Default)]
+pub(in crate::commands::agent::watch_web::messages) struct CodexParserState {
+    parent: Option<ParentSession>,
+    events: Vec<TimedCodexEvent>,
+    pending_tool_calls: Vec<PendingTool>,
+    skills: Vec<SkillSuggestion>,
+    partial_line: Vec<u8>,
+}
+
+#[derive(Clone)]
+struct TimedCodexEvent {
+    timestamp: Option<DateTime<Utc>>,
+    effects: Vec<CodexEffect>,
+}
+
+#[derive(Clone)]
+enum CodexEffect {
+    AssistantMessage {
+        text: String,
+        timestamp: Option<DateTime<Utc>>,
+    },
+    UserMessage {
+        text: String,
+        timestamp: Option<DateTime<Utc>>,
+    },
+    ToolAction(CodexToolSummaryRecord),
+    EditedFiles(Vec<String>),
+}
+
+impl CodexParserState {
+    pub(in crate::commands::agent::watch_web::messages) fn new(
+        parent: Option<&ParentSession>,
+    ) -> Self {
+        Self {
+            parent: parent.cloned(),
+            ..Self::default()
+        }
+    }
+
+    pub(in crate::commands::agent::watch_web::messages) fn append(
+        &mut self,
+        mut reader: impl BufRead,
+    ) -> io::Result<()> {
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            if reader.read_until(b'\n', &mut line)? == 0 {
+                break;
+            }
+            self.partial_line.extend_from_slice(&line);
+            if line.last() == Some(&b'\n') {
+                self.process_pending_line();
+            }
+        }
+        Ok(())
+    }
+
+    pub(in crate::commands::agent::watch_web::messages) fn render_with_decisions(
+        &self,
+        decisions: &[AgentDecision],
+    ) -> (Vec<ChatItem>, Vec<SkillSuggestion>) {
+        if self.partial_line.is_empty() {
+            return self.render_events(decisions);
+        }
+        let mut parser = self.clone();
+        parser.process_pending_line();
+        parser.render_events(decisions)
+    }
+
+    fn process_pending_line(&mut self) {
+        let line = std::mem::take(&mut self.partial_line);
+        if let Ok(line) = std::str::from_utf8(&line)
+            && let Ok(record) = serde_json::from_str(line)
+        {
+            self.process_record(record);
+        }
+    }
+
+    fn process_record(&mut self, record: Value) {
+        super::skill_suggestions::capture_codex_listing(&record, &mut self.skills);
         let timestamp = record_timestamp(&record);
-        insert_time_placed_decisions(timestamp, &mut decision_timeline, &mut tools, &mut items);
+        let mut effects = Vec::new();
         let record_type = record.get("type").and_then(Value::as_str);
         let payload = match record_type {
             Some("response_item") | Some("event_msg") => record.get("payload"),
             _ => None,
         };
-        let Some(payload) = payload else { return };
-
-        if record_type == Some("response_item") {
-            let item_type = payload.get("type").and_then(Value::as_str);
-            match item_type {
-                Some("message") => {
-                    let role = payload.get("role").and_then(Value::as_str);
-                    // User role records can include injected instructions; UserMessage is the visible source.
-                    if role == Some("assistant") {
-                        let text = content_text(payload.get("content"));
-                        if !text.is_empty() {
-                            tools.flush_into(&mut items);
-                            append_text(&mut items, text, false, None, timestamp);
+        if let Some(payload) = payload {
+            if record_type == Some("response_item") {
+                let item_type = payload.get("type").and_then(Value::as_str);
+                match item_type {
+                    Some("message") => {
+                        let role = payload.get("role").and_then(Value::as_str);
+                        // User role records can include injected instructions; UserMessage is the visible source.
+                        if role == Some("assistant") {
+                            let text = content_text(payload.get("content"));
+                            if !text.is_empty() {
+                                effects.push(CodexEffect::AssistantMessage { text, timestamp });
+                            }
                         }
                     }
-                }
-                Some("custom_tool_call") | Some("function_call") => {
-                    let name = payload
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    let input =
-                        parse_tool_input(payload.get("input").or_else(|| payload.get("arguments")));
-                    if let Some(call_id) = payload.get("call_id").and_then(Value::as_str) {
-                        pending_tool_calls.push(PendingTool {
-                            call_id: call_id.to_owned(),
-                            name: name.to_owned(),
-                            input,
-                        });
-                    } else {
-                        tools.record_codex(name, input.as_ref(), false);
-                    }
-                }
-                Some("custom_tool_call_output") | Some("function_call_output") => {
-                    if let Some(call_id) = payload.get("call_id").and_then(Value::as_str)
-                        && let Some(index) = pending_tool_calls
-                            .iter()
-                            .position(|pending| pending.call_id == call_id)
-                    {
-                        let completed = pending_tool_calls.remove(index);
-                        tools.record_codex(
-                            &completed.name,
-                            completed.input.as_ref(),
-                            codex_tool_failed(payload),
+                    Some("custom_tool_call") | Some("function_call") => {
+                        let name = payload
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        let input = parse_tool_input(
+                            payload.get("input").or_else(|| payload.get("arguments")),
                         );
+                        if let Some(call_id) = payload.get("call_id").and_then(Value::as_str) {
+                            self.pending_tool_calls.push(PendingTool {
+                                call_id: call_id.to_owned(),
+                                name: name.to_owned(),
+                                input,
+                            });
+                        } else {
+                            effects.push(CodexEffect::ToolAction(codex_tool_summary_record(
+                                name,
+                                input.as_ref(),
+                                false,
+                            )));
+                        }
                     }
-                }
-                Some("fileChange") => {
-                    if pending_tool_calls.is_empty() {
-                        tools.record_codex("edit_file", Some(payload), codex_tool_failed(payload));
-                    } else {
-                        tools.record_codex_files("edit_file", Some(payload));
+                    Some("custom_tool_call_output") | Some("function_call_output") => {
+                        if let Some(call_id) = payload.get("call_id").and_then(Value::as_str)
+                            && let Some(index) = self
+                                .pending_tool_calls
+                                .iter()
+                                .position(|pending| pending.call_id == call_id)
+                        {
+                            let completed = self.pending_tool_calls.remove(index);
+                            effects.push(CodexEffect::ToolAction(codex_tool_summary_record(
+                                &completed.name,
+                                completed.input.as_ref(),
+                                codex_tool_failed(payload),
+                            )));
+                        }
                     }
-                }
-                _ => {}
-            }
-        } else if matches!(
-            payload.get("type").and_then(Value::as_str),
-            Some("task_complete" | "turn_aborted")
-        ) {
-            // Missing tool outputs must not suppress actions from the next turn.
-            let failed = payload.get("type").and_then(Value::as_str) == Some("turn_aborted");
-            for pending in pending_tool_calls.drain(..) {
-                tools.record_codex(&pending.name, pending.input.as_ref(), failed);
-            }
-        } else if payload.get("type").and_then(Value::as_str) == Some("item_completed")
-            && let Some(item) = payload.get("item")
-        {
-            // AgentMessage repeats the assistant response_item and would duplicate its bubble.
-            match item.get("type").and_then(Value::as_str) {
-                Some("UserMessage") => {
-                    if let Some(text) = item.get("content").and_then(value_text) {
-                        tools.flush_into(&mut items);
-                        append_text(&mut items, text, true, parent, timestamp);
+                    Some("fileChange") => {
+                        if self.pending_tool_calls.is_empty() {
+                            effects.push(CodexEffect::ToolAction(codex_tool_summary_record(
+                                "edit_file",
+                                Some(payload),
+                                codex_tool_failed(payload),
+                            )));
+                        } else {
+                            effects.push(CodexEffect::EditedFiles(codex_edited_file_paths(
+                                "edit_file",
+                                Some(payload),
+                            )));
+                        }
                     }
+                    _ => {}
                 }
-                Some("CommandExecution") | Some("commandExecution") => {
-                    // CommandExecution can describe work performed by an open custom call.
-                    if pending_tool_calls.is_empty() {
-                        tools.record_codex(
-                            item.get("type").and_then(Value::as_str).unwrap_or_default(),
-                            Some(item),
-                            codex_tool_failed(item),
-                        );
+            } else if matches!(
+                payload.get("type").and_then(Value::as_str),
+                Some("task_complete" | "turn_aborted")
+            ) {
+                // Missing tool outputs must not suppress actions from the next turn.
+                let failed = payload.get("type").and_then(Value::as_str) == Some("turn_aborted");
+                for pending in self.pending_tool_calls.drain(..) {
+                    effects.push(CodexEffect::ToolAction(codex_tool_summary_record(
+                        &pending.name,
+                        pending.input.as_ref(),
+                        failed,
+                    )));
+                }
+            } else if payload.get("type").and_then(Value::as_str) == Some("item_completed")
+                && let Some(item) = payload.get("item")
+            {
+                // AgentMessage repeats the assistant response_item and would duplicate its bubble.
+                match item.get("type").and_then(Value::as_str) {
+                    Some("UserMessage") => {
+                        if let Some(text) = item.get("content").and_then(value_text) {
+                            effects.push(CodexEffect::UserMessage { text, timestamp });
+                        }
                     }
-                }
-                Some("FileChange") | Some("McpToolCall") | Some("fileChange")
-                | Some("mcpToolCall") => {
-                    let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
-                    if pending_tool_calls.is_empty() {
-                        tools.record_codex(item_type, Some(item), codex_tool_failed(item));
-                    } else {
-                        tools.record_codex_files(item_type, Some(item));
+                    Some("CommandExecution") | Some("commandExecution") => {
+                        // CommandExecution can describe work performed by an open custom call.
+                        if self.pending_tool_calls.is_empty() {
+                            effects.push(CodexEffect::ToolAction(codex_tool_summary_record(
+                                item.get("type").and_then(Value::as_str).unwrap_or_default(),
+                                Some(item),
+                                codex_tool_failed(item),
+                            )));
+                        }
                     }
+                    Some("FileChange") | Some("McpToolCall") | Some("fileChange")
+                    | Some("mcpToolCall") => {
+                        let item_type =
+                            item.get("type").and_then(Value::as_str).unwrap_or_default();
+                        if self.pending_tool_calls.is_empty() {
+                            effects.push(CodexEffect::ToolAction(codex_tool_summary_record(
+                                item_type,
+                                Some(item),
+                                codex_tool_failed(item),
+                            )));
+                        } else {
+                            effects.push(CodexEffect::EditedFiles(codex_edited_file_paths(
+                                item_type,
+                                Some(item),
+                            )));
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
-    })?;
-
-    let active_tool = pending_tool_calls
-        .last()
-        .map(|pending| ChatItem::ToolInProgress {
-            tool: pending.name.clone(),
-            target: operation_target(&pending.name, pending.input.as_ref()),
-        });
-    tools.flush_into(&mut items);
-    if let Some(active_tool) = active_tool {
-        items.push(active_tool);
+        self.events.push(TimedCodexEvent { timestamp, effects });
     }
-    decision_timeline.append_remaining(&mut items);
-    Ok((items, skills))
+
+    fn render_events(&self, decisions: &[AgentDecision]) -> (Vec<ChatItem>, Vec<SkillSuggestion>) {
+        let mut items = Vec::new();
+        let mut tools = ToolSummary::default();
+        let mut decision_timeline = DecisionTimeline::new(decisions);
+        for event in &self.events {
+            insert_time_placed_decisions(
+                event.timestamp,
+                &mut decision_timeline,
+                &mut tools,
+                &mut items,
+            );
+            for effect in &event.effects {
+                match effect {
+                    CodexEffect::AssistantMessage { text, timestamp } => {
+                        tools.flush_into(&mut items);
+                        append_text(&mut items, text.clone(), false, None, *timestamp);
+                    }
+                    CodexEffect::UserMessage { text, timestamp } => {
+                        tools.flush_into(&mut items);
+                        append_text(
+                            &mut items,
+                            text.clone(),
+                            true,
+                            self.parent.as_ref(),
+                            *timestamp,
+                        );
+                    }
+                    CodexEffect::ToolAction(action) => {
+                        tools.record_codex_action(action.clone());
+                    }
+                    CodexEffect::EditedFiles(paths) => {
+                        tools.record_codex_edited_files(paths.clone());
+                    }
+                }
+            }
+        }
+        let active_tool = self
+            .pending_tool_calls
+            .last()
+            .map(|pending| ChatItem::ToolInProgress {
+                tool: pending.name.clone(),
+                target: operation_target(&pending.name, pending.input.as_ref()),
+            });
+        tools.flush_into(&mut items);
+        if let Some(active_tool) = active_tool {
+            items.push(active_tool);
+        }
+        decision_timeline.append_remaining(&mut items);
+        (items, self.skills.clone())
+    }
+}
+
+#[derive(Clone)]
+struct PendingTool {
+    call_id: String,
+    name: String,
+    input: Option<Value>,
 }
 
 fn codex_tool_failed(result: &Value) -> bool {
@@ -165,12 +313,6 @@ fn codex_tool_failed(result: &Value) -> bool {
                 .and_then(Value::as_str)
                 .is_some_and(|status| matches!(status, "failed" | "error" | "aborted"))
     })
-}
-
-struct PendingTool {
-    call_id: String,
-    name: String,
-    input: Option<Value>,
 }
 
 fn content_text(content: Option<&Value>) -> String {
@@ -223,10 +365,88 @@ mod tests {
     use rstest::rstest;
     use serde_json::json;
 
-    use super::{parse, parse_with_skills};
+    use super::{CodexParserState, parse, parse_with_skills};
     use crate::commands::agent::watch_web::messages::{
         ChatItem, ParentSession, PeerDirection, SkillSuggestion, UserContentPart,
     };
+
+    #[rstest]
+    #[case::partial_tool_call_is_completed_after_append(
+        indoc! {r#"
+            {"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Before the tool."}]}}
+            {"type":"response_item","payload":{"type":"custom_tool_call","call_id":"fixture-
+        "#},
+        indoc! {r#"
+            call","name":"exec","input":{"command":"echo fixture"}}}
+            {"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"fixture-call","output":{"exit_code":0}}}
+            {"type":"event_msg","payload":{"type":"task_complete"}}
+            {"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"After the tool."}]}}
+        "#},
+        indoc! {r#"
+            {"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Before the tool."}]}}
+            {"type":"response_item","payload":{"type":"custom_tool_call","call_id":"fixture-call","name":"exec","input":{"command":"echo fixture"}}}
+            {"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"fixture-call","output":{"exit_code":0}}}
+            {"type":"event_msg","payload":{"type":"task_complete"}}
+            {"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"After the tool."}]}}
+        "#}
+    )]
+    #[case::eof_keeps_pending_tools_and_latest_skill_listing(
+        indoc! {r#"
+            {"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","input":{"command":"echo fixture"}}}
+            {"type":"response_item","payload":{"type":"custom_tool_call","call_id":"fixture-call","name":"exec","input":{"command":"echo pending"}}}
+            {"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<skills_instructions>\n## Skills\n### Available skills\n- fixture-skill: A fixture skill.\n</skills_instructions>"}]}}
+        "#},
+        "",
+        indoc! {r#"
+            {"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","input":{"command":"echo fixture"}}}
+            {"type":"response_item","payload":{"type":"custom_tool_call","call_id":"fixture-call","name":"exec","input":{"command":"echo pending"}}}
+            {"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<skills_instructions>\n## Skills\n### Available skills\n- fixture-skill: A fixture skill.\n</skills_instructions>"}]}}
+        "#}
+    )]
+    fn incremental_parse_matches_full_parse(
+        #[case] prefix: &str,
+        #[case] suffix: &str,
+        #[case] full_transcript: &str,
+    ) {
+        let prefix = prefix.trim_end_matches('\n');
+        let suffix = suffix.trim_end_matches('\n');
+        let full_transcript = full_transcript.trim_end_matches('\n');
+        let mut parser = CodexParserState::new(None);
+        parser.append(Cursor::new(prefix)).unwrap();
+        parser.append(Cursor::new(suffix)).unwrap();
+
+        assert_eq!(
+            parser.render_with_decisions(&[]),
+            parse_with_skills(Cursor::new(full_transcript), None, &[]).unwrap(),
+        );
+    }
+
+    #[test]
+    fn codex_parser_state_renders_updated_decisions_without_new_transcript_bytes() {
+        let transcript = indoc! {r#"
+            {"type":"response_item","timestamp":"2026-11-12T10:00:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Before the decision."}]}}
+            {"type":"response_item","timestamp":"2026-11-12T10:00:02Z","payload":{"type":"custom_tool_call","name":"exec","input":{"command":"echo fixture"}}}
+            {"type":"response_item","timestamp":"2026-11-12T10:00:04Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"After the decision."}]}}
+        "#};
+        let decision = crate::commands::agent::store::AgentDecision {
+            session_id: "fixture-session".to_string(),
+            seq: 1,
+            title: "Choose the fixture path".to_string(),
+            why: "The fixture remains isolated.".to_string(),
+            considered: Vec::new(),
+            easy_to_change: "Change the fixture value.".to_string(),
+            created_at: "2026-11-12T10:00:03Z".to_string(),
+            review: None,
+            reviewed_at: None,
+        };
+        let mut parser = CodexParserState::new(None);
+        parser.append(Cursor::new(transcript)).unwrap();
+
+        assert_eq!(
+            parser.render_with_decisions(std::slice::from_ref(&decision)),
+            parse_with_skills(Cursor::new(transcript), None, &[decision]).unwrap(),
+        );
+    }
 
     #[test]
     fn parses_the_latest_injected_skill_listing() {

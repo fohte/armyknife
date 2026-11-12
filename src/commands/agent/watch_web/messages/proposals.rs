@@ -5,6 +5,7 @@ use super::ChatItem;
 use crate::commands::agent::proposal::{ProposalAnswer, ProposalBody};
 use crate::commands::agent::store::AgentProposal;
 
+#[derive(Clone, PartialEq, Eq)]
 pub(super) struct ProposalItem {
     pub(super) seq: i64,
     pub(super) created_at: DateTime<Utc>,

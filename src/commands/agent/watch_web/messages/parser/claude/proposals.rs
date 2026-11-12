@@ -6,15 +6,16 @@ use super::super::super::ChatItem;
 use super::super::super::proposals::ProposalItem;
 use super::super::ToolSummary;
 
-pub(super) struct ProposalTimeline<'a> {
-    proposals: &'a [ProposalItem],
+#[derive(Clone)]
+pub(super) struct ProposalTimeline {
+    proposals: Vec<ProposalItem>,
     inserted_seqs: HashSet<i64>,
 }
 
-impl<'a> ProposalTimeline<'a> {
-    pub(super) fn new(proposals: &'a [ProposalItem]) -> Self {
+impl ProposalTimeline {
+    pub(super) fn new(proposals: &[ProposalItem]) -> Self {
         Self {
-            proposals,
+            proposals: proposals.to_vec(),
             inserted_seqs: HashSet::new(),
         }
     }

@@ -6,6 +6,7 @@ use super::super::ChatItem;
 use super::ToolSummary;
 use crate::commands::agent::store::AgentDecision;
 
+#[derive(Clone)]
 pub(super) struct DecisionTimeline {
     decisions: BTreeMap<i64, AgentDecision>,
     ordered: Vec<(DateTime<Utc>, i64)>,

@@ -8,7 +8,7 @@ use super::super::super::{BackgroundTask, BackgroundTaskKind};
 use super::user_input::user_text;
 use super::{ToolUse, tool_result_text};
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct BackgroundTaskTracker {
     tasks: Vec<RunningBackgroundTask>,
 }
@@ -155,6 +155,7 @@ fn task_notification_body(text: &str) -> Option<&str> {
         .strip_suffix("</task-notification>")
 }
 
+#[derive(Clone)]
 struct RunningBackgroundTask {
     id: String,
     description: String,

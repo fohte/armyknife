@@ -9,7 +9,7 @@ use super::append_text_with_user_marker_and_image_directory;
 use super::classifier::marked_user_body;
 use crate::commands::agent::store::WatchWebQueuedPrompt;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct Queue {
     pending: VecDeque<PendingPrompt>,
     removed: VecDeque<Option<String>>,
@@ -17,6 +17,7 @@ pub(super) struct Queue {
     resolved_queued_prompt_ids: Vec<i64>,
 }
 
+#[derive(Clone)]
 struct PendingPrompt {
     content: Option<String>,
     timestamp: Option<DateTime<Utc>>,

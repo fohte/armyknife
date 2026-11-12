@@ -1,4 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -10,6 +12,7 @@ use crate::commands::agent::store::{
 };
 use crate::commands::agent::types::{Engine, Session};
 
+use super::parser::{claude::IncrementalClaudeParser, codex::CodexParserState};
 use super::{ChatItem, UserContentPart};
 use super::{ConversationResponse, ParentSession, RouteLoaders};
 
@@ -70,6 +73,13 @@ impl MessageCacheKey {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TranscriptChange {
+    Unchanged,
+    Appended,
+    Rewritten,
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct TranscriptFingerprint {
     source_path: PathBuf,
@@ -84,6 +94,72 @@ pub(super) struct TranscriptFingerprint {
     changed_at_seconds: i64,
     #[cfg(unix)]
     changed_at_nanoseconds: i64,
+}
+
+impl TranscriptFingerprint {
+    pub(super) fn change_from(&self, previous: &Self) -> TranscriptChange {
+        if self == previous {
+            return TranscriptChange::Unchanged;
+        }
+        if self.source_path == previous.source_path
+            && self.len > previous.len
+            && self.has_same_file_identity(previous)
+        {
+            return TranscriptChange::Appended;
+        }
+        TranscriptChange::Rewritten
+    }
+
+    fn has_same_file_identity(&self, previous: &Self) -> bool {
+        #[cfg(unix)]
+        {
+            self.device == previous.device && self.inode == previous.inode
+        }
+        #[cfg(not(unix))]
+        {
+            self.modified >= previous.modified
+        }
+    }
+
+    pub(super) fn is_compressed(&self) -> bool {
+        self.source_path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            == Some("zst")
+    }
+
+    pub(super) fn read_delta_from(
+        &self,
+        previous: &Self,
+    ) -> anyhow::Result<(TranscriptChange, Vec<u8>)> {
+        let change = self.change_from(previous);
+        match change {
+            TranscriptChange::Unchanged => Ok((change, Vec::new())),
+            TranscriptChange::Rewritten => Ok((change, Vec::new())),
+            TranscriptChange::Appended => {
+                if self
+                    .source_path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    == Some("zst")
+                {
+                    return Ok((TranscriptChange::Rewritten, Vec::new()));
+                }
+                let mut file = File::open(&self.source_path)
+                    .with_context(|| format!("open transcript {}", self.source_path.display()))?;
+                file.seek(SeekFrom::Start(previous.len))
+                    .with_context(|| format!("seek transcript {}", self.source_path.display()))?;
+                let mut appended = Vec::new();
+                file.take(self.len - previous.len)
+                    .read_to_end(&mut appended)
+                    .with_context(|| format!("read transcript {}", self.source_path.display()))?;
+                if appended.len() as u64 != self.len - previous.len {
+                    return Ok((TranscriptChange::Rewritten, Vec::new()));
+                }
+                Ok((change, appended))
+            }
+        }
+    }
 }
 
 fn transcript_fingerprint(
@@ -257,9 +333,17 @@ pub(super) struct CachedConversation {
 #[derive(Clone, Default)]
 pub(super) struct MessageCache {
     entries: Arc<Mutex<HashMap<String, (MessageCacheKey, CachedConversation)>>>,
+    transcript_parsers: TranscriptParserCache,
 }
 
 impl MessageCache {
+    pub(super) fn transcript_parser_slot(
+        &self,
+        session_id: &str,
+    ) -> Arc<Mutex<Option<CachedTranscriptParser>>> {
+        self.transcript_parsers.get_or_create_slot(session_id)
+    }
+
     pub(super) fn get(
         &self,
         session_id: &str,
@@ -307,14 +391,57 @@ impl MessageCache {
     }
 }
 
+#[derive(Clone, Default)]
+pub(super) struct TranscriptParserCache {
+    entries: Arc<Mutex<TranscriptParserEntries>>,
+}
+
+type TranscriptParserSlot = Arc<Mutex<Option<CachedTranscriptParser>>>;
+type TranscriptParserEntries = HashMap<String, TranscriptParserSlot>;
+
+pub(super) struct CachedTranscriptParser {
+    pub(super) fingerprint: TranscriptFingerprint,
+    pub(super) engine: Engine,
+    pub(super) parent_session_id: Option<String>,
+    pub(super) parser: IncrementalTranscriptParser,
+}
+
+pub(super) enum IncrementalTranscriptParser {
+    Claude(Box<IncrementalClaudeParser>),
+    Codex(CodexParserState),
+}
+
+impl TranscriptParserCache {
+    pub(super) fn get_or_create_slot(&self, session_id: &str) -> TranscriptParserSlot {
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !entries.contains_key(session_id)
+            && entries.len() >= MAX_CACHED_SESSIONS
+            && let Some(evicted_session_id) = entries.keys().next().cloned()
+        {
+            entries.remove(&evicted_session_id);
+        }
+        Arc::clone(
+            entries
+                .entry(session_id.to_string())
+                .or_insert_with(|| Arc::new(Mutex::new(None))),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use serde_json::json;
 
     use super::{
-        ConversationResponse, MessageCacheKey, MessageCacheRecords, refresh_image_availability_with,
+        ConversationResponse, MessageCacheKey, MessageCacheRecords, TranscriptChange,
+        refresh_image_availability_with, transcript_fingerprint,
     };
-    use crate::commands::agent::types::{MAIN_THREAD_AGENT_KEY, Session};
+    use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
     use crate::commands::agent::watch_web::messages::{ChatItem, UserContentPart};
 
     #[test]
@@ -443,6 +570,53 @@ mod tests {
                 background_tasks: Vec::new(),
                 ..ConversationResponse::default()
             },
+        );
+    }
+
+    #[test]
+    fn transcript_append_reads_only_bytes_after_the_cached_length() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let path = directory.path().join("transcript.jsonl");
+        std::fs::write(&path, b"first record\n").expect("transcript should be written");
+        let previous = transcript_fingerprint(Engine::Claude, Some(&path))
+            .expect("transcript metadata should be read")
+            .expect("transcript should exist");
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("transcript should open for appending")
+            .write_all(b"second record\n")
+            .expect("record should be appended");
+        let current = transcript_fingerprint(Engine::Claude, Some(&path))
+            .expect("transcript metadata should be read")
+            .expect("transcript should exist");
+
+        assert_eq!(
+            current
+                .read_delta_from(&previous)
+                .expect("delta should be read"),
+            (TranscriptChange::Appended, b"second record\n".to_vec()),
+        );
+    }
+
+    #[test]
+    fn transcript_rewrite_requires_a_full_read() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let path = directory.path().join("transcript.jsonl");
+        std::fs::write(&path, b"first record\n").expect("transcript should be written");
+        let previous = transcript_fingerprint(Engine::Claude, Some(&path))
+            .expect("transcript metadata should be read")
+            .expect("transcript should exist");
+        std::fs::write(&path, b"other record\n").expect("transcript should be rewritten");
+        let current = transcript_fingerprint(Engine::Claude, Some(&path))
+            .expect("transcript metadata should be read")
+            .expect("transcript should exist");
+
+        assert_eq!(
+            current
+                .read_delta_from(&previous)
+                .expect("delta should be read"),
+            (TranscriptChange::Rewritten, Vec::new()),
         );
     }
 }
