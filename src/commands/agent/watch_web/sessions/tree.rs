@@ -29,7 +29,7 @@ pub(super) struct SessionTreeResponse {
     sessions: Vec<TreeSessionView>,
 }
 
-fn session_parent_ids(
+pub(super) fn session_parent_ids(
     tree_sessions: &[Session],
     tree_session_ids: &HashSet<&str>,
 ) -> HashMap<String, Option<String>> {

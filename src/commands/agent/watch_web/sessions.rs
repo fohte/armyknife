@@ -464,12 +464,22 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
 }
 
 fn session_tree_related_ids(sessions: &[Session]) -> HashSet<String> {
+    let tree_sessions = sessions
+        .iter()
+        .filter(|session| session.status != SessionStatus::Ended)
+        .cloned()
+        .collect::<Vec<_>>();
+    let tree_session_ids = tree_sessions
+        .iter()
+        .map(|session| session.session_id.as_str())
+        .collect::<HashSet<_>>();
+    let parent_ids = tree::session_parent_ids(&tree_sessions, &tree_session_ids);
+
     let mut related_ids = HashSet::new();
-    for session in sessions {
-        if !session.ancestor_session_ids.is_empty() {
-            related_ids.insert(session.session_id.clone());
+    for (session_id, parent_id) in parent_ids {
+        if let Some(parent_id) = parent_id {
+            related_ids.extend([session_id, parent_id]);
         }
-        related_ids.extend(session.ancestor_session_ids.iter().cloned());
     }
     related_ids
 }
@@ -962,7 +972,7 @@ mod tests {
     }
 
     #[test]
-    fn session_tree_relation_flag_includes_a_parent_with_only_ended_children() {
+    fn session_tree_relation_flag_excludes_sessions_related_only_through_ended_children() {
         let mut parent = session(SessionStatus::Running);
         parent.session_id = "parent-session".to_string();
         let mut child = session(SessionStatus::Ended);
@@ -971,6 +981,26 @@ mod tests {
 
         assert_eq!(
             super::session_tree_related_ids(&[parent, child]),
+            HashSet::new()
+        );
+    }
+
+    #[test]
+    fn session_tree_relation_flag_keeps_live_relatives_across_ended_ancestors() {
+        let mut parent = session(SessionStatus::Running);
+        parent.session_id = "parent-session".to_string();
+        let mut ended_intermediate = session(SessionStatus::Ended);
+        ended_intermediate.session_id = "ended-intermediate".to_string();
+        ended_intermediate.ancestor_session_ids = vec!["parent-session".to_string()];
+        let mut child = session(SessionStatus::Running);
+        child.session_id = "child-session".to_string();
+        child.ancestor_session_ids = vec![
+            "parent-session".to_string(),
+            "ended-intermediate".to_string(),
+        ];
+
+        assert_eq!(
+            super::session_tree_related_ids(&[parent, ended_intermediate, child]),
             HashSet::from(["child-session".to_string(), "parent-session".to_string(),]),
         );
     }
@@ -1037,7 +1067,7 @@ mod tests {
                     "id": "parent-session",
                     "title": "parent title"
                 },
-                "hasSessionTree": true,
+                "hasSessionTree": false,
                 "ancestorSessionIds": ["parent-session"],
                 "pullRequest": {
                     "number": 42,
