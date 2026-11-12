@@ -132,6 +132,9 @@ export function QuestionCard({
       const targetElement =
         event.target instanceof HTMLElement ? event.target : null
       const targetCard = targetElement?.closest('.chat-question-card') ?? null
+      const targetProposalCard =
+        targetElement?.closest('.chat-proposal-card') ?? null
+      if (targetCard === null && targetProposalCard !== null) return
       if (targetCard !== null) {
         if (targetCard !== cardRef.current) return
       } else {

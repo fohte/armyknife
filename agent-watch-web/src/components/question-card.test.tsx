@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
+import { ProposalCard } from '#components/proposal-card'
 import { QuestionCard } from '#components/question-card'
 
 type Props = ComponentProps<typeof QuestionCard>
@@ -53,6 +54,19 @@ function renderQuestion(cardProps: Props) {
   root ??= createRoot(container)
   act(() => {
     root?.render(<QuestionCard {...cardProps} />)
+  })
+}
+
+function renderQuestions(cardProps: Props[]) {
+  root ??= createRoot(container)
+  act(() => {
+    root?.render(
+      <>
+        {cardProps.map((questionProps, index) => (
+          <QuestionCard {...questionProps} key={String(index)} />
+        ))}
+      </>,
+    )
   })
 }
 
@@ -195,6 +209,152 @@ it('answers a desktop single-choice question with its number shortcut', async ()
     shortcuts: ['1', '2', '3'],
     answerCalls: [[{ 'Which direction should be used?': 'South' }]],
     selected: 'true',
+    defaultPrevented: true,
+  })
+})
+
+it('does not answer a desktop question while its answer field is focused', () => {
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  renderQuestion(props({ questions: singleChoiceQuestions, onAnswer }))
+  const answerField = requireElement(container.querySelector('textarea'))
+
+  const event = dispatchKey(answerField, '2')
+
+  const snapshot = () => ({
+    answerCalls: onAnswer.mock.calls,
+    selected: choiceButton('South').getAttribute('aria-pressed'),
+    defaultPrevented: event.defaultPrevented,
+  })
+  expect(snapshot()).toEqual({
+    answerCalls: [],
+    selected: 'false',
+    defaultPrevented: false,
+  })
+})
+
+it('routes shortcuts to the latest question card or the card containing focus', async () => {
+  const firstAnswer = vi.fn(() => Promise.resolve(true))
+  const lastAnswer = vi.fn(() => Promise.resolve(true))
+  renderQuestions([
+    props({ questions: singleChoiceQuestions, onAnswer: firstAnswer }),
+    props({ questions: singleChoiceQuestions, onAnswer: lastAnswer }),
+  ])
+
+  const outsideEvent = dispatchKey(window, '2')
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+  const afterOutsideShortcut = {
+    firstCalls: firstAnswer.mock.calls.slice(),
+    lastCalls: lastAnswer.mock.calls.slice(),
+    selectedPerCard: Array.from(
+      container.querySelectorAll('.chat-question-card'),
+      (card) =>
+        card.querySelectorAll(
+          '.chat-question-choices button[aria-pressed="true"]',
+        ).length,
+    ),
+    defaultPrevented: outsideEvent.defaultPrevented,
+  }
+
+  const insideEvent = dispatchKey(choiceButton('North'), '1')
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    afterOutsideShortcut,
+    insideDefaultPrevented: insideEvent.defaultPrevented,
+    firstCalls: firstAnswer.mock.calls,
+    lastCalls: lastAnswer.mock.calls,
+    selectedPerCard: Array.from(
+      container.querySelectorAll('.chat-question-card'),
+      (card) =>
+        card.querySelectorAll(
+          '.chat-question-choices button[aria-pressed="true"]',
+        ).length,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    afterOutsideShortcut: {
+      firstCalls: [],
+      lastCalls: [[{ 'Which direction should be used?': 'South' }]],
+      selectedPerCard: [0, 1],
+      defaultPrevented: true,
+    },
+    insideDefaultPrevented: true,
+    firstCalls: [[{ 'Which direction should be used?': 'North' }]],
+    lastCalls: [[{ 'Which direction should be used?': 'South' }]],
+    selectedPerCard: [1, 1],
+  })
+})
+
+it('leaves a number shortcut to the proposal card that owns the target', () => {
+  const onQuestionAnswer = vi.fn(() => Promise.resolve(true))
+  const onProposalAnswer = vi.fn(() => Promise.resolve(true))
+  root ??= createRoot(container)
+  act(() => {
+    root?.render(
+      <>
+        <QuestionCard
+          {...props({
+            questions: singleChoiceQuestions,
+            onAnswer: onQuestionAnswer,
+          })}
+        />
+        <ProposalCard
+          seq={9}
+          title="Which route should be used?"
+          summary={null}
+          options={[
+            {
+              label: 'North route',
+              description: null,
+              pros: [],
+              cons: [],
+              recommended: false,
+            },
+            {
+              label: 'South route',
+              description: null,
+              pros: [],
+              cons: [],
+              recommended: false,
+            },
+          ]}
+          answer={null}
+          resolved={false}
+          isMobile={false}
+          onAnswer={onProposalAnswer}
+        />
+      </>,
+    )
+  })
+  const proposalAction = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-proposal-actions button.aw-button--outline',
+    ),
+  )
+
+  const event = dispatchKey(proposalAction, '1')
+
+  const snapshot = () => ({
+    questionCalls: onQuestionAnswer.mock.calls,
+    proposalCalls: onProposalAnswer.mock.calls,
+    selectedProposalOptions: Array.from(
+      container.querySelectorAll<HTMLInputElement>(
+        '.chat-proposal-option input',
+      ),
+      (input) => input.checked,
+    ),
+    defaultPrevented: event.defaultPrevented,
+  })
+  expect(snapshot()).toEqual({
+    questionCalls: [],
+    proposalCalls: [],
+    selectedProposalOptions: [true, false],
     defaultPrevented: true,
   })
 })
