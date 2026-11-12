@@ -1,9 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
+use std::sync::{Arc, Mutex};
 
+use axum::Extension;
 use axum::Json;
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use chrono::{DateTime, Utc};
@@ -32,7 +34,11 @@ mod project;
 use self::project::{
     resolve_parent_project, resolve_project, resolve_repo, resolve_repos_for_sessions,
 };
+mod feed;
 mod tree;
+use self::feed::{
+    SessionSnapshotCache, SessionsFeedResponse, SessionsQuery, session_feed_response,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -209,15 +215,28 @@ pub(super) fn decision_category_is_done(
 }
 
 fn router_with_source<S: SessionSource>(source: S) -> Router {
+    router_with_source_and_cache(
+        source,
+        Arc::new(Mutex::new(SessionSnapshotCache::default())),
+    )
+}
+
+fn router_with_source_and_cache<S: SessionSource>(
+    source: S,
+    snapshot_cache: Arc<Mutex<SessionSnapshotCache>>,
+) -> Router {
     Router::new()
         .route("/sessions", get(list_sessions::<S>))
         .route("/sessions/{session_id}/tree", get(tree::session_tree::<S>))
+        .layer(Extension(snapshot_cache))
         .with_state(source)
 }
 
 async fn list_sessions<S: SessionSource>(
     State(source): State<S>,
-) -> Result<Json<SessionsResponse>, StatusCode> {
+    Query(query): Query<SessionsQuery>,
+    Extension(snapshot_cache): Extension<Arc<Mutex<SessionSnapshotCache>>>,
+) -> Result<Json<SessionsFeedResponse>, StatusCode> {
     let snapshot = match source.load_snapshot().await {
         Ok(snapshot) => snapshot,
         Err(error) => {
@@ -455,11 +474,17 @@ async fn list_sessions<S: SessionSource>(
         })
         .collect();
 
-    Ok(Json(SessionsResponse {
+    let response = SessionsResponse {
         revision: snapshot.revision,
         work_type_nav_labels,
         sessions,
-    }))
+    };
+
+    Ok(Json(session_feed_response(
+        &snapshot_cache,
+        query.since.as_deref(),
+        response,
+    )?))
 }
 
 fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
@@ -532,6 +557,7 @@ mod tests {
     use chrono::TimeZone;
     use rstest::{fixture, rstest};
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tower::ServiceExt;
 
     fn session(status: SessionStatus) -> Session {
@@ -658,6 +684,68 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct UpdatingTestSessionSource {
+        source: TestSessionSource,
+        snapshot_count: Arc<AtomicUsize>,
+    }
+
+    impl SessionSource for UpdatingTestSessionSource {
+        async fn load_snapshot(&self) -> anyhow::Result<SessionSnapshot> {
+            let mut snapshot = self.source.load_snapshot().await?;
+            if self.snapshot_count.fetch_add(1, Ordering::Relaxed) > 0 {
+                snapshot.revision += 1;
+                snapshot.agent_config.work_types.insert(
+                    "fixture-work-type".to_string(),
+                    AgentWorkTypeConfig {
+                        icon: "◇".to_string(),
+                        color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Cyan),
+                        nav_label: Some("Synthetic label".to_string()),
+                    },
+                );
+                snapshot
+                    .sessions
+                    .retain(|session| session.session_id != "removed-session");
+                snapshot
+                    .all_sessions
+                    .retain(|session| session.session_id != "removed-session");
+                if let Some(session) = snapshot
+                    .sessions
+                    .iter_mut()
+                    .find(|session| session.session_id == "child-session")
+                {
+                    session.last_message = Some("updated session preview".to_string());
+                }
+            }
+            Ok(snapshot)
+        }
+
+        async fn fetch_task_metadata(&self, sessions: &[Session]) -> SessionTaskMetadata {
+            self.source.fetch_task_metadata(sessions).await
+        }
+
+        async fn fetch_pull_requests(
+            &self,
+            sessions: &[Session],
+        ) -> HashMap<String, Option<PrInfo>> {
+            self.source.fetch_pull_requests(sessions).await
+        }
+
+        async fn running_background_task_session_ids(
+            &self,
+            sessions: Vec<Session>,
+        ) -> anyhow::Result<HashSet<String>> {
+            self.source
+                .running_background_task_session_ids(sessions)
+                .await
+        }
+
+        fn now(&self) -> DateTime<Utc> {
+            self.source.now()
+                + chrono::Duration::seconds(self.snapshot_count.load(Ordering::Relaxed) as i64)
+        }
+    }
+
     #[fixture]
     fn source() -> TestSessionSource {
         let mut child_session = session(SessionStatus::Stopped);
@@ -770,14 +858,19 @@ mod tests {
     }
 
     async fn sessions_response(source: TestSessionSource) -> (StatusCode, serde_json::Value) {
-        let response = Router::new()
-            .nest("/api", router_with_source(source))
-            .oneshot(
-                Request::builder()
-                    .uri("/api/sessions")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+        let router = Router::new().nest("/api", router_with_source(source));
+        let (status, mut response) = sessions_request(&router, "/api/sessions").await;
+        if let Some(object) = response.as_object_mut() {
+            object.remove("mode");
+            object.remove("token");
+        }
+        (status, response)
+    }
+
+    async fn sessions_request(router: &Router, uri: &str) -> (StatusCode, serde_json::Value) {
+        let response = router
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
             .await
             .unwrap();
         let status = response.status();
@@ -1123,6 +1216,109 @@ mod tests {
                         can_open_in_terminal: true,
                     },
                 ),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_route_returns_deltas_for_known_tokens_and_full_data_for_unknown_tokens(
+        mut source: TestSessionSource,
+    ) {
+        let mut removed_session = session(SessionStatus::Stopped);
+        removed_session.session_id = "removed-session".to_string();
+        source.sessions.push(removed_session.clone());
+        source.all_sessions.push(removed_session);
+        let router = Router::new().nest(
+            "/api",
+            router_with_source(UpdatingTestSessionSource {
+                source,
+                snapshot_count: Arc::new(AtomicUsize::new(0)),
+            }),
+        );
+
+        let (full_status, full) = sessions_request(&router, "/api/sessions").await;
+        let full_token = full["token"].as_str().unwrap();
+        let (delta_status, delta) =
+            sessions_request(&router, &format!("/api/sessions?since={full_token}")).await;
+        let delta_token = delta["token"].as_str().unwrap();
+        let (unchanged_status, unchanged) =
+            sessions_request(&router, &format!("/api/sessions?since={delta_token}")).await;
+        let (fallback_status, fallback) =
+            sessions_request(&router, "/api/sessions?since=expired-token").await;
+        let mut updated_child = full["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["id"] == "child-session")
+            .unwrap()
+            .clone();
+        updated_child["preview"] = serde_json::json!("updated session preview");
+        updated_child["elapsedSeconds"] = serde_json::json!(102);
+        let mut fallback_child = updated_child.clone();
+        fallback_child["elapsedSeconds"] = serde_json::json!(104);
+        let mut full_without_token = full.clone();
+        full_without_token.as_object_mut().unwrap().remove("token");
+        let mut delta_without_token = delta.clone();
+        delta_without_token.as_object_mut().unwrap().remove("token");
+        let mut unchanged_without_token = unchanged.clone();
+        unchanged_without_token
+            .as_object_mut()
+            .unwrap()
+            .remove("token");
+        let mut fallback_without_token = fallback.clone();
+        fallback_without_token
+            .as_object_mut()
+            .unwrap()
+            .remove("token");
+
+        assert_eq!(
+            (
+                full_status,
+                full_without_token,
+                delta_status,
+                delta_without_token,
+                unchanged_status,
+                unchanged_without_token,
+                fallback_status,
+                fallback_without_token,
+            ),
+            (
+                StatusCode::OK,
+                serde_json::json!({
+                    "mode": "full",
+                    "revision": 7,
+                    "workTypeNavLabels": {},
+                    "sessions": full["sessions"],
+                }),
+                StatusCode::OK,
+                serde_json::json!({
+                    "mode": "delta",
+                    "revision": 8,
+                    "workTypeNavLabels": {
+                        "fixture-work-type": "Synthetic label",
+                    },
+                    "updatedSessions": [updated_child.clone()],
+                    "removedSessionIds": ["removed-session"],
+                    "sessionOrder": ["child-session"],
+                }),
+                StatusCode::OK,
+                serde_json::json!({
+                    "mode": "delta",
+                    "revision": 8,
+                    "updatedSessions": [],
+                    "removedSessionIds": [],
+                    "sessionOrder": ["child-session"],
+                }),
+                StatusCode::OK,
+                serde_json::json!({
+                    "mode": "full",
+                    "revision": 8,
+                    "workTypeNavLabels": {
+                        "fixture-work-type": "Synthetic label",
+                    },
+                    "sessions": [fallback_child],
+                }),
             ),
         );
     }

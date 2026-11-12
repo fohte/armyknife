@@ -1,6 +1,8 @@
-import { expect, it, vi } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 
 import { startSessionFeed } from '#session-feed'
+
+afterEach(() => vi.restoreAllMocks())
 
 class FakeEventSource {
   private listeners = new Map<string, EventListenerOrEventListenerObject>()
@@ -40,11 +42,204 @@ function deferred<T>() {
 }
 
 function jsonResponse(body: unknown) {
-  return new Response(JSON.stringify(body), {
+  const responseBody =
+    typeof body === 'object' && body !== null && !('mode' in body)
+      ? { mode: 'full', token: 'fixture-token', ...body }
+      : body
+
+  return new Response(JSON.stringify(responseBody), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   })
 }
+
+function session(id: string, title: string, elapsedSeconds: number) {
+  return {
+    id,
+    isPaused: false,
+    category: 'in_progress',
+    kind: null,
+    title,
+    preview: null,
+    elapsedSeconds,
+    unread: false,
+    task: null,
+    repo: 'example/service',
+    pullRequest: null,
+  }
+}
+
+it('requests deltas and restores the ordered full session response', async () => {
+  const source = new FakeEventSource()
+  const firstReceived = deferred<undefined>()
+  const secondReceived = deferred<undefined>()
+  const thirdReceived = deferred<undefined>()
+  const responses: unknown[] = []
+  const sessionA = session('session-a', 'First session', 10)
+  const sessionB = session('session-b', 'Second session', 11)
+  const updatedSessionB = session('session-b', 'Updated session', 12)
+  const elapsedSessionB = { ...updatedSessionB, elapsedSeconds: 13 }
+  const sessionC = session('session-c', 'New session', 13)
+  const updatedSessionC = session('session-c', 'Updated new session', 14)
+  const fetcher = vi
+    .fn()
+    .mockResolvedValueOnce(
+      jsonResponse({
+        mode: 'full',
+        token: 'snapshot-1',
+        revision: 1,
+        workTypeNavLabels: { 'type-a': 'Type A' },
+        sessions: [sessionA, sessionB],
+      }),
+    )
+    .mockResolvedValueOnce(
+      jsonResponse({
+        mode: 'delta',
+        token: 'snapshot-2',
+        revision: 2,
+        updatedSessions: [updatedSessionB, sessionC],
+        removedSessionIds: ['session-a'],
+        sessionOrder: ['session-c', 'session-b'],
+      }),
+    )
+    .mockResolvedValueOnce(
+      jsonResponse({
+        mode: 'delta',
+        token: 'snapshot-3',
+        revision: 3,
+        workTypeNavLabels: { 'type-a': 'Updated Type A' },
+        updatedSessions: [updatedSessionC],
+        removedSessionIds: [],
+        sessionOrder: ['session-c', 'session-b'],
+      }),
+    )
+  let currentTime = 1_000
+  vi.spyOn(Date, 'now').mockImplementation(() => currentTime)
+
+  const stop = startSessionFeed(
+    (response) => {
+      responses.push(response)
+      if (responses.length === 1) {
+        firstReceived.resolve(undefined)
+      } else if (responses.length === 2) {
+        secondReceived.resolve(undefined)
+      } else {
+        thirdReceived.resolve(undefined)
+      }
+    },
+    () => {},
+    { fetcher, createEventSource: () => source },
+  )
+
+  await firstReceived.promise
+  currentTime = 2_000
+  source.emit('sessions')
+  await secondReceived.promise
+  currentTime = 3_000
+  source.emit('sessions')
+  await thirdReceived.promise
+  stop()
+
+  const snapshot = () => ({
+    requests: fetcher.mock.calls.map(([url]) => String(url)),
+    responses,
+  })
+
+  expect(snapshot()).toEqual({
+    requests: [
+      '/api/sessions',
+      '/api/sessions?since=snapshot-1',
+      '/api/sessions?since=snapshot-2',
+    ],
+    responses: [
+      {
+        revision: 1,
+        workTypeNavLabels: { 'type-a': 'Type A' },
+        sessions: [sessionA, sessionB],
+      },
+      {
+        revision: 2,
+        workTypeNavLabels: { 'type-a': 'Type A' },
+        sessions: [sessionC, updatedSessionB],
+      },
+      {
+        revision: 3,
+        workTypeNavLabels: { 'type-a': 'Updated Type A' },
+        sessions: [updatedSessionC, elapsedSessionB],
+      },
+    ],
+  })
+})
+
+it('preserves fractional elapsed time across unchanged session deltas', async () => {
+  const source = new FakeEventSource()
+  const responseReceived = Array.from({ length: 5 }, () =>
+    deferred<undefined>(),
+  )
+  const responses: unknown[] = []
+  const unchangedSession = session('stable-session', 'Unchanged session', 40)
+  const fetcher = vi.fn().mockResolvedValueOnce(
+    jsonResponse({
+      mode: 'full',
+      token: 'snapshot-1',
+      revision: 1,
+      sessions: [unchangedSession],
+    }),
+  )
+
+  for (let revision = 2; revision <= 5; revision += 1) {
+    fetcher.mockResolvedValueOnce(
+      jsonResponse({
+        mode: 'delta',
+        token: `snapshot-${revision.toString()}`,
+        revision,
+        updatedSessions: [],
+        removedSessionIds: [],
+        sessionOrder: ['stable-session'],
+      }),
+    )
+  }
+
+  let currentTime = 1_000
+  vi.spyOn(Date, 'now').mockImplementation(() => currentTime)
+
+  const stop = startSessionFeed(
+    (response) => {
+      responses.push(response)
+      responseReceived[responses.length - 1]?.resolve(undefined)
+    },
+    () => {},
+    { fetcher, createEventSource: () => source },
+  )
+
+  await responseReceived[0]?.promise
+  for (let responseIndex = 1; responseIndex < 5; responseIndex += 1) {
+    currentTime += 2_900
+    source.emit('sessions')
+    await responseReceived[responseIndex]?.promise
+  }
+  stop()
+
+  expect(responses).toEqual([
+    { revision: 1, sessions: [unchangedSession] },
+    {
+      revision: 2,
+      sessions: [{ ...unchangedSession, elapsedSeconds: 42 }],
+    },
+    {
+      revision: 3,
+      sessions: [{ ...unchangedSession, elapsedSeconds: 45 }],
+    },
+    {
+      revision: 4,
+      sessions: [{ ...unchangedSession, elapsedSeconds: 48 }],
+    },
+    {
+      revision: 5,
+      sessions: [{ ...unchangedSession, elapsedSeconds: 51 }],
+    },
+  ])
+})
 
 it('delivers tree availability and work type metadata from a session response', async () => {
   const source = new FakeEventSource()
