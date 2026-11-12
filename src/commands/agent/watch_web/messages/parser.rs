@@ -1,6 +1,7 @@
 pub(super) mod classifier;
 pub(super) mod claude;
 pub(super) mod codex;
+pub(super) mod decision_position;
 pub(super) mod queue;
 pub(super) mod skill_suggestions;
 
