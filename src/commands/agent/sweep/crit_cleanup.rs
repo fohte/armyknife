@@ -1,6 +1,7 @@
 use std::collections::HashSet;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::Result;
 
@@ -8,13 +9,13 @@ use super::super::crit;
 use super::super::store;
 
 pub(super) fn clear_stale_links(sessions_dir: &Path, dry_run: bool) -> Result<usize> {
-    clear_stale_links_with_status(sessions_dir, dry_run, crit::live_crit_ports)
+    clear_stale_links_with_port_probe(sessions_dir, dry_run, is_crit_port_live)
 }
 
-fn clear_stale_links_with_status(
+fn clear_stale_links_with_port_probe(
     sessions_dir: &Path,
     dry_run: bool,
-    mut read_live_ports: impl FnMut() -> Result<HashSet<u16>>,
+    mut is_port_live: impl FnMut(u16) -> bool,
 ) -> Result<usize> {
     let candidates = store::list_all_sessions_from(sessions_dir)?
         .into_iter()
@@ -28,7 +29,14 @@ fn clear_stale_links_with_status(
     if candidates.is_empty() {
         return Ok(0);
     }
-    let live_ports = read_live_ports()?;
+    let live_ports = candidates
+        .iter()
+        .flat_map(|session| session.crit_urls.iter())
+        .filter_map(|url| local_crit_port(url))
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .filter(|port| is_port_live(*port))
+        .collect::<HashSet<_>>();
     let mut cleared = 0;
 
     for listed_session in candidates {
@@ -64,6 +72,14 @@ fn clear_stale_links_with_status(
     }
 
     Ok(cleared)
+}
+
+fn is_crit_port_live(port: u16) -> bool {
+    TcpStream::connect_timeout(
+        &SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
+        Duration::from_millis(100),
+    )
+    .is_ok()
 }
 
 fn is_stale_local_crit_url(url: &str, live_ports: &HashSet<u16>) -> bool {
@@ -153,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn clears_only_stopped_local_crit_links_and_preserves_live_and_remote_urls() {
+    fn clears_only_unreachable_local_crit_links_and_preserves_live_and_remote_urls() {
         let before = session(&[
             "http://localhost:41001/review",
             "http://127.0.0.1:41002/review",
@@ -165,8 +181,9 @@ mod tests {
             "not a URL",
         ]);
         let dir = sessions_dir(&before);
+        let live_ports = HashSet::from([41004]);
         let actual =
-            clear_stale_links_with_status(dir.path(), false, || Ok(HashSet::from([41004])))
+            clear_stale_links_with_port_probe(dir.path(), false, |port| live_ports.contains(&port))
                 .expect("crit cleanup pass should succeed");
 
         assert_eq!(
@@ -190,7 +207,7 @@ mod tests {
     fn dry_run_keeps_stale_links_unchanged() {
         let before = session(&["http://localhost:42001/review"]);
         let dir = sessions_dir(&before);
-        let actual = clear_stale_links_with_status(dir.path(), true, || Ok(HashSet::new()))
+        let actual = clear_stale_links_with_port_probe(dir.path(), true, |_| false)
             .expect("crit cleanup pass should succeed");
 
         assert_eq!(
@@ -203,25 +220,31 @@ mod tests {
     }
 
     #[test]
-    fn crit_status_failure_keeps_all_links_unchanged() {
-        let before = session(&["http://localhost:43001/review"]);
+    fn probes_each_local_crit_port_once() {
+        let before = session(&[
+            "http://localhost:43001/review",
+            "http://127.0.0.1:43001/review",
+            "http://localhost:43002/review",
+        ]);
         let dir = sessions_dir(&before);
-        let status_reads = Cell::new(0);
-        let result = clear_stale_links_with_status(dir.path(), false, || {
-            status_reads.set(status_reads.get() + 1);
-            anyhow::bail!("fixture crit status failure")
+        let mut probed_ports = Cell::new(Vec::new());
+        let result = clear_stale_links_with_port_probe(dir.path(), false, |port| {
+            probed_ports.get_mut().push(port);
+            port == 43002
         });
+        let mut probed_ports = probed_ports.into_inner();
+        probed_ports.sort_unstable();
 
         assert_eq!(
             (
                 result.map_err(|error| format!("{error:#}")),
-                status_reads.get(),
+                probed_ports,
                 load_session(dir.path(), &before.session_id).crit_urls,
             ),
             (
-                Err("fixture crit status failure".to_string()),
-                1,
-                before.crit_urls,
+                Ok(2),
+                vec![43001, 43002],
+                vec!["http://localhost:43002/review".to_string()],
             ),
         );
     }
