@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.654](https://github.com/fohte/armyknife/compare/v0.1.653...v0.1.654) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show dates on older messages ([#1681](https://github.com/fohte/armyknife/issues/1681)) ([f9c41b7](https://github.com/fohte/armyknife/commit/f9c41b78fbc09b60ef3a0b158b1b1e5aa6f54c19))
+
 ## [0.1.653](https://github.com/fohte/armyknife/compare/v0.1.652...v0.1.653) (2026-11-12)
 
 
