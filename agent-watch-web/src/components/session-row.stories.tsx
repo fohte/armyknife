@@ -65,6 +65,13 @@ export const NeedsActionIsUnread: Story = {
   name: 'An unread question waits for a response',
 }
 
+export const PausedNeedsActionKeepsItsRequestStatus: Story = {
+  name: 'A paused question keeps its request status',
+  args: {
+    session: { ...session, isPaused: true },
+  },
+}
+
 export const SessionIsStarredForToday: Story = {
   name: 'A starred session stays on the TODAY list',
   args: {

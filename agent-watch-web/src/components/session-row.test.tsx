@@ -46,7 +46,9 @@ function renderRow(viewSession: Session, isMobile = false) {
 
 function snapshot() {
   return {
-    badge: container.querySelector('[data-slot="chip"]')?.textContent ?? null,
+    chips: Array.from(container.querySelectorAll('[data-slot="chip"]')).map(
+      (chip) => chip.textContent,
+    ),
     age: container.querySelector('.session-age')?.textContent,
     task: container.querySelector('.session-task')?.textContent,
   }
@@ -81,7 +83,7 @@ it.each([
   renderRow(viewSession)
 
   const expected = {
-    badge: null,
+    chips: [],
     age: 'Finished · 2m',
     task: '— No task',
   }
@@ -95,8 +97,19 @@ it('keeps the merged pull request label on a paused row', () => {
   })
 
   const expected = {
-    badge: null,
+    chips: [],
     age: 'Merged #2049 · 2m',
+    task: '— No task',
+  }
+  expect(snapshot()).toEqual(expected)
+})
+
+it('keeps only the request chip on a paused needs-action row', () => {
+  renderRow({ ...session, category: 'needs_action', kind: 'Question' })
+
+  const expected = {
+    chips: ['Question'],
+    age: '2m',
     task: '— No task',
   }
   expect(snapshot()).toEqual(expected)
