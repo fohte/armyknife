@@ -654,8 +654,6 @@ it('labels a Starred iPhone session for removal', () => {
     false,
     undefined,
     null,
-    false,
-    undefined,
     { isToday: true, onToggleToday },
   )
 
