@@ -14,7 +14,22 @@ type SessionFeedDependencies = {
   createEventSource?: (url: string) => SessionEventSource
   reloadPage?: () => void
   requestRetryDelayMs?: number
+  initialServerInstanceId?: string | null
   visibilityTarget?: SessionFeedVisibilityTarget
+}
+
+const SERVER_INSTANCE_ID_PLACEHOLDER = '__AGENT_WATCH_SERVER_INSTANCE_ID__'
+
+function readInitialServerInstanceId() {
+  if (typeof document === 'undefined') {
+    return null
+  }
+  const instanceId = document.querySelector<HTMLMetaElement>(
+    'meta[name="server-instance-id"]',
+  )?.content
+  return instanceId === SERVER_INSTANCE_ID_PLACEHOLDER
+    ? null
+    : (instanceId ?? null)
 }
 
 type SessionFeedVisibilityTarget = {
@@ -258,6 +273,7 @@ export function startSessionFeed(
       window.location.reload()
     },
     requestRetryDelayMs = 2_000,
+    initialServerInstanceId = readInitialServerInstanceId(),
     visibilityTarget = typeof document === 'undefined' ? undefined : document,
   }: SessionFeedDependencies = {},
 ) {
@@ -268,7 +284,7 @@ export function startSessionFeed(
   let requestError = false
   let streamError = false
   let restartPending = false
-  let serverInstanceId: string | null = null
+  let serverInstanceId = initialServerInstanceId
   let currentSessions: CurrentSessions | null = null
   let requestRetryTimer: ReturnType<typeof setTimeout> | null = null
   let reconnectPollTimer: ReturnType<typeof setInterval> | null = null

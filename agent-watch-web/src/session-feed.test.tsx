@@ -792,81 +792,58 @@ it('stops stream retries and clears connection errors while hidden', async () =>
   })
 })
 
-it('reconnects when visible without reloading when the server instance is unchanged', async () => {
-  const visibilityTarget = new FakeVisibilityTarget()
-  const sources: FakeEventSource[] = []
-  const received = deferred<undefined>()
-  const reloads: string[] = []
-  const fetcher = vi
-    .fn()
-    .mockResolvedValue(jsonResponse({ revision: 1, sessions: [] }))
-  const stop = startSessionFeed(
-    () => {
-      received.resolve(undefined)
-    },
-    () => {},
-    {
-      fetcher,
-      createEventSource: () => {
-        const source = new FakeEventSource()
-        sources.push(source)
-        return source
+it.each([
+  {
+    scenario: 'an unchanged server instance',
+    resumedServerInstanceId: 'fixture-server-instance',
+    expectedReloads: [],
+  },
+  {
+    scenario: 'a changed server instance',
+    resumedServerInstanceId: 'fixture-server-instance-after',
+    expectedReloads: ['reloaded'],
+  },
+])(
+  'checks $scenario after a hidden period',
+  async ({ resumedServerInstanceId, expectedReloads }) => {
+    const visibilityTarget = new FakeVisibilityTarget()
+    const sources: FakeEventSource[] = []
+    const received = deferred<undefined>()
+    const reloads: string[] = []
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ revision: 1, sessions: [] }))
+    const stop = startSessionFeed(
+      () => {
+        received.resolve(undefined)
       },
-      reloadPage: () => {
-        reloads.push('reloaded')
+      () => {},
+      {
+        fetcher,
+        createEventSource: () => {
+          const source = new FakeEventSource()
+          sources.push(source)
+          return source
+        },
+        reloadPage: () => {
+          reloads.push('reloaded')
+        },
+        initialServerInstanceId: 'fixture-server-instance',
+        visibilityTarget,
       },
-      visibilityTarget,
-    },
-  )
+    )
 
-  await received.promise
-  sources[0]?.emit('instance', 'fixture-server-instance')
-  visibilityTarget.setVisibility('hidden')
-  visibilityTarget.setVisibility('visible')
-  sources[1]?.emit('open')
-  sources[1]?.emit('instance', 'fixture-server-instance')
-  stop()
+    await received.promise
+    sources[0]?.emit('instance', 'fixture-server-instance')
+    visibilityTarget.setVisibility('hidden')
+    visibilityTarget.setVisibility('visible')
+    sources[1]?.emit('open')
+    sources[1]?.emit('instance', resumedServerInstanceId)
+    stop()
 
-  expect(reloads).toEqual([])
-})
-
-it('reloads when the server instance changes after a hidden period', async () => {
-  const visibilityTarget = new FakeVisibilityTarget()
-  const sources: FakeEventSource[] = []
-  const received = deferred<undefined>()
-  const reloads: string[] = []
-  const fetcher = vi
-    .fn()
-    .mockResolvedValue(jsonResponse({ revision: 1, sessions: [] }))
-  const stop = startSessionFeed(
-    () => {
-      received.resolve(undefined)
-    },
-    () => {},
-    {
-      fetcher,
-      createEventSource: () => {
-        const source = new FakeEventSource()
-        sources.push(source)
-        return source
-      },
-      reloadPage: () => {
-        reloads.push('reloaded')
-      },
-      visibilityTarget,
-    },
-  )
-
-  await received.promise
-  sources[0]?.emit('instance', 'fixture-server-instance-before')
-  visibilityTarget.setVisibility('hidden')
-  visibilityTarget.setVisibility('visible')
-  sources[1]?.emit('open')
-  sources[1]?.emit('instance', 'fixture-server-instance-after')
-  stop()
-
-  expect(reloads).toEqual(['reloaded'])
-})
+    expect(reloads).toEqual(expectedReloads)
+  },
+)
 
 it('waits for visibility before starting the stream when initially hidden', async () => {
   const visibilityTarget = new FakeVisibilityTarget()
@@ -892,6 +869,7 @@ it('waits for visibility before starting the stream when initially hidden', asyn
       reloadPage: () => {
         reloads.push('reloaded')
       },
+      initialServerInstanceId: 'fixture-server-instance',
       visibilityTarget,
     },
   )

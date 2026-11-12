@@ -15,6 +15,7 @@ mod sessions;
 
 use std::ffi::OsString;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::LazyLock;
 use tokio::sync::watch;
 
 use anyhow::Result;
@@ -41,6 +42,8 @@ pub struct WatchWebArgs {
 
 const LISTEN_PORT: u16 = 4317;
 const CRIT_PROXY_PORT: u16 = 4318;
+pub(super) static SERVER_INSTANCE_ID: LazyLock<String> =
+    LazyLock::new(|| uuid::Uuid::new_v4().to_string());
 
 fn is_invalid_session_id_error(error: &anyhow::Error) -> bool {
     error
@@ -244,7 +247,7 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
         .nest("/api", api)
         .route("/api/", any(api_not_found))
         .fallback(move |request: axum::extract::Request| async move {
-            assets::serve_from(request.uri(), dist)
+            assets::serve_from(request.uri(), dist, &SERVER_INSTANCE_ID)
         })
         .layer(axum::middleware::from_fn(security::validate_request))
         .layer(compression_layer())
