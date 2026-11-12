@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::super::resume::SHELL_COMMANDS;
 use super::super::store;
-use super::super::types::{Engine, MAIN_THREAD_AGENT_KEY, Session, SessionStatus, TmuxInfo};
+use super::super::types::{Engine, Session, SessionStatus, TmuxInfo};
 use super::super::user_turn::is_ask_user_question;
 use super::messages::RouteLoaders;
 
@@ -255,7 +255,8 @@ async fn approve_permission(
     RoutePath(id): RoutePath<String>,
     request: Option<Json<PermissionRequestAction>>,
 ) -> Result<Json<Success>, ApiError> {
-    resolve_permission_action(state, id, request.map(|Json(request)| request), true).await
+    let request_id = require_permission_request_id(request)?;
+    resolve_permission_action(state, id, request_id, true).await
 }
 
 async fn reject_permission(
@@ -263,19 +264,29 @@ async fn reject_permission(
     RoutePath(id): RoutePath<String>,
     request: Option<Json<PermissionRequestAction>>,
 ) -> Result<Json<Success>, ApiError> {
-    resolve_permission_action(state, id, request.map(|Json(request)| request), false).await
+    let request_id = require_permission_request_id(request)?;
+    resolve_permission_action(state, id, request_id, false).await
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PermissionRequestAction {
-    request_id: String,
+    request_id: Option<String>,
+}
+
+fn require_permission_request_id(
+    request: Option<Json<PermissionRequestAction>>,
+) -> Result<String, ApiError> {
+    request
+        .and_then(|Json(request)| request.request_id)
+        .filter(|request_id| !request_id.trim().is_empty())
+        .ok_or_else(|| ApiError::bad_request("requestId is required"))
 }
 
 async fn resolve_permission_action(
     state: ActionState,
     id: String,
-    request: Option<PermissionRequestAction>,
+    request_id: String,
     approved: bool,
 ) -> Result<Json<Success>, ApiError> {
     let session = load_session(state.clone(), id).await?;
@@ -287,30 +298,16 @@ async fn resolve_permission_action(
     if session.status == SessionStatus::Ended {
         return Err(ApiError::conflict("session has ended"));
     }
-    let request_id = request.map(|request| request.request_id);
-    let pending_request = match request_id {
-        Some(request_id) => session
-            .pending_permission_request_ids
-            .iter()
-            .find(|(agent_key, pending_request_id)| {
-                pending_request_id.as_str() == request_id
-                    && session
-                        .pending_permission_agent_ids
-                        .contains(agent_key.as_str())
-            })
-            .map(|(agent_key, _)| (agent_key.clone(), request_id)),
-        None => session
-            .pending_permission_agent_ids
-            .contains(MAIN_THREAD_AGENT_KEY)
-            .then(|| {
-                session
-                    .pending_permission_request_ids
-                    .get(MAIN_THREAD_AGENT_KEY)
-                    .cloned()
-            })
-            .flatten()
-            .map(|request_id| (MAIN_THREAD_AGENT_KEY.to_string(), request_id)),
-    };
+    let pending_request = session
+        .pending_permission_request_ids
+        .iter()
+        .find(|(agent_key, pending_request_id)| {
+            pending_request_id.as_str() == request_id
+                && session
+                    .pending_permission_agent_ids
+                    .contains(agent_key.as_str())
+        })
+        .map(|(agent_key, pending_request_id)| (agent_key.clone(), pending_request_id.clone()));
     let Some((agent_key, request_id)) = pending_request else {
         return Err(ApiError::conflict(
             "permission request is no longer pending; answer it in the terminal",
@@ -517,7 +514,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
-    use crate::commands::agent::types::TmuxInfo;
+    use crate::commands::agent::types::{MAIN_THREAD_AGENT_KEY, TmuxInfo};
 
     #[path = "send_message.rs"]
     mod send_message;
@@ -1076,9 +1073,17 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::approve_without_body("approve", None)]
+    #[case::approve_without_request_id("approve", Some(json!({})))]
+    #[case::reject_without_body("reject", None)]
+    #[case::reject_without_request_id("reject", Some(json!({})))]
     #[tokio::test]
-    async fn legacy_permission_action_without_body_targets_the_main_request() {
-        let action_context = action_context();
+    async fn permission_actions_require_a_request_id(
+        #[case] action: &str,
+        #[case] payload: Option<Value>,
+        action_context: ActionContext,
+    ) {
         let mut session = session("sample-session");
         action_context.save_pending_permission_request(
             &mut session,
@@ -1087,11 +1092,9 @@ mod tests {
             "Bash",
         );
 
-        let response = action_context
-            .router()
-            .oneshot(post_empty("/sessions/sample-session/permission/approve"))
-            .await
-            .unwrap();
+        let uri = format!("/sessions/sample-session/permission/{action}");
+        let request = payload.map_or_else(|| post_empty(&uri), |payload| post(&uri, payload));
+        let response = action_context.router().oneshot(request).await.unwrap();
         let mut waiter =
             store::PermissionRequestWaiter::open(&action_context.temp_dir.path().join("sessions"))
                 .unwrap();
@@ -1109,11 +1112,11 @@ mod tests {
             ),
             (
                 json!({
-                    "status": StatusCode::OK.as_u16(),
-                    "body": { "ok": true },
+                    "status": StatusCode::BAD_REQUEST.as_u16(),
+                    "body": { "error": "requestId is required" },
                     "calls": [],
                 }),
-                store::PermissionRequestWait::Decision(store::PermissionRequestDecision::Allow),
+                store::PermissionRequestWait::Pending,
             ),
         );
     }
