@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.655](https://github.com/fohte/armyknife/compare/v0.1.654...v0.1.655) (2026-11-12)
+
+
+### Features
+
+* **agent-watch-web:** allow merging sidebar PRs ([#1683](https://github.com/fohte/armyknife/issues/1683)) ([568f933](https://github.com/fohte/armyknife/commit/568f93342f69eea105ebee36985956f2b021d7c2))
+
 ## [0.1.654](https://github.com/fohte/armyknife/compare/v0.1.653...v0.1.654) (2026-11-12)
 
 
