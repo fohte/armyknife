@@ -422,6 +422,7 @@ export function ConversationPane({
     onSessionTreeViewStateChange: (state) =>
       onSessionTreeViewStateChange?.(session.id, state),
     onSelectSession,
+    statusPanelOpen,
     onAction,
     onCloseStatusPanel,
   })

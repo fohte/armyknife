@@ -3,9 +3,11 @@ import { useEffect, useState } from 'react'
 import { CritPane } from '#components/crit-pane'
 import type { Decision } from '#components/decision-card'
 import { DecisionsPanel } from '#components/decisions-panel'
+import { PullRequestListPanel } from '#components/pull-request-list-panel'
 import { RunningTasksPanel } from '#components/running-tasks-panel'
 import type { SessionStatusPanelTab } from '#components/session-status-panel'
 import { SessionTreePanel } from '#components/session-tree-panel'
+import { useSessionPullRequests } from '#components/use-session-pull-requests'
 import {
   needsActionDescendantCount,
   type SessionTreeViewState,
@@ -22,6 +24,7 @@ type UseConversationStatusPanelOptions = {
   sessionTreeViewState?: SessionTreeViewState | null
   onSessionTreeViewStateChange?: (state: SessionTreeViewState) => void
   onSelectSession?: (id: string) => void
+  statusPanelOpen?: boolean
   onAction: (
     action: string,
     payload?: Record<string, unknown>,
@@ -39,6 +42,7 @@ export function useConversationStatusPanel({
   sessionTreeViewState = null,
   onSessionTreeViewStateChange,
   onSelectSession = () => undefined,
+  statusPanelOpen = false,
   onAction,
   onCloseStatusPanel,
 }: UseConversationStatusPanelOptions) {
@@ -52,6 +56,8 @@ export function useConversationStatusPanel({
       (message): message is Decision => message.type === 'decision',
     )
   const decisionCount = session.decisionCount ?? decisions.length
+  const pullRequestListAvailable =
+    session.task !== null || session.hasSessionTree === true
   const unreviewedDecisionCount =
     session.unreviewedDecisionCount ??
     decisions.filter((decision) => decision.review === null).length
@@ -75,8 +81,31 @@ export function useConversationStatusPanel({
     (sessionTreeError !== null ||
       sessionTree === null ||
       sessionTree.length > 1)
+  const availableTabIds = [
+    ...(backgroundTasks.length === 0 ? [] : ['running']),
+    ...(treeAvailable ? ['tree'] : []),
+    ...(pullRequestListAvailable ? ['pull-requests'] : []),
+    ...(decisionCount === 0 ? [] : ['decisions']),
+    ...(critUrl === null ? [] : ['crit']),
+  ]
+  const defaultPanelTabId = availableTabIds.includes('crit')
+    ? 'crit'
+    : availableTabIds.includes('running')
+      ? 'running'
+      : (availableTabIds[0] ?? null)
+  const activeTabId =
+    activePanelTabId !== null && availableTabIds.includes(activePanelTabId)
+      ? activePanelTabId
+      : defaultPanelTabId
+  const pullRequestList = useSessionPullRequests({
+    session,
+    enabled:
+      statusPanelOpen &&
+      pullRequestListAvailable &&
+      activeTabId === 'pull-requests',
+  })
   const tabs: readonly SessionStatusPanelTab[] = [
-    ...(backgroundTasks.length > 0
+    ...(availableTabIds.includes('running')
       ? [
           {
             id: 'running',
@@ -91,9 +120,8 @@ export function useConversationStatusPanel({
           },
         ]
       : []),
-    ...(!treeAvailable
-      ? []
-      : [
+    ...(availableTabIds.includes('tree')
+      ? [
           {
             id: 'tree',
             label: 'Tree',
@@ -131,8 +159,27 @@ export function useConversationStatusPanel({
                 </>
               ),
           },
-        ]),
-    ...(decisionCount > 0
+        ]
+      : []),
+    ...(availableTabIds.includes('pull-requests')
+      ? [
+          {
+            id: 'pull-requests',
+            label: 'PRs',
+            count: pullRequestList.pullRequests.length,
+            visible: true,
+            showCount: pullRequestList.pullRequests.length > 0,
+            content: (
+              <PullRequestListPanel
+                pullRequests={pullRequestList.pullRequests}
+                loading={pullRequestList.loading}
+                error={pullRequestList.error}
+              />
+            ),
+          },
+        ]
+      : []),
+    ...(availableTabIds.includes('decisions')
       ? [
           {
             id: 'decisions',
@@ -156,25 +203,20 @@ export function useConversationStatusPanel({
           },
         ]
       : []),
-    ...(critUrl === null
-      ? []
-      : [
+    ...(availableTabIds.includes('crit')
+      ? [
           {
             id: 'crit',
             label: 'crit',
             count: 1,
-            content: <CritPane url={critUrl} onClose={onCloseStatusPanel} />,
+            content:
+              critUrl === null ? null : (
+                <CritPane url={critUrl} onClose={onCloseStatusPanel} />
+              ),
           },
-        ]),
+        ]
+      : []),
   ]
-  const defaultPanelTabId =
-    tabs.find((tab) => tab.id === 'crit')?.id ??
-    tabs.find((tab) => tab.id === 'running')?.id ??
-    tabs[0]?.id ??
-    null
-  const activeTabId = tabs.some((tab) => tab.id === activePanelTabId)
-    ? activePanelTabId
-    : defaultPanelTabId
   useEffect(() => {
     if (activePanelTabId !== activeTabId) setActivePanelTabId(activeTabId)
   }, [activePanelTabId, activeTabId])

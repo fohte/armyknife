@@ -71,6 +71,8 @@ Pressing `y` confirms the partition: the watch process generates a `run_id` and 
 
 The request middleware accepts only `localhost`, `127.0.0.1`, and `*.ts.net` Host values. It also requires the Origin authority to match Host for methods other than GET and HEAD. `GET /api/sessions/{id}/tree` returns the selected session's ancestor-rooted tree, excluding ended sessions. The `/api` nested router has its own 404 fallback so unimplemented API paths never receive the SPA. All other unmatched paths return `index.html` for client-side routing.
 
+`GET /api/sessions/{id}/pull-requests` uses the same progress fetcher as the TUI. It lists PRs from sessions linked to the selected primary tq task and that task's implementation checklist, or from direct delegates when no task is selected. Open PRs come first, with each PR's state, CI state, diff-review mark, and GitHub link.
+
 For tailnet access, `tailscale serve 4317` proxies to the loopback listener. This keeps the HTTP server bound to localhost while making it available through Tailscale Serve.
 
 ## Internal Subcommands

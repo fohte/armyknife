@@ -49,7 +49,7 @@ pub(crate) mod tmux_sync;
 mod todo;
 pub(crate) mod tq_session_tasks;
 mod transcript;
-mod tui;
+pub(super) mod tui;
 pub(crate) mod types;
 pub(crate) mod user_turn;
 mod vibe;

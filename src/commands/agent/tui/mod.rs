@@ -6,7 +6,7 @@ mod event;
 mod pr_fetch;
 mod progress;
 mod progress_batches;
-mod progress_fetch;
+pub(in crate::commands::agent) mod progress_fetch;
 mod progress_key;
 mod progress_refresh;
 mod session_key;
