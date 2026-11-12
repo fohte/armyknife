@@ -1,6 +1,6 @@
 use std::future::Future;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
@@ -12,33 +12,90 @@ pub(super) async fn close_session_value(
     args: &CloseArgs,
     child_parent_session_id: Option<&str>,
 ) -> Result<()> {
-    let Some(worktree_root) = super::worktree::linked_worktree_root(&session.cwd) else {
-        return close_session_value_without_worktree(
-            session,
-            args,
-            child_parent_session_id,
-            super::close_tracked_session,
-        );
-    };
+    let linked_worktree_root = super::worktree::linked_worktree_root(&session.cwd);
+    let runtime = super::LiveCloseRuntime;
 
-    close_session_value_with_worktree(
-        SessionWorktreeContext {
-            session,
-            force: args.force,
-            parent_session_id: child_parent_session_id,
-            worktree_root: &worktree_root,
+    close_session_value_with_dependencies(
+        session,
+        args,
+        child_parent_session_id,
+        linked_worktree_root,
+        &runtime,
+        |worktree_root| async move {
+            close_session_value_with_worktree(
+                SessionWorktreeContext {
+                    session,
+                    force: args.force,
+                    parent_session_id: child_parent_session_id,
+                    worktree_root: &worktree_root,
+                },
+                find_shared_worktree_session_ids,
+                crate::shared::worktree_delete::prepare(&worktree_root, args.force),
+                super::close_tracked_session,
+                || {
+                    let current_pane_id = crate::shared::caller_pane::resolve_caller_pane_id();
+                    super::worktree::close_worktree_session(
+                        session,
+                        args.force,
+                        current_pane_id.as_deref(),
+                    )
+                },
+                |plan| crate::shared::worktree_delete::execute(plan, args.skip_hooks),
+                &mut io::stderr(),
+            )
+            .await
         },
-        find_shared_worktree_session_ids,
-        crate::shared::worktree_delete::prepare(&worktree_root, args.force),
-        super::close_tracked_session,
-        || {
-            let current_pane_id = crate::shared::caller_pane::resolve_caller_pane_id();
-            super::worktree::close_worktree_session(session, args.force, current_pane_id.as_deref())
-        },
-        |plan| crate::shared::worktree_delete::execute(plan, args.skip_hooks),
-        &mut io::stderr(),
     )
     .await
+}
+
+async fn close_session_value_with_dependencies<R, Fut>(
+    session: &Session,
+    args: &CloseArgs,
+    child_parent_session_id: Option<&str>,
+    linked_worktree_root: Option<PathBuf>,
+    runtime: &R,
+    close_with_worktree: impl FnOnce(PathBuf) -> Fut,
+) -> Result<()>
+where
+    R: super::CloseRuntime,
+    Fut: Future<Output = Result<()>>,
+{
+    route_session_close(
+        args,
+        linked_worktree_root,
+        || {
+            close_session_value_without_worktree(
+                session,
+                args,
+                child_parent_session_id,
+                |session, force| super::close_tracked_session_with_runtime(session, force, runtime),
+            )
+        },
+        close_with_worktree,
+    )
+    .await
+}
+
+async fn route_session_close<Fut>(
+    args: &CloseArgs,
+    linked_worktree_root: Option<PathBuf>,
+    close_without_worktree: impl FnOnce() -> Result<()>,
+    close_with_worktree: impl FnOnce(PathBuf) -> Fut,
+) -> Result<()>
+where
+    Fut: Future<Output = Result<()>>,
+{
+    let worktree_root = if args.keep_worktree {
+        None
+    } else {
+        linked_worktree_root
+    };
+
+    match worktree_root {
+        Some(worktree_root) => close_with_worktree(worktree_root).await,
+        None => close_without_worktree(),
+    }
 }
 
 struct SessionWorktreeContext<'a> {
@@ -158,8 +215,11 @@ mod tests {
 
     use rstest::{fixture, rstest};
 
-    use super::super::test_support::session;
+    use super::super::test_support::{
+        FakeRuntime, kill_pane_call, pane_exists_call, pane_session_call, resolve_pid_call, session,
+    };
     use super::*;
+    use crate::commands::agent::types::SessionStatus;
 
     fn linked_session(session_id: &str, cwd: &str, pane_id: Option<&str>) -> Session {
         let mut session = session();
@@ -232,7 +292,7 @@ mod tests {
         Err("Agent session `session-1` is not a direct child of the calling session"),
         vec![],
     )]
-    fn validates_before_closing_a_tracked_session_without_a_linked_worktree(
+    fn validates_a_kept_session_before_closing_it(
         mut session: Session,
         #[case] ancestors: Vec<&str>,
         #[case] expected_result: std::result::Result<(), &str>,
@@ -266,6 +326,100 @@ mod tests {
                 calls.into_inner(),
             ),
             (expected_result.map_err(str::to_string), expected_calls,),
+        );
+    }
+
+    #[tokio::test]
+    async fn keep_worktree_closes_session_without_preparing_worktree() {
+        let mut session = session();
+        session.status = SessionStatus::Paused;
+        let args = CloseArgs {
+            keep_worktree: true,
+            ..CloseArgs::default()
+        };
+        let calls = RefCell::new(Vec::new());
+        let runtime = FakeRuntime {
+            pid: None,
+            ..FakeRuntime::default()
+        };
+
+        let result = close_session_value_with_dependencies(
+            &session,
+            &args,
+            None,
+            Some(PathBuf::from("/tmp/worktrees/feature")),
+            &runtime,
+            |_| async {
+                calls.borrow_mut().push("prepare or delete worktree");
+                Ok(())
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                calls.into_inner(),
+                runtime.calls.into_inner(),
+            ),
+            (
+                Ok(()),
+                vec![],
+                vec![
+                    pane_exists_call(),
+                    pane_session_call(),
+                    resolve_pid_call(session.engine),
+                    pane_exists_call(),
+                    pane_session_call(),
+                    kill_pane_call(),
+                ],
+            )
+        );
+    }
+
+    #[rstest]
+    #[case::running(SessionStatus::Running)]
+    #[case::waiting_for_input(SessionStatus::WaitingInput)]
+    #[tokio::test]
+    async fn keep_worktree_still_rejects_active_sessions(
+        mut session: Session,
+        #[case] status: SessionStatus,
+    ) {
+        session.status = status;
+        let args = CloseArgs {
+            keep_worktree: true,
+            ..CloseArgs::default()
+        };
+        let calls = RefCell::new(Vec::new());
+        let runtime = FakeRuntime::default();
+
+        let result = close_session_value_with_dependencies(
+            &session,
+            &args,
+            None,
+            Some(PathBuf::from("/tmp/worktrees/feature")),
+            &runtime,
+            |_| async {
+                calls.borrow_mut().push("prepare or delete worktree");
+                Ok(())
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                calls.into_inner(),
+                runtime.calls.into_inner(),
+            ),
+            (
+                Err(format!(
+                    "Agent session `{}` is running or waiting for input; pass --force to close it",
+                    session.session_id,
+                )),
+                vec![],
+                vec![pane_exists_call(), pane_session_call()],
+            ),
         );
     }
 

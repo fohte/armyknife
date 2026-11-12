@@ -600,6 +600,7 @@ mod tests {
             child: true,
             force: true,
             skip_hooks: false,
+            keep_worktree: false,
         };
         let calls = RefCell::new(Vec::new());
         let context = WorktreeCloseContext {
@@ -656,6 +657,7 @@ mod tests {
             child: true,
             force: false,
             skip_hooks: false,
+            keep_worktree: false,
         };
         let calls = RefCell::new(Vec::new());
         let context = WorktreeCloseContext {
@@ -715,6 +717,7 @@ mod tests {
             child: true,
             force: true,
             skip_hooks: false,
+            keep_worktree: false,
         };
         let calls = RefCell::new(Vec::new());
         let context = WorktreeCloseContext {

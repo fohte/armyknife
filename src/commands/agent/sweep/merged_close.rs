@@ -202,6 +202,7 @@ fn close_args(session_id: &str) -> super::super::close::CloseArgs {
         child: false,
         force: false,
         skip_hooks: false,
+        keep_worktree: false,
     }
 }
 

@@ -1,7 +1,6 @@
 //! `a agent close` shuts down a tracked agent session and removes its tmux pane.
 
 use std::io;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -10,9 +9,11 @@ use clap::Args;
 
 mod child;
 mod session_close;
+mod target;
 mod worktree;
+use target::{close_default_target, close_target, resolve_default_target};
 pub(crate) use worktree::close_worktree_path;
-use worktree::{close_worktree, linked_worktree_root};
+use worktree::linked_worktree_root;
 #[cfg(test)]
 mod test_support;
 
@@ -23,7 +24,7 @@ use super::signal::{LibcSignalSender, SignalSender};
 use super::types::{Engine, Session, SessionStatus, TmuxInfo};
 use crate::infra::process::{self, ProcessSnapshot};
 use crate::infra::tmux;
-use crate::shared::config::{load_config, load_config_or_default};
+use crate::shared::config::load_config_or_default;
 use crate::shared::env_var::EnvVars;
 use crate::shared::worktree_delete;
 
@@ -46,8 +47,12 @@ pub struct CloseArgs {
     pub force: bool,
 
     /// Skip worktree deletion hooks.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "keep_worktree")]
     pub skip_hooks: bool,
+
+    /// Keep the linked worktree and branch when closing a session.
+    #[arg(long, conflicts_with = "skip_hooks")]
+    pub keep_worktree: bool,
 }
 
 pub async fn run(args: &CloseArgs) -> Result<()> {
@@ -61,72 +66,26 @@ pub async fn run(args: &CloseArgs) -> Result<()> {
         let cwd = std::env::current_dir().context("Failed to get current directory")?;
         Ok(linked_worktree_root(&cwd))
     };
-    match resolve_default_target(
+    let target = resolve_default_target(
         resume::resolve_session_id_from_pane(),
         super::store::load_session,
         current_worktree_root,
-    )? {
-        DefaultTarget::Session(session) => {
-            session_close::close_session_value(&session, args, None).await
-        }
-        DefaultTarget::Worktree(worktree_root) => {
-            close_worktree(&worktree_root, args, false, None).await
-        }
-    }
-}
-
-#[derive(Debug)]
-enum DefaultTarget {
-    Session(Box<Session>),
-    Worktree(PathBuf),
-}
-
-fn resolve_default_target(
-    pane_session_id: Result<String>,
-    load_session: impl FnOnce(&str) -> Result<Option<Session>>,
-    current_worktree_root: impl FnOnce() -> Result<Option<PathBuf>>,
-) -> Result<DefaultTarget> {
-    match pane_session_id {
-        Ok(session_id) => match load_session(&session_id)? {
-            Some(session) => Ok(DefaultTarget::Session(Box::new(session))),
-            None => current_worktree_root()?
-                .map(DefaultTarget::Worktree)
-                .ok_or_else(|| anyhow::anyhow!("Agent session `{session_id}` was not found")),
-        },
-        Err(error) => current_worktree_root()?
-            .map(DefaultTarget::Worktree)
-            .ok_or(error),
-    }
-}
-
-async fn close_target(
-    target: &str,
-    args: &CloseArgs,
-    child_parent_session_id: Option<&str>,
-) -> Result<()> {
-    if !target.contains('/')
-        && !target.contains('\\')
-        && !target.contains("..")
-        && let Some(session) = super::store::load_session(target)?
-    {
-        return session_close::close_session_value(&session, args, child_parent_session_id).await;
-    }
-
-    let config = load_config()?;
-    let worktree_path = worktree_delete::resolve_worktree_path(
-        target,
-        &config.agent.worktree.dir,
-        &config.agent.worktree.branch_prefix,
     )?;
-    let worktree_path = PathBuf::from(worktree_path);
-    let worktree_root = linked_worktree_root(&worktree_path).unwrap_or(worktree_path);
-    close_worktree(&worktree_root, args, false, child_parent_session_id).await
+    close_default_target(target, args).await
 }
 
 fn close_tracked_session(session: &Session, force: bool) -> Result<()> {
+    close_tracked_session_with_runtime(session, force, &LiveCloseRuntime)
+}
+
+fn close_tracked_session_with_runtime<R: CloseRuntime>(
+    session: &Session,
+    force: bool,
+    runtime: &R,
+) -> Result<()> {
     let mut session = session.clone();
     super::session_status::include_pending_status(&mut session);
-    close_session(&session, force, &LiveCloseRuntime)
+    close_session(&session, force, runtime)
 }
 
 trait CloseRuntime {
@@ -476,179 +435,15 @@ fn write_draft_unavailable_warning(
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
     use std::io;
-    use std::path::PathBuf;
 
     use rstest::rstest;
 
-    use super::test_support::session;
+    use super::test_support::{
+        Call, FakeRuntime, draft_call, graceful_quit_call, kill_pane_call, pane_exists_call,
+        pane_session_call, resolve_pid_call, session,
+    };
     use super::*;
-    use crate::commands::agent::types::TmuxInfo;
-
-    #[derive(Debug, PartialEq, Eq)]
-    enum Call {
-        PaneExists(Option<String>, String),
-        PaneSession(Option<String>, String),
-        Draft(Option<String>, String, Engine),
-        ResolvePid(Option<String>, String, Engine),
-        LatestTurnStatus(String),
-        GracefulQuit(Option<String>, String, u32),
-        Sigterm(u32),
-        WaitForExit(u32),
-        EndCodexSession(String),
-        KillPane(Option<String>, String),
-    }
-
-    struct FakeRuntime {
-        calls: RefCell<Vec<Call>>,
-        pane_exists: Result<bool>,
-        pane_session_id: Option<String>,
-        draft: Option<bool>,
-        turn_status: std::result::Result<Option<String>, String>,
-        pid: Option<u32>,
-        pid_error: Option<String>,
-        graceful_result: io::Result<bool>,
-        signal_result: io::Result<()>,
-        wait_for_exit: bool,
-    }
-
-    impl Default for FakeRuntime {
-        fn default() -> Self {
-            Self {
-                calls: RefCell::new(Vec::new()),
-                pane_exists: Ok(true),
-                pane_session_id: Some("session-1".to_string()),
-                draft: Some(false),
-                turn_status: Ok(None),
-                pid: Some(42),
-                pid_error: None,
-                graceful_result: Ok(true),
-                signal_result: Ok(()),
-                wait_for_exit: true,
-            }
-        }
-    }
-
-    impl CloseRuntime for FakeRuntime {
-        fn pane_exists(&self, tmux_info: &TmuxInfo) -> Result<bool> {
-            self.calls.borrow_mut().push(Call::PaneExists(
-                tmux_info.socket_path.clone(),
-                tmux_info.pane_id.clone(),
-            ));
-            match &self.pane_exists {
-                Ok(exists) => Ok(*exists),
-                Err(error) => Err(anyhow::anyhow!(error.to_string())),
-            }
-        }
-
-        fn pane_session_id(&self, tmux_info: &TmuxInfo) -> Option<String> {
-            self.calls.borrow_mut().push(Call::PaneSession(
-                tmux_info.socket_path.clone(),
-                tmux_info.pane_id.clone(),
-            ));
-            self.pane_session_id.clone()
-        }
-
-        fn has_draft(&self, tmux_info: &TmuxInfo, engine: Engine) -> Option<bool> {
-            self.calls.borrow_mut().push(Call::Draft(
-                tmux_info.socket_path.clone(),
-                tmux_info.pane_id.clone(),
-                engine,
-            ));
-            self.draft
-        }
-
-        fn latest_codex_turn_status(&self, thread_id: &str) -> Result<Option<String>> {
-            self.calls
-                .borrow_mut()
-                .push(Call::LatestTurnStatus(thread_id.to_string()));
-            match &self.turn_status {
-                Ok(status) => Ok(status.clone()),
-                Err(error) => bail!(error.clone()),
-            }
-        }
-
-        fn resolve_agent_pid(&self, tmux_info: &TmuxInfo, engine: Engine) -> Result<Option<u32>> {
-            self.calls.borrow_mut().push(Call::ResolvePid(
-                tmux_info.socket_path.clone(),
-                tmux_info.pane_id.clone(),
-                engine,
-            ));
-            if let Some(error) = &self.pid_error {
-                return Err(anyhow::anyhow!(error.clone()));
-            }
-            Ok(self.pid)
-        }
-
-        fn request_graceful_quit(&self, tmux_info: &TmuxInfo, pid: u32) -> io::Result<bool> {
-            self.calls.borrow_mut().push(Call::GracefulQuit(
-                tmux_info.socket_path.clone(),
-                tmux_info.pane_id.clone(),
-                pid,
-            ));
-            match &self.graceful_result {
-                Ok(result) => Ok(*result),
-                Err(error) => Err(io::Error::new(error.kind(), error.to_string())),
-            }
-        }
-
-        fn send_sigterm(&self, pid: u32) -> io::Result<()> {
-            self.calls.borrow_mut().push(Call::Sigterm(pid));
-            match &self.signal_result {
-                Ok(()) => Ok(()),
-                Err(error) => Err(io::Error::new(error.kind(), error.to_string())),
-            }
-        }
-
-        fn wait_for_exit(&self, pid: u32) -> bool {
-            self.calls.borrow_mut().push(Call::WaitForExit(pid));
-            self.wait_for_exit
-        }
-
-        fn end_codex_session(&self, session_id: &str) -> Result<()> {
-            self.calls
-                .borrow_mut()
-                .push(Call::EndCodexSession(session_id.to_string()));
-            Ok(())
-        }
-
-        fn kill_pane(&self, tmux_info: &TmuxInfo) -> Result<()> {
-            self.calls.borrow_mut().push(Call::KillPane(
-                tmux_info.socket_path.clone(),
-                tmux_info.pane_id.clone(),
-            ));
-            Ok(())
-        }
-    }
-
-    fn pane_exists_call() -> Call {
-        Call::PaneExists(test_socket_path(), "%42".to_string())
-    }
-
-    fn resolve_pid_call(engine: Engine) -> Call {
-        Call::ResolvePid(test_socket_path(), "%42".to_string(), engine)
-    }
-
-    fn test_socket_path() -> Option<String> {
-        Some("/tmp/tmux-test/socket".to_string())
-    }
-
-    fn pane_session_call() -> Call {
-        Call::PaneSession(test_socket_path(), "%42".to_string())
-    }
-
-    fn draft_call(engine: Engine) -> Call {
-        Call::Draft(test_socket_path(), "%42".to_string(), engine)
-    }
-
-    fn graceful_quit_call(pid: u32) -> Call {
-        Call::GracefulQuit(test_socket_path(), "%42".to_string(), pid)
-    }
-
-    fn kill_pane_call() -> Call {
-        Call::KillPane(test_socket_path(), "%42".to_string())
-    }
 
     #[rstest]
     #[case::running(SessionStatus::Running, false, false)]
@@ -1308,67 +1103,6 @@ mod tests {
         );
     }
 
-    #[rstest]
-    #[case::stored_pane_session_wins(
-        Some("session-1"),
-        true,
-        Some("/tmp/worktrees/feature"),
-        Ok(ResolvedTarget::SessionId("session-1".to_string()))
-    )]
-    #[case::stale_pane_session_falls_back_to_worktree(
-        Some("session-1"),
-        false,
-        Some("/tmp/worktrees/feature"),
-        Ok(ResolvedTarget::Worktree(PathBuf::from("/tmp/worktrees/feature")))
-    )]
-    #[case::stale_pane_session_preserves_not_found_without_worktree(
-        Some("session-1"),
-        false,
-        None,
-        Err("Agent session `session-1` was not found".to_string())
-    )]
-    #[case::unavailable_pane_session_falls_back_to_worktree(
-        None,
-        false,
-        Some("/tmp/worktrees/feature"),
-        Ok(ResolvedTarget::Worktree(PathBuf::from("/tmp/worktrees/feature")))
-    )]
-    #[case::preserves_pane_error_without_worktree(
-        None,
-        false,
-        None,
-        Err("no agent session for pane".to_string())
-    )]
-    fn resolves_default_target_from_pane_or_current_worktree(
-        #[case] pane_session_id: Option<&str>,
-        #[case] session_is_stored: bool,
-        #[case] worktree_root: Option<&str>,
-        #[case] expected: std::result::Result<ResolvedTarget, String>,
-    ) {
-        let pane_session_id = pane_session_id
-            .map(|session_id| Ok(session_id.to_string()))
-            .unwrap_or_else(|| Err(anyhow::anyhow!("no agent session for pane")));
-        let worktree_root = worktree_root.map(PathBuf::from);
-        let actual = resolve_default_target(
-            pane_session_id,
-            |_| Ok(session_is_stored.then(session)),
-            || Ok(worktree_root),
-        )
-        .map(|target| match target {
-            DefaultTarget::Session(session) => ResolvedTarget::SessionId(session.session_id),
-            DefaultTarget::Worktree(path) => ResolvedTarget::Worktree(path),
-        })
-        .map_err(|error| error.to_string());
-
-        assert_eq!(actual, expected);
-    }
-
-    #[derive(Debug, PartialEq, Eq)]
-    enum ResolvedTarget {
-        SessionId(String),
-        Worktree(PathBuf),
-    }
-
     #[test]
     fn close_command_has_the_ag_c_alias() {
         use clap::Parser;
@@ -1380,20 +1114,49 @@ mod tests {
             "feature/worktree",
             "--child",
             "--force",
-            "--skip-hooks",
+            "--keep-worktree",
         ])
         .expect("the close command should parse");
 
         let close_args = match parsed.command {
-            crate::cli::Commands::Agent(super::super::AgentCommands::Close(args)) => {
-                Some((args.target, args.child, args.force, args.skip_hooks))
-            }
+            crate::cli::Commands::Agent(super::super::AgentCommands::Close(args)) => Some((
+                args.target,
+                args.child,
+                args.force,
+                args.skip_hooks,
+                args.keep_worktree,
+            )),
             _ => None,
         };
 
         assert_eq!(
             close_args,
-            Some((Some("feature/worktree".to_string()), true, true, true))
+            Some((
+                Some("feature/worktree".to_string()),
+                true,
+                true,
+                false,
+                true
+            ))
+        );
+    }
+
+    #[test]
+    fn keep_worktree_conflicts_with_skip_hooks() {
+        use clap::Parser;
+
+        let parsed = crate::cli::Cli::try_parse_from([
+            "a",
+            "ag",
+            "c",
+            "session-1",
+            "--keep-worktree",
+            "--skip-hooks",
+        ]);
+
+        assert_eq!(
+            parsed.err().map(|error| error.kind()),
+            Some(clap::error::ErrorKind::ArgumentConflict)
         );
     }
 
