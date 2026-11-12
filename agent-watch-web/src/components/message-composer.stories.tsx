@@ -61,7 +61,7 @@ export const ComposerWithSkillSuggestions: Story = {
   name: 'The composer filters skills after the slash trigger',
   args: {
     draft: '/deb',
-    engine: 'Claude',
+    engine: 'claude',
     skills: [
       { name: 'design-flow', description: 'Help shape a design.' },
       { name: 'debug-flow', description: 'Investigate and fix errors.' },
