@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.641](https://github.com/fohte/armyknife/compare/v0.1.640...v0.1.641) (2026-11-12)
+
+
+### Features
+
+* **agent:** show user todos in watch-web ([#1651](https://github.com/fohte/armyknife/issues/1651)) ([c0cfc18](https://github.com/fohte/armyknife/commit/c0cfc18a4b087c2164524254d49178d7a1694b4d))
+
 ## [0.1.640](https://github.com/fohte/armyknife/compare/v0.1.639...v0.1.640) (2026-11-12)
 
 
