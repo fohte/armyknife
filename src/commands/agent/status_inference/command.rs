@@ -336,7 +336,7 @@ pub(crate) fn record_codex_failure_status_if_unchanged(
         agent_config,
         cause,
         |delegator_id, message| {
-            super::super::peer::notify::notify(delegator_id, message, None, None).map(|_| ())
+            super::super::peer::notify::notify_with_retry(delegator_id, message)
         },
     )
 }
