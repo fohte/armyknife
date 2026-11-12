@@ -38,6 +38,7 @@ const appTestFiles = [
   'src/components/markdown-message.browser.test.tsx',
   'src/components/session-link.browser.test.tsx',
   'src/components/peer-message.browser.test.tsx',
+  'src/components/mobile-input-zoom.browser.test.tsx',
   'src/design-tokens.browser.test.tsx',
   'src/components/session-row.test.tsx',
   'src/components/session-task-links.test.tsx',
