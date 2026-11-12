@@ -9,6 +9,7 @@ import { ConversationMessageRow } from '#components/conversation-message-row'
 import { ConversationPane } from '#components/conversation-pane'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { InboxConversationPanes } from '#components/inbox-conversation-panes'
+import { formatMessageTime } from '#components/message-time'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import type {
@@ -2423,11 +2424,7 @@ it('marks a queued prompt below the delivered conversation', () => {
 
 it('shows a local time on system event rows', () => {
   const timestamp = '2026-06-01T12:00:00Z'
-  const localTime = new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).format(new Date(timestamp))
+  const localTime = formatMessageTime(timestamp) ?? 'invalid timestamp'
   renderView(() => Promise.resolve(true), session, undefined, [
     {
       type: 'event',

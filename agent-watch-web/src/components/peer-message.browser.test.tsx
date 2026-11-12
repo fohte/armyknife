@@ -2,6 +2,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
+import { formatMessageTime } from '#components/message-time'
 import { PeerMessage } from '#components/peer-message'
 import type { ChatItem } from '#types'
 
@@ -32,11 +33,8 @@ afterEach(() => {
 it('shows the send time in the peer card header', () => {
   root = createRoot(container)
   const timestamp = '2026-06-01T12:00:00Z'
-  const localTime = new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).format(new Date(timestamp))
+  const now = new Date(2026, 5, 2, 0, 3)
+  const localTime = formatMessageTime(timestamp, now) ?? 'invalid timestamp'
   act(() => {
     root?.render(
       <PeerMessage
@@ -50,6 +48,7 @@ it('shows the send time in the peer card header', () => {
         }}
         onSelectSession={() => undefined}
         sessions={[]}
+        now={now}
       />,
     )
   })

@@ -94,3 +94,17 @@ export const NonImageAttachmentNameAppears: Story = {
     },
   },
 }
+
+export const PreviousDayUserMessageShowsItsDate: Story = {
+  name: 'A user message shows its date when it was sent the previous day',
+  args: {
+    message: {
+      type: 'user',
+      text: 'Please review the fictional changes.',
+      timestamp: new Date(2030, 8, 11, 18, 58).toISOString(),
+    },
+  },
+  render: (args) => (
+    <UserWithContent {...args} now={new Date(2030, 8, 12, 12)} />
+  ),
+}
