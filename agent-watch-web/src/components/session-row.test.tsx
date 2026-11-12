@@ -1,6 +1,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { userEvent } from 'vitest/browser'
 
 import { SessionRow } from '#components/session-row'
 import type { Session } from '#types'
@@ -26,7 +27,11 @@ const session: Session = {
   pullRequest: null,
 }
 
-function renderRow(viewSession: Session, isMobile = false) {
+function renderRow(
+  viewSession: Session,
+  isMobile = false,
+  withActions = false,
+) {
   if (root !== null) act(() => root?.unmount())
   root = createRoot(container)
   act(() => {
@@ -36,6 +41,12 @@ function renderRow(viewSession: Session, isMobile = false) {
           session={viewSession}
           selected={false}
           onSelect={() => undefined}
+          {...(withActions
+            ? {
+                onLater: () => undefined,
+                onToggleToday: () => undefined,
+              }
+            : {})}
           compactRepo={isMobile}
           isMobile={isMobile}
         />
@@ -60,6 +71,30 @@ function mobileMetaSnapshot() {
     separator: container.querySelector('.mobile-session-meta-separator')
       ?.textContent,
     repo: container.querySelector('.session-repo')?.textContent,
+  }
+}
+
+function actionVisibilitySnapshot() {
+  const actions = container.querySelector('.session-row-actions')
+  const [starButton, laterButton] = container.querySelectorAll(
+    '.session-row-actions button',
+  )
+
+  return {
+    actionsOpacity: actions === null ? null : getComputedStyle(actions).opacity,
+    star: {
+      icon: starButton?.textContent,
+      pressed: starButton?.getAttribute('aria-pressed'),
+      opacity:
+        starButton === undefined ? null : getComputedStyle(starButton).opacity,
+    },
+    later:
+      laterButton === undefined
+        ? null
+        : {
+            opacity: getComputedStyle(laterButton).opacity,
+            pointerEvents: getComputedStyle(laterButton).pointerEvents,
+          },
   }
 }
 
@@ -166,6 +201,25 @@ it('keeps the task, separator, and repository together on an iPhone row', () => 
     task: 'P1 #2048 Improve request reliability',
     separator: '·',
     repo: 'service',
+  })
+})
+
+it('shows only the star on a starred desktop row at rest', async () => {
+  renderRow({ ...session, isToday: true }, false, true)
+  const pointerTarget = document.createElement('div')
+  pointerTarget.style.position = 'fixed'
+  pointerTarget.style.inset = '0'
+  pointerTarget.style.opacity = '0'
+  document.body.append(pointerTarget)
+  await userEvent.hover(pointerTarget)
+
+  const actual = actionVisibilitySnapshot()
+  pointerTarget.remove()
+
+  expect(actual).toEqual({
+    actionsOpacity: '1',
+    star: { icon: '★', pressed: 'true', opacity: '1' },
+    later: { opacity: '0', pointerEvents: 'none' },
   })
 })
 

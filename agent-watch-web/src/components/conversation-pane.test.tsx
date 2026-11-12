@@ -640,6 +640,33 @@ it('toggles Starred from the iPhone conversation header', () => {
   })
 })
 
+it('labels a Starred iPhone session for removal', () => {
+  const onToggleToday = vi.fn()
+  renderView(
+    () => Promise.resolve(true),
+    session,
+    undefined,
+    [],
+    actions,
+    true,
+    [],
+    [],
+    false,
+    undefined,
+    null,
+    false,
+    undefined,
+    { isToday: true, onToggleToday },
+  )
+
+  expect(starredToggleSnapshot(onToggleToday)).toEqual({
+    label: 'Remove from Starred',
+    pressed: 'true',
+    title: 'Remove from Starred',
+    calls: [],
+  })
+})
+
 it('sets the primary linked task from desktop and mobile headers', async () => {
   const primaryTask = {
     id: 'sample-primary-task',
@@ -2390,6 +2417,27 @@ it('shows a local time on system event rows', () => {
     dateTime: timestamp,
     kind: 'system',
     failed: 'true',
+  })
+})
+
+it('renders compact boundaries as a distinct conversation event', () => {
+  renderView(() => Promise.resolve(true), session, undefined, [
+    {
+      type: 'event',
+      kind: 'compact_boundary',
+      text: 'Context compacted',
+      failed: false,
+    },
+  ])
+
+  const event = container.querySelector<HTMLElement>('.chat-event')
+  const getActual = () => ({
+    text: event?.querySelector('.chat-event-text')?.textContent ?? null,
+    kind: event?.getAttribute('data-kind') ?? null,
+  })
+  expect(getActual()).toEqual({
+    text: 'Context compacted',
+    kind: 'compact_boundary',
   })
 })
 

@@ -1,12 +1,32 @@
+import '#index.css'
+
 import { act, type ComponentProps } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
 import { AgentWatchNav } from '#components/agent-watch-nav'
+import type { Session } from '#types'
 
 let container: HTMLDivElement
 let root: Root | null = null
+
+const baseTodaySession: Session = {
+  id: 'today-session',
+  category: 'needs_action',
+  isPaused: false,
+  kind: 'Question',
+  title: 'Review the retry policy',
+  preview: null,
+  elapsedSeconds: 0,
+  unread: false,
+  task: null,
+  repo: 'sample/repository',
+  project: 'sample project',
+  parent: null,
+  ancestorSessionIds: [],
+  pullRequest: null,
+}
 
 function renderNav(
   workTypeNavGroups: ComponentProps<typeof AgentWatchNav>['workTypeNavGroups'],
@@ -46,6 +66,7 @@ function renderNav(
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
+  container.className = 'agent-watch-shell'
   document.body.append(container)
 })
 
@@ -109,6 +130,69 @@ it('renders no work type sections without configured groups', () => {
       (section) => section.getAttribute('aria-labelledby'),
     ),
   ).toEqual([])
+})
+
+it('shows Starred status labels with their category colors', () => {
+  renderNav([], {
+    todaySessions: [
+      baseTodaySession,
+      {
+        ...baseTodaySession,
+        id: 'working-session',
+        category: 'in_progress',
+        kind: null,
+      },
+      { ...baseTodaySession, id: 'error-session', kind: 'Error' },
+      {
+        ...baseTodaySession,
+        id: 'stopped-session',
+        category: 'in_progress',
+        isPaused: true,
+        kind: 'Stopped',
+      },
+    ],
+  })
+
+  const snapshot = () => ({
+    heading: container.querySelector('#today-nav-title')?.textContent,
+    statuses: Array.from(
+      container.querySelectorAll<HTMLElement>('.today-session-status'),
+      (status) => ({
+        text: status.textContent,
+        className: status.className,
+        color: getComputedStyle(status).color,
+      }),
+    ),
+    oldIndicators: container.querySelectorAll('.today-start, .today-indicator')
+      .length,
+  })
+
+  expect(snapshot()).toEqual({
+    heading: 'Starred',
+    statuses: [
+      {
+        text: 'Question',
+        className: 'today-session-status is-needs-action',
+        color: 'rgb(251, 191, 36)',
+      },
+      {
+        text: 'Working',
+        className: 'today-session-status is-working',
+        color: 'rgb(96, 165, 250)',
+      },
+      {
+        text: 'Error',
+        className: 'today-session-status is-error',
+        color: 'rgb(248, 113, 113)',
+      },
+      {
+        text: 'Stopped',
+        className: 'today-session-status is-working',
+        color: 'rgb(96, 165, 250)',
+      },
+    ],
+    oldIndicators: 0,
+  })
 })
 
 it.each([
