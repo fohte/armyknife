@@ -85,8 +85,13 @@ function actionVisibilitySnapshot() {
       opacity:
         starButton === undefined ? null : getComputedStyle(starButton).opacity,
     },
-    laterOpacity:
-      laterButton === undefined ? null : getComputedStyle(laterButton).opacity,
+    later:
+      laterButton === undefined
+        ? null
+        : {
+            opacity: getComputedStyle(laterButton).opacity,
+            pointerEvents: getComputedStyle(laterButton).pointerEvents,
+          },
   }
 }
 
@@ -195,7 +200,7 @@ it('shows only the star on a starred desktop row at rest', async () => {
   expect(actual).toEqual({
     actionsOpacity: '1',
     star: { icon: '★', pressed: 'true', opacity: '1' },
-    laterOpacity: '0',
+    later: { opacity: '0', pointerEvents: 'none' },
   })
 })
 
