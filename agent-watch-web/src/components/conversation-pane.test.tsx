@@ -3315,6 +3315,72 @@ it('selects Running by default and switches to Decisions from its tab', () => {
   })
 })
 
+it('shows the unreviewed count instead of the total on the Decisions tab', () => {
+  const decisions: ChatItem[] = [
+    {
+      type: 'decision',
+      seq: 1,
+      title: 'Choose a retry limit',
+      why: 'Keep recovery bounded.',
+      considered: ['Retry indefinitely'],
+      easyToChange: 'Update one setting.',
+      review: null,
+      createdAt: '2026-11-11T03:25:59Z',
+    },
+    {
+      type: 'decision',
+      seq: 2,
+      title: 'Keep the current interval',
+      why: 'It already meets the service limit.',
+      considered: ['Use a shorter interval'],
+      easyToChange: 'Update one setting.',
+      review: 'ok',
+      createdAt: '2026-11-11T03:27:59Z',
+    },
+  ]
+  const reviewSession: Session = {
+    ...session,
+    decisionCount: 2,
+    unreviewedDecisionCount: 1,
+  }
+  function StatusPanelHarness() {
+    const statusPanel = useConversationStatusPanel({
+      session: reviewSession,
+      messages: decisions,
+      backgroundTasks: [],
+      onAction: () => Promise.resolve(true),
+      onCloseStatusPanel: () => undefined,
+    })
+    return (
+      <SessionStatusPanel
+        tabs={statusPanel.tabs}
+        activeTabId={statusPanel.activeTabId}
+        onTabChange={statusPanel.onTabChange}
+        onClose={() => undefined}
+      />
+    )
+  }
+  root = createRoot(container)
+  act(() => {
+    root?.render(<StatusPanelHarness />)
+  })
+
+  const snapshot = () => ({
+    tab: container.querySelector('[role="tab"]')?.textContent,
+    decisions: Array.from(
+      container.querySelectorAll('.decision-card--panel'),
+      (card) => card.getAttribute('data-review'),
+    ),
+    progress: container.querySelector('.decisions-panel-header span')
+      ?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    tab: 'Decisions1',
+    decisions: ['unreviewed'],
+    progress: '0 / 1 reviewed',
+  })
+})
+
 it('prefers crit when other status tabs are available', () => {
   const decision: ChatItem = {
     type: 'decision',
@@ -3638,6 +3704,41 @@ it('keeps the TODAY star available when a session has no decisions', () => {
     decisions: container.querySelector('.conversation-decisions-toggle'),
   })
   expect(snapshot()).toEqual({ star: true, decisions: null })
+})
+
+it('removes a session from TODAY from the desktop header', () => {
+  const onToggleToday = vi.fn<(isToday: boolean) => void>()
+  renderView(
+    vi.fn(() => Promise.resolve(true)),
+    session,
+    undefined,
+    [],
+    actions,
+    false,
+    [],
+    [],
+    false,
+    undefined,
+    undefined,
+    { isToday: true, onToggleToday },
+  )
+  const toggle = requireElement(
+    container.querySelector<HTMLButtonElement>('.conversation-today-toggle'),
+  )
+  act(() => {
+    toggle.click()
+  })
+
+  const snapshot = () => ({
+    label: toggle.getAttribute('aria-label'),
+    pressed: toggle.getAttribute('aria-pressed'),
+    calls: onToggleToday.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    label: 'Remove from TODAY',
+    pressed: 'true',
+    calls: [[false]],
+  })
 })
 
 it('opens and closes the existing status panel over the mobile conversation', async () => {
