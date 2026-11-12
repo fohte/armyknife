@@ -6,7 +6,10 @@ import { DecisionsPanel } from '#components/decisions-panel'
 import { RunningTasksPanel } from '#components/running-tasks-panel'
 import type { SessionStatusPanelTab } from '#components/session-status-panel'
 import { SessionTreePanel } from '#components/session-tree-panel'
-import { needsActionDescendantCount } from '#session-tree-model'
+import {
+  needsActionDescendantCount,
+  type SessionTreeViewState,
+} from '#session-tree-model'
 import type { BackgroundTask, ChatItem, Session, SessionTreeNode } from '#types'
 
 type UseConversationStatusPanelOptions = {
@@ -16,6 +19,8 @@ type UseConversationStatusPanelOptions = {
   backgroundTasks: readonly BackgroundTask[]
   sessionTree?: readonly SessionTreeNode[] | null
   sessionTreeError?: string | null
+  sessionTreeViewState?: SessionTreeViewState | null
+  onSessionTreeViewStateChange?: (state: SessionTreeViewState) => void
   onSelectSession?: (id: string) => void
   statusPanelOpen: boolean
   onAction: (
@@ -33,6 +38,8 @@ export function useConversationStatusPanel({
   backgroundTasks,
   sessionTree = null,
   sessionTreeError = null,
+  sessionTreeViewState = null,
+  onSessionTreeViewStateChange,
   onSelectSession = () => undefined,
   statusPanelOpen,
   onAction,
@@ -96,20 +103,33 @@ export function useConversationStatusPanel({
             showCount: treeCount > 0,
             countTone: 'warning' as const,
             content:
-              sessionTreeError !== null ? (
-                <div className="session-tree-feedback" role="alert">
-                  Could not load the session tree: {sessionTreeError}
-                </div>
-              ) : sessionTree === null ? (
-                <div className="session-tree-feedback" role="status">
-                  Loading session tree…
-                </div>
+              sessionTree === null ? (
+                sessionTreeError !== null ? (
+                  <div className="session-tree-feedback" role="alert">
+                    Could not load the session tree: {sessionTreeError}
+                  </div>
+                ) : (
+                  <div className="session-tree-feedback" role="status">
+                    Loading session tree…
+                  </div>
+                )
               ) : (
-                <SessionTreePanel
-                  sessions={sessionTree}
-                  selectedSessionId={session.id}
-                  onSelectSession={onSelectSession}
-                />
+                <>
+                  {sessionTreeError === null ? null : (
+                    <div className="session-tree-feedback" role="alert">
+                      Could not refresh the session tree: {sessionTreeError}
+                    </div>
+                  )}
+                  <SessionTreePanel
+                    sessions={sessionTree}
+                    selectedSessionId={session.id}
+                    onSelectSession={onSelectSession}
+                    viewState={sessionTreeViewState}
+                    {...(onSessionTreeViewStateChange === undefined
+                      ? {}
+                      : { onViewStateChange: onSessionTreeViewStateChange })}
+                  />
+                </>
               ),
           },
         ]),

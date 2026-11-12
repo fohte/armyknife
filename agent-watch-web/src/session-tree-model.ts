@@ -1,11 +1,33 @@
 import type { SessionTreeNode } from '#types'
 
+export type SessionTreeViewState = {
+  expandedSessionIds: readonly string[]
+  focusedSessionId: string
+  treeHasFocus: boolean
+}
+
 export type VisibleSessionTreeRow = {
   session: SessionTreeNode
   depth: number
   hasChildren: boolean
   isExpanded: boolean
   needsActionDescendantCount: number
+}
+
+export function expandSessionAncestors(
+  sessions: readonly SessionTreeNode[],
+  selectedId: string,
+  viewState: SessionTreeViewState,
+): SessionTreeViewState {
+  const byId = new Map(sessions.map((session) => [session.id, session]))
+  const expanded = new Set(viewState.expandedSessionIds)
+  let current = byId.get(selectedId)
+  while (current !== undefined && current.parentId !== null) {
+    expanded.add(current.parentId)
+    current = byId.get(current.parentId)
+  }
+  if (expanded.size === viewState.expandedSessionIds.length) return viewState
+  return { ...viewState, expandedSessionIds: [...expanded] }
 }
 
 function childrenByParent(sessions: readonly SessionTreeNode[]) {
