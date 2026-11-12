@@ -835,6 +835,58 @@ it('reconnects when visible and reloads after being hidden', async () => {
   })
 })
 
+it('waits for visibility before starting the stream when initially hidden', () => {
+  const visibilityTarget = new FakeVisibilityTarget()
+  visibilityTarget.setVisibility('hidden')
+  const sources: FakeEventSource[] = []
+  const reloads: string[] = []
+  const fetcher = vi.fn()
+  const stop = startSessionFeed(
+    () => {},
+    () => {},
+    {
+      fetcher,
+      createEventSource: () => {
+        const source = new FakeEventSource()
+        sources.push(source)
+        return source
+      },
+      reloadPage: () => {
+        reloads.push('reloaded')
+      },
+      visibilityTarget,
+    },
+  )
+
+  const beforeVisible = {
+    connections: sources.length,
+    requests: fetcher.mock.calls.length,
+    reloads: [...reloads],
+  }
+  visibilityTarget.setVisibility('visible')
+  sources[0]?.emit('open')
+  stop()
+
+  const snapshot = () => ({
+    beforeVisible,
+    afterVisible: {
+      connections: sources.length,
+      closed: sources.map((source) => source.closed),
+      requests: fetcher.mock.calls.length,
+      reloads,
+    },
+  })
+  expect(snapshot()).toEqual({
+    beforeVisible: { connections: 0, requests: 0, reloads: [] },
+    afterVisible: {
+      connections: 1,
+      closed: [true],
+      requests: 0,
+      reloads: ['reloaded'],
+    },
+  })
+})
+
 it('does not run a queued session refresh after a request finishes while hidden', async () => {
   const visibilityTarget = new FakeVisibilityTarget()
   const sources: FakeEventSource[] = []
