@@ -46,18 +46,6 @@ impl IncrementalClaudeParser {
                 }
             }
         })?;
-        if let Some(record) = parse_record(graph_lines.pending())
-            && let Some(uuid) = record.get("uuid").and_then(Value::as_str)
-        {
-            graph_latest_uuid = Some(uuid.to_owned());
-            transcript_nodes.insert(
-                uuid.to_owned(),
-                TranscriptNode {
-                    parent_uuid: record_parent_uuid(&record),
-                    membership: BranchMembership::Unknown,
-                },
-            );
-        }
         mark_active_branch(&mut transcript_nodes, graph_latest_uuid.as_deref());
 
         reader.seek(SeekFrom::Start(0))?;

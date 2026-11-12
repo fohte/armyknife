@@ -83,6 +83,11 @@ const PARALLEL_TOOLS_WITH_SYSTEM_AFTER_RESULT: &str = indoc! {r#"
     "",
     IncrementalAppend::Applied,
 )]
+#[case::initial_pending_line_completes_on_append(
+    r#"{"type":"user","uuid":"message-one","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"A question."}}"#,
+    "\n",
+    IncrementalAppend::Applied,
+)]
 #[case::queue_operation_crosses_append_boundary(
     indoc! {r#"
         {"type":"user","uuid":"message-one","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"A question."}}
@@ -218,9 +223,8 @@ fn appended_transcript_matches_a_full_parse(
     );
 }
 
-#[rstest]
-#[case::valid_partial_json_is_completed_by_a_later_append(())]
-fn pending_json_completed_after_a_second_append_matches_a_full_parse(#[case] _case: ()) {
+#[test]
+fn pending_json_completed_after_a_second_append_matches_a_full_parse() {
     let prefix = indoc! {r#"
         {"type":"user","uuid":"message-one","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"A question."}}
     "#};
