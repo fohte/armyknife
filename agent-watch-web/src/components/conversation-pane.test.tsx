@@ -333,7 +333,6 @@ function renderInboxPanes(
     onToggleInProgress: () => undefined,
     doneExpanded: false,
     onToggleDone: () => undefined,
-    onArchiveDone: () => undefined,
   }
   act(() => {
     root?.render(
@@ -347,7 +346,7 @@ function renderInboxPanes(
         statusPanelOpen
         onBack={() => undefined}
         onLater={() => undefined}
-        onArchiveSession={() => undefined}
+        onCloseSession={() => undefined}
         onSelectSession={() => undefined}
       />,
     )
