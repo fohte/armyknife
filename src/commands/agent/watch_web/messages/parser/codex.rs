@@ -7,6 +7,7 @@ use super::super::ChatItem;
 use super::super::ParentSession;
 use super::super::SkillSuggestion;
 use super::super::parser::classifier;
+use super::super::parser::jsonl::JsonlLineBuffer;
 use super::super::parser::todos::TodoTimeline;
 use super::super::parser::{
     CodexToolSummaryRecord, ToolSummary, append_text, codex_edited_file_paths,
@@ -21,28 +22,24 @@ fn parse(reader: impl BufRead, parent: Option<&ParentSession>) -> std::io::Resul
     parse_with_skills(reader, parent, &[], &[]).map(|(messages, _)| messages)
 }
 
-pub(in crate::commands::agent::watch_web::messages) fn parse_with_skills(
+#[cfg(test)]
+fn parse_with_skills(
     reader: impl BufRead,
     parent: Option<&ParentSession>,
     decisions: &[AgentDecision],
     todos: &[AgentTodo],
 ) -> std::io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
-    let mut parser = CodexParserState::new(parent);
+    let mut parser = CodexParserState::new();
     parser.append(reader)?;
-    if todos.is_empty() {
-        parser.render_with_decisions(decisions)
-    } else {
-        parser.render_with_decisions_and_todos(decisions, todos)
-    }
+    parser.render_with_decisions_and_todos(parent, decisions, todos)
 }
 
 #[derive(Clone, Default)]
 pub(in crate::commands::agent::watch_web::messages) struct CodexParserState {
-    parent: Option<ParentSession>,
     events: Vec<TimedCodexEvent>,
     pending_tool_calls: Vec<PendingTool>,
     skills: Vec<SkillSuggestion>,
-    partial_line: Vec<u8>,
+    lines: JsonlLineBuffer,
 }
 
 #[derive(Clone)]
@@ -101,56 +98,65 @@ impl CodexText {
 }
 
 impl CodexParserState {
-    pub(in crate::commands::agent::watch_web::messages) fn new(
-        parent: Option<&ParentSession>,
-    ) -> Self {
-        Self {
-            parent: parent.cloned(),
-            ..Self::default()
-        }
+    pub(in crate::commands::agent::watch_web::messages) fn new() -> Self {
+        Self::default()
     }
 
     pub(in crate::commands::agent::watch_web::messages) fn append(
         &mut self,
         mut reader: impl BufRead,
     ) -> io::Result<()> {
-        let mut line = Vec::new();
-        loop {
-            line.clear();
-            if reader.read_until(b'\n', &mut line)? == 0 {
-                break;
+        let mut lines = std::mem::take(&mut self.lines);
+        let mut parser_error = None;
+        let read_result = lines.read_from(&mut reader, |line| {
+            if parser_error.is_none()
+                && let Err(error) = self.process_line(line)
+            {
+                parser_error = Some(error);
             }
-            self.partial_line.extend_from_slice(&line);
-            if line.last() == Some(&b'\n') {
-                self.process_pending_line()?;
-            }
-        }
-        Ok(())
+        });
+        self.lines = lines;
+        read_result?;
+        parser_error.map_or(Ok(()), Err)
     }
 
-    pub(in crate::commands::agent::watch_web::messages) fn render_with_decisions(
+    #[cfg(test)]
+    fn render_with_decisions(
         &self,
+        parent: Option<&ParentSession>,
         decisions: &[AgentDecision],
     ) -> io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
-        self.render_with_decisions_and_todos(decisions, &[])
+        self.render_with_decisions_and_todos(parent, decisions, &[])
     }
 
     pub(in crate::commands::agent::watch_web::messages) fn render_with_decisions_and_todos(
         &self,
+        parent: Option<&ParentSession>,
         decisions: &[AgentDecision],
         todos: &[AgentTodo],
     ) -> io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
-        if self.partial_line.is_empty() {
-            return self.render_events(decisions, todos);
+        if self.lines.pending().is_empty() {
+            return self.render_events(parent, decisions, todos);
         }
         let mut parser = self.clone();
-        parser.process_pending_line()?;
-        parser.render_events(decisions, todos)
+        let mut lines = std::mem::take(&mut parser.lines);
+        let mut parser_error = None;
+        lines.feed(b"\n", |line| {
+            if parser_error.is_none()
+                && let Err(error) = parser.process_line(line)
+            {
+                parser_error = Some(error);
+            }
+        });
+        parser.lines = lines;
+        if let Some(error) = parser_error {
+            return Err(error);
+        }
+        parser.render_events(parent, decisions, todos)
     }
 
-    fn process_pending_line(&mut self) -> io::Result<()> {
-        let line = std::mem::take(&mut self.partial_line);
-        if let Ok(line) = std::str::from_utf8(&line)
+    fn process_line(&mut self, line: &[u8]) -> io::Result<()> {
+        if let Ok(line) = std::str::from_utf8(line)
             && let Ok(record) = serde_json::from_str(line)
         {
             self.process_record(record)?;
@@ -309,6 +315,7 @@ impl CodexParserState {
 
     fn render_events(
         &self,
+        parent: Option<&ParentSession>,
         decisions: &[AgentDecision],
         todos: &[AgentTodo],
     ) -> io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
@@ -332,13 +339,7 @@ impl CodexParserState {
                     }
                     CodexEffect::UserMessage { text, timestamp } => {
                         tools.flush_into(&mut items);
-                        append_text(
-                            &mut items,
-                            text.decode()?,
-                            true,
-                            self.parent.as_ref(),
-                            *timestamp,
-                        );
+                        append_text(&mut items, text.decode()?, true, parent, *timestamp);
                     }
                     CodexEffect::ArmyknifeEvent { text, timestamp } => {
                         tools.flush_into(&mut items);
@@ -516,12 +517,12 @@ mod tests {
         let prefix = prefix.trim_end_matches('\n');
         let suffix = suffix.trim_end_matches('\n');
         let full_transcript = full_transcript.trim_end_matches('\n');
-        let mut parser = CodexParserState::new(None);
+        let mut parser = CodexParserState::new();
         parser.append(Cursor::new(prefix)).unwrap();
         parser.append(Cursor::new(suffix)).unwrap();
 
         assert_eq!(
-            parser.render_with_decisions(&[]).unwrap(),
+            parser.render_with_decisions(None, &[]).unwrap(),
             parse_with_skills(Cursor::new(full_transcript), None, &[], &[]).unwrap(),
         );
     }
@@ -539,10 +540,10 @@ mod tests {
             },
         });
         let transcript = format!("{record}\n");
-        let mut parser = CodexParserState::new(None);
+        let mut parser = CodexParserState::new();
         parser.append(Cursor::new(transcript.as_bytes())).unwrap();
 
-        let output = parser.render_with_decisions(&[]).unwrap();
+        let output = parser.render_with_decisions(None, &[]).unwrap();
         assert_eq!(output, (vec![ChatItem::Assistant { text }], Vec::new()));
     }
 
@@ -550,7 +551,6 @@ mod tests {
     fn codex_parser_state_renders_updated_decisions_without_new_transcript_bytes() {
         let transcript = indoc! {r#"
             {"type":"response_item","timestamp":"2026-11-12T10:00:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Before the decision."}]}}
-            {"type":"response_item","timestamp":"2026-11-12T10:00:02Z","payload":{"type":"custom_tool_call","name":"exec","input":{"command":"echo fixture"}}}
             {"type":"response_item","timestamp":"2026-11-12T10:00:04Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"After the decision."}]}}
         "#};
         let decision = crate::commands::agent::store::AgentDecision {
@@ -564,14 +564,49 @@ mod tests {
             review: None,
             reviewed_at: None,
         };
-        let mut parser = CodexParserState::new(None);
+        let mut parser = CodexParserState::new();
         parser.append(Cursor::new(transcript)).unwrap();
 
         assert_eq!(
-            parser
-                .render_with_decisions(std::slice::from_ref(&decision))
-                .unwrap(),
-            parse_with_skills(Cursor::new(transcript), None, &[decision], &[]).unwrap(),
+            (
+                parser.render_with_decisions(None, &[]).unwrap(),
+                parser
+                    .render_with_decisions(None, std::slice::from_ref(&decision))
+                    .unwrap(),
+            ),
+            (
+                (
+                    vec![
+                        ChatItem::Assistant {
+                            text: "Before the decision.".to_string(),
+                        },
+                        ChatItem::Assistant {
+                            text: "After the decision.".to_string(),
+                        },
+                    ],
+                    Vec::new(),
+                ),
+                (
+                    vec![
+                        ChatItem::Assistant {
+                            text: "Before the decision.".to_string(),
+                        },
+                        ChatItem::Decision {
+                            seq: 1,
+                            title: "Choose the fixture path".to_string(),
+                            why: "The fixture remains isolated.".to_string(),
+                            considered: Vec::new(),
+                            easy_to_change: "Change the fixture value.".to_string(),
+                            review: None,
+                            created_at: "2026-11-12T10:00:03Z".to_string(),
+                        },
+                        ChatItem::Assistant {
+                            text: "After the decision.".to_string(),
+                        },
+                    ],
+                    Vec::new(),
+                ),
+            ),
         );
     }
 
@@ -582,12 +617,107 @@ mod tests {
             {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"After the todo."}}}
         "#};
         let todos = [todo];
-        let mut parser = CodexParserState::new(None);
+        let mut parser = CodexParserState::new();
         parser.append(Cursor::new(transcript)).unwrap();
 
         assert_eq!(
-            parser.render_with_decisions_and_todos(&[], &todos).unwrap(),
-            parse_with_skills(Cursor::new(transcript), None, &[], &todos).unwrap(),
+            (
+                parser
+                    .render_with_decisions_and_todos(None, &[], &[])
+                    .unwrap(),
+                parser
+                    .render_with_decisions_and_todos(None, &[], &todos)
+                    .unwrap(),
+            ),
+            (
+                (
+                    vec![
+                        ChatItem::Assistant {
+                            text: "Before the todo.".to_string(),
+                        },
+                        ChatItem::User {
+                            text: "After the todo.".to_string(),
+                            timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
+                            from: None,
+                        },
+                    ],
+                    Vec::new(),
+                ),
+                (
+                    vec![
+                        ChatItem::Assistant {
+                            text: "Before the todo.".to_string(),
+                        },
+                        ChatItem::Todo {
+                            seq: 1,
+                            title: "Review the fictional report".to_string(),
+                            detail: None,
+                            completed: true,
+                            comment: Some("The sample is ready.".to_string()),
+                        },
+                        ChatItem::User {
+                            text: "After the todo.".to_string(),
+                            timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
+                            from: None,
+                        },
+                    ],
+                    Vec::new(),
+                ),
+            ),
+        );
+    }
+
+    #[test]
+    fn codex_parser_uses_the_current_parent_title_when_rendering() {
+        let transcript = indoc! {r#"
+            {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":[{"type":"Text","text":"<peer-message>\n- From session_id: fixture-parent-id\n\nPlease keep the summary brief.\n</peer-message>"}]}}}
+        "#};
+        let first_parent = ParentSession {
+            session_id: "fixture-parent-id".to_string(),
+            title: "First parent title".to_string(),
+        };
+        let updated_parent = ParentSession {
+            session_id: "fixture-parent-id".to_string(),
+            title: "Updated parent title".to_string(),
+        };
+        let mut parser = CodexParserState::new();
+        parser.append(Cursor::new(transcript)).unwrap();
+
+        assert_eq!(
+            (
+                parser
+                    .render_with_decisions(Some(&first_parent), &[])
+                    .unwrap(),
+                parser
+                    .render_with_decisions(Some(&updated_parent), &[])
+                    .unwrap(),
+            ),
+            (
+                (
+                    vec![ChatItem::Peer {
+                        direction: PeerDirection::From,
+                        session_id: "fixture-parent-id".to_string(),
+                        session_title: Some("First parent title".to_string()),
+                        content: vec![UserContentPart::Text {
+                            text: "Please keep the summary brief.".to_string(),
+                        }],
+                        timestamp: None,
+                    }],
+                    Vec::new(),
+                ),
+                (
+                    vec![ChatItem::Peer {
+                        direction: PeerDirection::From,
+                        session_id: "fixture-parent-id".to_string(),
+                        session_title: Some("Updated parent title".to_string()),
+                        content: vec![UserContentPart::Text {
+                            text: "Please keep the summary brief.".to_string(),
+                        }],
+                        timestamp: None,
+                    }],
+                    Vec::new(),
+                ),
+            ),
         );
     }
 

@@ -2,6 +2,7 @@ pub(super) mod classifier;
 pub(super) mod claude;
 pub(super) mod codex;
 pub(super) mod decision_position;
+pub(super) mod jsonl;
 pub(super) mod queue;
 pub(super) mod skill_suggestions;
 mod time_placed;
@@ -419,26 +420,6 @@ fn append_classification(
         | classifier::MessageKind::SubagentReport { .. }
         | classifier::MessageKind::Hidden => {}
     }
-}
-
-pub(in crate::commands::agent::watch_web::messages::parser) fn append_record_with_user_marker_and_image_directory(
-    items: &mut Vec<ChatItem>,
-    record: &serde_json::Value,
-    text: String,
-    marker: Option<&str>,
-    images: Vec<UserContentPart>,
-    image_directory: Option<&Path>,
-    parent: Option<&ParentSession>,
-) {
-    let classification = classifier::classify_inbound(record, &text, marker);
-    append_classification(
-        items,
-        classification,
-        images,
-        image_directory,
-        parent,
-        record_timestamp(record),
-    );
 }
 
 pub(in crate::commands::agent::watch_web::messages::parser) fn append_classification_with_image_directory(

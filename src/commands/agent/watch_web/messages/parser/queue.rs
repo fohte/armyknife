@@ -630,11 +630,11 @@ mod tests {
     ) -> Vec<ChatItem> {
         super::super::claude::parse_with_queued_prompts_and_peer_out_messages_and_proposals(
             Cursor::new(transcript),
-            parent,
-            None,
-            marker,
             Utc::now(),
             ParserAdditions {
+                parent,
+                pending_tool: None,
+                user_marker: marker,
                 decisions: &[],
                 queued_prompts: &[],
                 peer_out_messages: &[],
@@ -653,11 +653,11 @@ mod tests {
     ) -> (Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>) {
         super::super::claude::parse_with_queued_prompts_and_peer_out_messages_and_proposals(
             Cursor::new(transcript),
-            None,
-            None,
-            marker,
             Utc::now(),
             ParserAdditions {
+                parent: None,
+                pending_tool: None,
+                user_marker: marker,
                 decisions: &[],
                 queued_prompts: prompts,
                 peer_out_messages: &[],

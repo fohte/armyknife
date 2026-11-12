@@ -314,7 +314,7 @@ fn load_conversation_with_queued_prompts(
             todos: todos.clone(),
         },
     )?;
-    if let Some(mut cached) = loaders.message_cache.get(session_id, &cache_key) {
+    if let Some(mut cached) = loaders.message_cache.get(session_id, &cache_key)? {
         let elapsed = cached.cached_at.elapsed().as_secs();
         for task in &mut cached.conversation.background_tasks {
             task.elapsed_seconds = task.elapsed_seconds.saturating_add(elapsed);
@@ -339,10 +339,10 @@ fn load_conversation_with_queued_prompts(
     let transcript_input = TranscriptInput {
         path: session.transcript_path.as_deref(),
         engine: session.engine,
-        parent: parent.as_ref(),
-        pending_tool: pending_tool.as_deref(),
-        watch_web_user_marker: user_marker.as_deref(),
         additions: parser::claude::ParserAdditions {
+            parent: parent.as_ref(),
+            pending_tool: pending_tool.as_deref(),
+            user_marker: user_marker.as_deref(),
             decisions: &decisions,
             queued_prompts: &queued_prompts,
             peer_out_messages: &peer_out_messages,
@@ -464,74 +464,13 @@ fn permission_request_tool_detail(tool_input: &Value) -> Option<&str> {
 pub(in crate::commands::agent::watch_web::messages) struct TranscriptInput<'a> {
     path: Option<&'a Path>,
     engine: Engine,
-    parent: Option<&'a ParentSession>,
-    pending_tool: Option<&'a str>,
-    watch_web_user_marker: Option<&'a str>,
     additions: parser::claude::ParserAdditions<'a>,
 }
 
 pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript(
-    TranscriptInput {
-        path,
-        engine,
-        parent,
-        pending_tool,
-        watch_web_user_marker,
-        additions,
-    }: TranscriptInput<'_>,
+    input: TranscriptInput<'_>,
 ) -> Result<(ConversationResponse, Vec<i64>)> {
-    match engine {
-        Engine::Claude => {
-            let reader = match path {
-                Some(path) => open_seekable_transcript(path)?,
-                None => None,
-            };
-            let reader = reader.unwrap_or_else(|| Box::new(Cursor::new(Vec::new())));
-            let (mut messages, background_tasks, resolved_ids, skills) =
-                parser::claude::parse_with_queued_prompts_and_peer_out_messages_and_proposals_and_skills(
-                    reader,
-                    parent,
-                    pending_tool,
-                    watch_web_user_marker,
-                    chrono::Utc::now(),
-                    additions,
-                )?;
-            if let Some(path) = path {
-                subagent_reports::add_descriptions(path, &mut messages);
-            }
-            Ok((
-                ConversationResponse {
-                    messages,
-                    background_tasks,
-                    skills,
-                    ..ConversationResponse::default()
-                },
-                resolved_ids,
-            ))
-        }
-        Engine::Codex => {
-            let reader = path
-                .map(|path| open_transcript(path, true))
-                .transpose()?
-                .flatten()
-                .unwrap_or_else(|| Box::new(Cursor::new(Vec::new())));
-            let (messages, skills) = parser::codex::parse_with_skills(
-                reader,
-                parent,
-                additions.decisions,
-                additions.todos,
-            )?;
-            Ok((
-                ConversationResponse {
-                    messages,
-                    background_tasks: Vec::new(),
-                    skills,
-                    ..ConversationResponse::default()
-                },
-                Vec::new(),
-            ))
-        }
-    }
+    incremental::parse_session_transcript(input)
 }
 
 trait SeekableBufRead: BufRead + Seek {}
@@ -803,6 +742,7 @@ mod tests {
     use serde_json::json;
     use tower::ServiceExt;
 
+    use super::cache::TranscriptChange;
     use super::{
         ChatItem, QuestionChoice, QuestionPrompt, RouteLoaders,
         load_conversation_with_queued_prompts, load_messages_with,
@@ -981,13 +921,18 @@ mod tests {
             Engine::Claude
         };
         session.transcript_path = Some(transcript_path.clone());
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
-            move |id| Ok((id == "fixture-session").then(|| session.clone())),
-            |_| Ok(None),
+        let loaders = RouteLoaders::new(
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        );
+        let message_cache = loaders.message_cache.clone();
+        let router = routes_with_proposals_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            loaders,
         );
 
         let first = message_response(&router).await;
@@ -1028,7 +973,104 @@ mod tests {
             }),
         );
 
-        assert_eq!((first, appended), (expected_first, expected_appended));
+        let slot = message_cache.transcript_parser_slot("fixture-session");
+        let last_change = slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|entry| entry.last_change);
+
+        assert_eq!(
+            (first, appended, last_change),
+            (
+                expected_first,
+                expected_appended,
+                Some(TranscriptChange::Appended),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn messages_route_renders_new_decisions_without_reparsing_the_transcript() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("fixture.jsonl");
+        std::fs::write(
+            &transcript_path,
+            indoc::indoc! {r#"
+                {"type":"assistant","timestamp":"2026-11-10T00:00:00Z","message":{"content":[{"type":"text","text":"Fixture response."}]}}
+            "#},
+        )
+        .unwrap();
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path);
+        let decision_enabled = Arc::new(AtomicBool::new(false));
+        let decision_loader_enabled = Arc::clone(&decision_enabled);
+        let loaders = RouteLoaders::new(
+            move |_| {
+                Ok(if decision_loader_enabled.load(Ordering::Relaxed) {
+                    vec![fixture_decision(1)]
+                } else {
+                    Vec::new()
+                })
+            },
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        );
+        let message_cache = loaders.message_cache.clone();
+        let router = routes_with_proposals_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            loaders,
+        );
+
+        let initial = message_response(&router).await;
+        decision_enabled.store(true, Ordering::Relaxed);
+        let updated = message_response(&router).await;
+        let decision = fixture_decision_json(1);
+        let slot = message_cache.transcript_parser_slot("fixture-session");
+        let last_change = slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|entry| entry.last_change);
+
+        assert_eq!(
+            (initial, updated, last_change),
+            (
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({
+                        "messages": [{"type": "assistant", "text": "Fixture response."}],
+                        "backgroundTasks": [],
+                        "start": 0,
+                        "total": 1,
+                        "decisions": [],
+                        "hasUnansweredProposal": false,
+                        "activeQuestionIndex": null,
+                    }),
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({
+                        "messages": [
+                            {"type": "assistant", "text": "Fixture response."},
+                            decision.clone(),
+                        ],
+                        "backgroundTasks": [],
+                        "start": 0,
+                        "total": 2,
+                        "decisions": [decision],
+                        "hasUnansweredProposal": false,
+                        "activeQuestionIndex": null,
+                    }),
+                ),
+                Some(TranscriptChange::Unchanged),
+            ),
+        );
     }
 
     #[rstest]

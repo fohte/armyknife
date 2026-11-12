@@ -1,45 +1,29 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{BufRead, Seek};
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
-use serde_json::Value;
 
 mod background_tasks;
+mod events;
 mod incremental;
 mod proposals;
 mod questions;
+mod render;
+mod state;
 mod transcript_branch;
 mod user_input;
 
 pub(in crate::commands::agent::watch_web::messages) use incremental::{
-    IncrementalAppend, IncrementalClaudeParser, IncrementalClaudeSnapshot,
+    IncrementalAppend, IncrementalClaudeParser,
 };
 
 use super::super::BackgroundTask;
 use super::super::ChatItem;
 use super::super::ParentSession;
 use super::super::SkillSuggestion;
-use super::super::parser::todos::TodoTimeline;
-use super::super::parser::{
-    ToolSummary, append_classification_with_image_directory,
-    append_record_with_user_marker_and_image_directory, append_text_with_image_directory,
-    classifier::{self, MessageKind},
-    record_timestamp, tool_target,
-};
 use super::super::proposals::ProposalItem;
-use super::decision_position::{DecisionTimeline, insert_time_placed_decisions};
 use crate::commands::agent::store::{
     AgentDecision, AgentTodo, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
-};
-use background_tasks::{BackgroundTaskTracker, task_notification_envelope, task_notification_text};
-use proposals::ProposalTimeline;
-use questions::{
-    append_questions, apply_question_answers, parse_question_answers, tool_use_result_answers,
-};
-use transcript_branch::{BranchMembership, TranscriptNode, is_inactive_branch};
-use user_input::{
-    content_blocks, is_tool_result_only_user_record, slash_command_text, user_content,
 };
 
 pub(in crate::commands::agent::watch_web::messages) type ParsedTranscript = (
@@ -48,6 +32,20 @@ pub(in crate::commands::agent::watch_web::messages) type ParsedTranscript = (
     Vec<i64>,
     Vec<SkillSuggestion>,
 );
+
+#[derive(Clone, Copy)]
+pub(in crate::commands::agent::watch_web::messages) struct ParserAdditions<'a> {
+    pub(in crate::commands::agent::watch_web::messages) parent: Option<&'a ParentSession>,
+    pub(in crate::commands::agent::watch_web::messages) pending_tool: Option<&'a str>,
+    pub(in crate::commands::agent::watch_web::messages) user_marker: Option<&'a str>,
+    pub(in crate::commands::agent::watch_web::messages) decisions: &'a [AgentDecision],
+    pub(in crate::commands::agent::watch_web::messages) queued_prompts:
+        &'a [WatchWebQueuedPrompt],
+    pub(in crate::commands::agent::watch_web::messages) peer_out_messages:
+        &'a [WatchWebPeerOutMessage],
+    pub(in crate::commands::agent::watch_web::messages) proposals: &'a [ProposalItem],
+    pub(in crate::commands::agent::watch_web::messages) todos: &'a [AgentTodo],
+}
 
 #[cfg(test)]
 fn parse(
@@ -76,12 +74,12 @@ fn parse_with_image_directory(
 ) -> std::io::Result<Vec<ChatItem>> {
     parse_with_background_tasks_and_image_directory(
         reader,
-        parent,
-        pending_tool,
-        user_marker,
+        image_directory,
         Utc::now(),
-        ParseContext {
-            image_directory,
+        ParserAdditions {
+            parent,
+            pending_tool,
+            user_marker,
             queued_prompts: &[],
             peer_out_messages: &[],
             decisions: &[],
@@ -104,11 +102,11 @@ fn parse_with_decisions_and_queued_prompts(
 ) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>)> {
     parse_with_queued_prompts_and_peer_out_messages_and_proposals(
         reader,
-        parent,
-        pending_tool,
-        user_marker,
         now,
         ParserAdditions {
+            parent,
+            pending_tool,
+            user_marker,
             decisions,
             queued_prompts,
             peer_out_messages: &[],
@@ -129,11 +127,11 @@ fn parse_with_background_tasks_and_peer_out_messages(
 ) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>)> {
     parse_with_queued_prompts_and_peer_out_messages_and_proposals(
         reader,
-        parent,
-        pending_tool,
-        user_marker,
         now,
         ParserAdditions {
+            parent,
+            pending_tool,
+            user_marker,
             decisions: &[],
             queued_prompts: &[],
             peer_out_messages,
@@ -156,11 +154,11 @@ fn parse_with_queued_prompts_and_proposals(
 ) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>)> {
     parse_with_queued_prompts_and_peer_out_messages_and_proposals(
         reader,
-        parent,
-        pending_tool,
-        user_marker,
         now,
         ParserAdditions {
+            parent,
+            pending_tool,
+            user_marker,
             decisions: &[],
             queued_prompts,
             peer_out_messages: &[],
@@ -172,558 +170,35 @@ fn parse_with_queued_prompts_and_proposals(
 
 pub(in crate::commands::agent::watch_web::messages) fn parse_with_queued_prompts_and_peer_out_messages_and_proposals(
     reader: impl BufRead + Seek,
-    parent: Option<&ParentSession>,
-    pending_tool: Option<&str>,
-    user_marker: Option<&str>,
     now: DateTime<Utc>,
     additions: ParserAdditions<'_>,
 ) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>)> {
-    parse_with_queued_prompts_and_peer_out_messages_and_proposals_and_skills(
-        reader,
-        parent,
-        pending_tool,
-        user_marker,
-        now,
-        additions,
-    )
-    .map(|(messages, tasks, resolved_ids, _)| (messages, tasks, resolved_ids))
+    parse_with_queued_prompts_and_peer_out_messages_and_proposals_and_skills(reader, now, additions)
+        .map(|(messages, tasks, resolved_ids, _)| (messages, tasks, resolved_ids))
 }
 
 pub(in crate::commands::agent::watch_web::messages) fn parse_with_queued_prompts_and_peer_out_messages_and_proposals_and_skills(
     reader: impl BufRead + Seek,
-    parent: Option<&ParentSession>,
-    pending_tool: Option<&str>,
-    user_marker: Option<&str>,
     now: DateTime<Utc>,
     additions: ParserAdditions<'_>,
 ) -> std::io::Result<ParsedTranscript> {
     let image_directory = super::super::super::image_attachments::storage_directory().ok();
     parse_with_background_tasks_and_image_directory(
         reader,
-        parent,
-        pending_tool,
-        user_marker,
+        image_directory.as_deref(),
         now,
-        ParseContext {
-            image_directory: image_directory.as_deref(),
-            queued_prompts: additions.queued_prompts,
-            peer_out_messages: additions.peer_out_messages,
-            decisions: additions.decisions,
-            proposals: additions.proposals,
-            todos: additions.todos,
-        },
+        additions,
     )
-}
-
-#[derive(Clone, Copy)]
-pub(in crate::commands::agent::watch_web::messages) struct ParserAdditions<'a> {
-    pub(in crate::commands::agent::watch_web::messages) decisions: &'a [AgentDecision],
-    pub(in crate::commands::agent::watch_web::messages) queued_prompts:
-        &'a [WatchWebQueuedPrompt],
-    pub(in crate::commands::agent::watch_web::messages) peer_out_messages:
-        &'a [WatchWebPeerOutMessage],
-    pub(in crate::commands::agent::watch_web::messages) proposals: &'a [ProposalItem],
-    pub(in crate::commands::agent::watch_web::messages) todos: &'a [AgentTodo],
-}
-
-struct ParseContext<'a> {
-    image_directory: Option<&'a Path>,
-    queued_prompts: &'a [WatchWebQueuedPrompt],
-    peer_out_messages: &'a [WatchWebPeerOutMessage],
-    decisions: &'a [AgentDecision],
-    proposals: &'a [ProposalItem],
-    todos: &'a [AgentTodo],
 }
 
 fn parse_with_background_tasks_and_image_directory(
     reader: impl BufRead + Seek,
-    parent: Option<&ParentSession>,
-    pending_tool: Option<&str>,
-    user_marker: Option<&str>,
+    image_directory: Option<&Path>,
     now: DateTime<Utc>,
-    context: ParseContext<'_>,
+    additions: ParserAdditions<'_>,
 ) -> std::io::Result<ParsedTranscript> {
-    let parser = IncrementalClaudeParser::from_reader(
-        reader,
-        parent,
-        pending_tool,
-        user_marker,
-        now,
-        context,
-    )?;
-    match parser.snapshot(now)? {
-        IncrementalClaudeSnapshot::Parsed(parsed) => Ok(parsed),
-        IncrementalClaudeSnapshot::RestartRequired => Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Claude transcript tail forks from the cached active branch",
-        )),
-    }
-}
-
-#[derive(Clone, PartialEq, Eq)]
-struct TranscriptParserContext {
-    parent: Option<ParentSession>,
-    pending_tool: Option<String>,
-    user_marker: Option<String>,
-    image_directory: Option<std::path::PathBuf>,
-    decisions: Vec<AgentDecision>,
-    queued_prompts: Vec<WatchWebQueuedPrompt>,
-    peer_out_messages: Vec<WatchWebPeerOutMessage>,
-    proposals: Vec<ProposalItem>,
-    todos: Vec<AgentTodo>,
-}
-
-#[derive(Clone)]
-struct ClaudeParserState {
-    transcript_nodes: BTreeMap<String, TranscriptNode>,
-    latest_uuid: Option<String>,
-    items: Vec<ChatItem>,
-    tools: ToolSummary,
-    tool_uses: Vec<ToolUse>,
-    question_uses: HashMap<String, Vec<usize>>,
-    matched_peer_out_message_ids: HashSet<i64>,
-    background_tasks: BackgroundTaskTracker,
-    decision_timeline: DecisionTimeline,
-    proposal_timeline: ProposalTimeline,
-    todo_timeline: TodoTimeline,
-    queue: super::queue::Queue,
-    skills: Vec<SkillSuggestion>,
-}
-
-impl ClaudeParserState {
-    fn new(context: &ParseContext<'_>) -> Self {
-        Self {
-            transcript_nodes: BTreeMap::new(),
-            latest_uuid: None,
-            items: Vec::new(),
-            tools: ToolSummary::default(),
-            tool_uses: Vec::new(),
-            question_uses: HashMap::new(),
-            matched_peer_out_message_ids: HashSet::new(),
-            background_tasks: BackgroundTaskTracker::default(),
-            decision_timeline: DecisionTimeline::new(context.decisions),
-            proposal_timeline: ProposalTimeline::new(context.proposals),
-            todo_timeline: TodoTimeline::new(context.todos),
-            queue: super::queue::Queue::new(context.queued_prompts),
-            skills: Vec::new(),
-        }
-    }
-
-    fn process_record(
-        &mut self,
-        record: Value,
-        context: &TranscriptParserContext,
-        now: DateTime<Utc>,
-    ) {
-        let ClaudeParserState {
-            transcript_nodes,
-            items,
-            tools,
-            tool_uses,
-            question_uses,
-            matched_peer_out_message_ids,
-            background_tasks,
-            decision_timeline,
-            proposal_timeline,
-            todo_timeline,
-            queue,
-            skills,
-            ..
-        } = self;
-        let parent = context.parent.as_ref();
-        let user_marker = context.user_marker.as_deref();
-        let image_directory = context.image_directory.as_deref();
-
-        if let Some(attachment) = record.get("attachment")
-            && attachment.get("type").and_then(Value::as_str) == Some("skill_listing")
-        {
-            *skills = super::skill_suggestions::parse_claude_listing(attachment.get("content"));
-        }
-        let task_notification = task_notification_text(&record);
-        if let Some(uuid) = record.get("uuid").and_then(Value::as_str) {
-            let membership = transcript_nodes.get(uuid).map(|node| node.membership);
-            let is_tool_result_only = is_tool_result_only_user_record(&record);
-            if membership.is_none() && !is_tool_result_only && task_notification.is_none() {
-                return;
-            }
-            if membership == Some(BranchMembership::Unknown)
-                && !is_tool_result_only
-                && task_notification.is_none()
-                && is_inactive_branch(uuid, transcript_nodes)
-            {
-                return;
-            }
-        }
-        insert_time_placed_decisions(record_timestamp(&record), decision_timeline, tools, items);
-        if queued_prompt_delivery_is_on_active_branch(&record, transcript_nodes) {
-            queue.observe_queued_prompt_delivery(&record, user_marker);
-        }
-        if let Some(text) = task_notification.as_deref() {
-            background_tasks.finish_notification(text);
-        }
-        proposal_timeline.insert_before_record(record_timestamp(&record), items, tools);
-        todo_timeline.insert_before_record(record_timestamp(&record), items, tools);
-        match record.get("type").and_then(Value::as_str) {
-            _ if record
-                .get("attachment")
-                .and_then(|attachment| attachment.get("type"))
-                .and_then(Value::as_str)
-                == Some("queued_command") =>
-            {
-                if let Some(prompt) = record
-                    .get("attachment")
-                    .and_then(|attachment| attachment.get("prompt"))
-                {
-                    let (text, images) = user_content(Some(prompt));
-                    if !text.is_empty() || !images.is_empty() {
-                        tools.flush_into(items);
-                        let text = task_notification
-                            .as_deref()
-                            .and_then(task_notification_envelope)
-                            .unwrap_or(&text)
-                            .to_owned();
-                        append_record_with_user_marker_and_image_directory(
-                            items,
-                            &record,
-                            text,
-                            user_marker,
-                            images,
-                            image_directory,
-                            parent,
-                        );
-                    }
-                }
-            }
-            Some("user") => {
-                if let Some(message) = record.get("message") {
-                    let tool_use_result = record
-                        .get("toolUseResult")
-                        .filter(|result| !result.is_null());
-                    for block in tool_result_blocks(message) {
-                        let Some(id) = block.get("tool_use_id").and_then(Value::as_str) else {
-                            continue;
-                        };
-                        if let Some(indices) = question_uses.remove(id) {
-                            let answers = match tool_use_result {
-                                Some(result) => tool_use_result_answers(result),
-                                None => block
-                                    .get("content")
-                                    .and_then(tool_result_text)
-                                    .and_then(|text| parse_question_answers(&text)),
-                            };
-                            if let Some(answers) = answers {
-                                apply_question_answers(items, &indices, &answers);
-                            }
-                        }
-                        if let Some(index) = tool_uses
-                            .iter()
-                            .position(|tool_use: &ToolUse| tool_use.id == id)
-                        {
-                            let tool_use = tool_uses.remove(index);
-                            if classifier::is_peer_notify_tool(
-                                &tool_use.name,
-                                tool_use.input.as_ref(),
-                            ) {
-                                let text = block
-                                    .get("content")
-                                    .and_then(tool_result_text)
-                                    .unwrap_or_default();
-                                if tool_result_failed(&record, block)
-                                    || classifier::peer_notification_failed(&record, &text)
-                                {
-                                    append_classification_with_image_directory(
-                                        items,
-                                        classifier::failed_peer_notification(&text),
-                                        Vec::new(),
-                                        image_directory,
-                                        parent,
-                                        record_timestamp(&record),
-                                    );
-                                } else if let Some(mut peer) = classifier::peer_out_from_tool(
-                                    &tool_use.name,
-                                    tool_use.input.as_ref(),
-                                    parent.map(|parent| parent.session_id.as_str()),
-                                    Some(&text),
-                                ) {
-                                    let completed_at = record_timestamp(&record);
-                                    let delivered =
-                                        context.peer_out_messages.iter().find(|message| {
-                                            !matched_peer_out_message_ids.contains(&message.id)
-                                                && message.to_session_id == peer.session_id
-                                                && tool_use.started_at.is_some_and(|started_at| {
-                                                    started_at <= message.sent_at
-                                                })
-                                                && completed_at.is_some_and(|completed_at| {
-                                                    message.sent_at <= completed_at
-                                                })
-                                        });
-                                    if let Some(delivered) = delivered {
-                                        peer.text.clone_from(&delivered.content);
-                                        matched_peer_out_message_ids.insert(delivered.id);
-                                    }
-                                    super::append_peer_out(
-                                        items,
-                                        peer,
-                                        delivered
-                                            .map(|message| message.sent_at)
-                                            .or_else(|| record_timestamp(&record)),
-                                    );
-                                }
-                            } else {
-                                tools.record(
-                                    &tool_use.name,
-                                    tool_use.input.as_ref(),
-                                    tool_result_failed(&record, block),
-                                );
-                                background_tasks.complete_tool_use(&tool_use, &record, block, now);
-                            }
-                        }
-                    }
-                    let (text, images) = user_content(message.get("content"));
-                    if !text.is_empty() || !images.is_empty() {
-                        tools.flush_into(items);
-                        let classification_text = task_notification
-                            .as_deref()
-                            .and_then(task_notification_envelope)
-                            .unwrap_or(&text);
-                        let classification =
-                            classifier::classify_inbound(&record, classification_text, user_marker);
-                        let classification = match classification {
-                            MessageKind::User { text } => MessageKind::User {
-                                text: slash_command_text(&text).unwrap_or(text),
-                            },
-                            classification => classification,
-                        };
-                        append_classification_with_image_directory(
-                            items,
-                            classification,
-                            images,
-                            image_directory,
-                            parent,
-                            record_timestamp(&record),
-                        );
-                    }
-                }
-            }
-            Some("system") => {
-                tools.flush_into(items);
-                let text = record
-                    .get("message")
-                    .map(user_input::user_text)
-                    .unwrap_or_default();
-                append_record_with_user_marker_and_image_directory(
-                    items,
-                    &record,
-                    text,
-                    None,
-                    Vec::new(),
-                    image_directory,
-                    parent,
-                );
-            }
-            Some("assistant") => {
-                if let Some(content) = record
-                    .get("message")
-                    .and_then(|message| message.get("content"))
-                {
-                    for block in content_blocks(content) {
-                        match block.get("type").and_then(Value::as_str) {
-                            Some("text") => {
-                                if let Some(text) = block.get("text").and_then(Value::as_str) {
-                                    tools.flush_into(items);
-                                    append_text_with_image_directory(
-                                        items,
-                                        text.to_owned(),
-                                        false,
-                                        None,
-                                        image_directory,
-                                        None,
-                                    );
-                                }
-                            }
-                            Some("tool_use") => {
-                                let name = block
-                                    .get("name")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or_default();
-                                let input = block.get("input");
-                                if classifier::is_peer_notify_tool(name, input) {
-                                    tools.flush_into(items);
-                                    if let Some(id) = block.get("id").and_then(Value::as_str) {
-                                        tool_uses.push(ToolUse {
-                                            id: id.to_owned(),
-                                            name: name.to_owned(),
-                                            input: input.cloned(),
-                                            started_at: record_timestamp(&record),
-                                        });
-                                    }
-                                } else if name == "AskUserQuestion" {
-                                    tools.flush_into(items);
-                                    if let Some(id) = block.get("id").and_then(Value::as_str) {
-                                        let indices = append_questions(items, input);
-                                        question_uses.insert(id.to_owned(), indices);
-                                    } else {
-                                        append_questions(items, input);
-                                    }
-                                } else if let Some(id) = block.get("id").and_then(Value::as_str) {
-                                    background_tasks.stop(input, name);
-                                    tool_uses.push(ToolUse {
-                                        id: id.to_owned(),
-                                        name: name.to_owned(),
-                                        input: input.cloned(),
-                                        started_at: record_timestamp(&record),
-                                    });
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn into_parsed(
-        self,
-        context: &TranscriptParserContext,
-        now: DateTime<Utc>,
-    ) -> ParsedTranscript {
-        let mut items = self.items;
-        let mut tools = self.tools;
-        let pending_tool = context.pending_tool.as_deref();
-        let parent = context.parent.as_ref();
-        let user_marker = context.user_marker.as_deref();
-        let image_directory = context.image_directory.as_deref();
-        tools.flush_into(&mut items);
-        // Permission state must be tied to an unanswered call ID, not a reused tool name.
-        if let Some(tool_use) = pending_tool.and_then(|pending| {
-            self.tool_uses.iter().rev().find(|tool_use| {
-                matches_pending_tool(tool_use, pending)
-                    && !classifier::is_peer_notify_tool(&tool_use.name, tool_use.input.as_ref())
-            })
-        }) {
-            items.push(ChatItem::Permission {
-                request_id: None,
-                tool: tool_use.name.clone(),
-                description: tool_detail(&tool_use.name, tool_use.input.as_ref()),
-            });
-        } else if let Some(tool_use) = self.tool_uses.last().filter(|tool_use| {
-            !classifier::is_peer_notify_tool(&tool_use.name, tool_use.input.as_ref())
-        }) {
-            items.push(ChatItem::ToolInProgress {
-                tool: tool_use.name.clone(),
-                target: tool_target(&tool_use.name, tool_use.input.as_ref()),
-            });
-        }
-        let resolved_queued_prompt_ids = self.queue.resolved_queued_prompt_ids();
-        items.extend(
-            self.queue
-                .pending_items(parent, user_marker, image_directory),
-        );
-        self.decision_timeline.append_remaining(&mut items);
-        let mut proposal_timeline = self.proposal_timeline;
-        proposal_timeline.append_remaining(&mut items);
-        let mut todo_timeline = self.todo_timeline;
-        todo_timeline.append_remaining(&mut items);
-        let background_tasks = self.background_tasks.into_api_tasks(now);
-        (
-            items,
-            background_tasks,
-            resolved_queued_prompt_ids,
-            self.skills,
-        )
-    }
-}
-
-fn queued_prompt_delivery_is_on_active_branch(
-    record: &Value,
-    transcript_nodes: &mut BTreeMap<String, TranscriptNode>,
-) -> bool {
-    if let Some(uuid) = record.get("uuid").and_then(Value::as_str) {
-        return transcript_nodes
-            .get(uuid)
-            .is_some_and(|node| node.membership == BranchMembership::Active);
-    }
-    let Some(parent_uuid) = record
-        .get("parentUuid")
-        .and_then(Value::as_str)
-        .or_else(|| record.get("logicalParentUuid").and_then(Value::as_str))
-    else {
-        return true;
-    };
-    let Some(node) = transcript_nodes.get(parent_uuid) else {
-        return false;
-    };
-    node.membership == BranchMembership::Active
-}
-
-#[derive(Clone)]
-struct ToolUse {
-    id: String,
-    name: String,
-    input: Option<Value>,
-    started_at: Option<DateTime<Utc>>,
-}
-
-fn tool_result_blocks(message: &Value) -> impl Iterator<Item = &Value> {
-    message
-        .get("content")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
-}
-
-fn tool_result_text(content: &Value) -> Option<String> {
-    match content {
-        Value::String(text) => Some(text.clone()),
-        Value::Array(blocks) => Some(
-            blocks
-                .iter()
-                .filter_map(|block| block.get("text").and_then(Value::as_str))
-                .collect::<Vec<_>>()
-                .join("\n"),
-        ),
-        _ => None,
-    }
-}
-
-fn tool_result_failed(record: &Value, block: &Value) -> bool {
-    [Some(block), record.get("toolUseResult")]
-        .into_iter()
-        .flatten()
-        .any(|result| {
-            ["is_error", "isError"]
-                .into_iter()
-                .any(|key| result.get(key).and_then(Value::as_bool) == Some(true))
-        })
-}
-
-fn matches_pending_tool(tool_use: &ToolUse, pending_tool: &str) -> bool {
-    let (name, detail) = pending_tool
-        .split_once('(')
-        .map_or((pending_tool, None), |(name, detail)| {
-            (name, detail.strip_suffix(')'))
-        });
-    if tool_use.name != name {
-        return false;
-    }
-    let Some(detail) = detail else {
-        return true;
-    };
-    tool_use
-        .input
-        .as_ref()
-        .and_then(super::super::permission_request_tool_detail)
-        == Some(detail)
-}
-
-fn tool_detail(name: &str, input: Option<&Value>) -> String {
-    let Some(target) = tool_target(name, input) else {
-        return name.to_owned();
-    };
-    format!("{name}: {target}")
+    let parser = IncrementalClaudeParser::new(reader, image_directory)?;
+    parser.render_with(now, additions)
 }
 
 #[cfg(test)]
@@ -771,11 +246,11 @@ mod tests {
         let (messages, _, _, _) =
             parse_with_queued_prompts_and_peer_out_messages_and_proposals_and_skills(
                 Cursor::new(transcript),
-                None,
-                None,
-                None,
                 Utc::now(),
                 ParserAdditions {
+                    parent: None,
+                    pending_tool: None,
+                    user_marker: None,
                     decisions: &[],
                     queued_prompts: &[],
                     peer_out_messages: &[],
@@ -814,11 +289,11 @@ mod tests {
         let (_, _, _, skills) =
             parse_with_queued_prompts_and_peer_out_messages_and_proposals_and_skills(
                 Cursor::new(transcript),
-                None,
-                None,
-                None,
                 Utc::now(),
                 ParserAdditions {
+                    parent: None,
+                    pending_tool: None,
+                    user_marker: None,
                     decisions: &[],
                     queued_prompts: &[],
                     peer_out_messages: &[],

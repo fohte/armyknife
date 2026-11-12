@@ -109,13 +109,12 @@ impl RunningBackgroundTaskCache {
             .entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !entries.contains_key(session_id)
-            && entries.len() >= MAX_CACHED_BACKGROUND_TASK_SESSIONS
-            && let Some(evicted_session_id) = entries.keys().next().cloned()
-        {
-            entries.remove(&evicted_session_id);
-        }
-        entries.insert(session_id.to_string(), (fingerprint, has_running_task));
+        insert_with_eviction(
+            &mut entries,
+            session_id.to_string(),
+            (fingerprint, has_running_task),
+            MAX_CACHED_BACKGROUND_TASK_SESSIONS,
+        );
     }
 }
 
@@ -188,16 +187,25 @@ impl MessageCache {
         &self,
         session_id: &str,
         key: &MessageCacheKey,
-    ) -> Option<CachedConversation> {
+    ) -> anyhow::Result<Option<CachedConversation>> {
         let entries = self
             .entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (cached_key, cached) = entries.get(session_id)?;
+        let Some((cached_key, cached)) = entries.get(session_id) else {
+            return Ok(None);
+        };
         if cached_key != key {
-            return None;
+            return Ok(None);
         }
-        Some(cached.clone())
+        let cached = cached.clone();
+        drop(entries);
+        if transcript_fingerprint(key.engine, key.transcript_path.as_deref())?
+            != key.transcript_fingerprint
+        {
+            return Ok(None);
+        }
+        Ok(Some(cached))
     }
 
     pub(super) fn insert(
@@ -211,13 +219,8 @@ impl MessageCache {
             .entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !entries.contains_key(session_id)
-            && entries.len() >= MAX_CACHED_SESSIONS
-            && let Some(evicted_session_id) = entries.keys().next().cloned()
-        {
-            entries.remove(&evicted_session_id);
-        }
-        entries.insert(
+        insert_with_eviction(
+            &mut entries,
             session_id.to_string(),
             (
                 key,
@@ -227,6 +230,7 @@ impl MessageCache {
                     cached_at: Instant::now(),
                 },
             ),
+            MAX_CACHED_SESSIONS,
         );
     }
 }
@@ -241,8 +245,9 @@ type TranscriptParserEntries = HashMap<String, TranscriptParserSlot>;
 
 pub(super) struct CachedTranscriptParser {
     pub(super) fingerprint: TranscriptFingerprint,
+    pub(super) tail: Vec<u8>,
     pub(super) engine: Engine,
-    pub(super) parent_session_id: Option<String>,
+    pub(super) last_change: TranscriptChange,
     pub(super) parser: IncrementalTranscriptParser,
 }
 
@@ -257,18 +262,31 @@ impl TranscriptParserCache {
             .entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !entries.contains_key(session_id)
-            && entries.len() >= MAX_CACHED_SESSIONS
-            && let Some(evicted_session_id) = entries.keys().next().cloned()
-        {
-            entries.remove(&evicted_session_id);
-        }
-        Arc::clone(
-            entries
-                .entry(session_id.to_string())
-                .or_insert_with(|| Arc::new(Mutex::new(None))),
-        )
+        let slot = entries
+            .get(session_id)
+            .cloned()
+            .unwrap_or_else(|| Arc::new(Mutex::new(None)));
+        insert_with_eviction(
+            &mut entries,
+            session_id.to_string(),
+            Arc::clone(&slot),
+            MAX_CACHED_SESSIONS,
+        );
+        slot
     }
+}
+
+fn insert_with_eviction<K, V>(entries: &mut HashMap<K, V>, key: K, value: V, capacity: usize)
+where
+    K: Clone + Eq + std::hash::Hash,
+{
+    if !entries.contains_key(&key)
+        && entries.len() >= capacity
+        && let Some(evicted_key) = entries.keys().next().cloned()
+    {
+        entries.remove(&evicted_key);
+    }
+    entries.insert(key, value);
 }
 
 #[cfg(test)]

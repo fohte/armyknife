@@ -5,8 +5,9 @@ use serde_json::Value;
 
 use super::super::super::claude_content_text;
 use super::super::super::{BackgroundTask, BackgroundTaskKind};
+use super::state::ToolUse;
+use super::state::tool_result_text;
 use super::user_input::user_text;
-use super::{ToolUse, tool_result_text};
 
 #[derive(Clone, Default)]
 pub(super) struct BackgroundTaskTracker {

@@ -109,11 +109,11 @@ fn output_path_for_task(session: &Session, task_id: &str) -> Result<Option<PathB
     let (_, tasks, _) =
         super::parser::claude::parse_with_queued_prompts_and_peer_out_messages_and_proposals(
             reader,
-            None,
-            None,
-            None,
             chrono::Utc::now(),
             super::parser::claude::ParserAdditions {
+                parent: None,
+                pending_tool: None,
+                user_marker: None,
                 decisions: &decisions,
                 queued_prompts: &queued_prompts,
                 peer_out_messages: &peer_out_messages,

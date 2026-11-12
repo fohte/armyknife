@@ -1,5 +1,4 @@
 use std::io::{Cursor, Read};
-use std::path::Path;
 
 use anyhow::Result;
 
@@ -10,8 +9,15 @@ use super::cache::{
 use super::parser;
 use super::{
     ConversationResponse, Engine, TranscriptInput, open_seekable_transcript, open_transcript,
-    parse_session_transcript, subagent_reports,
+    subagent_reports,
 };
+
+pub(super) fn parse_session_transcript(
+    input: TranscriptInput<'_>,
+) -> Result<(ConversationResponse, Vec<i64>)> {
+    let parser = create_parser(&input, None)?;
+    render_parser(&parser, &input)
+}
 
 pub(super) fn parse_session_transcript_incrementally(
     session_id: &str,
@@ -19,46 +25,74 @@ pub(super) fn parse_session_transcript_incrementally(
     fingerprint: Option<TranscriptFingerprint>,
     cache: &MessageCache,
 ) -> Result<(ConversationResponse, Vec<i64>)> {
-    let (Some(path), Some(fingerprint)) = (input.path, fingerprint) else {
+    let Some(fingerprint) = fingerprint else {
+        clear_parser(cache, session_id);
         return parse_session_transcript(input);
     };
-    if fingerprint.is_compressed() {
-        return parse_session_transcript(input);
-    }
-
     let parser_slot = cache.transcript_parser_slot(session_id);
     let mut cached = parser_slot
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let parent_session_id = input.parent.map(|parent| parent.session_id.clone());
-    let mut can_reuse = false;
-    if let Some(entry) = cached.as_mut()
+    let can_reuse = if let Some(entry) = cached.as_mut()
         && entry.engine == input.engine
-        && entry.parent_session_id == parent_session_id
         && parser_matches_engine(&entry.parser, input.engine)
     {
-        can_reuse = advance_cached_parser(entry, &fingerprint)?;
+        match advance_cached_parser(entry, &fingerprint) {
+            Ok(can_reuse) => can_reuse,
+            Err(error) => {
+                *cached = None;
+                return Err(error);
+            }
+        }
+    } else {
+        false
+    };
+
+    if can_reuse {
+        let entry = cached
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("incremental transcript parser was not initialized"))?;
+        return match render_parser(&entry.parser, &input) {
+            Ok(conversation) => Ok(conversation),
+            Err(error) => {
+                *cached = None;
+                Err(error)
+            }
+        };
     }
 
-    if can_reuse
-        && let Some(entry) = cached.as_mut()
-        && let Some(conversation) = render_incremental_parser(entry, path, &input)?
-    {
-        return Ok(conversation);
-    }
-
-    let parser = create_parser(path, &input, fingerprint.len())?;
+    *cached = None;
+    let captured_length = (!fingerprint.is_compressed()).then(|| fingerprint.len());
+    let parser = create_parser(&input, captured_length)?;
+    let tail = if fingerprint.is_compressed() {
+        Vec::new()
+    } else {
+        fingerprint.tail_bytes()?
+    };
     *cached = Some(CachedTranscriptParser {
         fingerprint,
+        tail,
         engine: input.engine,
-        parent_session_id,
+        last_change: TranscriptChange::Rewritten,
         parser,
     });
     let entry = cached
-        .as_mut()
+        .as_ref()
         .ok_or_else(|| anyhow::anyhow!("incremental transcript parser was not initialized"))?;
-    render_incremental_parser(entry, path, &input)?
-        .ok_or_else(|| anyhow::anyhow!("Claude transcript parser requires a full restart"))
+    match render_parser(&entry.parser, &input) {
+        Ok(conversation) => Ok(conversation),
+        Err(error) => {
+            *cached = None;
+            Err(error)
+        }
+    }
+}
+
+fn clear_parser(cache: &MessageCache, session_id: &str) {
+    let slot = cache.transcript_parser_slot(session_id);
+    *slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
 }
 
 fn parser_matches_engine(parser: &IncrementalTranscriptParser, engine: Engine) -> bool {
@@ -73,9 +107,12 @@ fn advance_cached_parser(
     entry: &mut CachedTranscriptParser,
     fingerprint: &TranscriptFingerprint,
 ) -> Result<bool> {
-    let (change, suffix) = fingerprint.read_delta_from(&entry.fingerprint)?;
+    let (change, suffix) = fingerprint.read_delta_from(&entry.fingerprint, &entry.tail)?;
     match change {
-        TranscriptChange::Unchanged => Ok(true),
+        TranscriptChange::Unchanged => {
+            entry.last_change = change;
+            Ok(true)
+        }
         TranscriptChange::Rewritten => Ok(false),
         TranscriptChange::Appended => {
             let appended = match &mut entry.parser {
@@ -89,7 +126,9 @@ fn advance_cached_parser(
                 }
             };
             if appended {
+                entry.tail = fingerprint.tail_bytes()?;
                 entry.fingerprint = fingerprint.clone();
+                entry.last_change = change;
             }
             Ok(appended)
         }
@@ -97,77 +136,141 @@ fn advance_cached_parser(
 }
 
 fn create_parser(
-    path: &Path,
     input: &TranscriptInput<'_>,
-    captured_length: u64,
+    captured_length: Option<u64>,
 ) -> Result<IncrementalTranscriptParser> {
     match input.engine {
         Engine::Claude => {
-            let reader = open_seekable_transcript(path)?
+            let reader = input
+                .path
+                .map(open_seekable_transcript)
+                .transpose()?
+                .flatten()
                 .unwrap_or_else(|| Box::new(Cursor::new(Vec::new())));
-            let reader = reader.take(captured_length);
-            let parser = parser::claude::IncrementalClaudeParser::new(
-                reader,
-                input.parent,
-                input.pending_tool,
-                input.watch_web_user_marker,
-                chrono::Utc::now(),
-                input.additions,
-            )?;
+            let image_directory = super::super::image_attachments::storage_directory().ok();
+            let parser = match captured_length {
+                Some(length) => parser::claude::IncrementalClaudeParser::new(
+                    reader.take(length),
+                    image_directory.as_deref(),
+                )?,
+                None => parser::claude::IncrementalClaudeParser::new(
+                    reader,
+                    image_directory.as_deref(),
+                )?,
+            };
             Ok(IncrementalTranscriptParser::Claude(Box::new(parser)))
         }
         Engine::Codex => {
-            let mut parser = parser::codex::CodexParserState::new(input.parent);
-            if let Some(reader) = open_transcript(path, false)? {
-                parser.append(reader.take(captured_length))?;
+            let reader = input
+                .path
+                .map(|path| open_transcript(path, captured_length.is_none()))
+                .transpose()?
+                .flatten();
+            let mut parser = parser::codex::CodexParserState::new();
+            if let Some(reader) = reader {
+                match captured_length {
+                    Some(length) => parser.append(reader.take(length))?,
+                    None => parser.append(reader)?,
+                }
             }
             Ok(IncrementalTranscriptParser::Codex(parser))
         }
     }
 }
 
-fn render_incremental_parser(
-    entry: &mut CachedTranscriptParser,
-    path: &Path,
+fn render_parser(
+    parser: &IncrementalTranscriptParser,
     input: &TranscriptInput<'_>,
-) -> Result<Option<(ConversationResponse, Vec<i64>)>> {
-    match &mut entry.parser {
+) -> Result<(ConversationResponse, Vec<i64>)> {
+    match parser {
         IncrementalTranscriptParser::Claude(parser) => {
-            let parsed = match parser.snapshot_with(
-                chrono::Utc::now(),
-                input.parent,
-                input.pending_tool,
-                input.watch_web_user_marker,
-                input.additions,
-            )? {
-                parser::claude::IncrementalClaudeSnapshot::Parsed(parsed) => parsed,
-                parser::claude::IncrementalClaudeSnapshot::RestartRequired => return Ok(None),
-            };
-            let (mut messages, background_tasks, resolved_queued_prompt_ids, skills) = parsed;
-            subagent_reports::add_descriptions(path, &mut messages);
-            Ok(Some((
+            let (mut messages, background_tasks, resolved_ids, skills) =
+                parser.render_with(chrono::Utc::now(), input.additions)?;
+            if let Some(path) = input.path {
+                subagent_reports::add_descriptions(path, &mut messages);
+            }
+            Ok((
                 ConversationResponse {
                     messages,
                     background_tasks,
                     skills,
                     ..ConversationResponse::default()
                 },
-                resolved_queued_prompt_ids,
-            )))
+                resolved_ids,
+            ))
         }
         IncrementalTranscriptParser::Codex(parser) => {
             let (messages, skills) = parser.render_with_decisions_and_todos(
+                input.additions.parent,
                 input.additions.decisions,
                 input.additions.todos,
             )?;
-            Ok(Some((
+            Ok((
                 ConversationResponse {
                     messages,
                     skills,
                     ..ConversationResponse::default()
                 },
                 Vec::new(),
-            )))
+            ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_session_transcript_incrementally;
+    use crate::commands::agent::types::{Engine, Session};
+    use crate::commands::agent::watch_web::messages::cache::{
+        MessageCache, RunningBackgroundTaskCache,
+    };
+    use crate::commands::agent::watch_web::messages::parser::claude::ParserAdditions;
+    use crate::commands::agent::watch_web::messages::{ConversationResponse, TranscriptInput};
+
+    #[test]
+    fn missing_transcript_after_fingerprinting_renders_an_empty_conversation() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("fixture.jsonl");
+        std::fs::write(
+            &path,
+            br#"{"type":"assistant","message":{"content":[{"type":"text","text":"Fixture response."}]}}"#,
+        )
+        .unwrap();
+        let session: Session = serde_json::from_value(serde_json::json!({
+            "session_id": "fixture-session",
+            "cwd": "/fixture/project",
+            "status": "ended",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "engine": "claude",
+            "transcript_path": path,
+        }))
+        .unwrap();
+        let fingerprint = RunningBackgroundTaskCache::fingerprint(&session)
+            .unwrap()
+            .unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let result = parse_session_transcript_incrementally(
+            "fixture-session",
+            TranscriptInput {
+                path: Some(&path),
+                engine: Engine::Claude,
+                additions: ParserAdditions {
+                    parent: None,
+                    pending_tool: None,
+                    user_marker: None,
+                    decisions: &[],
+                    queued_prompts: &[],
+                    peer_out_messages: &[],
+                    proposals: &[],
+                    todos: &[],
+                },
+            },
+            Some(fingerprint),
+            &MessageCache::default(),
+        )
+        .unwrap();
+
+        assert_eq!(result, (ConversationResponse::default(), Vec::new()));
     }
 }

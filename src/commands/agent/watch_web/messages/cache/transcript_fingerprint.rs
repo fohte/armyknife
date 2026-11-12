@@ -1,4 +1,4 @@
-use std::fs::File;
+use std::fs::{File, Metadata};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
@@ -6,10 +6,7 @@ use anyhow::Context;
 
 use crate::commands::agent::types::Engine;
 
-const TRANSCRIPT_PROBE_COUNT: u64 = 16;
-const TRANSCRIPT_PROBE_BYTES: u64 = 64;
-const TRANSCRIPT_FULL_PREFIX_LIMIT: u64 = 2048;
-const TRANSCRIPT_SNAPSHOT_ATTEMPTS: usize = 3;
+const TRANSCRIPT_TAIL_BYTES: u64 = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::commands::agent::watch_web::messages) enum TranscriptChange {
@@ -23,8 +20,6 @@ pub(in crate::commands::agent::watch_web::messages) struct TranscriptFingerprint
     source_path: PathBuf,
     len: u64,
     modified: std::time::SystemTime,
-    prefix_probes: Vec<TranscriptProbe>,
-    // ctime catches same-size rewrites even if the modification time is restored.
     #[cfg(unix)]
     device: u64,
     #[cfg(unix)]
@@ -33,12 +28,6 @@ pub(in crate::commands::agent::watch_web::messages) struct TranscriptFingerprint
     changed_at_seconds: i64,
     #[cfg(unix)]
     changed_at_nanoseconds: i64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct TranscriptProbe {
-    offset: u64,
-    bytes: Vec<u8>,
 }
 
 impl TranscriptFingerprint {
@@ -66,34 +55,6 @@ impl TranscriptFingerprint {
         }
     }
 
-    fn matches_file_metadata(&self, file: &File) -> anyhow::Result<bool> {
-        let metadata = file
-            .metadata()
-            .with_context(|| format!("read transcript metadata {}", self.source_path.display()))?;
-        let modified = metadata.modified().with_context(|| {
-            format!(
-                "read transcript modification time {}",
-                self.source_path.display()
-            )
-        })?;
-        if metadata.len() != self.len || modified != self.modified {
-            return Ok(false);
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-
-            if metadata.dev() != self.device
-                || metadata.ino() != self.inode
-                || metadata.ctime() != self.changed_at_seconds
-                || metadata.ctime_nsec() != self.changed_at_nanoseconds
-            {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    }
-
     pub(in crate::commands::agent::watch_web::messages) fn is_compressed(&self) -> bool {
         self.source_path
             .extension()
@@ -105,23 +66,72 @@ impl TranscriptFingerprint {
         self.len
     }
 
+    pub(super) fn is_present(&self) -> anyhow::Result<bool> {
+        Ok(read_metadata(&self.source_path)?.is_some())
+    }
+
+    pub(in crate::commands::agent::watch_web::messages) fn tail_bytes(
+        &self,
+    ) -> anyhow::Result<Vec<u8>> {
+        let mut file = match File::open(&self.source_path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("open transcript {}", self.source_path.display()));
+            }
+        };
+        if !file_matches_fingerprint(&file, self)? {
+            anyhow::bail!(
+                "transcript changed while reading its tail {}",
+                self.source_path.display()
+            );
+        }
+        let tail_start = self.len.saturating_sub(TRANSCRIPT_TAIL_BYTES);
+        let tail_len = self.len - tail_start;
+        file.seek(SeekFrom::Start(tail_start))
+            .with_context(|| format!("seek transcript tail {}", self.source_path.display()))?;
+        let mut tail = Vec::with_capacity(tail_len as usize);
+        (&mut file)
+            .take(tail_len)
+            .read_to_end(&mut tail)
+            .with_context(|| format!("read transcript tail {}", self.source_path.display()))?;
+        if tail.len() as u64 != tail_len || !file_matches_fingerprint(&file, self)? {
+            anyhow::bail!(
+                "transcript changed while reading its tail {}",
+                self.source_path.display()
+            );
+        }
+        Ok(tail)
+    }
+
     pub(in crate::commands::agent::watch_web::messages) fn read_delta_from(
         &self,
         previous: &Self,
+        previous_tail: &[u8],
     ) -> anyhow::Result<(TranscriptChange, Vec<u8>)> {
         let change = self.change_from(previous);
         match change {
-            TranscriptChange::Unchanged => Ok((change, Vec::new())),
+            TranscriptChange::Unchanged if self.is_present()? => Ok((change, Vec::new())),
+            TranscriptChange::Unchanged => Ok((TranscriptChange::Rewritten, Vec::new())),
             TranscriptChange::Rewritten => Ok((change, Vec::new())),
             TranscriptChange::Appended => {
                 if self.is_compressed() {
                     return Ok((TranscriptChange::Rewritten, Vec::new()));
                 }
-                let mut file = File::open(&self.source_path)
-                    .with_context(|| format!("open transcript {}", self.source_path.display()))?;
-                // A full prefix read here would make every append scale with transcript history.
-                if !self.matches_file_metadata(&file)?
-                    || !prefix_matches(&mut file, &self.source_path, &previous.prefix_probes)?
+                let mut file = match File::open(&self.source_path) {
+                    Ok(file) => file,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        return Ok((TranscriptChange::Rewritten, Vec::new()));
+                    }
+                    Err(error) => {
+                        return Err(error).with_context(|| {
+                            format!("open transcript {}", self.source_path.display())
+                        });
+                    }
+                };
+                if !file_matches_fingerprint(&file, self)?
+                    || !matches_tail(&mut file, &self.source_path, previous.len, previous_tail)?
                 {
                     return Ok((TranscriptChange::Rewritten, Vec::new()));
                 }
@@ -135,8 +145,8 @@ impl TranscriptFingerprint {
                 if appended.len() as u64 != self.len - previous.len {
                     return Ok((TranscriptChange::Rewritten, Vec::new()));
                 }
-                if !self.matches_file_metadata(&file)?
-                    || !prefix_matches(&mut file, &self.source_path, &self.prefix_probes)?
+                if !file_matches_fingerprint(&file, self)?
+                    || !matches_tail(&mut file, &self.source_path, previous.len, previous_tail)?
                 {
                     return Ok((TranscriptChange::Rewritten, Vec::new()));
                 }
@@ -153,69 +163,28 @@ pub(super) fn transcript_fingerprint(
     let Some(path) = path else {
         return Ok(None);
     };
-    let source_path = if engine == Engine::Codex {
-        match std::fs::metadata(path) {
-            Ok(_) => path.to_path_buf(),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let compressed_path = super::super::compressed_path(path);
-                match std::fs::metadata(&compressed_path) {
-                    Ok(_) => compressed_path,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                        return Ok(None);
-                    }
-                    Err(error) => {
-                        return Err(error).with_context(|| {
-                            format!("read transcript metadata {}", compressed_path.display())
-                        });
-                    }
-                }
-            }
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("read transcript metadata {}", path.display()));
-            }
+    let (source_path, metadata) = if engine == Engine::Codex {
+        if let Some(metadata) = read_metadata(path)? {
+            (path.to_path_buf(), metadata)
+        } else {
+            let compressed_path = super::super::compressed_path(path);
+            let Some(metadata) = read_metadata(&compressed_path)? else {
+                return Ok(None);
+            };
+            (compressed_path, metadata)
         }
     } else {
-        path.to_path_buf()
+        let Some(metadata) = read_metadata(path)? else {
+            return Ok(None);
+        };
+        (path.to_path_buf(), metadata)
     };
-    retry_transcript_fingerprint_capture(|| read_transcript_fingerprint_snapshot(&source_path))
-}
-
-fn retry_transcript_fingerprint_capture(
-    mut capture: impl FnMut() -> anyhow::Result<Option<TranscriptFingerprint>>,
-) -> anyhow::Result<Option<TranscriptFingerprint>> {
-    for _ in 0..TRANSCRIPT_SNAPSHOT_ATTEMPTS {
-        if let Some(fingerprint) = capture()? {
-            return Ok(Some(fingerprint));
-        }
-    }
-    Ok(None)
-}
-
-fn read_transcript_fingerprint_snapshot(
-    source_path: &Path,
-) -> anyhow::Result<Option<TranscriptFingerprint>> {
-    let mut file = match File::open(source_path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("open transcript {}", source_path.display()));
-        }
-    };
-    let metadata = file
-        .metadata()
-        .with_context(|| format!("read transcript metadata {}", source_path.display()))?;
     let modified = metadata.modified().with_context(|| {
         format!(
             "read transcript modification time {}",
             source_path.display()
         )
     })?;
-    let Some(prefix_probes) = transcript_prefix_probes(&mut file, source_path, metadata.len())?
-    else {
-        return Ok(None);
-    };
     #[cfg(unix)]
     let (device, inode, changed_at_seconds, changed_at_nanoseconds) = {
         use std::os::unix::fs::MetadataExt;
@@ -227,11 +196,10 @@ fn read_transcript_fingerprint_snapshot(
             metadata.ctime_nsec(),
         )
     };
-    let fingerprint = TranscriptFingerprint {
-        source_path: source_path.to_path_buf(),
+    Ok(Some(TranscriptFingerprint {
+        source_path,
         len: metadata.len(),
         modified,
-        prefix_probes,
         #[cfg(unix)]
         device,
         #[cfg(unix)]
@@ -240,92 +208,104 @@ fn read_transcript_fingerprint_snapshot(
         changed_at_seconds,
         #[cfg(unix)]
         changed_at_nanoseconds,
-    };
-    if !fingerprint.matches_file_metadata(&file)? {
-        return Ok(None);
-    }
-    Ok(Some(fingerprint))
+    }))
 }
 
-fn transcript_prefix_probes(
-    file: &mut File,
-    path: &Path,
-    len: u64,
-) -> anyhow::Result<Option<Vec<TranscriptProbe>>> {
-    if len == 0 || path.extension().and_then(|extension| extension.to_str()) == Some("zst") {
-        return Ok(Some(Vec::new()));
-    }
-
-    let sample_bytes = if len <= TRANSCRIPT_FULL_PREFIX_LIMIT {
-        len
-    } else {
-        TRANSCRIPT_PROBE_BYTES
-    };
-    let offsets = if len <= TRANSCRIPT_FULL_PREFIX_LIMIT {
-        vec![0]
-    } else {
-        // Keep checks constant-sized so a large transcript does not dominate append latency.
-        let span = len - sample_bytes;
-        let denominator = TRANSCRIPT_PROBE_COUNT - 1;
-        (0..TRANSCRIPT_PROBE_COUNT)
-            .map(|index| (span / denominator) * index + (span % denominator) * index / denominator)
-            .collect::<Vec<_>>()
-    };
-    let mut probes = Vec::new();
-    for offset in offsets {
-        file.seek(SeekFrom::Start(offset))
-            .with_context(|| format!("seek transcript {}", path.display()))?;
-        let mut bytes = vec![0; sample_bytes as usize];
-        if let Err(error) = file.read_exact(&mut bytes) {
-            if error.kind() == std::io::ErrorKind::UnexpectedEof {
-                return Ok(None);
-            }
-            return Err(error).with_context(|| format!("read transcript {}", path.display()));
+fn read_metadata(path: &Path) -> anyhow::Result<Option<Metadata>> {
+    match std::fs::metadata(path) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => {
+            Err(error).with_context(|| format!("read transcript metadata {}", path.display()))
         }
-        probes.push(TranscriptProbe { offset, bytes });
     }
-    Ok(Some(probes))
 }
 
-fn prefix_matches(
-    file: &mut File,
-    path: &Path,
-    probes: &[TranscriptProbe],
+fn file_matches_fingerprint(
+    file: &File,
+    fingerprint: &TranscriptFingerprint,
 ) -> anyhow::Result<bool> {
-    for probe in probes {
-        file.seek(SeekFrom::Start(probe.offset))
-            .with_context(|| format!("seek transcript prefix probe {}", path.display()))?;
-        let mut bytes = vec![0; probe.bytes.len()];
-        match file.read_exact(&mut bytes) {
-            Ok(()) if bytes == probe.bytes => {}
-            Ok(()) => return Ok(false),
-            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(false),
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("read transcript prefix probe {}", path.display()));
-            }
+    let metadata = file.metadata().with_context(|| {
+        format!(
+            "read transcript metadata {}",
+            fingerprint.source_path.display()
+        )
+    })?;
+    if metadata.len() < fingerprint.len {
+        return Ok(false);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        if metadata.dev() != fingerprint.device || metadata.ino() != fingerprint.inode {
+            return Ok(false);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let modified = metadata.modified().with_context(|| {
+            format!(
+                "read transcript modification time {}",
+                fingerprint.source_path.display()
+            )
+        })?;
+        if modified < fingerprint.modified {
+            return Ok(false);
         }
     }
     Ok(true)
 }
 
+fn matches_tail(
+    file: &mut File,
+    path: &Path,
+    previous_len: u64,
+    previous_tail: &[u8],
+) -> anyhow::Result<bool> {
+    let tail_len = previous_tail.len() as u64;
+    if tail_len > previous_len {
+        return Ok(false);
+    }
+    if previous_tail.is_empty() {
+        return Ok(true);
+    }
+    file.seek(SeekFrom::Start(previous_len - tail_len))
+        .with_context(|| format!("seek transcript tail {}", path.display()))?;
+    let mut current_tail = vec![0; previous_tail.len()];
+    match file.read_exact(&mut current_tail) {
+        Ok(()) => Ok(current_tail == previous_tail),
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
+        Err(error) => {
+            Err(error).with_context(|| format!("read transcript tail {}", path.display()))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
+    use std::io::{Seek, SeekFrom, Write};
 
-    use rstest::rstest;
+    use indoc::indoc;
+    use rstest::{fixture, rstest};
 
-    use super::{
-        TRANSCRIPT_SNAPSHOT_ATTEMPTS, TranscriptChange, retry_transcript_fingerprint_capture,
-        transcript_fingerprint,
-    };
+    use super::{TranscriptChange, transcript_fingerprint};
     use crate::commands::agent::types::Engine;
 
-    #[test]
-    fn transcript_append_reads_only_bytes_after_the_cached_length() {
+    #[fixture]
+    fn transcript_file() -> (tempfile::TempDir, std::path::PathBuf) {
         let directory = tempfile::tempdir().expect("temporary directory should be created");
         let path = directory.path().join("transcript.jsonl");
-        std::fs::write(&path, b"first record\n").expect("transcript should be written");
+        (directory, path)
+    }
+
+    #[rstest]
+    fn transcript_append_reads_only_bytes_after_the_cached_length(
+        transcript_file: (tempfile::TempDir, std::path::PathBuf),
+    ) {
+        let (_directory, path) = transcript_file;
+        let previous_tail = b"first record\n";
+        std::fs::write(&path, previous_tail).expect("transcript should be written");
         let previous = transcript_fingerprint(Engine::Claude, Some(&path))
             .expect("transcript metadata should be read")
             .expect("transcript should exist");
@@ -341,17 +321,146 @@ mod tests {
 
         assert_eq!(
             current
-                .read_delta_from(&previous)
+                .read_delta_from(&previous, previous_tail)
                 .expect("delta should be read"),
             (TranscriptChange::Appended, b"second record\n".to_vec()),
         );
     }
 
-    #[test]
-    fn transcript_rewrite_requires_a_full_read() {
-        let directory = tempfile::tempdir().expect("temporary directory should be created");
-        let path = directory.path().join("transcript.jsonl");
+    #[rstest]
+    fn transcript_tail_rewrite_requires_a_full_read(
+        transcript_file: (tempfile::TempDir, std::path::PathBuf),
+    ) {
+        let (_directory, path) = transcript_file;
+        let previous_tail = b"second record\n";
+        std::fs::write(
+            &path,
+            indoc! {"
+                first record
+                second record
+            "},
+        )
+        .expect("transcript should be written");
+        let previous = transcript_fingerprint(Engine::Claude, Some(&path))
+            .expect("transcript metadata should be read")
+            .expect("transcript should exist");
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("transcript should open for rewriting");
+        file.seek(SeekFrom::Start(b"first record\n".len() as u64))
+            .expect("rewrite position should be reached");
+        file.write_all(b"second rec0rd\n")
+            .expect("tail should be rewritten");
+        file.seek(SeekFrom::End(0))
+            .expect("transcript end should be reached");
+        file.write_all(b"third record\n")
+            .expect("new record should be appended");
+        drop(file);
+        let current = transcript_fingerprint(Engine::Claude, Some(&path))
+            .expect("transcript metadata should be read")
+            .expect("transcript should exist");
+
+        assert_eq!(
+            (
+                current.change_from(&previous),
+                current
+                    .read_delta_from(&previous, previous_tail)
+                    .expect("delta should be read"),
+            ),
+            (
+                TranscriptChange::Appended,
+                (TranscriptChange::Rewritten, Vec::new()),
+            ),
+        );
+    }
+
+    #[rstest]
+    fn transcript_append_after_fingerprint_capture_keeps_the_original_delta(
+        transcript_file: (tempfile::TempDir, std::path::PathBuf),
+    ) {
+        let (_directory, path) = transcript_file;
+        let previous_tail = b"first record\n";
+        std::fs::write(&path, previous_tail).expect("transcript should be written");
+        let previous = transcript_fingerprint(Engine::Claude, Some(&path))
+            .expect("transcript metadata should be read")
+            .expect("transcript should exist");
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("transcript should open for appending")
+            .write_all(b"middle record\n")
+            .expect("first record should be appended");
+        let current = transcript_fingerprint(Engine::Claude, Some(&path))
+            .expect("transcript metadata should be read")
+            .expect("transcript should exist");
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("transcript should open for appending")
+            .write_all(b"later record\n")
+            .expect("additional record should be appended");
+
+        assert_eq!(
+            current
+                .read_delta_from(&previous, previous_tail)
+                .expect("captured delta should be read"),
+            (TranscriptChange::Appended, b"middle record\n".to_vec()),
+        );
+    }
+
+    #[rstest]
+    fn transcript_tail_bytes_stop_at_the_fingerprinted_length(
+        transcript_file: (tempfile::TempDir, std::path::PathBuf),
+    ) {
+        let (_directory, path) = transcript_file;
+        let initial = vec![b'a'; 80];
+        let expected_tail = initial[16..].to_vec();
+        std::fs::write(&path, &initial).expect("transcript should be written");
+        let fingerprint = transcript_fingerprint(Engine::Claude, Some(&path))
+            .expect("transcript metadata should be read")
+            .expect("transcript should exist");
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("transcript should open for appending")
+            .write_all(b"later bytes are outside the snapshot")
+            .expect("later bytes should be appended");
+
+        assert_eq!(
+            fingerprint
+                .tail_bytes()
+                .expect("captured tail should be read"),
+            expected_tail,
+        );
+    }
+
+    #[rstest]
+    fn transcript_tail_bytes_are_empty_after_the_file_disappears(
+        transcript_file: (tempfile::TempDir, std::path::PathBuf),
+    ) {
+        let (_directory, path) = transcript_file;
         std::fs::write(&path, b"first record\n").expect("transcript should be written");
+        let fingerprint = transcript_fingerprint(Engine::Claude, Some(&path))
+            .expect("transcript metadata should be read")
+            .expect("transcript should exist");
+        std::fs::remove_file(&path).expect("transcript should be removed");
+
+        assert_eq!(
+            fingerprint
+                .tail_bytes()
+                .expect("missing transcript should yield an empty tail"),
+            Vec::<u8>::new(),
+        );
+    }
+
+    #[rstest]
+    fn same_length_transcript_rewrite_requires_a_full_read(
+        transcript_file: (tempfile::TempDir, std::path::PathBuf),
+    ) {
+        let (_directory, path) = transcript_file;
+        let previous_tail = b"first record\n";
+        std::fs::write(&path, previous_tail).expect("transcript should be written");
         let previous = transcript_fingerprint(Engine::Claude, Some(&path))
             .expect("transcript metadata should be read")
             .expect("transcript should exist");
@@ -362,60 +471,7 @@ mod tests {
 
         assert_eq!(
             current
-                .read_delta_from(&previous)
-                .expect("delta should be read"),
-            (TranscriptChange::Rewritten, Vec::new()),
-        );
-    }
-
-    #[test]
-    fn unstable_transcript_fingerprint_falls_back_after_bounded_retries() {
-        let mut attempts = 0;
-
-        let fingerprint = retry_transcript_fingerprint_capture(|| {
-            attempts += 1;
-            Ok(None)
-        })
-        .expect("unstable transcript snapshots should fall back");
-
-        assert_eq!(
-            (fingerprint.is_none(), attempts),
-            (true, TRANSCRIPT_SNAPSHOT_ATTEMPTS)
-        );
-    }
-
-    #[rstest]
-    #[case::small_prefix(512, 600, 256)]
-    #[case::within_full_prefix_limit(2048, 2500, 100)]
-    #[case::sampled_large_prefix(4096, 4500, 1881)]
-    fn transcript_longer_in_place_rewrite_requires_a_full_read(
-        #[case] previous_len: usize,
-        #[case] current_len: usize,
-        #[case] changed_offset: usize,
-    ) {
-        let directory = tempfile::tempdir().expect("temporary directory should be created");
-        let path = directory.path().join("transcript.jsonl");
-        std::fs::write(&path, vec![b'a'; previous_len]).expect("transcript should be written");
-        let previous = transcript_fingerprint(Engine::Claude, Some(&path))
-            .expect("transcript metadata should be read")
-            .expect("transcript should exist");
-        let mut rewritten = vec![b'a'; current_len];
-        rewritten[changed_offset] = b'b';
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .open(&path)
-            .expect("transcript should open for rewriting");
-        file.set_len(0).expect("transcript should be truncated");
-        file.write_all(&rewritten)
-            .expect("rewritten transcript should be written");
-        drop(file);
-        let current = transcript_fingerprint(Engine::Claude, Some(&path))
-            .expect("transcript metadata should be read")
-            .expect("transcript should exist");
-
-        assert_eq!(
-            current
-                .read_delta_from(&previous)
+                .read_delta_from(&previous, previous_tail)
                 .expect("rewrite should be detected"),
             (TranscriptChange::Rewritten, Vec::new()),
         );
