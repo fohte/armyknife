@@ -386,6 +386,12 @@ fn ensure_session_is_idle(session: &Session, effective_status: SessionStatus) ->
             ),
         }
     }
+    if session.has_pending_permission_requests() {
+        bail!(
+            "Agent session `{}` has pending permission requests; resolve them and retry this command",
+            session.session_id
+        );
+    }
     Ok(())
 }
 
@@ -605,6 +611,27 @@ mod tests {
                     pane_session_call(),
                     Call::LatestTurnStatus("session-1".to_string()),
                 ],
+            ),
+        );
+    }
+
+    #[test]
+    fn close_rejects_pending_permissions_when_the_session_is_stopped() {
+        let mut session = session();
+        session.status = SessionStatus::Stopped;
+        session
+            .pending_permission_agent_ids
+            .insert("fixture-agent-id".to_string());
+        let runtime = FakeRuntime::default();
+
+        let result = close_session(&session, false, &runtime);
+
+        assert_eq!(
+            (result.unwrap_err().to_string(), runtime.calls.into_inner()),
+            (
+                "Agent session `session-1` has pending permission requests; resolve them and retry this command"
+                    .to_string(),
+                vec![pane_exists_call(), pane_session_call()],
             ),
         );
     }

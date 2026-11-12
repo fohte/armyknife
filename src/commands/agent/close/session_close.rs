@@ -25,16 +25,66 @@ pub(crate) async fn close_session_value_from_watch_web(
     session: &Session,
     keep_worktree: bool,
 ) -> Result<()> {
+    let linked_worktree_root = super::worktree::linked_worktree_root(&session.cwd);
+    let runtime = super::LiveCloseRuntime;
+
+    close_session_value_from_watch_web_with_dependencies(
+        session,
+        keep_worktree,
+        linked_worktree_root,
+        &runtime,
+        |worktree_root, unmerged_policy| async move {
+            close_session_value_with_worktree(
+                SessionWorktreeContext {
+                    session,
+                    force: false,
+                    parent_session_id: None,
+                    worktree_root: &worktree_root,
+                },
+                find_shared_worktree_session_ids,
+                crate::shared::worktree_delete::prepare(&worktree_root, false, unmerged_policy),
+                super::close_tracked_session,
+                || super::worktree::close_worktree_session(session, false, None),
+                |plan| crate::shared::worktree_delete::execute(plan, false),
+                &mut io::stderr(),
+            )
+            .await
+        },
+    )
+    .await
+}
+
+async fn close_session_value_from_watch_web_with_dependencies<R, Fut>(
+    session: &Session,
+    keep_worktree: bool,
+    linked_worktree_root: Option<PathBuf>,
+    runtime: &R,
+    close_with_worktree: impl FnOnce(
+        PathBuf,
+        crate::shared::worktree_delete::UnmergedWorktreePolicy,
+    ) -> Fut,
+) -> Result<()>
+where
+    R: super::CloseRuntime,
+    Fut: Future<Output = Result<()>>,
+{
     let args = CloseArgs {
         target: Some(session.session_id.clone()),
         keep_worktree,
         ..CloseArgs::default()
     };
-    close_session_value_with_policy(
+    close_session_value_with_dependencies(
         session,
         &args,
         None,
-        crate::shared::worktree_delete::UnmergedWorktreePolicy::Reject,
+        linked_worktree_root,
+        runtime,
+        |worktree_root| {
+            close_with_worktree(
+                worktree_root,
+                crate::shared::worktree_delete::UnmergedWorktreePolicy::Reject,
+            )
+        },
     )
     .await
 }
@@ -456,6 +506,48 @@ mod tests {
                 )),
                 vec![],
                 vec![pane_exists_call(), pane_session_call()],
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn watch_web_close_rejects_unmerged_worktrees_without_prompting() {
+        let session = session();
+        let runtime = FakeRuntime::default();
+        let policy_rejected = RefCell::new(Vec::new());
+
+        let result = close_session_value_from_watch_web_with_dependencies(
+            &session,
+            false,
+            Some(PathBuf::from("/tmp/worktrees/feature")),
+            &runtime,
+            |_, policy| {
+                policy_rejected
+                    .borrow_mut()
+                    .push(policy == crate::shared::worktree_delete::UnmergedWorktreePolicy::Reject);
+                async move {
+                    if policy == crate::shared::worktree_delete::UnmergedWorktreePolicy::Reject {
+                        Err(crate::shared::worktree_delete::UnmergedWorktreeError::new(
+                            "feature",
+                            "pull request is still open",
+                        )
+                        .into())
+                    } else {
+                        Ok(())
+                    }
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                policy_rejected.into_inner(),
+            ),
+            (
+                Err("Branch `feature` is not merged (pull request is still open); close the session while keeping its worktree to continue".to_string()),
+                vec![true],
             ),
         );
     }

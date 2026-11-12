@@ -19,6 +19,7 @@ use super::super::types::{Engine, Session, SessionStatus, TmuxInfo};
 use super::super::user_turn::is_ask_user_question;
 use super::messages::RouteLoaders;
 
+mod close;
 mod decisions;
 mod messages;
 mod proposal_answer_locks;
@@ -66,7 +67,7 @@ fn router_with_state(state: ActionState) -> Router {
         .route("/sessions/{id}/focus", post(focus))
         .route("/sessions/{id}/read", post(mark_read))
         .route("/sessions/{id}/primary-task", post(set_primary_task))
-        .route("/sessions/{id}/close", post(close))
+        .route("/sessions/{id}/close", post(close::close))
         .with_state(state)
 }
 
@@ -160,10 +161,10 @@ impl ActionRuntime for LiveActionRuntime {
         session: &'a Session,
         keep_worktree: bool,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
-        Box::pin(crate::commands::agent::close_from_watch_web(
-            session,
-            keep_worktree,
-        ))
+        let session = session.clone();
+        Box::pin(close::run_close_on_blocking_worker(move || async move {
+            crate::commands::agent::close_from_watch_web(&session, keep_worktree).await
+        }))
     }
 }
 
@@ -231,6 +232,16 @@ impl ApiError {
             status: StatusCode::CONFLICT,
             message: error.to_string(),
             code,
+        }
+    }
+
+    fn close_persistence(error: impl std::fmt::Display) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: format!(
+                "The session closed, but it is still in the Inbox because its record could not be updated. Retry Close when storage is available: {error}"
+            ),
+            code: None,
         }
     }
 }
@@ -421,39 +432,6 @@ async fn set_primary_task(
     if !changed {
         return Err(ApiError::not_found());
     }
-    Ok(Json(Success::new()))
-}
-
-#[derive(Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct CloseRequest {
-    keep_worktree: bool,
-}
-
-async fn close(
-    State(state): State<ActionState>,
-    RoutePath(id): RoutePath<String>,
-    request: Option<Json<CloseRequest>>,
-) -> Result<Json<Success>, ApiError> {
-    let session = load_session(state.clone(), id).await?;
-    state
-        .runtime
-        .close_session(
-            &session,
-            request
-                .map(|Json(request)| request.keep_worktree)
-                .unwrap_or(false),
-        )
-        .await
-        .map_err(ApiError::close)?;
-    let sessions_dir = resolve_sessions_dir(state.sessions_dir).map_err(ApiError::internal)?;
-    run_blocking(move || {
-        store::update_session_in(&sessions_dir, &session.session_id, |stored| {
-            stored.archived_at = Some(Utc::now());
-            true
-        })
-    })
-    .await?;
     Ok(Json(Success::new()))
 }
 
