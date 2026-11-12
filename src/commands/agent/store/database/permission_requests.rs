@@ -26,7 +26,11 @@ pub(crate) struct PermissionRequestData {
 pub(crate) enum PermissionRequestWait {
     Pending,
     Finished,
-    Decision(PermissionRequestDecision),
+    Decision {
+        decision: PermissionRequestDecision,
+        tool_input: Value,
+        answers: Option<Value>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,6 +149,24 @@ pub(crate) fn resolve_permission_request(
     request_id: &str,
     decision: &PermissionRequestDecision,
 ) -> Result<PermissionRequestResolution> {
+    resolve_permission_request_with_answers(
+        sessions_dir,
+        session_id,
+        agent_key,
+        request_id,
+        decision,
+        None,
+    )
+}
+
+pub(crate) fn resolve_permission_request_with_answers(
+    sessions_dir: &Path,
+    session_id: &str,
+    agent_key: &str,
+    request_id: &str,
+    decision: &PermissionRequestDecision,
+    answers: Option<&Value>,
+) -> Result<PermissionRequestResolution> {
     super::validate_session_id(session_id)?;
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -176,9 +198,15 @@ pub(crate) fn resolve_permission_request(
 
     let changed = transaction.execute(
         "UPDATE permission_request_decision
-         SET decision = ?1
-         WHERE session_id = ?2 AND request_id = ?3 AND decision IS NULL",
-        params![serde_json::to_string(decision)?, session_id, request_id,],
+         SET decision = ?1, answers = ?2
+         WHERE session_id = ?3 AND agent_key = ?4 AND request_id = ?5 AND decision IS NULL",
+        params![
+            serde_json::to_string(decision)?,
+            answers.map(serde_json::to_string).transpose()?,
+            session_id,
+            agent_key,
+            request_id,
+        ],
     )?;
     if changed != 1 {
         transaction.commit()?;
@@ -234,15 +262,21 @@ fn finalize_permission_request_from(
     let is_current = session
         .as_ref()
         .is_some_and(|session| permission_request_is_current(session, agent_key, request_id));
-    let decision = transaction
+    let request = transaction
         .query_row(
-            "SELECT decision FROM permission_request_decision
+            "SELECT decision, tool_input, answers FROM permission_request_decision
              WHERE session_id = ?1 AND agent_key = ?2 AND request_id = ?3",
             params![session_id, agent_key, request_id],
-            |row| row.get::<_, Option<String>>(0),
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
         )
         .optional()?;
-    let Some(decision) = decision else {
+    let Some((decision, tool_input, answers)) = request else {
         transaction.commit()?;
         return Ok(PermissionRequestWait::Finished);
     };
@@ -274,12 +308,19 @@ fn finalize_permission_request_from(
             session.updated_at = Utc::now();
             write_session(&transaction, session)?;
         }
+        let wait = if let Some(decision) = expiration_decision {
+            PermissionRequestWait::Decision {
+                decision: decision.clone(),
+                tool_input: serde_json::from_str(&tool_input)?,
+                answers: answers
+                    .map(|answers| serde_json::from_str(&answers))
+                    .transpose()?,
+            }
+        } else {
+            PermissionRequestWait::Finished
+        };
         transaction.commit()?;
-        return Ok(
-            expiration_decision.map_or(PermissionRequestWait::Finished, |decision| {
-                PermissionRequestWait::Decision(decision.clone())
-            }),
-        );
+        return Ok(wait);
     }
     let Some(decision) = decision else {
         transaction.commit()?;
@@ -292,7 +333,13 @@ fn finalize_permission_request_from(
         params![session_id, agent_key, request_id],
     )?;
     transaction.commit()?;
-    Ok(PermissionRequestWait::Decision(decision))
+    Ok(PermissionRequestWait::Decision {
+        decision,
+        tool_input: serde_json::from_str(&tool_input)?,
+        answers: answers
+            .map(|answers| serde_json::from_str(&answers))
+            .transpose()?,
+    })
 }
 
 fn permission_request_is_current(
@@ -437,7 +484,57 @@ mod tests {
 
         assert_eq!(
             poll_request(sessions_dir.path(), "session-cobalt", "request-cobalt"),
-            PermissionRequestWait::Decision(decision),
+            PermissionRequestWait::Decision {
+                decision,
+                tool_input: serde_json::json!({"command": "echo fictional"}),
+                answers: None,
+            },
+        );
+    }
+
+    #[test]
+    fn answer_payload_is_returned_with_the_original_input() {
+        let sessions_dir = sessions_dir();
+        super::super::super::save_session_to(sessions_dir.path(), &session("session-cobalt"))
+            .expect("session should be saved");
+        let mut connection = open_connection(sessions_dir.path()).expect("database should open");
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .expect("transaction should begin");
+        let tool_input = serde_json::json!({
+            "questions": [{ "question": "Which format?" }],
+        });
+        insert_permission_request(
+            &transaction,
+            "session-cobalt",
+            MAIN_THREAD_AGENT_KEY,
+            "request-cobalt",
+            Some("AskUserQuestion"),
+            &tool_input,
+        )
+        .expect("request should be registered");
+        transaction.commit().expect("request should be committed");
+        let answers = serde_json::json!({ "Which format?": "Markdown" });
+
+        assert_eq!(
+            resolve_permission_request_with_answers(
+                sessions_dir.path(),
+                "session-cobalt",
+                MAIN_THREAD_AGENT_KEY,
+                "request-cobalt",
+                &PermissionRequestDecision::Allow,
+                Some(&answers),
+            )
+            .expect("answer should be saved"),
+            PermissionRequestResolution::Resolved,
+        );
+        assert_eq!(
+            poll_request(sessions_dir.path(), "session-cobalt", "request-cobalt"),
+            PermissionRequestWait::Decision {
+                decision: PermissionRequestDecision::Allow,
+                tool_input,
+                answers: Some(answers),
+            },
         );
     }
 
@@ -474,7 +571,14 @@ mod tests {
 
         assert_eq!(
             (wait, request),
-            (PermissionRequestWait::Decision(decision), None)
+            (
+                PermissionRequestWait::Decision {
+                    decision,
+                    tool_input: serde_json::json!({ "command": "echo fictional" }),
+                    answers: None,
+                },
+                None,
+            )
         );
     }
 
@@ -564,10 +668,14 @@ mod tests {
                 session.status,
             ),
             (
-                PermissionRequestWait::Decision(PermissionRequestDecision::Deny {
-                    message: "timeout fixture".to_string(),
-                    interrupt: false,
-                }),
+                PermissionRequestWait::Decision {
+                    decision: PermissionRequestDecision::Deny {
+                        message: "timeout fixture".to_string(),
+                        interrupt: false,
+                    },
+                    tool_input: serde_json::json!({ "command": "echo fictional" }),
+                    answers: None,
+                },
                 None,
                 BTreeSet::new(),
                 BTreeMap::new(),

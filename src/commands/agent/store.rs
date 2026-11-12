@@ -26,7 +26,7 @@ pub(crate) use database::{
     PermissionRequestDecision, PermissionRequestResolution, PermissionRequestWait,
     PermissionRequestWaiter, SessionLock, SessionStoreChanges, WakeLock, WatchWebPeerOutMessage,
     WatchWebQueuedPrompt, WatchWebSessionState, permission_request_data,
-    resolve_permission_request, serialize_session,
+    resolve_permission_request, resolve_permission_request_with_answers, serialize_session,
 };
 pub(crate) use peer_out_messages::{
     insert_watch_web_peer_out_message, watch_web_peer_out_messages_from,

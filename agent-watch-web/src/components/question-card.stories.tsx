@@ -5,24 +5,44 @@ import { QuestionCard } from '#components/question-card'
 const callbacks = {
   onAnswer: () => Promise.resolve(true),
   onSkip: () => Promise.resolve(true),
-  onFreeformAnswer: () => Promise.resolve(true),
   onOpenInTerminal: () => undefined,
 }
+
+const questions = [
+  {
+    header: 'Format',
+    question: 'Which formats should be included?',
+    choices: [
+      { label: 'Markdown', description: 'Readable source text.' },
+      { label: 'Plain text' },
+      { label: 'HTML' },
+    ],
+    multi_select: true,
+    answer: null,
+  },
+  {
+    header: 'Examples',
+    question: 'Should the guide include examples?',
+    choices: [{ label: 'Yes' }, { label: 'No' }],
+    multi_select: false,
+    answer: null,
+  },
+]
+
+const singleChoiceQuestions = [
+  {
+    header: 'Direction',
+    question: 'Which direction should be used?',
+    choices: [{ label: 'North' }, { label: 'South' }, { label: 'East' }],
+    multi_select: false,
+    answer: null,
+  },
+]
 
 const meta = {
   component: QuestionCard,
   args: {
-    header: 'Retry policy',
-    question: 'Which **retry policy** should be used?',
-    choices: [
-      {
-        label: 'Retry **three times** with exponential backoff',
-        description: 'Wait briefly before each retry.',
-      },
-      { label: 'Retry once without delay' },
-    ],
-    multiSelect: false,
-    answer: null,
+    questions,
     canAnswer: true,
     isMobile: false,
     showTerminalFallback: false,
@@ -34,8 +54,8 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
-export const QuestionWaitsForAnAnswer: Story = {
-  name: 'A question offers choices while it waits for an answer',
+export const WaitingForAllAnswers: Story = {
+  name: 'A question group waits for an answer to every prompt',
   decorators: [
     (Story) => (
       <div
@@ -47,8 +67,8 @@ export const QuestionWaitsForAnAnswer: Story = {
   ],
 }
 
-export const QuestionWaitsForAnAnswerOnIPhone: Story = {
-  name: 'An iPhone question shows numbered choices in full-width rows',
+export const WaitingOnAMobileScreen: Story = {
+  name: 'A mobile question group shows its prompts in one card',
   args: {
     isMobile: true,
   },
@@ -65,41 +85,46 @@ export const QuestionWaitsForAnAnswerOnIPhone: Story = {
   ],
 }
 
-export const QuestionShowsItsMultipleSelectType: Story = {
-  name: 'A question is marked as a multiple select question',
+export const ShowingAnswers: Story = {
+  name: 'A completed question group shows every recorded answer',
   args: {
-    multiSelect: true,
-  },
-}
-
-export const QuestionShowsSelectedAnswer: Story = {
-  name: 'A question marks the choice selected by the user',
-  args: {
-    answer: 'Retry once without delay',
     canAnswer: false,
+    questions: questions.map((question, index) => ({
+      ...question,
+      answer: index === 0 ? 'Markdown, HTML' : 'Yes',
+    })),
   },
 }
 
-export const QuestionShowsFreeformAnswer: Story = {
-  name: 'A question shows an answer outside its listed choices',
+export const DesktopSingleChoiceShowsShortcuts: Story = {
+  name: 'A desktop single choice shows numbered shortcuts',
   args: {
-    answer: 'Wait until the next deployment',
-    canAnswer: false,
+    questions: singleChoiceQuestions,
+    isMobile: false,
   },
 }
 
-export const QuestionOffersALinkedChoice: Story = {
-  name: 'A choice shows its link destination as plain text',
+export const MobileSingleChoiceHidesShortcuts: Story = {
+  name: 'A mobile single choice shows no keyboard shortcuts',
   args: {
-    choices: [
-      { label: 'Follow the [setup guide](https://example.org/guide)' },
-      { label: 'Use the default settings' },
-    ],
+    questions: singleChoiceQuestions,
+    isMobile: true,
   },
+  decorators: [
+    (Story) => (
+      <div
+        className="conversation-pane"
+        data-mobile="true"
+        style={{ width: '390px', height: '844px', padding: '0 16px' }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
 }
 
-export const QuestionCanBeAnsweredInTheTerminal: Story = {
-  name: 'A Codex question directs the user to the terminal',
+export const AnsweringInTheTerminal: Story = {
+  name: 'A question group without a watch-web request directs to the terminal',
   args: {
     canAnswer: false,
     showTerminalFallback: true,

@@ -30,7 +30,6 @@ function areConversationMessagePropsEqual(
       )
     case 'question':
       return (
-        previous.activeQuestion === next.activeQuestion &&
         previous.actions === next.actions &&
         previous.actionsReady === next.actionsReady &&
         previous.onAction === next.onAction &&

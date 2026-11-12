@@ -3780,7 +3780,7 @@ it('opens a known session ID from a conversation message', async () => {
   })
 })
 
-it('answers an Inbox question with a number key when the pane is not focused', async () => {
+it('answers an Inbox question with its request ID and selected answer', async () => {
   const requestPath = (input: Parameters<typeof fetch>[0]) =>
     typeof input === 'string'
       ? new URL(input, 'http://localhost').pathname
@@ -3795,13 +3795,15 @@ it('answers an Inbox question with a number key when the pane is not focused', a
           messages: [
             {
               type: 'question',
-              question: 'Which retry policy should be used?',
-              choices: [
-                { label: 'Retry three times' },
-                { label: 'Retry once' },
+              requestId: 'ask-request-inbox',
+              questions: [
+                {
+                  question: 'Which cache window should be used?',
+                  choices: [{ label: 'Window A' }, { label: 'Window B' }],
+                  multi_select: false,
+                  answer: null,
+                },
               ],
-              multi_select: false,
-              answer: null,
             },
           ],
           backgroundTasks: [],
@@ -3829,15 +3831,27 @@ it('answers an Inbox question with a number key when the pane is not focused', a
   renderApp()
   publishSessions({
     revision: 1,
-    sessions: [session('session-question', 'Choose a retry policy')],
+    sessions: [session('session-question', 'Choose a cache window')],
   })
   await act(async () => {
     for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
 
-  let event: KeyboardEvent | null = null
+  const choice = Array.from(
+    container.querySelectorAll<HTMLButtonElement>(
+      '.chat-question-choices button',
+    ),
+  ).find((button) => button.textContent.includes('Window B'))
+  if (choice === undefined) throw new Error('Expected an answer choice')
   act(() => {
-    event = dispatchKey(window, '1')
+    choice.click()
+  })
+  const submit = container.querySelector<HTMLButtonElement>(
+    '.chat-question-actions button.aw-button--primary',
+  )
+  if (submit === null) throw new Error('Expected a question submit button')
+  act(() => {
+    submit.click()
   })
   await act(async () => {
     for (let index = 0; index < 12; index += 1) await Promise.resolve()
@@ -3845,7 +3859,6 @@ it('answers an Inbox question with a number key when the pane is not focused', a
 
   const snapshot = () => ({
     selectedTitle: readSelectedTitle(),
-    defaultPrevented: event?.defaultPrevented,
     requests: fetcher.mock.calls.map(([input, init]) => ({
       path: requestPath(input),
       method: init?.method ?? 'GET',
@@ -3854,8 +3867,7 @@ it('answers an Inbox question with a number key when the pane is not focused', a
   })
 
   expect(snapshot()).toEqual({
-    selectedTitle: 'Choose a retry policy',
-    defaultPrevented: true,
+    selectedTitle: 'Choose a cache window',
     requests: [
       {
         path: '/api/sessions/session-question/messages',
@@ -3870,7 +3882,7 @@ it('answers an Inbox question with a number key when the pane is not focused', a
       {
         path: '/api/sessions/session-question/answer',
         method: 'POST',
-        body: '{"choice":1}',
+        body: '{"requestId":"ask-request-inbox","answers":{"Which cache window should be used?":"Window B"}}',
       },
       {
         path: '/api/sessions/session-question/messages',

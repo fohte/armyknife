@@ -879,7 +879,7 @@ The pane is normally found by walking the hook process's ancestry up to it. A Co
 
 `a agent hook <event> --engine <claude|codex>` (default: `claude`) records which coding agent CLI fired the hook; this is the engine `a agent resume` reads back to pick which binary to relaunch (see `--engine` on `new` above). Event names and JSON payload shape are the same regardless of engine: an allowed `stop` resolves to `Stopped` ("waiting for the next prompt"), while an unclassified stop remains `Running` until the agent reports its status. Both `permission-request` and `notification` with `notification_type: "permission_prompt"` resolve to `WaitingInput` ("waiting for tool-call approval") -- so a Codex hook configuration that maps Codex's own hook events onto these same `--event` values and payload fields gets the same approval-wait/input-wait distinction in `a agent list` for free.
 
-Claude Code's `PermissionRequest` hook lets watch-web approve or reject requests from the main thread and subagents. The hook waits up to 590 seconds for a decision from watch-web or the terminal. If neither responds in time, it removes the pending request and returns a deny decision with `interrupt: false`, including for `AskUserQuestion`; this closes the terminal permission dialog while allowing the turn to continue. If the terminal resolves a request first, the hook exits without a decision. Approve returns an allow decision; reject returns a deny decision with `interrupt: false`.
+Claude Code's `PermissionRequest` hook lets watch-web approve, reject, or answer requests from the main thread and subagents. The hook waits up to 590 seconds for a watch-web or terminal decision. If neither responds in time, it removes the pending request and returns a deny decision with `interrupt: false`, including for `AskUserQuestion`; this closes the terminal permission dialog while allowing the turn to continue. If the terminal resolves a request first, the hook exits without a decision. Approve returns an allow decision; reject returns a deny decision with `interrupt: false`. Question answers return an allow decision with the original `tool_input` plus an `answers` object. Skipping a question returns a deny decision with `interrupt: false` and tells Claude that the user skipped it.
 
 Register these in Codex's `hooks.json` (each command with `--engine codex`) to track Codex sessions the same way as Claude Code sessions:
 
@@ -1143,7 +1143,7 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 - `GET /api/images/{name}` for saved conversation images
 - `GET /api/sessions/later-options` for server-calculated return times
 - `POST /api/sessions/{id}/messages` with `{"content":"..."}`
-- `POST /api/sessions/{id}/answer` with `{"choice":1}` or `{"skip":true}`
+- `POST /api/sessions/{id}/answer` with `{"requestId":"...","answers":{"Which formats?":"Markdown, Plain text","Include examples?":"Yes"}}`, or `{"requestId":"...","skip":true}`
 - `POST /api/sessions/{id}/proposals/{seq}/answer` with `{"choice":0,"comment":"..."}`; `choice` is a zero-based option index or `null` to request another proposal, and `comment` may be `null`
 - `POST /api/sessions/{id}/permission/approve` with `{"requestId":"..."}`
 - `POST /api/sessions/{id}/permission/reject` with `{"requestId":"..."}`
@@ -1184,22 +1184,22 @@ curl -X POST http://127.0.0.1:4317/api/sessions/example-session/messages \
   -d '{"content":"Hello"}'
 ```
 
-Answer a question with:
+Answer every question in a pending AskUserQuestion at once. For `multiSelect`, join the selected option labels with `, `:
 
 ```sh
 curl -X POST http://127.0.0.1:4317/api/sessions/example-session/answer \
   -H 'Origin: http://127.0.0.1:4317' \
   -H 'Content-Type: application/json' \
-  -d '{"choice":1}'
+  -d '{"requestId":"example-request-id","answers":{"Which formats?":"Markdown, Plain text","Include examples?":"Yes"}}'
 ```
 
-Skip a question by sending Escape:
+Skip the question without interrupting Claude's turn:
 
 ```sh
 curl -X POST http://127.0.0.1:4317/api/sessions/example-session/answer \
   -H 'Origin: http://127.0.0.1:4317' \
   -H 'Content-Type: application/json' \
-  -d '{"skip":true}'
+  -d '{"requestId":"example-request-id","skip":true}'
 ```
 
 ```sh

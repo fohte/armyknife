@@ -18,7 +18,6 @@ type UseConversationMessageElementsOptions = {
   start?: number
   decisions?: readonly Extract<ChatItem, { type: 'decision' }>[]
   hasUnansweredProposal?: boolean
-  activeQuestionIndex?: number | null
   sessionCategory: Session['category']
   isCompacting: boolean
   sessionEngine: Session['engine']
@@ -43,7 +42,6 @@ export function useConversationMessageElements({
   start = 0,
   decisions: allDecisions,
   hasUnansweredProposal: proposalPending,
-  activeQuestionIndex: responseActiveQuestionIndex,
   sessionCategory,
   isCompacting,
   sessionEngine,
@@ -60,11 +58,6 @@ export function useConversationMessageElements({
   sessions,
 }: UseConversationMessageElementsOptions) {
   return useMemo(() => {
-    const activeQuestionIndex =
-      responseActiveQuestionIndex === undefined
-        ? start +
-          messages.findLastIndex((message) => message.type === 'question')
-        : responseActiveQuestionIndex
     const activeTool = messages.findLast(
       (message) => message.type === 'tool_in_progress',
     )
@@ -107,8 +100,6 @@ export function useConversationMessageElements({
             : String(start + index),
         actions,
         actionsReady,
-        activeQuestion:
-          message.type === 'question' && start + index === activeQuestionIndex,
         index: start + index,
         isMobile,
         selected:
@@ -150,7 +141,6 @@ export function useConversationMessageElements({
     openInTerminalStatus,
     pendingActions,
     proposalPending,
-    responseActiveQuestionIndex,
     selectedDecisionSeq,
     sessionCategory,
     sessionEngine,
