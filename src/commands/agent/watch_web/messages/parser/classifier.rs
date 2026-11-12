@@ -1,5 +1,7 @@
 use serde_json::Value;
 
+mod system_record;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum MessageKind {
     User {
@@ -97,7 +99,7 @@ pub(super) fn classify_inbound(
     }
 
     if record.get("type").and_then(Value::as_str) == Some("system") {
-        return system_record(record, text);
+        return system_record::classify(record, text);
     }
 
     if let Some(origin_kind) = origin(record)
@@ -314,86 +316,6 @@ pub(super) fn failed_peer_notification(text: &str) -> MessageKind {
 
 pub(super) fn peer_notification_failed(record: &Value, text: &str) -> bool {
     is_failure(record, "peer-notify", text)
-}
-
-fn system_record(record: &Value, raw_text: &str) -> MessageKind {
-    if record.get("subtype").and_then(Value::as_str).is_none() && raw_text.trim().is_empty() {
-        return MessageKind::Hidden;
-    }
-    let subtype = record
-        .get("subtype")
-        .and_then(Value::as_str)
-        .unwrap_or("system event");
-    if subtype == "stop_hook_summary"
-        && record
-            .get("hookErrors")
-            .and_then(Value::as_array)
-            .is_none_or(Vec::is_empty)
-        && record.get("preventedContinuation").and_then(Value::as_bool) != Some(true)
-    {
-        return MessageKind::Hidden;
-    }
-    let kind = if subtype == "compact_boundary" {
-        EventKind::CompactBoundary
-    } else {
-        EventKind::System
-    };
-    let text = match subtype {
-        "compact_boundary" => "Context compacted".to_owned(),
-        "resume" | "session_resume" => "Session resumed".to_owned(),
-        "model_change" | "model_changed" => "Model changed".to_owned(),
-        "away_summary" => record
-            .get("content")
-            .and_then(Value::as_str)
-            .filter(|content| !content.trim().is_empty())
-            .or_else(|| (!raw_text.trim().is_empty()).then_some(raw_text))
-            .map(|content| format!("recap: {}", one_line(content)))
-            .unwrap_or_else(|| subtype.replace('_', " ")),
-        "turn_duration" => turn_duration_text(record),
-        _ if !raw_text.trim().is_empty() => one_line(raw_text),
-        _ => subtype.replace('_', " "),
-    };
-    MessageKind::Event {
-        kind,
-        failed: is_failure(record, subtype, &text),
-        text,
-    }
-}
-
-fn turn_duration_text(record: &Value) -> String {
-    let duration = record
-        .get("durationMs")
-        .and_then(Value::as_u64)
-        .map(format_duration)
-        .map(|duration| format!("Took {duration}"));
-    let ended_at = record
-        .get("timestamp")
-        .and_then(Value::as_str)
-        .and_then(|timestamp| chrono::DateTime::parse_from_rfc3339(timestamp).ok())
-        .map(|timestamp| {
-            format!(
-                "done {}",
-                timestamp.with_timezone(&chrono::Local).format("%H:%M")
-            )
-        });
-    [duration, ended_at]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(" · ")
-}
-
-fn format_duration(duration_ms: u64) -> String {
-    let seconds = duration_ms / 1000;
-    let minutes = seconds / 60;
-    let seconds = seconds % 60;
-    let hours = minutes / 60;
-    let minutes = minutes % 60;
-    match (hours, minutes) {
-        (0, 0) => format!("{seconds}s"),
-        (0, _) => format!("{minutes}m {seconds}s"),
-        _ => format!("{hours}h {minutes}m"),
-    }
 }
 
 fn event(tag: &str, body: &str, record: &Value) -> MessageKind {
@@ -670,9 +592,10 @@ mod tests {
     #[case::background_task_uses_summary(json!({"type":"user"}), "<task-notification><task-id>fixture-task-id</task-id><status>completed</status><summary>Background command \"Check the fictional build\" completed (exit code 0)</summary></task-notification>", None, MessageKind::Event { kind: EventKind::System, text: "Background command \"Check the fictional build\" completed (exit code 0)".to_owned(), failed: false })]
     #[case::background_task_without_summary_uses_id_and_status(json!({"type":"user"}), "<task-notification><task-id>fixture-task-id</task-id><status>completed</status></task-notification>", None, MessageKind::Event { kind: EventKind::System, text: "Background task fixture-task-id completed".to_owned(), failed: false })]
     #[case::away_summary_uses_record_content(json!({"type":"system","subtype":"away_summary","content":"The fictional task finished while the user was away."}), "", None, MessageKind::Event { kind: EventKind::System, text: "recap: The fictional task finished while the user was away.".to_owned(), failed: false })]
+    #[case::away_summary_uses_raw_text_when_content_is_empty(json!({"type":"system","subtype":"away_summary","content":"  "}), "The fictional task finished while the user was away.", None, MessageKind::Event { kind: EventKind::System, text: "recap: The fictional task finished while the user was away.".to_owned(), failed: false })]
     #[case::empty_stop_hook_summary_is_hidden(json!({"type":"system","subtype":"stop_hook_summary","hookErrors":[],"preventedContinuation":false}), "", None, MessageKind::Hidden)]
-    #[case::stop_hook_error_is_visible_without_changing_failure_classification(json!({"type":"system","subtype":"stop_hook_summary","hookErrors":[{"hookName":"fixture-hook","error":"Synthetic hook failure."}],"preventedContinuation":false}), "", None, MessageKind::Event { kind: EventKind::System, text: "stop hook summary".to_owned(), failed: false })]
-    #[case::prevented_continuation_is_visible(json!({"type":"system","subtype":"stop_hook_summary","hookErrors":[],"preventedContinuation":true}), "", None, MessageKind::Event { kind: EventKind::System, text: "stop hook summary".to_owned(), failed: false })]
+    #[case::stop_hook_error_is_visible_without_changing_failure_classification(json!({"type":"system","subtype":"stop_hook_summary","hookErrors":[{"hookName":"fixture-hook","error":"Synthetic hook failure."}],"preventedContinuation":false}), "", None, MessageKind::Event { kind: EventKind::System, text: "Stop hook summary: fixture-hook: Synthetic hook failure.".to_owned(), failed: false })]
+    #[case::prevented_continuation_is_visible(json!({"type":"system","subtype":"stop_hook_summary","hookErrors":[],"preventedContinuation":true}), "", None, MessageKind::Event { kind: EventKind::System, text: "Stop hook summary: continuation was prevented".to_owned(), failed: false })]
     #[case::turn_duration_shows_elapsed_time_and_end_time(json!({"type":"system","subtype":"turn_duration","durationMs":30314,"messageCount":5,"timestamp":"2026-06-01T12:34:00Z"}), "", None, MessageKind::Event { kind: EventKind::System, text: format!("Took 30s · done {}", chrono::DateTime::parse_from_rfc3339("2026-06-01T12:34:00Z").expect("valid fixture timestamp").with_timezone(&chrono::Local).format("%H:%M")), failed: false })]
     #[case::hook_output_is_one_line(json!({"type":"user"}), "<local-command-stdout>First line.\nSecond line.</local-command-stdout>", None, MessageKind::Event { kind: EventKind::Hook, text: "First line. Second line.".to_owned(), failed: false })]
     fn classifies_inbound_records(
