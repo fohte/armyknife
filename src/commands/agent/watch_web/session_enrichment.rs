@@ -14,7 +14,17 @@ use crate::commands::agent::types::Session;
 use crate::infra::github::{BranchPrQuery, GitHubClient, PrInfo};
 use crate::infra::tq::{TqClient, TqProjectSummary, TqTaskSummary};
 
+mod cache;
+#[cfg(test)]
+mod test_support;
+
+use cache::{
+    merge_pull_request_results, merge_session_task_metadata, prune_pull_request_results,
+    prune_session_task_metadata,
+};
+
 const CACHE_TTL: Duration = Duration::from_secs(30);
+const CACHE_KEY_RETENTION: Duration = Duration::from_secs(10 * 60);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(35);
 type BranchPrKey = (String, String, String);
 type FetchFuture<T> = Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'static>>;
@@ -76,9 +86,13 @@ impl SessionEnrichmentCache {
         let fetch_session_ids = session_ids.clone();
         let fetcher = Arc::clone(&self.task_fetcher);
         self.tq
-            .get_or_refresh("tq", session_ids, move |previous| {
-                fetcher(fetch_session_ids, previous)
-            })
+            .get_or_refresh(
+                "tq",
+                session_ids,
+                move |previous| fetcher(fetch_session_ids, previous),
+                merge_session_task_metadata,
+                prune_session_task_metadata,
+            )
             .await
     }
 
@@ -94,10 +108,16 @@ impl SessionEnrichmentCache {
         let fetcher = Arc::clone(&self.pull_request_fetcher);
         let cached = self
             .pull_requests
-            .get_or_refresh("GitHub", query_keys, {
-                let sessions = sessions.to_vec();
-                move |_| fetcher(sessions)
-            })
+            .get_or_refresh(
+                "GitHub",
+                query_keys,
+                {
+                    let sessions = sessions.to_vec();
+                    move |_| fetcher(sessions)
+                },
+                merge_pull_request_results,
+                prune_pull_request_results,
+            )
             .await;
 
         sessions
@@ -134,22 +154,23 @@ struct RefreshingCache<T, K> {
 }
 
 struct CacheState<T, K> {
-    value: Option<T>,
-    last_attempt: Option<Instant>,
-    attempted_keys: HashSet<K>,
+    value: T,
+    attempted_at: HashMap<K, Instant>,
+    last_requested: HashMap<K, Instant>,
     refresh_in_flight: bool,
 }
 
 impl<T, K> RefreshingCache<T, K>
 where
+    T: Default,
     K: Eq + Hash,
 {
     fn new(updates: EnrichmentUpdates, fetch_timeout: Duration) -> Self {
         Self {
             state: tokio::sync::Mutex::new(CacheState {
-                value: None,
-                last_attempt: None,
-                attempted_keys: HashSet::new(),
+                value: T::default(),
+                attempted_at: HashMap::new(),
+                last_requested: HashMap::new(),
                 refresh_in_flight: false,
             }),
             updates,
@@ -168,23 +189,42 @@ where
         resource: &'static str,
         keys: HashSet<K>,
         fetch: F,
+        merge: fn(&mut T, T, &HashSet<K>),
+        prune: fn(&mut T, &HashSet<K>),
     ) -> T
     where
         F: FnOnce(T) -> Fut + Send + 'static,
         Fut: Future<Output = Result<T, String>> + Send + 'static,
     {
         let mut state = self.state.lock().await;
-        let cached = state.value.clone().unwrap_or_default();
-        let expired = state
-            .last_attempt
-            .is_none_or(|last_attempt| last_attempt.elapsed() >= CACHE_TTL)
-            || keys.iter().any(|key| !state.attempted_keys.contains(key));
+        let now = Instant::now();
+        for key in &keys {
+            state.last_requested.insert(key.clone(), now);
+        }
+        let stale_keys = state
+            .last_requested
+            .iter()
+            .filter(|(_, last_requested)| last_requested.elapsed() >= CACHE_KEY_RETENTION)
+            .map(|(key, _)| key.clone())
+            .collect::<HashSet<_>>();
+        for key in &stale_keys {
+            state.last_requested.remove(key);
+            state.attempted_at.remove(key);
+        }
+        prune(&mut state.value, &stale_keys);
+        let cached = state.value.clone();
+        let expired = keys.iter().any(|key| {
+            state
+                .attempted_at
+                .get(key)
+                .is_none_or(|last_attempt| last_attempt.elapsed() >= CACHE_TTL)
+        });
 
         if expired && !state.refresh_in_flight {
             state.refresh_in_flight = true;
-            state.attempted_keys = keys;
             let cache = Arc::clone(self);
             let previous = cached.clone();
+            let attempted_keys = keys.clone();
             let fetch_timeout = self.fetch_timeout;
             tokio::spawn(async move {
                 let result = match tokio::time::timeout(fetch_timeout, fetch(previous)).await {
@@ -192,10 +232,13 @@ where
                     Err(_) => Err(format!("lookup exceeded {fetch_timeout:?}")),
                 };
                 let mut state = cache.state.lock().await;
-                state.last_attempt = Some(Instant::now());
+                let attempted_at = Instant::now();
+                for key in attempted_keys {
+                    state.attempted_at.insert(key, attempted_at);
+                }
                 match result {
                     Ok(value) => {
-                        state.value = Some(value);
+                        merge(&mut state.value, value, &keys);
                     }
                     Err(error) => {
                         tracing::warn!(%error, resource, "Failed to refresh agent watch metadata; keeping cached values");
@@ -365,28 +408,14 @@ async fn fetch_pull_requests(
 
 #[cfg(test)]
 mod tests {
+    use super::test_support::{
+        cache_with_fetchers, metadata, session, session_with_branch, wait_for_refresh,
+    };
     use super::*;
     use crate::commands::agent::tq_session_tasks::task_priority_metadata;
-    use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionStatus};
-    use chrono::{TimeZone, Utc};
     use rstest::rstest;
-    use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Notify;
-
-    fn cache_with_fetchers(
-        updates: EnrichmentUpdates,
-        fetch_timeout: Duration,
-        task_fetcher: TaskMetadataFetcher,
-        pull_request_fetcher: PullRequestFetcher,
-    ) -> SessionEnrichmentCache {
-        SessionEnrichmentCache::with_fetchers(
-            updates,
-            fetch_timeout,
-            task_fetcher,
-            pull_request_fetcher,
-        )
-    }
 
     fn task(id: &str, priority: Option<i32>) -> TqTaskSummary {
         TqTaskSummary {
@@ -406,89 +435,6 @@ mod tests {
             parent_task_id: None,
             is_closed: false,
         }
-    }
-
-    fn metadata(session_ids: HashSet<String>) -> SessionTaskMetadata {
-        let links = session_ids
-            .into_iter()
-            .map(|session_id| {
-                let task_id = format!("task-{session_id}");
-                (
-                    session_id,
-                    vec![SessionTask {
-                        task_id,
-                        task_number: 7,
-                        task_title: "Example task".to_string(),
-                        parent_task_id: None,
-                        is_closed: false,
-                    }],
-                )
-            })
-            .collect();
-        SessionTaskMetadata {
-            links,
-            priorities: HashMap::new(),
-            priority_order: HashMap::new(),
-            task_projects: HashMap::new(),
-        }
-    }
-
-    fn session(session_id: &str, pr_context: Option<SessionPrContext>) -> Session {
-        let timestamp = Utc.timestamp_opt(1_234_567, 0).single().unwrap();
-        Session {
-            session_id: session_id.to_string(),
-            archived_at: None,
-            pr_context,
-            crit_urls: Vec::new(),
-            pending_human_review_ids: Default::default(),
-            cwd: PathBuf::from("/workspace/example"),
-            transcript_path: None,
-            tty: None,
-            tmux_info: None,
-            status: SessionStatus::Stopped,
-            agent_status: None,
-            agent_status_clear_pending: false,
-            created_at: timestamp,
-            updated_at: timestamp,
-            last_message: None,
-            current_tool: None,
-            label: None,
-            work_type: None,
-            vibe_enabled: false,
-            launched_with_vibe: false,
-            work_type_pinned: false,
-            child_launch: Default::default(),
-            ancestor_session_ids: Vec::new(),
-            pending_bg_task_ids: Default::default(),
-            pending_agent_task_ids: Default::default(),
-            pending_permission_agent_ids: Default::default(),
-            pending_permission_request_ids: Default::default(),
-            read_at: None,
-            sweep_signaled: false,
-            stop_blocked_by_armyknife: false,
-            engine: Engine::Claude,
-            model: None,
-            effort: None,
-        }
-    }
-
-    fn session_with_branch(session_id: &str) -> Session {
-        session(
-            session_id,
-            Some(SessionPrContext {
-                owner: "example-owner".to_string(),
-                repo: "example-repository".to_string(),
-                branch: "feature/example".to_string(),
-                checklist_item_id: None,
-            }),
-        )
-    }
-
-    async fn wait_for_refresh(receiver: &mut tokio::sync::watch::Receiver<()>) {
-        tokio::time::timeout(Duration::from_secs(1), receiver.changed())
-            .await
-            .unwrap()
-            .unwrap();
     }
 
     #[rstest]
