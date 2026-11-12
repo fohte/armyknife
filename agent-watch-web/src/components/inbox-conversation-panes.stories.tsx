@@ -98,6 +98,9 @@ const meta = {
             openInTerminal: true,
           }),
         ),
+        http.get('/api/sessions/:sessionId/pull-requests', () =>
+          HttpResponse.json({ pullRequests: [] }),
+        ),
       ],
     },
   },

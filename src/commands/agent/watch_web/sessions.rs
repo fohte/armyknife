@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use axum::Extension;
 use axum::Json;
 use axum::Router;
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use chrono::{DateTime, Utc};
@@ -230,8 +230,59 @@ fn router_with_source_and_cache<S: SessionSource>(
     Router::new()
         .route("/sessions", get(list_sessions::<S>))
         .route("/sessions/{session_id}/tree", get(tree::session_tree::<S>))
+        .route(
+            "/sessions/{session_id}/pull-requests",
+            get(session_pull_requests::<S>),
+        )
         .layer(Extension(snapshot_cache))
         .with_state(source)
+}
+
+async fn session_pull_requests<S: SessionSource>(
+    State(source): State<S>,
+    Path(session_id): Path<String>,
+) -> Result<Json<crate::commands::agent::tui::progress_fetch::PullRequestListResponse>, StatusCode>
+{
+    let snapshot = source.load_snapshot().await.map_err(|error| {
+        tracing::warn!(%error, "failed to load sessions for PR list");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let task_metadata = source.fetch_task_metadata(&snapshot.all_sessions).await;
+    let task_ids_by_session = task_metadata
+        .links
+        .iter()
+        .map(|(session_id, tasks)| {
+            (
+                session_id.clone(),
+                tasks.iter().map(|task| task.task_id.clone()).collect(),
+            )
+        })
+        .collect::<HashMap<_, Vec<String>>>();
+    let linked_tasks = task_metadata.links.get(&session_id);
+    let primary_task_id = snapshot
+        .web_states
+        .iter()
+        .find(|state| state.session_id == session_id)
+        .and_then(|state| state.primary_task_id.as_deref())
+        .filter(|task_id| {
+            linked_tasks.is_some_and(|tasks| tasks.iter().any(|task| task.task_id == *task_id))
+        })
+        .or_else(|| linked_tasks.and_then(|tasks| tasks.first().map(|task| task.task_id.as_str())));
+
+    let response = crate::commands::agent::tui::progress_fetch::fetch_pull_request_list(
+        session_id,
+        primary_task_id,
+        &snapshot.all_sessions,
+        &task_ids_by_session,
+        &snapshot.agent_config,
+    )
+    .await
+    .map_err(|error| {
+        tracing::warn!(%error, "failed to fetch session PR list");
+        StatusCode::BAD_GATEWAY
+    })?;
+
+    Ok(Json(response))
 }
 
 async fn list_sessions<S: SessionSource>(

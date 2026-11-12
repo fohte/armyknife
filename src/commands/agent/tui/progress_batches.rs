@@ -7,11 +7,12 @@ use crate::infra::github::{PrNumberQuery, PrProgressInfo, PrState};
 use crate::infra::tq::{TqChecklist, TqChecklistItem, TqGithubLink};
 use crate::shared::config::AgentConfig;
 
-use super::progress::marks::{completed_stage_marks, pr_ci_merge_marks};
+use super::progress::marks::{completed_stage_marks, pr_ci_merge_marks, stage_marks};
 use super::progress::{
     FetchedDelegate, PrProgressRow, ProgressMark, ProgressRow, StageMarks,
     delegate_row_is_displayable, has_delegated_descendant, pr_progress_row, work_progress_row,
 };
+use super::progress_fetch::PullRequestListItem;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct ImplementationPlan {
@@ -191,6 +192,101 @@ pub(super) fn build_implementation_plan(
     ImplementationPlan {
         batches,
         unmatched_delegates,
+    }
+}
+
+pub(super) fn pull_request_list_items(
+    delegates: &[FetchedDelegate],
+    plan: Option<&ImplementationPlan>,
+    agent_config: &AgentConfig,
+) -> Vec<PullRequestListItem> {
+    let mut items = Vec::new();
+    let mut matched_delegate_session_ids = HashSet::new();
+
+    if let Some(plan) = plan {
+        for item in plan.batches.iter().flat_map(|batch| &batch.items) {
+            let delegate = item.delegate_session_id.as_deref().and_then(|id| {
+                delegates
+                    .iter()
+                    .find(|delegate| delegate.session.session_id == id)
+            });
+            if let Some(delegate) = delegate {
+                matched_delegate_session_ids.insert(delegate.session.session_id.clone());
+            }
+
+            let progress = item.pull_request.as_ref();
+            let link = item.github_link.as_ref();
+            let number = progress
+                .map(|progress| progress.pull_request.number)
+                .or_else(|| link.and_then(|link| link.number));
+            let url = progress
+                .map(|progress| progress.pull_request.url.clone())
+                .or_else(|| link.and_then(|link| link.url.clone()));
+            let (Some(number), Some(url)) = (number, url) else {
+                continue;
+            };
+
+            items.push(PullRequestListItem {
+                number,
+                title: progress
+                    .map_or_else(|| item.title.clone(), |pr| pr.pull_request.title.clone()),
+                url,
+                state: progress
+                    .map(|progress| progress.pull_request.state.clone())
+                    .or_else(|| {
+                        link.and_then(|link| link.state.as_deref())
+                            .and_then(parse_pr_state)
+                    }),
+                ci_state: progress.map(|progress| progress.ci_state),
+                review_status: delegate
+                    .map_or(ProgressMark::NotStarted, |delegate| {
+                        stage_marks(&delegate.session, progress, agent_config).diff_review
+                    })
+                    .label()
+                    .to_string(),
+            });
+        }
+    }
+
+    items.extend(
+        delegates
+            .iter()
+            .filter(|delegate| !matched_delegate_session_ids.contains(&delegate.session.session_id))
+            .filter_map(|delegate| {
+                let progress = delegate.pull_request.as_ref()?;
+                Some(PullRequestListItem {
+                    number: progress.pull_request.number,
+                    title: progress.pull_request.title.clone(),
+                    url: progress.pull_request.url.clone(),
+                    state: Some(progress.pull_request.state.clone()),
+                    ci_state: Some(progress.ci_state),
+                    review_status: stage_marks(&delegate.session, Some(progress), agent_config)
+                        .diff_review
+                        .label()
+                        .to_string(),
+                })
+            }),
+    );
+
+    let mut seen_urls = HashSet::new();
+    items.retain(|item| seen_urls.insert(item.url.clone()));
+    items.sort_by_key(|item| match item.state {
+        Some(PrState::Open) => 0,
+        Some(PrState::Closed | PrState::Merged) => 1,
+        None => 2,
+    });
+    items
+}
+
+fn parse_pr_state(state: &str) -> Option<PrState> {
+    if state.eq_ignore_ascii_case("open") {
+        Some(PrState::Open)
+    } else if state.eq_ignore_ascii_case("closed") {
+        Some(PrState::Closed)
+    } else if state.eq_ignore_ascii_case("merged") {
+        Some(PrState::Merged)
+    } else {
+        None
     }
 }
 
@@ -454,6 +550,7 @@ fn pull_request_title(content: &str) -> Option<String> {
 mod tests {
     use std::collections::HashMap;
 
+    use crate::commands::agent::tui::progress::FetchedDelegate;
     use crate::commands::agent::tui::progress::ProgressSelectionKey;
     use crate::commands::agent::tui::ui::test_support::create_test_session;
     use crate::commands::agent::types::SessionStatus;
@@ -528,6 +625,62 @@ mod tests {
             },
             ci_state: PrCiState::Successful,
         }
+    }
+
+    #[test]
+    fn lists_open_pull_requests_before_merged_pull_requests() {
+        let delegates = vec![
+            FetchedDelegate {
+                session: create_test_session("merged-session"),
+                checklist_item_id: None,
+                pull_request: Some(PrProgressInfo {
+                    pull_request: PrInfo {
+                        number: 46,
+                        title: "Finish workspace guide".to_string(),
+                        state: PrState::Merged,
+                        url: "https://github.com/example/project/pull/46".to_string(),
+                    },
+                    ci_state: PrCiState::Successful,
+                }),
+                lookup_unavailable: false,
+            },
+            FetchedDelegate {
+                session: create_test_session("open-session"),
+                checklist_item_id: None,
+                pull_request: Some(PrProgressInfo {
+                    pull_request: PrInfo {
+                        number: 48,
+                        title: "Improve project navigation".to_string(),
+                        state: PrState::Open,
+                        url: "https://github.com/example/project/pull/48".to_string(),
+                    },
+                    ci_state: PrCiState::InProgress,
+                }),
+                lookup_unavailable: false,
+            },
+        ];
+
+        assert_eq!(
+            pull_request_list_items(&delegates, None, &AgentConfig::default()),
+            vec![
+                PullRequestListItem {
+                    number: 48,
+                    title: "Improve project navigation".to_string(),
+                    url: "https://github.com/example/project/pull/48".to_string(),
+                    state: Some(PrState::Open),
+                    ci_state: Some(PrCiState::InProgress),
+                    review_status: "done".to_string(),
+                },
+                PullRequestListItem {
+                    number: 46,
+                    title: "Finish workspace guide".to_string(),
+                    url: "https://github.com/example/project/pull/46".to_string(),
+                    state: Some(PrState::Merged),
+                    ci_state: Some(PrCiState::Successful),
+                    review_status: "done".to_string(),
+                },
+            ],
+        );
     }
 
     #[test]

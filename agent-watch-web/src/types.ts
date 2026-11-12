@@ -25,6 +25,16 @@ export type PullRequest = {
   state: 'Open' | 'Closed' | 'Merged' | (string & {})
 }
 
+export type SessionPullRequest = {
+  number: number
+  title: string
+  url: string
+  state: 'Open' | 'Closed' | 'Merged' | null
+  ciState: 'Waiting' | 'InProgress' | 'Successful' | 'Unknown' | null
+  reviewStatus:
+    'done' | 'user' | 'working' | 'waiting' | 'not_started' | (string & {})
+}
+
 type ParentSession = {
   id: string
   title: string | null

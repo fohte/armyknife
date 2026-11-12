@@ -4,6 +4,7 @@ import type {
   ChatItem,
   ConversationResponse,
   SessionActions,
+  SessionPullRequest,
   SessionTreeNode,
   SkillSuggestion,
 } from '#types'
@@ -286,6 +287,38 @@ export function isSessionTreeResponse(
         Number.isInteger(session['decisionCount']) &&
         (session['pullRequest'] === null ||
           isPullRequest(session['pullRequest'])),
+    )
+  )
+}
+
+export function isSessionPullRequestListResponse(
+  value: unknown,
+): value is { pullRequests: SessionPullRequest[] } {
+  return (
+    isRecord(value) &&
+    Array.isArray(value['pullRequests']) &&
+    value['pullRequests'].every(
+      (pullRequest) =>
+        isRecord(pullRequest) &&
+        typeof pullRequest['number'] === 'number' &&
+        Number.isInteger(pullRequest['number']) &&
+        pullRequest['number'] > 0 &&
+        typeof pullRequest['title'] === 'string' &&
+        typeof pullRequest['url'] === 'string' &&
+        (pullRequest['state'] === null ||
+          pullRequest['state'] === 'Open' ||
+          pullRequest['state'] === 'Closed' ||
+          pullRequest['state'] === 'Merged') &&
+        (pullRequest['ciState'] === null ||
+          pullRequest['ciState'] === 'Waiting' ||
+          pullRequest['ciState'] === 'InProgress' ||
+          pullRequest['ciState'] === 'Successful' ||
+          pullRequest['ciState'] === 'Unknown') &&
+        (pullRequest['reviewStatus'] === 'done' ||
+          pullRequest['reviewStatus'] === 'user' ||
+          pullRequest['reviewStatus'] === 'working' ||
+          pullRequest['reviewStatus'] === 'waiting' ||
+          pullRequest['reviewStatus'] === 'not_started'),
     )
   )
 }
