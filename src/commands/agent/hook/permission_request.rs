@@ -94,21 +94,68 @@ mod tests {
     #[test]
     fn expired_wait_finishes_without_writing_a_hook_response() {
         let sessions_dir = tempfile::tempdir().expect("sessions directory should be created");
+        let session_id = "fixture-session";
+        let request_id = "fixture-request";
+        let agent_key = crate::commands::agent::types::MAIN_THREAD_AGENT_KEY;
+        let mut session: crate::commands::agent::types::Session = serde_json::from_value(json!({
+            "session_id": session_id,
+            "cwd": "/tmp/fixture",
+            "transcript_path": null,
+            "tmux_info": null,
+            "status": "waiting_input",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": null,
+        }))
+        .expect("session should deserialize");
+        session
+            .pending_permission_agent_ids
+            .insert(agent_key.to_string());
+        session
+            .pending_permission_request_ids
+            .insert(agent_key.to_string(), request_id.to_string());
+        super::super::super::store::save_session_to(sessions_dir.path(), &session)
+            .expect("session should be saved");
+        let session_lock =
+            super::super::super::store::lock_session_for_update(sessions_dir.path(), session_id)
+                .expect("session should lock");
+        session_lock
+            .register_permission_request(
+                agent_key,
+                request_id,
+                Some("Bash"),
+                &json!({ "command": "echo fixture" }),
+            )
+            .expect("permission request should register");
+        session_lock
+            .save(&session)
+            .expect("pending session should save");
         let mut waiter = PermissionRequestWaiter::open(sessions_dir.path())
             .expect("permission request waiter should open");
         let mut output = Vec::new();
 
         wait_until_deadline(
             &mut waiter,
-            "fixture-session",
-            "main",
-            "fixture-request",
-            Instant::now(),
+            session_id,
+            agent_key,
+            request_id,
+            Instant::now() - Duration::from_secs(1),
             &mut output,
         )
         .expect("expired wait should finish successfully");
 
-        assert_eq!(output, Vec::<u8>::new());
+        assert_eq!(
+            (
+                output,
+                super::super::super::store::permission_request_data(
+                    sessions_dir.path(),
+                    session_id,
+                    request_id,
+                )
+                .expect("expired request should be readable"),
+            ),
+            (Vec::<u8>::new(), None),
+        );
     }
 
     #[test]
