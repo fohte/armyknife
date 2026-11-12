@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.625](https://github.com/fohte/armyknife/compare/v0.1.624...v0.1.625) (2026-11-12)
+
+
+### Features
+
+* **agent/watch-web:** close completed sessions ([#1618](https://github.com/fohte/armyknife/issues/1618)) ([60b7812](https://github.com/fohte/armyknife/commit/60b7812ea14c80d7b522bc51ad732c18e172b7ec))
+
 ## [0.1.624](https://github.com/fohte/armyknife/compare/v0.1.623...v0.1.624) (2026-11-12)
 
 
