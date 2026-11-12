@@ -53,16 +53,21 @@ export function SessionTaskLinks({
   sessions = [],
   onMakePrimary,
   taskListOpen,
+  completedTasksExpanded,
 }: {
   task: SessionTask | null
   tasks: SessionTask[]
   sessions?: readonly SessionTaskLinkSession[]
   onMakePrimary?: (taskId: string) => Promise<boolean>
   taskListOpen?: boolean
+  completedTasksExpanded?: boolean
 }) {
   const taskMenuId = useId()
   const summaryRef = useRef<HTMLElement>(null)
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false)
+  const [expandedCompletedTasksFor, setExpandedCompletedTasksFor] = useState<
+    string | null
+  >(null)
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null)
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null)
   const menuOpen =
@@ -104,6 +109,25 @@ export function SessionTaskLinks({
   }, [menuOpen])
 
   if (task === null) return null
+
+  const primaryAndOpenTasks = tasks.filter(
+    (linkedTask) => linkedTask.id === task.id || linkedTask.isClosed !== true,
+  )
+  const completedSecondaryTasks = tasks.filter(
+    (linkedTask) => linkedTask.id !== task.id && linkedTask.isClosed === true,
+  )
+  const completedTasksKey = `${task.id}:${completedSecondaryTasks
+    .map((completedTask) => completedTask.id)
+    .join(',')}`
+  const showCompletedTasks =
+    completedTasksExpanded ?? expandedCompletedTasksFor === completedTasksKey
+  const visibleTasks = showCompletedTasks
+    ? [...primaryAndOpenTasks, ...completedSecondaryTasks]
+    : primaryAndOpenTasks
+  const taskCountLabel =
+    primaryAndOpenTasks.length > 1
+      ? `+${String(primaryAndOpenTasks.length - 1)} tasks ▾`
+      : `+0 tasks · ${String(completedSecondaryTasks.length)} completed ▾`
 
   const makePrimary = async (taskId: string) => {
     if (onMakePrimary === undefined) return
@@ -170,9 +194,14 @@ export function SessionTaskLinks({
             <summary
               ref={summaryRef}
               aria-controls={taskMenuId}
-              aria-label={`${String(tasks.length - 1)} more linked tq tasks`}
+              aria-label={
+                completedSecondaryTasks.length > 0 &&
+                primaryAndOpenTasks.length === 1
+                  ? `0 more linked tq tasks, ${String(completedSecondaryTasks.length)} completed`
+                  : `${String(primaryAndOpenTasks.length - 1)} more linked tq tasks`
+              }
             >
-              +{tasks.length - 1} tasks ▾
+              {taskCountLabel}
             </summary>
           </details>
         ) : null}
@@ -199,7 +228,7 @@ export function SessionTaskLinks({
                 Linked tq tasks · Inbox and Board use the primary one
               </div>
               <ul>
-                {tasks.map((linkedTask) => {
+                {visibleTasks.map((linkedTask) => {
                   const isPrimary = linkedTask.id === task.id
 
                   return (
@@ -256,6 +285,23 @@ export function SessionTaskLinks({
                   )
                 })}
               </ul>
+              {completedSecondaryTasks.length > 0 ? (
+                <button
+                  className="session-task-links-completed-toggle"
+                  type="button"
+                  aria-expanded={showCompletedTasks}
+                  onClick={() => {
+                    if (completedTasksExpanded === undefined) {
+                      setExpandedCompletedTasksFor(
+                        showCompletedTasks ? null : completedTasksKey,
+                      )
+                    }
+                  }}
+                >
+                  {showCompletedTasks ? 'Hide' : 'Show'}{' '}
+                  {String(completedSecondaryTasks.length)} completed
+                </button>
+              ) : null}
             </div>,
             document.body,
           )
