@@ -1878,12 +1878,17 @@ mod tests {
     }
 
     #[test]
-    fn claude_tool_resolution_removes_the_permission_request_mailbox_entry() {
+    fn claude_question_tool_resolution_ends_the_permission_wait_without_output() {
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
         process_hook_event_impl(
             HookEvent::PermissionRequest,
-            create_test_input_with_tool("Bash", Some(r#"{"command":"echo fictional"}"#)),
+            create_test_input_with_tool(
+                "AskUserQuestion",
+                Some(
+                    r#"{"questions":[{"question":"Which format?","options":[{"label":"Plain"}]}]}"#,
+                ),
+            ),
             sessions_dir,
             &SideEffects::none(),
         )
@@ -1896,18 +1901,43 @@ mod tests {
             .get(MAIN_THREAD_AGENT_KEY)
             .expect("request ID should be recorded")
             .clone();
+        let mut waiter = store::PermissionRequestWaiter::open(sessions_dir)
+            .expect("permission waiter should open");
+        assert_eq!(
+            waiter
+                .poll("test-123", MAIN_THREAD_AGENT_KEY, &request_id)
+                .expect("pending question should be visible"),
+            store::PermissionRequestWait::Pending,
+        );
         process_hook_event_impl(
             HookEvent::PostToolUse,
-            create_test_input_with_tool("Bash", Some(r#"{"command":"echo fictional"}"#)),
+            create_test_input_with_tool(
+                "AskUserQuestion",
+                Some(
+                    r#"{"questions":[{"question":"Which format?","options":[{"label":"Plain"}]}]}"#,
+                ),
+            ),
             sessions_dir,
             &SideEffects::none(),
         )
         .expect("tool resolution should save");
+        let mut output = Vec::new();
+        permission_request::wait_and_write(
+            sessions_dir,
+            "test-123",
+            MAIN_THREAD_AGENT_KEY,
+            &request_id,
+            &mut output,
+        )
+        .expect("resolved question should not emit a decision");
 
         assert_eq!(
-            store::permission_request_data(sessions_dir, "test-123", &request_id)
-                .expect("request lookup should succeed"),
-            None,
+            (
+                store::permission_request_data(sessions_dir, "test-123", &request_id)
+                    .expect("request lookup should succeed"),
+                output,
+            ),
+            (None, Vec::new()),
         );
     }
 
