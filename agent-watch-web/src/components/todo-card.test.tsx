@@ -103,40 +103,47 @@ it('sends a trimmed optional comment and keeps the task as completed', async () 
   const snapshot = () => ({
     completeCalls: onComplete.mock.calls,
     status: container.querySelector('h2')?.textContent,
-    commentDisabled: comment.disabled,
-    completionLabel: container.querySelector('.chat-todo-completed-label')
+    title: container.querySelector('h3')?.textContent,
+    completionComment: container.querySelector('.chat-todo-completed-comment')
       ?.textContent,
+    commentInput: container.querySelector('.chat-todo-comment') !== null,
     buttonCount: container.querySelectorAll('.chat-todo-footer button').length,
   })
 
   expect(snapshot()).toEqual({
     completeCalls: [['The layout looks good.']],
     status: 'To-do · done',
-    commentDisabled: true,
-    completionLabel: 'Done',
+    title: 'Check the updated layout on a phone',
+    completionComment: 'The layout looks good.',
+    commentInput: false,
     buttonCount: 0,
   })
 })
 
-it('shows an already completed task without a completion action', () => {
-  renderCard(props({ detail: null, completed: true }))
+it('shows a completed task compactly with its saved comment', () => {
+  renderCard(
+    props({
+      completed: true,
+      defaultComment: 'The task was completed in another tab.',
+    }),
+  )
 
   const snapshot = () => ({
     status: container.querySelector('h2')?.textContent,
+    title: container.querySelector('h3')?.textContent,
     detail: container.querySelector('.chat-todo-detail')?.textContent,
-    commentDisabled:
-      container.querySelector<HTMLTextAreaElement>('.chat-todo-comment')
-        ?.disabled,
-    completionLabel: container.querySelector('.chat-todo-completed-label')
+    comment: container.querySelector('.chat-todo-completed-comment')
       ?.textContent,
+    commentInput: container.querySelector('.chat-todo-comment') !== null,
     buttonCount: container.querySelectorAll('.chat-todo-footer button').length,
   })
 
   expect(snapshot()).toEqual({
     status: 'To-do · done',
+    title: 'Check the updated layout on a phone',
     detail: undefined,
-    commentDisabled: true,
-    completionLabel: 'Done',
+    comment: 'The task was completed in another tab.',
+    commentInput: false,
     buttonCount: 0,
   })
 })
@@ -151,18 +158,15 @@ it('shows the persisted comment when a pending task becomes completed', () => {
   )
 
   const snapshot = () => ({
-    comment:
-      container.querySelector<HTMLTextAreaElement>('.chat-todo-comment')?.value,
-    commentDisabled:
-      container.querySelector<HTMLTextAreaElement>('.chat-todo-comment')
-        ?.disabled,
-    completionLabel: container.querySelector('.chat-todo-completed-label')
+    comment: container.querySelector('.chat-todo-completed-comment')
       ?.textContent,
+    commentInput: container.querySelector('.chat-todo-comment') !== null,
+    buttonCount: container.querySelectorAll('.chat-todo-footer button').length,
   })
 
   expect(snapshot()).toEqual({
     comment: 'The task was completed in another tab.',
-    commentDisabled: true,
-    completionLabel: 'Done',
+    commentInput: false,
+    buttonCount: 0,
   })
 })

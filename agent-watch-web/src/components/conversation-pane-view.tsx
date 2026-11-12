@@ -335,7 +335,7 @@ export function ConversationPaneView({
               className="mobile-conversation-today cursor-pointer"
               type="button"
               variant="plain"
-              aria-label={isToday ? 'Remove from TODAY' : 'Add to TODAY'}
+              aria-label={isToday ? 'Remove from Starred' : 'Add to Starred'}
               aria-pressed={isToday}
               onClick={() => {
                 onToggleToday?.(!isToday)

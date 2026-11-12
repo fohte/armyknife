@@ -6,26 +6,35 @@ use serde_json::Value;
 use super::super::ChatItem;
 use super::super::ParentSession;
 use super::super::SkillSuggestion;
+use super::super::parser::classifier;
+use super::super::parser::todos::TodoTimeline;
 use super::super::parser::{
     CodexToolSummaryRecord, ToolSummary, append_text, codex_edited_file_paths,
     codex_tool_summary_record, operation_target, record_timestamp,
 };
 use super::decision_position::{DecisionTimeline, insert_time_placed_decisions};
-use crate::commands::agent::store::AgentDecision;
+use crate::commands::agent::store::{AgentDecision, AgentTodo};
+use crate::commands::agent::watch_web::messages::EventKind;
 
 #[cfg(test)]
 fn parse(reader: impl BufRead, parent: Option<&ParentSession>) -> std::io::Result<Vec<ChatItem>> {
-    parse_with_skills(reader, parent, &[]).map(|(messages, _)| messages)
+    parse_with_skills(reader, parent, &[], &[]).map(|(messages, _)| messages)
 }
 
 pub(in crate::commands::agent::watch_web::messages) fn parse_with_skills(
     reader: impl BufRead,
     parent: Option<&ParentSession>,
     decisions: &[AgentDecision],
+    todos: &[AgentTodo],
 ) -> std::io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
     let mut parser = CodexParserState::new(parent);
     parser.append(reader)?;
-    Ok(parser.render_with_decisions(decisions))
+    let rendered = if todos.is_empty() {
+        parser.render_with_decisions(decisions)
+    } else {
+        parser.render_with_decisions_and_todos(decisions, todos)
+    };
+    Ok(rendered)
 }
 
 #[derive(Clone, Default)]
@@ -50,6 +59,10 @@ enum CodexEffect {
         timestamp: Option<DateTime<Utc>>,
     },
     UserMessage {
+        text: String,
+        timestamp: Option<DateTime<Utc>>,
+    },
+    ArmyknifeEvent {
         text: String,
         timestamp: Option<DateTime<Utc>>,
     },
@@ -89,12 +102,20 @@ impl CodexParserState {
         &self,
         decisions: &[AgentDecision],
     ) -> (Vec<ChatItem>, Vec<SkillSuggestion>) {
+        self.render_with_decisions_and_todos(decisions, &[])
+    }
+
+    pub(in crate::commands::agent::watch_web::messages) fn render_with_decisions_and_todos(
+        &self,
+        decisions: &[AgentDecision],
+        todos: &[AgentTodo],
+    ) -> (Vec<ChatItem>, Vec<SkillSuggestion>) {
         if self.partial_line.is_empty() {
-            return self.render_events(decisions);
+            return self.render_events(decisions, todos);
         }
         let mut parser = self.clone();
         parser.process_pending_line();
-        parser.render_events(decisions)
+        parser.render_events(decisions, todos)
     }
 
     fn process_pending_line(&mut self) {
@@ -202,7 +223,16 @@ impl CodexParserState {
                 match item.get("type").and_then(Value::as_str) {
                     Some("UserMessage") => {
                         if let Some(text) = item.get("content").and_then(value_text) {
-                            effects.push(CodexEffect::UserMessage { text, timestamp });
+                            if let Some((tag, body)) = classifier::tagged_body(&text)
+                                && classifier::is_watch_web_action_tag(tag)
+                            {
+                                effects.push(CodexEffect::ArmyknifeEvent {
+                                    text: body.to_owned(),
+                                    timestamp,
+                                });
+                            } else {
+                                effects.push(CodexEffect::UserMessage { text, timestamp });
+                            }
                         }
                     }
                     Some("CommandExecution") | Some("commandExecution") => {
@@ -239,10 +269,15 @@ impl CodexParserState {
         self.events.push(TimedCodexEvent { timestamp, effects });
     }
 
-    fn render_events(&self, decisions: &[AgentDecision]) -> (Vec<ChatItem>, Vec<SkillSuggestion>) {
+    fn render_events(
+        &self,
+        decisions: &[AgentDecision],
+        todos: &[AgentTodo],
+    ) -> (Vec<ChatItem>, Vec<SkillSuggestion>) {
         let mut items = Vec::new();
         let mut tools = ToolSummary::default();
         let mut decision_timeline = DecisionTimeline::new(decisions);
+        let mut todo_timeline = TodoTimeline::new(todos);
         for event in &self.events {
             insert_time_placed_decisions(
                 event.timestamp,
@@ -250,6 +285,7 @@ impl CodexParserState {
                 &mut tools,
                 &mut items,
             );
+            todo_timeline.insert_before_record(event.timestamp, &mut items, &mut tools);
             for effect in &event.effects {
                 match effect {
                     CodexEffect::AssistantMessage { text, timestamp } => {
@@ -265,6 +301,15 @@ impl CodexParserState {
                             self.parent.as_ref(),
                             *timestamp,
                         );
+                    }
+                    CodexEffect::ArmyknifeEvent { text, timestamp } => {
+                        tools.flush_into(&mut items);
+                        items.push(ChatItem::Event {
+                            kind: EventKind::Armyknife,
+                            text: classifier::one_line(text),
+                            failed: false,
+                            timestamp: timestamp.map(|timestamp| timestamp.to_rfc3339()),
+                        });
                     }
                     CodexEffect::ToolAction(action) => {
                         tools.record_codex_action(action.clone());
@@ -287,6 +332,7 @@ impl CodexParserState {
             items.push(active_tool);
         }
         decision_timeline.append_remaining(&mut items);
+        todo_timeline.append_remaining(&mut items);
         (items, self.skills.clone())
     }
 }
@@ -361,14 +407,35 @@ fn parse_tool_input(input: Option<&Value>) -> Option<Value> {
 mod tests {
     use std::io::Cursor;
 
+    use chrono::{DateTime, Utc};
     use indoc::indoc;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use serde_json::json;
 
     use super::{CodexParserState, parse, parse_with_skills};
+    use crate::commands::agent::store::AgentTodo;
     use crate::commands::agent::watch_web::messages::{
-        ChatItem, ParentSession, PeerDirection, SkillSuggestion, UserContentPart,
+        ChatItem, EventKind, ParentSession, PeerDirection, SkillSuggestion, UserContentPart,
     };
+
+    #[fixture]
+    fn todo() -> AgentTodo {
+        AgentTodo {
+            session_id: "fixture-session".to_string(),
+            seq: 1,
+            title: "Review the fictional report".to_string(),
+            detail: None,
+            created_at: DateTime::parse_from_rfc3339("2026-06-01T12:03:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            completed_at: Some(
+                DateTime::parse_from_rfc3339("2026-06-01T12:04:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            ),
+            comment: Some("The sample is ready.".to_string()),
+        }
+    }
 
     #[rstest]
     #[case::partial_tool_call_is_completed_after_append(
@@ -417,7 +484,7 @@ mod tests {
 
         assert_eq!(
             parser.render_with_decisions(&[]),
-            parse_with_skills(Cursor::new(full_transcript), None, &[]).unwrap(),
+            parse_with_skills(Cursor::new(full_transcript), None, &[], &[]).unwrap(),
         );
     }
 
@@ -444,7 +511,23 @@ mod tests {
 
         assert_eq!(
             parser.render_with_decisions(std::slice::from_ref(&decision)),
-            parse_with_skills(Cursor::new(transcript), None, &[decision]).unwrap(),
+            parse_with_skills(Cursor::new(transcript), None, &[decision], &[]).unwrap(),
+        );
+    }
+
+    #[rstest]
+    fn codex_parser_state_renders_updated_todos_without_new_transcript_bytes(todo: AgentTodo) {
+        let transcript = indoc! {r#"
+            {"type":"response_item","timestamp":"2026-06-01T12:00:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Before the todo."}]}}
+            {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"After the todo."}}}
+        "#};
+        let todos = [todo];
+        let mut parser = CodexParserState::new(None);
+        parser.append(Cursor::new(transcript)).unwrap();
+
+        assert_eq!(
+            parser.render_with_decisions_and_todos(&[], &todos),
+            parse_with_skills(Cursor::new(transcript), None, &[], &todos).unwrap(),
         );
     }
 
@@ -457,7 +540,7 @@ mod tests {
         "###};
 
         assert_eq!(
-            parse_with_skills(Cursor::new(transcript), None, &[]).unwrap(),
+            parse_with_skills(Cursor::new(transcript), None, &[], &[]).unwrap(),
             (
                 Vec::new(),
                 vec![
@@ -471,6 +554,54 @@ mod tests {
                     },
                 ],
             ),
+        );
+    }
+
+    #[rstest]
+    fn places_completed_todos_at_their_creation_time(todo: AgentTodo) {
+        let transcript = indoc! {r#"
+            {"type":"response_item","timestamp":"2026-06-01T12:00:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"before"}]}}
+            {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"after"}}}
+        "#};
+        assert_eq!(
+            parse_with_skills(Cursor::new(transcript), None, &[], &[todo]).unwrap(),
+            (
+                vec![
+                    ChatItem::Assistant {
+                        text: "before".to_string(),
+                    },
+                    ChatItem::Todo {
+                        seq: 1,
+                        title: "Review the fictional report".to_string(),
+                        detail: None,
+                        completed: true,
+                        comment: Some("The sample is ready.".to_string()),
+                    },
+                    ChatItem::User {
+                        text: "after".to_string(),
+                        timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
+                        from: None,
+                    },
+                ],
+                Vec::new(),
+            ),
+        );
+    }
+
+    #[test]
+    fn renders_marked_todo_completions_as_armyknife_events() {
+        let transcript = indoc! {r#"
+            {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<armyknife-todo-completed>Fixture action text.</armyknife-todo-completed>"}}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None).unwrap(),
+            vec![ChatItem::Event {
+                kind: EventKind::Armyknife,
+                text: "Fixture action text.".to_string(),
+                failed: false,
+                timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
+            }],
         );
     }
 

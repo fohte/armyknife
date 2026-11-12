@@ -15,6 +15,7 @@ use super::super::BackgroundTask;
 use super::super::ChatItem;
 use super::super::ParentSession;
 use super::super::SkillSuggestion;
+use super::super::parser::todos::TodoTimeline;
 use super::super::parser::{
     ToolSummary, append_classification_with_image_directory,
     append_record_with_user_marker_and_image_directory, append_text_with_image_directory,
@@ -23,7 +24,9 @@ use super::super::parser::{
 };
 use super::super::proposals::ProposalItem;
 use super::decision_position::{DecisionTimeline, insert_time_placed_decisions};
-use crate::commands::agent::store::{AgentDecision, WatchWebPeerOutMessage, WatchWebQueuedPrompt};
+use crate::commands::agent::store::{
+    AgentDecision, AgentTodo, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
+};
 use background_tasks::{BackgroundTaskTracker, task_notification_envelope, task_notification_text};
 use proposals::ProposalTimeline;
 use questions::{
@@ -78,6 +81,7 @@ fn parse_with_image_directory(
             peer_out_messages: &[],
             decisions: &[],
             proposals: &[],
+            todos: &[],
         },
     )
     .map(|(messages, _, _, _)| messages)
@@ -104,6 +108,7 @@ fn parse_with_decisions_and_queued_prompts(
             queued_prompts,
             peer_out_messages: &[],
             proposals: &[],
+            todos: &[],
         },
     )
 }
@@ -128,6 +133,7 @@ fn parse_with_background_tasks_and_peer_out_messages(
             queued_prompts: &[],
             peer_out_messages,
             proposals: &[],
+            todos: &[],
         },
     )
     .map(|(messages, background_tasks, _)| (messages, background_tasks))
@@ -154,6 +160,7 @@ fn parse_with_queued_prompts_and_proposals(
             queued_prompts,
             peer_out_messages: &[],
             proposals,
+            todos: &[],
         },
     )
 }
@@ -198,6 +205,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_with_queued_prompts
             peer_out_messages: additions.peer_out_messages,
             decisions: additions.decisions,
             proposals: additions.proposals,
+            todos: additions.todos,
         },
     )
 }
@@ -210,6 +218,7 @@ pub(in crate::commands::agent::watch_web::messages) struct ParserAdditions<'a> {
     pub(in crate::commands::agent::watch_web::messages) peer_out_messages:
         &'a [WatchWebPeerOutMessage],
     pub(in crate::commands::agent::watch_web::messages) proposals: &'a [ProposalItem],
+    pub(in crate::commands::agent::watch_web::messages) todos: &'a [AgentTodo],
 }
 
 struct ParseContext<'a> {
@@ -218,6 +227,7 @@ struct ParseContext<'a> {
     peer_out_messages: &'a [WatchWebPeerOutMessage],
     decisions: &'a [AgentDecision],
     proposals: &'a [ProposalItem],
+    todos: &'a [AgentTodo],
 }
 
 fn parse_with_background_tasks_and_image_directory(
@@ -255,6 +265,7 @@ struct TranscriptParserContext {
     queued_prompts: Vec<WatchWebQueuedPrompt>,
     peer_out_messages: Vec<WatchWebPeerOutMessage>,
     proposals: Vec<ProposalItem>,
+    todos: Vec<AgentTodo>,
 }
 
 #[derive(Clone)]
@@ -269,6 +280,7 @@ struct ClaudeParserState {
     background_tasks: BackgroundTaskTracker,
     decision_timeline: DecisionTimeline,
     proposal_timeline: ProposalTimeline,
+    todo_timeline: TodoTimeline,
     queue: super::queue::Queue,
     skills: Vec<SkillSuggestion>,
 }
@@ -286,6 +298,7 @@ impl ClaudeParserState {
             background_tasks: BackgroundTaskTracker::default(),
             decision_timeline: DecisionTimeline::new(context.decisions),
             proposal_timeline: ProposalTimeline::new(context.proposals),
+            todo_timeline: TodoTimeline::new(context.todos),
             queue: super::queue::Queue::new(context.queued_prompts),
             skills: Vec::new(),
         }
@@ -307,6 +320,7 @@ impl ClaudeParserState {
             background_tasks,
             decision_timeline,
             proposal_timeline,
+            todo_timeline,
             queue,
             skills,
             ..
@@ -343,6 +357,7 @@ impl ClaudeParserState {
             background_tasks.finish_notification(text);
         }
         proposal_timeline.insert_before_record(record_timestamp(&record), items, tools);
+        todo_timeline.insert_before_record(record_timestamp(&record), items, tools);
         match record.get("type").and_then(Value::as_str) {
             _ if record
                 .get("attachment")
@@ -604,6 +619,8 @@ impl ClaudeParserState {
         self.decision_timeline.append_remaining(&mut items);
         let mut proposal_timeline = self.proposal_timeline;
         proposal_timeline.append_remaining(&mut items);
+        let mut todo_timeline = self.todo_timeline;
+        todo_timeline.append_remaining(&mut items);
         let background_tasks = self.background_tasks.into_api_tasks(now);
         (
             items,
@@ -650,6 +667,7 @@ impl IncrementalClaudeParser {
                 peer_out_messages: additions.peer_out_messages,
                 decisions: additions.decisions,
                 proposals: additions.proposals,
+                todos: additions.todos,
             },
         )
     }
@@ -671,6 +689,7 @@ impl IncrementalClaudeParser {
             queued_prompts: context.queued_prompts.to_vec(),
             peer_out_messages: context.peer_out_messages.to_vec(),
             proposals: context.proposals.to_vec(),
+            todos: context.todos.to_vec(),
         };
         let mut state = ClaudeParserState::new(&context);
         let mut latest_complete_uuid = None;
@@ -753,6 +772,7 @@ impl IncrementalClaudeParser {
             queued_prompts: additions.queued_prompts.to_vec(),
             peer_out_messages: additions.peer_out_messages.to_vec(),
             proposals: additions.proposals.to_vec(),
+            todos: additions.todos.to_vec(),
         };
         if context == self.context {
             return self.snapshot_from_context(now, &context);
@@ -769,6 +789,7 @@ impl IncrementalClaudeParser {
             peer_out_messages: &context.peer_out_messages,
             decisions: &context.decisions,
             proposals: &context.proposals,
+            todos: &context.todos,
         };
         let rebased = Self::from_reader(
             Cursor::new(transcript),
@@ -1015,7 +1036,7 @@ mod tests {
         parse_with_queued_prompts_and_peer_out_messages_and_proposals_and_skills,
         parse_with_queued_prompts_and_proposals,
     };
-    use crate::commands::agent::store::AgentDecision;
+    use crate::commands::agent::store::{AgentDecision, AgentTodo};
     use crate::commands::agent::watch_web::messages::{
         ChatItem, ParentSession, PeerDirection, ProposalOption, QuestionChoice, SkillSuggestion,
         ToolOperation, UserContentPart,
@@ -1038,6 +1059,7 @@ mod tests {
                 peer_out_messages: &[],
                 decisions: &[],
                 proposals: &[],
+                todos: &[],
             },
         )
         .unwrap()
@@ -1051,6 +1073,7 @@ mod tests {
                 queued_prompts: &[],
                 peer_out_messages: &[],
                 proposals: &[],
+                todos: &[],
             },
         )
     }
@@ -1140,6 +1163,64 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::completed(true)]
+    #[case::pending(false)]
+    fn places_todos_at_their_creation_time(#[case] is_completed: bool) {
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-before","parentUuid":null,"timestamp":"2026-01-01T00:00:00Z","type":"assistant","message":{"content":[{"type":"text","text":"before"}]}}
+            {"uuid":"fixture-after","parentUuid":"fixture-before","timestamp":"2026-01-01T00:05:00Z","type":"assistant","message":{"content":[{"type":"text","text":"after"}]}}
+        "#};
+        let created_at = DateTime::parse_from_rfc3339("2026-01-01T00:03:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let todo = AgentTodo {
+            session_id: "fixture-session".to_string(),
+            seq: 1,
+            title: "Review the sample report".to_string(),
+            detail: Some("Open the sample summary.".to_string()),
+            created_at,
+            completed_at: is_completed.then(|| created_at + chrono::Duration::minutes(1)),
+            comment: is_completed.then(|| "The sample is ready.".to_string()),
+        };
+
+        let (messages, _, _, _) =
+            parse_with_queued_prompts_and_peer_out_messages_and_proposals_and_skills(
+                Cursor::new(transcript),
+                None,
+                None,
+                None,
+                Utc::now(),
+                ParserAdditions {
+                    decisions: &[],
+                    queued_prompts: &[],
+                    peer_out_messages: &[],
+                    proposals: &[],
+                    todos: &[todo],
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            messages,
+            vec![
+                ChatItem::Assistant {
+                    text: "before".to_string(),
+                },
+                ChatItem::Todo {
+                    seq: 1,
+                    title: "Review the sample report".to_string(),
+                    detail: Some("Open the sample summary.".to_string()),
+                    completed: is_completed,
+                    comment: is_completed.then(|| "The sample is ready.".to_string()),
+                },
+                ChatItem::Assistant {
+                    text: "after".to_string(),
+                },
+            ],
+        );
+    }
+
     #[test]
     fn overlay_changes_replay_the_cached_transcript() {
         let prefix = indoc! {r#"
@@ -1161,6 +1242,17 @@ mod tests {
             review: None,
             reviewed_at: None,
         };
+        let todo = AgentTodo {
+            session_id: "fixture-session".to_string(),
+            seq: 1,
+            title: "Review the sample report".to_string(),
+            detail: None,
+            created_at: DateTime::parse_from_rfc3339("2026-01-01T00:00:01.500Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            completed_at: None,
+            comment: None,
+        };
         let mut parser = incremental_parser(prefix);
         assert_eq!(
             parser.append_bytes(suffix, fixed_time()).unwrap(),
@@ -1173,6 +1265,7 @@ mod tests {
             queued_prompts: &[],
             peer_out_messages: &[],
             proposals: &[],
+            todos: std::slice::from_ref(&todo),
         };
 
         let actual = match parser
@@ -1205,6 +1298,7 @@ mod tests {
                     queued_prompts: &[],
                     peer_out_messages: &[],
                     proposals: &[],
+                    todos: &[],
                 },
             )
             .unwrap();

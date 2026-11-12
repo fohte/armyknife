@@ -197,7 +197,7 @@ export const PausedSessionIsVisibleOnIPhone: Story = {
 }
 
 export const TodayCanBeChangedFromTheIPhoneConversation: Story = {
-  name: 'The iPhone conversation header shows the active TODAY toggle',
+  name: 'The iPhone conversation header shows the active Starred toggle',
   args: {
     isMobile: true,
     isToday: true,

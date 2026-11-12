@@ -88,7 +88,9 @@ export function SessionRow({
   return (
     <li className="session-list-item">
       <div
-        className={`session-row-layout${actionsVisible ? ' actions-visible' : ''}`}
+        className={`session-row-layout${actionsVisible ? ' actions-visible' : ''}${
+          session.isToday === true ? ' is-starred' : ''
+        }`}
       >
         <Button
           type="button"
@@ -168,8 +170,8 @@ export function SessionRow({
                 variant="plain"
                 aria-label={
                   session.isToday === true
-                    ? 'Remove from TODAY'
-                    : 'Add to TODAY'
+                    ? 'Remove from Starred'
+                    : 'Add to Starred'
                 }
                 aria-pressed={session.isToday ?? false}
                 className="session-action-button cursor-pointer"

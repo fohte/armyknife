@@ -348,6 +348,7 @@ fn load_conversation_with_queued_prompts(
             queued_prompts: &queued_prompts,
             peer_out_messages: &peer_out_messages,
             proposals: &proposal_items,
+            todos: &todos,
         },
     };
     let (mut conversation, resolved_queued_prompt_ids) = parse_session_transcript_incrementally(
@@ -394,21 +395,6 @@ fn load_conversation_with_queued_prompts(
             .any(|message| matches!(message, ChatItem::Proposal { seq: existing, .. } if existing == &proposal.seq))
         {
             messages.push(proposal.item.clone());
-        }
-    }
-
-    for todo in &todos {
-        if !messages
-            .iter()
-            .any(|message| matches!(message, ChatItem::Todo { seq, .. } if *seq == todo.seq))
-        {
-            messages.push(ChatItem::Todo {
-                seq: todo.seq,
-                title: todo.title.clone(),
-                detail: todo.detail.clone(),
-                completed: todo.completed_at.is_some(),
-                comment: todo.comment.clone(),
-            });
         }
     }
 
@@ -525,38 +511,17 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript(
             ))
         }
         Engine::Codex => {
-            let Some(path) = path else {
-                return Ok((
-                    ConversationResponse {
-                        messages: additions
-                            .decisions
-                            .iter()
-                            .cloned()
-                            .map(ChatItem::from)
-                            .collect(),
-                        background_tasks: Vec::new(),
-                        ..ConversationResponse::default()
-                    },
-                    Vec::new(),
-                ));
-            };
-            let Some(reader) = open_transcript(path, true)? else {
-                return Ok((
-                    ConversationResponse {
-                        messages: additions
-                            .decisions
-                            .iter()
-                            .cloned()
-                            .map(ChatItem::from)
-                            .collect(),
-                        background_tasks: Vec::new(),
-                        ..ConversationResponse::default()
-                    },
-                    Vec::new(),
-                ));
-            };
-            let (messages, skills) =
-                parser::codex::parse_with_skills(reader, parent, additions.decisions)?;
+            let reader = path
+                .map(|path| open_transcript(path, true))
+                .transpose()?
+                .flatten()
+                .unwrap_or_else(|| Box::new(Cursor::new(Vec::new())));
+            let (messages, skills) = parser::codex::parse_with_skills(
+                reader,
+                parent,
+                additions.decisions,
+                additions.todos,
+            )?;
             Ok((
                 ConversationResponse {
                     messages,
@@ -700,7 +665,8 @@ fn render_incremental_parser(
             )))
         }
         IncrementalTranscriptParser::Codex(parser) => {
-            let (messages, skills) = parser.render_with_decisions(input.additions.decisions);
+            let (messages, skills) = parser
+                .render_with_decisions_and_todos(input.additions.decisions, input.additions.todos);
             Ok(Some((
                 ConversationResponse {
                     messages,

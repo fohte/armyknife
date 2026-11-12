@@ -25,6 +25,7 @@ const todaySessionInProgress: Session = {
   ...todaySession,
   id: 'today-session-in-progress',
   category: 'in_progress',
+  kind: null,
   title: 'Review the release notes',
   task: {
     id: 'sample-task',
@@ -32,6 +33,14 @@ const todaySessionInProgress: Session = {
     title: 'Review the release notes',
     priority: null,
   },
+}
+
+const todaySessionStopped: Session = {
+  ...todaySessionInProgress,
+  id: 'today-session-paused',
+  isPaused: true,
+  kind: 'Stopped',
+  title: 'Prepare the next deployment window',
 }
 
 const meta = {
@@ -100,8 +109,20 @@ export const BoardIsSelected: Story = {
 }
 
 export const InProgressTodaySession: Story = {
-  name: 'An in-progress Today session shows its task and start label',
+  name: 'An in-progress starred session shows the Working status',
   args: { todaySessions: [todaySessionInProgress] },
+}
+
+export const TodaySessionStatusesUseTheirCategoryColors: Story = {
+  name: 'Starred sessions show their state labels in category colors',
+  args: {
+    todaySessions: [
+      todaySession,
+      todaySessionInProgress,
+      { ...todaySession, id: 'today-session-error', kind: 'Error' },
+      todaySessionStopped,
+    ],
+  },
 }
 
 export const InboxIsCollapsed: Story = {

@@ -639,6 +639,7 @@ mod tests {
                 queued_prompts: &[],
                 peer_out_messages: &[],
                 proposals: &[],
+                todos: &[],
             },
         )
         .unwrap()
@@ -661,6 +662,7 @@ mod tests {
                 queued_prompts: prompts,
                 peer_out_messages: &[],
                 proposals: &[],
+                todos: &[],
             },
         )
         .unwrap()
