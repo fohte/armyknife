@@ -1239,7 +1239,7 @@ it('restores the desktop navigation width after keyboard resizing', () => {
   })
 })
 
-it('shows desktop review guidance without mounting crit on mobile', () => {
+it('shows crit in the mobile status panel without changing desktop layout', () => {
   renderApp()
   publishSessions({
     revision: 1,
@@ -1272,16 +1272,16 @@ it('shows desktop review guidance without mounting crit on mobile', () => {
     guidance: container.querySelector('.mobile-review-note')?.textContent,
     iframeCount: container.querySelectorAll('iframe').length,
     critButtonCount: container.querySelectorAll(
-      '.conversation-status-panel-toggle',
+      '.mobile-conversation-status-toggle',
     ).length,
     resizerCount: container.querySelectorAll('[role="separator"]').length,
     desktopIframeCount,
     desktopResizers,
   })
   expect(snapshot()).toEqual({
-    guidance: 'Open this session on your Mac to review it in crit.',
-    iframeCount: 0,
-    critButtonCount: 0,
+    guidance: undefined,
+    iframeCount: 1,
+    critButtonCount: 1,
     resizerCount: 0,
     desktopIframeCount: 1,
     desktopResizers: [
@@ -1476,7 +1476,7 @@ it('toggles the Inbox and status panel by keyboard while keeping j and k navigat
   })
 })
 
-it('shows desktop review guidance when a Review session has no crit URL', () => {
+it('keeps the mobile status panel available when a Review session has no crit URL', () => {
   renderApp()
   publishSessions({
     revision: 1,
@@ -1497,10 +1497,14 @@ it('shows desktop review guidance when a Review session has no crit URL', () => 
   const snapshot = () => ({
     guidance: container.querySelector('.mobile-review-note')?.textContent,
     iframeCount: container.querySelectorAll('iframe').length,
+    statusToggleCount: container.querySelectorAll(
+      '.mobile-conversation-status-toggle',
+    ).length,
   })
   expect(snapshot()).toEqual({
-    guidance: 'Open this session on your Mac to review it in crit.',
+    guidance: undefined,
     iframeCount: 0,
+    statusToggleCount: 1,
   })
 })
 

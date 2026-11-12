@@ -1,4 +1,4 @@
-import { act, useState } from 'react'
+import { act, type ReactNode, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
@@ -240,6 +240,7 @@ function renderView(
     isToday: boolean
     onToggleToday: (isToday: boolean) => void
   } = { isToday: false, onToggleToday: () => undefined },
+  mobileStatusPanel?: ReactNode,
 ) {
   root ??= createRoot(container)
   act(() => {
@@ -266,6 +267,7 @@ function renderView(
         isToday={today.isToday}
         onToggleToday={today.onToggleToday}
         statusPanelOpen={statusPanelOpen}
+        mobileStatusPanel={mobileStatusPanel}
         decisionsPanelOpen={decisionsPanelOpen}
         {...(onToggleStatusPanel === undefined ? {} : { onToggleStatusPanel })}
         {...(onToggleDecisionsPanel === undefined
@@ -2924,7 +2926,7 @@ it('accepts classified messages and the active tool from messages endpoint', asy
     peerFile: 'fixture-peer-layout.html',
     event: [{ text: 'A fictional event was blocked.', failed: 'true' }],
     backgroundTasks: 'Background tasks (1)',
-    headerRunningCount: undefined,
+    headerRunningCount: '1',
   })
 })
 
@@ -3613,6 +3615,89 @@ it('opens and closes the Decisions tab from the conversation header', async () =
   })
 })
 
+it('opens and closes the existing status panel over the mobile conversation', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const decision: ChatItem = {
+    type: 'decision',
+    seq: 1,
+    title: 'Use a bounded retry limit',
+    why: 'The service does not expose reliable timing data yet.',
+    considered: ['Retry until the service recovers'],
+    easyToChange: 'Update the retry limit configuration.',
+    review: null,
+    createdAt: '2026-11-11T03:25:59Z',
+  }
+  vi.stubGlobal(
+    'fetch',
+    vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(messagesResponse([decision])))
+      .mockResolvedValueOnce(jsonResponse(actions)),
+  )
+  function ToggleHarness() {
+    const [statusPanelOpen, setStatusPanelOpen] = useState(false)
+    return (
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+        isMobile
+        statusPanelOpen={statusPanelOpen}
+        onToggleStatusPanel={() => {
+          setStatusPanelOpen((open) => !open)
+        }}
+        onCloseStatusPanel={() => {
+          setStatusPanelOpen(false)
+        }}
+      />
+    )
+  }
+  root = createRoot(container)
+  act(() => root?.render(<ToggleHarness />))
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.mobile-conversation-status-toggle',
+      ),
+    ).click()
+  })
+
+  const opened = {
+    overlay: container.querySelector('.mobile-session-status-overlay') !== null,
+    selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
+      ?.textContent,
+    decisionHeading: container.querySelector('.decisions-panel-header h2')
+      ?.textContent,
+  }
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.mobile-session-status-overlay .session-status-panel-close',
+      ),
+    ).click()
+  })
+  const closed = {
+    overlay: container.querySelector('.mobile-session-status-overlay') !== null,
+    conversation: container.querySelector('.conversation-pane') !== null,
+  }
+
+  const snapshot = () => ({ opened, closed })
+  expect(snapshot()).toEqual({
+    opened: {
+      overlay: true,
+      selectedTab: '◇ Decisions',
+      decisionHeading: 'Decisions in this session',
+    },
+    closed: { overlay: false, conversation: true },
+  })
+})
+
 it('shows the paused state in the conversation header', () => {
   renderView(
     vi.fn().mockResolvedValue(true),
@@ -3658,6 +3743,69 @@ it('shows the paused state in the mobile conversation header', () => {
     title: 'Choose a retry policy',
     paused: 'Paused',
   })
+})
+
+it('offers the status panel from the mobile header and shows running task count', () => {
+  const onToggleStatusPanel = vi.fn<() => void>()
+  renderView(
+    vi.fn(() => Promise.resolve(true)),
+    session,
+    undefined,
+    [],
+    actions,
+    true,
+    [
+      {
+        id: 'sample-background-task',
+        description: 'Inspect the retry flow',
+        elapsedSeconds: 10,
+        kind: 'subagent',
+        agentType: 'Explorer',
+      },
+    ],
+    [],
+    false,
+    onToggleStatusPanel,
+  )
+  const toggle = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.mobile-conversation-status-toggle',
+    ),
+  )
+
+  act(() => {
+    toggle.click()
+  })
+
+  const snapshot = () => ({
+    expanded: toggle.getAttribute('aria-expanded'),
+    controls: toggle.getAttribute('aria-controls'),
+    count: toggle.querySelector('.conversation-status-panel-count')
+      ?.textContent,
+    calls: onToggleStatusPanel.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    expanded: 'false',
+    controls: 'session-status-panel',
+    count: '1',
+    calls: [[]],
+  })
+})
+
+it('does not tell mobile review sessions to open crit on a Mac', () => {
+  renderView(
+    vi.fn(() => Promise.resolve(true)),
+    { ...session, kind: 'Review' },
+    undefined,
+    [],
+    actions,
+    true,
+  )
+
+  const snapshot = () => ({
+    mobileNotice: container.querySelector('.mobile-review-note')?.textContent,
+  })
+  expect(snapshot()).toEqual({ mobileNotice: undefined })
 })
 
 it('keeps the status panel toggle available without a waiting crit URL', () => {

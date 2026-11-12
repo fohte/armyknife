@@ -475,6 +475,49 @@ html[data-mobile-layout='true'] {
   width: 44px;
 }
 
+.mobile-conversation-status-toggle {
+  display: inline-flex;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 0 5px;
+  border: 1px solid var(--aw-border-control);
+  color: var(--aw-color-working);
+}
+
+.mobile-conversation-status-toggle[aria-expanded='true'] {
+  border-color: var(--aw-border-emphasis);
+  background: var(--aw-bg-pressed);
+}
+
+.mobile-session-status-overlay {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  box-sizing: border-box;
+  inset: 0;
+  padding-block: max(8px, env(safe-area-inset-top, 0px))
+    max(8px, env(safe-area-inset-bottom, 0px));
+  background: var(--aw-bg-nav);
+}
+
+.mobile-session-status-overlay .session-status-panel {
+  width: 100%;
+  min-width: 0;
+}
+
+.mobile-session-status-overlay .session-status-panel-close {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+}
+
 .mobile-conversation-back svg {
   width: 30px;
   height: 30px;
@@ -527,16 +570,6 @@ html[data-mobile-layout='true'] {
   font-size: 11.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.mobile-review-note {
-  flex: 0 0 auto;
-  margin: 0;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--aw-border-control);
-  background: var(--aw-bg-surface);
-  color: var(--aw-text-body);
-  font-size: 13px;
 }
 
 .conversation-pane[data-mobile='true'] .conversation-scroll {
