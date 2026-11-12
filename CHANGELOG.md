@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.621](https://github.com/fohte/armyknife/compare/v0.1.620...v0.1.621) (2026-11-12)
+
+
+### Features
+
+* **agent:** allow browser opt-out for watch-web ([#1609](https://github.com/fohte/armyknife/issues/1609)) ([6921756](https://github.com/fohte/armyknife/commit/6921756a25396d55e7f33e931fe937a46e2d220f))
+
+
+### Bug Fixes
+
+* **agent:** preserve HTML preview URL on reopen ([#1611](https://github.com/fohte/armyknife/issues/1611)) ([1026cfd](https://github.com/fohte/armyknife/commit/1026cfdca19b1ce59334d42e18e63bef3beb858c))
+
 ## [0.1.620](https://github.com/fohte/armyknife/compare/v0.1.619...v0.1.620) (2026-11-12)
 
 
