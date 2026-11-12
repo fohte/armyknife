@@ -257,6 +257,7 @@ fn file_matches_fingerprint(
     Ok(true)
 }
 
+// shortcut: changes before the saved tail can go undetected, widen this check if transcript writers ever modify existing bytes.
 fn matches_tail(
     file: &mut File,
     path: &Path,
