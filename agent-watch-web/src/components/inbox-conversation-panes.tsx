@@ -20,14 +20,13 @@ type SessionTreeCacheEntry = {
 }
 
 function treeRefreshKey(
-  tree: readonly SessionTreeNode[],
+  treeSessionIds: ReadonlySet<string>,
   sessionRefreshRevisions: ReadonlyMap<string, number>,
   sessions: readonly Session[],
 ) {
-  const treeSessionIds = new Set(tree.map((node) => node.id))
-  const treeRevision = tree.reduce(
-    (latestRevision, node) =>
-      Math.max(latestRevision, sessionRefreshRevisions.get(node.id) ?? 0),
+  const treeRevision = [...treeSessionIds].reduce(
+    (latestRevision, sessionId) =>
+      Math.max(latestRevision, sessionRefreshRevisions.get(sessionId) ?? 0),
     0,
   )
   return sessions.reduce(
@@ -38,6 +37,23 @@ function treeRefreshKey(
         ? Math.max(latestRevision, sessionRefreshRevisions.get(session.id) ?? 0)
         : latestRevision,
     treeRevision,
+  )
+}
+
+function treeRefreshKeyForSelectedSession(
+  selectedSession: Session | null | undefined,
+  sessionRefreshRevisions: ReadonlyMap<string, number>,
+  sessions: readonly Session[],
+) {
+  if (selectedSession == null) return 0
+
+  const rootSessionId =
+    selectedSession.ancestorSessionIds[0] ?? selectedSession.id
+
+  return treeRefreshKey(
+    new Set([rootSessionId]),
+    sessionRefreshRevisions,
+    sessions,
   )
 }
 
@@ -112,7 +128,7 @@ export function InboxConversationPanes({
         pendingTreeRefreshes.current.delete(selectedSessionId)
       }
       const currentTreeRefreshKey = treeRefreshKey(
-        tree,
+        new Set(tree.map((node) => node.id)),
         sessionRefreshRevisionsRef.current,
         sessionsRef.current,
       )
@@ -254,11 +270,13 @@ export function InboxConversationPanes({
     selectedTreeCache === undefined
       ? (pendingTreeRefreshes.current.get(selectedSession?.id ?? '')
           ?.refreshKey ??
-        (selectedSession == null
-          ? 0
-          : (sessionRefreshRevisions.get(selectedSession.id) ?? 0)))
+        treeRefreshKeyForSelectedSession(
+          selectedSession,
+          sessionRefreshRevisions,
+          sessions,
+        ))
       : treeRefreshKey(
-          selectedTreeCache.sessions,
+          new Set(selectedTreeCache.sessions.map((node) => node.id)),
           sessionRefreshRevisions,
           sessions,
         )

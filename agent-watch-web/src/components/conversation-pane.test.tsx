@@ -479,6 +479,50 @@ it('refreshes a session tree only when a tree member changes', async () => {
   })
 })
 
+it('uses existing descendant revisions for the initial tree request', async () => {
+  const rootSession = treeSession('root-session', 'Root session')
+  const childSession = treeSession(
+    'child-session',
+    'Child session',
+    rootSession,
+  )
+  const sessions = [rootSession, childSession]
+  const tree = [
+    treeNode(rootSession.id, null, rootSession.title),
+    treeNode(childSession.id, rootSession.id, childSession.title),
+  ]
+  const fetcher = inboxFetch(() =>
+    Promise.resolve(jsonResponse({ revision: 1, sessions: tree })),
+  )
+  vi.stubGlobal('fetch', fetcher)
+
+  renderInboxPanes(
+    sessions,
+    rootSession,
+    new Map([
+      [rootSession.id, 1],
+      [childSession.id, 2],
+    ]),
+  )
+  await waitForState(
+    () => container.querySelector('#session-tree-row-child-session') !== null,
+  )
+
+  const snapshot = () => ({
+    requests: fetcher.mock.calls.map(([input]) => requestUrl(input)),
+    childRow:
+      container.querySelector('#session-tree-row-child-session') !== null,
+  })
+  expect(snapshot()).toEqual({
+    requests: [
+      '/api/sessions/root-session/tree',
+      '/api/sessions/root-session/messages?limit=100',
+      '/api/sessions/root-session/actions',
+    ],
+    childRow: true,
+  })
+})
+
 it('refetches the initial tree when a member changes while it loads', async () => {
   const rootSession = treeSession('root-session', 'Root session')
   const childSession = treeSession(
