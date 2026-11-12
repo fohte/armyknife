@@ -686,3 +686,25 @@ export const OlderMessagesAreLoading: Story = {
     ],
   },
 }
+
+export const CompactBoundarySeparatesConversation: Story = {
+  name: 'A divider marks where the conversation was compacted',
+  args: {
+    messages: [
+      {
+        type: 'assistant',
+        text: 'The earlier part of the conversation is summarized.',
+      },
+      {
+        type: 'event',
+        kind: 'compact_boundary',
+        text: 'Context compacted',
+        failed: false,
+      },
+      {
+        type: 'assistant',
+        text: 'The assistant continues after the conversation is compacted.',
+      },
+    ],
+  },
+}

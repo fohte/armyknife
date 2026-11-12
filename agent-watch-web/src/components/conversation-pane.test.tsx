@@ -2170,6 +2170,27 @@ it('shows a local time on system event rows', () => {
   })
 })
 
+it('renders compact boundaries as a distinct conversation event', () => {
+  renderView(() => Promise.resolve(true), session, undefined, [
+    {
+      type: 'event',
+      kind: 'compact_boundary',
+      text: 'Context compacted',
+      failed: false,
+    },
+  ])
+
+  const event = container.querySelector<HTMLElement>('.chat-event')
+  const getActual = () => ({
+    text: event?.querySelector('.chat-event-text')?.textContent ?? null,
+    kind: event?.getAttribute('data-kind') ?? null,
+  })
+  expect(getActual()).toEqual({
+    text: 'Context compacted',
+    kind: 'compact_boundary',
+  })
+})
+
 it('shows peer images and supports keyboard navigation', () => {
   const linkedSession: Session = {
     ...session,

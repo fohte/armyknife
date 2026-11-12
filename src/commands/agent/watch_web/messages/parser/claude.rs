@@ -1636,7 +1636,7 @@ mod tests {
                     failed: false,
                 },
                 ChatItem::Event {
-                    kind: super::super::super::EventKind::System,
+                    kind: super::super::super::EventKind::CompactBoundary,
                     text: "Context compacted".to_string(),
                     timestamp: None,
                     failed: false,
@@ -1651,6 +1651,24 @@ mod tests {
                     }],
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn serializes_compact_boundary_with_a_distinct_event_kind() {
+        let transcript = indoc! {r#"
+            {"type":"system","subtype":"compact_boundary"}
+        "#};
+
+        assert_eq!(
+            serde_json::to_value(parse(Cursor::new(transcript), None, None, None).unwrap())
+                .unwrap(),
+            json!([{
+                "type": "event",
+                "kind": "compact_boundary",
+                "text": "Context compacted",
+                "failed": false,
+            }]),
         );
     }
 
@@ -2357,7 +2375,7 @@ mod tests {
                     from: None,
                 },
                 ChatItem::Event {
-                    kind: super::super::super::EventKind::System,
+                    kind: super::super::super::EventKind::CompactBoundary,
                     text: "Context compacted".to_string(),
                     timestamp: None,
                     failed: false,
@@ -2390,7 +2408,7 @@ mod tests {
                     from: None,
                 },
                 ChatItem::Event {
-                    kind: super::super::super::EventKind::System,
+                    kind: super::super::super::EventKind::CompactBoundary,
                     text: "Context compacted".to_string(),
                     timestamp: None,
                     failed: false,
