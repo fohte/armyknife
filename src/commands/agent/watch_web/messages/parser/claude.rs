@@ -1058,14 +1058,26 @@ mod tests {
         }
     }
 
-    #[test]
-    fn places_a_recorded_decision_at_its_successful_add_call() {
+    #[rstest]
+    #[case::current_output(
+        indoc! {"
+            Decision recorded for this session.
+            Session-local sequence: 1
+            To refer to it in another session or task, describe its contents; this sequence only works in this session.
+        "}
+    )]
+    #[case::legacy_output("Recorded decision 1")]
+    fn places_a_recorded_decision_at_its_successful_add_call(#[case] result: &str) {
         let transcript = indoc! {r#"
             {"uuid":"fixture-before","parentUuid":null,"type":"assistant","timestamp":"2026-11-11T10:00:00Z","message":{"content":[{"type":"text","text":"Before the decision."}]}}
             {"uuid":"fixture-decision-call","parentUuid":"fixture-before","type":"assistant","timestamp":"2026-11-11T11:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Decision 1'"}}]}}
-            {"uuid":"fixture-decision-result","parentUuid":"fixture-decision-call","type":"user","timestamp":"2026-11-11T12:00:00Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded decision 1"}]}}
+            {"uuid":"fixture-decision-result","parentUuid":"fixture-decision-call","type":"user","timestamp":"2026-11-11T12:00:00Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"__RESULT__"}]}}
             {"uuid":"fixture-after","parentUuid":"fixture-decision-result","type":"assistant","timestamp":"2026-11-11T13:00:00Z","message":{"content":[{"type":"text","text":"After the decision."}]}}
-        "#};
+        "#}
+        .replace(
+            "\"__RESULT__\"",
+            &serde_json::to_string(result).expect("result should serialize"),
+        );
         let decision = decision_at(1, "2026-11-11T09:00:00Z");
 
         assert_eq!(

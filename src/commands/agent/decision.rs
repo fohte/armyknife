@@ -65,7 +65,12 @@ fn add_in(
         &args.considered,
         &args.easy_to_change,
     )?;
-    writeln!(output, "Recorded decision {seq}")?;
+    writeln!(output, "Decision recorded for this session.")?;
+    writeln!(output, "Session-local sequence: {seq}")?;
+    writeln!(
+        output,
+        "To refer to it in another session or task, describe its contents; this sequence only works in this session."
+    )?;
     Ok(())
 }
 
@@ -290,7 +295,9 @@ mod tests {
                     true
                 )],
                 indoc! {"
-                    Recorded decision 1
+                    Decision recorded for this session.
+                    Session-local sequence: 1
+                    To refer to it in another session or task, describe its contents; this sequence only works in this session.
                 "}
                 .as_bytes()
                 .to_vec(),

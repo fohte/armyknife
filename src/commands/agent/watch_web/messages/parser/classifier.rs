@@ -204,8 +204,9 @@ pub(super) fn is_agent_add_tool(name: &str, input: Option<&Value>, command: &str
 pub(super) fn recorded_agent_add_seq(text: &str, command: &str) -> Option<i64> {
     let prefix = format!("Recorded {command} ");
     text.lines().find_map(|line| {
-        line.trim()
-            .strip_prefix(&prefix)
+        let line = line.trim();
+        line.strip_prefix("Session-local sequence: ")
+            .or_else(|| line.strip_prefix(&prefix))
             .and_then(|seq| seq.parse::<i64>().ok())
             .filter(|seq| *seq > 0)
     })
@@ -720,7 +721,16 @@ mod tests {
     }
 
     #[rstest]
-    #[case::recorded("Recorded decision 12", "decision", Some(12))]
+    #[case::current_output(
+        indoc! {"
+            Decision recorded for this session.
+            Session-local sequence: 12
+            To refer to it in another session or task, describe its contents; this sequence only works in this session.
+        "},
+        "decision",
+        Some(12)
+    )]
+    #[case::legacy_output("Recorded decision 12", "decision", Some(12))]
     #[case::wrong_name("Recorded proposal 12", "decision", None)]
     #[case::invalid_sequence("Recorded decision zero", "decision", None)]
     fn parses_named_agent_add_results(
