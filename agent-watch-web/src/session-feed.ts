@@ -1,4 +1,4 @@
-import { err, errAsync, ok, ResultAsync } from 'neverthrow'
+import { err, errAsync, ok, Result, ResultAsync } from 'neverthrow'
 
 import { isPullRequest, isSessionTask } from '#session-record-validation'
 import type { Session, SessionsResponse } from '#types'
@@ -14,6 +14,35 @@ type SessionFeedDependencies = {
   createEventSource?: (url: string) => SessionEventSource
   reloadPage?: () => void
   requestRetryDelayMs?: number
+}
+
+type SessionsFeedResponse =
+  | {
+      mode: 'full'
+      token: string
+      revision: number
+      workTypeNavLabels?: Record<string, string>
+      sessions: Session[]
+    }
+  | {
+      mode: 'delta'
+      token: string
+      revision: number
+      workTypeNavLabels?: Record<string, string>
+      updatedSessions: Session[]
+      removedSessionIds: string[]
+      sessionOrder: string[]
+    }
+
+type SessionElapsedAnchor = {
+  elapsedSeconds: number
+  receivedAt: number
+}
+
+type CurrentSessions = {
+  token: string
+  response: SessionsResponse
+  elapsedAnchors: ReadonlyMap<string, SessionElapsedAnchor>
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -61,21 +90,47 @@ function isSession(value: unknown): value is Session {
   )
 }
 
-function isSessionsResponse(value: unknown): value is SessionsResponse {
+function isWorkTypeNavLabels(value: unknown): value is Record<string, string> {
+  return (
+    isRecord(value) &&
+    Object.values(value).every((label) => typeof label === 'string')
+  )
+}
+
+function isSessionArray(value: unknown): value is Session[] {
+  return Array.isArray(value) && value.every(isSession)
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) && value.every((entry) => typeof entry === 'string')
+  )
+}
+
+function isSessionsFeedResponse(value: unknown): value is SessionsFeedResponse {
   const workTypeNavLabels = isRecord(value)
     ? value['workTypeNavLabels']
     : undefined
 
+  if (
+    !isRecord(value) ||
+    typeof value['token'] !== 'string' ||
+    value['token'].length === 0 ||
+    typeof value['revision'] !== 'number' ||
+    (workTypeNavLabels !== undefined && !isWorkTypeNavLabels(workTypeNavLabels))
+  ) {
+    return false
+  }
+
+  if (value['mode'] === 'full') {
+    return isSessionArray(value['sessions'])
+  }
+
   return (
-    isRecord(value) &&
-    typeof value['revision'] === 'number' &&
-    (workTypeNavLabels === undefined ||
-      (isRecord(workTypeNavLabels) &&
-        Object.values(workTypeNavLabels).every(
-          (label) => typeof label === 'string',
-        ))) &&
-    Array.isArray(value['sessions']) &&
-    value['sessions'].every(isSession)
+    value['mode'] === 'delta' &&
+    isSessionArray(value['updatedSessions']) &&
+    isStringArray(value['removedSessionIds']) &&
+    isStringArray(value['sessionOrder'])
   )
 }
 
@@ -87,18 +142,100 @@ function toSessionFeedError(error: unknown) {
 
 function fetchSessions(
   fetcher: typeof fetch,
-): ResultAsync<SessionsResponse, Error> {
-  return ResultAsync.fromPromise(fetcher('/api/sessions'), toSessionFeedError)
+  token: string | null,
+): ResultAsync<SessionsFeedResponse, Error> {
+  const url =
+    token === null
+      ? '/api/sessions'
+      : `/api/sessions?since=${encodeURIComponent(token)}`
+
+  return ResultAsync.fromPromise(fetcher(url), toSessionFeedError)
     .andThen((response): ResultAsync<unknown, Error> =>
       response.ok
         ? ResultAsync.fromPromise(response.json(), toSessionFeedError)
         : errAsync(new Error('Session request failed')),
     )
     .andThen((body) =>
-      isSessionsResponse(body)
+      isSessionsFeedResponse(body)
         ? ok(body)
         : err(new Error('Session response is invalid')),
     )
+}
+
+function applySessionsFeedResponse(
+  body: SessionsFeedResponse,
+  current: CurrentSessions | null,
+  receivedAt: number,
+): Result<CurrentSessions, Error> {
+  if (body.mode === 'full') {
+    const response: SessionsResponse = {
+      revision: body.revision,
+      sessions: body.sessions,
+      ...(body.workTypeNavLabels === undefined
+        ? {}
+        : { workTypeNavLabels: body.workTypeNavLabels }),
+    }
+    const elapsedAnchors = new Map(
+      body.sessions.map((session): [string, SessionElapsedAnchor] => [
+        session.id,
+        { elapsedSeconds: session.elapsedSeconds, receivedAt },
+      ]),
+    )
+    return ok({ token: body.token, response, elapsedAnchors })
+  }
+
+  if (current === null) {
+    return err(new Error('Session delta arrived before a full response'))
+  }
+
+  const elapsedAnchors = new Map(current.elapsedAnchors)
+  const sessionsById = new Map<string, Session>()
+  for (const session of current.response.sessions) {
+    sessionsById.set(session.id, session)
+  }
+  for (const id of body.removedSessionIds) {
+    sessionsById.delete(id)
+    elapsedAnchors.delete(id)
+  }
+  for (const session of body.updatedSessions) {
+    sessionsById.set(session.id, session)
+    elapsedAnchors.set(session.id, {
+      elapsedSeconds: session.elapsedSeconds,
+      receivedAt,
+    })
+  }
+
+  const sessions: Session[] = []
+  for (const id of body.sessionOrder) {
+    const session = sessionsById.get(id)
+    const elapsedAnchor = elapsedAnchors.get(id)
+    if (session === undefined || elapsedAnchor === undefined) {
+      return err(new Error('Session delta is invalid'))
+    }
+    const elapsedSecondsSinceAnchor = Math.floor(
+      Math.max(0, receivedAt - elapsedAnchor.receivedAt) / 1_000,
+    )
+    sessions.push({
+      ...session,
+      elapsedSeconds: elapsedAnchor.elapsedSeconds + elapsedSecondsSinceAnchor,
+    })
+  }
+  if (
+    new Set(body.sessionOrder).size !== body.sessionOrder.length ||
+    sessions.length !== sessionsById.size ||
+    sessions.length !== elapsedAnchors.size
+  ) {
+    return err(new Error('Session delta is invalid'))
+  }
+
+  const workTypeNavLabels =
+    body.workTypeNavLabels ?? current.response.workTypeNavLabels
+  const response: SessionsResponse = {
+    revision: body.revision,
+    sessions,
+    ...(workTypeNavLabels === undefined ? {} : { workTypeNavLabels }),
+  }
+  return ok({ token: body.token, response, elapsedAnchors })
 }
 
 export function startSessionFeed(
@@ -119,6 +256,7 @@ export function startSessionFeed(
   let requestError = false
   let streamError = false
   let restartPending = false
+  let currentSessions: CurrentSessions | null = null
   let requestRetryTimer: ReturnType<typeof setTimeout> | null = null
   let reconnectPollTimer: ReturnType<typeof setInterval> | null = null
 
@@ -159,11 +297,22 @@ export function startSessionFeed(
   const runRefresh = () => {
     refreshQueued = false
 
-    void fetchSessions(fetcher)
+    void fetchSessions(fetcher, currentSessions?.token ?? null)
       .match(
         (body) => {
           if (active) {
-            onSessions(body)
+            const applied = applySessionsFeedResponse(
+              body,
+              currentSessions,
+              Date.now(),
+            )
+            if (applied.isErr()) {
+              reportRequestError()
+              return
+            }
+
+            currentSessions = applied.value
+            onSessions(currentSessions.response)
             requestError = false
             clearRequestRetry()
             reportStatus()

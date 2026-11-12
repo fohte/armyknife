@@ -517,8 +517,8 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript(
                     Vec::new(),
                 ));
             };
-            let (mut messages, skills) = parser::codex::parse_with_skills(reader, parent)?;
-            messages.extend(additions.decisions.iter().cloned().map(ChatItem::from));
+            let (messages, skills) =
+                parser::codex::parse_with_skills(reader, parent, additions.decisions)?;
             Ok((
                 ConversationResponse {
                     messages,
@@ -1435,10 +1435,10 @@ mod tests {
         std::fs::write(
             &transcript_path,
             indoc::indoc! {r#"
-                {"type":"assistant","message":{"content":[{"type":"text","text":"Before the decision."}]}}
-                {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Choose the fixture path'"}}]}}
-                {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded decision 5"}]}}
-                {"type":"assistant","message":{"content":[{"type":"text","text":"After the decision."}]}}
+                {"type":"assistant","timestamp":"2026-11-11T10:00:00Z","message":{"content":[{"type":"text","text":"Before the decision."}]}}
+                {"type":"assistant","timestamp":"2026-11-11T11:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Choose the fixture path'"}}]}}
+                {"type":"user","timestamp":"2026-11-11T12:00:00Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded decision 5"}]}}
+                {"type":"assistant","timestamp":"2026-11-11T13:00:00Z","message":{"content":[{"type":"text","text":"After the decision."}]}}
             "#},
         )
         .unwrap();
@@ -1455,7 +1455,7 @@ mod tests {
                     why: "The fixture remains reversible.".to_string(),
                     considered: vec!["Choose the other fixture path".to_string()],
                     easy_to_change: "Change one fixture value.".to_string(),
-                    created_at: "2026-11-11T00:00:00Z".to_string(),
+                    created_at: "2026-11-11T12:30:00Z".to_string(),
                     review: Some("ok".to_string()),
                     reviewed_at: None,
                 }])
@@ -1479,25 +1479,25 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"{"messages":[{"type":"assistant","text":"Before the decision."},{"type":"decision","seq":5,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":"ok","createdAt":"2026-11-11T00:00:00Z"},{"type":"assistant","text":"After the decision."}],"backgroundTasks":[],"start":0,"total":3,"decisions":[{"type":"decision","seq":5,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":"ok","createdAt":"2026-11-11T00:00:00Z"}],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
+                r#"{"messages":[{"type":"assistant","text":"Before the decision."},{"type":"tool_summary","summary":"Bash ×1","operations":[{"tool":"Bash","target":"a agent decision add 'Choose the fixture path'","failed":false}]},{"type":"decision","seq":5,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":"ok","createdAt":"2026-11-11T12:30:00Z"},{"type":"assistant","text":"After the decision."}],"backgroundTasks":[],"start":0,"total":4,"decisions":[{"type":"decision","seq":5,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":"ok","createdAt":"2026-11-11T12:30:00Z"}],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
             ),
         );
     }
 
     #[tokio::test]
-    async fn claude_message_route_places_decisions_and_proposals_in_transcript_order() {
+    async fn claude_message_route_places_decisions_and_proposals_by_creation_time() {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("transcript.jsonl");
         std::fs::write(
             &transcript_path,
             indoc::indoc! {r#"
-                {"type":"assistant","message":{"content":[{"type":"text","text":"Before the records."}]}}
-                {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Choose the fixture path'"}}]}}
-                {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded decision 5"}]}}
-                {"type":"assistant","message":{"content":[{"type":"text","text":"Between the records."}]}}
-                {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-proposal-call","name":"Bash","input":{"command":"a agent proposal add '<fixture-json>'"}}]}}
-                {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-proposal-call","content":"Recorded proposal 7"}]}}
-                {"type":"assistant","message":{"content":[{"type":"text","text":"After the records."}]}}
+                {"type":"assistant","timestamp":"2026-06-01T11:58:00Z","message":{"content":[{"type":"text","text":"Before the records."}]}}
+                {"type":"assistant","timestamp":"2026-06-01T11:59:30Z","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Choose the fixture path'"}}]}}
+                {"type":"user","timestamp":"2026-06-01T12:00:00Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded decision 5"}]}}
+                {"type":"assistant","timestamp":"2026-06-01T12:00:30Z","message":{"content":[{"type":"text","text":"Between the records."}]}}
+                {"type":"assistant","timestamp":"2026-06-01T12:01:00Z","message":{"content":[{"type":"tool_use","id":"fixture-proposal-call","name":"Bash","input":{"command":"a agent proposal add '<fixture-json>'"}}]}}
+                {"type":"user","timestamp":"2026-06-01T12:02:00Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-proposal-call","content":"Recorded proposal 7"}]}}
+                {"type":"assistant","timestamp":"2026-06-01T12:03:00Z","message":{"content":[{"type":"text","text":"After the records."}]}}
             "#},
         )
         .unwrap();
@@ -1519,7 +1519,7 @@ mod tests {
             session_id: "fixture-session".to_string(),
             seq: 7,
             body: r#"{"title":"Choose a fixture option","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}]}"#.to_string(),
-            created_at: chrono::DateTime::parse_from_rfc3339("2026-06-01T12:00:00Z")
+            created_at: chrono::DateTime::parse_from_rfc3339("2026-06-01T12:00:45Z")
                 .unwrap()
                 .with_timezone(&chrono::Utc),
             answer: None,
@@ -1569,6 +1569,15 @@ mod tests {
                             "review": null,
                             "createdAt": "2026-06-01T11:59:00Z",
                         },
+                        {
+                            "type": "tool_summary",
+                            "summary": "Bash ×1",
+                            "operations": [{
+                                "tool": "Bash",
+                                "target": "a agent decision add 'Choose the fixture path'",
+                                "failed": false,
+                            }],
+                        },
                         {"type": "assistant", "text": "Between the records."},
                         {
                             "type": "proposal",
@@ -1594,11 +1603,20 @@ mod tests {
                             "answer": null,
                             "resolved": false,
                         },
+                        {
+                            "type": "tool_summary",
+                            "summary": "Bash ×1",
+                            "operations": [{
+                                "tool": "Bash",
+                                "target": "a agent proposal add '<fixture-json>'",
+                                "failed": false,
+                            }],
+                        },
                         {"type": "assistant", "text": "After the records."},
                     ],
                     "backgroundTasks": [],
                     "start": 0,
-                    "total": 5,
+                    "total": 7,
                     "decisions": [{
                         "type": "decision",
                         "seq": 5,
@@ -1617,14 +1635,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claude_message_route_combines_decisions_with_peer_out_messages() {
+    async fn claude_message_route_places_decisions_by_time_for_combined_add_and_peer_commands() {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("transcript.jsonl");
         let transcript = indoc::indoc! {r#"
-            {"type":"assistant","timestamp":"2026-06-01T12:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Choose the fixture path'"}}]}}
-            {"type":"user","timestamp":"2026-06-01T12:00:01Z","sourceToolAssistantUUID":"fixture-assistant-call","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded decision 5"}]}}
-            {"type":"assistant","timestamp":"2026-06-01T12:00:02Z","message":{"content":[{"type":"tool_use","id":"fixture-peer-notify-call","name":"Bash","input":{"command":"a agent peer notify -m \"Requested fixture body.\" fixture-target-id"}}]}}
-            {"type":"user","timestamp":"2026-06-01T12:00:04Z","sourceToolAssistantUUID":"fixture-assistant-call","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-peer-notify-call","content":"delivered"}]}}
+            {"type":"assistant","timestamp":"2026-06-01T12:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-combined-call","name":"Bash","input":{"command":"a agent decision add 'Choose the fixture path' && a agent peer notify -m \"Requested fixture body.\" fixture-target-id"}}]}}
+            {"type":"user","timestamp":"2026-06-01T12:00:04Z","sourceToolAssistantUUID":"fixture-assistant-call","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-combined-call","content":"Decision recorded for this session.\nSession-local sequence: 5\nInjected into the running turn of Codex session fixture-target-id."}]}}
         "#};
         std::fs::write(&transcript_path, transcript).unwrap();
 
@@ -1725,12 +1741,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn codex_message_route_appends_database_decisions_after_the_transcript() {
+    async fn codex_message_route_places_database_decisions_by_creation_time() {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("transcript.jsonl");
         std::fs::write(
             &transcript_path,
-            r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Existing Codex message."}]}}"#,
+            indoc::indoc! {r#"
+                {"type":"response_item","timestamp":"2026-11-11T11:00:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Before the decision."}]}}
+                {"type":"response_item","timestamp":"2026-11-11T13:00:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"After the decision."}]}}
+            "#},
         )
         .unwrap();
         let mut session = stored_session();
@@ -1747,7 +1766,7 @@ mod tests {
                     why: "The fixture remains reversible.".to_string(),
                     considered: vec!["Choose the other fixture path".to_string()],
                     easy_to_change: "Change one fixture value.".to_string(),
-                    created_at: "2026-11-11T00:00:00Z".to_string(),
+                    created_at: "2026-11-11T12:00:00Z".to_string(),
                     review: None,
                     reviewed_at: None,
                 }])
@@ -1771,7 +1790,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"{"messages":[{"type":"assistant","text":"Existing Codex message."},{"type":"decision","seq":1,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":null,"createdAt":"2026-11-11T00:00:00Z"}],"backgroundTasks":[],"start":0,"total":2,"decisions":[{"type":"decision","seq":1,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":null,"createdAt":"2026-11-11T00:00:00Z"}],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
+                r#"{"messages":[{"type":"assistant","text":"Before the decision."},{"type":"decision","seq":1,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":null,"createdAt":"2026-11-11T12:00:00Z"},{"type":"assistant","text":"After the decision."}],"backgroundTasks":[],"start":0,"total":3,"decisions":[{"type":"decision","seq":1,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":null,"createdAt":"2026-11-11T12:00:00Z"}],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
             ),
         );
     }

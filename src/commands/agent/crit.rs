@@ -24,6 +24,14 @@ use self::url::{add_url, parse_port};
 
 const CRIT_TITLE: &str = "■ crit - Review requested";
 
+pub(super) fn live_crit_ports() -> Result<std::collections::HashSet<u16>> {
+    monitor::live_ports()
+}
+
+pub(super) fn crit_port_from_url(url: &str) -> Result<u16> {
+    parse_port(url)
+}
+
 trait CritAddRuntime {
     fn sync_pane(&mut self, pane_id: &str, url: &str) -> Result<()>;
     fn start_monitor(&mut self, port: u16, session: Option<&Session>) -> Result<()>;

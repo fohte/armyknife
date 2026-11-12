@@ -1,5 +1,6 @@
 //! Detached cleanup worker for crit review daemons.
 
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -19,6 +20,8 @@ use crate::shared::log::short_run_id;
 
 const MONITOR_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const STARTING_MARKER_TTL: Duration = Duration::from_secs(15);
+const CLEANUP_RETRIES: usize = 3;
+const CLEANUP_RETRY_DELAY: Duration = Duration::from_millis(500);
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct MonitorArgs {
@@ -132,24 +135,22 @@ pub(super) fn run(args: &MonitorArgs) -> Result<()> {
 
     kill_shpool_session(args.port);
     close_crit_panes(args.port);
-    cleanup_session_links(args.port, args.session.as_deref(), args.pane.as_deref());
+    if let Err(error) =
+        cleanup_session_links(args.port, args.session.as_deref(), args.pane.as_deref())
+    {
+        tracing::warn!(
+            event = "agent.crit.cleanup.failed",
+            port = args.port,
+            error = %error,
+        );
+    }
     remove_marker_if_owned(&marker);
     tracing::info!(event = "agent.crit.monitor.exit", daemon_pid = watched_pid);
     Ok(())
 }
 
 fn crit_pid_for_port(port: u16) -> Result<Option<u32>> {
-    let mut command = ExternalTool::Crit.command();
-    command.args(["status", "--json"]);
-    let output = process::run_with_timeout(command, Duration::from_secs(5))
-        .context("failed to read crit daemon status")?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("crit status --json failed: {stderr}");
-    }
-
-    let status: serde_json::Value =
-        serde_json::from_slice(&output.stdout).context("failed to parse crit status JSON")?;
+    let status = crit_status()?;
     Ok(pid_for_port(&status, port))
 }
 
@@ -285,31 +286,117 @@ fn cleanup_session_links(
     port: u16,
     fallback_session_id: Option<&str>,
     fallback_pane_id: Option<&str>,
-) {
-    let mut fallback_was_processed = fallback_session_id.is_none();
-    match store::list_all_sessions() {
-        Ok(sessions) => {
-            for session in sessions.into_iter().filter(|session| {
-                session
-                    .crit_urls
-                    .iter()
-                    .any(|url| parse_port(url).ok() == Some(port))
-            }) {
-                fallback_was_processed |= Some(session.session_id.as_str()) == fallback_session_id;
-                let pane_id = session.tmux_info.as_ref().map(|info| info.pane_id.as_str());
-                remove_session_link(port, &session.session_id, pane_id);
-            }
-        }
-        Err(error) => {
-            tracing::warn!(
-                event = "agent.crit.cleanup.session_list_failed",
+) -> Result<()> {
+    let mut updated_sessions = BTreeMap::new();
+    let result = retry_cleanup_with(
+        || {
+            let sessions_dir = store::sessions_dir()?;
+            cleanup_session_links_in(
+                &sessions_dir,
                 port,
+                fallback_session_id,
+                fallback_pane_id,
+                &mut updated_sessions,
+            )
+        },
+        thread::sleep,
+        |attempt, error| {
+            tracing::warn!(
+                event = "agent.crit.cleanup.retrying",
+                port,
+                attempt,
                 error = %error,
             );
-        }
+        },
+    );
+
+    for (session_id, (session, fallback)) in updated_sessions {
+        let pane_id = session
+            .as_ref()
+            .and_then(|session| session.tmux_info.as_ref())
+            .map(|info| info.pane_id.as_str())
+            .or(fallback.as_deref());
+        restore_pane_link(port, pane_id, session.as_ref(), &session_id);
     }
-    if !fallback_was_processed && let Some(fallback_session_id) = fallback_session_id {
-        remove_session_link(port, fallback_session_id, fallback_pane_id);
+    result
+}
+
+fn cleanup_session_links_in(
+    sessions_dir: &Path,
+    port: u16,
+    fallback_session_id: Option<&str>,
+    fallback_pane_id: Option<&str>,
+    updated_sessions: &mut BTreeMap<String, (Option<Session>, Option<String>)>,
+) -> Result<()> {
+    let sessions = match store::list_all_sessions_from(sessions_dir) {
+        Ok(sessions) => sessions,
+        Err(error) => {
+            if let Some(session_id) = fallback_session_id {
+                let session = drop_port_from_session_in(sessions_dir, port, session_id)?;
+                updated_sessions.insert(
+                    session_id.to_string(),
+                    (session, fallback_pane_id.map(str::to_string)),
+                );
+            }
+            return Err(error);
+        }
+    };
+    let mut targets = sessions
+        .into_iter()
+        .filter(|session| {
+            session
+                .crit_urls
+                .iter()
+                .any(|url| parse_port(url).ok() == Some(port))
+        })
+        .map(|session| {
+            let fallback_pane = session
+                .tmux_info
+                .as_ref()
+                .map(|info| info.pane_id.clone())
+                .or_else(|| {
+                    (Some(session.session_id.as_str()) == fallback_session_id)
+                        .then(|| fallback_pane_id.map(str::to_string))
+                        .flatten()
+                });
+            (session.session_id, fallback_pane)
+        })
+        .collect::<Vec<_>>();
+
+    if let Some(fallback_session_id) = fallback_session_id
+        && !targets
+            .iter()
+            .any(|(session_id, _)| session_id == fallback_session_id)
+    {
+        targets.push((
+            fallback_session_id.to_string(),
+            fallback_pane_id.map(str::to_string),
+        ));
+    }
+
+    for (session_id, fallback_pane) in targets {
+        let session = drop_port_from_session_in(sessions_dir, port, &session_id)?;
+        updated_sessions.insert(session_id, (session, fallback_pane));
+    }
+    Ok(())
+}
+
+fn retry_cleanup_with<T>(
+    mut cleanup: impl FnMut() -> Result<T>,
+    mut wait: impl FnMut(Duration),
+    mut on_retry: impl FnMut(usize, &anyhow::Error),
+) -> Result<T> {
+    let mut attempt = 0;
+    loop {
+        match cleanup() {
+            Ok(value) => return Ok(value),
+            Err(error) if attempt < CLEANUP_RETRIES => {
+                attempt += 1;
+                on_retry(attempt, &error);
+                wait(CLEANUP_RETRY_DELAY);
+            }
+            Err(error) => return Err(error),
+        }
     }
 }
 
@@ -333,40 +420,6 @@ fn close_crit_panes(port: u16) {
     }
 }
 
-fn remove_session_link(port: u16, session_id: &str, fallback_pane_id: Option<&str>) {
-    let sessions_dir = match store::sessions_dir() {
-        Ok(dir) => dir,
-        Err(error) => {
-            tracing::warn!(
-                event = "agent.crit.cleanup.session_dir_failed",
-                session = %session_id,
-                port,
-                error = %error,
-            );
-            restore_pane_link(port, fallback_pane_id, None, session_id);
-            return;
-        }
-    };
-    let updated = match drop_port_from_session_in(&sessions_dir, port, session_id) {
-        Ok(updated) => updated,
-        Err(error) => {
-            tracing::warn!(
-                event = "agent.crit.cleanup.session_update_failed",
-                session = %session_id,
-                port,
-                error = %error,
-            );
-            None
-        }
-    };
-    let pane_id = updated
-        .as_ref()
-        .and_then(|session| session.tmux_info.as_ref())
-        .map(|info| info.pane_id.as_str())
-        .or(fallback_pane_id);
-    restore_pane_link(port, pane_id, updated.as_ref(), session_id);
-}
-
 fn drop_port_from_session_in(
     sessions_dir: &Path,
     port: u16,
@@ -385,6 +438,55 @@ fn drop_port_from_session_in(
         lock.save(&session)?;
     }
     Ok(Some(session))
+}
+
+pub(super) fn live_ports() -> Result<std::collections::HashSet<u16>> {
+    let status = crit_status()?;
+    live_ports_from_status(&status, process::is_process_alive)
+}
+
+fn live_ports_from_status(
+    status: &serde_json::Value,
+    is_process_alive: impl Fn(u32) -> bool,
+) -> Result<std::collections::HashSet<u16>> {
+    let sessions = status
+        .get("sessions")
+        .and_then(serde_json::Value::as_array)
+        .context("crit status JSON is missing the sessions array")?;
+    sessions.iter().try_fold(
+        std::collections::HashSet::new(),
+        |mut live_ports, session| {
+            let port = session
+                .get("port")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|port| u16::try_from(port).ok())
+                .filter(|port| *port != 0)
+                .context("crit status JSON contains an invalid session port")?;
+            let pid = session
+                .get("pid")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|pid| u32::try_from(pid).ok())
+                .filter(|pid| *pid != 0)
+                .context("crit status JSON contains an invalid session PID")?;
+            if is_process_alive(pid) {
+                live_ports.insert(port);
+            }
+            Ok(live_ports)
+        },
+    )
+}
+
+fn crit_status() -> Result<serde_json::Value> {
+    let mut command = ExternalTool::Crit.command();
+    command.args(["status", "--json"]);
+    let output = process::run_with_timeout(command, Duration::from_secs(5))
+        .context("failed to read crit daemon status")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("crit status --json failed: {stderr}");
+    }
+
+    serde_json::from_slice(&output.stdout).context("failed to parse crit status JSON")
 }
 
 fn restore_pane_link(
@@ -422,4 +524,195 @@ fn unix_time_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::collections::HashSet;
+
+    use super::*;
+
+    #[test]
+    fn live_ports_requires_a_valid_pid_that_is_still_alive() {
+        let status = serde_json::json!({
+            "sessions": [
+                { "port": 43210, "pid": 321 },
+                { "port": 43211, "pid": 654 },
+            ]
+        });
+        let actual = live_ports_from_status(&status, |pid| pid == 321)
+            .expect("valid crit status should be parsed");
+
+        assert_eq!(actual, HashSet::from([43210]));
+    }
+
+    #[test]
+    fn retries_database_cleanup_before_returning_success() {
+        let attempts = Cell::new(0);
+        let mut waits = Vec::new();
+        let mut retries = Vec::new();
+        let result = retry_cleanup_with(
+            || {
+                attempts.set(attempts.get() + 1);
+                if attempts.get() < 3 {
+                    bail!("fixture database failure");
+                }
+                Ok("cleaned")
+            },
+            |delay| waits.push(delay),
+            |attempt, error| retries.push((attempt, format!("{error:#}"))),
+        );
+
+        assert_eq!(
+            (
+                result
+                    .map(str::to_string)
+                    .map_err(|error| format!("{error:#}")),
+                attempts.get(),
+                waits,
+                retries,
+            ),
+            (
+                Ok("cleaned".to_string()),
+                3,
+                vec![CLEANUP_RETRY_DELAY; 2],
+                vec![
+                    (1, "fixture database failure".to_string()),
+                    (2, "fixture database failure".to_string()),
+                ],
+            ),
+        );
+    }
+
+    #[test]
+    fn stops_after_the_configured_number_of_database_retries() {
+        let attempts = Cell::new(0);
+        let mut waits = Vec::new();
+        let result: Result<()> = retry_cleanup_with(
+            || {
+                attempts.set(attempts.get() + 1);
+                bail!("fixture database failure")
+            },
+            |delay| waits.push(delay),
+            |_, _| {},
+        );
+
+        assert_eq!(
+            (
+                result.map_err(|error| format!("{error:#}")),
+                attempts.get(),
+                waits,
+            ),
+            (
+                Err("fixture database failure".to_string()),
+                CLEANUP_RETRIES + 1,
+                vec![CLEANUP_RETRY_DELAY; CLEANUP_RETRIES],
+            ),
+        );
+    }
+
+    #[test]
+    fn cleanup_removes_matching_and_fallback_session_links_from_a_temp_store() {
+        use std::collections::{BTreeMap as SessionMap, BTreeSet};
+        use std::path::PathBuf;
+
+        use chrono::Utc;
+        use tempfile::TempDir;
+
+        use crate::commands::agent::types::SessionStatus;
+
+        fn fixture_session(id: &str, urls: &[&str], archived: bool) -> Session {
+            let timestamp = Utc::now();
+            Session {
+                archived_at: archived.then_some(timestamp),
+                pr_context: None,
+                session_id: id.to_string(),
+                crit_urls: urls.iter().map(|url| (*url).to_string()).collect(),
+                pending_human_review_ids: BTreeSet::new(),
+                cwd: PathBuf::from("/tmp/fixture-worktree"),
+                transcript_path: None,
+                tty: None,
+                tmux_info: None,
+                status: SessionStatus::Running,
+                created_at: timestamp,
+                updated_at: timestamp,
+                last_message: None,
+                current_tool: None,
+                label: None,
+                work_type: None,
+                work_type_pinned: false,
+                vibe_enabled: false,
+                launched_with_vibe: false,
+                child_launch: Default::default(),
+                ancestor_session_ids: Vec::new(),
+                pending_bg_task_ids: BTreeSet::new(),
+                pending_agent_task_ids: BTreeSet::new(),
+                pending_permission_agent_ids: BTreeSet::new(),
+                pending_permission_request_ids: SessionMap::new(),
+                read_at: None,
+                sweep_signaled: false,
+                stop_blocked_by_armyknife: false,
+                agent_status: None,
+                agent_status_clear_pending: false,
+                engine: Default::default(),
+                model: None,
+                effort: None,
+            }
+        }
+
+        let temp = TempDir::new().expect("temporary directory should be created");
+        let sessions_dir = temp.path();
+        let active = fixture_session(
+            "fixture-active-session",
+            &[
+                "http://localhost:43210/review",
+                "http://localhost:43211/review",
+            ],
+            false,
+        );
+        let archived_fallback = fixture_session(
+            "fixture-archived-session",
+            &[
+                "http://localhost:43210/review",
+                "http://localhost:43212/review",
+            ],
+            true,
+        );
+        store::save_session_to(sessions_dir, &active).expect("active session should save");
+        store::save_session_to(sessions_dir, &archived_fallback)
+            .expect("archived fallback session should save");
+        let mut updated_sessions = BTreeMap::new();
+
+        cleanup_session_links_in(
+            sessions_dir,
+            43210,
+            Some("fixture-archived-session"),
+            Some("%fixture-pane"),
+            &mut updated_sessions,
+        )
+        .expect("session links should be cleaned");
+
+        assert_eq!(
+            (
+                store::load_session_from(sessions_dir, "fixture-active-session")
+                    .expect("active session should load")
+                    .expect("active session should exist")
+                    .crit_urls,
+                store::load_session_from(sessions_dir, "fixture-archived-session")
+                    .expect("archived session should load")
+                    .expect("archived session should exist")
+                    .crit_urls,
+                updated_sessions.keys().cloned().collect::<Vec<_>>(),
+            ),
+            (
+                vec!["http://localhost:43211/review".to_string()],
+                vec!["http://localhost:43212/review".to_string()],
+                vec![
+                    "fixture-active-session".to_string(),
+                    "fixture-archived-session".to_string(),
+                ],
+            ),
+        );
+    }
 }
