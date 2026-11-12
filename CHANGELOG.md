@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.650](https://github.com/fohte/armyknife/compare/v0.1.649...v0.1.650) (2026-11-12)
+
+
+### Features
+
+* **agent-watch-web:** clarify header actions ([#1673](https://github.com/fohte/armyknife/issues/1673)) ([a4840a2](https://github.com/fohte/armyknife/commit/a4840a22c6e508eef4eb4de7b01a1c9740390c79))
+
 ## [0.1.649](https://github.com/fohte/armyknife/compare/v0.1.648...v0.1.649) (2026-11-12)
 
 
