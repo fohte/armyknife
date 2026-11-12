@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.635](https://github.com/fohte/armyknife/compare/v0.1.634...v0.1.635) (2026-11-12)
+
+
+### Features
+
+* **agent-watch-web:** reduce transfer size ([#1638](https://github.com/fohte/armyknife/issues/1638)) ([55e1938](https://github.com/fohte/armyknife/commit/55e193864e6b6f1032079d1dd5946b48369209f3))
+
 ## [0.1.634](https://github.com/fohte/armyknife/compare/v0.1.633...v0.1.634) (2026-11-12)
 
 
