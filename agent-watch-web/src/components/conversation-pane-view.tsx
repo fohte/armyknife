@@ -44,7 +44,6 @@ type ConversationPaneViewProps = {
   start?: number
   decisions?: readonly Extract<ChatItem, { type: 'decision' }>[]
   hasUnansweredProposal?: boolean
-  activeQuestionIndex?: number | null
   loadingOlder?: boolean
   onLoadOlder?: () => void
   onPruneOldMessages?: () => void
@@ -88,7 +87,6 @@ export function ConversationPaneView({
   start = 0,
   decisions,
   hasUnansweredProposal: responseHasUnansweredProposal,
-  activeQuestionIndex,
   loadingOlder = false,
   onLoadOlder = () => undefined,
   onPruneOldMessages = () => undefined,
@@ -183,7 +181,6 @@ export function ConversationPaneView({
     ...(responseHasUnansweredProposal === undefined
       ? {}
       : { hasUnansweredProposal: responseHasUnansweredProposal }),
-    ...(activeQuestionIndex === undefined ? {} : { activeQuestionIndex }),
     sessionCategory: session.category,
     isCompacting: session.isCompacting === true,
     sessionEngine: session.engine,

@@ -3,30 +3,48 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
+import { ProposalCard } from '#components/proposal-card'
 import { QuestionCard } from '#components/question-card'
 
 type Props = ComponentProps<typeof QuestionCard>
+
+const singleChoiceQuestions: Props['questions'] = [
+  {
+    header: 'Direction',
+    question: 'Which direction should be used?',
+    choices: [{ label: 'North' }, { label: 'South' }, { label: 'East' }],
+    multi_select: false,
+    answer: null,
+  },
+]
 
 let container: HTMLDivElement
 let root: Root | null = null
 
 function props(overrides: Partial<Props> = {}): Props {
   return {
-    header: 'Retry policy',
-    question: 'Which **retry policy** should be used?',
-    choices: [
-      { label: 'Retry *a few* times', description: 'Use a short delay.' },
-      { label: 'Retry once' },
+    questions: [
+      {
+        header: 'Colors',
+        question: 'Which colors should be included?',
+        choices: [{ label: 'Cedar' }, { label: 'Amber' }, { label: 'Jade' }],
+        multi_select: true,
+        answer: null,
+      },
+      {
+        header: 'Icon',
+        question: 'Which icon?',
+        choices: [{ label: 'Compass' }, { label: 'Lantern' }],
+        multi_select: false,
+        answer: null,
+      },
     ],
-    multiSelect: false,
-    answer: null,
     canAnswer: true,
     isMobile: false,
     showTerminalFallback: false,
     canOpenInTerminal: true,
     onAnswer: vi.fn(() => Promise.resolve(true)),
     onSkip: vi.fn(() => Promise.resolve(true)),
-    onFreeformAnswer: vi.fn(() => Promise.resolve(true)),
     onOpenInTerminal: vi.fn(),
     ...overrides,
   }
@@ -39,20 +57,44 @@ function renderQuestion(cardProps: Props) {
   })
 }
 
+function renderQuestions(cardProps: Props[]) {
+  root ??= createRoot(container)
+  act(() => {
+    root?.render(
+      <>
+        {cardProps.map((questionProps, index) => (
+          <QuestionCard {...questionProps} key={String(index)} />
+        ))}
+      </>,
+    )
+  })
+}
+
 function requireElement<T extends Element>(element: T | null): T {
   if (element === null) throw new Error('Expected element was not rendered')
   return element
 }
 
-function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
-  const valueSetter = Reflect.getOwnPropertyDescriptor(
-    textarea.constructor.prototype,
-    'value',
-  )?.set
-  if (valueSetter !== undefined) {
-    Reflect.apply(valueSetter, textarea, [value])
-  }
-  textarea.dispatchEvent(new Event('input', { bubbles: true }))
+function choiceButton(label: string): HTMLButtonElement {
+  return requireElement(
+    Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.chat-question-choices button',
+      ),
+    ).find((button) => button.textContent.includes(label)) ?? null,
+  )
+}
+
+function dispatchKey(target: EventTarget, key: string) {
+  const event = new KeyboardEvent('keydown', {
+    key,
+    bubbles: true,
+    cancelable: true,
+  })
+  act(() => {
+    target.dispatchEvent(event)
+  })
+  return event
 }
 
 beforeEach(() => {
@@ -69,449 +111,427 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it('renders answered choice Markdown as inline spans without paragraphs', () => {
-  renderQuestion(props({ answer: 'Retry *a few* times' }))
+it('submits every selected answer once with multi-select labels joined', async () => {
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  renderQuestion(props({ onAnswer }))
 
-  const card = requireElement(container.querySelector('.chat-question-card'))
-  const snapshot = () => ({
-    question: card.querySelector('.chat-question-text strong')?.textContent,
-    choices: Array.from(
-      card.querySelectorAll<HTMLButtonElement>('.chat-question-choices button'),
-      (button) => ({
-        disabled: button.disabled,
-        selected: button.classList.contains('is-selected'),
-        dimmed: button.classList.contains('is-unselected'),
-        textTag: button.querySelector('.chat-question-choice-text')?.tagName,
-        textMarkup: button.querySelector('.chat-question-choice-text')
-          ?.innerHTML,
-        paragraphCount: button.querySelectorAll('p').length,
-        description: button.querySelector('.chat-question-choice-description')
-          ?.textContent,
-        check: button.querySelector('.chat-question-choice-check')?.textContent,
-      }),
+  const submit = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-question-actions button.aw-button--primary',
     ),
-    answer: card.querySelector('.chat-question-answer')?.textContent,
+  )
+  const beforeAllQuestionsAreAnswered = submit.disabled
+  act(() => {
+    choiceButton('Cedar').click()
+    choiceButton('Amber').click()
+  })
+  const afterFirstQuestionIsAnswered = submit.disabled
+  act(() => {
+    choiceButton('Compass').click()
+  })
+  const afterEveryQuestionIsAnswered = submit.disabled
+
+  await act(async () => {
+    submit.click()
+    await Promise.resolve()
   })
 
-  expect(snapshot()).toEqual({
-    question: 'retry policy',
-    choices: [
-      {
-        disabled: true,
-        selected: true,
-        dimmed: false,
-        textTag: 'SPAN',
-        textMarkup: '<span>Retry <em>a few</em> times</span>',
-        paragraphCount: 0,
-        description: 'Use a short delay.',
-        check: '✓',
-      },
-      {
-        disabled: true,
-        selected: false,
-        dimmed: true,
-        textTag: 'SPAN',
-        textMarkup: '<span>Retry once</span>',
-        paragraphCount: 0,
-        description: undefined,
-        check: undefined,
-      },
+  const snapshot = () => ({
+    disabled: [
+      beforeAllQuestionsAreAnswered,
+      afterFirstQuestionIsAnswered,
+      afterEveryQuestionIsAnswered,
     ],
-    answer: undefined,
+    answers: onAnswer.mock.calls,
+    submitAfterAnswer: submit.disabled,
+  })
+  expect(snapshot()).toEqual({
+    disabled: [true, true, false],
+    answers: [
+      [
+        {
+          'Which colors should be included?': 'Cedar, Amber',
+          'Which icon?': 'Compass',
+        },
+      ],
+    ],
+    submitAfterAnswer: true,
   })
 })
 
-it('shows numbered choices on iPhone', () => {
-  renderQuestion(props({ isMobile: true }))
+it('sends a single-choice answer as soon as an option is selected', async () => {
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  renderQuestion(
+    props({ questions: singleChoiceQuestions, isMobile: true, onAnswer }),
+  )
 
-  const snapshot = () =>
-    Array.from(
-      container.querySelectorAll('.chat-question-choices button'),
-      (button) => ({
-        number: button.querySelector('kbd')?.textContent,
-        label: button.querySelector('.chat-question-choice-text')?.textContent,
-      }),
+  await act(async () => {
+    choiceButton('South').click()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    answerCalls: onAnswer.mock.calls,
+    selected: choiceButton('South').getAttribute('aria-pressed'),
+    submitButton: container.querySelector(
+      '.chat-question-actions button.aw-button--primary',
+    ),
+  })
+  expect(snapshot()).toEqual({
+    answerCalls: [[{ 'Which direction should be used?': 'South' }]],
+    selected: 'true',
+    submitButton: null,
+  })
+})
+
+it('answers a desktop single-choice question with its number shortcut', async () => {
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  renderQuestion(props({ questions: singleChoiceQuestions, onAnswer }))
+  const shortcuts = Array.from(
+    container.querySelectorAll('.chat-question-choices kbd'),
+    (key) => key.textContent,
+  )
+
+  const event = dispatchKey(window, '2')
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    shortcuts,
+    answerCalls: onAnswer.mock.calls,
+    selected: choiceButton('South').getAttribute('aria-pressed'),
+    defaultPrevented: event.defaultPrevented,
+  })
+  expect(snapshot()).toEqual({
+    shortcuts: ['1', '2', '3'],
+    answerCalls: [[{ 'Which direction should be used?': 'South' }]],
+    selected: 'true',
+    defaultPrevented: true,
+  })
+})
+
+it('does not answer a desktop question while its answer field is focused', () => {
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  renderQuestion(props({ questions: singleChoiceQuestions, onAnswer }))
+  const answerField = requireElement(container.querySelector('textarea'))
+
+  const event = dispatchKey(answerField, '2')
+
+  const snapshot = () => ({
+    answerCalls: onAnswer.mock.calls,
+    selected: choiceButton('South').getAttribute('aria-pressed'),
+    defaultPrevented: event.defaultPrevented,
+  })
+  expect(snapshot()).toEqual({
+    answerCalls: [],
+    selected: 'false',
+    defaultPrevented: false,
+  })
+})
+
+it('routes shortcuts to the latest question card or the card containing focus', async () => {
+  const firstAnswer = vi.fn(() => Promise.resolve(true))
+  const lastAnswer = vi.fn(() => Promise.resolve(true))
+  renderQuestions([
+    props({ questions: singleChoiceQuestions, onAnswer: firstAnswer }),
+    props({ questions: singleChoiceQuestions, onAnswer: lastAnswer }),
+  ])
+
+  const outsideEvent = dispatchKey(window, '2')
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+  const afterOutsideShortcut = {
+    firstCalls: firstAnswer.mock.calls.slice(),
+    lastCalls: lastAnswer.mock.calls.slice(),
+    selectedPerCard: Array.from(
+      container.querySelectorAll('.chat-question-card'),
+      (card) =>
+        card.querySelectorAll(
+          '.chat-question-choices button[aria-pressed="true"]',
+        ).length,
+    ),
+    defaultPrevented: outsideEvent.defaultPrevented,
+  }
+
+  const insideEvent = dispatchKey(choiceButton('North'), '1')
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    afterOutsideShortcut,
+    insideDefaultPrevented: insideEvent.defaultPrevented,
+    firstCalls: firstAnswer.mock.calls,
+    lastCalls: lastAnswer.mock.calls,
+    selectedPerCard: Array.from(
+      container.querySelectorAll('.chat-question-card'),
+      (card) =>
+        card.querySelectorAll(
+          '.chat-question-choices button[aria-pressed="true"]',
+        ).length,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    afterOutsideShortcut: {
+      firstCalls: [],
+      lastCalls: [[{ 'Which direction should be used?': 'South' }]],
+      selectedPerCard: [0, 1],
+      defaultPrevented: true,
+    },
+    insideDefaultPrevented: true,
+    firstCalls: [[{ 'Which direction should be used?': 'North' }]],
+    lastCalls: [[{ 'Which direction should be used?': 'South' }]],
+    selectedPerCard: [1, 1],
+  })
+})
+
+it('leaves a number shortcut to the proposal card that owns the target', () => {
+  const onQuestionAnswer = vi.fn(() => Promise.resolve(true))
+  const onProposalAnswer = vi.fn(() => Promise.resolve(true))
+  root ??= createRoot(container)
+  act(() => {
+    root?.render(
+      <>
+        <QuestionCard
+          {...props({
+            questions: singleChoiceQuestions,
+            onAnswer: onQuestionAnswer,
+          })}
+        />
+        <ProposalCard
+          seq={9}
+          title="Which route should be used?"
+          summary={null}
+          options={[
+            {
+              label: 'North route',
+              description: null,
+              pros: [],
+              cons: [],
+              recommended: false,
+            },
+            {
+              label: 'South route',
+              description: null,
+              pros: [],
+              cons: [],
+              recommended: false,
+            },
+          ]}
+          answer={null}
+          resolved={false}
+          isMobile={false}
+          onAnswer={onProposalAnswer}
+        />
+      </>,
     )
+  })
+  const proposalAction = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-proposal-actions button.aw-button--outline',
+    ),
+  )
 
-  expect(snapshot()).toEqual([
-    { number: '1', label: 'Retry a few times' },
-    { number: '2', label: 'Retry once' },
+  const event = dispatchKey(proposalAction, '1')
+
+  const snapshot = () => ({
+    questionCalls: onQuestionAnswer.mock.calls,
+    proposalCalls: onProposalAnswer.mock.calls,
+    selectedProposalOptions: Array.from(
+      container.querySelectorAll<HTMLInputElement>(
+        '.chat-proposal-option input',
+      ),
+      (input) => input.checked,
+    ),
+    defaultPrevented: event.defaultPrevented,
+  })
+  expect(snapshot()).toEqual({
+    questionCalls: [],
+    proposalCalls: [],
+    selectedProposalOptions: [true, false],
+    defaultPrevented: true,
+  })
+})
+
+it('does not show or use number shortcuts on mobile', () => {
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  renderQuestion(
+    props({ questions: singleChoiceQuestions, isMobile: true, onAnswer }),
+  )
+
+  const event = dispatchKey(window, '2')
+
+  const snapshot = () => ({
+    shortcuts: container.querySelectorAll('.chat-question-choices kbd').length,
+    answerCalls: onAnswer.mock.calls,
+    defaultPrevented: event.defaultPrevented,
+  })
+  expect(snapshot()).toEqual({
+    shortcuts: 0,
+    answerCalls: [],
+    defaultPrevented: false,
+  })
+})
+
+it('submits freeform answers for every question', async () => {
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  const onSkip = vi.fn(() => Promise.resolve(true))
+  renderQuestion(props({ onAnswer, onSkip }))
+
+  const textareas = Array.from(
+    container.querySelectorAll<HTMLTextAreaElement>('textarea'),
+  )
+  act(() => {
+    for (const [index, textarea] of textareas.entries()) {
+      const setter = Reflect.getOwnPropertyDescriptor(
+        textarea.constructor.prototype,
+        'value',
+      )?.set
+      if (setter !== undefined) {
+        Reflect.apply(setter, textarea, [`Custom ${String(index)}`])
+      }
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+  })
+
+  const submit = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-question-actions button.aw-button--primary',
+    ),
+  )
+  await act(async () => {
+    submit.click()
+    await Promise.resolve()
+  })
+
+  expect(onAnswer.mock.calls).toEqual([
+    [
+      {
+        'Which colors should be included?': 'Custom 0',
+        'Which icon?': 'Custom 1',
+      },
+    ],
   ])
 })
 
-it('shows a link destination as text and answers only the selected choice', async () => {
-  const onAnswer = vi.fn(() => Promise.resolve(true))
-  const cardProps = props({
-    choices: [
-      { label: 'Follow the [setup guide](https://example.org/guide)' },
-      { label: 'Use the default settings' },
-    ],
-    onAnswer,
+it('keeps the answer after a failed submission and allows retry', async () => {
+  const onAnswer = vi
+    .fn<() => Promise<boolean>>()
+    .mockResolvedValueOnce(false)
+    .mockResolvedValueOnce(true)
+  renderQuestion(props({ onAnswer }))
+  act(() => {
+    choiceButton('Cedar').click()
+    choiceButton('Compass').click()
   })
-  renderQuestion(cardProps)
-
-  const destination = requireElement(
-    container.querySelector('.chat-question-choice-text .markdown-link-text'),
+  const submit = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-question-actions button.aw-button--primary',
+    ),
   )
+
   await act(async () => {
-    destination.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    submit.click()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  const afterFailedSubmission = {
+    error: container.querySelector('[role="alert"]')?.textContent,
+    cedarSelected: choiceButton('Cedar').getAttribute('aria-pressed'),
+    submitDisabled: submit.disabled,
+  }
+
+  await act(async () => {
+    submit.click()
     await Promise.resolve()
     await Promise.resolve()
   })
 
   const snapshot = () => ({
-    destinationText: destination.textContent,
-    destinationTag: destination.tagName,
-    anchorCount: container.querySelectorAll('.chat-question-choices a').length,
-    actionCalls: onAnswer.mock.calls,
+    afterFailedSubmission,
+    calls: onAnswer.mock.calls,
+    errorAfterRetry: container.querySelector('[role="alert"]'),
+    submitAfterRetry: container.querySelector(
+      '.chat-question-actions button.aw-button--primary',
+    ),
   })
-
   expect(snapshot()).toEqual({
-    destinationText: 'https://example.org/guide',
-    destinationTag: 'SPAN',
-    anchorCount: 0,
-    actionCalls: [[1]],
+    afterFailedSubmission: {
+      error:
+        'Your answer was not sent. Your draft is still available; select Send answer to retry.',
+      cedarSelected: 'true',
+      submitDisabled: false,
+    },
+    calls: [
+      [
+        {
+          'Which colors should be included?': 'Cedar',
+          'Which icon?': 'Compass',
+        },
+      ],
+      [
+        {
+          'Which colors should be included?': 'Cedar',
+          'Which icon?': 'Compass',
+        },
+      ],
+    ],
+    errorAfterRetry: null,
+    submitAfterRetry: null,
   })
 })
 
-it('shows question metadata', () => {
+it('skips all questions with one request', async () => {
+  const onSkip = vi.fn(() => Promise.resolve(true))
+  renderQuestion(props({ onSkip }))
+  const skip = requireElement(
+    Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(
+      (button) => button.textContent.includes('No answer'),
+    ) ?? null,
+  )
+
+  await act(async () => {
+    skip.click()
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    skipCalls: onSkip.mock.calls,
+    skipButtonPresent:
+      container.querySelector(
+        '.chat-question-actions button.aw-button--outline',
+      ) !== null,
+  })
+  expect(snapshot()).toEqual({ skipCalls: [[]], skipButtonPresent: false })
+})
+
+it('shows the terminal fallback for questions without a watch-web request', () => {
   renderQuestion(
     props({
-      header: 'Output format',
-      question: 'Which format should be used?',
-      choices: [{ label: 'Compact', description: 'Fits in a short report.' }],
-      multiSelect: true,
+      canAnswer: false,
+      showTerminalFallback: true,
+      canOpenInTerminal: false,
     }),
   )
 
   const snapshot = () => ({
-    heading: container.querySelector('.chat-question-card h2')?.textContent,
-    multiSelect: container.querySelector('.chat-question-card p')?.textContent,
-    description: container.querySelector('.chat-question-choice-description')
+    terminalMessage: container.querySelector('.conversation-terminal-fallback')
       ?.textContent,
-    answerLabel: container.querySelector('label')?.textContent,
-  })
-  expect(snapshot()).toEqual({
-    heading: 'Output format',
-    multiSelect: 'Multiple select question.',
-    description: 'Fits in a short report.',
-    answerLabel: 'Type something',
-  })
-})
-
-it('skips a question from the no-answer button', async () => {
-  const onSkip = vi.fn(() => Promise.resolve(true))
-  renderQuestion(props({ onSkip }))
-
-  const skipButton = requireElement(
-    Array.from(container.querySelectorAll('button')).find((button) =>
-      button.textContent.includes('No answer'),
-    ) ?? null,
-  )
-  act(() => {
-    skipButton.click()
-  })
-  await act(async () => Promise.resolve())
-
-  expect(onSkip.mock.calls).toEqual([[]])
-})
-
-it('keeps the question actionable after a no-answer request fails', async () => {
-  const onSkip = vi
-    .fn(() => Promise.resolve(false))
-    .mockImplementationOnce(() => Promise.resolve(false))
-    .mockImplementationOnce(() => Promise.resolve(true))
-  renderQuestion(props({ onSkip }))
-
-  const skipButton = requireElement(
-    Array.from(container.querySelectorAll('button')).find((button) =>
-      button.textContent.includes('No answer'),
-    ) ?? null,
-  )
-  await act(async () => {
-    skipButton.click()
-    await Promise.resolve()
-    await Promise.resolve()
-  })
-  const afterFailure = {
-    choiceDisabled: requireElement(
-      container.querySelector<HTMLButtonElement>(
-        '.chat-question-choices button',
-      ),
-    ).disabled,
-    formPresent: container.querySelector('form') !== null,
-    skipDisabled: skipButton.disabled,
-  }
-
-  await act(async () => {
-    skipButton.click()
-    await Promise.resolve()
-    await Promise.resolve()
-  })
-
-  const snapshot = () => ({
-    afterFailure,
-    afterRetry: {
-      choiceDisabled: requireElement(
-        container.querySelector<HTMLButtonElement>(
-          '.chat-question-choices button',
-        ),
-      ).disabled,
-      formPresent: container.querySelector('form') !== null,
-      skipButtonPresent: (
-        container.querySelector<HTMLButtonElement>(
-          '.chat-question-actions button',
-        )?.textContent ?? ''
-      ).includes('No answer'),
-    },
-    skipCalls: onSkip.mock.calls,
-  })
-  expect(snapshot()).toEqual({
-    afterFailure: {
-      choiceDisabled: false,
-      formPresent: true,
-      skipDisabled: false,
-    },
-    afterRetry: {
-      choiceDisabled: true,
-      formPresent: false,
-      skipButtonPresent: false,
-    },
-    skipCalls: [[], []],
-  })
-})
-
-it('does not skip a question when Escape is pressed in the freeform field', async () => {
-  const onSkip = vi.fn(() => Promise.resolve(true))
-  renderQuestion(props({ onSkip }))
-  const textarea = requireElement(
-    container.querySelector<HTMLTextAreaElement>('textarea'),
-  )
-  const event = new KeyboardEvent('keydown', {
-    key: 'Escape',
-    bubbles: true,
-    cancelable: true,
-  })
-  await act(async () => {
-    textarea.dispatchEvent(event)
-    await Promise.resolve()
-  })
-
-  const snapshot = () => ({
-    skipCalls: onSkip.mock.calls,
-    defaultPrevented: event.defaultPrevented,
-  })
-  expect(snapshot()).toEqual({ skipCalls: [], defaultPrevented: false })
-})
-
-it('skips a question when Escape is pressed elsewhere in the card', async () => {
-  const onSkip = vi.fn(() => Promise.resolve(true))
-  renderQuestion(props({ onSkip }))
-  const card = requireElement(container.querySelector('.chat-question-card'))
-  const event = new KeyboardEvent('keydown', {
-    key: 'Escape',
-    bubbles: true,
-    cancelable: true,
-  })
-  await act(async () => {
-    card.dispatchEvent(event)
-    await Promise.resolve()
-  })
-
-  const snapshot = () => ({
-    skipCalls: onSkip.mock.calls,
-    defaultPrevented: event.defaultPrevented,
-  })
-  expect(snapshot()).toEqual({ skipCalls: [[]], defaultPrevented: true })
-})
-
-it('prevents skip and repeat shortcuts while a choice answer is being sent', async () => {
-  let resolveAnswer: (sent: boolean) => void = () => undefined
-  const answerPromise = new Promise<boolean>((resolve) => {
-    resolveAnswer = resolve
-  })
-  const onAnswer = vi.fn(() => answerPromise)
-  const onSkip = vi.fn(() => Promise.resolve(true))
-  renderQuestion(props({ onAnswer, onSkip }))
-
-  const choice = requireElement(
-    container.querySelector<HTMLButtonElement>('.chat-question-choices button'),
-  )
-  const skipButton = requireElement(
-    Array.from(container.querySelectorAll('button')).find((button) =>
-      button.textContent.includes('No answer'),
-    ) ?? null,
-  )
-  const card = requireElement(container.querySelector('.chat-question-card'))
-  act(() => {
-    choice.click()
-  })
-  const escapeEvent = new KeyboardEvent('keydown', {
-    key: 'Escape',
-    bubbles: true,
-    cancelable: true,
-  })
-  act(() => {
-    card.dispatchEvent(escapeEvent)
-  })
-  const shortcutEvent = new KeyboardEvent('keydown', {
-    key: '2',
-    bubbles: true,
-    cancelable: true,
-  })
-  act(() => {
-    document.body.dispatchEvent(shortcutEvent)
-  })
-  const whileSending = {
-    choiceDisabled: choice.disabled,
-    skipDisabled: skipButton.disabled,
-    skipCalls: onSkip.mock.calls,
-    escapeDefaultPrevented: escapeEvent.defaultPrevented,
-    shortcutDefaultPrevented: shortcutEvent.defaultPrevented,
-    answerCalls: onAnswer.mock.calls,
-  }
-
-  await act(async () => {
-    resolveAnswer(false)
-    await answerPromise
-    await Promise.resolve()
-  })
-
-  const snapshot = () => ({
-    whileSending,
-    afterFailure: {
-      choiceDisabled: choice.disabled,
-      skipDisabled: skipButton.disabled,
-      skipCalls: onSkip.mock.calls,
-    },
-    answerCalls: onAnswer.mock.calls,
-  })
-  expect(snapshot()).toEqual({
-    whileSending: {
-      choiceDisabled: true,
-      skipDisabled: true,
-      skipCalls: [],
-      escapeDefaultPrevented: false,
-      shortcutDefaultPrevented: false,
-      answerCalls: [[1]],
-    },
-    afterFailure: {
-      choiceDisabled: false,
-      skipDisabled: false,
-      skipCalls: [],
-    },
-    answerCalls: [[1]],
-  })
-})
-
-it('keeps the question closed after a choice answer succeeds', async () => {
-  const onAnswer = vi.fn(() => Promise.resolve(true))
-  renderQuestion(props({ onAnswer }))
-
-  const choice = requireElement(
-    container.querySelector<HTMLButtonElement>('.chat-question-choices button'),
-  )
-  await act(async () => {
-    choice.click()
-    await Promise.resolve()
-    await Promise.resolve()
-  })
-
-  const shortcutEvent = new KeyboardEvent('keydown', {
-    key: '1',
-    bubbles: true,
-    cancelable: true,
-  })
-  act(() => {
-    document.body.dispatchEvent(shortcutEvent)
-  })
-
-  const snapshot = () => ({
-    choiceDisabled: choice.disabled,
-    freeformFormPresent: container.querySelector('form') !== null,
-    skipButtonPresent: Array.from(container.querySelectorAll('button')).some(
-      (button) => button.textContent.includes('No answer'),
+    submitButton: container.querySelector(
+      '.chat-question-actions button.aw-button--primary',
     ),
-    shortcutDefaultPrevented: shortcutEvent.defaultPrevented,
-    answerCalls: onAnswer.mock.calls,
+    promptCount: container.querySelectorAll('.chat-question-prompt').length,
   })
   expect(snapshot()).toEqual({
-    choiceDisabled: true,
-    freeformFormPresent: false,
-    skipButtonPresent: false,
-    shortcutDefaultPrevented: false,
-    answerCalls: [[1]],
-  })
-})
-
-it('keeps a freeform answer available to retry after the question closes', async () => {
-  const events: string[] = []
-  const onSkip = vi.fn(() => {
-    events.push('skip')
-    return Promise.resolve(true)
-  })
-  let messageAttempts = 0
-  const onFreeformAnswer = vi.fn(() => {
-    events.push('message')
-    messageAttempts += 1
-    return Promise.resolve(messageAttempts > 1)
-  })
-  const cardProps = props({ onSkip, onFreeformAnswer })
-  renderQuestion(cardProps)
-
-  const textarea = requireElement(
-    container.querySelector<HTMLTextAreaElement>('textarea'),
-  )
-  act(() => {
-    setTextareaValue(textarea, 'Use a fictional format')
-  })
-  await act(async () => {
-    requireElement(container.querySelector('form')).dispatchEvent(
-      new Event('submit', { bubbles: true, cancelable: true }),
-    )
-    await Promise.resolve()
-    await Promise.resolve()
-  })
-
-  renderQuestion(props({ ...cardProps, canAnswer: false }))
-  const retryTextarea = requireElement(
-    container.querySelector<HTMLTextAreaElement>('textarea'),
-  )
-  const retryButton = requireElement(
-    container.querySelector<HTMLButtonElement>('button[type="submit"]'),
-  )
-  const failedSendSnapshot = {
-    draft: retryTextarea.value,
-    retryDisabled: retryButton.disabled,
-    error: container.querySelector('[role="alert"]')?.textContent,
-    events: [...events],
-  }
-
-  await act(async () => {
-    requireElement(container.querySelector('form')).dispatchEvent(
-      new Event('submit', { bubbles: true, cancelable: true }),
-    )
-    await Promise.resolve()
-  })
-
-  const snapshot = () => ({
-    failedSendSnapshot,
-    errorAfterRetry: container.querySelector('[role="alert"]')?.textContent,
-    events,
-    skipCalls: onSkip.mock.calls,
-    answerCalls: onFreeformAnswer.mock.calls,
-  })
-  expect(snapshot()).toEqual({
-    failedSendSnapshot: {
-      draft: 'Use a fictional format',
-      retryDisabled: false,
-      error:
-        'Your answer was not sent. Your draft is still available; select Send answer to retry.',
-      events: ['skip', 'message'],
-    },
-    errorAfterRetry: undefined,
-    events: ['skip', 'message', 'message'],
-    skipCalls: [[]],
-    answerCalls: [['Use a fictional format'], ['Use a fictional format']],
+    terminalMessage: 'Answer in terminal to continue.',
+    submitButton: null,
+    promptCount: 2,
   })
 })

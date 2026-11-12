@@ -29,10 +29,16 @@ mod background_task_outputs;
 mod background_tasks;
 mod parser;
 mod proposals;
+mod questions;
 mod range;
 mod subagent_reports;
 
 use self::proposals::proposal_chat_item;
+#[cfg(test)]
+use self::questions::QuestionChoice;
+use self::questions::{
+    QuestionPrompt, attach_question_request_if_present, question_item_from_input,
+};
 use self::range::MessageRange;
 
 mod cache;
@@ -315,6 +321,11 @@ fn load_conversation_with_queued_prompts(
         if let Some(path) = session.transcript_path.as_deref() {
             subagent_reports::add_descriptions(path, &mut cached.conversation.messages);
         }
+        attach_question_request_if_present(
+            &mut cached.conversation.messages,
+            main_permission_request_id.as_deref(),
+            main_permission_data.as_ref(),
+        );
         resolve_peer_session_titles(&mut cached.conversation.messages, &mut load_session)?;
         cache::delete_resolved_queued_prompts(
             loaders,
@@ -338,6 +349,12 @@ fn load_conversation_with_queued_prompts(
             },
         })?;
     resolve_peer_session_titles(&mut conversation.messages, &mut load_session)?;
+
+    attach_question_request_if_present(
+        &mut conversation.messages,
+        main_permission_request_id.as_deref(),
+        main_permission_data.as_ref(),
+    );
 
     for message in &mut conversation.messages {
         if let ChatItem::Permission { request_id, .. } = message {
@@ -402,9 +419,14 @@ fn load_conversation_with_queued_prompts(
         let permission_data = (loaders.permission_request_data)(session_id, &request_id)?;
         if permission_data
             .as_ref()
-            .and_then(|data| data.tool_name.as_deref())
-            == Some("AskUserQuestion")
+            .is_some_and(|data| data.tool_name.as_deref() == Some("AskUserQuestion"))
         {
+            let Some(data) = permission_data.as_ref() else {
+                continue;
+            };
+            if let Some(question) = question_item_from_input(Some(request_id), &data.tool_input) {
+                messages.push(question);
+            }
             continue;
         }
         messages.push(ChatItem::Permission {
@@ -525,8 +547,8 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript(
                     Vec::new(),
                 ));
             };
-            let (mut messages, skills) = parser::codex::parse_with_skills(reader, parent)?;
-            messages.extend(additions.decisions.iter().cloned().map(ChatItem::from));
+            let (messages, skills) =
+                parser::codex::parse_with_skills(reader, parent, additions.decisions)?;
             Ok((
                 ConversationResponse {
                     messages,
@@ -663,12 +685,9 @@ enum ChatItem {
         target: Option<String>,
     },
     Question {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        header: Option<String>,
-        question: String,
-        choices: Vec<QuestionChoice>,
-        multi_select: bool,
-        answer: Option<String>,
+        #[serde(rename = "requestId", skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
+        questions: Vec<QuestionPrompt>,
     },
     Proposal {
         seq: i64,
@@ -716,14 +735,6 @@ impl From<AgentDecision> for ChatItem {
             created_at: decision.created_at,
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct QuestionChoice {
-    label: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -819,8 +830,9 @@ mod tests {
     use tower::ServiceExt;
 
     use super::{
-        ChatItem, QuestionChoice, RouteLoaders, load_conversation_with_queued_prompts,
-        load_messages_with, routes_with_decisions_and_queued_prompts_and_peer_out_messages,
+        ChatItem, QuestionChoice, QuestionPrompt, RouteLoaders,
+        load_conversation_with_queued_prompts, load_messages_with,
+        routes_with_decisions_and_queued_prompts_and_peer_out_messages,
         routes_with_proposals_and_peer_out_messages,
     };
     use crate::commands::agent::store::{
@@ -1535,10 +1547,10 @@ mod tests {
         std::fs::write(
             &transcript_path,
             indoc::indoc! {r#"
-                {"type":"assistant","message":{"content":[{"type":"text","text":"Before the decision."}]}}
-                {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Choose the fixture path'"}}]}}
-                {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded decision 5"}]}}
-                {"type":"assistant","message":{"content":[{"type":"text","text":"After the decision."}]}}
+                {"type":"assistant","timestamp":"2026-11-11T10:00:00Z","message":{"content":[{"type":"text","text":"Before the decision."}]}}
+                {"type":"assistant","timestamp":"2026-11-11T11:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Choose the fixture path'"}}]}}
+                {"type":"user","timestamp":"2026-11-11T12:00:00Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded decision 5"}]}}
+                {"type":"assistant","timestamp":"2026-11-11T13:00:00Z","message":{"content":[{"type":"text","text":"After the decision."}]}}
             "#},
         )
         .unwrap();
@@ -1555,7 +1567,7 @@ mod tests {
                     why: "The fixture remains reversible.".to_string(),
                     considered: vec!["Choose the other fixture path".to_string()],
                     easy_to_change: "Change one fixture value.".to_string(),
-                    created_at: "2026-11-11T00:00:00Z".to_string(),
+                    created_at: "2026-11-11T12:30:00Z".to_string(),
                     review: Some("ok".to_string()),
                     reviewed_at: None,
                 }])
@@ -1579,25 +1591,25 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"{"messages":[{"type":"assistant","text":"Before the decision."},{"type":"decision","seq":5,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":"ok","createdAt":"2026-11-11T00:00:00Z"},{"type":"assistant","text":"After the decision."}],"backgroundTasks":[],"start":0,"total":3,"decisions":[{"type":"decision","seq":5,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":"ok","createdAt":"2026-11-11T00:00:00Z"}],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
+                r#"{"messages":[{"type":"assistant","text":"Before the decision."},{"type":"tool_summary","summary":"Bash ×1","operations":[{"tool":"Bash","target":"a agent decision add 'Choose the fixture path'","failed":false}]},{"type":"decision","seq":5,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":"ok","createdAt":"2026-11-11T12:30:00Z"},{"type":"assistant","text":"After the decision."}],"backgroundTasks":[],"start":0,"total":4,"decisions":[{"type":"decision","seq":5,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":"ok","createdAt":"2026-11-11T12:30:00Z"}],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
             ),
         );
     }
 
     #[tokio::test]
-    async fn claude_message_route_places_decisions_and_proposals_in_transcript_order() {
+    async fn claude_message_route_places_decisions_and_proposals_by_creation_time() {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("transcript.jsonl");
         std::fs::write(
             &transcript_path,
             indoc::indoc! {r#"
-                {"type":"assistant","message":{"content":[{"type":"text","text":"Before the records."}]}}
-                {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Choose the fixture path'"}}]}}
-                {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded decision 5"}]}}
-                {"type":"assistant","message":{"content":[{"type":"text","text":"Between the records."}]}}
-                {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-proposal-call","name":"Bash","input":{"command":"a agent proposal add '<fixture-json>'"}}]}}
-                {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-proposal-call","content":"Recorded proposal 7"}]}}
-                {"type":"assistant","message":{"content":[{"type":"text","text":"After the records."}]}}
+                {"type":"assistant","timestamp":"2026-06-01T11:58:00Z","message":{"content":[{"type":"text","text":"Before the records."}]}}
+                {"type":"assistant","timestamp":"2026-06-01T11:59:30Z","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Choose the fixture path'"}}]}}
+                {"type":"user","timestamp":"2026-06-01T12:00:00Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded decision 5"}]}}
+                {"type":"assistant","timestamp":"2026-06-01T12:00:30Z","message":{"content":[{"type":"text","text":"Between the records."}]}}
+                {"type":"assistant","timestamp":"2026-06-01T12:01:00Z","message":{"content":[{"type":"tool_use","id":"fixture-proposal-call","name":"Bash","input":{"command":"a agent proposal add '<fixture-json>'"}}]}}
+                {"type":"user","timestamp":"2026-06-01T12:02:00Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-proposal-call","content":"Recorded proposal 7"}]}}
+                {"type":"assistant","timestamp":"2026-06-01T12:03:00Z","message":{"content":[{"type":"text","text":"After the records."}]}}
             "#},
         )
         .unwrap();
@@ -1619,7 +1631,7 @@ mod tests {
             session_id: "fixture-session".to_string(),
             seq: 7,
             body: r#"{"title":"Choose a fixture option","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}]}"#.to_string(),
-            created_at: chrono::DateTime::parse_from_rfc3339("2026-06-01T12:00:00Z")
+            created_at: chrono::DateTime::parse_from_rfc3339("2026-06-01T12:00:45Z")
                 .unwrap()
                 .with_timezone(&chrono::Utc),
             answer: None,
@@ -1669,6 +1681,15 @@ mod tests {
                             "review": null,
                             "createdAt": "2026-06-01T11:59:00Z",
                         },
+                        {
+                            "type": "tool_summary",
+                            "summary": "Bash ×1",
+                            "operations": [{
+                                "tool": "Bash",
+                                "target": "a agent decision add 'Choose the fixture path'",
+                                "failed": false,
+                            }],
+                        },
                         {"type": "assistant", "text": "Between the records."},
                         {
                             "type": "proposal",
@@ -1694,11 +1715,20 @@ mod tests {
                             "answer": null,
                             "resolved": false,
                         },
+                        {
+                            "type": "tool_summary",
+                            "summary": "Bash ×1",
+                            "operations": [{
+                                "tool": "Bash",
+                                "target": "a agent proposal add '<fixture-json>'",
+                                "failed": false,
+                            }],
+                        },
                         {"type": "assistant", "text": "After the records."},
                     ],
                     "backgroundTasks": [],
                     "start": 0,
-                    "total": 5,
+                    "total": 7,
                     "decisions": [{
                         "type": "decision",
                         "seq": 5,
@@ -1717,14 +1747,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claude_message_route_combines_decisions_with_peer_out_messages() {
+    async fn claude_message_route_places_decisions_by_time_for_combined_add_and_peer_commands() {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("transcript.jsonl");
         let transcript = indoc::indoc! {r#"
-            {"type":"assistant","timestamp":"2026-06-01T12:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Choose the fixture path'"}}]}}
-            {"type":"user","timestamp":"2026-06-01T12:00:01Z","sourceToolAssistantUUID":"fixture-assistant-call","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded decision 5"}]}}
-            {"type":"assistant","timestamp":"2026-06-01T12:00:02Z","message":{"content":[{"type":"tool_use","id":"fixture-peer-notify-call","name":"Bash","input":{"command":"a agent peer notify -m \"Requested fixture body.\" fixture-target-id"}}]}}
-            {"type":"user","timestamp":"2026-06-01T12:00:04Z","sourceToolAssistantUUID":"fixture-assistant-call","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-peer-notify-call","content":"delivered"}]}}
+            {"type":"assistant","timestamp":"2026-06-01T12:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-combined-call","name":"Bash","input":{"command":"a agent decision add 'Choose the fixture path' && a agent peer notify -m \"Requested fixture body.\" fixture-target-id"}}]}}
+            {"type":"user","timestamp":"2026-06-01T12:00:04Z","sourceToolAssistantUUID":"fixture-assistant-call","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-combined-call","content":"Decision recorded for this session.\nSession-local sequence: 5\nInjected into the running turn of Codex session fixture-target-id."}]}}
         "#};
         std::fs::write(&transcript_path, transcript).unwrap();
 
@@ -1825,12 +1853,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn codex_message_route_appends_database_decisions_after_the_transcript() {
+    async fn codex_message_route_places_database_decisions_by_creation_time() {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("transcript.jsonl");
         std::fs::write(
             &transcript_path,
-            r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Existing Codex message."}]}}"#,
+            indoc::indoc! {r#"
+                {"type":"response_item","timestamp":"2026-11-11T11:00:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Before the decision."}]}}
+                {"type":"response_item","timestamp":"2026-11-11T13:00:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"After the decision."}]}}
+            "#},
         )
         .unwrap();
         let mut session = stored_session();
@@ -1847,7 +1878,7 @@ mod tests {
                     why: "The fixture remains reversible.".to_string(),
                     considered: vec!["Choose the other fixture path".to_string()],
                     easy_to_change: "Change one fixture value.".to_string(),
-                    created_at: "2026-11-11T00:00:00Z".to_string(),
+                    created_at: "2026-11-11T12:00:00Z".to_string(),
                     review: None,
                     reviewed_at: None,
                 }])
@@ -1871,7 +1902,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"{"messages":[{"type":"assistant","text":"Existing Codex message."},{"type":"decision","seq":1,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":null,"createdAt":"2026-11-11T00:00:00Z"}],"backgroundTasks":[],"start":0,"total":2,"decisions":[{"type":"decision","seq":1,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":null,"createdAt":"2026-11-11T00:00:00Z"}],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
+                r#"{"messages":[{"type":"assistant","text":"Before the decision."},{"type":"decision","seq":1,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":null,"createdAt":"2026-11-11T12:00:00Z"},{"type":"assistant","text":"After the decision."}],"backgroundTasks":[],"start":0,"total":3,"decisions":[{"type":"decision","seq":1,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":null,"createdAt":"2026-11-11T12:00:00Z"}],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
             ),
         );
     }
@@ -2027,7 +2058,14 @@ mod tests {
         .with_permission_request_data_loader(|_, _| {
             Ok(Some(PermissionRequestData {
                 tool_name: Some("AskUserQuestion".to_string()),
-                tool_input: json!({ "questions": [] }),
+                tool_input: json!({
+                    "questions": [{
+                        "header": "Summary",
+                        "question": "Should the summary be brief?",
+                        "options": [{ "label": "Yes" }, { "label": "No" }],
+                        "multiSelect": true,
+                    }],
+                }),
                 pending: true,
             }))
         });
@@ -2042,17 +2080,20 @@ mod tests {
             .unwrap()
             .map(|conversation| conversation.messages),
             Some(vec![ChatItem::Question {
-                header: Some("Summary".to_string()),
-                question: "Should the summary be brief?".to_string(),
-                choices: vec![
-                    QuestionChoice {
-                        label: "Yes".to_string(),
-                        description: Some("Keep it concise.".to_string()),
-                    },
-                    question_choice("No"),
-                ],
-                multi_select: true,
-                answer: None,
+                request_id: Some("permission-request-question".to_string()),
+                questions: vec![QuestionPrompt {
+                    header: Some("Summary".to_string()),
+                    question: "Should the summary be brief?".to_string(),
+                    choices: vec![
+                        QuestionChoice {
+                            label: "Yes".to_string(),
+                            description: Some("Keep it concise.".to_string()),
+                        },
+                        question_choice("No"),
+                    ],
+                    multi_select: true,
+                    answer: None,
+                }],
             }])
         );
     }
@@ -2086,17 +2127,20 @@ mod tests {
             .unwrap(),
             Some(vec![
                 ChatItem::Question {
-                    header: Some("Summary".to_string()),
-                    question: "Should the summary be brief?".to_string(),
-                    choices: vec![
-                        QuestionChoice {
-                            label: "Yes".to_string(),
-                            description: Some("Keep it concise.".to_string()),
-                        },
-                        question_choice("No"),
-                    ],
-                    multi_select: true,
-                    answer: None,
+                    request_id: None,
+                    questions: vec![QuestionPrompt {
+                        header: Some("Summary".to_string()),
+                        question: "Should the summary be brief?".to_string(),
+                        choices: vec![
+                            QuestionChoice {
+                                label: "Yes".to_string(),
+                                description: Some("Keep it concise.".to_string()),
+                            },
+                            question_choice("No"),
+                        ],
+                        multi_select: true,
+                        answer: None,
+                    }],
                 },
                 ChatItem::Permission {
                     request_id: Some("permission-request-subagent".to_string()),
@@ -2494,7 +2538,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"{"messages":[{"type":"question","header":"Summary","question":"Should the summary be brief?","choices":[{"label":"Yes","description":"Keep it concise."},{"label":"No"}],"multi_select":true,"answer":null}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":0}"#
+                r#"{"messages":[{"type":"question","questions":[{"header":"Summary","question":"Should the summary be brief?","choices":[{"label":"Yes","description":"Keep it concise."},{"label":"No"}],"multi_select":true,"answer":null}]}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":0}"#
                     .to_string(),
             )
         );

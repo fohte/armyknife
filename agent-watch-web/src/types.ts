@@ -138,11 +138,8 @@ export type ChatItem =
   | { type: 'tool_in_progress'; tool: string; target?: string }
   | {
       type: 'question'
-      header?: string
-      question: string
-      choices: QuestionChoice[]
-      multi_select?: boolean
-      answer: string | null
+      requestId?: string
+      questions: QuestionPrompt[]
     }
   | {
       type: 'proposal'
@@ -178,9 +175,17 @@ export type ChatItem =
       createdAt: string
     }
 
-export type QuestionChoice = {
+type QuestionChoice = {
   label: string
   description?: string
+}
+
+export type QuestionPrompt = {
+  header?: string
+  question: string
+  choices: QuestionChoice[]
+  multi_select: boolean
+  answer: string | null
 }
 
 export type ProposalOption = {

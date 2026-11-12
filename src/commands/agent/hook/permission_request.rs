@@ -11,7 +11,7 @@ use super::super::store::{
 };
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
-// Leave time for Claude Code to fall back to its terminal dialog before the command hook times out.
+// Leave time for a terminal decision before Claude Code's command hook times out.
 const MAX_WAIT: Duration = Duration::from_secs(590);
 
 pub(super) fn wait_and_write(
@@ -43,7 +43,11 @@ fn wait_until_deadline(
 ) -> Result<()> {
     loop {
         let wait = if Instant::now() >= deadline {
-            waiter.expire(session_id, agent_key, request_id)?
+            let message = format!(
+                "No response was provided in watch-web or the terminal within {} seconds. This request was automatically denied.",
+                MAX_WAIT.as_secs(),
+            );
+            waiter.expire_with_deny(session_id, agent_key, request_id, &message)?
         } else {
             waiter.poll(session_id, agent_key, request_id)?
         };
@@ -52,16 +56,34 @@ fn wait_until_deadline(
                 thread::sleep(POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())))
             }
             PermissionRequestWait::Finished => return Ok(()),
-            PermissionRequestWait::Decision(decision) => {
-                return write_response(decision, &mut output);
+            PermissionRequestWait::Decision {
+                decision,
+                tool_input,
+                answers,
+            } => {
+                return write_response(decision, tool_input, answers, &mut output);
             }
         }
     }
 }
 
-fn write_response(decision: PermissionRequestDecision, mut output: impl Write) -> Result<()> {
+fn write_response(
+    decision: PermissionRequestDecision,
+    mut tool_input: serde_json::Value,
+    answers: Option<serde_json::Value>,
+    mut output: impl Write,
+) -> Result<()> {
     let decision = match decision {
-        PermissionRequestDecision::Allow => json!({ "behavior": "allow" }),
+        PermissionRequestDecision::Allow => match answers {
+            Some(answers) => {
+                let Some(updated_input) = tool_input.as_object_mut() else {
+                    anyhow::bail!("permission request input must be an object to apply answers");
+                };
+                updated_input.insert("answers".to_string(), answers);
+                json!({ "behavior": "allow", "updatedInput": tool_input })
+            }
+            None => json!({ "behavior": "allow" }),
+        },
         PermissionRequestDecision::Deny { message, interrupt } => json!({
             "behavior": "deny",
             "message": message,
@@ -84,8 +106,10 @@ fn write_response(decision: PermissionRequestDecision, mut output: impl Write) -
 mod tests {
     use super::*;
 
-    #[test]
-    fn expired_wait_finishes_without_writing_a_hook_response() {
+    #[rstest::rstest]
+    #[case::permission_request("Bash")]
+    #[case::ask_user_question("AskUserQuestion")]
+    fn expired_wait_denies_a_pending_request(#[case] tool_name: &str) {
         let sessions_dir = tempfile::tempdir().expect("sessions directory should be created");
         let session_id = "fixture-session";
         let request_id = "fixture-request";
@@ -116,7 +140,7 @@ mod tests {
             .register_permission_request(
                 agent_key,
                 request_id,
-                Some("Bash"),
+                Some(tool_name),
                 &json!({ "command": "echo fixture" }),
             )
             .expect("permission request should register");
@@ -137,9 +161,14 @@ mod tests {
         )
         .expect("expired wait should finish successfully");
 
+        let message = format!(
+            "No response was provided in watch-web or the terminal within {} seconds. This request was automatically denied.",
+            MAX_WAIT.as_secs(),
+        );
         assert_eq!(
             (
-                output,
+                serde_json::from_slice::<serde_json::Value>(&output)
+                    .expect("deny response should be JSON"),
                 super::super::super::store::permission_request_data(
                     sessions_dir.path(),
                     session_id,
@@ -147,7 +176,19 @@ mod tests {
                 )
                 .expect("expired request should be readable"),
             ),
-            (Vec::<u8>::new(), None),
+            (
+                json!({
+                    "hookSpecificOutput": {
+                        "hookEventName": "PermissionRequest",
+                        "decision": {
+                            "behavior": "deny",
+                            "message": message,
+                            "interrupt": false,
+                        },
+                    },
+                }),
+                None,
+            ),
         );
     }
 
@@ -159,6 +200,8 @@ mod tests {
                 message: "Permission request rejected from watch-web.".to_string(),
                 interrupt: false,
             },
+            json!({ "command": "echo fictional" }),
+            None,
             &mut output,
         )
         .expect("response should be written");
@@ -181,8 +224,13 @@ mod tests {
     #[test]
     fn allow_approves_the_original_tool_input() {
         let mut output = Vec::new();
-        write_response(PermissionRequestDecision::Allow, &mut output)
-            .expect("response should be written");
+        write_response(
+            PermissionRequestDecision::Allow,
+            json!({ "command": "echo fictional" }),
+            None,
+            &mut output,
+        )
+        .expect("response should be written");
 
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&output).expect("response should be JSON"),
@@ -190,6 +238,36 @@ mod tests {
                 "hookSpecificOutput": {
                     "hookEventName": "PermissionRequest",
                     "decision": { "behavior": "allow" },
+                },
+            }),
+        );
+    }
+
+    #[test]
+    fn allow_returns_answers_with_the_original_tool_input() {
+        let mut output = Vec::new();
+        write_response(
+            PermissionRequestDecision::Allow,
+            json!({
+                "questions": [{ "question": "Which format?" }],
+            }),
+            Some(json!({ "Which format?": "Markdown" })),
+            &mut output,
+        )
+        .expect("response should be written");
+
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&output).expect("response should be JSON"),
+            json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "decision": {
+                        "behavior": "allow",
+                        "updatedInput": {
+                            "questions": [{ "question": "Which format?" }],
+                            "answers": { "Which format?": "Markdown" },
+                        },
+                    },
                 },
             }),
         );

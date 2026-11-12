@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.1.639](https://github.com/fohte/armyknife/compare/v0.1.638...v0.1.639) (2026-11-12)
+
+
+### Features
+
+* **agent/watch-web:** answer questions ([#1647](https://github.com/fohte/armyknife/issues/1647)) ([ebb0d79](https://github.com/fohte/armyknife/commit/ebb0d796e0778a1103c58ab0398cb5308f6b4bee))
+
+## [0.1.638](https://github.com/fohte/armyknife/compare/v0.1.637...v0.1.638) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** cap graceful shutdown wait ([#1645](https://github.com/fohte/armyknife/issues/1645)) ([14225ba](https://github.com/fohte/armyknife/commit/14225ba487154c51f4d6dea491b87417783fac36))
+
+## [0.1.637](https://github.com/fohte/armyknife/compare/v0.1.636...v0.1.637) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** place decisions by timestamp ([#1643](https://github.com/fohte/armyknife/issues/1643)) ([654ba04](https://github.com/fohte/armyknife/commit/654ba0423b0752a8298644c3bfeb21ab067f9a08))
+
+## [0.1.636](https://github.com/fohte/armyknife/compare/v0.1.635...v0.1.636) (2026-11-12)
+
+
+### Features
+
+* **agent-watch-web:** fetch session deltas ([#1640](https://github.com/fohte/armyknife/issues/1640)) ([234d4d0](https://github.com/fohte/armyknife/commit/234d4d0212b4e114945411451ceea1056edfe84a))
+
+## [0.1.635](https://github.com/fohte/armyknife/compare/v0.1.634...v0.1.635) (2026-11-12)
+
+
+### Features
+
+* **agent-watch-web:** reduce transfer size ([#1638](https://github.com/fohte/armyknife/issues/1638)) ([55e1938](https://github.com/fohte/armyknife/commit/55e193864e6b6f1032079d1dd5946b48369209f3))
+
+## [0.1.634](https://github.com/fohte/armyknife/compare/v0.1.633...v0.1.634) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent/hook:** deny expired permission requests ([#1636](https://github.com/fohte/armyknife/issues/1636)) ([df9344d](https://github.com/fohte/armyknife/commit/df9344d08c61902913b3dd9fc4aef4ee3f6312f9))
+
 ## [0.1.633](https://github.com/fohte/armyknife/compare/v0.1.632...v0.1.633) (2026-11-12)
 
 

@@ -6,7 +6,6 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 mod background_tasks;
-mod decision_position;
 mod proposals;
 mod questions;
 mod transcript_branch;
@@ -23,9 +22,9 @@ use super::super::parser::{
     for_each_jsonl_record, record_timestamp, tool_target,
 };
 use super::super::proposals::ProposalItem;
+use super::decision_position::{DecisionTimeline, insert_time_placed_decisions};
 use crate::commands::agent::store::{AgentDecision, WatchWebPeerOutMessage, WatchWebQueuedPrompt};
 use background_tasks::{BackgroundTaskTracker, task_notification_envelope, task_notification_text};
-use decision_position::insert_time_placed_decisions;
 use proposals::ProposalTimeline;
 use questions::{
     append_questions, apply_question_answers, parse_question_answers, tool_use_result_answers,
@@ -230,15 +229,8 @@ fn parse_with_background_tasks_and_image_directory(
 ) -> std::io::Result<ParsedTranscript> {
     let mut transcript_nodes = BTreeMap::new();
     let mut latest_uuid = None;
-    let mut decision_tool_uses = Vec::new();
-    let mut decision_tool_results = Vec::new();
     let mut queue = super::queue::Queue::new(context.queued_prompts);
     for_each_jsonl_record(&mut reader, |record| {
-        decision_position::observe_recorded_decisions(
-            &record,
-            &mut decision_tool_uses,
-            &mut decision_tool_results,
-        );
         queue.observe(&record);
         let Some(uuid) = record.get("uuid").and_then(Value::as_str) else {
             return;
@@ -262,11 +254,6 @@ fn parse_with_background_tasks_and_image_directory(
         );
     })?;
     mark_active_branch(&mut transcript_nodes, latest_uuid.as_deref());
-    let recorded_decision_seqs = decision_position::recorded_decision_seqs(
-        &decision_tool_uses,
-        &decision_tool_results,
-        &transcript_nodes,
-    );
     reader.seek(SeekFrom::Start(0))?;
     let mut items = Vec::new();
     let mut tools = ToolSummary::default();
@@ -274,12 +261,7 @@ fn parse_with_background_tasks_and_image_directory(
     let mut question_uses = HashMap::<String, Vec<usize>>::new();
     let mut matched_peer_out_message_ids = HashSet::new();
     let mut background_tasks = BackgroundTaskTracker::default();
-    let mut unplaced_decisions = context
-        .decisions
-        .iter()
-        .cloned()
-        .map(|decision| (decision.seq, decision))
-        .collect::<BTreeMap<_, _>>();
+    let mut decision_timeline = DecisionTimeline::new(context.decisions);
     let mut proposal_timeline = ProposalTimeline::new(context.proposals);
     let mut skills = Vec::new();
 
@@ -306,8 +288,7 @@ fn parse_with_background_tasks_and_image_directory(
         }
         insert_time_placed_decisions(
             record_timestamp(&record),
-            &recorded_decision_seqs,
-            &mut unplaced_decisions,
+            &mut decision_timeline,
             &mut tools,
             &mut items,
         );
@@ -424,61 +405,12 @@ fn parse_with_background_tasks_and_image_directory(
                                             .or_else(|| record_timestamp(&record)),
                                     );
                                 }
-                            } else if classifier::is_agent_add_tool(
-                                &tool_use.name,
-                                tool_use.input.as_ref(),
-                                "decision",
-                            ) {
-                                let text = block
-                                    .get("content")
-                                    .and_then(tool_result_text)
-                                    .unwrap_or_default();
-                                if !tool_result_failed(&record, block)
-                                    && let Some(seq) =
-                                        classifier::recorded_agent_add_seq(&text, "decision")
-                                    && let Some(decision) = unplaced_decisions.remove(&seq)
-                                {
-                                    tools.flush_into(&mut items);
-                                    items.push(decision.into());
-                                } else {
-                                    tools.record(
-                                        &tool_use.name,
-                                        tool_use.input.as_ref(),
-                                        tool_result_failed(&record, block),
-                                    );
-                                    background_tasks
-                                        .complete_tool_use(&tool_use, &record, block, now);
-                                }
                             } else {
-                                let proposal = (tool_use.name == "Bash")
-                                    .then(|| {
-                                        block
-                                            .get("content")
-                                            .and_then(tool_result_text)
-                                            .and_then(|text| recorded_proposal_seq(&text))
-                                    })
-                                    .flatten()
-                                    .and_then(|seq| {
-                                        context
-                                            .proposals
-                                            .iter()
-                                            .find(|proposal| proposal.seq == seq)
-                                    });
-                                if let Some(proposal) = proposal {
-                                    tools.flush_into(&mut items);
-                                    proposal_timeline.move_to_transcript_position(
-                                        proposal.seq,
-                                        &mut items,
-                                        &mut question_uses,
-                                    );
-                                    items.push(proposal.item.clone());
-                                } else {
-                                    tools.record(
-                                        &tool_use.name,
-                                        tool_use.input.as_ref(),
-                                        tool_result_failed(&record, block),
-                                    );
-                                }
+                                tools.record(
+                                    &tool_use.name,
+                                    tool_use.input.as_ref(),
+                                    tool_result_failed(&record, block),
+                                );
                                 background_tasks.complete_tool_use(&tool_use, &record, block, now);
                             }
                         }
@@ -551,9 +483,7 @@ fn parse_with_background_tasks_and_image_directory(
                                     .and_then(Value::as_str)
                                     .unwrap_or_default();
                                 let input = block.get("input");
-                                if classifier::is_peer_notify_tool(name, input)
-                                    || classifier::is_agent_add_tool(name, input, "decision")
-                                {
+                                if classifier::is_peer_notify_tool(name, input) {
                                     tools.flush_into(&mut items);
                                     if let Some(id) = block.get("id").and_then(Value::as_str) {
                                         tool_uses.push(ToolUse {
@@ -613,19 +543,10 @@ fn parse_with_background_tasks_and_image_directory(
     }
     let resolved_queued_prompt_ids = queue.resolved_queued_prompt_ids();
     items.extend(queue.pending_items(parent, user_marker, context.image_directory));
-    items.extend(unplaced_decisions.into_values().map(Into::into));
+    decision_timeline.append_remaining(&mut items);
     proposal_timeline.append_remaining(&mut items);
     let background_tasks = background_tasks.into_api_tasks(now);
     Ok((items, background_tasks, resolved_queued_prompt_ids, skills))
-}
-
-fn recorded_proposal_seq(text: &str) -> Option<i64> {
-    let seq = text
-        .trim()
-        .strip_prefix("Recorded proposal ")?
-        .parse::<i64>()
-        .ok()?;
-    (seq > 0).then_some(seq)
 }
 
 fn queued_prompt_delivery_is_on_active_branch(
@@ -730,7 +651,7 @@ mod tests {
         ParserAdditions, ProposalItem, parse, parse_with_decisions_and_queued_prompts,
         parse_with_image_directory,
         parse_with_queued_prompts_and_peer_out_messages_and_proposals_and_skills,
-        parse_with_queued_prompts_and_proposals, recorded_proposal_seq,
+        parse_with_queued_prompts_and_proposals,
     };
     use crate::commands::agent::store::AgentDecision;
     use crate::commands::agent::watch_web::messages::{
@@ -787,27 +708,13 @@ mod tests {
         );
     }
 
-    #[rstest]
-    #[case::exact_output("Recorded proposal 12", Some(12))]
-    #[case::surrounding_whitespace(indoc! {"
-         Recorded proposal 12
-        "}, Some(12))]
-    #[case::prefixed_output("Command output: Recorded proposal 12", None)]
-    #[case::additional_output("Recorded proposal 12\nAdditional output", None)]
-    #[case::trailing_text("Recorded proposal 12 copied", None)]
-    fn recognizes_only_a_complete_recorded_proposal_output(
-        #[case] output: &str,
-        #[case] expected: Option<i64>,
-    ) {
-        assert_eq!(recorded_proposal_seq(output), expected);
-    }
-
     #[test]
-    fn recorded_proposal_replaces_its_bash_summary_at_the_tool_result_position() {
+    fn places_a_proposal_by_creation_time_and_keeps_its_bash_summary() {
         let transcript = [
             json!({
                 "uuid": "fixture-assistant-before",
                 "parentUuid": null,
+                "timestamp": "2026-06-01T12:00:00Z",
                 "type": "assistant",
                 "message": {"content": [
                     {"type": "text", "text": "before"},
@@ -817,6 +724,7 @@ mod tests {
             json!({
                 "uuid": "fixture-proposal-result",
                 "parentUuid": "fixture-assistant-before",
+                "timestamp": "2026-06-01T12:02:00Z",
                 "type": "user",
                 "message": {"content": [{
                     "type": "tool_result",
@@ -827,6 +735,7 @@ mod tests {
             json!({
                 "uuid": "fixture-assistant-after",
                 "parentUuid": "fixture-proposal-result",
+                "timestamp": "2026-06-01T13:00:00Z",
                 "type": "assistant",
                 "message": {"content": [{"type": "text", "text": "after"}]},
             }),
@@ -861,7 +770,9 @@ mod tests {
                 &[],
                 &[ProposalItem {
                     seq: 1,
-                    created_at: Utc.timestamp_opt(1_000, 0).unwrap(),
+                    created_at: DateTime::parse_from_rfc3339("2026-06-01T12:30:00Z")
+                        .unwrap()
+                        .with_timezone(&Utc),
                     item: proposal.clone(),
                 }],
             )
@@ -873,6 +784,14 @@ mod tests {
                 vec![
                     ChatItem::Assistant {
                         text: "before".to_string(),
+                    },
+                    ChatItem::ToolSummary {
+                        summary: "Bash ×1".to_string(),
+                        operations: vec![ToolOperation {
+                            tool: "Bash".to_string(),
+                            target: Some("a agent proposal add".to_string()),
+                            failed: false,
+                        }],
                     },
                     proposal,
                     ChatItem::Assistant {
@@ -1007,6 +926,14 @@ mod tests {
                         text: "middle".to_string(),
                     },
                     recorded_proposal,
+                    ChatItem::ToolSummary {
+                        summary: "Bash ×1".to_string(),
+                        operations: vec![ToolOperation {
+                            tool: "Bash".to_string(),
+                            target: Some("a agent proposal add".to_string()),
+                            failed: false,
+                        }],
+                    },
                     ChatItem::Assistant {
                         text: "after".to_string(),
                     },
@@ -1018,7 +945,7 @@ mod tests {
     }
 
     #[test]
-    fn moving_a_timed_proposal_to_its_tool_result_preserves_later_question_answers() {
+    fn keeps_timed_proposals_in_creation_order_and_answers_later_questions() {
         let transcript = indoc! {r#"
             {"uuid":"fixture-before","parentUuid":null,"timestamp":"2026-06-01T12:00:00Z","type":"assistant","message":{"content":[{"type":"text","text":"before"}]}}
             {"uuid":"fixture-question","parentUuid":"fixture-before","timestamp":"2026-06-01T12:02:00Z","type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-call","name":"AskUserQuestion","input":{"questions":[{"question":"Which display mode?","header":"Display","multiSelect":false,"options":[{"label":"Option A"},{"label":"Option B"}]}]}}]}}
@@ -1068,23 +995,22 @@ mod tests {
                     ChatItem::Assistant {
                         text: "before".to_string(),
                     },
-                    ChatItem::Question {
+                    proposal,
+                    question_group(vec![super::super::super::QuestionPrompt {
                         header: Some("Display".to_string()),
                         question: "Which display mode?".to_string(),
-                        choices: vec![
-                            QuestionChoice {
-                                label: "Option A".to_string(),
-                                description: None,
-                            },
-                            QuestionChoice {
-                                label: "Option B".to_string(),
-                                description: None,
-                            },
-                        ],
+                        choices: vec![question_choice("Option A"), question_choice("Option B")],
                         multi_select: false,
                         answer: Some("Option A".to_string()),
+                    }]),
+                    ChatItem::ToolSummary {
+                        summary: "Bash ×1".to_string(),
+                        operations: vec![ToolOperation {
+                            tool: "Bash".to_string(),
+                            target: Some("a agent proposal add".to_string()),
+                            failed: false,
+                        }],
                     },
-                    proposal,
                     ChatItem::Assistant {
                         text: "after".to_string(),
                     },
@@ -1147,7 +1073,7 @@ mod tests {
         "}
     )]
     #[case::legacy_output("Recorded decision 1")]
-    fn places_a_recorded_decision_at_its_successful_add_call(#[case] result: &str) {
+    fn places_a_decision_by_creation_time_regardless_of_tool_output(#[case] result: &str) {
         let transcript = indoc! {r#"
             {"uuid":"fixture-before","parentUuid":null,"type":"assistant","timestamp":"2026-11-11T10:00:00Z","message":{"content":[{"type":"text","text":"Before the decision."}]}}
             {"uuid":"fixture-decision-call","parentUuid":"fixture-before","type":"assistant","timestamp":"2026-11-11T11:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Decision 1'"}}]}}
@@ -1158,7 +1084,7 @@ mod tests {
             "\"__RESULT__\"",
             &serde_json::to_string(result).expect("result should serialize"),
         );
-        let decision = decision_at(1, "2026-11-11T09:00:00Z");
+        let decision = decision_at(1, "2026-11-11T12:30:00Z");
 
         assert_eq!(
             parse_with_decisions_and_queued_prompts(
@@ -1176,7 +1102,15 @@ mod tests {
                 ChatItem::Assistant {
                     text: "Before the decision.".to_string(),
                 },
-                decision_item_at(1, "2026-11-11T09:00:00Z"),
+                ChatItem::ToolSummary {
+                    summary: "Bash ×1".to_string(),
+                    operations: vec![ToolOperation {
+                        tool: "Bash".to_string(),
+                        target: Some("a agent decision add 'Decision 1'".to_string()),
+                        failed: false,
+                    }],
+                },
+                decision_item_at(1, "2026-11-11T12:30:00Z"),
                 ChatItem::Assistant {
                     text: "After the decision.".to_string(),
                 },
@@ -1463,6 +1397,28 @@ mod tests {
         QuestionChoice {
             label: label.to_string(),
             description: None,
+        }
+    }
+
+    fn question_prompt(
+        question: &str,
+        choices: Vec<QuestionChoice>,
+        multi_select: bool,
+        answer: Option<&str>,
+    ) -> super::super::super::QuestionPrompt {
+        super::super::super::QuestionPrompt {
+            header: None,
+            question: question.to_string(),
+            choices,
+            multi_select,
+            answer: answer.map(str::to_string),
+        }
+    }
+
+    fn question_group(questions: Vec<super::super::super::QuestionPrompt>) -> ChatItem {
+        ChatItem::Question {
+            request_id: None,
+            questions,
         }
     }
 
@@ -1992,7 +1948,7 @@ mod tests {
                         operation("Edit", Some("fixture/flow.rs")),
                     ],
                 },
-                ChatItem::Question {
+                question_group(vec![super::super::super::QuestionPrompt {
                     header: None,
                     question: "Should notifications be grouped?".to_string(),
                     choices: vec![
@@ -2007,7 +1963,7 @@ mod tests {
                     ],
                     multi_select: false,
                     answer: None,
-                },
+                }]),
                 ChatItem::Peer {
                     direction: PeerDirection::From,
                     session_id: "fixture-parent-id".to_string(),
@@ -2064,99 +2020,91 @@ mod tests {
             {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-one","name":"AskUserQuestion","input":{"questions":[{"question":"Should the summary be brief?","options":[{"label":"Yes"},{"label":"No"}]}]}}]}}
             {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-one","content":"Your questions have been answered: \"Should the summary be brief?\"=\"Yes\". You can now continue with these answers in mind."}]}}
         "#},
-        vec![ChatItem::Question {
-            header: None,
-            question: "Should the summary be brief?".to_string(),
-            choices: vec![question_choice("Yes"), question_choice("No")],
-            multi_select: false,
-            answer: Some("Yes".to_string()),
-        }]
+        vec![question_group(vec![question_prompt(
+            "Should the summary be brief?",
+            vec![question_choice("Yes"), question_choice("No")],
+            false,
+            Some("Yes"),
+        )])]
     )]
     #[case::multiple_questions(
         indoc! {r#"
             {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-many","name":"AskUserQuestion","input":{"questions":[{"question":"Which output format?","options":[{"label":"Markdown"},{"label":"Plain text"}]},{"question":"Include examples?","options":[{"label":"Yes"},{"label":"No"}]}]}}]}}
             {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-many","content":"Your questions have been answered: \"Which output format?\"=\"Markdown\", \"Include examples?\"=\"No\". You can now continue with these answers in mind."}]}}
         "#},
-        vec![
-            ChatItem::Question {
-                header: None,
-                question: "Which output format?".to_string(),
-                choices: vec![question_choice("Markdown"), question_choice("Plain text")],
-                multi_select: false,
-                answer: Some("Markdown".to_string()),
-            },
-            ChatItem::Question {
-                header: None,
-                question: "Include examples?".to_string(),
-                choices: vec![question_choice("Yes"), question_choice("No")],
-                multi_select: false,
-                answer: Some("No".to_string()),
-            },
-        ]
+        vec![question_group(vec![
+            question_prompt(
+                "Which output format?",
+                vec![question_choice("Markdown"), question_choice("Plain text")],
+                false,
+                Some("Markdown"),
+            ),
+            question_prompt(
+                "Include examples?",
+                vec![question_choice("Yes"), question_choice("No")],
+                false,
+                Some("No"),
+            ),
+        ])]
     )]
     #[case::answer_outside_choices(
         indoc! {r#"
             {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-custom","name":"AskUserQuestion","input":{"questions":[{"question":"How should the cache expire?","options":[{"label":"After one hour"},{"label":"After one day"}]}]}}]}}
             {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-custom","content":"The user answered: \"How should the cache expire?\"=\"Keep it until deployment\". You can now continue with these answers in mind."}]}}
         "#},
-        vec![ChatItem::Question {
-            header: None,
-            question: "How should the cache expire?".to_string(),
-            choices: vec![question_choice("After one hour"), question_choice("After one day")],
-            multi_select: false,
-            answer: Some("Keep it until deployment".to_string()),
-        }]
+        vec![question_group(vec![question_prompt(
+            "How should the cache expire?",
+            vec![question_choice("After one hour"), question_choice("After one day")],
+            false,
+            Some("Keep it until deployment"),
+        )])]
     )]
     #[case::tool_use_result_answers(
         indoc! {r#"
             {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-structured","name":"AskUserQuestion","input":{"questions":[{"question":"Which color theme?","options":[{"label":"Light"},{"label":"Dark"}]}]}}]}}
             {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-structured","content":"Your questions have been answered: \"Which color theme?\"=\"Dark\". You can now continue with these answers in mind."}]},"toolUseResult":{"questions":[{"question":"Which color theme?"}],"answers":{"Which color theme?":"Use a fictional palette"},"annotations":{}}}
         "#},
-        vec![ChatItem::Question {
-            header: None,
-            question: "Which color theme?".to_string(),
-            choices: vec![question_choice("Light"), question_choice("Dark")],
-            multi_select: false,
-            answer: Some("Use a fictional palette".to_string()),
-        }]
+        vec![question_group(vec![question_prompt(
+            "Which color theme?",
+            vec![question_choice("Light"), question_choice("Dark")],
+            false,
+            Some("Use a fictional palette"),
+        )])]
     )]
     #[case::null_tool_use_result_uses_text_answer(
         indoc! {r#"
             {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-null-result","name":"AskUserQuestion","input":{"questions":[{"question":"Should weekends be shown?","options":[{"label":"Yes"},{"label":"No"}]}]}}]}}
             {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-null-result","content":"The user answered: \"Should weekends be shown?\"=\"No\". You can now continue with these answers in mind."}]},"toolUseResult":null}
         "#},
-        vec![ChatItem::Question {
-            header: None,
-            question: "Should weekends be shown?".to_string(),
-            choices: vec![question_choice("Yes"), question_choice("No")],
-            multi_select: false,
-            answer: Some("No".to_string()),
-        }]
+        vec![question_group(vec![question_prompt(
+            "Should weekends be shown?",
+            vec![question_choice("Yes"), question_choice("No")],
+            false,
+            Some("No"),
+        )])]
     )]
     #[case::no_answer(
         indoc! {r#"
             {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-pending","name":"AskUserQuestion","input":{"questions":[{"question":"Should the report include a chart?","options":[{"label":"Yes"},{"label":"No"}]}]}}]}}
         "#},
-        vec![ChatItem::Question {
-            header: None,
-            question: "Should the report include a chart?".to_string(),
-            choices: vec![question_choice("Yes"), question_choice("No")],
-            multi_select: false,
-            answer: None,
-        }]
+        vec![question_group(vec![question_prompt(
+            "Should the report include a chart?",
+            vec![question_choice("Yes"), question_choice("No")],
+            false,
+            None,
+        )])]
     )]
     #[case::answer_extraction_fails(
         indoc! {r#"
             {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-cancelled","name":"AskUserQuestion","input":{"questions":[{"question":"Should the report include a chart?","options":[{"label":"Yes"},{"label":"No"}]}]}}]}}
             {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-cancelled","content":"The user cancelled this question."}]}}
         "#},
-        vec![ChatItem::Question {
-            header: None,
-            question: "Should the report include a chart?".to_string(),
-            choices: vec![question_choice("Yes"), question_choice("No")],
-            multi_select: false,
-            answer: None,
-        }]
+        vec![question_group(vec![question_prompt(
+            "Should the report include a chart?",
+            vec![question_choice("Yes"), question_choice("No")],
+            false,
+            None,
+        )])]
     )]
     fn parses_question_answers_from_tool_results(
         #[case] transcript: &str,

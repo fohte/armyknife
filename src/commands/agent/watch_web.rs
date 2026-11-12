@@ -25,6 +25,7 @@ use axum::routing::any;
 use clap::Args;
 use include_dir::Dir;
 use tokio::net::TcpListener;
+use tower_http::compression::CompressionLayer;
 
 use super::browser;
 use super::error::CcError;
@@ -128,14 +129,18 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
                 })
                 .await
         };
-        let server = async move { tokio::try_join!(watch_web_server, crit_proxy_server) };
-        tokio::pin!(server);
-
-        tokio::select! {
-            result = &mut server => return result.map(|_| ()).map_err(Into::into),
-            () = restart::wait_for_replacement(&executable, executable_identity, restart_retry_interval) => {
-                restart_sender.send_replace(true);
-                server.await?;
+        let server =
+            async move { tokio::try_join!(watch_web_server, crit_proxy_server).map(|_| ()) };
+        match restart::wait_for_server_or_restart(
+            server,
+            restart::wait_for_replacement(&executable, executable_identity, restart_retry_interval),
+            restart_sender,
+            restart::SERVER_SHUTDOWN_TIMEOUT,
+        )
+        .await?
+        {
+            restart::ServerOutcome::Exited => return Ok(()),
+            restart::ServerOutcome::Restart => {
                 match restart::exec_replacement(&executable, executable_identity, &restart_args) {
                     Ok(_) => restart_retry_interval = restart::POLL_INTERVAL,
                     Err(error) => {
@@ -247,6 +252,11 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
             assets::serve_from(request.uri(), dist)
         })
         .layer(axum::middleware::from_fn(security::validate_request))
+        .layer(compression_layer())
+}
+
+fn compression_layer() -> CompressionLayer {
+    CompressionLayer::new().gzip(true)
 }
 
 async fn api_not_found() -> impl IntoResponse {
@@ -256,21 +266,42 @@ async fn api_not_found() -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use axum::body::{Body, to_bytes};
-    use axum::http::header::{CONTENT_TYPE, HOST, ORIGIN};
+    use axum::http::header::{CACHE_CONTROL, CONTENT_ENCODING, CONTENT_TYPE, HOST, ORIGIN};
     use axum::http::{Request, Response, StatusCode};
+    use axum::response::sse::{Event, Sse};
     use clap::Parser;
+    use flate2::read::GzDecoder;
+    use futures_util::stream::{self, StreamExt};
     use include_dir::{Dir, include_dir};
-    use rstest::rstest;
+    use indoc::indoc;
+    use rstest::{fixture, rstest};
+    use std::io::Read;
     use tokio::sync::watch;
     use tower::ServiceExt;
 
-    use super::{app, app_with_assets, app_with_assets_and_loader, open_browser_on_startup};
+    use super::{
+        app, app_with_assets, app_with_assets_and_loader, compression_layer,
+        open_browser_on_startup,
+    };
     use crate::cli::{Cli, Commands};
     use crate::commands::agent::AgentCommands;
     use crate::commands::agent::types::Session;
 
     static TEST_DIST: Dir<'static> =
         include_dir!("$CARGO_MANIFEST_DIR/src/commands/agent/watch_web/test_assets");
+
+    #[fixture]
+    fn fixture_session() -> Session {
+        serde_json::from_value(serde_json::json!({
+            "session_id": "fixture-session",
+            "cwd": "/fixture/project",
+            "status": "ended",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": null,
+        }))
+        .unwrap()
+    }
 
     #[rstest]
     #[case::opens_browser_by_default(&["a", "agent", "watch-web"], false, Some("http://127.0.0.1:12345"))]
@@ -331,7 +362,7 @@ mod tests {
         "/apifoo",
         StatusCode::OK,
         Some("text/html"),
-        "<main>fixture</main>\n"
+        include_str!("watch_web/test_assets/index.html")
     )]
     #[tokio::test]
     async fn only_api_paths_use_the_api_fallback(
@@ -436,19 +467,11 @@ mod tests {
         #[case] expected_status: StatusCode,
         #[case] expected_content_type: Option<&str>,
         #[case] expected_body: &str,
+        fixture_session: Session,
     ) {
-        let session: Session = serde_json::from_value(serde_json::json!({
-            "session_id": "fixture-session",
-            "cwd": "/fixture/project",
-            "status": "ended",
-            "created_at": "2026-01-01T00:00:00Z",
-            "updated_at": "2026-01-01T00:00:00Z",
-            "last_message": null,
-        }))
-        .unwrap();
         let router = app_with_assets_and_loader(
             &TEST_DIST,
-            move |session_id| Ok((session_id == "fixture-session").then(|| session.clone())),
+            move |session_id| Ok((session_id == "fixture-session").then(|| fixture_session.clone())),
             |_| Ok(None),
         );
         let response = router
@@ -463,6 +486,154 @@ mod tests {
                 expected_content_type.map(str::to_owned),
                 expected_body.to_owned(),
             )
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn api_responses_are_gzip_encoded(fixture_session: Session) {
+        let router = app_with_assets_and_loader(
+            &TEST_DIST,
+            move |session_id| Ok((session_id == "fixture-session").then(|| fixture_session.clone())),
+            |_| Ok(None),
+        );
+
+        let compressed_api = router
+            .oneshot(compressed_request("/api/sessions/fixture-session/messages"))
+            .await
+            .unwrap();
+        let compressed_api_encoding = compressed_api
+            .headers()
+            .get(CONTENT_ENCODING)
+            .map(|value| value.to_str().unwrap().to_owned());
+        let compressed_api_body = to_bytes(compressed_api.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (
+                compressed_api_encoding,
+                decode_gzip(&compressed_api_body),
+            ),
+            (
+                Some("gzip".to_owned()),
+                br#"{"messages":[],"backgroundTasks":[],"start":0,"total":0,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_vec(),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::javascript("/assets/app-abcdef12.js", "text/javascript", include_bytes!("watch_web/test_assets/assets/app-abcdef12.js").as_slice())]
+    #[case::stylesheet("/assets/app-abcdef12.css", "text/css", include_bytes!("watch_web/test_assets/assets/app-abcdef12.css").as_slice())]
+    #[case::index("/", "text/html", include_bytes!("watch_web/test_assets/index.html").as_slice())]
+    #[case::spa_fallback("/sessions/fixture-session", "text/html", include_bytes!("watch_web/test_assets/index.html").as_slice())]
+    #[tokio::test]
+    async fn static_responses_are_gzip_encoded(
+        #[case] uri: &str,
+        #[case] expected_content_type: &str,
+        #[case] expected_body: &[u8],
+    ) {
+        let response = app_with_assets(&TEST_DIST)
+            .oneshot(compressed_request(uri))
+            .await
+            .unwrap();
+        let status = response.status();
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .map(|value| value.to_str().unwrap().to_owned());
+        let content_encoding = response
+            .headers()
+            .get(CONTENT_ENCODING)
+            .map(|value| value.to_str().unwrap().to_owned());
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+
+        assert_eq!(
+            (status, content_type, content_encoding, decode_gzip(&body),),
+            (
+                StatusCode::OK,
+                Some(expected_content_type.to_owned()),
+                Some("gzip".to_owned()),
+                expected_body.to_vec(),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::hashed_javascript("/assets/app-abcdef12.js", "public, max-age=31536000, immutable")]
+    #[case::hash_contains_hyphen("/assets/app-Ab-d_f12.js", "public, max-age=31536000, immutable")]
+    #[case::hashed_stylesheet("/assets/app-abcdef12.css", "public, max-age=31536000, immutable")]
+    #[case::unhashed_stylesheet("/assets/app.css", "no-cache")]
+    #[case::descriptive_suffix_is_not_a_hash("/assets/logo-illustration.svg", "no-cache")]
+    #[case::index_root("/", "no-cache")]
+    #[case::direct_index("/index.html", "no-cache")]
+    #[case::spa_fallback("/sessions/fixture-session", "no-cache")]
+    #[tokio::test]
+    async fn static_cache_policy_matches_asset_hashing(
+        #[case] uri: &str,
+        #[case] expected_cache_control: &str,
+    ) {
+        let response = app_with_assets(&TEST_DIST)
+            .oneshot(request("GET", uri, "localhost", None))
+            .await
+            .unwrap();
+        let cache_control = response
+            .headers()
+            .get(CACHE_CONTROL)
+            .map(|value| value.to_str().unwrap().to_owned());
+
+        assert_eq!(cache_control, Some(expected_cache_control.to_owned()));
+    }
+
+    #[tokio::test]
+    async fn compression_layer_sends_sse_events_without_compression() {
+        let router = axum::Router::new()
+            .route(
+                "/api/events",
+                axum::routing::get(|| async {
+                    Sse::new(
+                        stream::once(async {
+                            Ok::<_, std::convert::Infallible>(
+                                Event::default().data("ready".repeat(32)),
+                            )
+                        })
+                        .chain(stream::pending()),
+                    )
+                }),
+            )
+            .layer(compression_layer());
+        let response = router
+            .oneshot(compressed_request("/api/events"))
+            .await
+            .unwrap();
+        let status = response.status();
+        let content_encoding = response
+            .headers()
+            .get(CONTENT_ENCODING)
+            .map(|value| value.to_str().unwrap().to_owned());
+        let first_chunk = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            response.into_body().into_data_stream().next(),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+        let expected_event = format!(
+            indoc! {"
+                data: {}
+
+            "},
+            "ready".repeat(32),
+        );
+
+        assert_eq!(
+            (
+                status,
+                content_encoding,
+                String::from_utf8(first_chunk.to_vec()).unwrap(),
+            ),
+            (StatusCode::OK, None, expected_event),
         );
     }
 
@@ -500,6 +671,23 @@ mod tests {
             builder = builder.header(ORIGIN, origin);
         }
         builder.body(Body::empty()).unwrap()
+    }
+
+    fn compressed_request(uri: &str) -> Request<Body> {
+        Request::builder()
+            .method("GET")
+            .uri(uri)
+            .header(HOST, "localhost")
+            .header("accept-encoding", "gzip")
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    fn decode_gzip(body: &[u8]) -> Vec<u8> {
+        let mut decoder = GzDecoder::new(body);
+        let mut decoded = Vec::new();
+        decoder.read_to_end(&mut decoded).unwrap();
+        decoded
     }
 
     async fn response_snapshot(response: Response<Body>) -> (StatusCode, Option<String>, String) {

@@ -28,7 +28,6 @@ import type {
 export type ConversationMessageRowProps = {
   actions: SessionActions | null
   actionsReady: boolean
-  activeQuestion: boolean
   index: number
   isMobile: boolean
   selected: boolean
@@ -51,7 +50,6 @@ export type ConversationMessageRowProps = {
 export function renderConversationMessage({
   actions,
   actionsReady,
-  activeQuestion,
   index,
   isMobile,
   selected,
@@ -151,39 +149,29 @@ export function renderConversationMessage({
     )
   }
   if (message.type === 'question') {
+    const unanswered = message.questions.every(
+      (question) => question.answer === null,
+    )
     const canAnswer =
-      activeQuestion &&
-      message.answer === null &&
+      message.requestId !== undefined &&
+      unanswered &&
       actionsReady &&
       actions?.answerQuestion === true
     return (
       <QuestionCard
         key={`question-${String(index)}`}
-        {...(message.header === undefined ? {} : { header: message.header })}
-        question={message.question}
-        choices={message.choices}
-        multiSelect={message.multi_select === true}
-        answer={message.answer}
+        questions={message.questions}
         canAnswer={canAnswer}
         isMobile={isMobile}
-        showTerminalFallback={
-          sessionEngine === 'Codex' &&
-          actions !== null &&
-          !actions.answerQuestion
-        }
+        showTerminalFallback={unanswered && actionsReady && !canAnswer}
         canOpenInTerminal={actions?.openInTerminal === true}
         openInTerminalStatus={openInTerminalStatus}
-        onAnswer={(choice) => onAction('answer', { choice })}
-        onSkip={() => onAction('answer', { skip: true })}
-        onFreeformAnswer={(answer) => {
-          const questionContext =
-            message.header !== undefined && message.header.length > 0
-              ? `${message.header}: ${message.question}`
-              : message.question
-          return onAction('messages', {
-            content: `My answer to "${questionContext}" is:\n${answer}`,
-          })
-        }}
+        onAnswer={(answers) =>
+          onAction('answer', { requestId: message.requestId, answers })
+        }
+        onSkip={() =>
+          onAction('answer', { requestId: message.requestId, skip: true })
+        }
         onOpenInTerminal={onOpenInTerminal}
       />
     )

@@ -77,7 +77,7 @@ const iPhoneViewportDecorator: Decorator = (Story) => (
 )
 
 export const QuestionWaitsForAnAnswer: Story = {
-  name: 'A question offers numbered choices',
+  name: 'A question offers selectable choices',
   args: {
     messages: [
       {
@@ -86,17 +86,22 @@ export const QuestionWaitsForAnAnswer: Story = {
       },
       {
         type: 'question',
-        header: 'Retry policy',
-        question: 'Which **retry policy** should be used?',
-        choices: [
+        requestId: 'ask-request-retry-policy',
+        questions: [
           {
-            label: 'Retry **three times** with exponential backoff',
-            description: 'Wait briefly before each retry.',
+            header: 'Cache policy',
+            question: 'Which **cache window** should be used?',
+            choices: [
+              {
+                label: 'Use a **brief window**',
+                description: 'Refresh cached data soon.',
+              },
+              { label: 'Use an extended window' },
+            ],
+            multi_select: false,
+            answer: null,
           },
-          { label: 'Retry once without delay' },
         ],
-        multi_select: false,
-        answer: null,
       },
     ],
   },
@@ -125,13 +130,17 @@ export const QuestionShowsSelectedAnswer: Story = {
     messages: [
       {
         type: 'question',
-        question: 'Which **retry policy** should be used?',
-        choices: [
-          { label: 'Retry **three times** with exponential backoff' },
-          { label: 'Retry once without delay' },
+        questions: [
+          {
+            question: 'Which **cache window** should be used?',
+            choices: [
+              { label: 'Use a brief window' },
+              { label: 'Use an extended window' },
+            ],
+            multi_select: false,
+            answer: 'Use an extended window',
+          },
         ],
-        multi_select: false,
-        answer: 'Retry once without delay',
       },
     ],
   },
@@ -143,13 +152,17 @@ export const QuestionShowsFreeformAnswer: Story = {
     messages: [
       {
         type: 'question',
-        question: 'Which **retry policy** should be used?',
-        choices: [
-          { label: 'Retry three times with exponential backoff' },
-          { label: 'Retry once without delay' },
+        questions: [
+          {
+            question: 'Which **cache window** should be used?',
+            choices: [
+              { label: 'Use a brief window' },
+              { label: 'Use an extended window' },
+            ],
+            multi_select: false,
+            answer: 'Refresh the cache after each update',
+          },
         ],
-        multi_select: false,
-        answer: 'Use a short delay before each retry',
       },
     ],
   },
@@ -277,14 +290,19 @@ export const IPhoneConversationShowsAQuestion: Story = {
       },
       {
         type: 'question',
-        header: 'Question',
-        question: 'Should retries use the default limit?',
-        choices: [
-          { label: 'Yes, use the default limit' },
-          { label: 'No, choose a different limit' },
+        requestId: 'ask-request-mobile',
+        questions: [
+          {
+            header: 'Cache policy',
+            question: 'Should this cache use its default window?',
+            choices: [
+              { label: 'Yes, use the default window' },
+              { label: 'No, choose another window' },
+            ],
+            multi_select: false,
+            answer: null,
+          },
         ],
-        multi_select: false,
-        answer: null,
       },
     ],
   },
@@ -437,10 +455,14 @@ export const CodexOnlyOpensInTerminal: Story = {
     messages: [
       {
         type: 'question',
-        question: 'Which retry policy should be used?',
-        choices: [{ label: 'Retry three times' }, { label: 'Retry once' }],
-        multi_select: false,
-        answer: null,
+        questions: [
+          {
+            question: 'Which cache window should be used?',
+            choices: [{ label: 'Window A' }, { label: 'Window B' }],
+            multi_select: false,
+            answer: null,
+          },
+        ],
       },
       {
         type: 'permission',
