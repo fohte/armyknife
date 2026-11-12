@@ -27,8 +27,11 @@ export type PullRequest = {
 
 export type SessionPullRequest = {
   number: number
+  owner: string | null
+  repo: string | null
   title: string
   url: string
+  headSha: string | null
   state: 'Open' | 'Closed' | 'Merged' | null
   ciState: 'Waiting' | 'InProgress' | 'Successful' | 'Unknown' | null
   reviewStatus:

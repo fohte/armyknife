@@ -19,7 +19,9 @@ use crate::commands::agent::session_title::title_display_name;
 use crate::commands::agent::store;
 #[cfg(test)]
 use crate::commands::agent::tq_session_tasks::SessionTask as LinkedSessionTask;
-use crate::commands::agent::tui::progress_fetch::PullRequestListResponse;
+use crate::commands::agent::tui::progress_fetch::{
+    PullRequestListCache, PullRequestListResponse, fetch_pull_request_list,
+};
 use crate::commands::agent::types::{Engine, Session, SessionStatus};
 use crate::commands::agent::user_turn::{UserTurnKind, user_turns};
 use crate::infra::github::{PrInfo, PrState};
@@ -150,6 +152,10 @@ trait SessionSource: Clone + Send + Sync + 'static {
         sessions: &[Session],
     ) -> impl Future<Output = HashMap<String, Option<PrInfo>>> + Send;
 
+    fn pull_request_list_cache(&self) -> PullRequestListCache {
+        PullRequestListCache::default()
+    }
+
     fn fetch_session_pull_request_list(
         &self,
         selected_session_id: String,
@@ -158,13 +164,15 @@ trait SessionSource: Clone + Send + Sync + 'static {
         task_ids_by_session: HashMap<String, Vec<String>>,
         agent_config: AgentConfig,
     ) -> impl Future<Output = Result<PullRequestListResponse, String>> + Send {
+        let cache = self.pull_request_list_cache();
         async move {
-            crate::commands::agent::tui::progress_fetch::fetch_pull_request_list(
+            fetch_pull_request_list(
                 selected_session_id,
                 task_id.as_deref(),
                 &sessions,
                 &task_ids_by_session,
                 &agent_config,
+                &cache,
             )
             .await
         }
@@ -184,6 +192,7 @@ trait SessionSource: Clone + Send + Sync + 'static {
 struct LiveSessionSource {
     enrichment: SessionEnrichmentCache,
     message_loaders: super::messages::RouteLoaders,
+    pull_request_list_cache: PullRequestListCache,
 }
 
 impl SessionSource for LiveSessionSource {
@@ -197,6 +206,10 @@ impl SessionSource for LiveSessionSource {
 
     async fn fetch_pull_requests(&self, sessions: &[Session]) -> HashMap<String, Option<PrInfo>> {
         self.enrichment.pull_requests(sessions).await
+    }
+
+    fn pull_request_list_cache(&self) -> PullRequestListCache {
+        self.pull_request_list_cache.clone()
     }
 
     async fn running_background_task_session_ids(
@@ -222,6 +235,7 @@ pub(super) fn router(
     router_with_source(LiveSessionSource {
         enrichment: SessionEnrichmentCache::new(updates),
         message_loaders,
+        pull_request_list_cache: PullRequestListCache::default(),
     })
 }
 
@@ -1036,8 +1050,11 @@ mod tests {
             pull_requests: vec![
                 crate::commands::agent::tui::progress_fetch::PullRequestListItem {
                     number: 2048,
+                    owner: Some("example".to_string()),
+                    repo: Some("project".to_string()),
                     title: "Add session pull request links".to_string(),
                     url: "https://github.com/example/project/pull/2048".to_string(),
+                    head_sha: Some("confirmed-head".to_string()),
                     state: Some(PrState::Open),
                     ci_state: Some(crate::infra::github::PrCiState::InProgress),
                     review_status: "working".to_string(),
@@ -1057,8 +1074,11 @@ mod tests {
                 serde_json::json!({
                     "pullRequests": [{
                         "number": 2048,
+                        "owner": "example",
+                        "repo": "project",
                         "title": "Add session pull request links",
                         "url": "https://github.com/example/project/pull/2048",
+                        "headSha": "confirmed-head",
                         "state": "Open",
                         "ciState": "InProgress",
                         "reviewStatus": "working",

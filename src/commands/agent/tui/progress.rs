@@ -573,6 +573,7 @@ mod tests {
                 url: "https://github.com/example-org/example-project/pull/7".to_string(),
             },
             ci_state,
+            head_sha: None,
         }
     }
 

@@ -171,9 +171,12 @@ export function useConversationStatusPanel({
             showCount: pullRequestList.pullRequests.length > 0,
             content: (
               <PullRequestListPanel
+                key={`${session.id}:${session.task?.id ?? ''}`}
+                sessionId={session.id}
                 pullRequests={pullRequestList.pullRequests}
                 loading={pullRequestList.loading}
                 error={pullRequestList.error}
+                onRefresh={pullRequestList.refresh}
               />
             ),
           },

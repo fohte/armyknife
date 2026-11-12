@@ -3,6 +3,7 @@ import '#components/session-task-links.css'
 import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
+import { CompletedItemsToggle } from '#components/completed-items-toggle'
 import type { Session, SessionTask } from '#types'
 
 type MenuPosition = {
@@ -287,21 +288,18 @@ export function SessionTaskLinks({
                 })}
               </ul>
               {completedSecondaryTasks.length > 0 ? (
-                <button
-                  className="session-task-links-completed-toggle"
-                  type="button"
-                  aria-expanded={showCompletedTasks}
-                  onClick={() => {
+                <CompletedItemsToggle
+                  count={completedSecondaryTasks.length}
+                  expanded={showCompletedTasks}
+                  onToggle={() => {
                     if (completedTasksExpanded === undefined) {
                       setExpandedCompletedTasksFor(
                         showCompletedTasks ? null : completedTasksKey,
                       )
                     }
                   }}
-                >
-                  {showCompletedTasks ? 'Hide' : 'Show'}{' '}
-                  {String(completedSecondaryTasks.length)} completed
-                </button>
+                  placement="linked-task-menu"
+                />
               ) : null}
             </div>,
             document.body,
