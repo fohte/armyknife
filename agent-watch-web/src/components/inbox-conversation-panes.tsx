@@ -1,9 +1,10 @@
 import type { ComponentProps } from 'react'
+import { useCallback, useState } from 'react'
 
 import { ConversationPane } from '#components/conversation-pane'
 import { InboxView } from '#components/inbox-view'
 import { ResizableColumns } from '#components/resizable-columns'
-import type { Session } from '#types'
+import type { Session, SessionTreeNode } from '#types'
 
 type InboxConversationPanesProps = {
   inboxProps: Omit<ComponentProps<typeof InboxView>, 'isMobile'>
@@ -38,6 +39,16 @@ export function InboxConversationPanes({
   onArchiveSession,
   onSelectSession,
 }: InboxConversationPanesProps) {
+  const [sessionTrees, setSessionTrees] = useState<
+    ReadonlyMap<string, readonly SessionTreeNode[]>
+  >(() => new Map())
+  const cacheSessionTree = useCallback((tree: readonly SessionTreeNode[]) => {
+    setSessionTrees((current) => {
+      const next = new Map(current)
+      for (const node of tree) next.set(node.id, tree)
+      return next
+    })
+  }, [])
   const inboxView = <InboxView {...inboxProps} isMobile={isMobile} />
   const conversationPane =
     selectedSession != null && (!isMobile || showMobileConversation) ? (
@@ -45,6 +56,8 @@ export function InboxConversationPanes({
         key={selectedSession.id}
         session={selectedSession}
         sessions={sessions}
+        initialSessionTree={sessionTrees.get(selectedSession.id) ?? null}
+        onSessionTreeLoaded={cacheSessionTree}
         refreshKey={refreshKey}
         isMobile={isMobile}
         statusPanelOpen={statusPanelOpen}

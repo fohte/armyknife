@@ -45,6 +45,8 @@ const RETAINED_MESSAGE_COUNT = 200
 type ConversationPaneProps = {
   session: Session
   sessions?: readonly Session[]
+  initialSessionTree?: readonly SessionTreeNode[] | null
+  onSessionTreeLoaded?: (tree: readonly SessionTreeNode[]) => void
   refreshKey: number
   onSelectSession: (id: string) => void
   isMobile?: boolean
@@ -61,6 +63,8 @@ type ConversationPaneProps = {
 export function ConversationPane({
   session,
   sessions = EMPTY_SESSIONS,
+  initialSessionTree = null,
+  onSessionTreeLoaded,
   refreshKey,
   onSelectSession,
   isMobile = false,
@@ -81,7 +85,9 @@ export function ConversationPane({
   const loadingOlderRef = useRef(false)
   const [messagesLoadedAt, setMessagesLoadedAt] = useState<number | null>(null)
   const [actions, setActions] = useState<SessionActions | null>(null)
-  const [sessionTree, setSessionTree] = useState<SessionTreeNode[] | null>(null)
+  const [sessionTree, setSessionTree] = useState<
+    readonly SessionTreeNode[] | null
+  >(initialSessionTree)
   const [sessionTreeError, setSessionTreeError] = useState<string | null>(null)
   const [actionsReady, setActionsReady] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -234,8 +240,15 @@ export function ConversationPane({
     ).match(
       (response) => {
         if (current) {
-          setSessionTree(response.sessions)
-          setSessionTreeError(null)
+          if (response.sessions.some((node) => node.id === session.id)) {
+            setSessionTree(response.sessions)
+            setSessionTreeError(null)
+            onSessionTreeLoaded?.(response.sessions)
+          } else {
+            setSessionTreeError(
+              'The session tree does not contain the selected session.',
+            )
+          }
         }
       },
       (treeError) => {
@@ -245,7 +258,7 @@ export function ConversationPane({
     return () => {
       current = false
     }
-  }, [refreshKey, session.hasSessionTree, session.id])
+  }, [onSessionTreeLoaded, refreshKey, session.hasSessionTree, session.id])
 
   useEffect(() => {
     setPendingPermissionAction(null)
@@ -400,7 +413,7 @@ export function ConversationPane({
     allDecisions: conversation.decisions,
     backgroundTasks: displayBackgroundTasks,
     sessionTree,
-    sessionTreeError,
+    sessionTreeError: sessionTree === null ? sessionTreeError : null,
     onSelectSession,
     statusPanelOpen,
     onAction,
