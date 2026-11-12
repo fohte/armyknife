@@ -11,7 +11,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use reqwest::Client;
 
-use super::attachments::MAX_ATTACHMENT_BYTES;
+use super::limits::MAX_REQUEST_BODY_BYTES;
 use super::security;
 use crate::commands::agent::types::Session;
 
@@ -240,7 +240,7 @@ async fn proxy_request<T: CritTransport>(
 
     let uri = request.uri().clone();
     let (parts, body) = request.into_parts();
-    let body = match to_bytes(body, MAX_ATTACHMENT_BYTES).await {
+    let body = match to_bytes(body, MAX_REQUEST_BODY_BYTES).await {
         Ok(body) => body,
         Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
     };

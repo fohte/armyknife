@@ -5,6 +5,7 @@ mod crit_proxy;
 mod events;
 mod image_attachments;
 mod interrupted;
+mod limits;
 mod messages;
 mod restart;
 mod security;
