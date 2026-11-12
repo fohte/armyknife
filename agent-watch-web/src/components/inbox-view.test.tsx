@@ -266,9 +266,14 @@ it('filters each inbox section and updates the visible counts', () => {
 it('labels the Starred session strip for assistive technology', () => {
   renderInbox({ isMobile: true })
 
-  expect(
-    container.querySelector('.mobile-today-strip')?.getAttribute('aria-label'),
-  ).toEqual('Starred sessions')
+  const snapshot = () => {
+    const strip = container.querySelector('.mobile-today-strip')
+    return {
+      role: strip?.getAttribute('role'),
+      label: strip?.getAttribute('aria-label'),
+    }
+  }
+  expect(snapshot()).toEqual({ role: 'group', label: 'Starred sessions' })
 })
 
 it('omits quick actions from iPhone inbox rows', () => {

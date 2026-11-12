@@ -256,7 +256,11 @@ export function InboxView({
           </ul>
         </section>
       ) : null}
-      <div className="mobile-today-strip" aria-label="Starred sessions">
+      <div
+        className="mobile-today-strip"
+        role="group"
+        aria-label="Starred sessions"
+      >
         {filterInboxSessions(todaySessions, filters).map((session) => (
           <Button
             key={session.id}

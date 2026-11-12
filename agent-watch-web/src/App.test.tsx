@@ -3240,6 +3240,22 @@ it('adds a session to Starred from the session row', async () => {
   ])
 })
 
+it('labels a Starred session for removal from its row', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [{ ...session('session-a', 'First session'), isToday: true }],
+  })
+
+  expect(
+    container
+      .querySelector<HTMLButtonElement>(
+        '.session-row-actions button[aria-pressed="true"]',
+      )
+      ?.getAttribute('aria-label'),
+  ).toEqual('Remove from Starred')
+})
+
 it('reports a Starred update failure', async () => {
   const fetchMock = vi
     .fn<typeof fetch>()

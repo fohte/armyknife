@@ -422,6 +422,32 @@ it('toggles Starred from the iPhone conversation header', () => {
   })
 })
 
+it('labels a Starred iPhone session for removal', () => {
+  const onToggleToday = vi.fn()
+  renderView(
+    () => Promise.resolve(true),
+    session,
+    undefined,
+    [],
+    actions,
+    true,
+    [],
+    [],
+    false,
+    undefined,
+    null,
+    false,
+    undefined,
+    { isToday: true, onToggleToday },
+  )
+
+  expect(todayToggleSnapshot(onToggleToday)).toEqual({
+    label: 'Remove from Starred',
+    pressed: 'true',
+    calls: [],
+  })
+})
+
 it('sets the primary linked task from desktop and mobile headers', async () => {
   const primaryTask = {
     id: 'sample-primary-task',
