@@ -78,7 +78,48 @@ export const SessionHasMultipleLinkedTasks: Story = {
     tasks: linkedTasks,
     taskListOpen: true,
   },
-  name: 'A session lists linked tasks and marks completed work',
+  name: 'The task menu hides completed secondary tasks by default',
+}
+
+export const SessionShowsCompletedLinkedTasks: Story = {
+  args: {
+    tasks: linkedTasks,
+    taskListOpen: true,
+    completedTasksExpanded: true,
+  },
+  name: 'The task menu shows completed secondary tasks when expanded',
+}
+
+export const SessionHasOnlyCompletedSecondaryTasks: Story = {
+  args: {
+    task: completedTask,
+    tasks: [
+      completedTask,
+      {
+        id: 'example-other-completed-task',
+        number: 2045,
+        title: 'Review request metrics',
+        priority: 3,
+        isClosed: true,
+      },
+      {
+        id: 'example-third-completed-task',
+        number: 2044,
+        title: 'Update retry guide',
+        priority: 4,
+        isClosed: true,
+      },
+      {
+        id: 'example-fourth-completed-task',
+        number: 2043,
+        title: 'Verify request alerts',
+        priority: 5,
+        isClosed: true,
+      },
+    ],
+    taskListOpen: true,
+  },
+  name: 'A completed primary keeps other completed tasks reachable',
 }
 
 export const SessionHasMultipleLinkedTasksInNarrowPane: Story = {
