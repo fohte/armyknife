@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.653](https://github.com/fohte/armyknife/compare/v0.1.652...v0.1.653) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** clarify transcript rows ([#1679](https://github.com/fohte/armyknife/issues/1679)) ([ca80bbb](https://github.com/fohte/armyknife/commit/ca80bbb13b18d69f8425b673a1694e2a0d9d1735))
+
 ## [0.1.652](https://github.com/fohte/armyknife/compare/v0.1.651...v0.1.652) (2026-11-12)
 
 
