@@ -829,28 +829,51 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::claude(false)]
+    #[case::codex(true)]
     #[tokio::test]
-    async fn messages_route_returns_session_skill_suggestions() {
+    async fn messages_route_returns_session_skill_suggestions(#[case] use_codex_transcript: bool) {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("fixture.jsonl");
-        let content = indoc::indoc! {"
-            - design-flow: Help shape a design.
-            - debug-flow: Investigate a failure.
-        "};
-        std::fs::write(
-            &transcript_path,
+        let record = if use_codex_transcript {
+            json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{
+                        "type": "input_text",
+                        "text": indoc::indoc! {"
+                            <skills_instructions>
+                            ## Skills
+                            ### Available skills
+                            - design-flow: Help shape a design.
+                            - debug-flow: Investigate a failure.
+                            </skills_instructions>
+                        "},
+                    }],
+                },
+            })
+        } else {
             json!({
                 "attachment": {
                     "type": "skill_listing",
-                    "content": content,
+                    "content": indoc::indoc! {"
+                        - design-flow: Help shape a design.
+                        - debug-flow: Investigate a failure.
+                    "},
                 },
             })
-            .to_string(),
-        )
-        .unwrap();
+        };
+        std::fs::write(&transcript_path, record.to_string()).unwrap();
 
         let mut session = stored_session();
-        session.engine = Engine::Claude;
+        session.engine = if use_codex_transcript {
+            Engine::Codex
+        } else {
+            Engine::Claude
+        };
         session.transcript_path = Some(transcript_path);
         let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |id| Ok((id == "fixture-session").then(|| session.clone())),

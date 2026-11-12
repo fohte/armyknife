@@ -223,10 +223,11 @@ mod tests {
     };
 
     #[test]
-    fn parses_the_latest_available_skills_section() {
+    fn parses_the_latest_injected_skill_listing() {
         let transcript = indoc! {r###"
-            {"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"## Skills\n### Available skills\n- old-tool: Old description.\n"}]}}
-            {"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"## Skills\n### Available skills\n- design-flow: Help shape a design.\n  location: /fixture/path\n- debug-flow: Investigate a failure.\n"}]}}
+            {"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<skills_instructions>\n## Skills\n### Available skills\n- old-tool: Old description.\n</skills_instructions>"}]}}
+            {"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<skills_instructions>\n## Skills\n### Available skills\n- design-flow: Help shape a design.\n  location: /fixture/path\n- debug-flow: Investigate a failure.\n</skills_instructions>"}]}}
+            {"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"## Skills\n### Available skills\n- nonexistent-tool: Quoted by the user."}]}}
         "###};
 
         assert_eq!(

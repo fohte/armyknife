@@ -133,7 +133,14 @@ export function MessageComposer({
     const insertion = `${completion.trigger}${skill.name}${separator}`
     const nextDraft = draft.slice(0, completion.start) + insertion + afterToken
     const nextCursor = completion.start + insertion.length
-    pendingCursorPosition.current = nextCursor
+    if (nextDraft === draft) {
+      pendingCursorPosition.current = null
+      const textarea = textareaRef.current
+      textarea?.focus()
+      textarea?.setSelectionRange(nextCursor, nextCursor)
+    } else {
+      pendingCursorPosition.current = nextCursor
+    }
     setCaret({ draft: nextDraft, position: nextCursor })
     onDraftChange(nextDraft)
     setDismissedCompletion(
@@ -157,7 +164,7 @@ export function MessageComposer({
         return
       }
       if (event.key === 'Enter' || event.key === 'Tab') {
-        const skill = matchingSkills[activeSkillIndex]
+        const skill = matchingSkills[selectedSkillIndex]
         if (skill !== undefined) {
           event.preventDefault()
           selectSkill(skill)

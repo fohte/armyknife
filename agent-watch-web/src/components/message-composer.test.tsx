@@ -1,4 +1,4 @@
-import { act, useState } from 'react'
+import { act, type KeyboardEvent, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
@@ -19,6 +19,7 @@ function ComposerHarness({
   skills = [],
   initialDraft = '',
   onSend = () => undefined,
+  onKeyDown = () => undefined,
   onPasteFiles = () => undefined,
   onRemoveAttachment = () => undefined,
 }: {
@@ -27,6 +28,7 @@ function ComposerHarness({
   skills?: readonly SkillSuggestion[]
   initialDraft?: string
   onSend?: () => void
+  onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void
   onPasteFiles?: (files: File[]) => void
   onRemoveAttachment?: (id: string) => void
 }) {
@@ -43,7 +45,7 @@ function ComposerHarness({
       canInterrupt={false}
       attachments={[]}
       onDraftChange={setDraft}
-      onKeyDown={() => undefined}
+      onKeyDown={onKeyDown}
       onPasteFiles={onPasteFiles}
       onRemoveAttachment={onRemoveAttachment}
       onSend={onSend}
@@ -451,7 +453,7 @@ it('selects the final skill with ArrowUp and Tab', () => {
   })
 })
 
-it('keeps Codex slash commands and unknown skill lists out of suggestions', () => {
+it('does not complete Codex slash commands', () => {
   renderFreshComposer({
     engine: 'Codex',
     skills: skillSuggestions,
@@ -461,8 +463,13 @@ it('keeps Codex slash commands and unknown skill lists out of suggestions', () =
     'Run /de',
   )
 
-  const codexSlashCount = container.querySelectorAll('[role="option"]').length
+  const snapshot = () => ({
+    suggestions: container.querySelectorAll('[role="option"]').length,
+  })
+  expect(snapshot()).toEqual({ suggestions: 0 })
+})
 
+it('does not complete when the transcript has no skills', () => {
   renderFreshComposer({
     engine: 'Claude',
   })
@@ -471,13 +478,10 @@ it('keeps Codex slash commands and unknown skill lists out of suggestions', () =
     'Run /de',
   )
 
-  const missingSkillsCount =
-    container.querySelectorAll('[role="option"]').length
-  const snapshot = () => ({ codexSlashCount, missingSkillsCount })
-  expect(snapshot()).toEqual({
-    codexSlashCount: 0,
-    missingSkillsCount: 0,
+  const snapshot = () => ({
+    suggestions: container.querySelectorAll('[role="option"]').length,
   })
+  expect(snapshot()).toEqual({ suggestions: 0 })
 })
 
 it('dismisses an open skill list with Escape', () => {
@@ -506,4 +510,78 @@ it('dismisses an open skill list with Escape', () => {
     visibleOptions: container.querySelectorAll('[role="option"]').length,
   })
   expect(snapshot()).toEqual({ visibleOptions: 0 })
+})
+
+it('does not restore an old cursor after selecting an unchanged skill', () => {
+  renderFreshComposer({
+    engine: 'Claude',
+    skills: skillSuggestions,
+  })
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, '/design-flow today', '/design-flow'.length)
+
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>('[role="option"]'),
+    ).click()
+  })
+  setTextareaValue(textarea, '/design-flow! today', '/design-flow!'.length)
+
+  const snapshot = () => ({
+    draft: textarea.value,
+    cursor: textarea.selectionStart,
+  })
+  expect(snapshot()).toEqual({
+    draft: '/design-flow! today',
+    cursor: '/design-flow!'.length,
+  })
+})
+
+it('selects a matching skill after the caret moves to a narrower query', () => {
+  const onKeyDown = vi.fn()
+  renderFreshComposer({
+    engine: 'Codex',
+    initialDraft: '$d then $deb',
+    skills: skillSuggestions,
+    onKeyDown,
+  })
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, '$d then $deb', '$d'.length)
+  act(() => {
+    textarea.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'ArrowDown',
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+  })
+  act(() => {
+    textarea.setSelectionRange('$d then $deb'.length, '$d then $deb'.length)
+    textarea.dispatchEvent(new Event('select', { bubbles: true }))
+  })
+  act(() => {
+    textarea.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+  })
+
+  const snapshot = () => ({
+    draft: textarea.value,
+    delegatedKeydowns: onKeyDown.mock.calls.length,
+    suggestions: container.querySelectorAll('[role="option"]').length,
+  })
+  expect(snapshot()).toEqual({
+    draft: '$d then $debug-flow ',
+    delegatedKeydowns: 0,
+    suggestions: 0,
+  })
 })

@@ -5,41 +5,44 @@ use super::super::SkillSuggestion;
 pub(super) fn parse_claude_listing(content: Option<&Value>) -> Vec<SkillSuggestion> {
     super::super::claude_content_text(content)
         .lines()
-        .filter_map(|line| {
-            let entry = line.trim().strip_prefix("- ")?;
-            let (name, description) = entry.split_once(':')?;
-            let name = name.trim();
-            let description = description.trim();
-            (!name.is_empty() && !description.is_empty()).then(|| SkillSuggestion {
-                name: name.to_owned(),
-                description: description.to_owned(),
-            })
-        })
+        .filter_map(parse_skill_bullet)
         .collect()
 }
 
-pub(super) fn capture_codex_listing(value: &Value, skills: &mut Vec<SkillSuggestion>) {
-    match value {
-        Value::String(text) => {
-            if let Some(listing) = parse_codex_available_skills(text) {
-                *skills = listing;
-            }
+pub(super) fn capture_codex_listing(record: &Value, skills: &mut Vec<SkillSuggestion>) {
+    if record.get("type").and_then(Value::as_str) != Some("response_item") {
+        return;
+    }
+
+    let Some(payload) = record.get("payload") else {
+        return;
+    };
+    if payload.get("type").and_then(Value::as_str) != Some("message")
+        || payload.get("role").and_then(Value::as_str) != Some("developer")
+    {
+        return;
+    }
+
+    let Some(content) = payload.get("content").and_then(Value::as_array) else {
+        return;
+    };
+    for block in content {
+        if block.get("type").and_then(Value::as_str) != Some("input_text") {
+            continue;
         }
-        Value::Array(values) => {
-            for value in values {
-                capture_codex_listing(value, skills);
-            }
+        let Some(text) = block.get("text").and_then(Value::as_str) else {
+            continue;
+        };
+        if let Some(listing) = parse_codex_available_skills(text) {
+            *skills = listing;
         }
-        Value::Object(values) => {
-            for value in values.values() {
-                capture_codex_listing(value, skills);
-            }
-        }
-        _ => {}
     }
 }
 
 fn parse_codex_available_skills(text: &str) -> Option<Vec<SkillSuggestion>> {
+    let text = text.trim();
+    let text = text.strip_prefix("<skills_instructions>")?;
+    let text = text.strip_suffix("</skills_instructions>")?;
     let mut in_available_skills = false;
     let mut skills = Vec::new();
     let mut found_section = false;
@@ -57,21 +60,21 @@ fn parse_codex_available_skills(text: &str) -> Option<Vec<SkillSuggestion>> {
         if !in_available_skills {
             continue;
         }
-        let Some(entry) = heading.strip_prefix("- ") else {
-            continue;
-        };
-        let Some((name, description)) = entry.split_once(':') else {
-            continue;
-        };
-        let name = name.trim().trim_matches('`').trim_matches('*');
-        let description = description.trim();
-        if !name.is_empty() && !description.is_empty() {
-            skills.push(SkillSuggestion {
-                name: name.to_owned(),
-                description: description.to_owned(),
-            });
+        if let Some(skill) = parse_skill_bullet(heading) {
+            skills.push(skill);
         }
     }
 
     found_section.then_some(skills)
+}
+
+fn parse_skill_bullet(line: &str) -> Option<SkillSuggestion> {
+    let entry = line.trim().strip_prefix("- ")?;
+    let (name, description) = entry.split_once(':')?;
+    let name = name.trim().trim_matches('`').trim_matches('*');
+    let description = description.trim();
+    (!name.is_empty() && !description.is_empty()).then(|| SkillSuggestion {
+        name: name.to_owned(),
+        description: description.to_owned(),
+    })
 }
