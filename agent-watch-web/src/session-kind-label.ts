@@ -1,5 +1,10 @@
 import type { Session } from '#types'
 
+export function sessionKindTone(session: Session) {
+  if (session.kind === 'Error') return 'error'
+  return session.category.replace('_', '-')
+}
+
 export function sessionKindLabel(session: Session) {
   if (session.kind !== null) return session.kind
   switch (session.category) {

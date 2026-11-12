@@ -182,7 +182,7 @@ it('shows Starred status labels with their category colors', () => {
       },
       {
         text: 'Error',
-        className: 'today-session-status is-needs-action is-error',
+        className: 'today-session-status is-error',
         color: 'rgb(248, 113, 113)',
       },
       {

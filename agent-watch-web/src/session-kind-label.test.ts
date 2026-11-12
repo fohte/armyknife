@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest'
 
-import { sessionKindLabel } from '#session-kind-label'
+import { sessionKindLabel, sessionKindTone } from '#session-kind-label'
 import type { Session } from '#types'
 
 const baseSession: Session = {
@@ -57,4 +57,38 @@ it.each([
   expected: string
 }[])('returns $expected when $label', ({ session, expected }) => {
   expect(sessionKindLabel({ ...baseSession, ...session })).toEqual(expected)
+})
+
+it.each([
+  {
+    label: 'needs action uses its category tone',
+    session: { category: 'needs_action', kind: 'Question' },
+    expected: 'needs-action',
+  },
+  {
+    label: 'in-progress Stopped uses its category tone',
+    session: { category: 'in_progress', kind: 'Stopped' },
+    expected: 'in-progress',
+  },
+  {
+    label: 'Error overrides its category tone',
+    session: { category: 'in_progress', kind: 'Error' },
+    expected: 'error',
+  },
+  {
+    label: 'later uses its category tone',
+    session: { category: 'later', kind: 'Review' },
+    expected: 'later',
+  },
+  {
+    label: 'done uses its category tone',
+    session: { category: 'done', kind: null },
+    expected: 'done',
+  },
+] satisfies {
+  label: string
+  session: Partial<Session>
+  expected: string
+}[])('returns $expected tone when $label', ({ session, expected }) => {
+  expect(sessionKindTone({ ...baseSession, ...session })).toEqual(expected)
 })

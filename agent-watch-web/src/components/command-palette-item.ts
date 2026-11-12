@@ -1,4 +1,5 @@
 import type { PaletteItem } from '#command-palette-model'
+import { sessionKindTone } from '#session-kind-label'
 import { formatLinkedTaskCount } from '#session-task-count'
 import type { Session } from '#types'
 
@@ -88,10 +89,7 @@ export function itemDetail(item: PaletteItem) {
 }
 
 export function itemColor(item: PaletteItem) {
-  if (item.type === 'session') {
-    if (item.session.kind === 'Error') return 'error'
-    return item.session.category.replace('_', '-')
-  }
+  if (item.type === 'session') return sessionKindTone(item.session)
   if (item.type === 'command') return 'command'
   return item.type
 }
