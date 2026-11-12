@@ -166,7 +166,7 @@ export type ChatItem =
       createdAt: string
     }
 
-export type QuestionChoice = {
+type QuestionChoice = {
   label: string
   description?: string
 }
