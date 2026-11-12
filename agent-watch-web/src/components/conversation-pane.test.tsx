@@ -551,6 +551,86 @@ it('shows a tree request error instead of hiding the tree tab', async () => {
   })
 })
 
+it('shows an error when the returned tree omits the selected session', async () => {
+  const treeSession = { ...session, hasSessionTree: true }
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(actions))
+    }
+    if (url.endsWith('/tree')) {
+      return Promise.resolve(
+        jsonResponse({
+          revision: 1,
+          sessions: [
+            {
+              id: 'other-session',
+              parentId: null,
+              category: 'in_progress',
+              isActive: true,
+              kind: null,
+              title: 'Other session',
+              preview: null,
+              elapsedSeconds: 0,
+              task: null,
+              repo: session.repo,
+              decisionCount: 0,
+              pullRequest: null,
+            },
+            {
+              id: 'other-child-session',
+              parentId: 'other-session',
+              category: 'in_progress',
+              isActive: true,
+              kind: null,
+              title: 'Other child',
+              preview: null,
+              elapsedSeconds: 0,
+              task: null,
+              repo: session.repo,
+              decisionCount: 0,
+              pullRequest: null,
+            },
+          ],
+        }),
+      )
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={treeSession}
+        refreshKey={0}
+        statusPanelOpen
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+
+  await waitForState(() => container.querySelector('[role="alert"]') !== null)
+  const snapshot = () => ({
+    treeRequest: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/tree')),
+    tab: container.querySelector('[role="tab"]')?.textContent,
+    alert: container.querySelector('[role="alert"]')?.textContent,
+    rows: container.querySelectorAll('.session-tree-row').length,
+  })
+  expect(snapshot()).toEqual({
+    treeRequest: ['/api/sessions/sample-session/tree'],
+    tab: 'Tree',
+    alert:
+      'Could not load the session tree: The session tree does not contain the selected session.',
+    rows: 0,
+  })
+})
+
 it('keeps the session tree while selecting another session and loads a different tree', async () => {
   const rootSession = { ...session, hasSessionTree: true }
   const childSession = {
@@ -592,6 +672,10 @@ it('keeps the session tree while selecting another session and loads a different
     makeNode(otherSession.id, null, otherSession.title),
     makeNode('other-child-session', otherSession.id, 'Other child'),
   ]
+  let resolveChildTree: ((response: Response) => void) | undefined
+  const childTreeResponse = new Promise<Response>((resolve) => {
+    resolveChildTree = resolve
+  })
   let resolveOtherTree: ((response: Response) => void) | undefined
   const otherTreeResponse = new Promise<Response>((resolve) => {
     resolveOtherTree = resolve
@@ -606,6 +690,7 @@ it('keeps the session tree while selecting another session and loads a different
     }
     if (url.endsWith('/tree')) {
       if (url.includes(otherSession.id)) return otherTreeResponse
+      if (url.includes(childSession.id)) return childTreeResponse
       return Promise.resolve(jsonResponse({ revision: 1, sessions: firstTree }))
     }
     return Promise.resolve(jsonResponse({}))
@@ -667,6 +752,15 @@ it('keeps the session tree while selecting another session and loads a different
       .map(([input]) => requestUrl(input))
       .filter((url) => url.endsWith('/tree')),
   }
+  await act(async () => {
+    resolveChildTree?.(jsonResponse({ error: 'Sample tree error' }, 503))
+    await childTreeResponse
+  })
+  await waitForState(() => container.querySelector('[role="alert"]') !== null)
+  const cachedTreeAfterRefreshFailure = {
+    alert: container.querySelector('[role="alert"]')?.textContent,
+    currentRow: container.querySelector('.session-tree-row.is-current')?.id,
+  }
   render(otherSession)
   const differentTreeLoading = container.querySelector(
     '.session-tree-feedback',
@@ -680,6 +774,7 @@ it('keeps the session tree while selecting another session and loads a different
   )
   const snapshot = () => ({
     selectedFromSameTree,
+    cachedTreeAfterRefreshFailure,
     differentTreeLoading,
     currentRow: container.querySelector('.session-tree-row.is-current')?.id,
     treeRequests: fetcher.mock.calls
@@ -695,6 +790,10 @@ it('keeps the session tree while selecting another session and loads a different
         '/api/sessions/sample-session/tree',
         '/api/sessions/child-session/tree',
       ],
+    },
+    cachedTreeAfterRefreshFailure: {
+      alert: 'Could not refresh the session tree: Sample tree error',
+      currentRow: 'session-tree-row-child-session',
     },
     differentTreeLoading: 'Loading session tree…',
     currentRow: 'session-tree-row-other-session',

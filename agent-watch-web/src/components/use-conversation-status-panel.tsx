@@ -96,20 +96,29 @@ export function useConversationStatusPanel({
             showCount: treeCount > 0,
             countTone: 'warning' as const,
             content:
-              sessionTreeError !== null ? (
-                <div className="session-tree-feedback" role="alert">
-                  Could not load the session tree: {sessionTreeError}
-                </div>
-              ) : sessionTree === null ? (
-                <div className="session-tree-feedback" role="status">
-                  Loading session tree…
-                </div>
+              sessionTree === null ? (
+                sessionTreeError !== null ? (
+                  <div className="session-tree-feedback" role="alert">
+                    Could not load the session tree: {sessionTreeError}
+                  </div>
+                ) : (
+                  <div className="session-tree-feedback" role="status">
+                    Loading session tree…
+                  </div>
+                )
               ) : (
-                <SessionTreePanel
-                  sessions={sessionTree}
-                  selectedSessionId={session.id}
-                  onSelectSession={onSelectSession}
-                />
+                <>
+                  {sessionTreeError === null ? null : (
+                    <div className="session-tree-feedback" role="alert">
+                      Could not refresh the session tree: {sessionTreeError}
+                    </div>
+                  )}
+                  <SessionTreePanel
+                    sessions={sessionTree}
+                    selectedSessionId={session.id}
+                    onSelectSession={onSelectSession}
+                  />
+                </>
               ),
           },
         ]),

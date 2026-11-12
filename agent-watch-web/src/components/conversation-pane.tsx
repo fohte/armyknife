@@ -413,7 +413,7 @@ export function ConversationPane({
     allDecisions: conversation.decisions,
     backgroundTasks: displayBackgroundTasks,
     sessionTree,
-    sessionTreeError: sessionTree === null ? sessionTreeError : null,
+    sessionTreeError,
     onSelectSession,
     statusPanelOpen,
     onAction,
