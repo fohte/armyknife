@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.629](https://github.com/fohte/armyknife/compare/v0.1.628...v0.1.629) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align mobile layout ([#1626](https://github.com/fohte/armyknife/issues/1626)) ([e162812](https://github.com/fohte/armyknife/commit/e16281236d7e22eee71bc3418075fbf28371dfa6))
+
 ## [0.1.628](https://github.com/fohte/armyknife/compare/v0.1.627...v0.1.628) (2026-11-12)
 
 
