@@ -47,6 +47,7 @@ use crate::shared::config;
 use crate::shared::log::short_run_id;
 
 mod codex_turn_status;
+mod crit_cleanup;
 mod merged_close;
 mod service;
 mod undelivered_redelivery;
@@ -112,6 +113,12 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
         dry_run = args.dry_run,
         pause_enabled,
     );
+    let crit_links_cleared = recover_sweep_pass(
+        crit_cleanup::clear_stale_links(&sessions_dir, args.dry_run),
+        "agent.sweep.crit_cleanup_failed",
+        "stale crit-link cleanup failed",
+        &mut |warning| eprintln!("{warning}"),
+    );
     let pause_pass = || -> Result<SweepReport> {
         let timeout = auto_pause::parse_duration(&timeout_str)
             .with_context(|| format!("invalid agent.auto_pause.timeout `{timeout_str}`"))?;
@@ -159,6 +166,7 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
         codex_failed = codex_updates.failed,
         codex_interrupted = codex_updates.interrupted,
         merged_closed,
+        crit_links_cleared,
         redelivery_started,
         timeout = %timeout_str,
         dry_run = args.dry_run,
@@ -173,12 +181,13 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
     // above already records every signal for anyone tailing the JSONL log.
     if report.paused > 0 || codex_updates.total() > 0 || merged_closed > 0 || args.dry_run {
         eprintln!(
-            "[armyknife] agent sweep: scanned={} paused={} codex_failed={} codex_interrupted={} merged_closed={} redelivery_started={} signaled={} waiting={} active={} (timeout={})",
+            "[armyknife] agent sweep: scanned={} paused={} codex_failed={} codex_interrupted={} merged_closed={} crit_links_cleared={} redelivery_started={} signaled={} waiting={} active={} (timeout={})",
             report.scanned,
             report.paused,
             codex_updates.failed,
             codex_updates.interrupted,
             merged_closed,
+            crit_links_cleared,
             redelivery_started,
             report.signaled,
             report.waiting,
