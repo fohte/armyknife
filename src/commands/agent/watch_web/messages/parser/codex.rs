@@ -527,7 +527,7 @@ mod tests {
     }
 
     #[test]
-    fn compressed_message_text_preserves_the_conversation_output() {
+    fn large_message_text_preserves_the_conversation_output() {
         let text = "A fictional transcript paragraph with repeated details. ".repeat(16);
         let record = json!({
             "type": "response_item",
@@ -543,18 +543,7 @@ mod tests {
         parser.append(Cursor::new(transcript.as_bytes())).unwrap();
 
         let output = parser.render_with_decisions(&[]).unwrap();
-        let compressed = matches!(
-            &parser.events[0].effects[0],
-            super::CodexEffect::AssistantMessage {
-                text: super::CodexText::Compressed(_),
-                ..
-            }
-        );
-
-        assert_eq!(
-            (output, compressed),
-            ((vec![ChatItem::Assistant { text }], Vec::new()), true),
-        );
+        assert_eq!(output, (vec![ChatItem::Assistant { text }], Vec::new()));
     }
 
     #[test]
