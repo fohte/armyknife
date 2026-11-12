@@ -69,7 +69,7 @@ const iPhoneViewportDecorator: Decorator = (Story) => (
   <div
     className="story-mobile-layout"
     data-layout="mobile"
-    style={{ width: '390px', height: '844px', display: 'flex' }}
+    style={{ width: 'min(390px, 100%)', height: '844px', display: 'flex' }}
   >
     <Story />
   </div>
@@ -237,12 +237,27 @@ export const IPhoneConversationShowsAQuestion: Story = {
 }
 
 export const IPhoneConversationShowsItsWorkingStatus: Story = {
-  name: 'The iPhone conversation keeps the working status within its insets',
+  name: 'The iPhone conversation keeps messages and working status above the composer',
   args: {
     isMobile: true,
     session: { ...session, category: 'in_progress', kind: null },
     messages: [
-      { type: 'assistant', text: 'The request client is being updated.' },
+      {
+        type: 'user',
+        text: 'Please verify the retry limits before the next release.',
+      },
+      {
+        type: 'assistant',
+        text: 'The request client now caps attempts and preserves the original failure.',
+      },
+      {
+        type: 'tool_summary',
+        summary: 'Read ×2 · Edit ×1 · Shell ×1',
+      },
+      {
+        type: 'assistant',
+        text: 'I am checking the timeout path and the final error message.',
+      },
       {
         type: 'tool_in_progress',
         tool: 'Shell',

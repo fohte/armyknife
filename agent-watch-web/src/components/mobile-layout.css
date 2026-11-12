@@ -1,9 +1,17 @@
 .agent-watch-shell[data-layout='mobile'] {
-  height: 100vh;
+  position: fixed;
+  top: var(--mobile-viewport-top, 0px);
+  right: 0;
+  left: 0;
   height: var(--mobile-viewport-height, 100dvh);
   min-height: 0;
+  overflow: hidden;
   font-size: var(--aw-font-size-mobile-body);
   line-height: var(--aw-line-height-body);
+}
+
+html[data-mobile-layout='true'] {
+  overflow: hidden;
 }
 
 .agent-watch-shell[data-layout='mobile'] .agent-watch-nav {
@@ -439,10 +447,10 @@
 }
 
 .conversation-pane[data-mobile='true'] .conversation-header {
-  min-height: 101px;
-  flex: 0 0 101px;
+  min-height: calc(50px + max(8px, env(safe-area-inset-top)));
+  flex: 0 0 calc(50px + max(8px, env(safe-area-inset-top)));
   gap: 4px;
-  padding: 50px 12px 6px 4px;
+  padding: max(8px, env(safe-area-inset-top)) 12px 6px 4px;
   border-bottom-color: var(--aw-border);
 }
 
@@ -465,7 +473,11 @@
 
 .mobile-conversation-back {
   width: 44px;
-  font-size: 26px;
+}
+
+.mobile-conversation-back svg {
+  width: 30px;
+  height: 30px;
 }
 
 .conversation-pane[data-mobile='true'] .mobile-conversation-back {

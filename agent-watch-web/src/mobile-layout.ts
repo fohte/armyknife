@@ -21,23 +21,41 @@ export function useMobileLayout() {
   const [doneExpanded, setDoneExpanded] = useState(false)
 
   useEffect(() => {
-    const viewport = window.visualViewport
-    if (!isMobile || viewport === null) {
-      document.documentElement.style.removeProperty('--mobile-viewport-height')
-      return
+    const root = document.documentElement
+    if (isMobile) {
+      root.dataset['mobileLayout'] = 'true'
+    } else {
+      delete root.dataset['mobileLayout']
     }
 
-    const updateHeight = () => {
-      document.documentElement.style.setProperty(
+    const viewport = window.visualViewport
+    if (!isMobile || viewport === null) {
+      root.style.removeProperty('--mobile-viewport-top')
+      document.documentElement.style.removeProperty('--mobile-viewport-height')
+      return () => {
+        delete root.dataset['mobileLayout']
+      }
+    }
+
+    const updateViewport = () => {
+      root.style.setProperty(
+        '--mobile-viewport-top',
+        `${String(viewport.offsetTop)}px`,
+      )
+      root.style.setProperty(
         '--mobile-viewport-height',
         `${String(viewport.height)}px`,
       )
     }
-    updateHeight()
-    viewport.addEventListener('resize', updateHeight)
+    updateViewport()
+    viewport.addEventListener('resize', updateViewport)
+    viewport.addEventListener('scroll', updateViewport)
     return () => {
-      viewport.removeEventListener('resize', updateHeight)
-      document.documentElement.style.removeProperty('--mobile-viewport-height')
+      viewport.removeEventListener('resize', updateViewport)
+      viewport.removeEventListener('scroll', updateViewport)
+      root.style.removeProperty('--mobile-viewport-top')
+      root.style.removeProperty('--mobile-viewport-height')
+      delete root.dataset['mobileLayout']
     }
   }, [isMobile])
 
