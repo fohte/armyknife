@@ -171,6 +171,76 @@ it('requests deltas and restores the ordered full session response', async () =>
   })
 })
 
+it('preserves fractional elapsed time across unchanged session deltas', async () => {
+  const source = new FakeEventSource()
+  const responseReceived = Array.from({ length: 5 }, () =>
+    deferred<undefined>(),
+  )
+  const responses: unknown[] = []
+  const unchangedSession = session('stable-session', 'Unchanged session', 40)
+  const fetcher = vi.fn().mockResolvedValueOnce(
+    jsonResponse({
+      mode: 'full',
+      token: 'snapshot-1',
+      revision: 1,
+      sessions: [unchangedSession],
+    }),
+  )
+
+  for (let revision = 2; revision <= 5; revision += 1) {
+    fetcher.mockResolvedValueOnce(
+      jsonResponse({
+        mode: 'delta',
+        token: `snapshot-${revision.toString()}`,
+        revision,
+        updatedSessions: [],
+        removedSessionIds: [],
+        sessionOrder: ['stable-session'],
+      }),
+    )
+  }
+
+  let currentTime = 1_000
+  vi.spyOn(Date, 'now').mockImplementation(() => currentTime)
+
+  const stop = startSessionFeed(
+    (response) => {
+      responses.push(response)
+      responseReceived[responses.length - 1]?.resolve(undefined)
+    },
+    () => {},
+    { fetcher, createEventSource: () => source },
+  )
+
+  await responseReceived[0]?.promise
+  for (let responseIndex = 1; responseIndex < 5; responseIndex += 1) {
+    currentTime += 2_900
+    source.emit('sessions')
+    await responseReceived[responseIndex]?.promise
+  }
+  stop()
+
+  expect(responses).toEqual([
+    { revision: 1, sessions: [unchangedSession] },
+    {
+      revision: 2,
+      sessions: [{ ...unchangedSession, elapsedSeconds: 42 }],
+    },
+    {
+      revision: 3,
+      sessions: [{ ...unchangedSession, elapsedSeconds: 45 }],
+    },
+    {
+      revision: 4,
+      sessions: [{ ...unchangedSession, elapsedSeconds: 48 }],
+    },
+    {
+      revision: 5,
+      sessions: [{ ...unchangedSession, elapsedSeconds: 51 }],
+    },
+  ])
+})
+
 it('delivers tree availability and work type metadata from a session response', async () => {
   const source = new FakeEventSource()
   const received = deferred<undefined>()
