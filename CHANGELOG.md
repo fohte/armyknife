@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.637](https://github.com/fohte/armyknife/compare/v0.1.636...v0.1.637) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** place decisions by timestamp ([#1643](https://github.com/fohte/armyknife/issues/1643)) ([654ba04](https://github.com/fohte/armyknife/commit/654ba0423b0752a8298644c3bfeb21ab067f9a08))
+
 ## [0.1.636](https://github.com/fohte/armyknife/compare/v0.1.635...v0.1.636) (2026-11-12)
 
 
