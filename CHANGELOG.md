@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.617](https://github.com/fohte/armyknife/compare/v0.1.616...v0.1.617) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** merge cache entries by key ([#1600](https://github.com/fohte/armyknife/issues/1600)) ([270d39e](https://github.com/fohte/armyknife/commit/270d39e40f5d37d8ae924c39df03d404266b52b0))
+
 ## [0.1.616](https://github.com/fohte/armyknife/compare/v0.1.615...v0.1.616) (2026-11-12)
 
 
