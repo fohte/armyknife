@@ -60,6 +60,13 @@ impl ApiError {
     }
 
     pub(super) fn close(error: anyhow::Error) -> Self {
+        if error
+            .downcast_ref::<crate::commands::agent::SessionLifecyclePersistenceError>()
+            .is_some()
+        {
+            return Self::internal(error);
+        }
+
         let code = error
             .downcast_ref::<crate::shared::worktree_delete::UnmergedWorktreeError>()
             .map(|_| "unmerged_worktree");
@@ -78,5 +85,28 @@ impl IntoResponse for ApiError {
             None => json!({ "error": self.message }),
         };
         (self.status, Json(body)).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn close_lifecycle_persistence_errors_are_internal_server_errors() {
+        let error = ApiError::close(anyhow::Error::new(
+            crate::commands::agent::SessionLifecyclePersistenceError::new(anyhow::anyhow!(
+                "database unavailable"
+            )),
+        ));
+
+        assert_eq!(
+            (error.status, error.message, error.code),
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "the session closed, but its lifecycle storage cleanup failed; retry Close when storage is available: database unavailable".to_string(),
+                None,
+            ),
+        );
     }
 }

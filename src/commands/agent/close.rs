@@ -92,7 +92,20 @@ fn close_tracked_session_with_runtime<R: CloseRuntime>(
     close_session(&session, force, runtime)?;
     runtime
         .mark_session_ended(&session.session_id)
-        .context("the session closed, but its Inbox status could not be updated; retry Close when storage is available")
+        .map_err(SessionLifecyclePersistenceError::new)?;
+    Ok(())
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "the session closed, but its lifecycle storage cleanup failed; retry Close when storage is available: {0}"
+)]
+pub(crate) struct SessionLifecyclePersistenceError(#[source] anyhow::Error);
+
+impl SessionLifecyclePersistenceError {
+    pub(crate) fn new(source: anyhow::Error) -> Self {
+        Self(source)
+    }
 }
 
 trait CloseRuntime {

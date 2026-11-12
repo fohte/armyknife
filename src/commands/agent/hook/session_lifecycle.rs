@@ -5,7 +5,7 @@ use chrono::Utc;
 
 use super::super::{
     store,
-    types::{Engine, SessionStatus},
+    types::{Engine, Session, SessionStatus},
 };
 use super::side_effects::SideEffects;
 use crate::shared::config;
@@ -30,6 +30,13 @@ pub(super) fn mark_session_ended_after_close_in(
     sessions_dir: &Path,
     side_effects: &SideEffects,
 ) -> Result<()> {
+    let Some(current_session) = store::load_session_from(sessions_dir, session_id)? else {
+        return Ok(());
+    };
+    if current_session.engine == Engine::Claude {
+        store::set_watch_web_compacting(sessions_dir, session_id, false)?;
+    }
+
     let mut ended_session = None;
     store::update_session_in(sessions_dir, session_id, |session| {
         if session.status == SessionStatus::Ended {
@@ -44,25 +51,31 @@ pub(super) fn mark_session_ended_after_close_in(
     })?;
 
     if let Some(session) = ended_session {
-        side_effects.remove_notification_group(session_id);
-        side_effects.archive_tq_session(session_id);
-        if session.engine == Engine::Claude {
-            store::set_watch_web_compacting(sessions_dir, session_id, false)?;
-        }
-        let work_type_config = session
-            .work_type
-            .as_ref()
-            .map(|_| config::load_config_or_default());
-        side_effects.sync_tmux(
-            session.tmux_info.as_ref().map(|info| info.pane_id.as_str()),
-            Some(SessionStatus::Ended),
-            Some(&session),
-            work_type_config.as_ref().map(|config| &config.agent),
-            sessions_dir,
-        );
+        finish_ended_session(session_id, &session, sessions_dir, side_effects);
     }
 
     Ok(())
+}
+
+fn finish_ended_session(
+    session_id: &str,
+    session: &Session,
+    sessions_dir: &Path,
+    side_effects: &SideEffects,
+) {
+    side_effects.remove_notification_group(session_id);
+    side_effects.archive_tq_session(session_id);
+    let work_type_config = session
+        .work_type
+        .as_ref()
+        .map(|_| config::load_config_or_default());
+    side_effects.sync_tmux(
+        session.tmux_info.as_ref().map(|info| info.pane_id.as_str()),
+        Some(SessionStatus::Ended),
+        Some(session),
+        work_type_config.as_ref().map(|config| &config.agent),
+        sessions_dir,
+    );
 }
 
 pub(super) fn codex_process_exited_in(
@@ -179,19 +192,7 @@ fn end_codex_session_with_policy(
     })?;
 
     if let Some(session) = ended_session {
-        side_effects.remove_notification_group(session_id);
-        side_effects.archive_tq_session(session_id);
-        let work_type_config = session
-            .work_type
-            .as_ref()
-            .map(|_| config::load_config_or_default());
-        side_effects.sync_tmux(
-            session.tmux_info.as_ref().map(|info| info.pane_id.as_str()),
-            Some(SessionStatus::Ended),
-            Some(&session),
-            work_type_config.as_ref().map(|config| &config.agent),
-            sessions_dir,
-        );
+        finish_ended_session(session_id, &session, sessions_dir, side_effects);
     }
 
     Ok(())
@@ -204,6 +205,7 @@ mod tests {
 
     use chrono::Utc;
     use rstest::{fixture, rstest};
+    use rusqlite::OptionalExtension;
     use tempfile::TempDir;
 
     use super::*;
@@ -301,6 +303,19 @@ mod tests {
             archived,
             synced,
         }
+    }
+
+    fn compacting_state(sessions_dir: &Path, session_id: &str) -> Option<bool> {
+        rusqlite::Connection::open(sessions_dir.join("sessions.db"))
+            .expect("open session database")
+            .query_row(
+                "SELECT is_compacting FROM watch_web_session_state WHERE session_id = ?1",
+                [session_id],
+                |row| row.get::<_, Option<bool>>(0),
+            )
+            .optional()
+            .expect("load compacting state")
+            .flatten()
     }
 
     #[rstest]
@@ -418,6 +433,10 @@ mod tests {
         let mut paused = session(engine, SessionStatus::Paused, true);
         paused.ancestor_session_ids = vec!["fixture-parent-session".to_string()];
         store::save_session_to(temp_dir.path(), &paused).expect("save session");
+        if engine == Engine::Claude {
+            store::set_watch_web_compacting(temp_dir.path(), "thread-one", true)
+                .expect("compacting state should be set");
+        }
 
         mark_session_ended_after_close_in("thread-one", temp_dir.path(), &sinks.side_effects)
             .expect("explicit close should end the session");
@@ -435,6 +454,7 @@ mod tests {
                 updated.status,
                 updated.sweep_signaled,
                 updated.archived_at,
+                compacting_state(temp_dir.path(), "thread-one"),
                 retained_sessions,
                 sinks.removed.lock().expect("removed lock").clone(),
                 sinks.archived.lock().expect("archive lock").clone(),
@@ -444,10 +464,81 @@ mod tests {
                 SessionStatus::Ended,
                 false,
                 None,
+                (engine == Engine::Claude).then_some(false),
                 vec![(
                     "thread-one".to_string(),
                     vec!["fixture-parent-session".to_string()],
                 )],
+                vec!["thread-one".to_string()],
+                vec!["thread-one".to_string()],
+                vec![(
+                    Some("%42".to_string()),
+                    Some(SessionStatus::Ended),
+                    Some("thread-one".to_string()),
+                    temp_dir.path().to_path_buf(),
+                )],
+            ),
+        );
+    }
+
+    #[rstest]
+    fn explicit_close_retries_when_compacting_state_cannot_be_cleared(
+        lifecycle_test_context: LifecycleTestContext,
+    ) {
+        let LifecycleTestContext { temp_dir, sinks } = lifecycle_test_context;
+        store::save_session_to(
+            temp_dir.path(),
+            &session(Engine::Claude, SessionStatus::Paused, false),
+        )
+        .expect("save paused session");
+        store::set_watch_web_compacting(temp_dir.path(), "thread-one", true)
+            .expect("stale compacting state should be set");
+        let connection =
+            rusqlite::Connection::open(temp_dir.path().join("sessions.db")).expect("open db");
+        connection
+            .execute_batch(
+                "CREATE TRIGGER fail_compacting_reset
+                 BEFORE UPDATE OF is_compacting ON watch_web_session_state
+                 WHEN NEW.is_compacting = 0
+                 BEGIN
+                     SELECT RAISE(ABORT, 'compacting reset unavailable');
+                 END;",
+            )
+            .expect("install compacting reset failure");
+
+        let failed_close =
+            mark_session_ended_after_close_in("thread-one", temp_dir.path(), &sinks.side_effects);
+        let after_failure = store::load_session_from(temp_dir.path(), "thread-one")
+            .expect("load session after failure")
+            .expect("session exists after failure");
+        let compacting_after_failure = compacting_state(temp_dir.path(), "thread-one");
+
+        connection
+            .execute_batch("DROP TRIGGER fail_compacting_reset;")
+            .expect("remove compacting reset failure");
+        mark_session_ended_after_close_in("thread-one", temp_dir.path(), &sinks.side_effects)
+            .expect("close should succeed after storage recovers");
+
+        let after_retry = store::load_session_from(temp_dir.path(), "thread-one")
+            .expect("load session")
+            .expect("session exists");
+        assert_eq!(
+            (
+                failed_close.is_err(),
+                after_failure.status,
+                compacting_after_failure,
+                after_retry.status,
+                compacting_state(temp_dir.path(), "thread-one"),
+                sinks.removed.lock().expect("removed lock").clone(),
+                sinks.archived.lock().expect("archive lock").clone(),
+                sinks.synced.lock().expect("sync lock").clone(),
+            ),
+            (
+                true,
+                SessionStatus::Paused,
+                Some(true),
+                SessionStatus::Ended,
+                Some(false),
                 vec!["thread-one".to_string()],
                 vec!["thread-one".to_string()],
                 vec![(
