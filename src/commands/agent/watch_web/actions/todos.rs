@@ -19,9 +19,6 @@ pub(super) async fn complete_todo(
     let todo_lock = state.todo_completion_locks.get_or_create(&id, seq).await;
     let _todo_guard = todo_lock.lock().await;
     let session = load_session(state.clone(), id.clone()).await?;
-    if session.status == SessionStatus::Ended {
-        return Err(ApiError::conflict("session has ended"));
-    }
     let configured_sessions_dir = state.sessions_dir.clone();
     let sessions_dir =
         resolve_sessions_dir(configured_sessions_dir.clone()).map_err(ApiError::internal)?;
@@ -44,23 +41,26 @@ pub(super) async fn complete_todo(
         .comment
         .map(|comment| comment.trim().to_string())
         .filter(|comment| !comment.is_empty());
-    let content = todo_completion_message(&todo.title, comment.as_deref());
-    let marker = if session.engine == super::super::super::types::Engine::Claude {
-        let session_id = session.session_id.clone();
-        let sessions_dir = sessions_dir.clone();
-        Some(
-            run_blocking(move || {
-                store::ensure_watch_web_user_marker_from(&sessions_dir, &session_id)
-            })
-            .await?,
-        )
-    } else {
-        None
-    };
-    let content = super::messages::watch_web_message_content(&session, marker.as_deref(), &content);
-    let runtime = state.runtime;
-    let send_session = session.clone();
-    run_blocking(move || runtime.send_message(&send_session, &content)).await?;
+    if session.status != SessionStatus::Ended {
+        let content = todo_completion_message(&todo.title, comment.as_deref());
+        let marker = if session.engine == super::super::super::types::Engine::Claude {
+            let session_id = session.session_id.clone();
+            let sessions_dir = sessions_dir.clone();
+            Some(
+                run_blocking(move || {
+                    store::ensure_watch_web_user_marker_from(&sessions_dir, &session_id)
+                })
+                .await?,
+            )
+        } else {
+            None
+        };
+        let content =
+            super::messages::watch_web_message_content(&session, marker.as_deref(), &content);
+        let runtime = state.runtime;
+        let send_session = session.clone();
+        run_blocking(move || runtime.send_message(&send_session, &content)).await?;
+    }
 
     let session_id = session.session_id;
     let configured_sessions_dir = state.sessions_dir;

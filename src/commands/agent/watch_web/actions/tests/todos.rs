@@ -6,6 +6,7 @@ use tower::ServiceExt;
 
 use super::{ActionContext, action_context, post, response_snapshot, session};
 use crate::commands::agent::store;
+use crate::commands::agent::types::SessionStatus;
 
 #[rstest]
 #[tokio::test]
@@ -58,6 +59,48 @@ async fn completing_a_todo_notifies_the_session_before_persisting(action_context
                         The header fits.
                     "}.trim_end(),
                 }],
+            }),
+            vec![("Check the page", true, Some("The header fits."))],
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn completing_a_todo_for_an_ended_session_skips_notification(action_context: ActionContext) {
+    let mut ended_session = session("sample-session");
+    ended_session.status = SessionStatus::Ended;
+    action_context.save_session(&ended_session);
+    let sessions_dir = action_context.temp_dir.path().join("sessions");
+    store::add_agent_todo_in(&sessions_dir, "sample-session", "Check the page", None).unwrap();
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            "/sessions/sample-session/todos/1/complete",
+            json!({ "comment": "The header fits." }),
+        ))
+        .await
+        .unwrap();
+    let todos = store::agent_todos_from(&sessions_dir, "sample-session").unwrap();
+
+    assert_eq!(
+        (
+            response_snapshot(response, &action_context).await,
+            todos
+                .iter()
+                .map(|todo| (
+                    todo.title.as_str(),
+                    todo.completed_at.is_some(),
+                    todo.comment.as_deref(),
+                ))
+                .collect::<Vec<_>>(),
+        ),
+        (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [],
             }),
             vec![("Check the page", true, Some("The header fits."))],
         ),
