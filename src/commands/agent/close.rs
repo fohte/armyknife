@@ -89,7 +89,10 @@ fn close_tracked_session_with_runtime<R: CloseRuntime>(
 ) -> Result<()> {
     let mut session = session.clone();
     super::session_status::include_pending_status(&mut session);
-    close_session(&session, force, runtime)
+    close_session(&session, force, runtime)?;
+    runtime
+        .mark_session_ended(&session.session_id)
+        .context("the session closed, but its Inbox status could not be updated; retry Close when storage is available")
 }
 
 trait CloseRuntime {
@@ -102,6 +105,7 @@ trait CloseRuntime {
     fn send_sigterm(&self, pid: u32) -> io::Result<()>;
     fn wait_for_exit(&self, pid: u32) -> bool;
     fn end_codex_session(&self, session_id: &str) -> Result<()>;
+    fn mark_session_ended(&self, session_id: &str) -> Result<()>;
     fn kill_pane(&self, tmux_info: &TmuxInfo) -> Result<()>;
 
     fn unknown_draft_timeout(&self) -> Duration {
@@ -170,6 +174,10 @@ impl CloseRuntime for LiveCloseRuntime {
 
     fn end_codex_session(&self, session_id: &str) -> Result<()> {
         super::hook::end_codex_session(session_id)
+    }
+
+    fn mark_session_ended(&self, session_id: &str) -> Result<()> {
+        super::hook::mark_session_ended_after_close(session_id)
     }
 
     fn kill_pane(&self, tmux_info: &TmuxInfo) -> Result<()> {
@@ -454,6 +462,43 @@ mod tests {
         pane_session_call, resolve_pid_call, session,
     };
     use super::*;
+
+    #[rstest]
+    #[case::stopped(
+        SessionStatus::Stopped,
+        Ok(()),
+        vec!["session-1"],
+    )]
+    #[case::running(
+        SessionStatus::Running,
+        Err("Agent session `session-1` is running or waiting for input; complete any requested input and wait for the current turn to finish, then retry this command"),
+        vec![],
+    )]
+    fn close_marks_session_ended_only_after_shutdown_succeeds(
+        mut session: Session,
+        #[case] status: SessionStatus,
+        #[case] expected_result: std::result::Result<(), &str>,
+        #[case] expected_ended_sessions: Vec<&str>,
+    ) {
+        session.status = status;
+        let runtime = FakeRuntime::default();
+
+        let result = close_tracked_session_with_runtime(&session, false, &runtime);
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                runtime.ended_sessions.into_inner(),
+            ),
+            (
+                expected_result.map_err(str::to_string),
+                expected_ended_sessions
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+            ),
+        );
+    }
 
     #[rstest]
     #[case::running(SessionStatus::Running, false, false)]

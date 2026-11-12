@@ -20,6 +20,51 @@ pub(super) fn end_codex_session(session_id: &str) -> Result<()> {
     end_codex_session_in(session_id, &sessions_dir, &SideEffects::all())
 }
 
+pub(super) fn mark_session_ended_after_close(session_id: &str) -> Result<()> {
+    let sessions_dir = store::sessions_dir()?;
+    mark_session_ended_after_close_in(session_id, &sessions_dir, &SideEffects::all())
+}
+
+pub(super) fn mark_session_ended_after_close_in(
+    session_id: &str,
+    sessions_dir: &Path,
+    side_effects: &SideEffects,
+) -> Result<()> {
+    let mut ended_session = None;
+    store::update_session_in(sessions_dir, session_id, |session| {
+        if session.status == SessionStatus::Ended {
+            return false;
+        }
+
+        session.status = SessionStatus::Ended;
+        session.sweep_signaled = false;
+        session.updated_at = Utc::now();
+        ended_session = Some(session.clone());
+        true
+    })?;
+
+    if let Some(session) = ended_session {
+        side_effects.remove_notification_group(session_id);
+        side_effects.archive_tq_session(session_id);
+        if session.engine == Engine::Claude {
+            store::set_watch_web_compacting(sessions_dir, session_id, false)?;
+        }
+        let work_type_config = session
+            .work_type
+            .as_ref()
+            .map(|_| config::load_config_or_default());
+        side_effects.sync_tmux(
+            session.tmux_info.as_ref().map(|info| info.pane_id.as_str()),
+            Some(SessionStatus::Ended),
+            Some(&session),
+            work_type_config.as_ref().map(|config| &config.agent),
+            sessions_dir,
+        );
+    }
+
+    Ok(())
+}
+
 pub(super) fn codex_process_exited_in(
     session_id: &str,
     sessions_dir: &Path,
@@ -358,6 +403,59 @@ mod tests {
                 SessionStatus::Ended,
                 vec!["thread-one".to_string()],
                 vec!["thread-one".to_string()],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::claude_paused(Engine::Claude)]
+    #[case::codex_paused(Engine::Codex)]
+    fn explicit_close_ends_paused_sessions_without_archiving_them(
+        lifecycle_test_context: LifecycleTestContext,
+        #[case] engine: Engine,
+    ) {
+        let LifecycleTestContext { temp_dir, sinks } = lifecycle_test_context;
+        let mut paused = session(engine, SessionStatus::Paused, true);
+        paused.ancestor_session_ids = vec!["fixture-parent-session".to_string()];
+        store::save_session_to(temp_dir.path(), &paused).expect("save session");
+
+        mark_session_ended_after_close_in("thread-one", temp_dir.path(), &sinks.side_effects)
+            .expect("explicit close should end the session");
+
+        let updated = store::load_session_from(temp_dir.path(), "thread-one")
+            .expect("load session")
+            .expect("session exists");
+        let retained_sessions = store::list_all_sessions_from(temp_dir.path())
+            .expect("list sessions")
+            .into_iter()
+            .map(|session| (session.session_id, session.ancestor_session_ids))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            (
+                updated.status,
+                updated.sweep_signaled,
+                updated.archived_at,
+                retained_sessions,
+                sinks.removed.lock().expect("removed lock").clone(),
+                sinks.archived.lock().expect("archive lock").clone(),
+                sinks.synced.lock().expect("sync lock").clone(),
+            ),
+            (
+                SessionStatus::Ended,
+                false,
+                None,
+                vec![(
+                    "thread-one".to_string(),
+                    vec!["fixture-parent-session".to_string()],
+                )],
+                vec!["thread-one".to_string()],
+                vec!["thread-one".to_string()],
+                vec![(
+                    Some("%42".to_string()),
+                    Some(SessionStatus::Ended),
+                    Some("thread-one".to_string()),
+                    temp_dir.path().to_path_buf(),
+                )],
             ),
         );
     }

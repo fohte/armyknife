@@ -5,13 +5,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use axum::extract::{DefaultBodyLimit, Path as RoutePath, State};
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use super::super::resume::SHELL_COMMANDS;
 use super::super::store;
@@ -19,12 +16,14 @@ use super::super::types::{Engine, Session, SessionStatus, TmuxInfo};
 use super::super::user_turn::is_ask_user_question;
 use super::messages::RouteLoaders;
 
+mod api_error;
 mod close;
 mod decisions;
 mod messages;
 mod proposal_answer_locks;
 mod proposals;
 
+pub(super) use api_error::ApiError;
 use proposal_answer_locks::ProposalAnswerLocks;
 
 pub(super) fn router(message_loaders: RouteLoaders) -> Router {
@@ -165,94 +164,6 @@ impl ActionRuntime for LiveActionRuntime {
         Box::pin(close::run_close_on_blocking_worker(move || async move {
             crate::commands::agent::close_from_watch_web(&session, keep_worktree).await
         }))
-    }
-}
-
-#[derive(Debug)]
-struct ApiError {
-    status: StatusCode,
-    message: String,
-    code: Option<&'static str>,
-}
-
-impl ApiError {
-    fn bad_request(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            message: message.into(),
-            code: None,
-        }
-    }
-
-    fn not_found() -> Self {
-        Self {
-            status: StatusCode::NOT_FOUND,
-            message: "session not found".to_string(),
-            code: None,
-        }
-    }
-
-    fn decision_not_found() -> Self {
-        Self {
-            status: StatusCode::NOT_FOUND,
-            message: "decision not found".to_string(),
-            code: None,
-        }
-    }
-
-    fn conflict(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::CONFLICT,
-            message: message.into(),
-            code: None,
-        }
-    }
-
-    fn operation(error: impl std::fmt::Display) -> Self {
-        Self {
-            status: StatusCode::BAD_GATEWAY,
-            message: error.to_string(),
-            code: None,
-        }
-    }
-
-    fn internal(error: impl std::fmt::Display) -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            message: error.to_string(),
-            code: None,
-        }
-    }
-
-    fn close(error: anyhow::Error) -> Self {
-        let code = error
-            .downcast_ref::<crate::shared::worktree_delete::UnmergedWorktreeError>()
-            .map(|_| "unmerged_worktree");
-        Self {
-            status: StatusCode::CONFLICT,
-            message: error.to_string(),
-            code,
-        }
-    }
-
-    fn close_persistence(error: impl std::fmt::Display) -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            message: format!(
-                "The session closed, but it is still in the Inbox because its record could not be updated. Retry Close when storage is available: {error}"
-            ),
-            code: None,
-        }
-    }
-}
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        let body = match self.code {
-            Some(code) => json!({ "error": self.message, "code": code }),
-            None => json!({ "error": self.message }),
-        };
-        (self.status, Json(body)).into_response()
     }
 }
 
@@ -539,7 +450,7 @@ mod tests {
     use axum::http::{Request, Response, StatusCode};
     use chrono::TimeZone;
     use rstest::{fixture, rstest};
-    use serde_json::Value;
+    use serde_json::{Value, json};
     use tempfile::TempDir;
     use tower::ServiceExt;
 
@@ -569,6 +480,7 @@ mod tests {
         pane_has_agent_process: Mutex<bool>,
         pane_command_matches: Mutex<bool>,
         close_unmerged_worktree: Mutex<bool>,
+        sessions_dir: Mutex<Option<PathBuf>>,
     }
 
     impl Default for FakeRuntime {
@@ -582,6 +494,7 @@ mod tests {
                 pane_has_agent_process: Mutex::new(true),
                 pane_command_matches: Mutex::new(true),
                 close_unmerged_worktree: Mutex::new(false),
+                sessions_dir: Mutex::new(None),
             }
         }
     }
@@ -660,6 +573,8 @@ mod tests {
             keep_worktree: bool,
         ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
             let fail_for_unmerged_worktree = *self.close_unmerged_worktree.lock().unwrap();
+            let sessions_dir = self.sessions_dir.lock().unwrap().clone();
+            let session_id = session.session_id.clone();
             self.calls.lock().unwrap().push(json!({
                 "kind": "close",
                 "sessionId": session.session_id,
@@ -672,6 +587,12 @@ mod tests {
                         "not merged",
                     )
                     .into());
+                }
+                if let Some(sessions_dir) = sessions_dir {
+                    store::update_session_in(&sessions_dir, &session_id, |stored| {
+                        stored.status = SessionStatus::Ended;
+                        true
+                    })?;
                 }
                 Ok(())
             })
@@ -756,10 +677,10 @@ mod tests {
 
     #[fixture]
     fn action_context() -> ActionContext {
-        ActionContext {
-            temp_dir: TempDir::new().unwrap(),
-            runtime: Arc::new(FakeRuntime::default()),
-        }
+        let temp_dir = TempDir::new().unwrap();
+        let runtime = Arc::new(FakeRuntime::default());
+        *runtime.sessions_dir.lock().unwrap() = Some(temp_dir.path().join("sessions"));
+        ActionContext { temp_dir, runtime }
     }
 
     fn empty_message_loaders() -> super::super::messages::RouteLoaders {
@@ -1353,30 +1274,20 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn close_hides_the_session_from_later_actions_lookups(action_context: ActionContext) {
+    async fn close_ends_the_session_without_archiving_it(action_context: ActionContext) {
         let mut session = session("sample-session");
         session.status = SessionStatus::Stopped;
         action_context.save_session(&session);
-        let app = action_context.router();
 
-        let closed = app
-            .clone()
+        let closed = action_context
+            .router()
             .oneshot(post_empty("/sessions/sample-session/close"))
             .await
             .unwrap();
-        let lookup = app
-            .oneshot(
-                Request::builder()
-                    .uri("/sessions/sample-session/actions")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        session.status = SessionStatus::Ended;
         assert_eq!(
             (
                 response_snapshot(closed, &action_context).await,
-                response_snapshot(lookup, &action_context).await,
                 normalize_session(action_context.load_session("sample-session")),
             ),
             (
@@ -1385,16 +1296,7 @@ mod tests {
                     "sessionId": "sample-session",
                     "keepWorktree": false,
                 }] }),
-                json!({ "status": StatusCode::NOT_FOUND.as_u16(), "body": { "error": "session not found" }, "calls": [{
-                    "kind": "close",
-                    "sessionId": "sample-session",
-                    "keepWorktree": false,
-                }] }),
-                normalize_session({
-                    let mut expected = session;
-                    expected.archived_at = Some(Utc::now());
-                    expected
-                }),
+                normalize_session(session),
             ),
         );
     }
@@ -1598,8 +1500,7 @@ mod tests {
             .unwrap();
 
         let response = response_snapshot(response, &action_context).await;
-        let mut expected = session;
-        expected.archived_at = Some(Utc::now());
+        session.status = SessionStatus::Ended;
         assert_eq!(
             json!({
                 "response": response,
@@ -1615,7 +1516,7 @@ mod tests {
                         "keepWorktree": true,
                     }],
                 },
-                "session": normalize_session(expected),
+                "session": normalize_session(session),
             }),
         );
     }

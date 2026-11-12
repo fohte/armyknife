@@ -2,7 +2,6 @@ use std::future::Future;
 
 use axum::Json;
 use axum::extract::{Path as RoutePath, State};
-use chrono::Utc;
 use serde::Deserialize;
 
 use super::*;
@@ -40,16 +39,6 @@ pub(super) async fn close(
         )
         .await
         .map_err(ApiError::close)?;
-    let sessions_dir = resolve_sessions_dir(state.sessions_dir).map_err(ApiError::internal)?;
-    tokio::task::spawn_blocking(move || {
-        store::update_session_in(&sessions_dir, &session.session_id, |stored| {
-            stored.archived_at = Some(Utc::now());
-            true
-        })
-    })
-    .await
-    .map_err(ApiError::internal)?
-    .map_err(ApiError::close_persistence)?;
     Ok(Json(Success::new()))
 }
 
