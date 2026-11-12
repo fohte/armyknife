@@ -83,3 +83,17 @@ export const PeerMessageNamesArmyknife: Story = {
     sessions: [],
   },
 }
+
+export const PeerMessageShowsPreviousDay: Story = {
+  name: 'A peer message shows its date when it was sent the previous day',
+  args: {
+    message: {
+      type: 'peer',
+      direction: 'from',
+      session_id: target.id,
+      timestamp: new Date(2030, 8, 11, 18, 58).toISOString(),
+      content: [{ type: 'text', text: 'Please review the fictional changes.' }],
+    } satisfies Extract<ChatItem, { type: 'peer' }>,
+  },
+  render: (args) => <PeerMessage {...args} now={new Date(2030, 8, 12, 12)} />,
+}

@@ -11,10 +11,12 @@ export function PeerMessage({
   message,
   onSelectSession,
   sessions,
+  now,
 }: {
   message: PeerMessageItem
   onSelectSession: (id: string) => void
   sessions: readonly SessionLinkTarget[]
+  now?: Date
 }) {
   const foundTarget = sessions.find(
     (session) => session.id === message.session_id,
@@ -25,7 +27,7 @@ export function PeerMessage({
       ? 'armyknife'
       : `${message.session_title ?? message.session_id} (ended)`)
   const directionLabel = message.direction === 'from' ? 'FROM' : 'TO'
-  const time = formatMessageTime(message.timestamp)
+  const time = formatMessageTime(message.timestamp, now)
   const openSession = () => {
     if (foundTarget === undefined) return
     onSelectSession(message.session_id)
