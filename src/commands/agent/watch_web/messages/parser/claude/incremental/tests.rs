@@ -4,6 +4,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use indoc::indoc;
 use rstest::rstest;
 
+use super::super::super::super::ChatItem;
 use super::super::ParserAdditions;
 use super::{IncrementalAppend, IncrementalClaudeParser};
 use crate::commands::agent::store::{AgentDecision, AgentTodo};
@@ -61,6 +62,12 @@ const PARALLEL_TOOLS_WITH_SYSTEM_AFTER_RESULT: &str = indoc! {r#"
     {"type":"system","uuid":"system-step","parentUuid":"result-a","timestamp":"2026-01-01T00:00:04Z","subtype":"compact_boundary"}
 "#};
 
+const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
+    {"type":"user","uuid":"root","parentUuid":null,"message":{"content":"The original request."}}
+    {"type":"assistant","uuid":"current","parentUuid":"root","message":{"content":[{"type":"text","text":"The current branch response."}]}}
+    {"type":"assistant","uuid":"replacement","parentUuid":"root","message":{"content":[{"type":"text","text":"The replacement response."}]}}
+"#};
+
 #[rstest]
 #[case::tool_use_then_appended_tool_result(
     indoc! {r#"
@@ -83,8 +90,8 @@ const PARALLEL_TOOLS_WITH_SYSTEM_AFTER_RESULT: &str = indoc! {r#"
     "",
     IncrementalAppend::Applied,
 )]
-#[case::initial_pending_line_completes_on_append(
-    r#"{"type":"user","uuid":"message-one","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"A question."}}"#,
+#[case::initial_pending_sibling_completes_on_append(
+    INITIAL_PENDING_SIBLING_TRANSCRIPT.trim_end_matches('\n'),
     "\n",
     IncrementalAppend::Applied,
 )]
@@ -220,6 +227,33 @@ fn appended_transcript_matches_a_full_parse(
     assert_eq!(
         incremental_result(prefix.as_bytes(), suffix.as_bytes()),
         (expected_append, parse_all(&transcript, empty_additions()),),
+    );
+}
+
+#[test]
+fn pending_sibling_renders_only_the_active_branch() {
+    let transcript = INITIAL_PENDING_SIBLING_TRANSCRIPT.trim_end_matches('\n');
+    let expected: super::ParsedTranscript = (
+        vec![
+            ChatItem::User {
+                text: "The original request.".to_owned(),
+                timestamp: None,
+                from: None,
+            },
+            ChatItem::Assistant {
+                text: "The replacement response.".to_owned(),
+            },
+        ],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    );
+
+    assert_eq!(
+        incremental_parser(transcript.as_bytes())
+            .render_with(fixed_time(), empty_additions())
+            .unwrap(),
+        expected,
     );
 }
 
