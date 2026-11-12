@@ -9,6 +9,163 @@ use super::append_text_with_user_marker_and_image_directory;
 use super::classifier::marked_user_body;
 use crate::commands::agent::store::WatchWebQueuedPrompt;
 
+#[derive(Clone)]
+pub(super) struct QueueReplayEvent {
+    kind: QueueRecordKind,
+    timestamp: Option<DateTime<Utc>>,
+    prompt: Option<String>,
+    source_tool_assistant_uuid_present: bool,
+    has_tool_use_result: bool,
+    pub(super) active_branch_delivery: bool,
+}
+
+#[derive(Clone, Copy)]
+enum QueueRecordKind {
+    Operation(QueueOperation),
+    QueuedCommand,
+    User,
+}
+
+#[derive(Clone, Copy)]
+enum QueueOperation {
+    Enqueue,
+    Dequeue,
+    Remove,
+    PopAll,
+}
+
+impl QueueReplayEvent {
+    pub(super) fn from_record(record: &Value) -> Option<Self> {
+        let kind = record.get("type").and_then(Value::as_str);
+        let attachment_type = record
+            .get("attachment")
+            .and_then(|attachment| attachment.get("type"))
+            .and_then(Value::as_str);
+        let timestamp = super::record_timestamp(record);
+
+        if kind == Some("queue-operation") {
+            let operation = match record.get("operation").and_then(Value::as_str) {
+                Some("enqueue") => QueueOperation::Enqueue,
+                Some("dequeue") => QueueOperation::Dequeue,
+                Some("remove") => QueueOperation::Remove,
+                Some("popAll") => QueueOperation::PopAll,
+                _ => return None,
+            };
+            let prompt = match operation {
+                QueueOperation::Enqueue => record
+                    .get("content")
+                    .filter(|content| !content.is_null())
+                    .map(|content| claude_content_text(Some(content))),
+                QueueOperation::Remove => record
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                QueueOperation::Dequeue | QueueOperation::PopAll => None,
+            };
+            return Some(Self {
+                kind: QueueRecordKind::Operation(operation),
+                timestamp,
+                prompt,
+                source_tool_assistant_uuid_present: false,
+                has_tool_use_result: false,
+                active_branch_delivery: false,
+            });
+        }
+
+        if attachment_type == Some("queued_command") {
+            return Some(Self {
+                kind: QueueRecordKind::QueuedCommand,
+                timestamp,
+                prompt: record
+                    .get("attachment")
+                    .and_then(|attachment| attachment.get("prompt"))
+                    .map(|prompt| claude_content_text(Some(prompt))),
+                source_tool_assistant_uuid_present: false,
+                has_tool_use_result: false,
+                active_branch_delivery: false,
+            });
+        }
+
+        if kind == Some("user") {
+            return Some(Self {
+                kind: QueueRecordKind::User,
+                timestamp,
+                prompt: user_prompt(record),
+                source_tool_assistant_uuid_present: record.get("sourceToolAssistantUUID").is_some(),
+                has_tool_use_result: record
+                    .get("toolUseResult")
+                    .is_some_and(|result| !result.is_null()),
+                active_branch_delivery: false,
+            });
+        }
+
+        None
+    }
+
+    pub(super) fn record_value(&self) -> Value {
+        let timestamp = self
+            .timestamp
+            .map(|value| Value::String(value.to_rfc3339()));
+        match self.kind {
+            QueueRecordKind::Operation(operation) => {
+                let operation = match operation {
+                    QueueOperation::Enqueue => "enqueue",
+                    QueueOperation::Dequeue => "dequeue",
+                    QueueOperation::Remove => "remove",
+                    QueueOperation::PopAll => "popAll",
+                };
+                let mut record = serde_json::Map::new();
+                record.insert(
+                    "type".to_owned(),
+                    Value::String("queue-operation".to_owned()),
+                );
+                record.insert("operation".to_owned(), Value::String(operation.to_owned()));
+                if let Some(timestamp) = timestamp {
+                    record.insert("timestamp".to_owned(), timestamp);
+                }
+                if let Some(prompt) = &self.prompt {
+                    record.insert("content".to_owned(), Value::String(prompt.clone()));
+                }
+                Value::Object(record)
+            }
+            QueueRecordKind::QueuedCommand => {
+                let mut attachment = serde_json::Map::new();
+                attachment.insert(
+                    "type".to_owned(),
+                    Value::String("queued_command".to_owned()),
+                );
+                if let Some(prompt) = &self.prompt {
+                    attachment.insert("prompt".to_owned(), Value::String(prompt.clone()));
+                }
+                let mut record = serde_json::Map::new();
+                record.insert("attachment".to_owned(), Value::Object(attachment));
+                if let Some(timestamp) = timestamp {
+                    record.insert("timestamp".to_owned(), timestamp);
+                }
+                Value::Object(record)
+            }
+            QueueRecordKind::User => {
+                let mut record = serde_json::Map::new();
+                record.insert("type".to_owned(), Value::String("user".to_owned()));
+                if let Some(timestamp) = timestamp {
+                    record.insert("timestamp".to_owned(), timestamp);
+                }
+                if self.source_tool_assistant_uuid_present {
+                    record.insert("sourceToolAssistantUUID".to_owned(), Value::Bool(true));
+                }
+                if self.has_tool_use_result {
+                    record.insert("toolUseResult".to_owned(), Value::Bool(true));
+                }
+                record.insert(
+                    "message".to_owned(),
+                    serde_json::json!({"content": self.prompt}),
+                );
+                Value::Object(record)
+            }
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub(super) struct Queue {
     pending: VecDeque<PendingPrompt>,

@@ -43,9 +43,3 @@ pub(super) enum ClaudeEffect {
         answers: Vec<(String, String)>,
     },
 }
-
-#[derive(Clone)]
-pub(super) struct QueueReplayEvent {
-    pub(super) record: Value,
-    pub(super) active_branch_delivery: bool,
-}

@@ -54,9 +54,10 @@ pub(super) fn render(
 
     let mut queue = super::super::queue::Queue::new(additions.queued_prompts);
     for event in &state.queue_events {
-        queue.observe(&event.record);
+        let record = event.record_value();
+        queue.observe(&record);
         if event.active_branch_delivery {
-            queue.observe_queued_prompt_delivery(&event.record, additions.user_marker);
+            queue.observe_queued_prompt_delivery(&record, additions.user_marker);
         }
     }
     let resolved_queued_prompt_ids = queue.resolved_queued_prompt_ids();

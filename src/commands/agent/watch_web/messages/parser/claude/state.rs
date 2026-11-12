@@ -4,9 +4,10 @@ use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 
 use super::super::super::SkillSuggestion;
+use super::super::queue::QueueReplayEvent;
 use super::super::{classifier, record_timestamp};
 use super::background_tasks::{BackgroundTaskTracker, task_notification_text};
-use super::events::{ClaudeEffect, QueueReplayEvent, TimedClaudeEvent};
+use super::events::{ClaudeEffect, TimedClaudeEvent};
 use super::questions::{append_questions, parse_question_answers, tool_use_result_answers};
 use super::transcript_branch::{BranchMembership, TranscriptNode, is_inactive_branch};
 use super::user_input::{content_blocks, is_tool_result_only_user_record, user_content, user_text};
@@ -63,13 +64,10 @@ impl ClaudeParserState {
             };
         }
 
-        if let Some(queue_record) = queue_relevant_record(&record) {
-            let active_branch_delivery = active_record
+        if let Some(mut queue_event) = QueueReplayEvent::from_record(&record) {
+            queue_event.active_branch_delivery = active_record
                 && queued_prompt_delivery_is_on_active_branch(&record, &mut self.transcript_nodes);
-            self.queue_events.push(QueueReplayEvent {
-                record: queue_record,
-                active_branch_delivery,
-            });
+            self.queue_events.push(queue_event);
         }
         if !active_record {
             return;
@@ -297,52 +295,6 @@ pub(super) struct ToolUse {
     pub(super) name: String,
     pub(super) input: Option<Value>,
     pub(super) started_at: Option<DateTime<Utc>>,
-}
-
-fn queue_relevant_record(record: &Value) -> Option<Value> {
-    let kind = record.get("type").and_then(Value::as_str);
-    let attachment_type = record
-        .get("attachment")
-        .and_then(|attachment| attachment.get("type"))
-        .and_then(Value::as_str);
-    if kind != Some("queue-operation")
-        && attachment_type != Some("queued_command")
-        && kind != Some("user")
-    {
-        return None;
-    }
-    let mut projected = Map::new();
-    if let Some(kind) = kind {
-        projected.insert("type".to_owned(), Value::String(kind.to_owned()));
-    }
-    for key in ["timestamp", "operation", "content"] {
-        if let Some(value) = record.get(key) {
-            projected.insert(key.to_owned(), value.clone());
-        }
-    }
-    if attachment_type == Some("queued_command") {
-        projected.insert(
-            "attachment".to_owned(),
-            serde_json::json!({
-                "type": "queued_command",
-                "prompt": record.get("attachment").and_then(|attachment| attachment.get("prompt")),
-            }),
-        );
-    }
-    if kind == Some("user") {
-        if let Some(message) = record.get("message") {
-            projected.insert(
-                "message".to_owned(),
-                serde_json::json!({"content": message.get("content")}),
-            );
-        }
-        for key in ["sourceToolAssistantUUID", "toolUseResult"] {
-            if let Some(value) = record.get(key) {
-                projected.insert(key.to_owned(), value.clone());
-            }
-        }
-    }
-    Some(Value::Object(projected))
 }
 
 fn classifier_record(record: &Value) -> Value {
