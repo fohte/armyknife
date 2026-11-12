@@ -346,8 +346,8 @@ pub fn delete_session(session_id: &str) -> Result<()> {
 
 /// Deletes a session without archiving its Codex thread.
 /// Used when cleanup handles archive ordering separately.
-pub(crate) fn delete_session_without_archive(session_id: &str) -> Result<()> {
-    delete_session_from(&sessions_dir()?, session_id)
+pub(crate) fn delete_session_without_archive(session_id: &str) -> Result<bool> {
+    database::delete_session(&sessions_dir()?, session_id)
 }
 
 /// Deletes a session from a specific directory.

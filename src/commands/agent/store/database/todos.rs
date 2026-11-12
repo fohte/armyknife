@@ -141,6 +141,7 @@ mod tests {
 
     use super::{
         AgentTodo, add_agent_todo, agent_todos, complete_agent_todo, incomplete_agent_todo_titles,
+        open_connection,
     };
     use crate::commands::agent::store::session_store_revision_from;
 
@@ -240,6 +241,72 @@ mod tests {
                 after_second - after_first
             ),
             (true, 1, false, 0)
+        );
+    }
+
+    #[rstest]
+    #[case::incomplete_todo(false, false, true)]
+    #[case::all_todos_completed(true, true, false)]
+    fn deleting_a_session_preserves_todos_until_all_are_completed(
+        sessions_dir: TempDir,
+        #[case] complete_second_todo: bool,
+        #[case] expected_removed: bool,
+        #[case] expected_session_exists: bool,
+    ) {
+        let connection = open_connection(sessions_dir.path()).expect("database should open");
+        connection
+            .execute(
+                "INSERT INTO sessions (session_id, data, rev) VALUES (?1, '{}', 0)",
+                ["session-a"],
+            )
+            .expect("session row should be stored");
+        let first_seq = add_agent_todo(sessions_dir.path(), "session-a", "First", None).unwrap();
+        let second_seq = add_agent_todo(sessions_dir.path(), "session-a", "Second", None).unwrap();
+        complete_agent_todo(sessions_dir.path(), "session-a", first_seq, Some("Done")).unwrap();
+        if complete_second_todo {
+            complete_agent_todo(sessions_dir.path(), "session-a", second_seq, Some("Done"))
+                .unwrap();
+        }
+
+        let removed = super::super::delete_session(sessions_dir.path(), "session-a").unwrap();
+        let session_exists: bool = open_connection(sessions_dir.path())
+            .unwrap()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sessions WHERE session_id = ?1)",
+                ["session-a"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let todos = normalize_timestamps(agent_todos(sessions_dir.path(), "session-a").unwrap());
+        let epoch = Utc.timestamp_opt(0, 0).single().unwrap();
+        let expected_todos = if complete_second_todo {
+            Vec::new()
+        } else {
+            vec![
+                AgentTodo {
+                    session_id: "session-a".to_string(),
+                    seq: first_seq,
+                    title: "First".to_string(),
+                    detail: None,
+                    created_at: epoch,
+                    completed_at: Some(epoch),
+                    comment: Some("Done".to_string()),
+                },
+                AgentTodo {
+                    session_id: "session-a".to_string(),
+                    seq: second_seq,
+                    title: "Second".to_string(),
+                    detail: None,
+                    created_at: epoch,
+                    completed_at: None,
+                    comment: None,
+                },
+            ]
+        };
+
+        assert_eq!(
+            (removed, session_exists, todos),
+            (expected_removed, expected_session_exists, expected_todos),
         );
     }
 }

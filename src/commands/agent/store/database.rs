@@ -445,6 +445,18 @@ fn read_revision(connection: &Connection) -> Result<i64> {
 }
 
 fn delete_session_row(connection: &Connection, session_id: &str) -> Result<bool> {
+    let has_incomplete_todos: bool = connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM agent_todo
+            WHERE session_id = ?1 AND completed_at IS NULL
+        )",
+        [session_id],
+        |row| row.get(0),
+    )?;
+    if has_incomplete_todos {
+        return Ok(false);
+    }
+
     let changed = connection.execute("DELETE FROM sessions WHERE session_id = ?1", [session_id])?;
     if changed > 0 {
         connection.execute(
