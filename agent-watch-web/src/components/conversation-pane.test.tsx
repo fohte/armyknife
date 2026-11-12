@@ -2891,8 +2891,9 @@ it('posts a todo completion to its sequence route with the comment', async () =>
   expect(
     await waitForState(
       () =>
-        container.querySelector('.chat-todo-completed-label')?.textContent ===
-        'Done',
+        container.querySelector('.chat-todo-completed-comment')?.textContent ===
+          'The page is readable.' &&
+        container.querySelector('.chat-todo-comment') === null,
     ),
   ).toBe(true)
 

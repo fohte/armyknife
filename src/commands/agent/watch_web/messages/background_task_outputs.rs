@@ -118,6 +118,7 @@ fn output_path_for_task(session: &Session, task_id: &str) -> Result<Option<PathB
                 queued_prompts: &queued_prompts,
                 peer_out_messages: &peer_out_messages,
                 proposals: &proposals,
+                todos: &[],
             },
         )?;
     let paths = tasks

@@ -192,10 +192,11 @@ async fn change_endpoint_keeps_the_decision_unreviewed_when_delivery_fails(
         .review
         .clone();
     let expected_content = indoc! {"
-        Requested change to decision: Choose the fixture path
+        <armyknife-decision-change>Requested change to decision: Choose the fixture path
 
-        Use the fixture alternative.
-    "};
+        Use the fixture alternative.</armyknife-decision-change>
+    "}
+    .trim_end();
 
     assert_eq!(
         (response_snapshot(response, &action_context).await, review,),
@@ -249,16 +250,18 @@ async fn change_endpoint_notifies_the_selected_session_and_marks_the_decision(
     let sent_content = call["content"].as_str().unwrap();
     let expected_content = if targets_parent {
         indoc! {"
-            Decision from session fixture-child-session: Choose the fixture path
+            <armyknife-decision-change>Decision from session fixture-child-session: Choose the fixture path
 
-            Requested change: Use the fixture alternative.
+            Requested change: Use the fixture alternative.</armyknife-decision-change>
         "}
+        .trim_end()
     } else {
         indoc! {"
-            Requested change to decision: Choose the fixture path
+            <armyknife-decision-change>Requested change to decision: Choose the fixture path
 
-            Use the fixture alternative.
+            Use the fixture alternative.</armyknife-decision-change>
         "}
+        .trim_end()
     };
     let marker_matches_target = watch_web_user_marker::strip_message(&marker, sent_content)
         .is_some_and(|content| content == expected_content);
