@@ -1,0 +1,21 @@
+@media (max-width: 760px) {
+  html:root
+    input:not(
+      :where(
+        [type='checkbox'],
+        [type='radio'],
+        [type='button'],
+        [type='submit'],
+        [type='reset'],
+        [type='image'],
+        [type='range'],
+        [type='color'],
+        [type='file'],
+        [type='hidden']
+      )
+    ),
+  html:root textarea,
+  html:root select {
+    font-size: 16px;
+  }
+}
