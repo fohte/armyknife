@@ -51,6 +51,7 @@ function snapshot() {
       text: container.querySelector('.session-task-line > a')?.textContent,
     },
     count: container.querySelector('.session-task-links summary')?.textContent,
+    summaryLabel: summary?.getAttribute('aria-label'),
     disclosureOwnsMenu:
       container
         .querySelector('.session-task-links')
@@ -200,6 +201,7 @@ it('keeps completed secondary tasks collapsed until requested', async () => {
         text: 'P1 #2048 Improve request reliability',
       },
       count: '+1 tasks ▾',
+      summaryLabel: '1 more linked tq tasks',
       disclosureOwnsMenu: true,
       summaryControlsMenu: true,
       menuRole: 'region',
@@ -239,6 +241,7 @@ it('keeps completed secondary tasks collapsed until requested', async () => {
         text: 'P1 #2048 Improve request reliability',
       },
       count: '+1 tasks ▾',
+      summaryLabel: '1 more linked tq tasks',
       disclosureOwnsMenu: true,
       summaryControlsMenu: true,
       menuRole: 'region',
@@ -286,6 +289,7 @@ it('keeps completed secondary tasks collapsed until requested', async () => {
         text: 'P1 #2048 Improve request reliability',
       },
       count: '+1 tasks ▾',
+      summaryLabel: '1 more linked tq tasks',
       disclosureOwnsMenu: true,
       summaryControlsMenu: true,
       menuRole: null,
@@ -328,6 +332,9 @@ it('keeps a completed primary visible when every secondary task is completed', a
   const snapshots = [
     {
       count: container.querySelector('summary')?.textContent,
+      summaryLabel: container
+        .querySelector('summary')
+        ?.getAttribute('aria-label'),
       menuTasks: Array.from(
         document.body.querySelectorAll('.session-task-links-menu li'),
       ).map((item) => item.querySelector('a')?.textContent),
@@ -346,6 +353,9 @@ it('keeps a completed primary visible when every secondary task is completed', a
 
   snapshots.push({
     count: container.querySelector('summary')?.textContent,
+    summaryLabel: container
+      .querySelector('summary')
+      ?.getAttribute('aria-label'),
     menuTasks: Array.from(
       document.body.querySelectorAll('.session-task-links-menu li'),
     ).map((item) => item.querySelector('a')?.textContent),
@@ -357,11 +367,13 @@ it('keeps a completed primary visible when every secondary task is completed', a
   expect(snapshots).toEqual([
     {
       count: '+0 tasks · 1 completed ▾',
+      summaryLabel: '0 more linked tq tasks, 1 completed',
       menuTasks: ['P1 #2048 Improve request reliability'],
       toggle: 'Show 1 completed',
     },
     {
       count: '+0 tasks · 1 completed ▾',
+      summaryLabel: '0 more linked tq tasks, 1 completed',
       menuTasks: [
         'P1 #2048 Improve request reliability',
         '#2047 Document retry behavior',
