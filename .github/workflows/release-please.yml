@@ -50,20 +50,57 @@ jobs:
         run: |
           PR_NUMBER=$(echo "$PR_JSON" | jq -r '.number')
           # Try --auto first (enables auto-merge when CI is pending/required)
-          # If PR is already in clean status, --auto fails with 'Pull request is in clean status'
-          # In that case, fall back to direct merge
+          # If PR is already in clean or unstable status, --auto cannot be enabled
+          # and required checks have passed, so fall back to direct merge.
           if OUTPUT=$(gh pr merge "$PR_NUMBER" --squash --auto -R "${{ github.repository }}" 2>&1); then
             echo "$OUTPUT"
             echo "Auto-merge enabled successfully"
-          elif echo "$OUTPUT" | grep -q "clean status"; then
+          elif echo "$OUTPUT" | grep -Eq "(clean|unstable) status"; then
             echo "$OUTPUT"
-            echo "PR is in clean status, merging directly"
+            echo "PR is ready to merge, merging directly"
             gh pr merge "$PR_NUMBER" --squash -R "${{ github.repository }}"
           else
             echo "$OUTPUT"
             echo "Auto-merge failed with unexpected error"
             exit 1
           fi
+
+          # Keep the merge inside the serialized job so the next run cannot
+          # update the release branch while GitHub is merging the PR.
+          for ((attempt = 1; attempt <= 90; attempt++)); do
+            PR_STATE=$(gh pr view "$PR_NUMBER" --json state --jq .state -R "${{ github.repository }}")
+            if [[ "$PR_STATE" == "MERGED" ]]; then
+              echo "Release PR merged successfully"
+              exit 0
+            fi
+            if [[ "$PR_STATE" == "CLOSED" ]]; then
+              echo "Release PR was closed without being merged"
+              exit 1
+            fi
+
+            CHECKS_EXIT=0
+            CHECKS_JSON=$(gh pr checks "$PR_NUMBER" --required --json bucket,name -R "${{ github.repository }}" 2>&1) || CHECKS_EXIT=$?
+            if [[ "$CHECKS_EXIT" != "0" && "$CHECKS_EXIT" != "1" && "$CHECKS_EXIT" != "8" ]]; then
+              echo "$CHECKS_JSON"
+              echo "Failed to read required checks for release PR"
+              exit 1
+            fi
+            if ! jq -e 'type == "array"' <<<"$CHECKS_JSON" >/dev/null; then
+              echo "$CHECKS_JSON"
+              echo "Required checks returned invalid JSON"
+              exit 1
+            fi
+            FAILED_CHECKS=$(jq -r '[.[] | select(.bucket == "fail") | .name] | join(", ")' <<<"$CHECKS_JSON")
+            if [[ -n "$FAILED_CHECKS" ]]; then
+              echo "Required checks failed: $FAILED_CHECKS"
+              exit 1
+            fi
+
+            sleep 10
+          done
+
+          echo "Timed out waiting for release PR to merge"
+          exit 1
 
   build-release:
     needs: release-please
@@ -89,6 +126,8 @@ jobs:
       SCCACHE_LOG: 'debug'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag_name || needs.release-please.outputs.tag_name }}
 
       - run: rustup show
 
