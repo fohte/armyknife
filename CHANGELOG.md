@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.632](https://github.com/fohte/armyknife/compare/v0.1.631...v0.1.632) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** prevent input zoom on mobile ([#1633](https://github.com/fohte/armyknife/issues/1633)) ([1c71c5e](https://github.com/fohte/armyknife/commit/1c71c5ec9296a1a18b062d4c62ab6ab8452d7032))
+
 ## [0.1.631](https://github.com/fohte/armyknife/compare/v0.1.630...v0.1.631) (2026-11-12)
 
 
