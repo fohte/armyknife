@@ -256,6 +256,91 @@ it('toggles between the Board and Inbox with shifted B', () => {
   expect(views).toEqual(['Board', 'Inbox'])
 })
 
+it('shows the cached conversation after switching to the Board and back', async () => {
+  const messages = Array.from({ length: 21 }, (_, index) => ({
+    type: 'assistant' as const,
+    text: `Fixture message ${String(index + 1)}`,
+  }))
+  const initialResponse = {
+    messages,
+    backgroundTasks: [],
+    start: 0,
+    total: messages.length,
+    decisions: [],
+    hasUnansweredProposal: false,
+    activeQuestionIndex: null,
+    stableStart: 0,
+    stableEnd: 1,
+    stableDigest: 'fixture-digest',
+  }
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url === '/api/sessions/session-a/messages?limit=100') {
+      return Promise.resolve(jsonResponse(initialResponse))
+    }
+    if (
+      url ===
+      '/api/sessions/session-a/messages?from=0&stableStart=0&stableEnd=1&stableDigest=fixture-digest'
+    ) {
+      return mockPendingResponse()
+    }
+    if (url === '/api/sessions/session-a/actions') {
+      return Promise.resolve(
+        jsonResponse({
+          message: true,
+          answerQuestion: true,
+          permission: { approve: true, reject: true },
+          interrupt: true,
+          openInTerminal: true,
+        }),
+      )
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'Sample session')],
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  act(() => {
+    dispatchKey(window, 'B', { shiftKey: true })
+  })
+  const viewAfterSwitchToBoard = readActiveView()
+  act(() => {
+    dispatchKey(window, 'B', { shiftKey: true })
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    viewAfterSwitchToBoard,
+    viewAfterReturn: readActiveView(),
+    cachedMessageVisible: container.textContent.includes('Fixture message 1'),
+    messageRequests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.includes('/messages')),
+  })
+  expect(snapshot()).toEqual({
+    viewAfterSwitchToBoard: 'Board',
+    viewAfterReturn: 'Inbox',
+    cachedMessageVisible: true,
+    messageRequests: [
+      '/api/sessions/session-a/messages?limit=100',
+      '/api/sessions/session-a/messages?from=0&stableStart=0&stableEnd=1&stableDigest=fixture-digest',
+    ],
+  })
+})
+
 it.each(openSessionCases)(
   'opens $target in Inbox with $activation activation',
   async ({ selector, expectedTitle, activation }) => {

@@ -16,6 +16,7 @@ import type {
   PermissionRequestIdentity,
 } from '#components/permission-card'
 import { ResizableColumns } from '#components/resizable-columns'
+import { useSessionConversationCache } from '#components/session-conversation-cache'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import {
@@ -95,13 +96,24 @@ export function ConversationPane({
   isToday = false,
   onToggleToday = () => undefined,
 }: ConversationPaneProps) {
-  const [conversation, setConversation] =
-    useState<ConversationResponse>(EMPTY_CONVERSATION)
+  const sessionConversationCache = useSessionConversationCache()
+  const setCachedConversation = sessionConversationCache?.setCachedConversation
+  const [initialCachedConversation] = useState(() =>
+    sessionConversationCache?.getCachedConversation(session.id),
+  )
+  const [conversation, setConversation] = useState<ConversationResponse>(
+    initialCachedConversation?.conversation ?? EMPTY_CONVERSATION,
+  )
   const conversationRef = useRef(conversation)
-  const conversationSessionId = useRef<string | null>(null)
+  const conversationSessionId = useRef<string | null>(
+    initialCachedConversation === undefined ? null : session.id,
+  )
   const [loadingOlder, setLoadingOlder] = useState(false)
   const loadingOlderRef = useRef(false)
-  const [messagesLoadedAt, setMessagesLoadedAt] = useState<number | null>(null)
+  const [messagesLoadedAt, setMessagesLoadedAt] = useState<number | null>(
+    initialCachedConversation?.messagesLoadedAt ?? null,
+  )
+  const messagesLoadedAtRef = useRef(messagesLoadedAt)
   const [actions, setActions] = useState<SessionActions | null>(null)
   const { sessionTree, sessionTreeError } = useSessionTree({
     session,
@@ -114,7 +126,9 @@ export function ConversationPane({
     onSessionTreeRequestFailed,
   })
   const [actionsReady, setActionsReady] = useState(false)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(
+    initialCachedConversation === undefined,
+  )
   const [error, setError] = useState<string | null>(null)
   const [pendingPermissionActions, setPendingPermissionActions] =
     useState<PendingPermissionActions>({})
@@ -125,9 +139,29 @@ export function ConversationPane({
   const openInTerminalTimer = useRef<number | null>(null)
   const requestGeneration = useRef(0)
   const olderRequestGeneration = useRef(0)
-  const updateConversation = useCallback((next: ConversationResponse) => {
-    conversationRef.current = next
-    setConversation(next)
+  const updateConversation = useCallback(
+    (next: ConversationResponse) => {
+      conversationRef.current = next
+      setConversation(next)
+      if (
+        setCachedConversation &&
+        conversationSessionId.current === session.id
+      ) {
+        const loadedAt = messagesLoadedAtRef.current
+        if (loadedAt !== null) {
+          setCachedConversation(session.id, {
+            conversation: next,
+            messagesLoadedAt: loadedAt,
+          })
+        }
+      }
+    },
+    [session.id, setCachedConversation],
+  )
+  const markMessagesLoaded = useCallback(() => {
+    const loadedAt = Date.now()
+    messagesLoadedAtRef.current = loadedAt
+    setMessagesLoadedAt(loadedAt)
   }, [])
   const pruneOldMessages = useCallback(() => {
     const current = conversationRef.current
@@ -136,6 +170,9 @@ export function ConversationPane({
     updateConversation({
       ...current,
       start: current.start + dropCount,
+      stableStart: undefined,
+      stableEnd: undefined,
+      stableDigest: undefined,
       messages: current.messages.slice(dropCount),
     })
   }, [updateConversation])
@@ -154,10 +191,17 @@ export function ConversationPane({
       conversationSessionId.current === session.id
         ? conversationRef.current
         : null
+    const stableDigestQuery =
+      loadedConversation !== null &&
+      loadedConversation.stableStart === loadedConversation.start &&
+      loadedConversation.stableEnd !== undefined &&
+      loadedConversation.stableDigest !== undefined
+        ? `&stableStart=${String(loadedConversation.stableStart)}&stableEnd=${String(loadedConversation.stableEnd)}&stableDigest=${loadedConversation.stableDigest}`
+        : ''
     const messagesRequest = requestJson(
       loadedConversation === null
         ? `${sessionPath}/messages?limit=${String(INITIAL_MESSAGE_LIMIT)}`
-        : `${sessionPath}/messages?from=${String(loadedConversation.start)}`,
+        : `${sessionPath}/messages?from=${String(loadedConversation.start)}${stableDigestQuery}`,
       isConversationResponse,
     ).match(
       (value) => ok(value),
@@ -203,9 +247,9 @@ export function ConversationPane({
               start,
             ),
           }
-          updateConversation(refreshedConversation)
           conversationSessionId.current = session.id
-          setMessagesLoadedAt(Date.now())
+          markMessagesLoaded()
+          updateConversation(refreshedConversation)
         }
         if (actionsResult.isOk()) {
           setActions((previous) =>
@@ -245,7 +289,7 @@ export function ConversationPane({
         setLoading(false)
       },
     )
-  }, [session.id, updateConversation])
+  }, [markMessagesLoaded, session.id, updateConversation])
 
   useEffect(() => {
     refresh()
@@ -259,6 +303,7 @@ export function ConversationPane({
     setOpenInTerminalStatus(null)
     if (conversationSessionId.current !== session.id) {
       updateConversation(EMPTY_CONVERSATION)
+      messagesLoadedAtRef.current = null
       setMessagesLoadedAt(null)
       setLoadingOlder(false)
       loadingOlderRef.current = false
@@ -292,8 +337,12 @@ export function ConversationPane({
         if (conversationSessionId.current !== session.id) return
         const latest = conversationRef.current
         const messages = [...response.messages, ...latest.messages]
+        markMessagesLoaded()
         updateConversation({
           ...response,
+          stableStart: undefined,
+          stableEnd: undefined,
+          stableDigest: undefined,
           messages: shareUnchangedMessages(
             latest.messages,
             messages,
@@ -301,7 +350,6 @@ export function ConversationPane({
             response.start,
           ),
         })
-        setMessagesLoadedAt(Date.now())
         setError(null)
         loadingOlderRef.current = false
         setLoadingOlder(false)
@@ -313,7 +361,7 @@ export function ConversationPane({
         setLoadingOlder(false)
       },
     )
-  }, [loadingOlder, session.id, updateConversation])
+  }, [loadingOlder, markMessagesLoaded, session.id, updateConversation])
 
   const onOpenInTerminal = useCallback(() => {
     const requestedSessionId = session.id

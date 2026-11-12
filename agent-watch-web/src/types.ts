@@ -249,6 +249,9 @@ export type ConversationResponse = {
   skills?: SkillSuggestion[]
   start: number
   total: number
+  stableStart?: number | undefined
+  stableEnd?: number | undefined
+  stableDigest?: string | undefined
   decisions: Extract<ChatItem, { type: 'decision' }>[]
   hasUnansweredProposal: boolean
   activeQuestionIndex: number | null

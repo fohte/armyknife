@@ -218,6 +218,11 @@ function isSkillSuggestion(value: unknown): value is SkillSuggestion {
 export function isConversationResponse(
   value: unknown,
 ): value is ConversationResponse {
+  const hasStableDigest =
+    isRecord(value) &&
+    value['stableStart'] !== undefined &&
+    value['stableEnd'] !== undefined &&
+    value['stableDigest'] !== undefined
   return (
     isRecord(value) &&
     Array.isArray(value['messages']) &&
@@ -233,6 +238,19 @@ export function isConversationResponse(
     typeof value['total'] === 'number' &&
     Number.isInteger(value['total']) &&
     value['total'] >= value['start'] + value['messages'].length &&
+    ((value['stableStart'] === undefined &&
+      value['stableEnd'] === undefined &&
+      value['stableDigest'] === undefined) ||
+      (hasStableDigest &&
+        typeof value['stableStart'] === 'number' &&
+        Number.isInteger(value['stableStart']) &&
+        value['stableStart'] >= 0 &&
+        value['stableStart'] <= value['total'] &&
+        typeof value['stableEnd'] === 'number' &&
+        Number.isInteger(value['stableEnd']) &&
+        value['stableEnd'] >= value['stableStart'] &&
+        value['stableEnd'] <= value['total'] &&
+        typeof value['stableDigest'] === 'string')) &&
     Array.isArray(value['decisions']) &&
     value['decisions'].every(
       (decision) => isChatItem(decision) && decision.type === 'decision',

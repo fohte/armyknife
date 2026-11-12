@@ -4,6 +4,7 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import { ConversationPane } from '#components/conversation-pane'
 import { InboxView } from '#components/inbox-view'
 import { ResizableColumns } from '#components/resizable-columns'
+import { useSessionConversationCache } from '#components/session-conversation-cache'
 import {
   defaultExpandedSessionIds,
   expandSessionAncestors,
@@ -102,6 +103,7 @@ export function InboxConversationPanes({
   onCloseSession,
   onSelectSession,
 }: InboxConversationPanesProps) {
+  const sessionConversationCache = useSessionConversationCache()
   const [sessionTrees, setSessionTrees] = useState<
     ReadonlyMap<string, SessionTreeCacheEntry>
   >(() => new Map())
@@ -328,6 +330,7 @@ export function InboxConversationPanes({
           onLater(selectedSession.id)
         }}
         onClose={() => {
+          sessionConversationCache?.clearCachedConversation(selectedSession.id)
           onCloseSession(selectedSession.id)
         }}
         isToday={selectedSession.isToday === true}
