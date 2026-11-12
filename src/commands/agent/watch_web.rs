@@ -129,14 +129,18 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
                 })
                 .await
         };
-        let server = async move { tokio::try_join!(watch_web_server, crit_proxy_server) };
-        tokio::pin!(server);
-
-        tokio::select! {
-            result = &mut server => return result.map(|_| ()).map_err(Into::into),
-            () = restart::wait_for_replacement(&executable, executable_identity, restart_retry_interval) => {
-                restart_sender.send_replace(true);
-                server.await?;
+        let server =
+            async move { tokio::try_join!(watch_web_server, crit_proxy_server).map(|_| ()) };
+        match restart::wait_for_server_or_restart(
+            server,
+            restart::wait_for_replacement(&executable, executable_identity, restart_retry_interval),
+            restart_sender,
+            restart::SERVER_SHUTDOWN_TIMEOUT,
+        )
+        .await?
+        {
+            restart::ServerOutcome::Exited => return Ok(()),
+            restart::ServerOutcome::Restart => {
                 match restart::exec_replacement(&executable, executable_identity, &restart_args) {
                     Ok(_) => restart_retry_interval = restart::POLL_INTERVAL,
                     Err(error) => {

@@ -1,17 +1,57 @@
 use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::future::Future;
 use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::time::Duration;
 
+use tokio::sync::watch;
 use tokio::time;
 
 use crate::infra::process;
 
 pub(super) const POLL_INTERVAL: Duration = Duration::from_secs(1);
 pub(super) const EXEC_RETRY_INTERVAL: Duration = Duration::from_secs(10);
+pub(super) const SERVER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const RESTART_MARKER: &str = "ARMYKNIFE_WATCH_WEB_RESTART";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ServerOutcome {
+    Exited,
+    Restart,
+}
+
+pub(super) async fn wait_for_server_or_restart<S, R, E>(
+    server: S,
+    replacement: R,
+    restart_sender: watch::Sender<bool>,
+    shutdown_timeout: Duration,
+) -> Result<ServerOutcome, E>
+where
+    S: Future<Output = Result<(), E>>,
+    R: Future<Output = ()>,
+{
+    tokio::pin!(server);
+
+    tokio::select! {
+        result = &mut server => {
+            result?;
+            Ok(ServerOutcome::Exited)
+        }
+        () = replacement => {
+            restart_sender.send_replace(true);
+            match time::timeout(shutdown_timeout, &mut server).await {
+                Ok(result) => result?,
+                Err(_) => tracing::warn!(
+                    timeout = ?shutdown_timeout,
+                    "watch-web servers did not shut down before the restart deadline"
+                ),
+            }
+            Ok(ServerOutcome::Restart)
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ExecutableIdentity {
@@ -96,8 +136,31 @@ mod tests {
     use std::ffi::OsString;
     use std::fs;
     use std::io;
+    use std::time::Duration;
 
-    use super::ExecutableIdentity;
+    use tokio::sync::watch;
+
+    use super::{ExecutableIdentity, ServerOutcome};
+
+    #[tokio::test]
+    async fn continues_restarting_when_a_server_does_not_shutdown_before_the_deadline() {
+        let (restart_sender, restart_receiver) = watch::channel(false);
+        let result = super::wait_for_server_or_restart(
+            std::future::pending::<io::Result<()>>(),
+            async {},
+            restart_sender,
+            Duration::from_millis(1),
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.expect("shutdown deadline should permit restart"),
+                *restart_receiver.borrow()
+            ),
+            (ServerOutcome::Restart, true),
+        );
+    }
 
     #[test]
     fn passes_the_replacement_path_arguments_and_marker_to_exec() {
