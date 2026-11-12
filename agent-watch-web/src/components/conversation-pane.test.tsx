@@ -2817,6 +2817,7 @@ it('posts a todo completion to its sequence route with the comment', async () =>
       <ConversationPane
         session={session}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
