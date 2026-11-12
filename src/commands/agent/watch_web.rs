@@ -30,7 +30,11 @@ use crate::commands::agent::store;
 use crate::commands::agent::types::Session;
 
 #[derive(Args, Clone, PartialEq, Eq)]
-pub struct WatchWebArgs {}
+pub struct WatchWebArgs {
+    /// Do not open the web UI in a browser
+    #[arg(long)]
+    no_open: bool,
+}
 
 const LISTEN_PORT: u16 = 4317;
 
@@ -38,6 +42,20 @@ fn is_invalid_session_id_error(error: &anyhow::Error) -> bool {
     error
         .downcast_ref::<CcError>()
         .is_some_and(|error| matches!(error, CcError::InvalidSessionId(_)))
+}
+
+fn open_browser_on_startup(
+    args: &WatchWebArgs,
+    is_restarted_process: bool,
+    url: &str,
+    open_url: impl FnOnce(&str) -> std::io::Result<()>,
+) {
+    if !args.no_open
+        && !is_restarted_process
+        && let Err(error) = open_url(url)
+    {
+        eprintln!("Could not open a browser automatically: {error}");
+    }
 }
 
 #[derive(Clone)]
@@ -60,19 +78,20 @@ impl EnrichmentUpdates {
     }
 }
 
-pub async fn run(_args: &WatchWebArgs) -> Result<()> {
+pub async fn run(args: &WatchWebArgs) -> Result<()> {
     let executable = std::env::current_exe()?;
     let mut executable_identity = restart::ExecutableIdentity::read(&executable)?;
-    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let restart_args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let address = SocketAddr::from((Ipv4Addr::LOCALHOST, LISTEN_PORT));
     let listener = TcpListener::bind(address).await?;
     let url = format!("http://{address}");
     println!("Agent Watch Web UI: {url}");
-    if !restart::is_restarted_process()
-        && let Err(error) = browser::open_url(&url)
-    {
-        eprintln!("Could not open a browser automatically: {error}");
-    }
+    open_browser_on_startup(
+        args,
+        restart::is_restarted_process(),
+        &url,
+        browser::open_url,
+    );
 
     let mut listener = listener;
     let mut restart_retry_interval = restart::POLL_INTERVAL;
@@ -93,7 +112,7 @@ pub async fn run(_args: &WatchWebArgs) -> Result<()> {
             () = restart::wait_for_replacement(&executable, executable_identity, restart_retry_interval) => {
                 restart_sender.send_replace(true);
                 server.await?;
-                match restart::exec_replacement(&executable, executable_identity, &args) {
+                match restart::exec_replacement(&executable, executable_identity, &restart_args) {
                     Ok(_) => restart_retry_interval = restart::POLL_INTERVAL,
                     Err(error) => {
                         eprintln!("Could not restart the Agent Watch Web UI: {error}");
@@ -210,16 +229,55 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::header::{CONTENT_TYPE, HOST, ORIGIN};
     use axum::http::{Request, Response, StatusCode};
+    use clap::Parser;
     use include_dir::{Dir, include_dir};
     use rstest::rstest;
     use tokio::sync::watch;
     use tower::ServiceExt;
 
-    use super::{app, app_with_assets, app_with_assets_and_loader};
+    use super::{app, app_with_assets, app_with_assets_and_loader, open_browser_on_startup};
+    use crate::cli::{Cli, Commands};
+    use crate::commands::agent::AgentCommands;
     use crate::commands::agent::types::Session;
 
     static TEST_DIST: Dir<'static> =
         include_dir!("$CARGO_MANIFEST_DIR/src/commands/agent/watch_web/test_assets");
+
+    #[rstest]
+    #[case::opens_browser_by_default(&["a", "agent", "watch-web"], false, Some("http://127.0.0.1:12345"))]
+    #[case::does_not_open_browser_when_requested(
+        &["a", "agent", "watch-web", "--no-open"],
+        false,
+        None
+    )]
+    #[case::does_not_reopen_browser_after_restart(
+        &["a", "agent", "watch-web"],
+        true,
+        None
+    )]
+    fn test_no_open_flag(
+        #[case] argv: &[&str],
+        #[case] is_restarted_process: bool,
+        #[case] expected_opened_url: Option<&str>,
+    ) {
+        let parsed = Cli::try_parse_from(argv).unwrap();
+        let args = match parsed.command {
+            Commands::Agent(AgentCommands::WatchWeb(args)) => args,
+            _ => panic!("watch-web arguments should parse"),
+        };
+        let mut opened_url = None;
+        open_browser_on_startup(
+            &args,
+            is_restarted_process,
+            "http://127.0.0.1:12345",
+            |url| {
+                opened_url = Some(url.to_owned());
+                Ok(())
+            },
+        );
+
+        assert_eq!(opened_url.as_deref(), expected_opened_url);
+    }
 
     #[rstest]
     #[case::api_root(
