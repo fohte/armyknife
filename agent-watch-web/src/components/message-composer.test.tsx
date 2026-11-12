@@ -1,8 +1,9 @@
-import { act, useState } from 'react'
+import { act, type KeyboardEvent, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { MessageComposer } from '#components/message-composer'
+import type { SkillSuggestion } from '#types'
 
 let container: HTMLDivElement
 let root: Root | null = null
@@ -14,16 +15,24 @@ function requireElement<T extends Element>(element: T | null): T {
 
 function ComposerHarness({
   isMobile = false,
+  engine,
+  skills = [],
+  initialDraft = '',
   onSend = () => undefined,
+  onKeyDown = () => undefined,
   onPasteFiles = () => undefined,
   onRemoveAttachment = () => undefined,
 }: {
   isMobile?: boolean
+  engine?: 'Claude' | 'Codex'
+  skills?: readonly SkillSuggestion[]
+  initialDraft?: string
   onSend?: () => void
+  onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void
   onPasteFiles?: (files: File[]) => void
   onRemoveAttachment?: (id: string) => void
 }) {
-  const [draft, setDraft] = useState('')
+  const [draft, setDraft] = useState(initialDraft)
   return (
     <MessageComposer
       draft={draft}
@@ -31,10 +40,12 @@ function ComposerHarness({
       disabled={false}
       isSending={false}
       isMobile={isMobile}
+      engine={engine}
+      skills={skills}
       canInterrupt={false}
       attachments={[]}
       onDraftChange={setDraft}
-      onKeyDown={() => undefined}
+      onKeyDown={onKeyDown}
       onPasteFiles={onPasteFiles}
       onRemoveAttachment={onRemoveAttachment}
       onSend={onSend}
@@ -43,7 +54,19 @@ function ComposerHarness({
   )
 }
 
-function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
+function renderFreshComposer(props: Parameters<typeof ComposerHarness>[0]) {
+  act(() => root?.unmount())
+  root = createRoot(container)
+  act(() => {
+    root?.render(<ComposerHarness {...props} />)
+  })
+}
+
+function setTextareaValue(
+  textarea: HTMLTextAreaElement,
+  value: string,
+  cursor = value.length,
+) {
   act(() => {
     const valueSetter = Reflect.getOwnPropertyDescriptor(
       textarea.constructor.prototype,
@@ -52,6 +75,7 @@ function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
     if (valueSetter !== undefined) {
       Reflect.apply(valueSetter, textarea, [value])
     }
+    textarea.setSelectionRange(cursor, cursor)
     textarea.dispatchEvent(new Event('input', { bubbles: true }))
   })
 }
@@ -65,6 +89,11 @@ beforeEach(() => {
     root?.render(<ComposerHarness />)
   })
 })
+
+const skillSuggestions: SkillSuggestion[] = [
+  { name: 'design-flow', description: 'Help shape a design.' },
+  { name: 'debug-flow', description: 'Investigate and fix errors.' },
+]
 
 afterEach(() => {
   if (root !== null) act(() => root?.unmount())
@@ -297,4 +326,265 @@ it('shows the byte size of a small non-image attachment', () => {
   const snapshot = () =>
     container.querySelector('.composer-attachment small')?.textContent
   expect(snapshot()).toEqual('512 B')
+})
+
+it('shows Claude skill suggestions after a slash following whitespace', () => {
+  renderFreshComposer({
+    engine: 'Claude',
+    skills: skillSuggestions,
+  })
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Explain /des')
+
+  const snapshot = () => ({
+    options: Array.from(container.querySelectorAll('[role="option"]')).map(
+      (option) => option.textContent,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    options: ['/design-flowHelp shape a design.'],
+  })
+})
+
+it('inserts the selected skill while preserving surrounding text', () => {
+  renderFreshComposer({
+    engine: 'Claude',
+    isMobile: true,
+    skills: skillSuggestions,
+  })
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Explain /des today', 'Explain /des'.length)
+
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>('[role="option"]'),
+    ).click()
+  })
+
+  const snapshot = () => ({
+    draft: textarea.value,
+    cursor: textarea.selectionStart,
+    options: container.querySelectorAll('[role="option"]').length,
+  })
+  expect(snapshot()).toEqual({
+    draft: 'Explain /design-flow today',
+    cursor: 20,
+    options: 0,
+  })
+})
+
+it('selects a Codex skill with the dollar trigger by keyboard', () => {
+  renderFreshComposer({
+    engine: 'Codex',
+    skills: skillSuggestions,
+  })
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Check $de')
+  act(() => {
+    textarea.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'ArrowDown',
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+  })
+  act(() => {
+    textarea.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+  })
+
+  const snapshot = () => ({
+    draft: textarea.value,
+    options: container.querySelectorAll('[role="option"]').length,
+  })
+  expect(snapshot()).toEqual({
+    draft: 'Check $debug-flow ',
+    options: 0,
+  })
+})
+
+it('selects the final skill with ArrowUp and Tab', () => {
+  renderFreshComposer({
+    engine: 'Codex',
+    skills: skillSuggestions,
+  })
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Check $de')
+  act(() => {
+    textarea.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'ArrowUp',
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+  })
+  act(() => {
+    textarea.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Tab',
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+  })
+
+  const snapshot = () => ({
+    draft: textarea.value,
+    options: container.querySelectorAll('[role="option"]').length,
+  })
+  expect(snapshot()).toEqual({
+    draft: 'Check $debug-flow ',
+    options: 0,
+  })
+})
+
+it.each([
+  {
+    reason: 'Codex slash commands',
+    engine: 'Codex' as const,
+    skills: skillSuggestions,
+    draft: 'Run /de',
+  },
+  {
+    reason: 'a missing transcript catalog',
+    engine: 'Claude' as const,
+    skills: [],
+    draft: 'Run /de',
+  },
+])('does not show suggestions for $reason', ({ engine, skills, draft }) => {
+  renderFreshComposer({ engine, skills })
+  setTextareaValue(
+    requireElement(container.querySelector<HTMLTextAreaElement>('textarea')),
+    draft,
+  )
+
+  const snapshot = () => ({
+    suggestions: container.querySelectorAll('[role="option"]').length,
+  })
+  expect(snapshot()).toEqual({ suggestions: 0 })
+})
+
+it('dismisses an open skill list with Escape', () => {
+  renderFreshComposer({
+    engine: 'Claude',
+    skills: skillSuggestions,
+  })
+  setTextareaValue(
+    requireElement(container.querySelector<HTMLTextAreaElement>('textarea')),
+    'Run /de',
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  act(() => {
+    textarea.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+  })
+
+  const snapshot = () => ({
+    visibleOptions: container.querySelectorAll('[role="option"]').length,
+  })
+  expect(snapshot()).toEqual({ visibleOptions: 0 })
+})
+
+it('does not restore an old cursor after selecting an unchanged skill', () => {
+  renderFreshComposer({
+    engine: 'Claude',
+    skills: skillSuggestions,
+  })
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, '/design-flow today', '/design-flow'.length)
+
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>('[role="option"]'),
+    ).click()
+  })
+  setTextareaValue(textarea, '/design-flow! today', '/design-flow!'.length)
+
+  const snapshot = () => ({
+    draft: textarea.value,
+    cursor: textarea.selectionStart,
+  })
+  expect(snapshot()).toEqual({
+    draft: '/design-flow! today',
+    cursor: '/design-flow!'.length,
+  })
+})
+
+it('selects a matching skill after the caret moves to a narrower query', () => {
+  const onKeyDown = vi.fn()
+  renderFreshComposer({
+    engine: 'Codex',
+    skills: skillSuggestions,
+    onKeyDown,
+  })
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, '$d then $deb', '$d'.length)
+  act(() => {
+    textarea.setSelectionRange('$d'.length, '$d'.length)
+    textarea.dispatchEvent(new Event('select', { bubbles: true }))
+  })
+  const initialOptions = container.querySelectorAll('[role="option"]').length
+  act(() => {
+    textarea.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'ArrowDown',
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+  })
+  act(() => {
+    textarea.focus()
+    textarea.setSelectionRange('$d then $deb'.length, '$d then $deb'.length)
+    textarea.dispatchEvent(new Event('select', { bubbles: true }))
+    document.dispatchEvent(new Event('selectionchange'))
+  })
+  act(() => {
+    textarea.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Enter',
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+  })
+
+  const snapshot = () => ({
+    initialOptions,
+    draft: textarea.value,
+    delegatedKeydowns: onKeyDown.mock.calls.length,
+    suggestions: container.querySelectorAll('[role="option"]').length,
+  })
+  expect(snapshot()).toEqual({
+    initialOptions: 2,
+    draft: '$d then $debug-flow ',
+    delegatedKeydowns: 0,
+    suggestions: 0,
+  })
 })

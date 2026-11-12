@@ -28,6 +28,7 @@ import type {
   OpenInTerminalStatus,
   Session,
   SessionActions,
+  SkillSuggestion,
 } from '#types'
 
 type ConversationPaneViewProps = {
@@ -42,6 +43,7 @@ type ConversationPaneViewProps = {
   onLoadOlder?: () => void
   onPruneOldMessages?: () => void
   backgroundTasks?: readonly BackgroundTask[]
+  skills?: readonly SkillSuggestion[]
   actions: SessionActions | null
   actionsReady?: boolean
   pendingPermissionAction?: PendingPermissionAction | undefined
@@ -84,6 +86,7 @@ export function ConversationPaneView({
   onLoadOlder = () => undefined,
   onPruneOldMessages = () => undefined,
   backgroundTasks = [],
+  skills = [],
   actions,
   actionsReady = true,
   pendingPermissionAction = null,
@@ -487,6 +490,8 @@ export function ConversationPaneView({
       ) : null}
       <MessageComposer
         draft={draft}
+        engine={session.engine}
+        skills={skills}
         placeholder={
           hasUnansweredProposal
             ? 'Choose an option above, or message the session'

@@ -5,6 +5,7 @@ import type {
   ConversationResponse,
   SessionActions,
   SessionTreeNode,
+  SkillSuggestion,
 } from '#types'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -184,6 +185,14 @@ function isBackgroundTask(value: unknown): value is BackgroundTask {
   )
 }
 
+function isSkillSuggestion(value: unknown): value is SkillSuggestion {
+  return (
+    isRecord(value) &&
+    typeof value['name'] === 'string' &&
+    typeof value['description'] === 'string'
+  )
+}
+
 export function isConversationResponse(
   value: unknown,
 ): value is ConversationResponse {
@@ -193,6 +202,9 @@ export function isConversationResponse(
     value['messages'].every(isChatItem) &&
     Array.isArray(value['backgroundTasks']) &&
     value['backgroundTasks'].every(isBackgroundTask) &&
+    (value['skills'] === undefined ||
+      (Array.isArray(value['skills']) &&
+        value['skills'].every(isSkillSuggestion))) &&
     typeof value['start'] === 'number' &&
     Number.isInteger(value['start']) &&
     value['start'] >= 0 &&

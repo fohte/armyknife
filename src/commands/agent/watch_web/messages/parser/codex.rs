@@ -4,19 +4,27 @@ use serde_json::Value;
 
 use super::super::ChatItem;
 use super::super::ParentSession;
+use super::super::SkillSuggestion;
 use super::super::parser::{
     ToolSummary, append_text, for_each_jsonl_record, operation_target, record_timestamp,
 };
 
-pub(in crate::commands::agent::watch_web::messages) fn parse(
+#[cfg(test)]
+fn parse(reader: impl BufRead, parent: Option<&ParentSession>) -> std::io::Result<Vec<ChatItem>> {
+    parse_with_skills(reader, parent).map(|(messages, _)| messages)
+}
+
+pub(in crate::commands::agent::watch_web::messages) fn parse_with_skills(
     reader: impl BufRead,
     parent: Option<&ParentSession>,
-) -> std::io::Result<Vec<ChatItem>> {
+) -> std::io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
     let mut items = Vec::new();
     let mut tools = ToolSummary::default();
     let mut pending_tool_calls: Vec<PendingTool> = Vec::new();
+    let mut skills = Vec::new();
 
     for_each_jsonl_record(reader, |record| {
+        super::skill_suggestions::capture_codex_listing(&record, &mut skills);
         let timestamp = record_timestamp(&record);
         let record_type = record.get("type").and_then(Value::as_str);
         let payload = match record_type {
@@ -133,7 +141,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
     if let Some(active_tool) = active_tool {
         items.push(active_tool);
     }
-    Ok(items)
+    Ok((items, skills))
 }
 
 fn codex_tool_failed(result: &Value) -> bool {
@@ -209,10 +217,36 @@ mod tests {
     use rstest::rstest;
     use serde_json::json;
 
-    use super::parse;
+    use super::{parse, parse_with_skills};
     use crate::commands::agent::watch_web::messages::{
-        ChatItem, ParentSession, PeerDirection, UserContentPart,
+        ChatItem, ParentSession, PeerDirection, SkillSuggestion, UserContentPart,
     };
+
+    #[test]
+    fn parses_the_latest_injected_skill_listing() {
+        let transcript = indoc! {r###"
+            {"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<skills_instructions>\n## Skills\n### Available skills\n- old-tool: Old description.\n</skills_instructions>"}]}}
+            {"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<skills_instructions>\n## Skills\n### Available skills\n- design-flow: Help shape a design.\n  location: /fixture/path\n- debug-flow: Investigate a failure.\n</skills_instructions>"}]}}
+            {"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"## Skills\n### Available skills\n- nonexistent-tool: Quoted by the user."}]}}
+        "###};
+
+        assert_eq!(
+            parse_with_skills(Cursor::new(transcript), None).unwrap(),
+            (
+                Vec::new(),
+                vec![
+                    SkillSuggestion {
+                        name: "design-flow".to_string(),
+                        description: "Help shape a design.".to_string(),
+                    },
+                    SkillSuggestion {
+                        name: "debug-flow".to_string(),
+                        description: "Investigate a failure.".to_string(),
+                    },
+                ],
+            ),
+        );
+    }
 
     #[test]
     fn parses_rollout_items_and_skips_unknown_rows() {

@@ -31,6 +31,7 @@ const EMPTY_SESSIONS: readonly Session[] = []
 const EMPTY_CONVERSATION: ConversationResponse = {
   messages: [],
   backgroundTasks: [],
+  skills: [],
   start: 0,
   total: 0,
   decisions: [],
@@ -420,6 +421,7 @@ export function ConversationPane({
       onLoadOlder={loadOlder}
       onPruneOldMessages={pruneOldMessages}
       backgroundTasks={displayBackgroundTasks}
+      skills={conversation.skills ?? []}
       actions={actions}
       actionsReady={actionsReady}
       pendingPermissionAction={pendingPermissionAction}
