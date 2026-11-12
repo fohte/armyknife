@@ -90,7 +90,7 @@ jobs:
               echo "Required checks returned invalid JSON"
               exit 1
             fi
-            FAILED_CHECKS=$(jq -r '[.[] | select(.bucket == "fail") | .name] | join(", ")' <<<"$CHECKS_JSON")
+            FAILED_CHECKS=$(jq -r '[.[] | select(.bucket == "fail" or .bucket == "cancel") | .name] | join(", ")' <<<"$CHECKS_JSON")
             if [[ -n "$FAILED_CHECKS" ]]; then
               echo "Required checks failed: $FAILED_CHECKS"
               exit 1
