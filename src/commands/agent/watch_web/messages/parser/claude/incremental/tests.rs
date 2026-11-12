@@ -108,7 +108,7 @@ fn incremental_result(
         {"type":"user","uuid":"message-one","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"A question."}}
     "#},
     indoc! {r#"
-        {"type":"system","uuid":"compact","parentUuid":"message-one","timestamp":"2026-01-01T00:00:02Z","subtype":"compact_boundary"}
+        {"type":"system","uuid":"compact","parentUuid":null,"logicalParentUuid":"message-one","timestamp":"2026-01-01T00:00:02Z","subtype":"compact_boundary"}
     "#},
     IncrementalAppend::Applied,
 )]
@@ -143,6 +143,28 @@ fn incremental_result(
     "#},
     IncrementalAppend::RestartRequired,
 )]
+#[case::parallel_tool_result_after_a_new_assistant_requires_restart(
+    indoc! {r#"
+        {"type":"user","uuid":"root","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"Run two fixture tools."}}
+        {"type":"assistant","uuid":"parallel-calls","parentUuid":"root","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_use","id":"call-a","name":"Read","input":{"file_path":"/fixture/a"}},{"type":"tool_use","id":"call-b","name":"Read","input":{"file_path":"/fixture/b"}}]}}
+        {"type":"user","uuid":"result-a","parentUuid":"parallel-calls","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-a","content":"first result"}]}}
+        {"type":"assistant","uuid":"followup","parentUuid":"result-a","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"text","text":"The first tool result is ready."}]}}
+    "#},
+    indoc! {r#"
+        {"type":"user","uuid":"result-b","parentUuid":"parallel-calls","timestamp":"2026-01-01T00:00:05Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-b","content":"second result"}]}}
+    "#},
+    IncrementalAppend::RestartRequired,
+)]
+#[case::tool_result_with_missing_parent_requires_restart(
+    indoc! {r#"
+        {"type":"user","uuid":"root","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"Run a fixture tool."}}
+        {"type":"assistant","uuid":"tool-call","parentUuid":"root","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_use","id":"call-a","name":"Read","input":{"file_path":"/fixture/a"}}]}}
+    "#},
+    indoc! {r#"
+        {"type":"user","uuid":"orphan-result","parentUuid":"missing-parent","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-a","content":"orphan output"}]}}
+    "#},
+    IncrementalAppend::RestartRequired,
+)]
 fn appended_transcript_matches_a_full_parse(
     #[case] prefix: &str,
     #[case] suffix: &str,
@@ -153,6 +175,37 @@ fn appended_transcript_matches_a_full_parse(
     assert_eq!(
         incremental_result(prefix.as_bytes(), suffix.as_bytes()),
         (expected_append, parse_all(&transcript, empty_additions()),),
+    );
+}
+
+#[rstest]
+#[case::valid_partial_json_is_completed_by_a_later_append(())]
+fn pending_json_completed_after_a_second_append_matches_a_full_parse(#[case] _case: ()) {
+    let prefix = indoc! {r#"
+        {"type":"user","uuid":"message-one","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"A question."}}
+    "#};
+    let first_append = r#"{"type":"assistant","uuid":"message-two","parentUuid":"message-one","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"text","text":"An answer"#;
+    let second_append = r#"."}]}}"#;
+    let mut transcript = prefix.as_bytes().to_vec();
+    transcript.extend_from_slice(first_append.as_bytes());
+    transcript.extend_from_slice(second_append.as_bytes());
+
+    let mut parser = incremental_parser(prefix.as_bytes());
+    let first_result = parser
+        .append_bytes(first_append.as_bytes(), fixed_time())
+        .unwrap();
+    let second_result = parser
+        .append_bytes(second_append.as_bytes(), fixed_time())
+        .unwrap();
+    let actual = parser.render_with(fixed_time(), empty_additions()).unwrap();
+
+    assert_eq!(
+        (first_result, second_result, actual),
+        (
+            IncrementalAppend::Applied,
+            IncrementalAppend::Applied,
+            parse_all(&transcript, empty_additions()),
+        ),
     );
 }
 

@@ -75,12 +75,10 @@ impl ClaudeParserState {
 
         if is_tool_result_only {
             self.tool_result_parent = record_parent_uuid(&record);
-        } else if task_notification.is_none()
-            && matches!(
-                record.get("type").and_then(Value::as_str),
-                Some("user" | "assistant")
-            )
-        {
+        } else if matches!(
+            record.get("type").and_then(Value::as_str),
+            Some("user" | "assistant")
+        ) {
             self.tool_result_parent = None;
         }
 

@@ -84,6 +84,9 @@ impl IncrementalClaudeParser {
         suffix: &[u8],
         now: DateTime<Utc>,
     ) -> io::Result<IncrementalAppend> {
+        if suffix.is_empty() {
+            return Ok(IncrementalAppend::Applied);
+        }
         let mut restart_required = false;
         let state = &mut self.state;
         let lines = &mut self.lines;
@@ -99,6 +102,7 @@ impl IncrementalClaudeParser {
             }
         });
         if !restart_required
+            && !self.pending_is_initial
             && let Some(record) = parse_record(lines.pending())
             && !is_active_branch_continuation(state, &record)
         {
@@ -171,15 +175,20 @@ fn ingest_record(
     if !matches!(origin, RecordOrigin::Initial)
         && let Some(uuid) = record.get("uuid").and_then(Value::as_str)
     {
+        let parent_uuid = record_parent_uuid(&record);
+        let parallel_tool_result = matches!(origin, RecordOrigin::Appended)
+            && is_tool_result_only_user_record(&record)
+            && parent_uuid.as_deref() == state.tool_result_parent.as_deref()
+            && parent_uuid.as_deref() != state.latest_uuid.as_deref();
         state.transcript_nodes.insert(
             uuid.to_owned(),
             TranscriptNode {
-                parent_uuid: record_parent_uuid(&record),
+                parent_uuid,
                 membership: BranchMembership::Unknown,
             },
         );
         mark_active_branch(&mut state.transcript_nodes, Some(uuid));
-        if matches!(origin, RecordOrigin::Appended) {
+        if matches!(origin, RecordOrigin::Appended) && !parallel_tool_result {
             state.latest_uuid = Some(uuid.to_owned());
         }
     }
@@ -202,39 +211,39 @@ fn is_active_branch_continuation(state: &ClaudeParserState, record: &Value) -> b
     let Some(uuid) = record.get("uuid").and_then(Value::as_str) else {
         return true;
     };
-    if is_tool_result_only_user_record(record)
-        || super::background_tasks::task_notification_text(record).is_some()
-    {
-        return true;
-    }
-    let parent_uuid = record_parent_uuid(record);
-    if record.get("type").and_then(Value::as_str) == Some("user")
-        && parent_uuid.as_deref() != state.latest_uuid.as_deref()
-    {
+    if state.transcript_nodes.contains_key(uuid) {
         return false;
     }
-    if record.get("type").and_then(Value::as_str) == Some("assistant")
-        && parent_uuid.as_deref() != state.latest_uuid.as_deref()
-        && parent_uuid.as_deref() != state.tool_result_parent.as_deref()
-    {
+    let parent_uuid = record_parent_uuid(record);
+    let is_tool_result_only = is_tool_result_only_user_record(record);
+    let is_task_notification = super::background_tasks::task_notification_text(record).is_some();
+    if is_tool_result_only && parent_uuid.is_none() {
         return false;
     }
     let Some(parent_uuid) = parent_uuid else {
         return state.latest_uuid.is_none();
     };
-    state
+    let parent_is_active = state
         .transcript_nodes
         .get(&parent_uuid)
-        .is_some_and(|node| {
-            matches!(
-                node.membership,
-                BranchMembership::Active | BranchMembership::ReachesActive
-            )
-        })
-        || state
-            .transcript_nodes
-            .get(uuid)
-            .is_some_and(|node| node.membership == BranchMembership::Active)
+        .is_some_and(|node| node.membership == BranchMembership::Active);
+    if !parent_is_active {
+        return false;
+    }
+
+    let parent_is_latest = state.latest_uuid.as_deref() == Some(parent_uuid.as_str());
+    if is_tool_result_only {
+        return parent_is_latest
+            || state.tool_result_parent.as_deref() == Some(parent_uuid.as_str());
+    }
+    if is_task_notification {
+        return parent_is_latest;
+    }
+    if record.get("type").and_then(Value::as_str) == Some("assistant") {
+        return parent_is_latest
+            || state.tool_result_parent.as_deref() == Some(parent_uuid.as_str());
+    }
+    parent_is_latest
 }
 
 #[cfg(test)]
