@@ -210,36 +210,42 @@ pub(super) async fn session_tree<S: SessionSource>(
                     priority_order: task_metadata.priority_order.get(&task.task_id).copied(),
                 });
             let turn = turns.get(session.session_id.as_str()).copied();
+            let has_unanswered_proposal = snapshot
+                .unanswered_proposal_titles
+                .contains_key(&session.session_id);
+            let todo_title = snapshot.unanswered_todo_titles.get(&session.session_id);
             let needs_action = interrupted_session_ids.contains(&session.session_id)
-                || snapshot
-                    .unanswered_proposal_titles
-                    .contains_key(&session.session_id);
+                || has_unanswered_proposal
+                || todo_title.is_some();
             let has_running_background_task =
                 running_background_task_sessions.contains(&session.session_id);
             let agent_status_state = session
                 .agent_status
                 .as_ref()
                 .map(|status| snapshot.agent_config.status_state(&status.kind));
-            let category = category_for_with_later(
-                session,
-                turn,
-                needs_action,
-                has_running_background_task,
-                agent_status_state,
-                state_by_id.get(session.session_id.as_str()).copied(),
-                now,
-            );
+            let category = if todo_title.is_some() {
+                SessionCategory::NeedsAction
+            } else {
+                category_for_with_later(
+                    session,
+                    turn,
+                    needs_action,
+                    has_running_background_task,
+                    agent_status_state,
+                    state_by_id.get(session.session_id.as_str()).copied(),
+                    now,
+                )
+            };
             TreeSessionView {
                 id: session.session_id.clone(),
                 parent_id: parent_ids.get(&session.session_id).cloned().flatten(),
                 category,
                 is_active: session.status != SessionStatus::Ended,
-                kind: kind_for(
+                kind: kind_for_with_todo(
                     session,
                     turn,
-                    snapshot
-                        .unanswered_proposal_titles
-                        .contains_key(&session.session_id),
+                    has_unanswered_proposal,
+                    todo_title.is_some(),
                     has_running_background_task,
                 ),
                 title: snapshot
@@ -251,6 +257,7 @@ pub(super) async fn session_tree<S: SessionSource>(
                     .unanswered_proposal_titles
                     .get(&session.session_id)
                     .cloned()
+                    .or_else(|| todo_title.cloned())
                     .or_else(|| session.last_message.clone()),
                 elapsed_seconds: now
                     .signed_duration_since(session.updated_at)

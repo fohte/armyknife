@@ -24,6 +24,7 @@ pub(super) enum SessionKind {
     Plan,
     Stopped,
     Proposal,
+    Todo,
 }
 
 pub(super) fn decision_category_is_done(
@@ -133,10 +134,27 @@ pub(super) fn category_for(
     }
 }
 
-pub(super) fn kind_for(
+#[cfg(test)]
+fn kind_for(
     session: &Session,
     turn: Option<UserTurnKind>,
     has_unanswered_proposal: bool,
+    has_running_background_task: bool,
+) -> Option<SessionKind> {
+    kind_for_with_todo(
+        session,
+        turn,
+        has_unanswered_proposal,
+        false,
+        has_running_background_task,
+    )
+}
+
+pub(super) fn kind_for_with_todo(
+    session: &Session,
+    turn: Option<UserTurnKind>,
+    has_unanswered_proposal: bool,
+    has_unanswered_todo: bool,
     has_running_background_task: bool,
 ) -> Option<SessionKind> {
     if session
@@ -155,6 +173,9 @@ pub(super) fn kind_for(
     }
     if has_unanswered_proposal {
         return Some(SessionKind::Proposal);
+    }
+    if has_unanswered_todo {
+        return Some(SessionKind::Todo);
     }
 
     let Some(turn) = turn else {
@@ -320,6 +341,26 @@ mod tests {
     ) {
         assert_eq!(
             kind_for(&session(SessionStatus::WaitingInput), turn, true, false),
+            Some(expected),
+        );
+    }
+
+    #[rstest]
+    #[case::todo(None, SessionKind::Todo)]
+    #[case::question(Some(UserTurnKind::Ask), SessionKind::Question)]
+    #[case::approval(Some(UserTurnKind::Allow), SessionKind::Approve)]
+    fn pending_todos_follow_questions_and_approvals(
+        #[case] turn: Option<UserTurnKind>,
+        #[case] expected: SessionKind,
+    ) {
+        assert_eq!(
+            kind_for_with_todo(
+                &session(SessionStatus::WaitingInput),
+                turn,
+                false,
+                true,
+                false,
+            ),
             Some(expected),
         );
     }

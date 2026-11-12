@@ -19,7 +19,7 @@ use serde_json::Value;
 
 use crate::commands::agent::proposal::{ProposalAnswer, ProposalOption};
 use crate::commands::agent::store::{
-    AgentDecision, AgentProposal, PermissionRequestData, WatchWebPeerOutMessage,
+    AgentDecision, AgentProposal, AgentTodo, PermissionRequestData, WatchWebPeerOutMessage,
     WatchWebQueuedPrompt,
 };
 use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
@@ -36,7 +36,7 @@ use self::proposals::proposal_chat_item;
 use self::range::MessageRange;
 
 mod cache;
-use self::cache::{MessageCache, MessageCacheKey, RunningBackgroundTaskCache};
+use self::cache::{MessageCache, MessageCacheKey, MessageCacheRecords, RunningBackgroundTaskCache};
 mod session_titles;
 use self::session_titles::{parent_session, resolve_peer_session_titles};
 
@@ -61,6 +61,7 @@ type QueuedPromptLoader = Arc<dyn Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> 
 type PeerOutMessageLoader = Arc<dyn Fn(&str) -> Result<Vec<WatchWebPeerOutMessage>> + Send + Sync>;
 type QueuedPromptDeleter = Arc<dyn Fn(&str, &[i64]) -> Result<()> + Send + Sync>;
 type ProposalLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentProposal>> + Send + Sync>;
+type TodoLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentTodo>> + Send + Sync>;
 type PermissionRequestDataLoader =
     Arc<dyn Fn(&str, &str) -> Result<Option<PermissionRequestData>> + Send + Sync>;
 
@@ -71,6 +72,7 @@ pub(super) struct RouteLoaders {
     peer_out_messages: PeerOutMessageLoader,
     delete_queued_prompts: QueuedPromptDeleter,
     proposals: ProposalLoader,
+    todos: TodoLoader,
     permission_request_data: PermissionRequestDataLoader,
     message_cache: MessageCache,
     running_background_task_cache: RunningBackgroundTaskCache,
@@ -93,10 +95,19 @@ impl RouteLoaders {
             peer_out_messages: Arc::new(load_peer_out_messages),
             delete_queued_prompts: Arc::new(delete_queued_prompts),
             proposals: Arc::new(load_proposals),
+            todos: Arc::new(|_| Ok(Vec::new())),
             permission_request_data: Arc::new(|_, _| Ok(None)),
             message_cache: MessageCache::default(),
             running_background_task_cache: RunningBackgroundTaskCache::default(),
         }
+    }
+
+    pub(super) fn with_todo_loader(
+        mut self,
+        load_todos: impl Fn(&str) -> Result<Vec<AgentTodo>> + Send + Sync + 'static,
+    ) -> Self {
+        self.todos = Arc::new(load_todos);
+        self
     }
 
     pub(super) fn with_permission_request_data_loader(
@@ -256,6 +267,7 @@ fn load_conversation_with_queued_prompts(
         .iter()
         .map(proposal_chat_item)
         .collect::<Result<Vec<_>>>()?;
+    let todos = (loaders.todos)(session_id)?;
     let parent = parent_session(&session, &mut load_session)?;
     let main_permission_pending = session
         .pending_permission_agent_ids
@@ -289,7 +301,10 @@ fn load_conversation_with_queued_prompts(
         decisions.clone(),
         queued_prompts.clone(),
         peer_out_messages.clone(),
-        proposals.clone(),
+        MessageCacheRecords {
+            proposals: proposals.clone(),
+            todos: todos.clone(),
+        },
     )?;
     if let Some(mut cached) = loaders.message_cache.get(session_id, &cache_key) {
         let elapsed = cached.cached_at.elapsed().as_secs();
@@ -354,6 +369,21 @@ fn load_conversation_with_queued_prompts(
             .any(|message| matches!(message, ChatItem::Proposal { seq: existing, .. } if existing == &proposal.seq))
         {
             messages.push(proposal.item.clone());
+        }
+    }
+
+    for todo in &todos {
+        if !messages
+            .iter()
+            .any(|message| matches!(message, ChatItem::Todo { seq, .. } if *seq == todo.seq))
+        {
+            messages.push(ChatItem::Todo {
+                seq: todo.seq,
+                title: todo.title.clone(),
+                detail: todo.detail.clone(),
+                completed: todo.completed_at.is_some(),
+                comment: todo.comment.clone(),
+            });
         }
     }
 
@@ -648,6 +678,13 @@ enum ChatItem {
         answer: Option<ProposalAnswer>,
         resolved: bool,
     },
+    Todo {
+        seq: i64,
+        title: String,
+        detail: Option<String>,
+        completed: bool,
+        comment: Option<String>,
+    },
     Permission {
         #[serde(rename = "requestId", skip_serializing_if = "Option::is_none")]
         request_id: Option<String>,
@@ -787,7 +824,7 @@ mod tests {
         routes_with_proposals_and_peer_out_messages,
     };
     use crate::commands::agent::store::{
-        AgentDecision, AgentProposal, PermissionRequestData, WatchWebPeerOutMessage,
+        AgentDecision, AgentProposal, AgentTodo, PermissionRequestData, WatchWebPeerOutMessage,
         WatchWebQueuedPrompt,
     };
     use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
@@ -1212,6 +1249,81 @@ mod tests {
                 },
                 "resolved": resolved,
             }]),
+        );
+    }
+
+    #[tokio::test]
+    async fn messages_route_includes_recorded_todos_and_completion_state() {
+        let epoch = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let session = stored_session();
+        let todos = vec![
+            AgentTodo {
+                session_id: "fixture-session".to_string(),
+                seq: 1,
+                title: "Check the page".to_string(),
+                detail: Some("Use a phone".to_string()),
+                created_at: epoch,
+                completed_at: None,
+                comment: None,
+            },
+            AgentTodo {
+                session_id: "fixture-session".to_string(),
+                seq: 2,
+                title: "Update settings".to_string(),
+                detail: None,
+                created_at: epoch,
+                completed_at: Some(epoch),
+                comment: Some("Done".to_string()),
+            },
+        ];
+        let loaders = RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
+        .with_todo_loader(move |_| Ok(todos.clone()));
+        let router = routes_with_proposals_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            loaders,
+        );
+
+        assert_eq!(
+            message_response(&router).await,
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                json!({
+                    "messages": [
+                        {
+                            "type": "todo",
+                            "seq": 1,
+                            "title": "Check the page",
+                            "detail": "Use a phone",
+                            "completed": false,
+                            "comment": null,
+                        },
+                        {
+                            "type": "todo",
+                            "seq": 2,
+                            "title": "Update settings",
+                            "detail": null,
+                            "completed": true,
+                            "comment": "Done",
+                        },
+                    ],
+                    "backgroundTasks": [],
+                    "start": 0,
+                    "total": 2,
+                    "decisions": [],
+                    "hasUnansweredProposal": false,
+                    "activeQuestionIndex": null,
+                }),
+            ),
         );
     }
 

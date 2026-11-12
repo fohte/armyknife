@@ -17,6 +17,7 @@ mod peer_out_messages;
 mod permission_requests;
 mod proposals;
 mod queued_prompts;
+mod todos;
 mod wake;
 mod web_state;
 
@@ -41,6 +42,10 @@ pub(crate) use proposals::{
 pub(crate) use queued_prompts::WatchWebQueuedPrompt;
 pub(crate) use queued_prompts::{
     delete_watch_web_queued_prompts, insert_watch_web_queued_prompt, watch_web_queued_prompts,
+};
+pub(crate) use todos::AgentTodo;
+pub(crate) use todos::{
+    add_agent_todo, agent_todos, complete_agent_todo, incomplete_agent_todo_titles,
 };
 pub(crate) use web_state::WatchWebSessionState;
 pub(crate) use web_state::set_watch_web_compacting;

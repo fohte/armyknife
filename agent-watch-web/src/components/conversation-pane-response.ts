@@ -151,6 +151,16 @@ function isChatItem(value: unknown): value is ChatItem {
         (value['answer'] === null || isProposalAnswer(value['answer'])) &&
         typeof value['resolved'] === 'boolean'
       )
+    case 'todo':
+      return (
+        typeof value['seq'] === 'number' &&
+        Number.isInteger(value['seq']) &&
+        value['seq'] > 0 &&
+        typeof value['title'] === 'string' &&
+        (value['detail'] === null || typeof value['detail'] === 'string') &&
+        typeof value['completed'] === 'boolean' &&
+        (value['comment'] === null || typeof value['comment'] === 'string')
+      )
     case 'permission':
       return (
         (value['requestId'] === undefined ||

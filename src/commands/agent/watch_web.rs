@@ -167,6 +167,7 @@ fn app(restart_signal: watch::Receiver<bool>) -> Router {
             store::delete_watch_web_queued_prompts,
             store::agent_proposals,
         )
+        .with_todo_loader(store::agent_todos)
         .with_permission_request_data_loader(|session_id, request_id| {
             store::permission_request_data(&store::sessions_dir()?, session_id, request_id)
         }),

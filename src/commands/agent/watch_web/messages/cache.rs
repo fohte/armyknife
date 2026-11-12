@@ -6,7 +6,7 @@ use std::time::Instant;
 use anyhow::Context;
 
 use crate::commands::agent::store::{
-    AgentDecision, AgentProposal, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
+    AgentDecision, AgentProposal, AgentTodo, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
 };
 use crate::commands::agent::types::{Engine, Session};
 
@@ -15,6 +15,12 @@ use super::{ConversationResponse, ParentSession, RouteLoaders};
 
 const MAX_CACHED_SESSIONS: usize = 8;
 const MAX_CACHED_BACKGROUND_TASK_SESSIONS: usize = 256;
+
+#[derive(Clone, Default, PartialEq, Eq)]
+pub(super) struct MessageCacheRecords {
+    pub(super) proposals: Vec<AgentProposal>,
+    pub(super) todos: Vec<AgentTodo>,
+}
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct MessageCacheKey {
@@ -30,6 +36,7 @@ pub(super) struct MessageCacheKey {
     pub(super) queued_prompts: Vec<WatchWebQueuedPrompt>,
     pub(super) peer_out_messages: Vec<WatchWebPeerOutMessage>,
     pub(super) proposals: Vec<AgentProposal>,
+    pub(super) todos: Vec<AgentTodo>,
 }
 
 impl MessageCacheKey {
@@ -40,7 +47,7 @@ impl MessageCacheKey {
         decisions: Vec<AgentDecision>,
         queued_prompts: Vec<WatchWebQueuedPrompt>,
         peer_out_messages: Vec<WatchWebPeerOutMessage>,
-        proposals: Vec<AgentProposal>,
+        records: MessageCacheRecords,
     ) -> anyhow::Result<Self> {
         Ok(Self {
             engine: session.engine,
@@ -57,7 +64,8 @@ impl MessageCacheKey {
             decisions,
             queued_prompts,
             peer_out_messages,
-            proposals,
+            proposals: records.proposals,
+            todos: records.todos,
         })
     }
 }
@@ -303,7 +311,9 @@ impl MessageCache {
 mod tests {
     use serde_json::json;
 
-    use super::{ConversationResponse, MessageCacheKey, refresh_image_availability_with};
+    use super::{
+        ConversationResponse, MessageCacheKey, MessageCacheRecords, refresh_image_availability_with,
+    };
     use crate::commands::agent::types::{MAIN_THREAD_AGENT_KEY, Session};
     use crate::commands::agent::watch_web::messages::{ChatItem, UserContentPart};
 
@@ -328,7 +338,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
-            Vec::new(),
+            MessageCacheRecords::default(),
         )
         .unwrap();
         session.last_message = Some("Later response.".to_string());
@@ -339,7 +349,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
-            Vec::new(),
+            MessageCacheRecords::default(),
         )
         .unwrap();
 
@@ -369,7 +379,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
-            Vec::new(),
+            MessageCacheRecords::default(),
         )
         .unwrap();
         session.pending_permission_request_ids.insert(
@@ -383,7 +393,7 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
-            Vec::new(),
+            MessageCacheRecords::default(),
         )
         .unwrap();
 
