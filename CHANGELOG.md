@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.642](https://github.com/fohte/armyknife/compare/v0.1.641...v0.1.642) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** stop SSE while hidden ([#1653](https://github.com/fohte/armyknife/issues/1653)) ([194b27a](https://github.com/fohte/armyknife/commit/194b27a90c6103e14111cba1113ef4223534479d))
+
 ## [0.1.641](https://github.com/fohte/armyknife/compare/v0.1.640...v0.1.641) (2026-11-12)
 
 
