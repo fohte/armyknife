@@ -196,8 +196,8 @@ export const PausedSessionIsVisibleOnIPhone: Story = {
   decorators: [iPhoneViewportDecorator],
 }
 
-export const TodayCanBeChangedFromTheIPhoneConversation: Story = {
-  name: 'The iPhone conversation header shows the active TODAY toggle',
+export const StarredCanBeChangedFromTheIPhoneConversation: Story = {
+  name: 'The iPhone conversation header shows the active Starred toggle',
   args: {
     isMobile: true,
     isToday: true,
@@ -569,8 +569,8 @@ export const DoneSessionNeedsDecisionReview: Story = {
   },
 }
 
-export const DesktopHeaderShowsClosedStatusPanelAndTodayAction: Story = {
-  name: 'The desktop header shows closed status and TODAY controls',
+export const DesktopHeaderShowsClosedStatusPanelAndStarredControl: Story = {
+  name: 'The desktop header shows closed status and Starred controls',
   args: {
     backgroundTasks: [
       {
@@ -585,8 +585,8 @@ export const DesktopHeaderShowsClosedStatusPanelAndTodayAction: Story = {
   },
 }
 
-export const DesktopHeaderShowsOpenStatusPanelAndTodayAction: Story = {
-  name: 'The desktop header shows open status and a starred TODAY action',
+export const DesktopHeaderShowsOpenStatusPanelAndStarredControl: Story = {
+  name: 'The desktop header shows open status and an active Starred control',
   args: {
     backgroundTasks: [
       {

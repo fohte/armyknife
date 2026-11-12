@@ -596,18 +596,19 @@ it('refetches the initial tree when a member changes while it loads', async () =
   })
 })
 
-function todayToggleSnapshot(onToggleToday: ReturnType<typeof vi.fn>) {
+function starredToggleSnapshot(onToggleToday: ReturnType<typeof vi.fn>) {
   const toggle = container.querySelector<HTMLButtonElement>(
     '.mobile-conversation-today',
   )
   return {
     label: toggle?.getAttribute('aria-label'),
     pressed: toggle?.getAttribute('aria-pressed'),
+    title: toggle?.getAttribute('title'),
     calls: onToggleToday.mock.calls,
   }
 }
 
-it('toggles TODAY from the iPhone conversation header', () => {
+it('toggles Starred from the iPhone conversation header', () => {
   const onToggleToday = vi.fn()
   renderView(
     () => Promise.resolve(true),
@@ -631,9 +632,10 @@ it('toggles TODAY from the iPhone conversation header', () => {
     toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
 
-  expect(todayToggleSnapshot(onToggleToday)).toEqual({
-    label: 'Add to TODAY',
+  expect(starredToggleSnapshot(onToggleToday)).toEqual({
+    label: 'Add to Starred',
     pressed: 'false',
+    title: 'Add to Starred',
     calls: [[true]],
   })
 })
@@ -3613,7 +3615,7 @@ it('shows the unreviewed count instead of the total on the Decisions tab', () =>
   expect(snapshot()).toEqual({
     tab: 'Decisions1',
     decisions: ['unreviewed'],
-    progress: '0 / 1 reviewed',
+    progress: '1 / 2 reviewed',
   })
 })
 
@@ -3888,7 +3890,7 @@ it('shows the open action when the status panel is closed', () => {
   })
 })
 
-it('keeps Decisions in the status panel and toggles TODAY from the header', () => {
+it('keeps Decisions in the status panel and toggles Starred from the header', () => {
   const onToggleToday = vi.fn<(isToday: boolean) => void>()
   renderView(
     vi.fn(() => Promise.resolve(true)),
@@ -3922,18 +3924,20 @@ it('keeps Decisions in the status panel and toggles TODAY from the header', () =
     label: toggle.getAttribute('aria-label'),
     icon: toggle.textContent,
     pressed: toggle.getAttribute('aria-pressed'),
+    title: toggle.getAttribute('title'),
     calls: onToggleToday.mock.calls,
   })
   expect(snapshot()).toEqual({
     noDecisionsAction: null,
-    label: 'Add to TODAY',
+    label: 'Add to Starred',
     icon: '☆',
     pressed: 'false',
+    title: 'Add to Starred',
     calls: [[true]],
   })
 })
 
-it('keeps the TODAY star available when a session has no decisions', () => {
+it('keeps the Starred toggle available when a session has no decisions', () => {
   renderView(vi.fn(() => Promise.resolve(true)))
 
   const snapshot = () => ({
@@ -3943,7 +3947,7 @@ it('keeps the TODAY star available when a session has no decisions', () => {
   expect(snapshot()).toEqual({ star: true, decisions: null })
 })
 
-it('removes a session from TODAY from the desktop header', () => {
+it('removes a session from Starred from the desktop header', () => {
   const onToggleToday = vi.fn<(isToday: boolean) => void>()
   renderView(
     vi.fn(() => Promise.resolve(true)),
@@ -3969,11 +3973,13 @@ it('removes a session from TODAY from the desktop header', () => {
   const snapshot = () => ({
     label: toggle.getAttribute('aria-label'),
     pressed: toggle.getAttribute('aria-pressed'),
+    title: toggle.getAttribute('title'),
     calls: onToggleToday.mock.calls,
   })
   expect(snapshot()).toEqual({
-    label: 'Remove from TODAY',
+    label: 'Remove from Starred',
     pressed: 'true',
+    title: 'Remove from Starred',
     calls: [[false]],
   })
 })

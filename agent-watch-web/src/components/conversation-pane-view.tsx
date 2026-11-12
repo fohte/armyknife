@@ -21,6 +21,7 @@ import type {
 import { SessionHeading } from '#components/session-heading'
 import { SessionLinkElapsedSecondsContext } from '#components/session-link-elapsed-seconds'
 import { SessionTaskLinks } from '#components/session-task-links'
+import { StarredSessionToggle } from '#components/starred-session-toggle'
 import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
 import { useConversationFileDrop } from '#components/use-conversation-file-drop'
@@ -338,18 +339,12 @@ export function ConversationPaneView({
                 Close
               </Button>
             ) : null}
-            <Button
+            <StarredSessionToggle
               className="mobile-conversation-today cursor-pointer"
-              type="button"
-              variant="plain"
-              aria-label={isToday ? 'Remove from TODAY' : 'Add to TODAY'}
-              aria-pressed={isToday}
-              onClick={() => {
-                onToggleToday?.(!isToday)
-              }}
-            >
-              {isToday ? '★' : '☆'}
-            </Button>
+              size="mobile"
+              isStarred={isToday}
+              onToggleToday={onToggleToday}
+            />
           </>
         ) : (
           <>
@@ -415,19 +410,12 @@ export function ConversationPaneView({
                       </span>
                     ) : null}
                   </Button>
-                  <Button
+                  <StarredSessionToggle
                     className="conversation-today-toggle"
-                    type="button"
-                    variant="plain"
-                    aria-label={isToday ? 'Remove from TODAY' : 'Add to TODAY'}
-                    aria-pressed={isToday}
-                    title={isToday ? 'Remove from TODAY' : 'Add to TODAY'}
-                    onClick={() => {
-                      onToggleToday?.(!isToday)
-                    }}
-                  >
-                    {isToday ? '★' : '☆'}
-                  </Button>
+                    size="desktop"
+                    isStarred={isToday}
+                    onToggleToday={onToggleToday}
+                  />
                   {session.pullRequest ? (
                     <a
                       className="conversation-pr-link"

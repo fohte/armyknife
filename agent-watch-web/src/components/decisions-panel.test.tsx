@@ -147,8 +147,42 @@ it('hides ok decisions and keeps change requests visible', () => {
   })
   expect(visibleState()).toEqual({
     cards: ['change'],
-    reviewProgress: '1 / 1 reviewed',
+    reviewProgress: '2 / 2 reviewed',
     changeFeedback: 'Change requested',
+  })
+})
+
+it('confirms when all decisions are approved', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <DecisionsPanel
+        decisions={decisions.map((decision) => ({
+          ...decision,
+          review: 'ok',
+        }))}
+        session={session}
+        selectedSeq={1}
+        onSelect={vi.fn()}
+        onOk={vi.fn(() => Promise.resolve(true))}
+        onChange={vi.fn(() => Promise.resolve(true))}
+      />,
+    )
+  })
+
+  const snapshot = () => ({
+    progress: container.querySelector('.decisions-panel-header span')
+      ?.textContent,
+    cards: Array.from(
+      container.querySelectorAll('.decision-card--panel'),
+      (card) => card.getAttribute('data-review'),
+    ),
+    emptyState: container.querySelector('.decisions-panel-empty')?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    progress: '2 / 2 reviewed',
+    cards: [],
+    emptyState: 'All decisions are approved.',
   })
 })
 

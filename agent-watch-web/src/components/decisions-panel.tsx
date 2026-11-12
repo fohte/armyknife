@@ -57,7 +57,7 @@ export function DecisionsPanel({
     displayedDecisions.find((decision) => decision.seq === selectedSeq) ??
     displayedDecisions.find((decision) => decision.review === null) ??
     displayedDecisions[0]
-  const reviewedCount = displayedDecisions.filter(
+  const reviewedCount = decisions.filter(
     (decision) => decision.review !== null,
   ).length
   const targetName = changeTargetName(session)
@@ -151,38 +151,42 @@ export function DecisionsPanel({
       <header className="decisions-panel-header">
         <h2>Decisions in this session</h2>
         <span>
-          {String(reviewedCount)} / {String(displayedDecisions.length)} reviewed
+          {String(reviewedCount)} / {String(decisions.length)} reviewed
         </span>
       </header>
       <div className="decisions-panel-list">
-        {orderedDecisions.map((decision) => {
-          const selected = decision.seq === selectedDecision?.seq
-          return (
-            <DecisionCard
-              key={decision.seq}
-              decision={decision}
-              variant="panel"
-              relativeTimeReference={relativeTimeReference}
-              expanded={selected}
-              selected={selected}
-              editing={editingSeq === decision.seq}
-              targetName={targetName}
-              onSelect={() => {
-                onSelect(decision.seq)
-              }}
-              onOk={() => onOk(decision.seq)}
-              onBeginChange={() => {
-                onSelect(decision.seq)
-                setEditingSeq(decision.seq)
-              }}
-              onRequestChange={async (comment) => {
-                const success = await onChange(decision.seq, comment)
-                if (success) setEditingSeq(null)
-                return success
-              }}
-            />
-          )
-        })}
+        {orderedDecisions.length === 0 && decisions.length > 0 ? (
+          <p className="decisions-panel-empty">All decisions are approved.</p>
+        ) : (
+          orderedDecisions.map((decision) => {
+            const selected = decision.seq === selectedDecision?.seq
+            return (
+              <DecisionCard
+                key={decision.seq}
+                decision={decision}
+                variant="panel"
+                relativeTimeReference={relativeTimeReference}
+                expanded={selected}
+                selected={selected}
+                editing={editingSeq === decision.seq}
+                targetName={targetName}
+                onSelect={() => {
+                  onSelect(decision.seq)
+                }}
+                onOk={() => onOk(decision.seq)}
+                onBeginChange={() => {
+                  onSelect(decision.seq)
+                  setEditingSeq(decision.seq)
+                }}
+                onRequestChange={async (comment) => {
+                  const success = await onChange(decision.seq, comment)
+                  if (success) setEditingSeq(null)
+                  return success
+                }}
+              />
+            )
+          })
+        )}
       </div>
       <footer
         className="decisions-panel-footer"
