@@ -9,6 +9,7 @@ use crate::commands::agent::types::Engine;
 const TRANSCRIPT_PROBE_COUNT: u64 = 16;
 const TRANSCRIPT_PROBE_BYTES: u64 = 64;
 const TRANSCRIPT_FULL_PREFIX_LIMIT: u64 = 2048;
+const TRANSCRIPT_SNAPSHOT_ATTEMPTS: usize = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::commands::agent::watch_web::messages) enum TranscriptChange {
@@ -34,7 +35,7 @@ pub(in crate::commands::agent::watch_web::messages) struct TranscriptFingerprint
     changed_at_nanoseconds: i64,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct TranscriptProbe {
     offset: u64,
     bytes: Vec<u8>,
@@ -118,7 +119,7 @@ impl TranscriptFingerprint {
                 }
                 let mut file = File::open(&self.source_path)
                     .with_context(|| format!("open transcript {}", self.source_path.display()))?;
-                // Metadata cannot locate writes inside the old prefix, so check bounded samples.
+                // A full prefix read here would make every append scale with transcript history.
                 if !self.matches_file_metadata(&file)?
                     || !prefix_matches(&mut file, &self.source_path, &previous.prefix_probes)?
                 {
@@ -177,58 +178,101 @@ pub(super) fn transcript_fingerprint(
     } else {
         path.to_path_buf()
     };
-    let mut file = match File::open(&source_path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("open transcript {}", source_path.display()));
+    for _ in 0..TRANSCRIPT_SNAPSHOT_ATTEMPTS {
+        let mut file = match File::open(&source_path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("open transcript {}", source_path.display()));
+            }
+        };
+        let metadata = file
+            .metadata()
+            .with_context(|| format!("read transcript metadata {}", source_path.display()))?;
+        let modified = metadata.modified().with_context(|| {
+            format!(
+                "read transcript modification time {}",
+                source_path.display()
+            )
+        })?;
+        let Some(prefix_probes) =
+            transcript_prefix_probes(&mut file, &source_path, metadata.len())?
+        else {
+            continue;
+        };
+        if !metadata_matches_snapshot(&source_path, &metadata, modified, &file)? {
+            continue;
         }
-    };
-    let metadata = file
+        #[cfg(unix)]
+        let (device, inode, changed_at_seconds, changed_at_nanoseconds) = {
+            use std::os::unix::fs::MetadataExt;
+
+            (
+                metadata.dev(),
+                metadata.ino(),
+                metadata.ctime(),
+                metadata.ctime_nsec(),
+            )
+        };
+        return Ok(Some(TranscriptFingerprint {
+            source_path,
+            len: metadata.len(),
+            modified,
+            prefix_probes,
+            #[cfg(unix)]
+            device,
+            #[cfg(unix)]
+            inode,
+            #[cfg(unix)]
+            changed_at_seconds,
+            #[cfg(unix)]
+            changed_at_nanoseconds,
+        }));
+    }
+    anyhow::bail!(
+        "transcript changed while reading its fingerprint {}",
+        source_path.display()
+    )
+}
+
+fn metadata_matches_snapshot(
+    path: &Path,
+    snapshot: &std::fs::Metadata,
+    snapshot_modified: std::time::SystemTime,
+    file: &File,
+) -> anyhow::Result<bool> {
+    let current = file
         .metadata()
-        .with_context(|| format!("read transcript metadata {}", source_path.display()))?;
-    let modified = metadata.modified().with_context(|| {
-        format!(
-            "read transcript modification time {}",
-            source_path.display()
-        )
-    })?;
-    let prefix_probes = transcript_prefix_probes(&mut file, &source_path, metadata.len())?;
+        .with_context(|| format!("read transcript metadata {}", path.display()))?;
+    let current_modified = current
+        .modified()
+        .with_context(|| format!("read transcript modification time {}", path.display()))?;
+    if current.len() != snapshot.len() || current_modified != snapshot_modified {
+        return Ok(false);
+    }
     #[cfg(unix)]
-    let (device, inode, changed_at_seconds, changed_at_nanoseconds) = {
+    {
         use std::os::unix::fs::MetadataExt;
 
-        (
-            metadata.dev(),
-            metadata.ino(),
-            metadata.ctime(),
-            metadata.ctime_nsec(),
-        )
-    };
-    Ok(Some(TranscriptFingerprint {
-        source_path,
-        len: metadata.len(),
-        modified,
-        prefix_probes,
-        #[cfg(unix)]
-        device,
-        #[cfg(unix)]
-        inode,
-        #[cfg(unix)]
-        changed_at_seconds,
-        #[cfg(unix)]
-        changed_at_nanoseconds,
-    }))
+        if current.dev() != snapshot.dev()
+            || current.ino() != snapshot.ino()
+            || current.ctime() != snapshot.ctime()
+            || current.ctime_nsec() != snapshot.ctime_nsec()
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn transcript_prefix_probes(
     file: &mut File,
     path: &Path,
     len: u64,
-) -> anyhow::Result<Vec<TranscriptProbe>> {
+) -> anyhow::Result<Option<Vec<TranscriptProbe>>> {
     if len == 0 || path.extension().and_then(|extension| extension.to_str()) == Some("zst") {
-        return Ok(Vec::new());
+        return Ok(Some(Vec::new()));
     }
 
     let sample_bytes = if len <= TRANSCRIPT_FULL_PREFIX_LIMIT {
@@ -239,6 +283,7 @@ fn transcript_prefix_probes(
     let offsets = if len <= TRANSCRIPT_FULL_PREFIX_LIMIT {
         vec![0]
     } else {
+        // Keep checks constant-sized so a large transcript does not dominate append latency.
         let span = len - sample_bytes;
         let denominator = TRANSCRIPT_PROBE_COUNT - 1;
         (0..TRANSCRIPT_PROBE_COUNT)
@@ -252,13 +297,13 @@ fn transcript_prefix_probes(
         let mut bytes = vec![0; sample_bytes as usize];
         if let Err(error) = file.read_exact(&mut bytes) {
             if error.kind() == std::io::ErrorKind::UnexpectedEof {
-                return Ok(Vec::new());
+                return Ok(None);
             }
             return Err(error).with_context(|| format!("read transcript {}", path.display()));
         }
         probes.push(TranscriptProbe { offset, bytes });
     }
-    Ok(probes)
+    Ok(Some(probes))
 }
 
 fn prefix_matches(
@@ -285,11 +330,12 @@ fn prefix_matches(
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
     use std::io::Write;
 
     use rstest::rstest;
 
-    use super::{TranscriptChange, transcript_fingerprint};
+    use super::{TranscriptChange, transcript_fingerprint, transcript_prefix_probes};
     use crate::commands::agent::types::Engine;
 
     #[test]
@@ -336,6 +382,20 @@ mod tests {
                 .read_delta_from(&previous)
                 .expect("delta should be read"),
             (TranscriptChange::Rewritten, Vec::new()),
+        );
+    }
+
+    #[test]
+    fn transcript_prefix_probe_rejects_an_unstable_snapshot() {
+        let directory = tempfile::tempdir().expect("temporary directory should be created");
+        let path = directory.path().join("transcript.jsonl");
+        std::fs::write(&path, b"x").expect("transcript should be written");
+        let mut file = File::open(&path).expect("transcript should open");
+
+        assert_eq!(
+            transcript_prefix_probes(&mut file, &path, 2)
+                .expect("shortened transcript is an unstable snapshot"),
+            None,
         );
     }
 
