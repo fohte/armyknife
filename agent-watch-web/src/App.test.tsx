@@ -2259,20 +2259,18 @@ it('closes each done session from the palette command', async () => {
 })
 
 it('stops the close batch and reports the failed session', async () => {
-  const fetchMock = vi
-    .fn<typeof fetch>()
-    .mockImplementation((input) =>
-      requestUrl(input).endsWith('/close')
-        ? Promise.resolve(
-            new Response(
-              JSON.stringify({
-                error: 'Could not close Unarchivable session.',
-              }),
-              { status: 500 },
-            ),
-          )
-        : mockSessionActionFetch(input),
-    )
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) =>
+    requestUrl(input).endsWith('/close')
+      ? Promise.resolve(
+          new Response(
+            JSON.stringify({
+              error: 'Could not close Unarchivable session.',
+            }),
+            { status: 500 },
+          ),
+        )
+      : mockSessionActionFetch(input),
+  )
   vi.stubGlobal('fetch', fetchMock)
   renderApp()
   publishSessions({
@@ -2309,20 +2307,18 @@ it('stops the close batch and reports the failed session', async () => {
 })
 
 it('closes all Done sessions from the Inbox heading and reports failures', async () => {
-  const fetchMock = vi
-    .fn<typeof fetch>()
-    .mockImplementation((input) =>
-      requestUrl(input).endsWith('/close')
-        ? Promise.resolve(
-            new Response(
-              JSON.stringify({
-                error: 'Could not close Unarchivable session.',
-              }),
-              { status: 500 },
-            ),
-          )
-        : mockSessionActionFetch(input),
-    )
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) =>
+    requestUrl(input).endsWith('/close')
+      ? Promise.resolve(
+          new Response(
+            JSON.stringify({
+              error: 'Could not close Unarchivable session.',
+            }),
+            { status: 500 },
+          ),
+        )
+      : mockSessionActionFetch(input),
+  )
   vi.stubGlobal('fetch', fetchMock)
   renderApp()
   publishSessions({
