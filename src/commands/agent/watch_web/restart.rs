@@ -138,18 +138,35 @@ mod tests {
     use std::io;
     use std::time::Duration;
 
+    use rstest::rstest;
     use tokio::sync::watch;
 
     use super::{ExecutableIdentity, ServerOutcome};
 
+    #[rstest]
+    #[case::graceful_shutdown(true)]
+    #[case::shutdown_deadline(false)]
     #[tokio::test]
-    async fn continues_restarting_when_a_server_does_not_shutdown_before_the_deadline() {
+    async fn continues_restarting_after_shutdown_or_deadline(#[case] shutdown_on_signal: bool) {
         let (restart_sender, restart_receiver) = watch::channel(false);
+        let mut server_receiver = restart_receiver.clone();
+        let server = async move {
+            if shutdown_on_signal {
+                server_receiver.changed().await.map_err(io::Error::other)?;
+                Ok(())
+            } else {
+                std::future::pending::<io::Result<()>>().await
+            }
+        };
         let result = super::wait_for_server_or_restart(
-            std::future::pending::<io::Result<()>>(),
+            server,
             async {},
             restart_sender,
-            Duration::from_millis(1),
+            if shutdown_on_signal {
+                Duration::from_secs(1)
+            } else {
+                Duration::from_millis(1)
+            },
         )
         .await;
 
