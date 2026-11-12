@@ -1,14 +1,105 @@
 use std::collections::{HashMap, HashSet};
 
+use serde::Serialize;
+
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Session, SessionPrContext};
 use crate::infra::git::GitRepo;
-use crate::infra::github::{BranchPrQuery, GitHubClient};
+use crate::infra::github::{BranchPrQuery, GitHubClient, PrCiState, PrState};
 use crate::infra::tq::{TqChecklist, TqClient, TqGithubLink};
+use crate::shared::config::AgentConfig;
 
 use super::super::session_pr_context::{self, Resolution};
 use super::progress::{FetchedDelegate, FetchedProgress, ProgressFetchScope};
-use super::progress_batches::{build_implementation_plan, pull_request_queries};
+use super::progress_batches::{
+    build_implementation_plan, pull_request_list_items, pull_request_queries,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(in crate::commands::agent) struct PullRequestListItem {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub state: Option<PrState>,
+    pub ci_state: Option<PrCiState>,
+    pub review_status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(in crate::commands::agent) struct PullRequestListResponse {
+    pub pull_requests: Vec<PullRequestListItem>,
+    pub error: Option<String>,
+}
+
+pub(in crate::commands::agent) async fn fetch_pull_request_list(
+    selected_session_id: String,
+    task_id: Option<&str>,
+    sessions: &[Session],
+    task_ids_by_session: &HashMap<String, Vec<String>>,
+    agent_config: &AgentConfig,
+) -> Result<PullRequestListResponse, String> {
+    let request_scope =
+        progress_scope(&selected_session_id, task_id, sessions, task_ids_by_session);
+    let fetched =
+        fetch_progress_for_sessions(selected_session_id, request_scope, sessions.to_vec()).await?;
+    let pull_requests = pull_request_list_items(
+        &fetched.delegated,
+        fetched.implementation.as_ref(),
+        agent_config,
+    );
+    Ok(PullRequestListResponse {
+        pull_requests,
+        error: fetched.github_error,
+    })
+}
+
+fn progress_scope(
+    selected_session_id: &str,
+    task_id: Option<&str>,
+    sessions: &[Session],
+    task_ids_by_session: &HashMap<String, Vec<String>>,
+) -> ProgressFetchScope {
+    let Some(task_id) = task_id else {
+        return ProgressFetchScope {
+            task_id: None,
+            session_ids: None,
+            other_task_session_ids: Vec::new(),
+        };
+    };
+
+    let mut task_session_ids = task_ids_by_session
+        .iter()
+        .filter(|(session_id, _)| {
+            sessions
+                .iter()
+                .any(|session| session.session_id.as_str() == session_id.as_str())
+        })
+        .filter(|(_, task_ids)| task_ids.iter().any(|id| id == task_id))
+        .map(|(session_id, _)| session_id.clone())
+        .collect::<HashSet<_>>();
+    task_session_ids.insert(selected_session_id.to_string());
+    let mut session_ids = task_session_ids.iter().cloned().collect::<Vec<_>>();
+    session_ids.sort_unstable();
+    let mut other_task_session_ids = sessions
+        .iter()
+        .filter(|session| !task_session_ids.contains(&session.session_id))
+        .filter(|session| {
+            task_ids_by_session
+                .get(&session.session_id)
+                .is_some_and(|task_ids| task_ids.iter().any(|id| id != task_id))
+        })
+        .map(|session| session.session_id.clone())
+        .collect::<Vec<_>>();
+    other_task_session_ids.sort_unstable();
+
+    ProgressFetchScope {
+        task_id: Some(task_id.to_string()),
+        session_ids: Some(session_ids),
+        other_task_session_ids,
+    }
+}
 
 pub(super) async fn fetch_progress(
     selected_session_id: String,
@@ -18,6 +109,14 @@ pub(super) async fn fetch_progress(
         .await
         .map_err(|error| format!("failed to read agent sessions: {error}"))?
         .map_err(|error| format!("failed to read agent sessions: {error}"))?;
+    fetch_progress_for_sessions(selected_session_id, request_scope, sessions).await
+}
+
+async fn fetch_progress_for_sessions(
+    selected_session_id: String,
+    request_scope: ProgressFetchScope,
+    sessions: Vec<Session>,
+) -> Result<FetchedProgress, String> {
     let delegated = match request_scope.session_ids.as_ref() {
         Some(session_ids) => {
             let session_ids = session_ids.iter().cloned().collect::<HashSet<_>>();
@@ -295,14 +394,15 @@ fn branch_query_from_context(context: SessionPrContext) -> BranchLookup {
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
-    use std::collections::{BTreeMap, BTreeSet, HashSet};
+    use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
     use std::path::PathBuf;
 
     use chrono::{TimeZone, Utc};
     use rstest::{fixture, rstest};
 
     use super::{
-        BranchLookup, Resolution, branch_query_for_with, direct_children, task_descendant_children,
+        BranchLookup, ProgressFetchScope, Resolution, branch_query_for_with, direct_children,
+        progress_scope, task_descendant_children,
     };
     use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionStatus};
     use crate::infra::github::BranchPrQuery;
@@ -325,6 +425,44 @@ mod tests {
                 .map(|session| session.session_id)
                 .collect::<Vec<_>>(),
             vec!["denied-child", "direct-newer", "direct-older"],
+        );
+    }
+
+    #[test]
+    fn task_scope_includes_sessions_linked_to_the_primary_task_and_other_task_barriers() {
+        let sessions = vec![
+            session("owner", vec![], 1),
+            session("same-task", vec!["owner"], 2),
+            session("other-task", vec!["owner"], 3),
+            session("unlinked", vec!["owner"], 4),
+        ];
+        let task_ids_by_session = HashMap::from([
+            ("owner".to_string(), vec!["task-main".to_string()]),
+            ("same-task".to_string(), vec!["task-main".to_string()]),
+            ("other-task".to_string(), vec!["task-other".to_string()]),
+        ]);
+
+        assert_eq!(
+            progress_scope("owner", Some("task-main"), &sessions, &task_ids_by_session),
+            ProgressFetchScope {
+                task_id: Some("task-main".to_string()),
+                session_ids: Some(vec!["owner".to_string(), "same-task".to_string()]),
+                other_task_session_ids: vec!["other-task".to_string()],
+            },
+        );
+    }
+
+    #[test]
+    fn taskless_scope_uses_direct_children() {
+        let sessions = vec![session("owner", vec![], 1)];
+
+        assert_eq!(
+            progress_scope("owner", None, &sessions, &HashMap::new()),
+            ProgressFetchScope {
+                task_id: None,
+                session_ids: None,
+                other_task_session_ids: Vec::new(),
+            },
         );
     }
 

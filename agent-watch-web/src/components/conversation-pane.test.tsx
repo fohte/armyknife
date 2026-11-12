@@ -166,6 +166,13 @@ function requestUrl(input: RequestInfo | URL) {
   return input instanceof URL ? input.href : input.url
 }
 
+function setPageVisibility(visibilityState: DocumentVisibilityState) {
+  Object.defineProperty(document, 'visibilityState', {
+    configurable: true,
+    value: visibilityState,
+  })
+}
+
 const permission: ChatItem = {
   type: 'permission',
   requestId: 'permission-request-main',
@@ -188,6 +195,10 @@ const originalExecCommand = Object.getOwnPropertyDescriptor(
 const originalClipboard = Object.getOwnPropertyDescriptor(
   navigator,
   'clipboard',
+)
+const originalVisibilityState = Object.getOwnPropertyDescriptor(
+  document,
+  'visibilityState',
 )
 type ActionHandler = (
   action: string,
@@ -911,6 +922,180 @@ it('loads and shows the session tree from the tree endpoint', async () => {
   })
 })
 
+it('shows linked pull requests alongside partial lookup errors', async () => {
+  const taskSession: Session = {
+    ...session,
+    task: {
+      id: 'synthetic-task-id',
+      number: 2048,
+      title: 'Show linked work in the sidebar',
+      priority: null,
+    },
+  }
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(actions))
+    }
+    if (url.endsWith('/pull-requests')) {
+      return Promise.resolve(
+        jsonResponse({
+          pullRequests: [
+            {
+              number: 2048,
+              title: 'Show linked work in the sidebar',
+              url: 'https://github.com/example/project/pull/2048',
+              state: 'Open',
+              ciState: 'Successful',
+              reviewStatus: 'done',
+            },
+          ],
+          error: 'Some linked pull requests could not be loaded.',
+        }),
+      )
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={taskSession}
+        sessionTreeRefreshKey={0}
+        refreshKey={0}
+        statusPanelOpen
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+
+  await waitForState(
+    () => container.querySelector('.pull-request-list-title') !== null,
+  )
+  const snapshot = () => ({
+    requests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/pull-requests')),
+    tabs: Array.from(container.querySelectorAll('[role="tab"]'), (tab) => ({
+      label: tab.textContent,
+      selected: tab.getAttribute('aria-selected'),
+    })),
+    pullRequests: Array.from(
+      container.querySelectorAll('.pull-request-list-item'),
+      (item) => ({
+        title: item.querySelector('.pull-request-list-title')?.textContent,
+        href: item
+          .querySelector('.pull-request-list-title')
+          ?.getAttribute('href'),
+        status: item.querySelector('.pull-request-list-meta')?.textContent,
+      }),
+    ),
+    error: container.querySelector('.pull-request-list-error')?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    requests: ['/api/sessions/sample-session/pull-requests'],
+    tabs: [{ label: 'PRs1', selected: 'true' }],
+    pullRequests: [
+      {
+        title: '#2048Show linked work in the sidebar',
+        href: 'https://github.com/example/project/pull/2048',
+        status: 'OpenCI: PassingReview: Done',
+      },
+    ],
+    error: 'Some linked pull requests could not be loaded.',
+  })
+})
+
+it('pauses pull request refresh while hidden and refreshes when visible again', async () => {
+  vi.useFakeTimers()
+  setPageVisibility('hidden')
+  const taskSession: Session = {
+    ...session,
+    task: {
+      id: 'synthetic-task-id',
+      number: 2048,
+      title: 'Show linked work in the sidebar',
+      priority: null,
+    },
+  }
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(actions))
+    }
+    if (url.endsWith('/pull-requests')) {
+      return Promise.resolve(jsonResponse({ pullRequests: [], error: null }))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={taskSession}
+        sessionTreeRefreshKey={0}
+        refreshKey={0}
+        statusPanelOpen
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const pullRequestRequests = () =>
+    fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/pull-requests'))
+
+  const hiddenBeforeFirstRequest = pullRequestRequests()
+  setPageVisibility('visible')
+  await act(async () => {
+    document.dispatchEvent(new Event('visibilitychange'))
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const visibleAfterResume = pullRequestRequests()
+  setPageVisibility('hidden')
+  await act(async () => {
+    document.dispatchEvent(new Event('visibilitychange'))
+    await Promise.resolve()
+  })
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(60_000)
+  })
+  const hiddenAfterRefreshInterval = pullRequestRequests()
+  setPageVisibility('visible')
+  await act(async () => {
+    document.dispatchEvent(new Event('visibilitychange'))
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    hiddenBeforeFirstRequest,
+    visibleAfterResume,
+    hiddenAfterRefreshInterval,
+    visibleAfterSecondResume: pullRequestRequests(),
+  })
+  expect(snapshot()).toEqual({
+    hiddenBeforeFirstRequest: [],
+    visibleAfterResume: ['/api/sessions/sample-session/pull-requests'],
+    hiddenAfterRefreshInterval: ['/api/sessions/sample-session/pull-requests'],
+    visibleAfterSecondResume: [
+      '/api/sessions/sample-session/pull-requests',
+      '/api/sessions/sample-session/pull-requests',
+    ],
+  })
+})
+
 it('shows a tree request error instead of hiding the tree tab', async () => {
   const treeSession = { ...session, hasSessionTree: true }
   const fetcher = vi.fn<typeof fetch>((input) => {
@@ -1446,6 +1631,11 @@ afterEach(() => {
     Reflect.deleteProperty(navigator, 'clipboard')
   } else {
     Object.defineProperty(navigator, 'clipboard', originalClipboard)
+  }
+  if (originalVisibilityState === undefined) {
+    Reflect.deleteProperty(document, 'visibilityState')
+  } else {
+    Object.defineProperty(document, 'visibilityState', originalVisibilityState)
   }
 })
 

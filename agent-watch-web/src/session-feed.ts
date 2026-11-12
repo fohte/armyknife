@@ -1,6 +1,11 @@
 import { err, errAsync, ok, Result, ResultAsync } from 'neverthrow'
 
 import { isPullRequest, isSessionTask } from '#session-record-validation'
+import {
+  isPageVisible,
+  type PageVisibilityTarget,
+  subscribeToPageVisibility,
+} from '#session-visibility'
 import type { Session, SessionsResponse } from '#types'
 
 type SessionEventSource = {
@@ -15,7 +20,7 @@ type SessionFeedDependencies = {
   reloadPage?: () => void
   requestRetryDelayMs?: number
   initialServerInstanceId?: string | null
-  visibilityTarget?: SessionFeedVisibilityTarget
+  visibilityTarget?: PageVisibilityTarget
 }
 
 const SERVER_INSTANCE_ID_PLACEHOLDER = '__AGENT_WATCH_SERVER_INSTANCE_ID__'
@@ -30,15 +35,6 @@ function readInitialServerInstanceId() {
   return instanceId === SERVER_INSTANCE_ID_PLACEHOLDER
     ? null
     : (instanceId ?? null)
-}
-
-type SessionFeedVisibilityTarget = {
-  visibilityState: DocumentVisibilityState
-  addEventListener: (type: 'visibilitychange', listener: EventListener) => void
-  removeEventListener: (
-    type: 'visibilitychange',
-    listener: EventListener,
-  ) => void
 }
 
 type SessionsFeedResponse =
@@ -281,7 +277,7 @@ export function startSessionFeed(
   }: SessionFeedDependencies = {},
 ) {
   let active = true
-  let visible = visibilityTarget?.visibilityState !== 'hidden'
+  let visible = isPageVisible(visibilityTarget)
   let requestPending = false
   let refreshQueued = false
   let requestError = false
@@ -470,8 +466,7 @@ export function startSessionFeed(
     eventSource = null
   }
 
-  const onVisibilityChange: EventListener = () => {
-    const nextVisible = visibilityTarget?.visibilityState !== 'hidden'
+  const onVisibilityChange = (nextVisible: boolean) => {
     if (!active || nextVisible === visible) {
       return
     }
@@ -494,7 +489,10 @@ export function startSessionFeed(
     startEventSource()
   }
 
-  visibilityTarget?.addEventListener('visibilitychange', onVisibilityChange)
+  const unsubscribeVisibility = subscribeToPageVisibility(
+    visibilityTarget,
+    onVisibilityChange,
+  )
   if (visible) {
     startEventSource()
     refresh()
@@ -507,10 +505,7 @@ export function startSessionFeed(
       clearInterval(reconnectPollTimer)
       reconnectPollTimer = null
     }
-    visibilityTarget?.removeEventListener(
-      'visibilitychange',
-      onVisibilityChange,
-    )
+    unsubscribeVisibility()
     stopEventSource()
   }
 }

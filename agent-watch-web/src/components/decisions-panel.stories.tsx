@@ -106,3 +106,19 @@ export const EveryDecisionIsApproved: Story = {
     selectedSeq: 2,
   },
 }
+
+export const LongCollapsedTitleFitsPanel: Story = {
+  name: 'A long collapsed decision title stays inside the panel',
+  args: {
+    decisions: decisions.map((decision) =>
+      decision.seq === 2
+        ? {
+            ...decision,
+            title:
+              'Keep the existing retry interval while collecting representative response timings across several scheduled verification runs',
+          }
+        : decision,
+    ),
+    selectedSeq: 1,
+  },
+}
