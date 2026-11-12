@@ -26,6 +26,7 @@ import { useSessionKeyboardNavigation } from '#session-keyboard-navigation'
 import { type LaterPreset, type LaterPresetTimes } from '#session-navigation'
 import type { Session } from '#types'
 import { useSavedInboxViews } from '#use-saved-inbox-views'
+import { useSessionRefreshRevisions } from '#use-session-refresh-revisions'
 
 export function App() {
   useEffect(() => {
@@ -55,10 +56,11 @@ export function App() {
   const [workTypeNavLabels, setWorkTypeNavLabels] = useState<
     Record<string, string>
   >({})
-  const [sessionRefreshState, setSessionRefreshState] = useState({
-    revision: 0,
-    sessionRevisions: new Map<string, number>(),
-  })
+  const {
+    revision: sessionRefreshRevision,
+    sessionRevisions,
+    recordSessionChanges,
+  } = useSessionRefreshRevisions()
   const [sessionsReceivedAt, setSessionsReceivedAt] = useState(() => Date.now())
   const [nowMs, setNowMs] = useState(() => Date.now())
   const {
@@ -326,14 +328,7 @@ export function App() {
               session.category === 'done',
           ),
         )
-        setSessionRefreshState((current) => {
-          const revision = current.revision + 1
-          const sessionRevisions = new Map(current.sessionRevisions)
-          for (const sessionId of changedSessionIds) {
-            sessionRevisions.set(sessionId, revision)
-          }
-          return { revision, sessionRevisions }
-        })
+        recordSessionChanges(changedSessionIds)
         setSessionsReceivedAt(receivedAt)
         setNowMs(receivedAt)
         setLoaded(true)
@@ -505,8 +500,8 @@ export function App() {
           inboxProps={inboxProps}
           sessions={sessionsWithElapsedTime}
           selectedSession={selectedSession}
-          refreshKey={sessionRefreshState.revision}
-          sessionRefreshRevisions={sessionRefreshState.sessionRevisions}
+          refreshKey={sessionRefreshRevision}
+          sessionRefreshRevisions={sessionRevisions}
           isMobile={isMobile}
           showMobileConversation={showMobileConversation}
           inboxCollapsed={inboxCollapsed}

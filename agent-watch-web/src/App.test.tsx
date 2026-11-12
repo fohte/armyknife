@@ -360,6 +360,10 @@ function requestUrl(input: RequestInfo | URL) {
   return input instanceof URL ? input.href : input.url
 }
 
+function requestPath(input: RequestInfo | URL) {
+  return new URL(requestUrl(input), 'http://localhost').pathname
+}
+
 function isConversationPaneRequest(input: RequestInfo | URL) {
   const path = new URL(requestUrl(input), 'http://localhost').pathname
   return path.endsWith('/messages') || path.endsWith('/actions')
@@ -3703,11 +3707,7 @@ it('reloads only the selected conversation when its session changes', async () =
     for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
   const requestsAfterUnrelatedChange = fetcher.mock.calls.map(([input]) =>
-    typeof input === 'string'
-      ? new URL(input, 'http://localhost').pathname
-      : input instanceof URL
-        ? input.pathname
-        : new URL(input.url).pathname,
+    requestPath(input),
   )
 
   publishSessions(
@@ -3727,13 +3727,7 @@ it('reloads only the selected conversation when its session changes', async () =
   const snapshot = () => ({
     transcript: container.querySelector('.chat-assistant-message')?.textContent,
     requestsAfterUnrelatedChange,
-    requestPaths: fetcher.mock.calls.map(([input]) =>
-      typeof input === 'string'
-        ? new URL(input, 'http://localhost').pathname
-        : input instanceof URL
-          ? input.pathname
-          : new URL(input.url).pathname,
-    ),
+    requestPaths: fetcher.mock.calls.map(([input]) => requestPath(input)),
   })
 
   expect(snapshot()).toEqual({

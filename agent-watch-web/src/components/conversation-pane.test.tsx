@@ -288,6 +288,8 @@ function treeSession(
     id,
     title,
     hasSessionTree: true,
+    ancestorSessionIds:
+      parent === null ? [] : [...parent.ancestorSessionIds, parent.id],
     parent: parent === null ? null : { id: parent.id, title: parent.title },
   }
 }
@@ -384,13 +386,31 @@ it('refreshes a session tree only when a tree member changes', async () => {
   )
   const unrelatedSession = treeSession('unrelated-session', 'Other session')
   const sessions = [rootSession, childSession, unrelatedSession]
+  const addedSession = treeSession(
+    'added-session',
+    'Added session',
+    rootSession,
+  )
   const tree = [
     treeNode(rootSession.id, null, rootSession.title),
     treeNode(childSession.id, rootSession.id, childSession.title),
   ]
-  const fetcher = inboxFetch(() =>
-    Promise.resolve(jsonResponse({ revision: 1, sessions: tree })),
-  )
+  let treeRequestCount = 0
+  const fetcher = inboxFetch(() => {
+    treeRequestCount += 1
+    return Promise.resolve(
+      jsonResponse({
+        revision: treeRequestCount,
+        sessions:
+          treeRequestCount === 1
+            ? tree
+            : [
+                ...tree,
+                treeNode(addedSession.id, rootSession.id, addedSession.title),
+              ],
+      }),
+    )
+  })
   vi.stubGlobal('fetch', fetcher)
 
   renderInboxPanes(
@@ -421,13 +441,14 @@ it('refreshes a session tree only when a tree member changes', async () => {
   )
 
   renderInboxPanes(
-    sessions,
+    [...sessions, addedSession],
     rootSession,
     3,
     new Map([
       [rootSession.id, 1],
-      [childSession.id, 3],
+      [childSession.id, 1],
       [unrelatedSession.id, 2],
+      [addedSession.id, 3],
     ]),
   )
   await waitForState(
@@ -439,10 +460,15 @@ it('refreshes a session tree only when a tree member changes', async () => {
         requestUrl(input).endsWith('/tree'),
       ).length === 2,
   )
+  await waitForState(
+    () => container.querySelector('#session-tree-row-added-session') !== null,
+  )
 
   const snapshot = () => ({
     requestsAfterUnrelatedChange,
     requests: fetcher.mock.calls.map(([input]) => requestUrl(input)),
+    addedChildRow:
+      container.querySelector('#session-tree-row-added-session') !== null,
   })
   expect(snapshot()).toEqual({
     requestsAfterUnrelatedChange: [
@@ -450,6 +476,81 @@ it('refreshes a session tree only when a tree member changes', async () => {
       '/api/sessions/root-session/messages?limit=100',
       '/api/sessions/root-session/actions',
     ],
+    requests: [
+      '/api/sessions/root-session/tree',
+      '/api/sessions/root-session/messages?limit=100',
+      '/api/sessions/root-session/actions',
+      '/api/sessions/root-session/tree',
+    ],
+    addedChildRow: true,
+  })
+})
+
+it('refetches the initial tree when a member changes while it loads', async () => {
+  const rootSession = treeSession('root-session', 'Root session')
+  const childSession = treeSession(
+    'child-session',
+    'Child session',
+    rootSession,
+  )
+  const sessions = [rootSession, childSession]
+  const tree = [
+    treeNode(rootSession.id, null, rootSession.title),
+    treeNode(childSession.id, rootSession.id, childSession.title),
+  ]
+  let resolveInitialTree: ((response: Response) => void) | undefined
+  const initialTreeResponse = new Promise<Response>((resolve) => {
+    resolveInitialTree = resolve
+  })
+  let treeRequestCount = 0
+  const fetcher = inboxFetch(() => {
+    treeRequestCount += 1
+    return treeRequestCount === 1
+      ? initialTreeResponse
+      : Promise.resolve(jsonResponse({ revision: 2, sessions: tree }))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  renderInboxPanes(
+    sessions,
+    rootSession,
+    1,
+    new Map([
+      [rootSession.id, 1],
+      [childSession.id, 1],
+    ]),
+  )
+  await waitForState(() => treeRequestCount === 1)
+
+  renderInboxPanes(
+    sessions,
+    rootSession,
+    2,
+    new Map([
+      [rootSession.id, 1],
+      [childSession.id, 2],
+    ]),
+  )
+  const requestsWhileInitialTreeIsPending = treeRequestCount
+
+  await act(async () => {
+    resolveInitialTree?.(jsonResponse({ revision: 1, sessions: tree }))
+    await initialTreeResponse
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(() => treeRequestCount === 2)
+  await waitForState(
+    () => container.querySelector('#session-tree-row-child-session') !== null,
+  )
+
+  const snapshot = () => ({
+    requestsWhileInitialTreeIsPending,
+    treeRequestCount,
+    requests: fetcher.mock.calls.map(([input]) => requestUrl(input)),
+  })
+  expect(snapshot()).toEqual({
+    requestsWhileInitialTreeIsPending: 1,
+    treeRequestCount: 2,
     requests: [
       '/api/sessions/root-session/tree',
       '/api/sessions/root-session/messages?limit=100',

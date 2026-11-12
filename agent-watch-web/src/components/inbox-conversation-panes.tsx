@@ -24,11 +24,22 @@ type SessionTreeCacheEntry = {
 function treeRefreshKey(
   tree: readonly SessionTreeNode[],
   sessionRefreshRevisions: ReadonlyMap<string, number>,
+  sessions: readonly Session[],
 ) {
-  return tree.reduce(
+  const treeSessionIds = new Set(tree.map((node) => node.id))
+  const treeRevision = tree.reduce(
     (latestRevision, node) =>
       Math.max(latestRevision, sessionRefreshRevisions.get(node.id) ?? 0),
     0,
+  )
+  return sessions.reduce(
+    (latestRevision, session) =>
+      session.ancestorSessionIds.some((ancestorId) =>
+        treeSessionIds.has(ancestorId),
+      )
+        ? Math.max(latestRevision, sessionRefreshRevisions.get(session.id) ?? 0)
+        : latestRevision,
+    treeRevision,
   )
 }
 
@@ -36,15 +47,17 @@ function loadedTreeRefreshKey(
   tree: readonly SessionTreeNode[],
   requestRefreshKey: number,
   sessionRefreshRevisions: ReadonlyMap<string, number>,
+  sessions: readonly Session[],
 ) {
-  if (
-    tree.some(
-      (node) => (sessionRefreshRevisions.get(node.id) ?? 0) > requestRefreshKey,
-    )
-  ) {
+  const currentTreeRefreshKey = treeRefreshKey(
+    tree,
+    sessionRefreshRevisions,
+    sessions,
+  )
+  if (currentTreeRefreshKey > requestRefreshKey) {
     return -1
   }
-  return treeRefreshKey(tree, sessionRefreshRevisions)
+  return currentTreeRefreshKey
 }
 
 function replaceTreeCacheEntry(
@@ -107,6 +120,8 @@ export function InboxConversationPanes({
   )
   const sessionRefreshRevisionsRef = useRef(sessionRefreshRevisions)
   sessionRefreshRevisionsRef.current = sessionRefreshRevisions
+  const sessionsRef = useRef(sessions)
+  sessionsRef.current = sessions
   const scopedRefreshEnabledRef = useRef(hasScopedSessionRefreshRevisions)
   scopedRefreshEnabledRef.current = hasScopedSessionRefreshRevisions
   const previousSelectedSessionId = useRef(selectedSession?.id)
@@ -128,6 +143,7 @@ export function InboxConversationPanes({
             tree,
             requestRefreshKey,
             sessionRefreshRevisionsRef.current,
+            sessionsRef.current,
           )
         : requestRefreshKey
       setSessionTrees((current) => {
@@ -265,7 +281,11 @@ export function InboxConversationPanes({
       ? (pendingTreeRefreshes.current.get(selectedSession?.id ?? '')
           ?.refreshKey ?? refreshKey)
       : hasScopedSessionRefreshRevisions
-        ? treeRefreshKey(selectedTreeCache.sessions, sessionRefreshRevisions)
+        ? treeRefreshKey(
+            selectedTreeCache.sessions,
+            sessionRefreshRevisions,
+            sessions,
+          )
         : refreshKey
   const skipSessionTreeFetch =
     selectedTreeCache !== undefined &&
