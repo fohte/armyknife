@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.627](https://github.com/fohte/armyknife/compare/v0.1.626...v0.1.627) (2026-11-12)
+
+
+### Features
+
+* **agent/watch-web:** support Crit over tailnet ([#1622](https://github.com/fohte/armyknife/issues/1622)) ([59685fc](https://github.com/fohte/armyknife/commit/59685fc19370801dc1b8fbe96383afca48d51d1a))
+
 ## [0.1.626](https://github.com/fohte/armyknife/compare/v0.1.625...v0.1.626) (2026-11-12)
 
 
