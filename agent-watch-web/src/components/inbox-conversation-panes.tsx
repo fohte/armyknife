@@ -1,10 +1,19 @@
 import type { ComponentProps } from 'react'
-import { useCallback, useLayoutEffect, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react'
 
 import { ConversationPane } from '#components/conversation-pane'
 import { InboxView } from '#components/inbox-view'
 import { ResizableColumns } from '#components/resizable-columns'
-import { clearCachedConversation } from '#components/session-conversation-cache'
+import {
+  clearCachedConversation,
+  clearCachedConversations,
+} from '#components/session-conversation-cache'
 import {
   defaultExpandedSessionIds,
   expandSessionAncestors,
@@ -103,6 +112,12 @@ export function InboxConversationPanes({
   onCloseSession,
   onSelectSession,
 }: InboxConversationPanesProps) {
+  useEffect(() => {
+    return () => {
+      clearCachedConversations()
+    }
+  }, [])
+
   const [sessionTrees, setSessionTrees] = useState<
     ReadonlyMap<string, SessionTreeCacheEntry>
   >(() => new Map())

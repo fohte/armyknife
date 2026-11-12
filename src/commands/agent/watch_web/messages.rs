@@ -1737,6 +1737,12 @@ mod tests {
     #[case::before_and_from_are_exclusive(
         "/sessions/fixture-session/messages?before=2&from=1&limit=1"
     )]
+    #[case::tail_start_must_match_from(
+        "/sessions/fixture-session/messages?from=0&tailStart=1&tailEnd=2&tailDigest=fixture"
+    )]
+    #[case::tail_end_must_not_precede_start(
+        "/sessions/fixture-session/messages?from=1&tailStart=1&tailEnd=0&tailDigest=fixture"
+    )]
     #[tokio::test]
     async fn messages_route_rejects_incompatible_range_parameters(#[case] uri: &str) {
         let session = stored_session();

@@ -1,11 +1,16 @@
 import type { ConversationResponse } from '#types'
 
 const MAX_CACHED_CONVERSATIONS = 8
-const conversations = new Map<string, ConversationResponse>()
+export type CachedConversation = {
+  conversation: ConversationResponse
+  messagesLoadedAt: number
+}
+
+const conversations = new Map<string, CachedConversation>()
 
 export function getCachedConversation(
   sessionId: string,
-): ConversationResponse | undefined {
+): CachedConversation | undefined {
   const cached = conversations.get(sessionId)
   if (cached === undefined) return undefined
   conversations.delete(sessionId)
@@ -15,10 +20,10 @@ export function getCachedConversation(
 
 export function setCachedConversation(
   sessionId: string,
-  conversation: ConversationResponse,
+  cached: CachedConversation,
 ): void {
   conversations.delete(sessionId)
-  conversations.set(sessionId, conversation)
+  conversations.set(sessionId, cached)
   if (conversations.size > MAX_CACHED_CONVERSATIONS) {
     const oldestSessionId = conversations.keys().next().value
     if (oldestSessionId !== undefined) conversations.delete(oldestSessionId)
@@ -27,4 +32,8 @@ export function setCachedConversation(
 
 export function clearCachedConversation(sessionId: string): void {
   conversations.delete(sessionId)
+}
+
+export function clearCachedConversations(): void {
+  conversations.clear()
 }

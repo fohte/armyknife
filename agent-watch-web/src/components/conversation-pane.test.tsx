@@ -10,7 +10,7 @@ import { ConversationPane } from '#components/conversation-pane'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { InboxConversationPanes } from '#components/inbox-conversation-panes'
 import { formatMessageTime } from '#components/message-time'
-import { clearCachedConversation } from '#components/session-conversation-cache'
+import { clearCachedConversations } from '#components/session-conversation-cache'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import { useSessionPullRequests } from '#components/use-session-pull-requests'
@@ -855,14 +855,7 @@ function dispatchKeyInAct(
 }
 
 beforeEach(() => {
-  for (const sessionId of [
-    'root-session',
-    'child-session',
-    'cache-session-a',
-    'cache-session-b',
-  ]) {
-    clearCachedConversation(sessionId)
-  }
+  clearCachedConversations()
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   optimizeImageAttachmentMock.mockReset()
   optimizeImageAttachmentMock.mockImplementation((file) =>
