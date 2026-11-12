@@ -161,6 +161,7 @@ export function renderConversationMessage({
         key={`question-${String(index)}`}
         questions={message.questions}
         canAnswer={canAnswer}
+        isMobile={isMobile}
         showTerminalFallback={unanswered && actionsReady && !canAnswer}
         canOpenInTerminal={actions?.openInTerminal === true}
         openInTerminalStatus={openInTerminalStatus}

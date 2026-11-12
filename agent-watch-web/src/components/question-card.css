@@ -43,6 +43,12 @@
   padding-block: 8px;
 }
 
+.chat-question-choices kbd {
+  color: var(--aw-text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
 .chat-question-choice-description {
   color: var(--aw-text-muted);
 }

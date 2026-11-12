@@ -29,11 +29,22 @@ const questions = [
   },
 ]
 
+const singleChoiceQuestions = [
+  {
+    header: 'Direction',
+    question: 'Which direction should be used?',
+    choices: [{ label: 'North' }, { label: 'South' }, { label: 'East' }],
+    multi_select: false,
+    answer: null,
+  },
+]
+
 const meta = {
   component: QuestionCard,
   args: {
     questions,
     canAnswer: true,
+    isMobile: false,
     showTerminalFallback: false,
     canOpenInTerminal: true,
     ...callbacks,
@@ -58,6 +69,9 @@ export const WaitingForAllAnswers: Story = {
 
 export const WaitingOnAMobileScreen: Story = {
   name: 'A mobile question group shows its prompts in one card',
+  args: {
+    isMobile: true,
+  },
   decorators: [
     (Story) => (
       <div
@@ -80,6 +94,33 @@ export const ShowingAnswers: Story = {
       answer: index === 0 ? 'Markdown, HTML' : 'Yes',
     })),
   },
+}
+
+export const DesktopSingleChoiceShowsShortcuts: Story = {
+  name: 'A desktop single choice shows numbered shortcuts',
+  args: {
+    questions: singleChoiceQuestions,
+    isMobile: false,
+  },
+}
+
+export const MobileSingleChoiceHidesShortcuts: Story = {
+  name: 'A mobile single choice shows no keyboard shortcuts',
+  args: {
+    questions: singleChoiceQuestions,
+    isMobile: true,
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="conversation-pane"
+        data-mobile="true"
+        style={{ width: '390px', height: '844px', padding: '0 16px' }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
 }
 
 export const AnsweringInTheTerminal: Story = {

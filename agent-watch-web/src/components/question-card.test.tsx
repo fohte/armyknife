@@ -7,6 +7,16 @@ import { QuestionCard } from '#components/question-card'
 
 type Props = ComponentProps<typeof QuestionCard>
 
+const singleChoiceQuestions: Props['questions'] = [
+  {
+    header: 'Direction',
+    question: 'Which direction should be used?',
+    choices: [{ label: 'North' }, { label: 'South' }, { label: 'East' }],
+    multi_select: false,
+    answer: null,
+  },
+]
+
 let container: HTMLDivElement
 let root: Root | null = null
 
@@ -29,6 +39,7 @@ function props(overrides: Partial<Props> = {}): Props {
       },
     ],
     canAnswer: true,
+    isMobile: false,
     showTerminalFallback: false,
     canOpenInTerminal: true,
     onAnswer: vi.fn(() => Promise.resolve(true)),
@@ -58,6 +69,18 @@ function choiceButton(label: string): HTMLButtonElement {
       ),
     ).find((button) => button.textContent.includes(label)) ?? null,
   )
+}
+
+function dispatchKey(target: EventTarget, key: string) {
+  const event = new KeyboardEvent('keydown', {
+    key,
+    bubbles: true,
+    cancelable: true,
+  })
+  act(() => {
+    target.dispatchEvent(event)
+  })
+  return event
 }
 
 beforeEach(() => {
@@ -119,6 +142,80 @@ it('submits every selected answer once with multi-select labels joined', async (
       ],
     ],
     submitAfterAnswer: true,
+  })
+})
+
+it('sends a single-choice answer as soon as an option is selected', async () => {
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  renderQuestion(
+    props({ questions: singleChoiceQuestions, isMobile: true, onAnswer }),
+  )
+
+  await act(async () => {
+    choiceButton('South').click()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    answerCalls: onAnswer.mock.calls,
+    selected: choiceButton('South').getAttribute('aria-pressed'),
+    submitButton: container.querySelector(
+      '.chat-question-actions button.aw-button--primary',
+    ),
+  })
+  expect(snapshot()).toEqual({
+    answerCalls: [[{ 'Which direction should be used?': 'South' }]],
+    selected: 'true',
+    submitButton: null,
+  })
+})
+
+it('answers a desktop single-choice question with its number shortcut', async () => {
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  renderQuestion(props({ questions: singleChoiceQuestions, onAnswer }))
+  const shortcuts = Array.from(
+    container.querySelectorAll('.chat-question-choices kbd'),
+    (key) => key.textContent,
+  )
+
+  const event = dispatchKey(window, '2')
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    shortcuts,
+    answerCalls: onAnswer.mock.calls,
+    selected: choiceButton('South').getAttribute('aria-pressed'),
+    defaultPrevented: event.defaultPrevented,
+  })
+  expect(snapshot()).toEqual({
+    shortcuts: ['1', '2', '3'],
+    answerCalls: [[{ 'Which direction should be used?': 'South' }]],
+    selected: 'true',
+    defaultPrevented: true,
+  })
+})
+
+it('does not show or use number shortcuts on mobile', () => {
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  renderQuestion(
+    props({ questions: singleChoiceQuestions, isMobile: true, onAnswer }),
+  )
+
+  const event = dispatchKey(window, '2')
+
+  const snapshot = () => ({
+    shortcuts: container.querySelectorAll('.chat-question-choices kbd').length,
+    answerCalls: onAnswer.mock.calls,
+    defaultPrevented: event.defaultPrevented,
+  })
+  expect(snapshot()).toEqual({
+    shortcuts: 0,
+    answerCalls: [],
+    defaultPrevented: false,
   })
 })
 
