@@ -1,4 +1,4 @@
-import type { Meta, StoryObj } from '@storybook/react-vite'
+import type { Decorator, Meta, StoryObj } from '@storybook/react-vite'
 
 import { MessageComposer } from '#components/message-composer'
 
@@ -9,6 +9,7 @@ const meta = {
     placeholder: 'Message session',
     disabled: false,
     isSending: false,
+    isProcessingAttachments: false,
     isMobile: false,
     canInterrupt: false,
     attachments: [],
@@ -30,6 +31,19 @@ const meta = {
 
 export default meta
 type Story = StoryObj<typeof meta>
+const mobileViewportDecorator: Decorator = (Story) => (
+  <div
+    style={{
+      width: 'min(390px, 100%)',
+      height: '844px',
+      display: 'flex',
+      alignItems: 'end',
+      background: '#09090b',
+    }}
+  >
+    <Story />
+  </div>
+)
 
 export const EmptyComposer: Story = {
   name: 'The composer is ready for a new message',
@@ -85,24 +99,51 @@ export const ComposerWithDocumentAttachment: Story = {
 }
 
 export const MobileComposer: Story = {
-  name: 'The composer shows touch sized controls on mobile',
+  name: 'The mobile composer places send and interrupt beside the text field',
   args: {
     isMobile: true,
     canInterrupt: true,
   },
-  decorators: [
-    (Story) => (
-      <div
-        style={{
-          width: '390px',
-          height: '844px',
-          display: 'flex',
-          alignItems: 'end',
-          background: '#09090b',
-        }}
-      >
-        <Story />
-      </div>
-    ),
-  ],
+  decorators: [mobileViewportDecorator],
+}
+
+export const MobileComposerWithoutInterrupt: Story = {
+  name: 'The mobile composer sends without an interrupt control',
+  args: {
+    isMobile: true,
+  },
+  decorators: [mobileViewportDecorator],
+}
+
+export const MobileComposerWithAttachment: Story = {
+  name: 'The mobile composer shows an attachment without an interrupt control',
+  args: {
+    isMobile: true,
+    attachments: [
+      {
+        id: 'example-attachment',
+        name: 'example-notes.txt',
+        size: 1024,
+        previewUrl: null,
+      },
+    ],
+  },
+  decorators: [mobileViewportDecorator],
+}
+
+export const MobileComposerWithAttachmentAndInterrupt: Story = {
+  name: 'The mobile composer shows an attachment below the text and action controls',
+  args: {
+    isMobile: true,
+    canInterrupt: true,
+    attachments: [
+      {
+        id: 'example-attachment',
+        name: 'example-notes.txt',
+        size: 1024,
+        previewUrl: null,
+      },
+    ],
+  },
+  decorators: [mobileViewportDecorator],
 }

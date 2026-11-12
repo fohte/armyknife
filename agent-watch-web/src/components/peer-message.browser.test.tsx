@@ -8,6 +8,14 @@ import type { ChatItem } from '#types'
 let container: HTMLDivElement
 let root: Root | null = null
 
+function imageAttributes() {
+  const image = container.querySelector('img')
+  return {
+    loading: image?.getAttribute('loading'),
+    decoding: image?.getAttribute('decoding'),
+  }
+}
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
@@ -56,6 +64,32 @@ it('shows the send time in the peer card header', () => {
     time: localTime,
     dateTime: timestamp,
   })
+})
+
+it('loads peer images lazily and decodes them asynchronously', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <PeerMessage
+        message={{
+          type: 'peer',
+          direction: 'from',
+          session_id: 'unknown',
+          content: [
+            {
+              type: 'image',
+              source: 'data:image/png;base64,AA==',
+              available: true,
+            },
+          ],
+        }}
+        onSelectSession={() => undefined}
+        sessions={[]}
+      />,
+    )
+  })
+
+  expect(imageAttributes()).toEqual({ loading: 'lazy', decoding: 'async' })
 })
 
 it.each([

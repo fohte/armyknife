@@ -1,7 +1,7 @@
 import '#components/message-composer.css'
 
 import { Button } from '@fohte/ui/button'
-import { ArrowUp } from 'lucide-react'
+import { ArrowUp, CircleStop } from 'lucide-react'
 import type { ClipboardEvent, KeyboardEvent, SubmitEvent } from 'react'
 import { useId, useLayoutEffect, useRef, useState } from 'react'
 
@@ -12,6 +12,7 @@ type MessageComposerProps = {
   placeholder: string
   disabled: boolean
   isSending: boolean
+  isProcessingAttachments: boolean
   isMobile: boolean
   canInterrupt: boolean
   attachments: readonly ComposerAttachment[]
@@ -47,6 +48,7 @@ export function MessageComposer({
   placeholder,
   disabled,
   isSending,
+  isProcessingAttachments,
   isMobile,
   canInterrupt,
   attachments,
@@ -183,6 +185,7 @@ export function MessageComposer({
   return (
     <form
       className="conversation-composer"
+      aria-busy={isProcessingAttachments}
       data-mobile={isMobile ? 'true' : undefined}
       onSubmit={handleSubmit}
     >
@@ -279,22 +282,29 @@ export function MessageComposer({
       ) : null}
       <div className="composer-footer">
         {!isMobile ? (
-          <span role={isSending ? 'status' : undefined}>
+          <span
+            role={isSending || isProcessingAttachments ? 'status' : undefined}
+          >
             {isSending
               ? 'Sending…'
-              : canInterrupt
-                ? '↵ Send · ⇧↵ / ⌥↵ New line · Esc Interrupt'
-                : '↵ Send · ⇧↵ / ⌥↵ New line'}
+              : isProcessingAttachments
+                ? 'Preparing attachments…'
+                : canInterrupt
+                  ? '↵ Send · ⇧↵ / ⌥↵ New line · Esc Interrupt'
+                  : '↵ Send · ⇧↵ / ⌥↵ New line'}
           </span>
+        ) : isProcessingAttachments ? (
+          <span role="status">Preparing attachments…</span>
         ) : null}
         {isMobile && canInterrupt ? (
           <Button
             className="mobile-interrupt-button"
             type="button"
             variant="plain"
+            aria-label="Interrupt"
             onClick={onInterrupt}
           >
-            Interrupt
+            <CircleStop aria-hidden="true" size={18} />
           </Button>
         ) : null}
         <Button
@@ -304,7 +314,8 @@ export function MessageComposer({
           disabled={
             (draft.trim() === '' && attachments.length === 0) ||
             disabled ||
-            isSending
+            isSending ||
+            isProcessingAttachments
           }
         >
           <ArrowUp aria-hidden="true" size={14} />

@@ -2,6 +2,7 @@ import { ResultAsync } from 'neverthrow'
 import { useEffect, useRef, useState } from 'react'
 
 import type { ComposerAttachment } from '#components/message-composer'
+import { optimizeImageAttachment } from '#lib/image-attachment'
 
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
 const MAX_ATTACHMENTS_PER_MESSAGE = 16
@@ -87,9 +88,12 @@ export function useComposerMessage({
 }: ComposerMessageOptions) {
   const [attachments, setAttachments] = useState<SelectedAttachment[]>([])
   const [sendPending, setSendPending] = useState(false)
+  const [isProcessingAttachments, setIsProcessingAttachments] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const sendingRef = useRef(false)
   const attachmentsRef = useRef(attachments)
+  const pendingFileCountRef = useRef(0)
+  const pasteQueueRef = useRef(Promise.resolve())
   attachmentsRef.current = attachments
   const isSending = externalSending || sendPending
   const limitError = attachmentLimitError(attachments)
@@ -106,17 +110,48 @@ export function useComposerMessage({
   )
 
   const onPasteFiles = (files: File[]) => {
-    const added = files.map((file) => ({
-      id: crypto.randomUUID(),
-      name: file.name || 'Pasted file',
-      size: file.size,
-      file,
-      previewUrl: PREVIEW_MIME_TYPES.has(file.type)
-        ? URL.createObjectURL(file)
-        : null,
-    }))
-    setAttachments((current) => [...current, ...added])
-    setError(null)
+    if (files.length === 0) return
+    const availableOptimizationSlots = Math.max(
+      0,
+      MAX_ATTACHMENTS_PER_MESSAGE -
+        attachmentsRef.current.length -
+        pendingFileCountRef.current,
+    )
+    pendingFileCountRef.current += files.length
+    setIsProcessingAttachments(true)
+
+    const addFiles = pasteQueueRef.current.then(async () => {
+      const added: SelectedAttachment[] = []
+      for (const [index, file] of files.entries()) {
+        const optimizedFile =
+          index < availableOptimizationSlots &&
+          file.size <= MAX_ATTACHMENT_BYTES
+            ? await optimizeImageAttachment(file)
+            : file
+        added.push({
+          id: crypto.randomUUID(),
+          name: optimizedFile.name || 'Pasted file',
+          size: optimizedFile.size,
+          file: optimizedFile,
+          previewUrl: PREVIEW_MIME_TYPES.has(optimizedFile.type)
+            ? URL.createObjectURL(optimizedFile)
+            : null,
+        })
+      }
+      const nextAttachments = [...attachmentsRef.current, ...added]
+      attachmentsRef.current = nextAttachments
+      setAttachments(nextAttachments)
+      setError(null)
+    })
+    pasteQueueRef.current = addFiles.then(
+      () => undefined,
+      () => undefined,
+    )
+    const finishPaste = () => {
+      pendingFileCountRef.current -= files.length
+      setIsProcessingAttachments(pendingFileCountRef.current > 0)
+    }
+    void addFiles.then(finishPaste, finishPaste)
   }
 
   const removeAttachment = (id: string) => {
@@ -147,6 +182,7 @@ export function useComposerMessage({
       (draft.trim() === '' && attachments.length === 0) ||
       !messageEnabled ||
       isSending ||
+      pendingFileCountRef.current > 0 ||
       sendingRef.current
     )
       return
@@ -192,6 +228,7 @@ export function useComposerMessage({
     attachments,
     error: limitError ?? error,
     isSending,
+    isProcessingAttachments,
     onPasteFiles,
     removeAttachment,
     sendMessage,

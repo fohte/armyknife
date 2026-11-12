@@ -2,6 +2,7 @@ import '#components/conversation-pane.css'
 import '#components/conversation-pane-view.css'
 
 import { Button } from '@fohte/ui/button'
+import { ChevronLeft } from 'lucide-react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useCallback, useMemo, useRef } from 'react'
 
@@ -118,6 +119,7 @@ export function ConversationPaneView({
     attachments,
     error: attachmentError,
     isSending,
+    isProcessingAttachments,
     onPasteFiles,
     removeAttachment,
     sendMessage,
@@ -269,7 +271,7 @@ export function ConversationPaneView({
               aria-label="Back to Inbox"
               onClick={onBack}
             >
-              ‹
+              <ChevronLeft aria-hidden="true" size={30} strokeWidth={2.5} />
             </Button>
             <div className="mobile-conversation-heading">
               <SessionHeading
@@ -509,6 +511,7 @@ export function ConversationPaneView({
         }
         disabled={actions?.message !== true}
         isSending={isSending}
+        isProcessingAttachments={isProcessingAttachments}
         isMobile={isMobile}
         canInterrupt={actions?.interrupt === true}
         attachments={attachments}
