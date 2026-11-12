@@ -124,7 +124,7 @@ export type ChatItem =
     }
   | {
       type: 'event'
-      kind: 'armyknife' | 'system' | 'hook'
+      kind: 'armyknife' | 'compact_boundary' | 'system' | 'hook'
       text: string
       failed: boolean
       timestamp?: string
