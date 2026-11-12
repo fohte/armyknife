@@ -1,3 +1,5 @@
+import '#index.css'
+
 import { act, type ComponentProps } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -64,6 +66,7 @@ function renderNav(
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
+  container.className = 'agent-watch-shell'
   document.body.append(container)
 })
 
@@ -147,13 +150,25 @@ it('shows Today status labels with their category colors', () => {
         isPaused: true,
         kind: 'Stopped',
       },
+      { ...baseTodaySession, id: 'paused-needs-action', isPaused: true },
+      {
+        ...baseTodaySession,
+        id: 'paused-error',
+        category: 'in_progress',
+        isPaused: true,
+        kind: 'Error',
+      },
     ],
   })
 
   const snapshot = () => ({
     statuses: Array.from(
       container.querySelectorAll<HTMLElement>('.today-session-status'),
-      (status) => ({ text: status.textContent, className: status.className }),
+      (status) => ({
+        text: status.textContent,
+        className: status.className,
+        color: getComputedStyle(status).color,
+      }),
     ),
     oldIndicators: container.querySelectorAll('.today-start, .today-indicator')
       .length,
@@ -164,15 +179,32 @@ it('shows Today status labels with their category colors', () => {
       {
         text: 'Question',
         className: 'today-session-status is-needs-action',
+        color: 'rgb(251, 191, 36)',
       },
-      { text: 'Working', className: 'today-session-status is-working' },
+      {
+        text: 'Working',
+        className: 'today-session-status is-working',
+        color: 'rgb(96, 165, 250)',
+      },
       {
         text: 'Error',
         className: 'today-session-status is-needs-action is-error',
+        color: 'rgb(248, 113, 113)',
       },
       {
         text: 'Paused',
         className: 'today-session-status is-paused',
+        color: 'rgb(139, 139, 148)',
+      },
+      {
+        text: 'Paused',
+        className: 'today-session-status is-needs-action is-paused',
+        color: 'rgb(251, 191, 36)',
+      },
+      {
+        text: 'Paused',
+        className: 'today-session-status is-error is-paused',
+        color: 'rgb(248, 113, 113)',
       },
     ],
     oldIndicators: 0,
