@@ -51,11 +51,14 @@ fn is_hashed_asset(path: &str) -> bool {
     let Some((stem, _)) = path.rsplit_once('.') else {
         return false;
     };
-    let Some((_, hash)) = stem.rsplit_once('-') else {
+    let Some(hash_start) = stem.len().checked_sub(8) else {
+        return false;
+    };
+    let Some((prefix, hash)) = stem.split_at_checked(hash_start) else {
         return false;
     };
 
-    hash.len() == 8
+    prefix.ends_with('-')
         && hash
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || "_-".contains(character))

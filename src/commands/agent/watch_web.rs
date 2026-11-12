@@ -556,6 +556,7 @@ mod tests {
 
     #[rstest]
     #[case::hashed_javascript("/assets/app-abcdef12.js", "public, max-age=31536000, immutable")]
+    #[case::hash_contains_hyphen("/assets/app-Ab-d_f12.js", "public, max-age=31536000, immutable")]
     #[case::hashed_stylesheet("/assets/app-abcdef12.css", "public, max-age=31536000, immutable")]
     #[case::unhashed_stylesheet("/assets/app.css", "no-cache")]
     #[case::descriptive_suffix_is_not_a_hash("/assets/logo-illustration.svg", "no-cache")]
