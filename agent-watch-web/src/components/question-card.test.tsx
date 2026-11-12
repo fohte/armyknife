@@ -163,6 +163,74 @@ it('submits freeform answers for every question', async () => {
   ])
 })
 
+it('keeps the answer after a failed submission and allows retry', async () => {
+  const onAnswer = vi
+    .fn<() => Promise<boolean>>()
+    .mockResolvedValueOnce(false)
+    .mockResolvedValueOnce(true)
+  renderQuestion(props({ onAnswer }))
+  act(() => {
+    choiceButton('Cedar').click()
+    choiceButton('Compass').click()
+  })
+  const submit = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-question-actions button.aw-button--primary',
+    ),
+  )
+
+  await act(async () => {
+    submit.click()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  const afterFailedSubmission = {
+    error: container.querySelector('[role="alert"]')?.textContent,
+    cedarSelected: choiceButton('Cedar').getAttribute('aria-pressed'),
+    submitDisabled: submit.disabled,
+  }
+
+  await act(async () => {
+    submit.click()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    afterFailedSubmission,
+    calls: onAnswer.mock.calls,
+    errorAfterRetry: container.querySelector('[role="alert"]'),
+    submitAfterRetry: container.querySelector(
+      '.chat-question-actions button.aw-button--primary',
+    ),
+  })
+  expect(snapshot()).toEqual({
+    afterFailedSubmission: {
+      error:
+        'Your answer was not sent. Your draft is still available; select Send answer to retry.',
+      cedarSelected: 'true',
+      submitDisabled: false,
+    },
+    calls: [
+      [
+        {
+          'Which colors should be included?': 'Cedar',
+          'Which icon?': 'Compass',
+        },
+      ],
+      [
+        {
+          'Which colors should be included?': 'Cedar',
+          'Which icon?': 'Compass',
+        },
+      ],
+    ],
+    errorAfterRetry: null,
+    submitAfterRetry: null,
+  })
+})
+
 it('skips all questions with one request', async () => {
   const onSkip = vi.fn(() => Promise.resolve(true))
   renderQuestion(props({ onSkip }))

@@ -77,7 +77,7 @@ const iPhoneViewportDecorator: Decorator = (Story) => (
 )
 
 export const QuestionWaitsForAnAnswer: Story = {
-  name: 'A question offers numbered choices',
+  name: 'A question offers selectable choices',
   args: {
     messages: [
       {

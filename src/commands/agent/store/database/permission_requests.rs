@@ -226,21 +226,15 @@ fn poll_permission_request_from(
     request_id: &str,
 ) -> Result<PermissionRequestWait> {
     super::validate_session_id(session_id)?;
-    let request = connection
+    let decision = connection
         .query_row(
-            "SELECT decision, tool_input, answers FROM permission_request_decision
+            "SELECT decision FROM permission_request_decision
              WHERE session_id = ?1 AND agent_key = ?2 AND request_id = ?3",
             params![session_id, agent_key, request_id],
-            |row| {
-                Ok((
-                    row.get::<_, Option<String>>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                ))
-            },
+            |row| row.get::<_, Option<String>>(0),
         )
         .optional()?;
-    let Some((decision, _, _)) = request else {
+    let Some(decision) = decision else {
         return Ok(PermissionRequestWait::Finished);
     };
     let session = read_session_strict(connection, session_id)?;

@@ -1006,6 +1006,68 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn answer_question_accepts_duplicate_question_texts(action_context: ActionContext) {
+        let mut session = session("sample-session");
+        let request_id = "question-request-duplicate-text";
+        let tool_input = json!({
+            "questions": [
+                {
+                    "question": "Which sections should be included?",
+                    "options": [{ "label": "Overview" }, { "label": "Details" }],
+                },
+                {
+                    "question": "Which sections should be included?",
+                    "options": [{ "label": "Overview" }, { "label": "Details" }],
+                },
+            ],
+        });
+        let answers = json!({
+            "Which sections should be included?": "Overview, Details",
+        });
+        action_context.save_pending_permission_request_with_input(
+            &mut session,
+            MAIN_THREAD_AGENT_KEY,
+            request_id,
+            "AskUserQuestion",
+            &tool_input,
+        );
+
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/answer",
+                json!({ "requestId": request_id, "answers": answers }),
+            ))
+            .await
+            .unwrap();
+        let mut waiter =
+            store::PermissionRequestWaiter::open(&action_context.temp_dir.path().join("sessions"))
+                .unwrap();
+
+        assert_eq!(
+            (
+                response_snapshot(response, &action_context).await,
+                waiter
+                    .poll("sample-session", MAIN_THREAD_AGENT_KEY, request_id)
+                    .unwrap(),
+            ),
+            (
+                json!({
+                    "status": StatusCode::OK.as_u16(),
+                    "body": { "ok": true },
+                    "calls": [],
+                }),
+                store::PermissionRequestWait::Decision {
+                    decision: store::PermissionRequestDecision::Allow,
+                    tool_input,
+                    answers: Some(answers),
+                },
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn skipping_a_question_denies_without_interrupting_the_turn(
         action_context: ActionContext,
     ) {

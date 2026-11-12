@@ -29,10 +29,16 @@ mod background_task_outputs;
 mod background_tasks;
 mod parser;
 mod proposals;
+mod questions;
 mod range;
 mod subagent_reports;
 
 use self::proposals::proposal_chat_item;
+#[cfg(test)]
+use self::questions::QuestionChoice;
+use self::questions::{
+    QuestionPrompt, attach_question_request_if_present, question_item_from_input,
+};
 use self::range::MessageRange;
 
 mod cache;
@@ -300,17 +306,11 @@ fn load_conversation_with_queued_prompts(
         if let Some(path) = session.transcript_path.as_deref() {
             subagent_reports::add_descriptions(path, &mut cached.conversation.messages);
         }
-        if let (Some(request_id), Some(data)) = (
+        attach_question_request_if_present(
+            &mut cached.conversation.messages,
             main_permission_request_id.as_deref(),
             main_permission_data.as_ref(),
-        ) && data.tool_name.as_deref() == Some("AskUserQuestion")
-        {
-            attach_question_request(
-                &mut cached.conversation.messages,
-                request_id,
-                &data.tool_input,
-            );
-        }
+        );
         resolve_peer_session_titles(&mut cached.conversation.messages, &mut load_session)?;
         cache::delete_resolved_queued_prompts(
             loaders,
@@ -335,13 +335,11 @@ fn load_conversation_with_queued_prompts(
         })?;
     resolve_peer_session_titles(&mut conversation.messages, &mut load_session)?;
 
-    if let (Some(request_id), Some(data)) = (
+    attach_question_request_if_present(
+        &mut conversation.messages,
         main_permission_request_id.as_deref(),
         main_permission_data.as_ref(),
-    ) && data.tool_name.as_deref() == Some("AskUserQuestion")
-    {
-        attach_question_request(&mut conversation.messages, request_id, &data.tool_input);
-    }
+    );
 
     for message in &mut conversation.messages {
         if let ChatItem::Permission { request_id, .. } = message {
@@ -432,43 +430,6 @@ fn permission_request_pending_tool(data: &PermissionRequestData) -> Option<Strin
         Some(detail) => format!("{tool_name}({detail})"),
         None => tool_name.to_string(),
     })
-}
-
-fn attach_question_request(
-    messages: &mut Vec<ChatItem>,
-    request_id: &str,
-    tool_input: &serde_json::Value,
-) {
-    let Some(ChatItem::Question {
-        questions: pending_questions,
-        ..
-    }) = question_item_from_input(Some(request_id.to_owned()), tool_input)
-    else {
-        return;
-    };
-    let pending_question_texts = pending_questions
-        .iter()
-        .map(|question| question.question.as_str())
-        .collect::<Vec<_>>();
-    let matching_question = messages.iter_mut().rev().find(|message| {
-        let ChatItem::Question { questions, .. } = message else {
-            return false;
-        };
-        questions
-            .iter()
-            .map(|question| question.question.as_str())
-            .eq(pending_question_texts.iter().copied())
-    });
-    if let Some(ChatItem::Question {
-        request_id: current_request_id,
-        ..
-    }) = matching_question
-    {
-        *current_request_id = Some(request_id.to_owned());
-    } else if let Some(question) = question_item_from_input(Some(request_id.to_owned()), tool_input)
-    {
-        messages.push(question);
-    }
 }
 
 fn permission_request_tool_detail(tool_input: &Value) -> Option<&str> {
@@ -737,75 +698,6 @@ impl From<AgentDecision> for ChatItem {
             created_at: decision.created_at,
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct QuestionChoice {
-    label: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct QuestionPrompt {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    header: Option<String>,
-    question: String,
-    choices: Vec<QuestionChoice>,
-    #[serde(rename = "multi_select")]
-    multi_select: bool,
-    answer: Option<String>,
-}
-
-fn question_item_from_input(
-    request_id: Option<String>,
-    input: &serde_json::Value,
-) -> Option<ChatItem> {
-    let questions = input.get("questions")?.as_array()?;
-    let questions = questions
-        .iter()
-        .filter_map(|question| {
-            Some(QuestionPrompt {
-                header: question
-                    .get("header")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned),
-                question: question
-                    .get("question")
-                    .and_then(serde_json::Value::as_str)?
-                    .to_owned(),
-                choices: question
-                    .get("options")
-                    .and_then(serde_json::Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|option| {
-                        Some(QuestionChoice {
-                            label: option
-                                .get("label")
-                                .and_then(serde_json::Value::as_str)?
-                                .to_owned(),
-                            description: option
-                                .get("description")
-                                .and_then(serde_json::Value::as_str)
-                                .map(str::to_owned),
-                        })
-                    })
-                    .collect(),
-                multi_select: question
-                    .get("multiSelect")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false),
-                answer: None,
-            })
-        })
-        .collect::<Vec<_>>();
-    (!questions.is_empty()).then_some(ChatItem::Question {
-        request_id,
-        questions,
-    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

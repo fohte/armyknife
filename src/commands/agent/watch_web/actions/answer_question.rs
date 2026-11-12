@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use axum::Json;
 use axum::extract::{Path as RoutePath, State};
@@ -111,16 +111,21 @@ fn validate_question_answers(
         .get("questions")
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| ApiError::bad_request("question request has no questions"))?;
-    if questions.len() != answers.len() {
+    let question_texts = questions
+        .iter()
+        .map(|question| {
+            question
+                .get("question")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| ApiError::bad_request("question text is missing"))
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    if question_texts.len() != answers.len() {
         return Err(ApiError::bad_request(
             "an answer is required for every question",
         ));
     }
-    for question in questions {
-        let question_text = question
-            .get("question")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| ApiError::bad_request("question text is missing"))?;
+    for question_text in question_texts {
         let answer = answers
             .get(question_text)
             .ok_or_else(|| ApiError::bad_request("an answer is required for every question"))?;
