@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.624](https://github.com/fohte/armyknife/compare/v0.1.623...v0.1.624) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** hide ended sessions in tree ([#1616](https://github.com/fohte/armyknife/issues/1616)) ([6c68721](https://github.com/fohte/armyknife/commit/6c6872141500cb6d27ea5a4d81b3d031eecf6f0f))
+
 ## [0.1.623](https://github.com/fohte/armyknife/compare/v0.1.622...v0.1.623) (2026-11-12)
 
 
