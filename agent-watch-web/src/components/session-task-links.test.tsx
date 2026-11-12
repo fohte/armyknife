@@ -311,19 +311,35 @@ it('keeps a completed primary visible when every secondary task is completed', a
     priority: 1,
     isClosed: true,
   }
-  const completedTask = {
-    id: 'completed-task',
-    number: 2047,
-    title: 'Document retry behavior',
-    priority: null,
-    isClosed: true,
-  }
+  const completedTasks = [
+    {
+      id: 'completed-task-one',
+      number: 2047,
+      title: 'Document retry behavior',
+      priority: null,
+      isClosed: true,
+    },
+    {
+      id: 'completed-task-two',
+      number: 2046,
+      title: 'Review request metrics',
+      priority: 3,
+      isClosed: true,
+    },
+    {
+      id: 'completed-task-three',
+      number: 2045,
+      title: 'Update retry guide',
+      priority: 4,
+      isClosed: true,
+    },
+  ]
   root = createRoot(container)
   act(() => {
     root?.render(
       <SessionTaskLinks
         task={task}
-        tasks={[task, completedTask]}
+        tasks={[task, ...completedTasks]}
         taskListOpen
       />,
     )
@@ -366,19 +382,21 @@ it('keeps a completed primary visible when every secondary task is completed', a
 
   expect(snapshots).toEqual([
     {
-      count: '+0 tasks · 1 completed ▾',
-      summaryLabel: '0 more linked tq tasks, 1 completed',
+      count: '3 completed ▾',
+      summaryLabel: '3 completed linked tq tasks',
       menuTasks: ['P1 #2048 Improve request reliability'],
-      toggle: 'Show 1 completed',
+      toggle: 'Show 3 completed',
     },
     {
-      count: '+0 tasks · 1 completed ▾',
-      summaryLabel: '0 more linked tq tasks, 1 completed',
+      count: '3 completed ▾',
+      summaryLabel: '3 completed linked tq tasks',
       menuTasks: [
         'P1 #2048 Improve request reliability',
         '#2047 Document retry behavior',
+        'P3 #2046 Review request metrics',
+        'P4 #2045 Update retry guide',
       ],
-      toggle: 'Hide 1 completed',
+      toggle: 'Hide 3 completed',
     },
   ])
 })

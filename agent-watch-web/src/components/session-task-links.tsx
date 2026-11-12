@@ -124,10 +124,16 @@ export function SessionTaskLinks({
   const visibleTasks = showCompletedTasks
     ? [...primaryAndOpenTasks, ...completedSecondaryTasks]
     : primaryAndOpenTasks
-  const taskCountLabel =
+  const taskListDisclosure =
     primaryAndOpenTasks.length > 1
-      ? `+${String(primaryAndOpenTasks.length - 1)} tasks ▾`
-      : `+0 tasks · ${String(completedSecondaryTasks.length)} completed ▾`
+      ? {
+          label: `${String(primaryAndOpenTasks.length - 1)} more linked tq tasks`,
+          summary: `+${String(primaryAndOpenTasks.length - 1)} tasks ▾`,
+        }
+      : {
+          label: `${String(completedSecondaryTasks.length)} completed linked tq tasks`,
+          summary: `${String(completedSecondaryTasks.length)} completed ▾`,
+        }
 
   const makePrimary = async (taskId: string) => {
     if (onMakePrimary === undefined) return
@@ -194,14 +200,9 @@ export function SessionTaskLinks({
             <summary
               ref={summaryRef}
               aria-controls={taskMenuId}
-              aria-label={
-                completedSecondaryTasks.length > 0 &&
-                primaryAndOpenTasks.length === 1
-                  ? `0 more linked tq tasks, ${String(completedSecondaryTasks.length)} completed`
-                  : `${String(primaryAndOpenTasks.length - 1)} more linked tq tasks`
-              }
+              aria-label={taskListDisclosure.label}
             >
-              {taskCountLabel}
+              {taskListDisclosure.summary}
             </summary>
           </details>
         ) : null}
