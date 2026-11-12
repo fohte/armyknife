@@ -656,11 +656,13 @@ $ a agent status set awaiting_build "waiting for a build"
 
 ### `a agent decision add`
 
-Record a provisional decision for the calling tracked session. Supply one or more `--considered` alternatives; the command prints `Recorded decision <seq>` after saving the decision.
+Record a provisional decision for the calling tracked session. Supply one or more `--considered` alternatives. The reported sequence is valid only in the current session; refer to the decision's contents from another session or task.
 
 ```console
-$ a agent decision add "Keep the current format" --why "It matches existing commands" --considered "Use a nested format" --easy-to-change "The command can be renamed later"
-Recorded decision 1
+$ a agent decision add "Choose a temporary cache format" --why "It keeps the test setup small" --considered "Store each entry separately" --easy-to-change "Replace it with one config change"
+Decision recorded for this session.
+Session-local sequence: 7
+To refer to it in another session or task, describe its contents; this sequence only works in this session.
 ```
 
 Tracked, hook-processed Claude Code sessions receive the instruction on `SessionStart` to record choices that are cheap to reverse and continue working. They should stop and ask about choices that are hard to reverse. Internal and headless invocations do not receive this instruction.
