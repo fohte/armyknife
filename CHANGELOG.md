@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.622](https://github.com/fohte/armyknife/compare/v0.1.621...v0.1.622) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent:** show when stopped sessions are waiting ([#1612](https://github.com/fohte/armyknife/issues/1612)) ([af521d9](https://github.com/fohte/armyknife/commit/af521d916e5f4c244274a1843e3e366cc69f9dbd))
+
 ## [0.1.621](https://github.com/fohte/armyknife/compare/v0.1.620...v0.1.621) (2026-11-12)
 
 
