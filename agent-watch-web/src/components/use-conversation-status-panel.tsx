@@ -163,6 +163,7 @@ export function useConversationStatusPanel({
             id: 'pull-requests',
             label: 'PRs',
             count: pullRequestList.pullRequests.length,
+            visible: true,
             showCount: pullRequestList.pullRequests.length > 0,
             content: (
               <PullRequestListPanel
@@ -223,40 +224,50 @@ export function useConversationStatusPanel({
     }
 
     let current = true
-    const refresh = () => {
+    let inFlight = false
+    const refresh = async () => {
+      if (inFlight) return
+      inFlight = true
       setPullRequestListState((state) => ({
         sessionId: session.id,
         pullRequests: state.sessionId === session.id ? state.pullRequests : [],
         loading: true,
         error: null,
       }))
-      void requestJson(
+      await requestJson(
         `/api/sessions/${encodeURIComponent(session.id)}/pull-requests`,
         isSessionPullRequestListResponse,
       ).match(
         (response) => {
-          if (!current) return
-          setPullRequestListState({
-            sessionId: session.id,
-            pullRequests: response.pullRequests,
-            loading: false,
-            error: null,
-          })
+          if (current) {
+            setPullRequestListState({
+              sessionId: session.id,
+              pullRequests: response.pullRequests,
+              loading: false,
+              error: response.error,
+            })
+          }
+          inFlight = false
         },
         (error) => {
-          if (!current) return
-          setPullRequestListState((state) => ({
-            sessionId: session.id,
-            pullRequests:
-              state.sessionId === session.id ? state.pullRequests : [],
-            loading: false,
-            error: error.message,
-          }))
+          if (current) {
+            setPullRequestListState((state) => ({
+              sessionId: session.id,
+              pullRequests:
+                state.sessionId === session.id ? state.pullRequests : [],
+              loading: false,
+              error: error.message,
+            }))
+          }
+          inFlight = false
         },
       )
     }
-    refresh()
-    const interval = window.setInterval(refresh, PULL_REQUEST_REFRESH_INTERVAL)
+    void refresh()
+    const interval = window.setInterval(
+      () => void refresh(),
+      PULL_REQUEST_REFRESH_INTERVAL,
+    )
     return () => {
       current = false
       window.clearInterval(interval)

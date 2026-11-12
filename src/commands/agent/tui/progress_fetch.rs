@@ -30,6 +30,7 @@ pub(in crate::commands::agent) struct PullRequestListItem {
 #[serde(rename_all = "camelCase")]
 pub(in crate::commands::agent) struct PullRequestListResponse {
     pub pull_requests: Vec<PullRequestListItem>,
+    pub error: Option<String>,
 }
 
 pub(in crate::commands::agent) async fn fetch_pull_request_list(
@@ -43,12 +44,14 @@ pub(in crate::commands::agent) async fn fetch_pull_request_list(
         progress_scope(&selected_session_id, task_id, sessions, task_ids_by_session);
     let fetched =
         fetch_progress_for_sessions(selected_session_id, request_scope, sessions.to_vec()).await?;
+    let pull_requests = pull_request_list_items(
+        &fetched.delegated,
+        fetched.implementation.as_ref(),
+        agent_config,
+    );
     Ok(PullRequestListResponse {
-        pull_requests: pull_request_list_items(
-            &fetched.delegated,
-            fetched.implementation.as_ref(),
-            agent_config,
-        ),
+        pull_requests,
+        error: fetched.github_error,
     })
 }
 

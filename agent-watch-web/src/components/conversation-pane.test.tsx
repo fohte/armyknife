@@ -630,6 +630,92 @@ it('loads and shows the session tree from the tree endpoint', async () => {
   })
 })
 
+it('loads task-linked pull requests in the session status panel', async () => {
+  const taskSession: Session = {
+    ...session,
+    task: {
+      id: 'synthetic-task-id',
+      number: 2048,
+      title: 'Show linked work in the sidebar',
+      priority: null,
+    },
+  }
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(actions))
+    }
+    if (url.endsWith('/pull-requests')) {
+      return Promise.resolve(
+        jsonResponse({
+          pullRequests: [
+            {
+              number: 2048,
+              title: 'Show linked work in the sidebar',
+              url: 'https://github.com/example/project/pull/2048',
+              state: 'Open',
+              ciState: 'Successful',
+              reviewStatus: 'done',
+            },
+          ],
+          error: null,
+        }),
+      )
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={taskSession}
+        refreshKey={0}
+        statusPanelOpen
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+
+  await waitForState(
+    () => container.querySelector('.pull-request-list-title') !== null,
+  )
+  const snapshot = () => ({
+    requests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/pull-requests')),
+    tabs: Array.from(container.querySelectorAll('[role="tab"]'), (tab) => ({
+      label: tab.textContent,
+      selected: tab.getAttribute('aria-selected'),
+    })),
+    pullRequests: Array.from(
+      container.querySelectorAll('.pull-request-list-item'),
+      (item) => ({
+        title: item.querySelector('.pull-request-list-title')?.textContent,
+        href: item
+          .querySelector('.pull-request-list-title')
+          ?.getAttribute('href'),
+        status: item.querySelector('.pull-request-list-meta')?.textContent,
+      }),
+    ),
+  })
+
+  expect(snapshot()).toEqual({
+    requests: ['/api/sessions/sample-session/pull-requests'],
+    tabs: [{ label: 'PRs1', selected: 'true' }],
+    pullRequests: [
+      {
+        title: '#2048Show linked work in the sidebar',
+        href: 'https://github.com/example/project/pull/2048',
+        status: 'OpenCI: PassingReview: Done',
+      },
+    ],
+  })
+})
+
 it('shows a tree request error instead of hiding the tree tab', async () => {
   const treeSession = { ...session, hasSessionTree: true }
   const fetcher = vi.fn<typeof fetch>((input) => {

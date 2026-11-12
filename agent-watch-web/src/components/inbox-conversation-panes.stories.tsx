@@ -99,7 +99,7 @@ const meta = {
           }),
         ),
         http.get('/api/sessions/:sessionId/pull-requests', () =>
-          HttpResponse.json({ pullRequests: [] }),
+          HttpResponse.json({ pullRequests: [], error: null }),
         ),
       ],
     },

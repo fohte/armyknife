@@ -54,5 +54,5 @@ export const PullRequestsAreLoading: Story = {
 
 export const PullRequestLoadingFailed: Story = {
   name: 'The panel shows an error when pull requests cannot be loaded.',
-  args: { error: 'Pull requests could not be loaded.' },
+  args: { pullRequests: [], error: 'Pull requests could not be loaded.' },
 }

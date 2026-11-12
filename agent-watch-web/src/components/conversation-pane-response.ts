@@ -4,7 +4,7 @@ import type {
   ChatItem,
   ConversationResponse,
   SessionActions,
-  SessionPullRequest,
+  SessionPullRequestListResponse,
   SessionTreeNode,
   SkillSuggestion,
 } from '#types'
@@ -293,9 +293,10 @@ export function isSessionTreeResponse(
 
 export function isSessionPullRequestListResponse(
   value: unknown,
-): value is { pullRequests: SessionPullRequest[] } {
+): value is SessionPullRequestListResponse {
   return (
     isRecord(value) &&
+    (value['error'] === null || typeof value['error'] === 'string') &&
     Array.isArray(value['pullRequests']) &&
     value['pullRequests'].every(
       (pullRequest) =>

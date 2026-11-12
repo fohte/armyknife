@@ -77,6 +77,13 @@
   text-align: center;
 }
 
+.pull-request-list-error {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--aw-border-row);
+  color: var(--aw-color-error);
+  font-size: 11px;
+}
+
 .pull-request-list-refreshing {
   position: sticky;
   bottom: 0;

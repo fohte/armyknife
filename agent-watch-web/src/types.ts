@@ -35,6 +35,11 @@ export type SessionPullRequest = {
     'done' | 'user' | 'working' | 'waiting' | 'not_started' | (string & {})
 }
 
+export type SessionPullRequestListResponse = {
+  pullRequests: SessionPullRequest[]
+  error: string | null
+}
+
 type ParentSession = {
   id: string
   title: string | null

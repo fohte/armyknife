@@ -44,7 +44,7 @@ export function PullRequestListPanel({
   loading,
   error,
 }: PullRequestListPanelProps) {
-  if (error !== null) {
+  if (error !== null && pullRequests.length === 0) {
     return (
       <div className="pull-request-list-feedback" role="alert">
         {error}
@@ -61,6 +61,11 @@ export function PullRequestListPanel({
 
   return (
     <div className="pull-request-list-panel">
+      {error === null ? null : (
+        <div className="pull-request-list-error" role="alert">
+          {error}
+        </div>
+      )}
       <ul className="pull-request-list">
         {pullRequests.map((pullRequest) => (
           <li

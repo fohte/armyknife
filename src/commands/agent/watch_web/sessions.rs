@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use axum::Extension;
 use axum::Json;
 use axum::Router;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use chrono::{DateTime, Utc};
@@ -19,6 +19,7 @@ use crate::commands::agent::session_title::title_display_name;
 use crate::commands::agent::store;
 #[cfg(test)]
 use crate::commands::agent::tq_session_tasks::SessionTask as LinkedSessionTask;
+use crate::commands::agent::tui::progress_fetch::PullRequestListResponse;
 use crate::commands::agent::types::{Engine, Session, SessionStatus};
 use crate::commands::agent::user_turn::{UserTurnKind, user_turns};
 use crate::infra::github::{PrInfo, PrState};
@@ -36,10 +37,14 @@ use self::project::{
     resolve_parent_project, resolve_project, resolve_repo, resolve_repos_for_sessions,
 };
 mod feed;
+mod pull_requests;
+mod task_selection;
 mod tree;
 use self::feed::{
     SessionSnapshotCache, SessionsFeedResponse, SessionsQuery, session_feed_response,
 };
+use self::pull_requests::session_pull_requests;
+use self::task_selection::primary_task_id;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -145,6 +150,26 @@ trait SessionSource: Clone + Send + Sync + 'static {
         sessions: &[Session],
     ) -> impl Future<Output = HashMap<String, Option<PrInfo>>> + Send;
 
+    fn fetch_session_pull_request_list(
+        &self,
+        selected_session_id: String,
+        task_id: Option<String>,
+        sessions: Vec<Session>,
+        task_ids_by_session: HashMap<String, Vec<String>>,
+        agent_config: AgentConfig,
+    ) -> impl Future<Output = Result<PullRequestListResponse, String>> + Send {
+        async move {
+            crate::commands::agent::tui::progress_fetch::fetch_pull_request_list(
+                selected_session_id,
+                task_id.as_deref(),
+                &sessions,
+                &task_ids_by_session,
+                &agent_config,
+            )
+            .await
+        }
+    }
+
     fn running_background_task_session_ids(
         &self,
         _sessions: Vec<Session>,
@@ -236,53 +261,6 @@ fn router_with_source_and_cache<S: SessionSource>(
         )
         .layer(Extension(snapshot_cache))
         .with_state(source)
-}
-
-async fn session_pull_requests<S: SessionSource>(
-    State(source): State<S>,
-    Path(session_id): Path<String>,
-) -> Result<Json<crate::commands::agent::tui::progress_fetch::PullRequestListResponse>, StatusCode>
-{
-    let snapshot = source.load_snapshot().await.map_err(|error| {
-        tracing::warn!(%error, "failed to load sessions for PR list");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-    let task_metadata = source.fetch_task_metadata(&snapshot.all_sessions).await;
-    let task_ids_by_session = task_metadata
-        .links
-        .iter()
-        .map(|(session_id, tasks)| {
-            (
-                session_id.clone(),
-                tasks.iter().map(|task| task.task_id.clone()).collect(),
-            )
-        })
-        .collect::<HashMap<_, Vec<String>>>();
-    let linked_tasks = task_metadata.links.get(&session_id);
-    let primary_task_id = snapshot
-        .web_states
-        .iter()
-        .find(|state| state.session_id == session_id)
-        .and_then(|state| state.primary_task_id.as_deref())
-        .filter(|task_id| {
-            linked_tasks.is_some_and(|tasks| tasks.iter().any(|task| task.task_id == *task_id))
-        })
-        .or_else(|| linked_tasks.and_then(|tasks| tasks.first().map(|task| task.task_id.as_str())));
-
-    let response = crate::commands::agent::tui::progress_fetch::fetch_pull_request_list(
-        session_id,
-        primary_task_id,
-        &snapshot.all_sessions,
-        &task_ids_by_session,
-        &snapshot.agent_config,
-    )
-    .await
-    .map_err(|error| {
-        tracing::warn!(%error, "failed to fetch session PR list");
-        StatusCode::BAD_GATEWAY
-    })?;
-
-    Ok(Json(response))
 }
 
 async fn list_sessions<S: SessionSource>(
@@ -385,11 +363,12 @@ async fn list_sessions<S: SessionSource>(
                 })
                 .collect::<Vec<_>>();
             let state = state_by_id.get(&session.session_id);
-            let task = state
-                .and_then(|state| state.primary_task_id.as_deref())
-                .and_then(|primary_task_id| tasks.iter().find(|task| task.id == primary_task_id))
-                .or_else(|| tasks.first())
-                .cloned();
+            let task = primary_task_id(
+                state.and_then(|state| state.primary_task_id.as_deref()),
+                tasks.iter().map(|task| task.id.as_str()),
+            )
+            .and_then(|primary_task_id| tasks.iter().find(|task| task.id == primary_task_id))
+            .cloned();
             let parent = session
                 .ancestor_session_ids
                 .last()
@@ -682,6 +661,8 @@ mod tests {
         }
     }
 
+    type PullRequestListRequests = Arc<Mutex<Vec<(String, Option<String>)>>>;
+
     #[derive(Clone)]
     struct TestSessionSource {
         revision: i64,
@@ -697,6 +678,8 @@ mod tests {
         task_priority_order: HashMap<String, usize>,
         task_projects: HashMap<String, String>,
         pull_requests: HashMap<String, Option<PrInfo>>,
+        pull_request_list_response: Result<PullRequestListResponse, String>,
+        pull_request_list_requests: PullRequestListRequests,
         decision_counts: HashMap<String, store::AgentDecisionCounts>,
         work_type_nav_labels: HashMap<String, String>,
         agent_statuses: HashMap<String, AgentStatusConfig>,
@@ -751,6 +734,21 @@ mod tests {
             _sessions: &[Session],
         ) -> HashMap<String, Option<PrInfo>> {
             self.pull_requests.clone()
+        }
+
+        async fn fetch_session_pull_request_list(
+            &self,
+            session_id: String,
+            task_id: Option<String>,
+            _sessions: Vec<Session>,
+            _task_ids_by_session: HashMap<String, Vec<String>>,
+            _agent_config: AgentConfig,
+        ) -> Result<PullRequestListResponse, String> {
+            self.pull_request_list_requests
+                .lock()
+                .expect("pull request list request lock should not be poisoned")
+                .push((session_id, task_id));
+            self.pull_request_list_response.clone()
         }
 
         async fn running_background_task_session_ids(
@@ -815,6 +813,25 @@ mod tests {
             sessions: &[Session],
         ) -> HashMap<String, Option<PrInfo>> {
             self.source.fetch_pull_requests(sessions).await
+        }
+
+        async fn fetch_session_pull_request_list(
+            &self,
+            session_id: String,
+            task_id: Option<String>,
+            sessions: Vec<Session>,
+            task_ids_by_session: HashMap<String, Vec<String>>,
+            agent_config: AgentConfig,
+        ) -> Result<PullRequestListResponse, String> {
+            self.source
+                .fetch_session_pull_request_list(
+                    session_id,
+                    task_id,
+                    sessions,
+                    task_ids_by_session,
+                    agent_config,
+                )
+                .await
         }
 
         async fn running_background_task_session_ids(
@@ -924,6 +941,11 @@ mod tests {
                     url: "https://example.com/pull/42".to_string(),
                 }),
             )]),
+            pull_request_list_response: Ok(PullRequestListResponse {
+                pull_requests: Vec::new(),
+                error: None,
+            }),
+            pull_request_list_requests: Arc::default(),
             decision_counts: HashMap::from([(
                 "child-session".to_string(),
                 store::AgentDecisionCounts {
@@ -984,6 +1006,68 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value = serde_json::from_slice::<serde_json::Value>(&body).unwrap();
         (status, value)
+    }
+
+    async fn session_pull_requests_response(
+        source: TestSessionSource,
+        session_id: &str,
+    ) -> (StatusCode, serde_json::Value) {
+        let response = Router::new()
+            .nest("/api", router_with_source(source))
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/sessions/{session_id}/pull-requests"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value = serde_json::from_slice::<serde_json::Value>(&body).unwrap();
+        (status, value)
+    }
+
+    #[tokio::test]
+    async fn pull_request_route_falls_back_from_a_stale_primary_task() {
+        let mut source = source();
+        source.web_states[0].primary_task_id = Some("removed-task".to_string());
+        source.pull_request_list_response = Ok(PullRequestListResponse {
+            pull_requests: vec![
+                crate::commands::agent::tui::progress_fetch::PullRequestListItem {
+                    number: 2048,
+                    title: "Add session pull request links".to_string(),
+                    url: "https://github.com/example/project/pull/2048".to_string(),
+                    state: Some(PrState::Open),
+                    ci_state: Some(crate::infra::github::PrCiState::InProgress),
+                    review_status: "working".to_string(),
+                },
+            ],
+            error: None,
+        });
+        let requests = Arc::clone(&source.pull_request_list_requests);
+
+        let (status, response) = session_pull_requests_response(source, "child-session").await;
+        let recorded_requests = requests.lock().unwrap().clone();
+
+        assert_eq!(
+            (status, response, recorded_requests),
+            (
+                StatusCode::OK,
+                serde_json::json!({
+                    "pullRequests": [{
+                        "number": 2048,
+                        "title": "Add session pull request links",
+                        "url": "https://github.com/example/project/pull/2048",
+                        "state": "Open",
+                        "ciState": "InProgress",
+                        "reviewStatus": "working",
+                    }],
+                    "error": null,
+                }),
+                vec![("child-session".to_string(), Some("task-id".to_string()))],
+            ),
+        );
     }
 
     #[tokio::test]
