@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.634](https://github.com/fohte/armyknife/compare/v0.1.633...v0.1.634) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent/hook:** deny expired permission requests ([#1636](https://github.com/fohte/armyknife/issues/1636)) ([df9344d](https://github.com/fohte/armyknife/commit/df9344d08c61902913b3dd9fc4aef4ee3f6312f9))
+
 ## [0.1.633](https://github.com/fohte/armyknife/compare/v0.1.632...v0.1.633) (2026-11-12)
 
 
