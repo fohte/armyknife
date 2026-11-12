@@ -20,7 +20,7 @@ use crate::shared::caller_pane;
 use crate::shared::env_var::EnvVars;
 use crate::shared::log::short_run_id;
 
-use self::url::parse_port;
+use self::url::{add_url, parse_port};
 
 const CRIT_TITLE: &str = "■ crit - Review requested";
 
@@ -401,29 +401,6 @@ fn send_notification(session: &Session, port: u16) -> Result<()> {
     crate::infra::notification::send(&notification)
 }
 
-fn add_url(crit_urls: &mut Vec<String>, url: &str) {
-    if let Ok(new_url) = reqwest::Url::parse(url)
-        && new_url.path() == "/"
-        && let Some(position) = crit_urls.iter().rposition(|existing| {
-            reqwest::Url::parse(existing).is_ok_and(|existing_url| {
-                existing_url.path() != "/"
-                    && existing_url.scheme() == new_url.scheme()
-                    && existing_url.host_str() == new_url.host_str()
-                    && existing_url.port_or_known_default() == new_url.port_or_known_default()
-            })
-        })
-    {
-        let existing_url = crit_urls.remove(position);
-        crit_urls.push(existing_url);
-        return;
-    }
-
-    if let Some(position) = crit_urls.iter().position(|existing| existing == url) {
-        crit_urls.remove(position);
-    }
-    crit_urls.push(url.to_string());
-}
-
 pub(super) fn spawn_open_after_watch(session_id: &str) -> Result<()> {
     let executable = std::env::current_exe().context("failed to resolve armyknife executable")?;
     let parent_pid = std::process::id().to_string();
@@ -443,7 +420,6 @@ pub(super) fn spawn_open_after_watch(session_id: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rstest::rstest;
 
     #[derive(Debug, PartialEq, Eq)]
     enum CritAddAction {
@@ -509,65 +485,6 @@ mod tests {
             });
             Ok(())
         }
-    }
-
-    #[rstest]
-    #[case::root_url_keeps_same_origin_pathful_url(
-        vec![
-            "http://review.example.test:43210/preview".to_string(),
-            "http://other.example.test:43210/review".to_string(),
-        ],
-        "http://review.example.test:43210/",
-        vec![
-            "http://other.example.test:43210/review".to_string(),
-            "http://review.example.test:43210/preview".to_string(),
-        ],
-    )]
-    #[case::different_origin_adds_root_url(
-        vec!["http://review.example.test:43210/preview".to_string()],
-        "http://other.example.test:43210/",
-        vec![
-            "http://review.example.test:43210/preview".to_string(),
-            "http://other.example.test:43210/".to_string(),
-        ],
-    )]
-    #[case::different_scheme_adds_root_url(
-        vec!["http://review.example.test:43210/preview".to_string()],
-        "https://review.example.test:43210/",
-        vec![
-            "http://review.example.test:43210/preview".to_string(),
-            "https://review.example.test:43210/".to_string(),
-        ],
-    )]
-    #[case::different_port_adds_root_url(
-        vec!["http://review.example.test:43210/preview".to_string()],
-        "http://review.example.test:43211/",
-        vec![
-            "http://review.example.test:43210/preview".to_string(),
-            "http://review.example.test:43211/".to_string(),
-        ],
-    )]
-    #[case::pathful_url_is_added_normally(
-        vec!["http://review.example.test:43210/preview".to_string()],
-        "http://review.example.test:43210/next",
-        vec![
-            "http://review.example.test:43210/preview".to_string(),
-            "http://review.example.test:43210/next".to_string(),
-        ],
-    )]
-    #[case::root_url_is_added_when_origin_has_no_pathful_url(
-        vec!["http://review.example.test:43210/".to_string()],
-        "http://review.example.test:43210/",
-        vec!["http://review.example.test:43210/".to_string()],
-    )]
-    fn adds_crit_url(
-        #[case] mut crit_urls: Vec<String>,
-        #[case] url: &str,
-        #[case] expected: Vec<String>,
-    ) {
-        add_url(&mut crit_urls, url);
-
-        assert_eq!(crit_urls, expected);
     }
 
     #[test]
