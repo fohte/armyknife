@@ -24,7 +24,6 @@ const meta = {
   args: {
     actions,
     actionsReady: true,
-    index: 0,
     isMobile: false,
     selected: false,
     decisionPosition: undefined,

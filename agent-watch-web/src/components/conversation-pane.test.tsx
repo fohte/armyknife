@@ -285,6 +285,27 @@ function renderView(
   })
 }
 
+function renderConversationMessages(
+  messages: readonly ChatItem[],
+  start: number,
+) {
+  root ??= createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPaneView
+        session={session}
+        messages={messages}
+        start={start}
+        actions={actions}
+        loading={false}
+        error={null}
+        onAction={() => Promise.resolve(true)}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+}
+
 function treeSession(
   id: string,
   title: string,
@@ -2817,6 +2838,7 @@ it('posts a todo completion to its sequence route with the comment', async () =>
       <ConversationPane
         session={session}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -7124,7 +7146,6 @@ it('skips committing an unchanged memoized conversation row', () => {
   const rowProps = {
     actions,
     actionsReady: true,
-    index: 0,
     isMobile: false,
     selected: false,
     decisionPosition: undefined,
@@ -7147,6 +7168,127 @@ it('skips committing an unchanged memoized conversation row', () => {
   })
 
   expect(renderMessage).toHaveBeenCalledTimes(1)
+})
+
+it('keeps a todo comment when a preceding conversation row arrives', () => {
+  const todo: ChatItem = {
+    type: 'todo',
+    seq: 12,
+    title: 'Review the deployment plan',
+    detail: null,
+    completed: false,
+    comment: null,
+  }
+  renderConversationMessages([todo], 0)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+  setTextareaValue(textarea, 'Keep the rollback step')
+
+  renderConversationMessages(
+    [{ type: 'assistant', text: 'A new reply arrived.' }, todo],
+    1,
+  )
+
+  const currentTextarea =
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment')
+  const snapshot = () => ({
+    sameTextarea: textarea === currentTextarea,
+    value: currentTextarea?.value,
+  })
+  expect(snapshot()).toEqual({
+    sameTextarea: true,
+    value: 'Keep the rollback step',
+  })
+})
+
+it('keeps a decision change comment when a preceding conversation row arrives', () => {
+  const decision: ChatItem = {
+    type: 'decision',
+    seq: 14,
+    title: 'Use a bounded retry policy',
+    why: 'The service has no reliable duration estimate.',
+    considered: ['Retry using the latest duration'],
+    easyToChange: 'Adjust one configuration value.',
+    review: null,
+    createdAt: '2026-11-11T12:00:00Z',
+  }
+  renderConversationMessages([decision], 0)
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>('.decision-card-summary'),
+    ).click()
+  })
+  act(() => {
+    requireElement(
+      Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(
+        (button) => button.textContent.trim() === 'Change…',
+      ) ?? null,
+    ).click()
+  })
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>(
+      '.decision-card-change-form textarea',
+    ),
+  )
+  setTextareaValue(textarea, 'Include a timeout limit')
+
+  renderConversationMessages(
+    [{ type: 'assistant', text: 'A new reply arrived.' }, decision],
+    1,
+  )
+
+  const currentTextarea = container.querySelector<HTMLTextAreaElement>(
+    '.decision-card-change-form textarea',
+  )
+  const snapshot = () => ({
+    sameTextarea: textarea === currentTextarea,
+    value: currentTextarea?.value,
+  })
+  expect(snapshot()).toEqual({
+    sameTextarea: true,
+    value: 'Include a timeout limit',
+  })
+})
+
+it('keeps a question answer draft when a preceding conversation row arrives', () => {
+  const question: ChatItem = {
+    type: 'question',
+    requestId: 'question-request-3',
+    questions: [
+      {
+        header: 'Retry behavior',
+        question: 'Which behavior should be used?',
+        choices: [{ label: 'Retry once' }, { label: 'Do not retry' }],
+        multi_select: true,
+        answer: null,
+      },
+    ],
+  }
+  renderConversationMessages([question], 0)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>(
+      '.chat-question-prompt textarea',
+    ),
+  )
+  setTextareaValue(textarea, 'Use the bounded option')
+
+  renderConversationMessages(
+    [{ type: 'assistant', text: 'A new reply arrived.' }, question],
+    1,
+  )
+
+  const currentTextarea = container.querySelector<HTMLTextAreaElement>(
+    '.chat-question-prompt textarea',
+  )
+  const snapshot = () => ({
+    sameTextarea: textarea === currentTextarea,
+    value: currentTextarea?.value,
+  })
+  expect(snapshot()).toEqual({
+    sameTextarea: true,
+    value: 'Use the bounded option',
+  })
 })
 
 it('keeps message rows memoized for elapsed and closed-task updates', () => {

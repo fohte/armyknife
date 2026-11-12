@@ -176,7 +176,6 @@ export function ConversationPaneView({
     hasUnansweredProposal,
   } = useConversationMessageElements({
     messages,
-    start,
     ...(decisions === undefined ? {} : { decisions }),
     ...(responseHasUnansweredProposal === undefined
       ? {}

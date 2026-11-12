@@ -28,7 +28,6 @@ import type {
 export type ConversationMessageRowProps = {
   actions: SessionActions | null
   actionsReady: boolean
-  index: number
   isMobile: boolean
   selected: boolean
   decisionPosition: string | undefined
@@ -50,7 +49,6 @@ export type ConversationMessageRowProps = {
 export function renderConversationMessage({
   actions,
   actionsReady,
-  index,
   isMobile,
   selected,
   decisionPosition,
@@ -71,7 +69,6 @@ export function renderConversationMessage({
   ) {
     return (
       <UserWithContent
-        key={`user-${String(index)}`}
         message={message}
         onSelectSession={onSelectSession}
         sessions={sessions}
@@ -81,7 +78,6 @@ export function renderConversationMessage({
   if (message.type === 'peer') {
     return (
       <PeerMessage
-        key={`peer-${String(index)}`}
         message={message}
         onSelectSession={onSelectSession}
         sessions={sessions}
@@ -91,7 +87,6 @@ export function renderConversationMessage({
   if (message.type === 'subagent_report') {
     return (
       <SubagentReport
-        key={`subagent-report-${String(index)}`}
         message={message}
         onSelectSession={onSelectSession}
         sessions={sessions}
@@ -105,7 +100,6 @@ export function renderConversationMessage({
         className="chat-event"
         data-failed={message.failed ? 'true' : undefined}
         data-kind={message.kind}
-        key={`event-${String(index)}`}
         title={message.text}
       >
         <span className="chat-event-text">{message.text}</span>
@@ -120,10 +114,7 @@ export function renderConversationMessage({
   }
   if (message.type === 'assistant') {
     return (
-      <article
-        className="chat-assistant-message"
-        key={`assistant-${String(index)}`}
-      >
+      <article className="chat-assistant-message">
         <MarkdownMessage onSelectSession={onSelectSession} sessions={sessions}>
           {message.text}
         </MarkdownMessage>
@@ -133,20 +124,13 @@ export function renderConversationMessage({
   if (message.type === 'tool_summary') {
     return (
       <ToolSummary
-        key={`tool-${String(index)}`}
         summary={message.summary}
         operations={message.operations ?? []}
       />
     )
   }
   if (message.type === 'tool_in_progress') {
-    return (
-      <ToolSummary
-        key={`tool-${String(index)}`}
-        summary="1 action"
-        operations={[message]}
-      />
-    )
+    return <ToolSummary summary="1 action" operations={[message]} />
   }
   if (message.type === 'question') {
     const unanswered = message.questions.every(
@@ -159,7 +143,6 @@ export function renderConversationMessage({
       actions?.answerQuestion === true
     return (
       <QuestionCard
-        key={`question-${String(index)}`}
         questions={message.questions}
         canAnswer={canAnswer}
         isMobile={isMobile}
@@ -179,7 +162,6 @@ export function renderConversationMessage({
   if (message.type === 'decision') {
     return (
       <DecisionCard
-        key={`decision-${String(message.seq)}-${String(index)}`}
         decision={message}
         variant="conversation"
         selected={selected}
@@ -199,7 +181,6 @@ export function renderConversationMessage({
   if (message.type === 'proposal') {
     return (
       <ProposalCard
-        key={`proposal-${String(message.seq)}`}
         seq={message.seq}
         title={message.title}
         summary={message.summary}
@@ -219,7 +200,6 @@ export function renderConversationMessage({
   if (message.type === 'todo') {
     return (
       <TodoCard
-        key={`todo-${String(message.seq)}`}
         title={message.title}
         detail={message.detail}
         completed={message.completed}
@@ -232,7 +212,6 @@ export function renderConversationMessage({
   }
   return (
     <PermissionCard
-      key={`permission-${String(index)}`}
       message={message}
       actions={actions}
       actionsReady={actionsReady}

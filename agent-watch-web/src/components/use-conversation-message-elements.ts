@@ -15,7 +15,6 @@ import type {
 
 type UseConversationMessageElementsOptions = {
   messages: readonly ChatItem[]
-  start?: number
   decisions?: readonly Extract<ChatItem, { type: 'decision' }>[]
   hasUnansweredProposal?: boolean
   sessionCategory: Session['category']
@@ -37,9 +36,24 @@ type UseConversationMessageElementsOptions = {
   sessions: readonly SessionLinkTarget[]
 }
 
+function getConversationMessageIdentity(message: ChatItem): string {
+  switch (message.type) {
+    case 'proposal':
+    case 'todo':
+    case 'decision':
+      return `${message.type}:${String(message.seq)}`
+    case 'question':
+    case 'permission':
+      return message.requestId === undefined
+        ? `${message.type}:${JSON.stringify(message)}`
+        : `${message.type}:${message.requestId}`
+    default:
+      return `${message.type}:${JSON.stringify(message)}`
+  }
+}
+
 export function useConversationMessageElements({
   messages,
-  start = 0,
   decisions: allDecisions,
   hasUnansweredProposal: proposalPending,
   sessionCategory,
@@ -61,21 +75,17 @@ export function useConversationMessageElements({
     const activeTool = messages.findLast(
       (message) => message.type === 'tool_in_progress',
     )
-    const conversationMessages = messages
-      .map((message, index) => ({ message, index }))
-      .filter(
-        ({ message }) =>
-          message.type !== 'tool_in_progress' ||
-          (sessionCategory !== 'in_progress' && !isCompacting),
-      )
+    const conversationMessages = messages.filter(
+      (message) =>
+        message.type !== 'tool_in_progress' ||
+        (sessionCategory !== 'in_progress' && !isCompacting),
+    )
     const decisions =
       allDecisions ??
-      conversationMessages
-        .map(({ message }) => message)
-        .filter(
-          (message): message is Extract<ChatItem, { type: 'decision' }> =>
-            message.type === 'decision',
-        )
+      conversationMessages.filter(
+        (message): message is Extract<ChatItem, { type: 'decision' }> =>
+          message.type === 'decision',
+      )
     const decisionPositions = new Map(
       decisions.map((decision, index) => [decision.seq, index + 1]),
     )
@@ -87,20 +97,20 @@ export function useConversationMessageElements({
           message.answer === null &&
           !message.resolved,
       )
-    const elements = conversationMessages.map(({ message, index }) => {
+    const keyOccurrences = new Map<string, number>()
+    const elements = conversationMessages.map((message) => {
       const messagePendingAction: PendingPermissionActionState =
         message.type === 'permission' && message.requestId !== undefined
           ? (pendingActions[message.requestId] ?? null)
           : null
+      const identity = getConversationMessageIdentity(message)
+      const occurrence = keyOccurrences.get(identity) ?? 0
+      keyOccurrences.set(identity, occurrence + 1)
 
       return createElement(ConversationMessageRow, {
-        key:
-          message.type === 'proposal'
-            ? `proposal-${String(message.seq)}`
-            : String(start + index),
+        key: `${identity}:${String(occurrence)}`,
         actions,
         actionsReady,
-        index: start + index,
         isMobile,
         selected:
           message.type === 'decision' && message.seq === selectedDecisionSeq,
@@ -130,7 +140,6 @@ export function useConversationMessageElements({
     actions,
     actionsReady,
     allDecisions,
-    start,
     isCompacting,
     isMobile,
     messages,
