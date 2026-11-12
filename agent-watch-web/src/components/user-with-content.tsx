@@ -46,17 +46,19 @@ export function UserWithContent({
   message,
   onSelectSession,
   sessions,
+  now,
 }: {
   message: UserMessage
   onSelectSession?: (id: string) => void
   sessions?: readonly SessionLinkTarget[]
+  now?: Date
 }) {
   const content: UserContentPart[] =
     message.type === 'user'
       ? [{ type: 'text', text: message.text }]
       : message.content
   const queued = message.type === 'queued_user'
-  const time = formatMessageTime(message.timestamp)
+  const time = formatMessageTime(message.timestamp, now)
   const label = queued
     ? 'You · Queued'
     : message.from != null && message.from !== ''

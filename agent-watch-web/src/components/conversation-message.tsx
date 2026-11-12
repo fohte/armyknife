@@ -44,6 +44,7 @@ export type ConversationMessageRowProps = {
   onSelectSession: (id: string) => void
   sessionEngine: Session['engine']
   sessions: readonly SessionLinkTarget[]
+  now?: Date
 }
 
 export function renderConversationMessage({
@@ -61,6 +62,7 @@ export function renderConversationMessage({
   onSelectSession,
   sessionEngine,
   sessions,
+  now,
 }: ConversationMessageRowProps): ReactNode {
   if (
     message.type === 'user' ||
@@ -72,6 +74,7 @@ export function renderConversationMessage({
         message={message}
         onSelectSession={onSelectSession}
         sessions={sessions}
+        {...(now === undefined ? {} : { now })}
       />
     )
   }
@@ -81,6 +84,7 @@ export function renderConversationMessage({
         message={message}
         onSelectSession={onSelectSession}
         sessions={sessions}
+        {...(now === undefined ? {} : { now })}
       />
     )
   }
@@ -94,7 +98,7 @@ export function renderConversationMessage({
     )
   }
   if (message.type === 'event') {
-    const time = formatMessageTime(message.timestamp)
+    const time = formatMessageTime(message.timestamp, now)
     return (
       <div
         className="chat-event"

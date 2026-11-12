@@ -114,6 +114,14 @@ export function ConversationPaneView({
   isToday = false,
   onToggleToday,
 }: ConversationPaneViewProps) {
+  const currentDate = new Date()
+  const currentYear = currentDate.getFullYear()
+  const currentMonth = currentDate.getMonth()
+  const currentDay = currentDate.getDate()
+  const now = useMemo(
+    () => new Date(currentYear, currentMonth, currentDay),
+    [currentYear, currentMonth, currentDay],
+  )
   const { draft, updateDraft, clearDraftIfUnchanged, storageAvailable } =
     useComposerDraft(session.id)
   const {
@@ -189,6 +197,7 @@ export function ConversationPaneView({
     onSelectSession: selectLinkedSession,
     pendingActions: pendingPermissionActions,
     sessions: sessionLinkTargets,
+    now,
   })
   const parent = session.parent
   const linkedTasks =
