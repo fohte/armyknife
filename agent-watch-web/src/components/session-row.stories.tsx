@@ -205,7 +205,7 @@ export const WorkShowsDecisionCount: Story = {
 }
 
 export const SessionIsPaused: Story = {
-  name: 'A paused session stays in Done and shows its paused state',
+  name: 'A paused session keeps the completed row status',
   args: {
     session: {
       ...session,

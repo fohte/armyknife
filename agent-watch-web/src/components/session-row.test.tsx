@@ -27,6 +27,7 @@ const session: Session = {
 }
 
 function renderRow(viewSession: Session, isMobile = false) {
+  if (root !== null) act(() => root?.unmount())
   root = createRoot(container)
   act(() => {
     root?.render(
@@ -45,7 +46,7 @@ function renderRow(viewSession: Session, isMobile = false) {
 
 function snapshot() {
   return {
-    badge: container.querySelector('[data-slot="chip"]')?.textContent,
+    badge: container.querySelector('[data-slot="chip"]')?.textContent ?? null,
     age: container.querySelector('.session-age')?.textContent,
     task: container.querySelector('.session-task')?.textContent,
   }
@@ -73,14 +74,18 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it('labels a paused session while keeping its elapsed time visible', () => {
-  renderRow(session)
+it.each([
+  { name: 'paused', viewSession: session },
+  { name: 'not paused', viewSession: { ...session, isPaused: false } },
+])('shows the same completed row status when $name', ({ viewSession }) => {
+  renderRow(viewSession)
 
-  expect(snapshot()).toEqual({
-    badge: 'Paused',
-    age: '2m',
+  const expected = {
+    badge: null,
+    age: 'Finished · 2m',
     task: '— No task',
-  })
+  }
+  expect(snapshot()).toEqual(expected)
 })
 
 it('keeps the merged pull request label on a paused row', () => {
@@ -89,11 +94,12 @@ it('keeps the merged pull request label on a paused row', () => {
     pullRequest: { number: 2049, state: 'Merged' },
   })
 
-  expect(snapshot()).toEqual({
-    badge: 'Paused',
+  const expected = {
+    badge: null,
     age: 'Merged #2049 · 2m',
     task: '— No task',
-  })
+  }
+  expect(snapshot()).toEqual(expected)
 })
 
 it('shows the primary tq task and the number of other linked tasks', () => {
