@@ -41,6 +41,14 @@ pub(crate) enum PermissionRequestWait {
 pub(crate) enum PermissionQuestionAnswerStatus {
     Pending,
     Complete,
+    Missing,
+    Finished,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PermissionRequestResolution {
+    Resolved,
+    Missing,
     Finished,
 }
 
@@ -62,6 +70,21 @@ impl PermissionRequestWaiter {
         request_id: &str,
     ) -> Result<PermissionRequestWait> {
         poll_permission_request_from(&mut self.connection, session_id, agent_key, request_id)
+    }
+
+    pub(crate) fn expire(
+        &mut self,
+        session_id: &str,
+        agent_key: &str,
+        request_id: &str,
+    ) -> Result<PermissionRequestWait> {
+        finalize_permission_request_from(
+            &mut self.connection,
+            session_id,
+            agent_key,
+            request_id,
+            true,
+        )
     }
 }
 
@@ -159,7 +182,7 @@ pub(crate) fn record_permission_question_answer(
         .optional()?
     else {
         transaction.commit()?;
-        return Ok(PermissionQuestionAnswerStatus::Finished);
+        return Ok(PermissionQuestionAnswerStatus::Missing);
     };
     let tool_input: Value = serde_json::from_str(&tool_input)?;
     let Some(questions) = tool_input.get("questions").and_then(Value::as_array) else {
@@ -227,17 +250,34 @@ pub(crate) fn resolve_permission_request(
     agent_key: &str,
     request_id: &str,
     decision: &PermissionRequestDecision,
-) -> Result<bool> {
+) -> Result<PermissionRequestResolution> {
     super::validate_session_id(session_id)?;
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let Some(mut session) = read_session_strict(&transaction, session_id)? else {
         transaction.commit()?;
-        return Ok(false);
+        return Ok(PermissionRequestResolution::Finished);
     };
     if !permission_request_is_current(&session, agent_key, request_id) {
         transaction.commit()?;
-        return Ok(false);
+        return Ok(PermissionRequestResolution::Finished);
+    }
+
+    let current_decision = transaction
+        .query_row(
+            "SELECT decision FROM permission_request_decision
+             WHERE session_id = ?1 AND agent_key = ?2 AND request_id = ?3",
+            params![session_id, agent_key, request_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?;
+    let Some(current_decision) = current_decision else {
+        transaction.commit()?;
+        return Ok(PermissionRequestResolution::Missing);
+    };
+    if current_decision.is_some() {
+        transaction.commit()?;
+        return Ok(PermissionRequestResolution::Finished);
     }
 
     let changed = transaction.execute(
@@ -248,13 +288,13 @@ pub(crate) fn resolve_permission_request(
     )?;
     if changed != 1 {
         transaction.commit()?;
-        return Ok(false);
+        return Ok(PermissionRequestResolution::Finished);
     }
 
     session.updated_at = Utc::now();
     write_session(&transaction, &session)?;
     transaction.commit()?;
-    Ok(true)
+    Ok(PermissionRequestResolution::Resolved)
 }
 
 fn poll_permission_request_from(
@@ -264,37 +304,71 @@ fn poll_permission_request_from(
     request_id: &str,
 ) -> Result<PermissionRequestWait> {
     super::validate_session_id(session_id)?;
+    let decision = connection
+        .query_row(
+            "SELECT decision FROM permission_request_decision
+             WHERE session_id = ?1 AND agent_key = ?2 AND request_id = ?3",
+            params![session_id, agent_key, request_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?;
+    let Some(decision) = decision else {
+        return Ok(PermissionRequestWait::Finished);
+    };
+    let session = read_session_strict(connection, session_id)?;
+    let is_current = session
+        .as_ref()
+        .is_some_and(|session| permission_request_is_current(session, agent_key, request_id));
+    if is_current && decision.is_none() {
+        return Ok(PermissionRequestWait::Pending);
+    }
+
+    finalize_permission_request_from(connection, session_id, agent_key, request_id, false)
+}
+
+fn finalize_permission_request_from(
+    connection: &mut Connection,
+    session_id: &str,
+    agent_key: &str,
+    request_id: &str,
+    expire_pending: bool,
+) -> Result<PermissionRequestWait> {
+    super::validate_session_id(session_id)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let Some(session) = read_session_strict(&transaction, session_id)? else {
+    let session = read_session_strict(&transaction, session_id)?;
+    let is_current = session
+        .as_ref()
+        .is_some_and(|session| permission_request_is_current(session, agent_key, request_id));
+    let decision = transaction
+        .query_row(
+            "SELECT decision FROM permission_request_decision
+             WHERE session_id = ?1 AND agent_key = ?2 AND request_id = ?3",
+            params![session_id, agent_key, request_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?;
+    let Some(decision) = decision else {
         transaction.commit()?;
         return Ok(PermissionRequestWait::Finished);
     };
-    if !permission_request_is_current(&session, agent_key, request_id) {
+    if !is_current || (decision.is_none() && expire_pending) {
         transaction.execute(
-            "DELETE FROM permission_request_decision WHERE request_id = ?1",
-            [request_id],
+            "DELETE FROM permission_request_decision
+             WHERE session_id = ?1 AND agent_key = ?2 AND request_id = ?3",
+            params![session_id, agent_key, request_id],
         )?;
         transaction.commit()?;
         return Ok(PermissionRequestWait::Finished);
     }
-
-    let decision = transaction
-        .query_row(
-            "SELECT decision FROM permission_request_decision
-             WHERE session_id = ?1 AND request_id = ?2",
-            params![session_id, request_id],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .optional()?
-        .flatten();
     let Some(decision) = decision else {
         transaction.commit()?;
         return Ok(PermissionRequestWait::Pending);
     };
     let decision = serde_json::from_str(&decision)?;
     transaction.execute(
-        "DELETE FROM permission_request_decision WHERE request_id = ?1",
-        [request_id],
+        "DELETE FROM permission_request_decision
+         WHERE session_id = ?1 AND agent_key = ?2 AND request_id = ?3",
+        params![session_id, agent_key, request_id],
     )?;
     transaction.commit()?;
     Ok(PermissionRequestWait::Decision(decision))
@@ -318,8 +392,10 @@ fn permission_request_is_current(
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::PathBuf;
+    use std::time::Duration;
 
     use chrono::{TimeZone, Utc};
+    use rstest::fixture;
     use tempfile::TempDir;
 
     use super::*;
@@ -370,6 +446,28 @@ mod tests {
         }
     }
 
+    #[fixture]
+    fn pending_bash_request() -> TempDir {
+        let sessions_dir = sessions_dir();
+        super::super::super::save_session_to(sessions_dir.path(), &session("session-cobalt"))
+            .expect("session should be saved");
+        let mut connection = open_connection(sessions_dir.path()).expect("database should open");
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .expect("transaction should begin");
+        insert_permission_request(
+            &transaction,
+            "session-cobalt",
+            MAIN_THREAD_AGENT_KEY,
+            "request-cobalt",
+            Some("Bash"),
+            &serde_json::json!({"command": "echo fictional"}),
+        )
+        .expect("request should be registered");
+        transaction.commit().expect("request should be committed");
+        sessions_dir
+    }
+
     fn poll_request(
         sessions_dir: &Path,
         session_id: &str,
@@ -404,7 +502,7 @@ mod tests {
             message: "Rejected from watch-web.".to_string(),
             interrupt: false,
         };
-        assert!(
+        assert_eq!(
             resolve_permission_request(
                 sessions_dir.path(),
                 "session-cobalt",
@@ -412,7 +510,8 @@ mod tests {
                 "request-cobalt",
                 &decision,
             )
-            .expect("decision should be saved")
+            .expect("decision should be saved"),
+            PermissionRequestResolution::Resolved,
         );
 
         assert_eq!(
@@ -553,6 +652,59 @@ mod tests {
         assert_eq!(
             poll_request(sessions_dir.path(), "session-cobalt", "request-cobalt"),
             PermissionRequestWait::Finished,
+        );
+    }
+
+    #[rstest::rstest]
+    fn pending_poll_does_not_acquire_a_write_lock(pending_bash_request: TempDir) {
+        let mut waiter =
+            PermissionRequestWaiter::open(pending_bash_request.path()).expect("waiter should open");
+        waiter
+            .connection
+            .busy_timeout(Duration::ZERO)
+            .expect("poll should not wait for a writer");
+        let mut writer =
+            open_connection(pending_bash_request.path()).expect("database should open");
+        let transaction = writer
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .expect("writer lock should be acquired");
+
+        let wait = waiter
+            .poll("session-cobalt", MAIN_THREAD_AGENT_KEY, "request-cobalt")
+            .expect("read-only polling should work while a writer is active");
+        transaction
+            .commit()
+            .expect("writer lock should be released");
+
+        assert_eq!(wait, PermissionRequestWait::Pending);
+    }
+
+    #[rstest::rstest]
+    fn expiring_a_pending_request_removes_its_mailbox(pending_bash_request: TempDir) {
+        let mut waiter =
+            PermissionRequestWaiter::open(pending_bash_request.path()).expect("waiter should open");
+        let wait = waiter
+            .expire("session-cobalt", MAIN_THREAD_AGENT_KEY, "request-cobalt")
+            .expect("request should expire");
+        let request = permission_request_data(
+            pending_bash_request.path(),
+            "session-cobalt",
+            "request-cobalt",
+        )
+        .expect("request should load after expiration");
+        let connection =
+            open_connection(pending_bash_request.path()).expect("database should open");
+        let session = read_session_strict(&connection, "session-cobalt")
+            .expect("session should load")
+            .expect("session should exist");
+
+        assert_eq!(
+            (wait, request, session.status),
+            (
+                PermissionRequestWait::Finished,
+                None,
+                SessionStatus::WaitingInput,
+            ),
         );
     }
 

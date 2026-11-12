@@ -30,8 +30,8 @@ pub(crate) use peer_out_messages::{
 };
 pub(crate) use permission_requests::{
     PermissionQuestionAnswerStatus, PermissionRequestData, PermissionRequestDecision,
-    PermissionRequestWait, PermissionRequestWaiter, permission_request_data,
-    record_permission_question_answer, resolve_permission_request,
+    PermissionRequestResolution, PermissionRequestWait, PermissionRequestWaiter,
+    permission_request_data, record_permission_question_answer, resolve_permission_request,
 };
 pub(crate) use proposals::AgentProposal;
 pub(crate) use proposals::{

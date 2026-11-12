@@ -1,7 +1,7 @@
 use std::io::Write;
 use std::path::Path;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -11,6 +11,8 @@ use super::super::store::{
 };
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
+// Leave time for Claude Code to fall back to its terminal dialog before the command hook times out.
+const MAX_WAIT: Duration = Duration::from_secs(590);
 
 pub(super) fn wait_and_write(
     sessions_dir: &Path,
@@ -19,13 +21,39 @@ pub(super) fn wait_and_write(
     request_id: &str,
     output: impl Write,
 ) -> Result<()> {
+    let deadline = Instant::now() + MAX_WAIT;
     let mut waiter = PermissionRequestWaiter::open(sessions_dir)?;
+    wait_until_deadline(
+        &mut waiter,
+        session_id,
+        agent_key,
+        request_id,
+        deadline,
+        output,
+    )
+}
+
+fn wait_until_deadline(
+    waiter: &mut PermissionRequestWaiter,
+    session_id: &str,
+    agent_key: &str,
+    request_id: &str,
+    deadline: Instant,
+    mut output: impl Write,
+) -> Result<()> {
     loop {
-        match waiter.poll(session_id, agent_key, request_id)? {
-            PermissionRequestWait::Pending => thread::sleep(POLL_INTERVAL),
+        let wait = if Instant::now() >= deadline {
+            waiter.expire(session_id, agent_key, request_id)?
+        } else {
+            waiter.poll(session_id, agent_key, request_id)?
+        };
+        match wait {
+            PermissionRequestWait::Pending => {
+                thread::sleep(POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())))
+            }
             PermissionRequestWait::Finished => return Ok(()),
             PermissionRequestWait::Decision(decision) => {
-                return write_response(decision, output);
+                return write_response(decision, &mut output);
             }
         }
     }
@@ -62,6 +90,26 @@ fn write_response(decision: PermissionRequestDecision, mut output: impl Write) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expired_wait_finishes_without_writing_a_hook_response() {
+        let sessions_dir = tempfile::tempdir().expect("sessions directory should be created");
+        let mut waiter = PermissionRequestWaiter::open(sessions_dir.path())
+            .expect("permission request waiter should open");
+        let mut output = Vec::new();
+
+        wait_until_deadline(
+            &mut waiter,
+            "fixture-session",
+            "main",
+            "fixture-request",
+            Instant::now(),
+            &mut output,
+        )
+        .expect("expired wait should finish successfully");
+
+        assert_eq!(output, Vec::<u8>::new());
+    }
 
     #[test]
     fn deny_keeps_the_turn_running() {

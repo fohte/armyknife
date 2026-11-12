@@ -27,6 +27,9 @@ mod proposals;
 pub(super) use api_error::ApiError;
 use proposal_answer_locks::ProposalAnswerLocks;
 
+const PERMISSION_REQUEST_EXPIRED_MESSAGE: &str =
+    "permission request is no longer available; answer in the terminal";
+
 pub(super) fn router(message_loaders: RouteLoaders) -> Router {
     router_with_state(ActionState {
         sessions_dir: None,
@@ -254,7 +257,7 @@ async fn answer_question(
         move || store::permission_request_data(&sessions_dir, &session_id, &request_id)
     })
     .await?
-    .ok_or_else(|| ApiError::conflict("question request is no longer pending"))?;
+    .ok_or_else(|| ApiError::conflict(PERMISSION_REQUEST_EXPIRED_MESSAGE))?;
     let question_data = question_request_data(&request_data, question)?;
     if request.skip {
         if request.choice.is_some() || request.answer.is_some() {
@@ -268,7 +271,7 @@ async fn answer_question(
         };
         let session_id = session.session_id.clone();
         let request_id = request_id.to_string();
-        let resolved = run_blocking(move || {
+        let resolution = run_blocking(move || {
             store::resolve_permission_request(
                 &sessions_dir,
                 &session_id,
@@ -278,8 +281,14 @@ async fn answer_question(
             )
         })
         .await?;
-        if !resolved {
-            return Err(ApiError::conflict("question request is no longer pending"));
+        match resolution {
+            store::PermissionRequestResolution::Resolved => {}
+            store::PermissionRequestResolution::Missing => {
+                return Err(ApiError::conflict(PERMISSION_REQUEST_EXPIRED_MESSAGE));
+            }
+            store::PermissionRequestResolution::Finished => {
+                return Err(ApiError::conflict("question request is no longer pending"));
+            }
         }
         return Ok(Json(Success::new()));
     }
@@ -312,8 +321,15 @@ async fn answer_question(
         )
     })
     .await?;
-    if answer_status == store::PermissionQuestionAnswerStatus::Finished {
-        return Err(ApiError::conflict("question request is no longer pending"));
+    match answer_status {
+        store::PermissionQuestionAnswerStatus::Pending
+        | store::PermissionQuestionAnswerStatus::Complete => {}
+        store::PermissionQuestionAnswerStatus::Missing => {
+            return Err(ApiError::conflict(PERMISSION_REQUEST_EXPIRED_MESSAGE));
+        }
+        store::PermissionQuestionAnswerStatus::Finished => {
+            return Err(ApiError::conflict("question request is no longer pending"));
+        }
     }
     Ok(Json(Success::new()))
 }
@@ -364,7 +380,7 @@ async fn resolve_permission_action(
     let sessions_dir = resolve_sessions_dir(state.sessions_dir).map_err(ApiError::internal)?;
     let session_id = session.session_id.clone();
     let request_id = request_id.to_string();
-    let resolved = run_blocking(move || {
+    let resolution = run_blocking(move || {
         store::resolve_permission_request(
             &sessions_dir,
             &session_id,
@@ -374,10 +390,16 @@ async fn resolve_permission_action(
         )
     })
     .await?;
-    if !resolved {
-        return Err(ApiError::conflict(
-            "permission approval is unavailable for this session",
-        ));
+    match resolution {
+        store::PermissionRequestResolution::Resolved => {}
+        store::PermissionRequestResolution::Missing => {
+            return Err(ApiError::conflict(PERMISSION_REQUEST_EXPIRED_MESSAGE));
+        }
+        store::PermissionRequestResolution::Finished => {
+            return Err(ApiError::conflict(
+                "permission approval is unavailable for this session",
+            ));
+        }
     }
     Ok(Json(Success::new()))
 }
@@ -821,6 +843,18 @@ mod tests {
             )
             .unwrap();
             lock.save(session).unwrap();
+        }
+
+        fn expire_pending_request(&self) {
+            let mut waiter =
+                store::PermissionRequestWaiter::open(&self.temp_dir.path().join("sessions"))
+                    .unwrap();
+            assert_eq!(
+                waiter
+                    .expire("sample-session", MAIN_THREAD_AGENT_KEY, "request-cobalt")
+                    .unwrap(),
+                PermissionRequestWait::Finished,
+            );
         }
 
         fn take_permission_decision(&self) -> PermissionRequestDecision {
@@ -1438,6 +1472,82 @@ mod tests {
                         "interrupt": false,
                     })
                 },
+            }),
+        );
+    }
+
+    #[rstest]
+    #[case::approve("approve")]
+    #[case::reject("reject")]
+    #[tokio::test]
+    async fn expired_permission_actions_direct_the_user_to_the_terminal(
+        #[case] action: &str,
+        action_context: ActionContext,
+    ) {
+        let mut session = session("sample-session");
+        action_context.save_pending_request(
+            &mut session,
+            "Bash",
+            json!({ "command": "echo fictional" }),
+        );
+        action_context.expire_pending_request();
+
+        let response = action_context
+            .router()
+            .oneshot(post_empty(&format!(
+                "/sessions/sample-session/permission/{action}"
+            )))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::CONFLICT.as_u16(),
+                "body": {
+                    "error": "permission request is no longer available; answer in the terminal",
+                },
+                "calls": [],
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn expired_question_answers_direct_the_user_to_the_terminal(
+        action_context: ActionContext,
+    ) {
+        let mut session = session("sample-session");
+        session.current_tool = Some("AskUserQuestion".to_string());
+        action_context.save_pending_request(
+            &mut session,
+            "AskUserQuestion",
+            json!({
+                "questions": [{
+                    "question": "Which output format?",
+                    "options": [{ "label": "Plain text" }],
+                }],
+            }),
+        );
+        action_context.expire_pending_request();
+
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/answer",
+                json!({ "question": "Which output format?", "choice": 1 }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::CONFLICT.as_u16(),
+                "body": {
+                    "error": "permission request is no longer available; answer in the terminal",
+                },
+                "calls": [],
             }),
         );
     }
