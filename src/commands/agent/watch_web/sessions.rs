@@ -60,6 +60,14 @@ struct PullRequestView {
     state: PrState,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SessionActivityStatus {
+    Working,
+    Waiting,
+    Stopped,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionView {
@@ -68,6 +76,9 @@ struct SessionView {
     work_type: Option<String>,
     category: SessionCategory,
     is_paused: bool,
+    activity_status: SessionActivityStatus,
+    waiting_reason: Option<String>,
+    waiting_for_background_tasks: bool,
     category_when_not_later: SessionCategory,
     kind: Option<SessionKind>,
     title: String,
@@ -326,6 +337,8 @@ async fn list_sessions<S: SessionSource>(
                 .agent_status
                 .as_ref()
                 .map(|status| snapshot.agent_config.status_state(&status.kind));
+            let agent_is_waiting = session.status == SessionStatus::Stopped
+                && agent_status_state == Some(config::AgentStatusState::Waiting);
             let proposal_title = unanswered_proposal_titles.get(&session.session_id);
             let needs_action = interrupted || proposal_title.is_some();
             let category_when_not_later = category_for_with_interruption(
@@ -335,6 +348,8 @@ async fn list_sessions<S: SessionSource>(
                 has_running_background_task,
                 agent_status_state,
             );
+            let waiting =
+                agent_is_waiting && category_when_not_later == SessionCategory::InProgress;
             let category = category_for_with_later(
                 session,
                 turn,
@@ -350,6 +365,26 @@ async fn list_sessions<S: SessionSource>(
                 work_type: session.work_type.clone(),
                 category,
                 is_paused: session.status == SessionStatus::Paused,
+                activity_status: if session.status == SessionStatus::Running {
+                    SessionActivityStatus::Working
+                } else if waiting {
+                    SessionActivityStatus::Waiting
+                } else {
+                    SessionActivityStatus::Stopped
+                },
+                waiting_reason: if waiting {
+                    session
+                        .agent_status
+                        .as_ref()
+                        .map(|status| status.note.trim())
+                        .filter(|reason| !reason.is_empty())
+                        .map(str::to_string)
+                } else {
+                    None
+                },
+                waiting_for_background_tasks: session.status == SessionStatus::Stopped
+                    && has_running_background_task
+                    && category_when_not_later == SessionCategory::InProgress,
                 category_when_not_later,
                 kind: kind_for(
                     session,
@@ -1060,6 +1095,9 @@ mod tests {
                 "workType": response.work_type,
                 "category": category,
                 "isPaused": details.is_paused,
+                "activityStatus": if category == "in_progress" { "working" } else { "stopped" },
+                "waitingReason": null,
+                "waitingForBackgroundTasks": false,
                 "categoryWhenNotLater": details.category_when_not_later,
                 "kind": details.kind,
                 "title": "child title",
@@ -1209,6 +1247,7 @@ mod tests {
                 can_open_in_terminal: true,
             },
         );
+        expected["sessions"][0]["activityStatus"] = serde_json::json!("working");
         expected["sessions"][0]["preview"] = serde_json::json!("Sample proposal");
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
@@ -1278,40 +1317,43 @@ mod tests {
         source.sessions[0].transcript_path = Some(transcript_file.path().to_path_buf());
         source.web_states[0].later_until = None;
 
-        assert_eq!(
-            sessions_response(source).await,
-            (
-                StatusCode::OK,
-                expected_response(
-                    expected_category,
-                    None,
-                    true,
-                    ExpectedSessionDetails {
-                        kind: None,
-                        category_when_not_later: expected_category,
-                        is_paused: false,
-                        unread: false,
-                        crit_url: None,
-                    },
-                    ExpectedSessionResponse {
-                        engine: match engine {
-                            Engine::Claude => "claude",
-                            Engine::Codex => "codex",
-                        },
-                        work_type: None,
-                        work_type_nav_labels: serde_json::json!({}),
-                        updated_at: "1970-01-01T00:16:40Z",
-                        elapsed_seconds: 100,
-                        can_open_in_terminal: true,
-                    },
-                ),
-            ),
+        let mut expected = expected_response(
+            expected_category,
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: None,
+                category_when_not_later: expected_category,
+                is_paused: false,
+                unread: false,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: match engine {
+                    Engine::Claude => "claude",
+                    Engine::Codex => "codex",
+                },
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
         );
+        expected["sessions"][0]["activityStatus"] =
+            serde_json::json!(if status == SessionStatus::Running {
+                "working"
+            } else {
+                "stopped"
+            });
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
 
     #[rstest]
     #[case::without_agent_status(None, true, false)]
     #[case::configured_done_with_transcript(Some(AgentStatusState::Done), true, false)]
+    #[case::waiting_with_background_task(Some(AgentStatusState::Waiting), false, false)]
     #[case::pending_task_without_transcript(None, false, false)]
     #[case::pending_task_with_parse_error(None, false, true)]
     #[tokio::test]
@@ -1354,32 +1396,84 @@ mod tests {
                 .insert(status_kind.to_string(), AgentStatusConfig { state });
         }
 
-        assert_eq!(
-            sessions_response(source).await,
-            (
-                StatusCode::OK,
-                expected_response(
-                    "in_progress",
-                    None,
-                    true,
-                    ExpectedSessionDetails {
-                        kind: None,
-                        category_when_not_later: "in_progress",
-                        is_paused: false,
-                        unread: true,
-                        crit_url: None,
-                    },
-                    ExpectedSessionResponse {
-                        engine: "claude",
-                        work_type: None,
-                        work_type_nav_labels: serde_json::json!({}),
-                        updated_at: "1970-01-01T00:16:40Z",
-                        elapsed_seconds: 100,
-                        can_open_in_terminal: true,
-                    },
-                ),
-            ),
+        let mut expected = expected_response(
+            "in_progress",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: None,
+                category_when_not_later: "in_progress",
+                is_paused: false,
+                unread: true,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
         );
+        expected["sessions"][0]["activityStatus"] =
+            serde_json::json!(if status_state == Some(AgentStatusState::Waiting) {
+                "waiting"
+            } else {
+                "stopped"
+            });
+        expected["sessions"][0]["waitingForBackgroundTasks"] = serde_json::json!(true);
+        if status_state == Some(AgentStatusState::Waiting) {
+            expected["sessions"][0]["waitingReason"] =
+                serde_json::json!("The synthetic task is complete.");
+        }
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_route_exposes_the_reason_for_a_stopped_waiting_session(
+        mut source: TestSessionSource,
+    ) {
+        source.sessions[0].status = SessionStatus::Stopped;
+        source.sessions[0].agent_status = Some(AgentStatus {
+            kind: "external_wait".to_string(),
+            note: "waiting for an external build".to_string(),
+        });
+        source.agent_statuses.insert(
+            "external_wait".to_string(),
+            AgentStatusConfig {
+                state: AgentStatusState::Waiting,
+            },
+        );
+        source.web_states[0].later_until = None;
+
+        let mut expected = expected_response(
+            "in_progress",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: Some("Stopped"),
+                category_when_not_later: "in_progress",
+                is_paused: false,
+                unread: true,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["activityStatus"] = serde_json::json!("waiting");
+        expected["sessions"][0]["waitingReason"] =
+            serde_json::json!("waiting for an external build");
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
 
     #[rstest]

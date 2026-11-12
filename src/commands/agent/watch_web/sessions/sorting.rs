@@ -24,6 +24,7 @@ pub(super) fn sort_session_views(sessions: &mut [SessionView]) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::SessionActivityStatus;
     use super::*;
     use crate::commands::agent::types::Engine;
     use crate::commands::agent::watch_web::sessions::category::SessionCategory;
@@ -50,6 +51,13 @@ mod tests {
             work_type: None,
             category,
             is_paused: false,
+            activity_status: if category == SessionCategory::InProgress {
+                SessionActivityStatus::Working
+            } else {
+                SessionActivityStatus::Stopped
+            },
+            waiting_reason: None,
+            waiting_for_background_tasks: false,
             category_when_not_later: category,
             kind: None,
             title: id.to_string(),
