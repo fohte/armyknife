@@ -102,7 +102,6 @@ impl IncrementalClaudeParser {
             }
         });
         if !restart_required
-            && !self.pending_is_initial
             && let Some(record) = parse_record(lines.pending())
             && !is_active_branch_continuation(state, &record)
         {

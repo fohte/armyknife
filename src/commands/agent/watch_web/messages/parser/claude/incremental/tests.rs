@@ -143,6 +143,14 @@ fn incremental_result(
     "#},
     IncrementalAppend::RestartRequired,
 )]
+#[case::unterminated_assistant_fork_restarts_without_render_error(
+    indoc! {r#"
+        {"type":"user","uuid":"root","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"The original request."}}
+        {"type":"assistant","uuid":"current","parentUuid":"root","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"text","text":"The current branch response."}]}}
+    "#},
+    r#"{"type":"assistant","uuid":"replacement","parentUuid":"root","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"text","text":"The replacement response."}]}}"#,
+    IncrementalAppend::RestartRequired,
+)]
 #[case::parallel_tool_result_after_a_new_assistant_requires_restart(
     indoc! {r#"
         {"type":"user","uuid":"root","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"Run two fixture tools."}}
