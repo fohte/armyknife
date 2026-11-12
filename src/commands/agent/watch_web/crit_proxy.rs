@@ -11,11 +11,11 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use reqwest::Client;
 
+use super::attachments::MAX_ATTACHMENT_BYTES;
 use super::security;
 use crate::commands::agent::types::Session;
 
 const PORT_COOKIE: &str = "armyknife_crit_port";
-const MAX_REQUEST_BODY_BYTES: usize = 2 * 1024 * 1024;
 const FORWARDED_REQUEST_HEADERS: [HeaderName; 6] = [
     ACCEPT,
     CONTENT_TYPE,
@@ -240,7 +240,7 @@ async fn proxy_request<T: CritTransport>(
 
     let uri = request.uri().clone();
     let (parts, body) = request.into_parts();
-    let body = match to_bytes(body, MAX_REQUEST_BODY_BYTES).await {
+    let body = match to_bytes(body, MAX_ATTACHMENT_BYTES).await {
         Ok(body) => body,
         Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
     };
@@ -513,6 +513,48 @@ mod tests {
                     "}
                     .as_bytes(),
                 ),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn attachment_requests_larger_than_two_mebibytes_are_forwarded() {
+        let upload_body = Bytes::from(vec![b'x'; 3 * 1024 * 1024]);
+        let expected_body = upload_body.clone();
+        let (transport, sent_request) = fake_transport();
+        let app = router_with_url_loader(
+            || Ok(vec!["http://localhost:48761/review/sample".to_owned()]),
+            transport,
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/attachments")
+                    .header(HOST, "localhost:4318")
+                    .header(ORIGIN, "http://localhost:4318")
+                    .header(COOKIE, "armyknife_crit_port=48761")
+                    .header(CONTENT_TYPE, "application/octet-stream")
+                    .body(Body::from(upload_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let response_status = response.status();
+        let sent_request = sent_request.lock().unwrap().take();
+        let mut expected_request_headers = HeaderMap::new();
+        expected_request_headers.insert(CONTENT_TYPE, "application/octet-stream".parse().unwrap());
+
+        assert_eq!(
+            (response_status, sent_request),
+            (
+                StatusCode::OK,
+                Some(UpstreamRequest {
+                    method: Method::POST,
+                    url: "http://127.0.0.1:48761/api/attachments".into(),
+                    headers: expected_request_headers,
+                    body: expected_body,
+                }),
             ),
         );
     }
