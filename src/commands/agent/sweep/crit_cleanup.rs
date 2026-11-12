@@ -1,4 +1,3 @@
-use std::cell::Cell;
 use std::collections::HashSet;
 use std::net::IpAddr;
 use std::path::Path;
@@ -17,10 +16,22 @@ fn clear_stale_links_with_status(
     dry_run: bool,
     mut read_live_ports: impl FnMut() -> Result<HashSet<u16>>,
 ) -> Result<usize> {
+    let candidates = store::list_all_sessions_from(sessions_dir)?
+        .into_iter()
+        .filter(|session| {
+            session
+                .crit_urls
+                .iter()
+                .any(|url| local_crit_port(url).is_some())
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Ok(0);
+    }
     let live_ports = read_live_ports()?;
     let mut cleared = 0;
 
-    for listed_session in store::list_all_sessions_from(sessions_dir)? {
+    for listed_session in candidates {
         let stale_count = listed_session
             .crit_urls
             .iter()
@@ -40,29 +51,27 @@ fn clear_stale_links_with_status(
             continue;
         }
 
-        let removed = Cell::new(0);
+        let mut removed = 0;
         store::update_session_in(sessions_dir, &listed_session.session_id, |session| {
             let previous_len = session.crit_urls.len();
             session
                 .crit_urls
                 .retain(|url| !is_stale_local_crit_url(url, &live_ports));
-            removed.set(previous_len - session.crit_urls.len());
-            removed.get() > 0
+            removed = previous_len - session.crit_urls.len();
+            removed > 0
         })?;
-        cleared += removed.get();
+        cleared += removed;
     }
 
     Ok(cleared)
 }
 
 fn is_stale_local_crit_url(url: &str, live_ports: &HashSet<u16>) -> bool {
-    let Ok(port) = crit::crit_port_from_url(url) else {
-        return false;
-    };
-    if live_ports.contains(&port) {
-        return false;
-    }
+    local_crit_port(url).is_some_and(|port| !live_ports.contains(&port))
+}
 
+fn local_crit_port(url: &str) -> Option<u16> {
+    let port = crit::crit_port_from_url(url).ok()?;
     reqwest::Url::parse(url)
         .ok()
         .and_then(|url| url.host_str().map(str::to_string))
@@ -76,10 +85,12 @@ fn is_stale_local_crit_url(url: &str, live_ports: &HashSet<u16>) -> bool {
                     .parse::<IpAddr>()
                     .is_ok_and(|address| address.is_loopback())
         })
+        .then_some(port)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::collections::{BTreeMap, BTreeSet, HashSet};
     use std::path::PathBuf;
 
@@ -148,6 +159,7 @@ mod tests {
             "http://127.0.0.1:41002/review",
             "http://[::1]:41003/review",
             "http://localhost:41004/review",
+            "http://review.localhost:41006/review",
             "https://review.example.test:41005/review",
             "http://localhost/review",
             "not a URL",
@@ -163,7 +175,7 @@ mod tests {
                 load_session(dir.path(), &before.session_id).crit_urls
             ),
             (
-                3,
+                4,
                 vec![
                     "http://localhost:41004/review".to_string(),
                     "https://review.example.test:41005/review".to_string(),

@@ -1017,6 +1017,8 @@ Sweep also checks the latest app-server turn for each running Codex session. It 
 
 `a agent sweep` scans every stored session record once. On the first shutdown request for a Codex session with a recorded tmux pane, it sends Ctrl+D so Codex can restore the terminal, then falls back to SIGTERM if the process remains alive. Codex sessions without a pane and Claude Code sessions receive SIGTERM directly. Later sweeps re-send SIGTERM while the process remains alive; the status stays `stopped` until exit is confirmed. A Claude Code session with an active [Remote Control](https://code.claude.com/docs/en/remote-control) connection is never signaled, so it stays reachable from claude.ai and the mobile app; once the connection closes, it is paused like any other idle session. If sweep cannot read the connection state, it skips the session for that pass. Run sweep periodically via a launchd agent so idle sessions eventually get paused even while no hook is firing.
 
+Sweep also removes stale Crit review links from local session URLs when no live Crit daemon owns their port. Live daemon links and non-local URLs remain unchanged.
+
 Each pass also checks `stopped` and `paused` sessions with linked worktrees. When the worktree branch has a merged pull request and no background task is pending, sweep closes the session through the regular `a agent close` path, which removes the worktree and notifies its delegator. Open pull requests, closed unmerged pull requests, and sessions without linked worktrees remain untouched. A successful automatic close sends a desktop notification with the PR number and title. If `magick` (ImageMagick) is installed, the notification uses a git-merge icon downloaded from Octicons and cached under `~/.cache/armyknife`; download or conversion failures leave the notification without an icon.
 
 The `agent.auto_pause.enabled` setting controls only the pause pass; merged pull request cleanup still runs when auto-pause is disabled.
@@ -1030,10 +1032,10 @@ The `agent.auto_pause.enabled` setting controls only the pause pass; merged pull
 
 Options for the run command:
 
-| Option             | Description                                                    |
-| ------------------ | -------------------------------------------------------------- |
-| `--timeout <spec>` | Override the config timeout for this run (e.g., `1m`, `1h30m`) |
-| `--dry-run`        | Print what would be paused or closed without making changes    |
+| Option             | Description                                                         |
+| ------------------ | ------------------------------------------------------------------- |
+| `--timeout <spec>` | Override the config timeout for this run (e.g., `1m`, `1h30m`)      |
+| `--dry-run`        | Log what would be paused, closed, or removed without making changes |
 
 The `install`, `uninstall`, and `status` subcommands require macOS. The launchd agent is installed at `~/Library/LaunchAgents/fohte.armyknife.cc-sweep.plist`.
 

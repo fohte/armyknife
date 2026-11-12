@@ -442,22 +442,38 @@ fn drop_port_from_session_in(
 
 pub(super) fn live_ports() -> Result<std::collections::HashSet<u16>> {
     let status = crit_status()?;
+    live_ports_from_status(&status, process::is_process_alive)
+}
+
+fn live_ports_from_status(
+    status: &serde_json::Value,
+    is_process_alive: impl Fn(u32) -> bool,
+) -> Result<std::collections::HashSet<u16>> {
     let sessions = status
         .get("sessions")
         .and_then(serde_json::Value::as_array)
         .context("crit status JSON is missing the sessions array")?;
-    sessions
-        .iter()
-        .map(|session| {
+    sessions.iter().try_fold(
+        std::collections::HashSet::new(),
+        |mut live_ports, session| {
             let port = session
                 .get("port")
                 .and_then(serde_json::Value::as_u64)
                 .and_then(|port| u16::try_from(port).ok())
                 .filter(|port| *port != 0)
                 .context("crit status JSON contains an invalid session port")?;
-            Ok(port)
-        })
-        .collect()
+            let pid = session
+                .get("pid")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|pid| u32::try_from(pid).ok())
+                .filter(|pid| *pid != 0)
+                .context("crit status JSON contains an invalid session PID")?;
+            if is_process_alive(pid) {
+                live_ports.insert(port);
+            }
+            Ok(live_ports)
+        },
+    )
 }
 
 fn crit_status() -> Result<serde_json::Value> {
@@ -513,8 +529,23 @@ fn unix_time_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
+    use std::collections::HashSet;
 
     use super::*;
+
+    #[test]
+    fn live_ports_requires_a_valid_pid_that_is_still_alive() {
+        let status = serde_json::json!({
+            "sessions": [
+                { "port": 43210, "pid": 321 },
+                { "port": 43211, "pid": 654 },
+            ]
+        });
+        let actual = live_ports_from_status(&status, |pid| pid == 321)
+            .expect("valid crit status should be parsed");
+
+        assert_eq!(actual, HashSet::from([43210]));
+    }
 
     #[test]
     fn retries_database_cleanup_before_returning_success() {
@@ -577,6 +608,110 @@ mod tests {
                 Err("fixture database failure".to_string()),
                 CLEANUP_RETRIES + 1,
                 vec![CLEANUP_RETRY_DELAY; CLEANUP_RETRIES],
+            ),
+        );
+    }
+
+    #[test]
+    fn cleanup_removes_matching_and_fallback_session_links_from_a_temp_store() {
+        use std::collections::{BTreeMap as SessionMap, BTreeSet};
+        use std::path::PathBuf;
+
+        use chrono::Utc;
+        use tempfile::TempDir;
+
+        use crate::commands::agent::types::SessionStatus;
+
+        fn fixture_session(id: &str, urls: &[&str], archived: bool) -> Session {
+            let timestamp = Utc::now();
+            Session {
+                archived_at: archived.then_some(timestamp),
+                pr_context: None,
+                session_id: id.to_string(),
+                crit_urls: urls.iter().map(|url| (*url).to_string()).collect(),
+                pending_human_review_ids: BTreeSet::new(),
+                cwd: PathBuf::from("/tmp/fixture-worktree"),
+                transcript_path: None,
+                tty: None,
+                tmux_info: None,
+                status: SessionStatus::Running,
+                created_at: timestamp,
+                updated_at: timestamp,
+                last_message: None,
+                current_tool: None,
+                label: None,
+                work_type: None,
+                work_type_pinned: false,
+                vibe_enabled: false,
+                launched_with_vibe: false,
+                child_launch: Default::default(),
+                ancestor_session_ids: Vec::new(),
+                pending_bg_task_ids: BTreeSet::new(),
+                pending_agent_task_ids: BTreeSet::new(),
+                pending_permission_agent_ids: BTreeSet::new(),
+                pending_permission_request_ids: SessionMap::new(),
+                read_at: None,
+                sweep_signaled: false,
+                stop_blocked_by_armyknife: false,
+                agent_status: None,
+                agent_status_clear_pending: false,
+                engine: Default::default(),
+                model: None,
+                effort: None,
+            }
+        }
+
+        let temp = TempDir::new().expect("temporary directory should be created");
+        let sessions_dir = temp.path();
+        let active = fixture_session(
+            "fixture-active-session",
+            &[
+                "http://localhost:43210/review",
+                "http://localhost:43211/review",
+            ],
+            false,
+        );
+        let archived_fallback = fixture_session(
+            "fixture-archived-session",
+            &[
+                "http://localhost:43210/review",
+                "http://localhost:43212/review",
+            ],
+            true,
+        );
+        store::save_session_to(sessions_dir, &active).expect("active session should save");
+        store::save_session_to(sessions_dir, &archived_fallback)
+            .expect("archived fallback session should save");
+        let mut updated_sessions = BTreeMap::new();
+
+        cleanup_session_links_in(
+            sessions_dir,
+            43210,
+            Some("fixture-archived-session"),
+            Some("%fixture-pane"),
+            &mut updated_sessions,
+        )
+        .expect("session links should be cleaned");
+
+        assert_eq!(
+            (
+                store::load_session_from(sessions_dir, "fixture-active-session")
+                    .expect("active session should load")
+                    .expect("active session should exist")
+                    .crit_urls,
+                store::load_session_from(sessions_dir, "fixture-archived-session")
+                    .expect("archived session should load")
+                    .expect("archived session should exist")
+                    .crit_urls,
+                updated_sessions.keys().cloned().collect::<Vec<_>>(),
+            ),
+            (
+                vec!["http://localhost:43211/review".to_string()],
+                vec!["http://localhost:43212/review".to_string()],
+                vec![
+                    "fixture-active-session".to_string(),
+                    "fixture-archived-session".to_string(),
+                ],
             ),
         );
     }

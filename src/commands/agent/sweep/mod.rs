@@ -179,7 +179,12 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
     // `signaled` too would flood the log for exactly the stuck-process
     // scenario this module exists to handle; the structured `tracing::info!`
     // above already records every signal for anyone tailing the JSONL log.
-    if report.paused > 0 || codex_updates.total() > 0 || merged_closed > 0 || args.dry_run {
+    if report.paused > 0
+        || codex_updates.total() > 0
+        || merged_closed > 0
+        || crit_links_cleared > 0
+        || args.dry_run
+    {
         eprintln!(
             "[armyknife] agent sweep: scanned={} paused={} codex_failed={} codex_interrupted={} merged_closed={} crit_links_cleared={} redelivery_started={} signaled={} waiting={} active={} (timeout={})",
             report.scanned,
