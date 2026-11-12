@@ -197,21 +197,6 @@ pub(super) fn is_peer_notify_tool(name: &str, input: Option<&Value>) -> bool {
     peer_notify_arguments(name, input).is_some()
 }
 
-pub(super) fn is_agent_add_tool(name: &str, input: Option<&Value>, command: &str) -> bool {
-    agent_add_arguments(name, input, command).is_some()
-}
-
-pub(super) fn recorded_agent_add_seq(text: &str, command: &str) -> Option<i64> {
-    let prefix = format!("Recorded {command} ");
-    text.lines().find_map(|line| {
-        let line = line.trim();
-        line.strip_prefix("Session-local sequence: ")
-            .or_else(|| line.strip_prefix(&prefix))
-            .and_then(|seq| seq.parse::<i64>().ok())
-            .filter(|seq| *seq > 0)
-    })
-}
-
 pub(super) fn peer_out_from_tool(
     name: &str,
     input: Option<&Value>,
@@ -284,10 +269,6 @@ fn is_literal_session_id(value: &str) -> bool {
 
 fn peer_notify_arguments(name: &str, input: Option<&Value>) -> Option<Vec<String>> {
     agent_command_arguments(name, input, &["a", "agent", "peer", "notify"])
-}
-
-fn agent_add_arguments(name: &str, input: Option<&Value>, command: &str) -> Option<Vec<String>> {
-    agent_command_arguments(name, input, &["a", "agent", command, "add"])
 }
 
 fn agent_command_arguments(
@@ -687,57 +668,5 @@ mod tests {
                 text: "Inspect the fictional result.".to_owned(),
             }),
         );
-    }
-
-    #[rstest]
-    #[case::decision_add(
-        "Bash",
-        "a agent decision add 'Choose the fixture path'",
-        "decision",
-        true
-    )]
-    #[case::proposal_add(
-        "Bash",
-        "a agent proposal add 'Describe the fixture plan'",
-        "proposal",
-        true
-    )]
-    #[case::other_tool(
-        "Read",
-        "a agent decision add 'Choose the fixture path'",
-        "decision",
-        false
-    )]
-    fn recognizes_named_agent_add_commands(
-        #[case] tool: &str,
-        #[case] command: &str,
-        #[case] name: &str,
-        #[case] expected: bool,
-    ) {
-        assert_eq!(
-            super::is_agent_add_tool(tool, Some(&json!({"command": command})), name),
-            expected,
-        );
-    }
-
-    #[rstest]
-    #[case::current_output(
-        indoc! {"
-            Decision recorded for this session.
-            Session-local sequence: 12
-            To refer to it in another session or task, describe its contents; this sequence only works in this session.
-        "},
-        "decision",
-        Some(12)
-    )]
-    #[case::legacy_output("Recorded decision 12", "decision", Some(12))]
-    #[case::wrong_name("Recorded proposal 12", "decision", None)]
-    #[case::invalid_sequence("Recorded decision zero", "decision", None)]
-    fn parses_named_agent_add_results(
-        #[case] text: &str,
-        #[case] name: &str,
-        #[case] expected: Option<i64>,
-    ) {
-        assert_eq!(super::recorded_agent_add_seq(text, name), expected);
     }
 }

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
 
@@ -8,16 +8,14 @@ use super::super::ToolSummary;
 
 pub(super) struct ProposalTimeline<'a> {
     proposals: &'a [ProposalItem],
-    timed_seqs: HashSet<i64>,
-    transcript_seqs: HashSet<i64>,
+    inserted_seqs: HashSet<i64>,
 }
 
 impl<'a> ProposalTimeline<'a> {
     pub(super) fn new(proposals: &'a [ProposalItem]) -> Self {
         Self {
             proposals,
-            timed_seqs: HashSet::new(),
-            transcript_seqs: HashSet::new(),
+            inserted_seqs: HashSet::new(),
         }
     }
 
@@ -34,9 +32,7 @@ impl<'a> ProposalTimeline<'a> {
             .proposals
             .iter()
             .filter(|proposal| {
-                proposal.created_at <= timestamp
-                    && !self.transcript_seqs.contains(&proposal.seq)
-                    && !self.timed_seqs.contains(&proposal.seq)
+                proposal.created_at <= timestamp && !self.inserted_seqs.contains(&proposal.seq)
             })
             .collect::<Vec<_>>();
         due.sort_by_key(|proposal| (proposal.created_at, proposal.seq));
@@ -47,41 +43,15 @@ impl<'a> ProposalTimeline<'a> {
         tools.flush_into(items);
         for proposal in due {
             items.push(proposal.item.clone());
-            self.timed_seqs.insert(proposal.seq);
+            self.inserted_seqs.insert(proposal.seq);
         }
-    }
-
-    pub(super) fn move_to_transcript_position(
-        &mut self,
-        seq: i64,
-        items: &mut Vec<ChatItem>,
-        question_uses: &mut HashMap<String, Vec<usize>>,
-    ) {
-        if self.timed_seqs.remove(&seq)
-            && let Some(index) = items.iter().position(
-                |item| matches!(item, ChatItem::Proposal { seq: item_seq, .. } if *item_seq == seq),
-            )
-        {
-            items.remove(index);
-            for indices in question_uses.values_mut() {
-                for question_index in indices {
-                    if *question_index > index {
-                        *question_index -= 1;
-                    }
-                }
-            }
-        }
-        self.transcript_seqs.insert(seq);
     }
 
     pub(super) fn append_remaining(&mut self, items: &mut Vec<ChatItem>) {
         let mut remaining = self
             .proposals
             .iter()
-            .filter(|proposal| {
-                !self.transcript_seqs.contains(&proposal.seq)
-                    && !self.timed_seqs.contains(&proposal.seq)
-            })
+            .filter(|proposal| !self.inserted_seqs.contains(&proposal.seq))
             .collect::<Vec<_>>();
         remaining.sort_by_key(|proposal| (proposal.created_at, proposal.seq));
         items.extend(remaining.into_iter().map(|proposal| proposal.item.clone()));

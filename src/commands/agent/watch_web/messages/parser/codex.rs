@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::BufRead;
 
 use serde_json::Value;
@@ -8,24 +9,33 @@ use super::super::SkillSuggestion;
 use super::super::parser::{
     ToolSummary, append_text, for_each_jsonl_record, operation_target, record_timestamp,
 };
+use super::claude::decision_position::insert_time_placed_decisions;
+use crate::commands::agent::store::AgentDecision;
 
 #[cfg(test)]
 fn parse(reader: impl BufRead, parent: Option<&ParentSession>) -> std::io::Result<Vec<ChatItem>> {
-    parse_with_skills(reader, parent).map(|(messages, _)| messages)
+    parse_with_skills(reader, parent, &[]).map(|(messages, _)| messages)
 }
 
 pub(in crate::commands::agent::watch_web::messages) fn parse_with_skills(
     reader: impl BufRead,
     parent: Option<&ParentSession>,
+    decisions: &[AgentDecision],
 ) -> std::io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
     let mut items = Vec::new();
     let mut tools = ToolSummary::default();
     let mut pending_tool_calls: Vec<PendingTool> = Vec::new();
     let mut skills = Vec::new();
+    let mut unplaced_decisions = decisions
+        .iter()
+        .cloned()
+        .map(|decision| (decision.seq, decision))
+        .collect::<BTreeMap<_, _>>();
 
     for_each_jsonl_record(reader, |record| {
         super::skill_suggestions::capture_codex_listing(&record, &mut skills);
         let timestamp = record_timestamp(&record);
+        insert_time_placed_decisions(timestamp, &mut unplaced_decisions, &mut tools, &mut items);
         let record_type = record.get("type").and_then(Value::as_str);
         let payload = match record_type {
             Some("response_item") | Some("event_msg") => record.get("payload"),
@@ -141,6 +151,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_with_skills(
     if let Some(active_tool) = active_tool {
         items.push(active_tool);
     }
+    items.extend(unplaced_decisions.into_values().map(ChatItem::from));
     Ok((items, skills))
 }
 
@@ -231,7 +242,7 @@ mod tests {
         "###};
 
         assert_eq!(
-            parse_with_skills(Cursor::new(transcript), None).unwrap(),
+            parse_with_skills(Cursor::new(transcript), None, &[]).unwrap(),
             (
                 Vec::new(),
                 vec![
