@@ -214,3 +214,26 @@
 .work-type-project-working .work-type-project-status {
   color: var(--aw-color-working);
 }
+
+.today-session-status {
+  color: var(--aw-text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.today-session-status.is-needs-action {
+  color: var(--aw-color-warning);
+}
+
+.today-session-status.is-working {
+  color: var(--aw-color-working);
+}
+
+.today-session-status.is-error {
+  color: var(--aw-color-error);
+}
+
+.today-session-status.is-paused:not(.is-needs-action):not(.is-error) {
+  color: var(--aw-text-secondary);
+}

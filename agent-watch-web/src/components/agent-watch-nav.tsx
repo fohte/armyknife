@@ -9,6 +9,7 @@ import type { WorkTypeNavGroup } from '#board-model'
 import type { CommandPaletteShortcut } from '#command-palette-shortcut'
 import { cn } from '#lib/utils'
 import type { SavedInboxView } from '#saved-inbox-views'
+import { sessionKindLabel } from '#session-kind-label'
 import type { Session } from '#types'
 
 type View = 'inbox' | 'board'
@@ -189,14 +190,19 @@ export function AgentWatchNav({
               >
                 {session.title}
               </span>
-              {session.category === 'needs_action' ? (
-                <span
-                  className={`today-indicator kind-${(session.kind ?? '').toLowerCase()}`}
-                  aria-hidden="true"
-                />
-              ) : (
-                <span className="today-start">Start</span>
-              )}
+              <span
+                className={cn(
+                  'today-session-status',
+                  session.category === 'needs_action' && 'is-needs-action',
+                  session.category === 'in_progress' &&
+                    !session.isPaused &&
+                    'is-working',
+                  session.kind === 'Error' && 'is-error',
+                  session.isPaused && 'is-paused',
+                )}
+              >
+                {sessionKindLabel(session)}
+              </span>
             </Button>
             {session.task !== null ? (
               <span className="today-session-meta">

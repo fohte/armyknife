@@ -4,9 +4,27 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
 import { AgentWatchNav } from '#components/agent-watch-nav'
+import type { Session } from '#types'
 
 let container: HTMLDivElement
 let root: Root | null = null
+
+const baseTodaySession: Session = {
+  id: 'today-session',
+  category: 'needs_action',
+  isPaused: false,
+  kind: 'Question',
+  title: 'Review the retry policy',
+  preview: null,
+  elapsedSeconds: 0,
+  unread: false,
+  task: null,
+  repo: 'sample/repository',
+  project: 'sample project',
+  parent: null,
+  ancestorSessionIds: [],
+  pullRequest: null,
+}
 
 function renderNav(
   workTypeNavGroups: ComponentProps<typeof AgentWatchNav>['workTypeNavGroups'],
@@ -109,6 +127,56 @@ it('renders no work type sections without configured groups', () => {
       (section) => section.getAttribute('aria-labelledby'),
     ),
   ).toEqual([])
+})
+
+it('shows Today status labels with their category colors', () => {
+  renderNav([], {
+    todaySessions: [
+      baseTodaySession,
+      {
+        ...baseTodaySession,
+        id: 'working-session',
+        category: 'in_progress',
+        kind: null,
+      },
+      { ...baseTodaySession, id: 'error-session', kind: 'Error' },
+      {
+        ...baseTodaySession,
+        id: 'paused-session',
+        category: 'in_progress',
+        isPaused: true,
+        kind: 'Stopped',
+      },
+    ],
+  })
+
+  const snapshot = () => ({
+    statuses: Array.from(
+      container.querySelectorAll<HTMLElement>('.today-session-status'),
+      (status) => ({ text: status.textContent, className: status.className }),
+    ),
+    oldIndicators: container.querySelectorAll('.today-start, .today-indicator')
+      .length,
+  })
+
+  expect(snapshot()).toEqual({
+    statuses: [
+      {
+        text: 'Question',
+        className: 'today-session-status is-needs-action',
+      },
+      { text: 'Working', className: 'today-session-status is-working' },
+      {
+        text: 'Error',
+        className: 'today-session-status is-needs-action is-error',
+      },
+      {
+        text: 'Paused',
+        className: 'today-session-status is-paused',
+      },
+    ],
+    oldIndicators: 0,
+  })
 })
 
 it.each([
