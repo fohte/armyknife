@@ -115,7 +115,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_with_skills(
                     if let Some(text) = item.get("content").and_then(value_text) {
                         tools.flush_into(&mut items);
                         if let Some((tag, body)) = codex_tagged_body(&text)
-                            && tag.starts_with("armyknife-")
+                            && super::super::parser::classifier::is_watch_web_action_tag(tag)
                         {
                             items.push(ChatItem::Event {
                                 kind: EventKind::Armyknife,

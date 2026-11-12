@@ -958,26 +958,25 @@ mod tests {
         );
     }
 
-    #[test]
-    fn places_completed_todos_at_their_creation_time() {
+    #[rstest]
+    #[case::completed(true)]
+    #[case::pending(false)]
+    fn places_todos_at_their_creation_time(#[case] is_completed: bool) {
         let transcript = indoc! {r#"
             {"uuid":"fixture-before","parentUuid":null,"timestamp":"2026-06-01T12:00:00Z","type":"assistant","message":{"content":[{"type":"text","text":"before"}]}}
             {"uuid":"fixture-after","parentUuid":"fixture-before","timestamp":"2026-06-01T12:05:00Z","type":"assistant","message":{"content":[{"type":"text","text":"after"}]}}
         "#};
+        let created_at = DateTime::parse_from_rfc3339("2026-06-01T12:03:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
         let todo = AgentTodo {
             session_id: "fixture-session".to_string(),
             seq: 1,
             title: "Review the fictional report".to_string(),
             detail: Some("Open the sample summary.".to_string()),
-            created_at: DateTime::parse_from_rfc3339("2026-06-01T12:03:00Z")
-                .unwrap()
-                .with_timezone(&Utc),
-            completed_at: Some(
-                DateTime::parse_from_rfc3339("2026-06-01T12:04:00Z")
-                    .unwrap()
-                    .with_timezone(&Utc),
-            ),
-            comment: Some("The sample is ready.".to_string()),
+            created_at,
+            completed_at: is_completed.then(|| created_at + chrono::Duration::minutes(1)),
+            comment: is_completed.then(|| "The sample is ready.".to_string()),
         };
 
         let (messages, _, _, _) =
@@ -1007,8 +1006,8 @@ mod tests {
                     seq: 1,
                     title: "Review the fictional report".to_string(),
                     detail: Some("Open the sample summary.".to_string()),
-                    completed: true,
-                    comment: Some("The sample is ready.".to_string()),
+                    completed: is_completed,
+                    comment: is_completed.then(|| "The sample is ready.".to_string()),
                 },
                 ChatItem::Assistant {
                     text: "after".to_string(),
