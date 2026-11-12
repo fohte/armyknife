@@ -762,18 +762,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_tree_route_includes_ended_ancestors_and_active_session_data() {
+    async fn session_tree_route_excludes_ended_ancestors_and_keeps_active_session_data() {
         let (status, tree) = session_tree_response(source(), "child-session").await;
 
-        assert_eq!(status, StatusCode::OK);
         assert_eq!(
-            tree,
-            serde_json::json!({
+            (status, tree),
+            (
+                StatusCode::OK,
+                serde_json::json!({
                 "revision": 7,
                 "sessions": [
                     {
                         "id": "child-session",
-                        "parentId": "parent-session",
+                        "parentId": null,
                         "category": "later",
                         "isActive": true,
                         "kind": "Stopped",
@@ -791,28 +792,9 @@ mod tests {
                         "decisionCount": 4,
                         "pullRequest": { "number": 42, "state": "Open" },
                     },
-                    {
-                        "id": "parent-session",
-                        "parentId": null,
-                        "category": "done",
-                        "isActive": false,
-                        "kind": null,
-                        "title": "parent title",
-                        "preview": null,
-                        "elapsedSeconds": 200,
-                        "task": {
-                            "id": "parent-task-id",
-                            "number": 18,
-                            "title": "parent task",
-                            "priority": null,
-                            "isClosed": false,
-                        },
-                        "repo": "example-org/parent-repository",
-                        "decisionCount": 0,
-                        "pullRequest": null,
-                    },
                 ],
-            }),
+                }),
+            ),
         );
     }
 
@@ -860,16 +842,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_tree_route_returns_siblings_and_descendants_with_nearest_living_parent() {
+    async fn session_tree_route_reparents_active_descendants_across_ended_sessions() {
         let mut source = source();
-        let mut grandchild = session(SessionStatus::Ended);
+        let mut grandchild = session(SessionStatus::Stopped);
         grandchild.session_id = "grandchild-session".to_string();
-        grandchild.ancestor_session_ids = vec![
-            "parent-session".to_string(),
-            "deleted-intermediate".to_string(),
-        ];
+        grandchild.ancestor_session_ids =
+            vec!["parent-session".to_string(), "child-session".to_string()];
         grandchild.updated_at = Utc.timestamp_opt(800, 0).unwrap();
-        grandchild.last_message = Some("completed the delegated work".to_string());
+        grandchild.last_message = Some("working on delegated task".to_string());
         let mut sibling = session(SessionStatus::Ended);
         sibling.session_id = "sibling-session".to_string();
         sibling.ancestor_session_ids = vec!["parent-session".to_string()];
@@ -895,15 +875,16 @@ mod tests {
 
         let (status, tree) = session_tree_response(source, "child-session").await;
 
-        assert_eq!(status, StatusCode::OK);
         assert_eq!(
-            tree,
-            serde_json::json!({
+            (status, tree),
+            (
+                StatusCode::OK,
+                serde_json::json!({
                 "revision": 7,
                 "sessions": [
                     {
                         "id": "child-session",
-                        "parentId": "parent-session",
+                        "parentId": null,
                         "category": "later",
                         "isActive": true,
                         "kind": "Stopped",
@@ -922,55 +903,22 @@ mod tests {
                         "pullRequest": { "number": 42, "state": "Open" },
                     },
                     {
-                        "id": "parent-session",
-                        "parentId": null,
-                        "category": "done",
-                        "isActive": false,
-                        "kind": null,
-                        "title": "parent title",
-                        "preview": null,
-                        "elapsedSeconds": 200,
-                        "task": {
-                            "id": "parent-task-id",
-                            "number": 18,
-                            "title": "parent task",
-                            "priority": null,
-                            "isClosed": false,
-                        },
-                        "repo": "example-org/parent-repository",
-                        "decisionCount": 0,
-                        "pullRequest": null,
-                    },
-                    {
                         "id": "grandchild-session",
-                        "parentId": "parent-session",
-                        "category": "done",
-                        "isActive": false,
-                        "kind": null,
+                        "parentId": "child-session",
+                        "category": "needs_action",
+                        "isActive": true,
+                        "kind": "Stopped",
                         "title": "Grandchild session",
-                        "preview": "completed the delegated work",
+                        "preview": "working on delegated task",
                         "elapsedSeconds": 300,
                         "task": null,
                         "repo": "example-org/grandchild-repo",
                         "decisionCount": 0,
                         "pullRequest": null,
                     },
-                    {
-                        "id": "sibling-session",
-                        "parentId": "parent-session",
-                        "category": "done",
-                        "isActive": false,
-                        "kind": null,
-                        "title": "Sibling session",
-                        "preview": null,
-                        "elapsedSeconds": 400,
-                        "task": null,
-                        "repo": "example-org/sibling-repo",
-                        "decisionCount": 0,
-                        "pullRequest": null,
-                    },
                 ],
-            }),
+                }),
+            ),
         );
     }
 

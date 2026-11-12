@@ -121,6 +121,7 @@ pub(super) async fn session_tree<S: SessionSource>(
                     .iter()
                     .any(|ancestor_id| ancestor_id == &root_id)
         })
+        .filter(|session| session.status != SessionStatus::Ended)
         .cloned()
         .collect::<Vec<_>>();
     let tree_session_ids = tree_sessions
