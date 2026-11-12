@@ -15,6 +15,7 @@ use crate::infra::github::{BranchPrQuery, GitHubClient, PrInfo};
 use crate::infra::tq::{TqClient, TqProjectSummary, TqTaskSummary};
 
 const CACHE_TTL: Duration = Duration::from_secs(30);
+const CACHE_KEY_RETENTION: Duration = Duration::from_secs(10 * 60);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(35);
 type BranchPrKey = (String, String, String);
 type FetchFuture<T> = Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'static>>;
@@ -81,6 +82,7 @@ impl SessionEnrichmentCache {
                 session_ids,
                 move |previous| fetcher(fetch_session_ids, previous),
                 merge_session_task_metadata,
+                prune_session_task_metadata,
             )
             .await
     }
@@ -105,6 +107,7 @@ impl SessionEnrichmentCache {
                     move |_| fetcher(sessions)
                 },
                 merge_pull_request_results,
+                prune_pull_request_results,
             )
             .await;
 
@@ -139,11 +142,36 @@ fn merge_pull_request_results(
     }
 }
 
+fn prune_pull_request_results(
+    cached: &mut HashMap<BranchPrKey, Option<PrInfo>>,
+    stale_keys: &HashSet<BranchPrKey>,
+) {
+    cached.retain(|key, _| !stale_keys.contains(key));
+}
+
 fn merge_session_task_metadata(
     cached: &mut SessionTaskMetadata,
     mut refreshed: SessionTaskMetadata,
     requested_session_ids: &HashSet<String>,
 ) {
+    let previous_task_ids = replace_session_links(cached, &mut refreshed, requested_session_ids);
+    prune_unlinked_task_metadata(cached, &previous_task_ids);
+
+    let refreshed_task_ids = cached
+        .links
+        .iter()
+        .filter(|(session_id, _)| requested_session_ids.contains(*session_id))
+        .flat_map(|(_, tasks)| tasks.iter().map(|task| task.task_id.clone()))
+        .collect::<HashSet<_>>();
+    merge_refreshed_task_metadata(cached, &refreshed, &refreshed_task_ids);
+    order_tasks_by_priority(&mut cached.links, &cached.priority_order);
+}
+
+fn replace_session_links(
+    cached: &mut SessionTaskMetadata,
+    refreshed: &mut SessionTaskMetadata,
+    requested_session_ids: &HashSet<String>,
+) -> HashSet<String> {
     let previous_task_ids = cached
         .links
         .iter()
@@ -158,6 +186,13 @@ fn merge_session_task_metadata(
         }
     }
 
+    previous_task_ids
+}
+
+fn prune_unlinked_task_metadata(
+    cached: &mut SessionTaskMetadata,
+    previous_task_ids: &HashSet<String>,
+) {
     let remaining_task_ids = cached
         .links
         .values()
@@ -169,22 +204,13 @@ fn merge_session_task_metadata(
         cached.priority_order.remove(task_id);
         cached.task_projects.remove(task_id);
     }
+}
 
-    let refreshed_task_ids = cached
-        .links
-        .iter()
-        .filter(|(session_id, _)| requested_session_ids.contains(*session_id))
-        .flat_map(|(_, tasks)| tasks.iter().map(|task| task.task_id.clone()))
-        .collect::<HashSet<_>>();
-    for task_id in &refreshed_task_ids {
-        cached.priority_order.remove(task_id);
-    }
-    let mut next_priority_order = cached
-        .priority_order
-        .values()
-        .copied()
-        .max()
-        .map_or(0, |order| order + 1);
+fn merge_refreshed_task_metadata(
+    cached: &mut SessionTaskMetadata,
+    refreshed: &SessionTaskMetadata,
+    refreshed_task_ids: &HashSet<String>,
+) {
     let mut order_by_priority = cached
         .priorities
         .iter()
@@ -192,8 +218,15 @@ fn merge_session_task_metadata(
             Some(((*priority)?, *cached.priority_order.get(task_id)?))
         })
         .collect::<HashMap<_, _>>();
+    let mut next_priority_order = cached
+        .priority_order
+        .values()
+        .copied()
+        .max()
+        .map_or(0, |order| order + 1);
 
-    for task_id in &refreshed_task_ids {
+    for task_id in refreshed_task_ids {
+        cached.priority_order.remove(task_id);
         if let Some(priority) = refreshed.priorities.get(task_id) {
             cached.priorities.insert(task_id.clone(), *priority);
         } else {
@@ -225,8 +258,22 @@ fn merge_session_task_metadata(
         });
         cached.priority_order.insert(task_id.clone(), order);
     }
+}
 
-    order_tasks_by_priority(&mut cached.links, &cached.priority_order);
+fn prune_session_task_metadata(
+    cached: &mut SessionTaskMetadata,
+    stale_session_ids: &HashSet<String>,
+) {
+    let stale_task_ids = cached
+        .links
+        .iter()
+        .filter(|(session_id, _)| stale_session_ids.contains(*session_id))
+        .flat_map(|(_, tasks)| tasks.iter().map(|task| task.task_id.clone()))
+        .collect::<HashSet<_>>();
+    cached
+        .links
+        .retain(|session_id, _| !stale_session_ids.contains(session_id));
+    prune_unlinked_task_metadata(cached, &stale_task_ids);
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -246,6 +293,7 @@ struct RefreshingCache<T, K> {
 struct CacheState<T, K> {
     value: T,
     attempted_at: HashMap<K, Instant>,
+    last_requested: HashMap<K, Instant>,
     refresh_in_flight: bool,
 }
 
@@ -259,6 +307,7 @@ where
             state: tokio::sync::Mutex::new(CacheState {
                 value: T::default(),
                 attempted_at: HashMap::new(),
+                last_requested: HashMap::new(),
                 refresh_in_flight: false,
             }),
             updates,
@@ -278,12 +327,28 @@ where
         keys: HashSet<K>,
         fetch: F,
         merge: fn(&mut T, T, &HashSet<K>),
+        prune: fn(&mut T, &HashSet<K>),
     ) -> T
     where
         F: FnOnce(T) -> Fut + Send + 'static,
         Fut: Future<Output = Result<T, String>> + Send + 'static,
     {
         let mut state = self.state.lock().await;
+        let now = Instant::now();
+        for key in &keys {
+            state.last_requested.insert(key.clone(), now);
+        }
+        let stale_keys = state
+            .last_requested
+            .iter()
+            .filter(|(_, last_requested)| last_requested.elapsed() >= CACHE_KEY_RETENTION)
+            .map(|(key, _)| key.clone())
+            .collect::<HashSet<_>>();
+        for key in &stale_keys {
+            state.last_requested.remove(key);
+            state.attempted_at.remove(key);
+        }
+        prune(&mut state.value, &stale_keys);
         let cached = state.value.clone();
         let expired = keys.iter().any(|key| {
             state
@@ -484,7 +549,7 @@ mod tests {
     use crate::commands::agent::tq_session_tasks::task_priority_metadata;
     use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionStatus};
     use chrono::{TimeZone, Utc};
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Notify;
@@ -501,6 +566,12 @@ mod tests {
             task_fetcher,
             pull_request_fetcher,
         )
+    }
+
+    #[fixture]
+    fn updates_and_receiver() -> (EnrichmentUpdates, tokio::sync::watch::Receiver<()>) {
+        let updates = EnrichmentUpdates::new();
+        (updates.clone(), updates.subscribe())
     }
 
     fn task(id: &str, priority: Option<i32>) -> TqTaskSummary {
@@ -546,6 +617,22 @@ mod tests {
             priority_order: HashMap::new(),
             task_projects: HashMap::new(),
         }
+    }
+
+    fn metadata_with_task_details(session_ids: HashSet<String>) -> SessionTaskMetadata {
+        let mut result = metadata(session_ids.clone());
+        for session_id in session_ids {
+            let task_id = format!("task-{session_id}");
+            let priority = if session_id == "session-a" { 0 } else { 1 };
+            result.priorities.insert(task_id.clone(), Some(priority));
+            result
+                .priority_order
+                .insert(task_id.clone(), priority as usize);
+            result
+                .task_projects
+                .insert(task_id, format!("project-{session_id}"));
+        }
+        result
     }
 
     fn session(session_id: &str, pr_context: Option<SessionPrContext>) -> Session {
@@ -763,12 +850,15 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn alternating_session_sets_keep_each_sessions_task_metadata() {
-        let updates = EnrichmentUpdates::new();
-        let mut receiver = updates.subscribe();
-        let task_fetcher: TaskMetadataFetcher =
-            Arc::new(|session_ids, _| Box::pin(async move { Ok(metadata(session_ids)) }));
+    async fn alternating_session_sets_keep_each_sessions_task_metadata(
+        updates_and_receiver: (EnrichmentUpdates, tokio::sync::watch::Receiver<()>),
+    ) {
+        let (updates, mut receiver) = updates_and_receiver;
+        let task_fetcher: TaskMetadataFetcher = Arc::new(|session_ids, _| {
+            Box::pin(async move { Ok(metadata_with_task_details(session_ids)) })
+        });
         let pull_request_fetcher: PullRequestFetcher =
             Arc::new(|_| Box::pin(async { Ok(HashMap::new()) }));
         let cache = cache_with_fetchers(updates, FETCH_TIMEOUT, task_fetcher, pull_request_fetcher);
@@ -791,9 +881,9 @@ mod tests {
             ),
             (
                 SessionTaskMetadata::default(),
-                metadata(HashSet::from(["session-a".to_string()])),
-                metadata(HashSet::from(["session-a".to_string()])),
-                metadata(HashSet::from([
+                metadata_with_task_details(HashSet::from(["session-a".to_string()])),
+                metadata_with_task_details(HashSet::from(["session-a".to_string()])),
+                metadata_with_task_details(HashSet::from([
                     "session-a".to_string(),
                     "session-b".to_string(),
                 ])),
@@ -1052,10 +1142,12 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn alternating_branch_sets_keep_each_cached_pull_request() {
-        let updates = EnrichmentUpdates::new();
-        let mut receiver = updates.subscribe();
+    async fn alternating_branch_sets_keep_each_cached_pull_request(
+        updates_and_receiver: (EnrichmentUpdates, tokio::sync::watch::Receiver<()>),
+    ) {
+        let (updates, mut receiver) = updates_and_receiver;
         let pull_request_fetcher: PullRequestFetcher = Arc::new(|sessions| {
             Box::pin(async move {
                 Ok(sessions
@@ -1091,6 +1183,7 @@ mod tests {
         let cached_while_b_refreshes = cache.pull_requests(std::slice::from_ref(&session_b)).await;
         wait_for_refresh(&mut receiver).await;
         let cached_a_after_b_refresh = cache.pull_requests(std::slice::from_ref(&session_a)).await;
+        let cached_b_after_refresh = cache.pull_requests(std::slice::from_ref(&session_b)).await;
 
         assert_eq!(
             (
@@ -1098,6 +1191,7 @@ mod tests {
                 cached_a,
                 cached_while_b_refreshes,
                 cached_a_after_b_refresh,
+                cached_b_after_refresh,
             ),
             (
                 HashMap::from([("session-a".to_string(), None)]),
@@ -1118,6 +1212,15 @@ mod tests {
                         title: "Change for branch-a".to_string(),
                         state: crate::infra::github::PrState::Open,
                         url: "https://example.test/branch-a".to_string(),
+                    }),
+                )]),
+                HashMap::from([(
+                    "session-b".to_string(),
+                    Some(PrInfo {
+                        number: 23,
+                        title: "Change for branch-b".to_string(),
+                        state: crate::infra::github::PrState::Open,
+                        url: "https://example.test/branch-b".to_string(),
                     }),
                 )]),
             )
