@@ -67,7 +67,7 @@ html[data-mobile-layout='true'] {
   height: auto;
   flex: 0 0 auto;
   align-items: center;
-  padding: 54px 16px 0;
+  padding: max(8px, env(safe-area-inset-top)) 16px 0;
   font-family: var(--font-mono);
   font-size: 13px;
   font-weight: 700;
