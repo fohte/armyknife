@@ -305,6 +305,10 @@ export function isSessionPullRequestListResponse(
         typeof pullRequest['number'] === 'number' &&
         Number.isInteger(pullRequest['number']) &&
         pullRequest['number'] > 0 &&
+        (pullRequest['owner'] === null ||
+          typeof pullRequest['owner'] === 'string') &&
+        (pullRequest['repo'] === null ||
+          typeof pullRequest['repo'] === 'string') &&
         typeof pullRequest['title'] === 'string' &&
         typeof pullRequest['url'] === 'string' &&
         (pullRequest['headSha'] === null ||

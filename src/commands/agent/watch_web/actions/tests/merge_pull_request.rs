@@ -25,7 +25,11 @@ async fn merge_forwards_the_confirmed_head_and_returns_the_merge_result(
         .router()
         .oneshot(post(
             "/sessions/sample-session/pull-requests/42/merge",
-            json!({ "expectedHeadSha": "confirmed-head" }),
+            json!({
+                "owner": "sample-org",
+                "repo": "sample-repo",
+                "expectedHeadSha": "confirmed-head",
+            }),
         ))
         .await
         .unwrap();
@@ -37,7 +41,8 @@ async fn merge_forwards_the_confirmed_head_and_returns_the_merge_result(
             "body": expected_body,
             "calls": [{
                 "kind": "merge-pull-request",
-                "sessionId": "sample-session",
+                "owner": "sample-org",
+                "repo": "sample-repo",
                 "number": 42,
                 "expectedHeadSha": "confirmed-head",
             }],
@@ -56,7 +61,11 @@ async fn merge_errors_are_returned_with_the_failure_reason(action_context: Actio
         .router()
         .oneshot(post(
             "/sessions/sample-session/pull-requests/42/merge",
-            json!({ "expectedHeadSha": "confirmed-head" }),
+            json!({
+                "owner": "sample-org",
+                "repo": "sample-repo",
+                "expectedHeadSha": "confirmed-head",
+            }),
         ))
         .await
         .unwrap();
@@ -68,7 +77,8 @@ async fn merge_errors_are_returned_with_the_failure_reason(action_context: Actio
             "body": { "error": "PR #42 head changed since confirmation." },
             "calls": [{
                 "kind": "merge-pull-request",
-                "sessionId": "sample-session",
+                "owner": "sample-org",
+                "repo": "sample-repo",
                 "number": 42,
                 "expectedHeadSha": "confirmed-head",
             }],
@@ -87,7 +97,11 @@ async fn merge_rejects_an_empty_confirmed_head_without_calling_runtime(
         .router()
         .oneshot(post(
             "/sessions/sample-session/pull-requests/42/merge",
-            json!({ "expectedHeadSha": " " }),
+            json!({
+                "owner": "sample-org",
+                "repo": "sample-repo",
+                "expectedHeadSha": " ",
+            }),
         ))
         .await
         .unwrap();
@@ -97,6 +111,66 @@ async fn merge_rejects_an_empty_confirmed_head_without_calling_runtime(
         json!({
             "status": StatusCode::BAD_REQUEST.as_u16(),
             "body": { "error": "expectedHeadSha cannot be empty" },
+            "calls": [],
+        }),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn merge_rejects_an_invalid_repository_without_calling_runtime(
+    action_context: ActionContext,
+) {
+    action_context.save_session(&session("sample-session"));
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            "/sessions/sample-session/pull-requests/42/merge",
+            json!({
+                "owner": "sample/org",
+                "repo": "sample-repo",
+                "expectedHeadSha": "confirmed-head",
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response_snapshot(response, &action_context).await,
+        json!({
+            "status": StatusCode::BAD_REQUEST.as_u16(),
+            "body": { "error": "owner and repo must identify a canonical GitHub repository" },
+            "calls": [],
+        }),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn merge_rejects_an_ended_session_without_calling_runtime(action_context: ActionContext) {
+    let mut ended_session = session("sample-session");
+    ended_session.status = crate::commands::agent::types::SessionStatus::Ended;
+    action_context.save_session(&ended_session);
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            "/sessions/sample-session/pull-requests/42/merge",
+            json!({
+                "owner": "sample-org",
+                "repo": "sample-repo",
+                "expectedHeadSha": "confirmed-head",
+            }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response_snapshot(response, &action_context).await,
+        json!({
+            "status": StatusCode::CONFLICT.as_u16(),
+            "body": { "error": "session has ended" },
             "calls": [],
         }),
     );

@@ -946,6 +946,8 @@ it('shows linked pull requests alongside partial lookup errors', async () => {
           pullRequests: [
             {
               number: 2048,
+              owner: 'example',
+              repo: 'project',
               title: 'Show linked work in the sidebar',
               url: 'https://github.com/example/project/pull/2048',
               headSha: 'confirmed-head',

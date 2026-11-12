@@ -29,20 +29,27 @@ function errorFromResponse(response: Response) {
   })
 }
 
+function jsonFromResponse<T>(
+  response: Response,
+  validate: (value: unknown) => value is T,
+) {
+  if (!response.ok) {
+    return errorFromResponse(response).andThen((error) => err<T, Error>(error))
+  }
+  return ResultAsync.fromPromise(response.json(), toError).andThen((body) =>
+    validate(body)
+      ? ok<T, Error>(body)
+      : err<T, Error>(new Error('The server returned an invalid response')),
+  )
+}
+
 export function requestJson<T>(
   url: string,
   validate: (value: unknown) => value is T,
 ) {
-  return ResultAsync.fromPromise(fetch(url), toError).andThen((response) => {
-    if (!response.ok) {
-      return errorFromResponse(response).andThen((error) => err(error))
-    }
-    return ResultAsync.fromPromise(response.json(), toError).andThen((body) =>
-      validate(body)
-        ? ok(body)
-        : err(new Error('The server returned an invalid response')),
-    )
-  })
+  return ResultAsync.fromPromise(fetch(url), toError).andThen((response) =>
+    jsonFromResponse(response, validate),
+  )
 }
 
 export function requestText(url: string) {
@@ -89,14 +96,5 @@ export function requestActionJson<T>(
       body: JSON.stringify(payload),
     }),
     toError,
-  ).andThen((response) => {
-    if (!response.ok) {
-      return errorFromResponse(response).andThen((error) => err(error))
-    }
-    return ResultAsync.fromPromise(response.json(), toError).andThen((body) =>
-      validate(body)
-        ? ok(body)
-        : err(new Error('The server returned an invalid response')),
-    )
-  })
+  ).andThen((response) => jsonFromResponse(response, validate))
 }

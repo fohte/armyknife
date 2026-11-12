@@ -12,6 +12,8 @@ const meta = {
     pullRequests: [
       {
         number: 2048,
+        owner: 'example',
+        repo: 'project',
         title: 'Show linked work in the session sidebar',
         url: 'https://github.com/example/project/pull/2048',
         headSha: 'confirmed-head',
@@ -21,6 +23,8 @@ const meta = {
       },
       {
         number: 2046,
+        owner: 'example',
+        repo: 'project',
         title: 'Update the workspace navigation',
         url: 'https://github.com/example/project/pull/2046',
         headSha: null,

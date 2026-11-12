@@ -9,6 +9,7 @@ use super::{
     MergeOutcome, PrMergeClient, PrSnapshot, ensure_pr_is_open_and_safe, unmerged_lower_pr,
 };
 
+#[cfg(test)]
 pub(super) async fn run_merge(
     client: &impl PrMergeClient,
     hook_runner: &mut impl FnMut(&[(&str, &str)]) -> anyhow::Result<()>,

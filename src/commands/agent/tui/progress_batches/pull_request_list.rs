@@ -38,9 +38,16 @@ pub(in crate::commands::agent::tui) fn pull_request_list_items(
             let (Some(number), Some(url)) = (number, url) else {
                 continue;
             };
+            let repository = pull_request_repository(
+                &url,
+                number,
+                link.and_then(|link| link.owner.as_deref().zip(link.repo.as_deref())),
+            );
 
             items.push(PullRequestListItem {
                 number,
+                owner: repository.as_ref().map(|(owner, _)| owner.clone()),
+                repo: repository.map(|(_, repo)| repo),
                 title: progress
                     .map_or_else(|| item.title.clone(), |pr| pr.pull_request.title.clone()),
                 url,
@@ -68,8 +75,15 @@ pub(in crate::commands::agent::tui) fn pull_request_list_items(
             .filter(|delegate| !matched_delegate_session_ids.contains(&delegate.session.session_id))
             .filter_map(|delegate| {
                 let progress = delegate.pull_request.as_ref()?;
+                let repository = pull_request_repository(
+                    &progress.pull_request.url,
+                    progress.pull_request.number,
+                    None,
+                );
                 Some(PullRequestListItem {
                     number: progress.pull_request.number,
+                    owner: repository.as_ref().map(|(owner, _)| owner.clone()),
+                    repo: repository.map(|(_, repo)| repo),
                     title: progress.pull_request.title.clone(),
                     url: progress.pull_request.url.clone(),
                     head_sha: progress.head_sha.clone(),
@@ -105,8 +119,38 @@ fn parse_pr_state(state: &str) -> Option<PrState> {
     }
 }
 
+fn pull_request_repository(
+    url: &str,
+    number: u64,
+    linked_repository: Option<(&str, &str)>,
+) -> Option<(String, String)> {
+    let parsed_url = reqwest::Url::parse(url).ok()?;
+    if parsed_url.scheme() != "https" {
+        return None;
+    }
+    let segments = parsed_url
+        .path_segments()?
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let pull_index = segments.iter().rposition(|segment| *segment == "pull")?;
+    if pull_index < 2 || segments.get(pull_index + 1)?.parse::<u64>().ok()? != number {
+        return None;
+    }
+    let repository = (
+        segments[pull_index - 2].to_string(),
+        segments[pull_index - 1].to_string(),
+    );
+    if linked_repository.is_some_and(|(owner, repo)| owner != repository.0 || repo != repository.1)
+    {
+        return None;
+    }
+    Some(repository)
+}
+
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use crate::commands::agent::tui::progress::FetchedDelegate;
     use crate::commands::agent::tui::progress_batches::{
         ImplementationBatch, ImplementationItem, ImplementationPlan,
@@ -119,6 +163,40 @@ mod tests {
     use crate::commands::agent::tui::progress_fetch::PullRequestListItem;
 
     use super::pull_request_list_items;
+
+    #[rstest]
+    #[case::github_url(
+        "https://github.com/example/project/pull/42",
+        42,
+        Some(("example", "project")),
+        Some(("example", "project")),
+    )]
+    #[case::enterprise_url(
+        "https://git.example/ghe/team/project/pull/42",
+        42,
+        None,
+        Some(("team", "project")),
+    )]
+    #[case::linked_repository_mismatch(
+        "https://github.com/example/project/pull/42",
+        42,
+        Some(("different", "project")),
+        None,
+    )]
+    #[case::url_number_mismatch("https://github.com/example/project/pull/43", 42, None, None)]
+    fn resolves_repository_from_the_listed_pull_request(
+        #[case] url: &str,
+        #[case] number: u64,
+        #[case] linked_repository: Option<(&str, &str)>,
+        #[case] expected: Option<(&str, &str)>,
+    ) {
+        let expected = expected.map(|(owner, repo)| (owner.to_string(), repo.to_string()));
+
+        assert_eq!(
+            super::pull_request_repository(url, number, linked_repository),
+            expected,
+        );
+    }
 
     #[test]
     fn lists_open_pull_requests_before_merged_pull_requests() {
@@ -160,6 +238,8 @@ mod tests {
             vec![
                 PullRequestListItem {
                     number: 2048,
+                    owner: Some("example".to_string()),
+                    repo: Some("project".to_string()),
                     title: "Add session pull request links".to_string(),
                     url: "https://github.com/example/project/pull/2048".to_string(),
                     head_sha: Some("confirmed-head".to_string()),
@@ -169,6 +249,8 @@ mod tests {
                 },
                 PullRequestListItem {
                     number: 2046,
+                    owner: Some("example".to_string()),
+                    repo: Some("project".to_string()),
                     title: "Update workspace navigation".to_string(),
                     url: "https://github.com/example/project/pull/2046".to_string(),
                     head_sha: None,
@@ -211,6 +293,8 @@ mod tests {
             pull_request_list_items(&[], Some(&plan), &AgentConfig::default()),
             vec![PullRequestListItem {
                 number: 2050,
+                owner: Some("example".to_string()),
+                repo: Some("project".to_string()),
                 title: "Add synthetic setting".to_string(),
                 url: "https://github.com/example/project/pull/2050".to_string(),
                 head_sha: None,

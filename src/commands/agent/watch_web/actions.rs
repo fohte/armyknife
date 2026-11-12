@@ -24,11 +24,13 @@ mod merge_pull_request;
 mod messages;
 mod proposal_answer_locks;
 mod proposals;
+mod runtime;
 mod todo_completion_locks;
 mod todos;
 
 pub(super) use api_error::ApiError;
 use proposal_answer_locks::ProposalAnswerLocks;
+use runtime::LiveActionRuntime;
 use todo_completion_locks::TodoCompletionLocks;
 
 pub(super) fn router(message_loaders: RouteLoaders) -> Router {
@@ -116,99 +118,11 @@ trait ActionRuntime: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
     fn merge_pull_request<'a>(
         &'a self,
-        session: &'a Session,
+        owner: &'a str,
+        repo: &'a str,
         pr_number: u64,
         expected_head_sha: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<crate::commands::gh::WatchWebPrMergeResult>> + Send + 'a>>;
-}
-
-struct LiveActionRuntime;
-
-impl ActionRuntime for LiveActionRuntime {
-    fn send_message(&self, session: &Session, content: &str) -> Result<()> {
-        messages::send_live_message(session, content)
-    }
-
-    fn pane_current_command(&self, tmux_info: &TmuxInfo) -> Option<String> {
-        crate::infra::tmux::get_pane_current_command_for_socket(
-            tmux_info.socket_path.as_deref(),
-            &tmux_info.pane_id,
-        )
-    }
-
-    fn send_keys_if_agent_is_running(
-        &self,
-        tmux_info: &TmuxInfo,
-        engine: Engine,
-        current_command: &str,
-        keys: &[&str],
-    ) -> Result<bool> {
-        let Some(pane_pid) = crate::infra::tmux::get_pane_pid_for_socket(
-            tmux_info.socket_path.as_deref(),
-            &tmux_info.pane_id,
-        )
-        .ok()
-        .flatten() else {
-            return Ok(false);
-        };
-        let Some(process_snapshot) = crate::infra::process::ProcessSnapshot::capture() else {
-            return Ok(false);
-        };
-        if !super::super::pane::process::pane_has_live_agent_process(
-            pane_pid,
-            engine,
-            Some(&process_snapshot),
-        ) {
-            return Ok(false);
-        }
-
-        crate::infra::tmux::send_keys_if_pane_command_matches_for_socket(
-            tmux_info.socket_path.as_deref(),
-            &tmux_info.pane_id,
-            current_command,
-            keys,
-        )
-        .map_err(anyhow::Error::from)
-    }
-
-    fn focus(&self, tmux_info: &TmuxInfo) -> Result<()> {
-        crate::infra::tmux::focus_pane_for_socket(
-            tmux_info.socket_path.as_deref(),
-            &tmux_info.pane_id,
-        )
-        .map_err(anyhow::Error::from)
-    }
-
-    fn close_session<'a>(
-        &'a self,
-        session: &'a Session,
-        keep_worktree: bool,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
-        let session = session.clone();
-        Box::pin(close::run_on_blocking_worker(move || async move {
-            crate::commands::agent::close_from_watch_web(&session, keep_worktree).await
-        }))
-    }
-
-    fn merge_pull_request<'a>(
-        &'a self,
-        session: &'a Session,
-        pr_number: u64,
-        expected_head_sha: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<crate::commands::gh::WatchWebPrMergeResult>> + Send + 'a>>
-    {
-        Box::pin(async move {
-            let repo = crate::infra::git::GitRepo::open_at(&session.cwd)?;
-            let (owner, repo_name) = crate::infra::git::github_owner_and_repo(&repo)?;
-            crate::commands::gh::run_watch_web_pr_merge(
-                &owner,
-                &repo_name,
-                pr_number,
-                expected_head_sha,
-            )
-            .await
-        })
-    }
 }
 
 #[derive(Serialize)]
@@ -671,7 +585,8 @@ mod tests {
 
         fn merge_pull_request<'a>(
             &'a self,
-            session: &'a Session,
+            owner: &'a str,
+            repo: &'a str,
             pr_number: u64,
             expected_head_sha: &'a str,
         ) -> Pin<
@@ -681,7 +596,8 @@ mod tests {
         > {
             self.calls.lock().unwrap().push(json!({
                 "kind": "merge-pull-request",
-                "sessionId": session.session_id,
+                "owner": owner,
+                "repo": repo,
                 "number": pr_number,
                 "expectedHeadSha": expected_head_sha,
             }));

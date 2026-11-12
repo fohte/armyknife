@@ -87,12 +87,17 @@ export function PullRequestListPanel({
   const confirmMerge = async () => {
     if (pendingMerge === null || merging || pendingMerge.headSha === null)
       return
+    if (pendingMerge.owner === null || pendingMerge.repo === null) return
     setMerging(true)
     setFeedback(null)
     await requestActionJson(
       sessionId,
       `pull-requests/${String(pendingMerge.number)}/merge`,
-      { expectedHeadSha: pendingMerge.headSha },
+      {
+        owner: pendingMerge.owner,
+        repo: pendingMerge.repo,
+        expectedHeadSha: pendingMerge.headSha,
+      },
       isMergeResponse,
     ).match(
       (response) => {
@@ -169,7 +174,10 @@ export function PullRequestListPanel({
               <span>CI: {ciLabel(pullRequest.ciState)}</span>
               <span>Review: {reviewLabel(pullRequest.reviewStatus)}</span>
             </div>
-            {pullRequest.state === 'Open' && pullRequest.headSha !== null ? (
+            {pullRequest.state === 'Open' &&
+            pullRequest.headSha !== null &&
+            pullRequest.owner !== null &&
+            pullRequest.repo !== null ? (
               <button
                 className="pull-request-list-merge-button"
                 type="button"
