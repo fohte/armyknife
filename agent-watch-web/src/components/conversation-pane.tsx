@@ -12,7 +12,7 @@ import {
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { requestAction, requestJson } from '#components/conversation-requests'
 import type {
-  PendingPermissionAction,
+  PendingPermissionActions,
   PermissionRequestIdentity,
 } from '#components/permission-card'
 import { ResizableColumns } from '#components/resizable-columns'
@@ -114,8 +114,8 @@ export function ConversationPane({
   const [actionsReady, setActionsReady] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [pendingPermissionAction, setPendingPermissionAction] =
-    useState<PendingPermissionAction>(null)
+  const [pendingPermissionActions, setPendingPermissionActions] =
+    useState<PendingPermissionActions>({})
   const [openInTerminalStatus, setOpenInTerminalStatus] =
     useState<OpenInTerminalStatus>(null)
   const currentSessionId = useRef(session.id)
@@ -210,22 +210,26 @@ export function ConversationPane({
             reuseEqualValue(previous, actionsResult.value),
           )
         }
-        setPendingPermissionAction((pending) => {
-          if (pending === null) return null
-          const permissionDisappeared =
-            refreshedConversation !== null &&
-            !refreshedConversation.messages.some(
-              (message) =>
-                message.type === 'permission' &&
-                message.tool === pending.tool &&
-                message.description === pending.description,
-            )
-          const permissionUnavailable =
-            actionsResult.isOk() &&
-            (actionsResult.value.permission == null ||
-              (!actionsResult.value.permission.approve &&
-                !actionsResult.value.permission.reject))
-          return permissionDisappeared || permissionUnavailable ? null : pending
+        const permissionUnavailable =
+          actionsResult.isOk() &&
+          (actionsResult.value.permission == null ||
+            (!actionsResult.value.permission.approve &&
+              !actionsResult.value.permission.reject))
+        setPendingPermissionActions((pending) => {
+          if (permissionUnavailable) return {}
+          if (refreshedConversation === null) return pending
+          const activeRequestIds = new Set(
+            refreshedConversation.messages.flatMap((message) =>
+              message.type === 'permission' && message.requestId !== undefined
+                ? [message.requestId]
+                : [],
+            ),
+          )
+          return Object.fromEntries(
+            Object.entries(pending).filter(([requestId]) =>
+              activeRequestIds.has(requestId),
+            ),
+          )
         })
         const firstError = messagesResult.isErr()
           ? messagesResult.error
@@ -249,7 +253,7 @@ export function ConversationPane({
   }, [refresh, refreshKey])
 
   useEffect(() => {
-    setPendingPermissionAction(null)
+    setPendingPermissionActions({})
     setOpenInTerminalStatus(null)
     if (conversationSessionId.current !== session.id) {
       updateConversation(EMPTY_CONVERSATION)
@@ -347,20 +351,26 @@ export function ConversationPane({
             ? 'reject'
             : null
       if (permissionAction !== null && permissionIdentity !== undefined) {
-        setPendingPermissionAction({
-          action: permissionAction,
-          status: 'sending',
-          ...permissionIdentity,
-        })
+        setPendingPermissionActions((pending) => ({
+          ...pending,
+          [permissionIdentity.requestId]: {
+            action: permissionAction,
+            status: 'sending',
+            ...permissionIdentity,
+          },
+        }))
       }
       return requestAction(session.id, action, payload).match(
         () => {
           if (permissionAction !== null && permissionIdentity !== undefined) {
-            setPendingPermissionAction({
-              action: permissionAction,
-              status: 'sent',
-              ...permissionIdentity,
-            })
+            setPendingPermissionActions((pending) => ({
+              ...pending,
+              [permissionIdentity.requestId]: {
+                action: permissionAction,
+                status: 'sent',
+                ...permissionIdentity,
+              },
+            }))
           }
           setError(null)
           refresh()
@@ -368,7 +378,13 @@ export function ConversationPane({
         },
         (requestError) => {
           if (permissionAction !== null && permissionIdentity !== undefined) {
-            setPendingPermissionAction(null)
+            setPendingPermissionActions((pending) =>
+              Object.fromEntries(
+                Object.entries(pending).filter(
+                  ([requestId]) => requestId !== permissionIdentity.requestId,
+                ),
+              ),
+            )
           }
           setError(requestError.message)
           return false
@@ -428,7 +444,7 @@ export function ConversationPane({
       skills={conversation.skills ?? []}
       actions={actions}
       actionsReady={actionsReady}
-      pendingPermissionAction={pendingPermissionAction}
+      pendingPermissionActions={pendingPermissionActions}
       openInTerminalStatus={openInTerminalStatus}
       loading={loading}
       error={error}

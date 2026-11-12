@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -23,6 +23,7 @@ pub(super) struct MessageCacheKey {
     pub(super) transcript_fingerprint: Option<TranscriptFingerprint>,
     pub(super) parent: Option<ParentSession>,
     pub(super) pending_permission_agent_ids: BTreeSet<String>,
+    pub(super) pending_permission_request_ids: BTreeMap<String, String>,
     pub(super) current_tool: Option<String>,
     pub(super) user_marker: Option<String>,
     pub(super) decisions: Vec<AgentDecision>,
@@ -50,6 +51,7 @@ impl MessageCacheKey {
             )?,
             parent,
             pending_permission_agent_ids: session.pending_permission_agent_ids.clone(),
+            pending_permission_request_ids: session.pending_permission_request_ids.clone(),
             current_tool: session.current_tool.clone(),
             user_marker,
             decisions,
@@ -342,6 +344,50 @@ mod tests {
         .unwrap();
 
         assert!(first_key == second_key);
+    }
+
+    #[test]
+    fn message_cache_key_changes_when_a_permission_request_is_replaced() {
+        let mut session: Session = serde_json::from_value(json!({
+            "session_id": "fixture-session",
+            "cwd": "/fixture/project",
+            "status": "waiting_input",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "pending_permission_agent_ids": [MAIN_THREAD_AGENT_KEY],
+            "pending_permission_request_ids": {},
+        }))
+        .unwrap();
+        session.pending_permission_request_ids.insert(
+            MAIN_THREAD_AGENT_KEY.to_string(),
+            "permission-request-first".to_string(),
+        );
+        let first_key = MessageCacheKey::new(
+            &session,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        session.pending_permission_request_ids.insert(
+            MAIN_THREAD_AGENT_KEY.to_string(),
+            "permission-request-next".to_string(),
+        );
+        let next_key = MessageCacheKey::new(
+            &session,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+
+        assert!(first_key != next_key);
     }
 
     #[test]

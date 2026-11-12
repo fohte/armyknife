@@ -153,6 +153,8 @@ function isChatItem(value: unknown): value is ChatItem {
       )
     case 'permission':
       return (
+        (value['requestId'] === undefined ||
+          typeof value['requestId'] === 'string') &&
         typeof value['tool'] === 'string' &&
         typeof value['description'] === 'string'
       )

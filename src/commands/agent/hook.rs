@@ -35,6 +35,7 @@ use crate::shared::log::short_run_id;
 mod background_tasks;
 mod pane_binding;
 pub(super) mod permission_notification;
+mod permission_request;
 mod prompt_skill;
 mod session_lifecycle;
 mod session_metadata;
@@ -110,7 +111,25 @@ pub fn run(args: &HookArgs) -> Result<()> {
 
     input.engine = args.engine;
     let session_id = input.session_id.clone();
+    let permission_agent_key =
+        permission_request_agent_key(event, args.engine, input.agent_id.as_deref());
     let result = process_hook_event(event, input)?;
+    if let Some(agent_key) = permission_agent_key {
+        let sessions_dir = store::sessions_dir()?;
+        let Some(session) = store::load_session_from(&sessions_dir, &session_id)? else {
+            return Ok(());
+        };
+        let Some(request_id) = session.pending_permission_request_ids.get(&agent_key) else {
+            return Ok(());
+        };
+        return permission_request::wait_and_write(
+            &sessions_dir,
+            &session_id,
+            &agent_key,
+            request_id,
+            io::stdout().lock(),
+        );
+    }
     let block_reason = match result {
         ProcessResult::StopBlocked(reason) => Some(reason),
         ProcessResult::SessionSaved | ProcessResult::SessionEnded | ProcessResult::Skipped => None,
@@ -320,6 +339,15 @@ fn ensure_watch_web_user_marker(
         session_lock.ensure_watch_web_user_marker()?;
     }
     Ok(())
+}
+
+fn permission_request_agent_key(
+    event: HookEvent,
+    engine: Engine,
+    agent_id: Option<&str>,
+) -> Option<String> {
+    (event == HookEvent::PermissionRequest && engine == Engine::Claude)
+        .then(|| agent_id.unwrap_or(MAIN_THREAD_AGENT_KEY).to_string())
 }
 
 fn startup_metadata_for_resume(sessions_dir: &Path, input: &HookInput) -> Result<Option<Session>> {
@@ -719,6 +747,11 @@ fn process_hook_event_impl_with_settings(
         .agent_id
         .clone()
         .unwrap_or_else(|| MAIN_THREAD_AGENT_KEY.to_string());
+    let previous_permission_request_ids = session
+        .pending_permission_request_ids
+        .values()
+        .cloned()
+        .collect::<BTreeSet<_>>();
     match event {
         HookEvent::PermissionRequest => {
             session
@@ -780,6 +813,14 @@ fn process_hook_event_impl_with_settings(
             .retain(|key, _| key == MAIN_THREAD_AGENT_KEY || live_agent_ids.contains(key));
     } else if event == HookEvent::PostToolUse {
         background_tasks::record_launched_bash_task(&mut session, &input);
+    }
+    let active_permission_request_ids = session
+        .pending_permission_request_ids
+        .values()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    for request_id in previous_permission_request_ids.difference(&active_permission_request_ids) {
+        session_lock.remove_permission_request(request_id)?;
     }
 
     // At least one agent (main thread or subagent) is still blocked on a
@@ -909,6 +950,25 @@ fn process_hook_event_impl_with_settings(
     // Commit before transcript and tmux work so they do not hold SQLite's
     // database-wide writer lock. `sync_tmux` also reloads this session.
     ensure_watch_web_user_marker(&session_lock, event, input.engine)?;
+    if event == HookEvent::PermissionRequest
+        && input.engine == Engine::Claude
+        && let Some(request_id) = session
+            .pending_permission_request_ids
+            .get(&permission_agent_key)
+    {
+        let tool_input = input
+            .tool_input
+            .as_ref()
+            .map(|tool_input| &tool_input.raw)
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        session_lock.register_permission_request(
+            &permission_agent_key,
+            request_id,
+            input.tool_name.as_deref(),
+            &tool_input,
+        )?;
+    }
     session_lock.save(&session)?;
     drop(session_lock);
 
@@ -1737,6 +1797,151 @@ mod tests {
     }
 
     #[test]
+    fn claude_permission_request_registers_original_tool_input_for_watch_web() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+        let input = create_test_input_with_tool(
+            "AskUserQuestion",
+            Some(
+                r#"{"questions":[{"question":"Which output format?","options":[{"label":"Option A"}]}]}"#,
+            ),
+        );
+        process_hook_event_impl(
+            HookEvent::PermissionRequest,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("permission request should save");
+        let session = store::load_session_from(sessions_dir, "test-123")
+            .expect("session should load")
+            .expect("session should exist");
+        let request_id = session
+            .pending_permission_request_ids
+            .get(MAIN_THREAD_AGENT_KEY)
+            .expect("request ID should be recorded");
+
+        assert_eq!(
+            store::permission_request_data(sessions_dir, "test-123", request_id)
+                .expect("request data should load"),
+            Some(store::PermissionRequestData {
+                tool_name: Some("AskUserQuestion".to_string()),
+                tool_input: serde_json::json!({
+                    "questions": [{
+                        "question": "Which output format?",
+                        "options": [{ "label": "Option A" }],
+                    }],
+                }),
+                pending: true,
+            }),
+        );
+    }
+
+    #[test]
+    fn claude_subagent_permission_request_registers_its_tool_input_for_watch_web() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+        let input = serde_json::from_value(serde_json::json!({
+            "session_id": "test-123",
+            "cwd": "/tmp/test",
+            "agent_id": "agent-fixture",
+            "tool_name": "Bash",
+            "tool_input": { "command": "echo fictional" },
+        }))
+        .expect("subagent permission input should deserialize");
+
+        process_hook_event_impl(
+            HookEvent::PermissionRequest,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("subagent permission request should save");
+
+        let session = store::load_session_from(sessions_dir, "test-123")
+            .expect("session should load")
+            .expect("session should exist");
+        let request_id = session
+            .pending_permission_request_ids
+            .get("agent-fixture")
+            .expect("subagent request ID should be recorded");
+
+        assert_eq!(
+            store::permission_request_data(sessions_dir, "test-123", request_id)
+                .expect("subagent request data should load"),
+            Some(store::PermissionRequestData {
+                tool_name: Some("Bash".to_string()),
+                tool_input: serde_json::json!({ "command": "echo fictional" }),
+                pending: true,
+            }),
+        );
+    }
+
+    #[test]
+    fn claude_question_tool_resolution_ends_the_permission_wait_without_output() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+        process_hook_event_impl(
+            HookEvent::PermissionRequest,
+            create_test_input_with_tool(
+                "AskUserQuestion",
+                Some(
+                    r#"{"questions":[{"question":"Which format?","options":[{"label":"Plain"}]}]}"#,
+                ),
+            ),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("permission request should save");
+        let session = store::load_session_from(sessions_dir, "test-123")
+            .expect("session should load")
+            .expect("session should exist");
+        let request_id = session
+            .pending_permission_request_ids
+            .get(MAIN_THREAD_AGENT_KEY)
+            .expect("request ID should be recorded")
+            .clone();
+        let mut waiter = store::PermissionRequestWaiter::open(sessions_dir)
+            .expect("permission waiter should open");
+        assert_eq!(
+            waiter
+                .poll("test-123", MAIN_THREAD_AGENT_KEY, &request_id)
+                .expect("pending question should be visible"),
+            store::PermissionRequestWait::Pending,
+        );
+        process_hook_event_impl(
+            HookEvent::PostToolUse,
+            create_test_input_with_tool(
+                "AskUserQuestion",
+                Some(
+                    r#"{"questions":[{"question":"Which format?","options":[{"label":"Plain"}]}]}"#,
+                ),
+            ),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("tool resolution should save");
+        let mut output = Vec::new();
+        permission_request::wait_and_write(
+            sessions_dir,
+            "test-123",
+            MAIN_THREAD_AGENT_KEY,
+            &request_id,
+            &mut output,
+        )
+        .expect("resolved question should not emit a decision");
+
+        assert_eq!(
+            (
+                store::permission_request_data(sessions_dir, "test-123", &request_id)
+                    .expect("request lookup should succeed"),
+                output,
+            ),
+            (None, Vec::new()),
+        );
+    }
+
+    #[test]
     fn session_start_persists_the_marker_across_resume() {
         let temp_dir = tempfile::TempDir::new().expect("temporary directory should be created");
         let sessions_dir = temp_dir.path();
@@ -1984,6 +2189,33 @@ mod tests {
     #[case::session_end("session-end", HookEvent::SessionEnd)]
     fn test_hook_event_parsing(#[case] event: &str, #[case] expected: HookEvent) {
         assert_eq!(HookEvent::from_str(event).expect("valid event"), expected);
+    }
+
+    #[rstest]
+    #[case::main_claude(
+        HookEvent::PermissionRequest,
+        Engine::Claude,
+        None,
+        Some(MAIN_THREAD_AGENT_KEY)
+    )]
+    #[case::subagent_claude(
+        HookEvent::PermissionRequest,
+        Engine::Claude,
+        Some("agent-fixture"),
+        Some("agent-fixture")
+    )]
+    #[case::main_codex(HookEvent::PermissionRequest, Engine::Codex, None, None)]
+    #[case::other_claude_event(HookEvent::PostToolUse, Engine::Claude, None, None)]
+    fn permission_request_waits_for_all_claude_agents(
+        #[case] event: HookEvent,
+        #[case] engine: Engine,
+        #[case] agent_id: Option<&str>,
+        #[case] expected_agent_key: Option<&str>,
+    ) {
+        assert_eq!(
+            permission_request_agent_key(event, engine, agent_id).as_deref(),
+            expected_agent_key
+        );
     }
 
     #[test]

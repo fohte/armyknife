@@ -1,7 +1,10 @@
 import { createElement, useMemo } from 'react'
 
 import { ConversationMessageRow } from '#components/conversation-message-row'
-import type { PendingPermissionAction } from '#components/permission-card'
+import type {
+  PendingPermissionActions,
+  PendingPermissionActionState,
+} from '#components/permission-card'
 import type {
   ChatItem,
   OpenInTerminalStatus,
@@ -31,7 +34,7 @@ type UseConversationMessageElementsOptions = {
   onOpenInTerminal: () => void
   openInTerminalStatus: OpenInTerminalStatus
   onSelectSession: (id: string) => void
-  pendingAction: PendingPermissionAction
+  pendingActions: PendingPermissionActions
   sessions: readonly SessionLinkTarget[]
 }
 
@@ -53,7 +56,7 @@ export function useConversationMessageElements({
   onOpenInTerminal,
   openInTerminalStatus,
   onSelectSession,
-  pendingAction,
+  pendingActions,
   sessions,
 }: UseConversationMessageElementsOptions) {
   return useMemo(() => {
@@ -92,11 +95,9 @@ export function useConversationMessageElements({
           !message.resolved,
       )
     const elements = conversationMessages.map(({ message, index }) => {
-      const messagePendingAction =
-        message.type === 'permission' &&
-        message.tool === pendingAction?.tool &&
-        message.description === pendingAction.description
-          ? pendingAction
+      const messagePendingAction: PendingPermissionActionState =
+        message.type === 'permission' && message.requestId !== undefined
+          ? (pendingActions[message.requestId] ?? null)
           : null
 
       return createElement(ConversationMessageRow, {
@@ -147,7 +148,7 @@ export function useConversationMessageElements({
     onSelectDecision,
     onSelectSession,
     openInTerminalStatus,
-    pendingAction,
+    pendingActions,
     proposalPending,
     responseActiveQuestionIndex,
     selectedDecisionSeq,

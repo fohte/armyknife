@@ -152,7 +152,12 @@ export type ChatItem =
       answer: ProposalAnswer | null
       resolved: boolean
     }
-  | { type: 'permission'; tool: string; description: string }
+  | {
+      type: 'permission'
+      requestId?: string
+      tool: string
+      description: string
+    }
   | {
       type: 'decision'
       seq: number

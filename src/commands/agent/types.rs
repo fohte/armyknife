@@ -351,6 +351,8 @@ pub struct ToolInput {
     pub pattern: Option<String>,
     /// Whether a Bash command was launched without waiting for completion.
     pub run_in_background: bool,
+    /// Original arguments retained for watch-web permission inspection.
+    pub raw: serde_json::Value,
 }
 
 // Never fails: Codex passes a tool's raw arguments as `tool_input`, so it can
@@ -368,6 +370,7 @@ impl<'de> Deserialize<'de> for ToolInput {
                 .get("run_in_background")
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false),
+            raw: value,
         })
     }
 }
@@ -471,12 +474,23 @@ mod tests {
         file_path: Option<&str>,
         pattern: Option<&str>,
     ) -> ToolInput {
+        let mut raw = serde_json::Map::new();
+        if let Some(command) = command {
+            raw.insert("command".to_string(), serde_json::json!(command));
+        }
+        if let Some(file_path) = file_path {
+            raw.insert("file_path".to_string(), serde_json::json!(file_path));
+        }
+        if let Some(pattern) = pattern {
+            raw.insert("pattern".to_string(), serde_json::json!(pattern));
+        }
         ToolInput {
             command: command.map(str::to_string),
             skill: None,
             file_path: file_path.map(str::to_string),
             pattern: pattern.map(str::to_string),
             run_in_background: false,
+            raw: serde_json::Value::Object(raw),
         }
     }
 
@@ -492,16 +506,51 @@ mod tests {
             file_path: None,
             pattern: None,
             run_in_background: true,
+            raw: serde_json::json!({
+                "command": "sample-command",
+                "run_in_background": true,
+            }),
         }
     )]
     #[case::read(r#"{"file_path":"/a"}"#, tool_input(None, Some("/a"), None))]
     #[case::grep(r#"{"pattern":"x"}"#, tool_input(None, None, Some("x")))]
-    #[case::bare_string(r#""raw arguments""#, tool_input(None, None, None))]
-    #[case::array(r#"["a","b"]"#, tool_input(None, None, None))]
+    #[case::bare_string(
+        r#""raw arguments""#,
+        ToolInput {
+            command: None,
+            skill: None,
+            file_path: None,
+            pattern: None,
+            run_in_background: false,
+            raw: serde_json::json!("raw arguments"),
+        }
+    )]
+    #[case::array(
+        r#"["a","b"]"#,
+        ToolInput {
+            command: None,
+            skill: None,
+            file_path: None,
+            pattern: None,
+            run_in_background: false,
+            raw: serde_json::json!(["a", "b"]),
+        }
+    )]
     #[case::empty_object("{}", tool_input(None, None, None))]
     #[case::non_string_values(
         r#"{"command":["a","b"],"file_path":1,"pattern":null}"#,
-        tool_input(None, None, None)
+        ToolInput {
+            command: None,
+            skill: None,
+            file_path: None,
+            pattern: None,
+            run_in_background: false,
+            raw: serde_json::json!({
+                "command": ["a", "b"],
+                "file_path": 1,
+                "pattern": null,
+            }),
+        }
     )]
     fn tool_input_deserializes_any_shape(#[case] json: &str, #[case] expected: ToolInput) {
         assert_eq!(serde_json::from_str::<ToolInput>(json).unwrap(), expected);

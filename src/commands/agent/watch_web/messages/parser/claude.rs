@@ -599,6 +599,7 @@ fn parse_with_background_tasks_and_image_directory(
         })
     }) {
         items.push(ChatItem::Permission {
+            request_id: None,
             tool: tool_use.name.clone(),
             description: tool_detail(&tool_use.name, tool_use.input.as_ref()),
         });
@@ -702,15 +703,10 @@ fn matches_pending_tool(tool_use: &ToolUse, pending_tool: &str) -> bool {
     let Some(detail) = detail else {
         return true;
     };
-    ["command", "file_path", "pattern"]
-        .into_iter()
-        .find_map(|key| {
-            tool_use
-                .input
-                .as_ref()
-                .and_then(|input| input.get(key))
-                .and_then(Value::as_str)
-        })
+    tool_use
+        .input
+        .as_ref()
+        .and_then(super::super::permission_request_tool_detail)
         == Some(detail)
 }
 
@@ -1374,6 +1370,7 @@ mod tests {
         "a agent decision add 'Decision 1'",
         Some("Bash(a agent decision add 'Decision 1')"),
         ChatItem::Permission {
+            request_id: None,
             tool: "Bash".to_string(),
             description: "Bash: a agent decision add 'Decision 1'".to_string(),
         }
@@ -1382,6 +1379,7 @@ mod tests {
         "cd ./fixture && a agent decision add 'Decision 1'",
         Some("Bash(cd ./fixture && a agent decision add 'Decision 1')"),
         ChatItem::Permission {
+            request_id: None,
             tool: "Bash".to_string(),
             description: "Bash: cd ./fixture && a agent decision add 'Decision 1'".to_string(),
         }
@@ -2192,6 +2190,7 @@ mod tests {
                     operations: vec![operation("Bash", Some("echo earlier"))],
                 },
                 ChatItem::Permission {
+                    request_id: None,
                     tool: "Bash".to_string(),
                     description: "Bash: echo awaiting approval".to_string(),
                 },

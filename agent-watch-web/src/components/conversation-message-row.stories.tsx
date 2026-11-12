@@ -84,14 +84,14 @@ export const PermissionIsSending: Story = {
   args: {
     message: {
       type: 'permission',
+      requestId: 'permission-request-example',
       tool: 'Shell',
       description: 'Run the project formatter.',
     },
     pendingAction: {
       action: 'approve',
       status: 'sending',
-      tool: 'Shell',
-      description: 'Run the project formatter.',
+      requestId: 'permission-request-example',
     },
   },
 }

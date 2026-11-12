@@ -843,6 +843,13 @@ Add the following to your Claude Code settings (`~/.claude/settings.json`):
         "hooks": [{ "type": "command", "command": "a agent hook notification" }]
       }
     ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          { "type": "command", "command": "a agent hook permission-request" }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [{ "type": "command", "command": "a agent hook stop" }]
@@ -871,6 +878,8 @@ Claude Code records the model from `SessionStart.model` or `PostModelSwitch.to_m
 The pane is normally found by walking the hook process's ancestry up to it. A Codex session running through the shared `codex app-server` daemon breaks that link: the daemon runs the agent loop, hooks included, outside any pane's process tree, so armyknife falls back to the launcher-written session ID option. It binds only when exactly one pane has that session ID and is currently running the Codex CLI. The lookup accepts both `@armyknife-last-agent-session-id` and the pre-rename `@armyknife-last-claude-code-session-id` option; if there is no unique match, the session remains unbound.
 
 `a agent hook <event> --engine <claude|codex>` (default: `claude`) records which coding agent CLI fired the hook; this is the engine `a agent resume` reads back to pick which binary to relaunch (see `--engine` on `new` above). Event names and JSON payload shape are the same regardless of engine: an allowed `stop` resolves to `Stopped` ("waiting for the next prompt"), while an unclassified stop remains `Running` until the agent reports its status. Both `permission-request` and `notification` with `notification_type: "permission_prompt"` resolve to `WaitingInput` ("waiting for tool-call approval") -- so a Codex hook configuration that maps Codex's own hook events onto these same `--event` values and payload fields gets the same approval-wait/input-wait distinction in `a agent list` for free.
+
+Claude Code's `PermissionRequest` hook lets watch-web approve or reject requests from the main thread and subagents. The hook waits up to 590 seconds for a watch-web decision, then removes the pending request and exits without a decision so Claude Code can use its terminal prompt. If the terminal resolves a request first, the hook also exits without a decision. Approve returns an allow decision; reject returns a deny decision with `interrupt: false`. `AskUserQuestion` keeps its existing answer flow; the hook exits without a decision after Claude Code completes the question tool.
 
 Register these in Codex's `hooks.json` (each command with `--engine codex`) to track Codex sessions the same way as Claude Code sessions:
 
@@ -1134,8 +1143,8 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 - `POST /api/sessions/{id}/messages` with `{"content":"..."}`
 - `POST /api/sessions/{id}/answer` with `{"choice":1}` or `{"skip":true}`
 - `POST /api/sessions/{id}/proposals/{seq}/answer` with `{"choice":0,"comment":"..."}`; `choice` is a zero-based option index or `null` to request another proposal, and `comment` may be `null`
-- `POST /api/sessions/{id}/permission/approve`
-- `POST /api/sessions/{id}/permission/reject`
+- `POST /api/sessions/{id}/permission/approve` with `{"requestId":"..."}`
+- `POST /api/sessions/{id}/permission/reject` with `{"requestId":"..."}`
 - `POST /api/sessions/{id}/interrupt`
 - `POST /api/sessions/{id}/focus`
 - `POST /api/sessions/{id}/read`

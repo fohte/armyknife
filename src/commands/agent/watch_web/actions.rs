@@ -253,35 +253,94 @@ async fn answer_question(
 async fn approve_permission(
     State(state): State<ActionState>,
     RoutePath(id): RoutePath<String>,
+    request: Option<Json<PermissionRequestAction>>,
 ) -> Result<Json<Success>, ApiError> {
-    resolve_permission_action(state, id, true).await
+    let request_id = require_permission_request_id(request)?;
+    resolve_permission_action(state, id, request_id, true).await
 }
 
 async fn reject_permission(
     State(state): State<ActionState>,
     RoutePath(id): RoutePath<String>,
+    request: Option<Json<PermissionRequestAction>>,
 ) -> Result<Json<Success>, ApiError> {
-    resolve_permission_action(state, id, false).await
+    let request_id = require_permission_request_id(request)?;
+    resolve_permission_action(state, id, request_id, false).await
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PermissionRequestAction {
+    request_id: Option<String>,
+}
+
+fn require_permission_request_id(
+    request: Option<Json<PermissionRequestAction>>,
+) -> Result<String, ApiError> {
+    request
+        .and_then(|Json(request)| request.request_id)
+        .filter(|request_id| !request_id.trim().is_empty())
+        .ok_or_else(|| ApiError::bad_request("requestId is required"))
 }
 
 async fn resolve_permission_action(
     state: ActionState,
     id: String,
+    request_id: String,
     approved: bool,
 ) -> Result<Json<Success>, ApiError> {
     let session = load_session(state.clone(), id).await?;
-    if session.engine != Engine::Claude || !session.has_pending_permission_requests() {
+    if session.engine != Engine::Claude {
         return Err(ApiError::conflict(
             "permission approval is unavailable for this session",
         ));
     }
-    let tmux_info = require_tmux(&session)?;
-    let keys = if approved {
-        vec!["Enter"]
-    } else {
-        vec!["Escape"]
+    if session.status == SessionStatus::Ended {
+        return Err(ApiError::conflict("session has ended"));
+    }
+    let pending_request = session
+        .pending_permission_request_ids
+        .iter()
+        .find(|(agent_key, pending_request_id)| {
+            pending_request_id.as_str() == request_id
+                && session
+                    .pending_permission_agent_ids
+                    .contains(agent_key.as_str())
+        })
+        .map(|(agent_key, pending_request_id)| (agent_key.clone(), pending_request_id.clone()));
+    let Some((agent_key, request_id)) = pending_request else {
+        return Err(ApiError::conflict(
+            "permission request is no longer pending; answer it in the terminal",
+        ));
     };
-    send_keys(state.runtime, &session, tmux_info, keys).await?;
+    let decision = if approved {
+        store::PermissionRequestDecision::Allow
+    } else {
+        store::PermissionRequestDecision::Deny {
+            message: "Rejected from watch-web.".to_string(),
+            interrupt: false,
+        }
+    };
+    let sessions_dir = resolve_sessions_dir(state.sessions_dir).map_err(ApiError::internal)?;
+    let resolution = run_blocking(move || {
+        store::resolve_permission_request(
+            &sessions_dir,
+            &session.session_id,
+            &agent_key,
+            &request_id,
+            &decision,
+        )
+    })
+    .await?;
+    match resolution {
+        store::PermissionRequestResolution::Resolved => {}
+        store::PermissionRequestResolution::Missing
+        | store::PermissionRequestResolution::Finished => {
+            return Err(ApiError::conflict(
+                "permission request is no longer pending; answer it in the terminal",
+            ));
+        }
+    }
     Ok(Json(Success::new()))
 }
 
@@ -455,7 +514,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
-    use crate::commands::agent::types::TmuxInfo;
+    use crate::commands::agent::types::{MAIN_THREAD_AGENT_KEY, TmuxInfo};
 
     #[path = "send_message.rs"]
     mod send_message;
@@ -630,6 +689,26 @@ mod tests {
 
         fn save_session(&self, session: &Session) {
             store::save_session_to(&self.temp_dir.path().join("sessions"), session).unwrap();
+        }
+
+        fn save_pending_permission_request(
+            &self,
+            session: &mut Session,
+            agent_key: &str,
+            request_id: &str,
+            tool_name: &str,
+        ) {
+            session
+                .pending_permission_agent_ids
+                .insert(agent_key.to_string());
+            session
+                .pending_permission_request_ids
+                .insert(agent_key.to_string(), request_id.to_string());
+            let sessions_dir = self.temp_dir.path().join("sessions");
+            let lock = store::lock_session_for_update(&sessions_dir, &session.session_id).unwrap();
+            lock.register_permission_request(agent_key, request_id, Some(tool_name), &json!({}))
+                .unwrap();
+            lock.save(session).unwrap();
         }
 
         fn load_session(&self, session_id: &str) -> Session {
@@ -941,26 +1020,137 @@ mod tests {
     }
 
     #[rstest]
-    #[case::approve(true, vec!["Enter"])]
-    #[case::reject(false, vec!["Escape"])]
+    #[case::approve(true, store::PermissionRequestDecision::Allow)]
+    #[case::reject(
+        false,
+        store::PermissionRequestDecision::Deny {
+            message: "Rejected from watch-web.".to_string(),
+            interrupt: false,
+        }
+    )]
     #[tokio::test]
-    async fn permission_actions_send_fixed_keys(
+    async fn permission_actions_write_the_hook_decision(
         #[case] approved: bool,
-        #[case] expected_keys: Vec<&str>,
+        #[case] expected_decision: store::PermissionRequestDecision,
         action_context: ActionContext,
     ) {
         let mut session = session("sample-session");
-        session
-            .pending_permission_agent_ids
-            .insert("main".to_string());
-        action_context.save_session(&session);
+        action_context.save_pending_permission_request(
+            &mut session,
+            "main",
+            "permission-request-main",
+            "Bash",
+        );
         let action = if approved { "approve" } else { "reject" };
 
         let response = action_context
             .router()
-            .oneshot(post_empty(&format!(
-                "/sessions/sample-session/permission/{action}"
-            )))
+            .oneshot(post(
+                &format!("/sessions/sample-session/permission/{action}"),
+                json!({ "requestId": "permission-request-main" }),
+            ))
+            .await
+            .unwrap();
+        let mut waiter =
+            store::PermissionRequestWaiter::open(&action_context.temp_dir.path().join("sessions"))
+                .unwrap();
+
+        assert_eq!(
+            (
+                response_snapshot(response, &action_context).await,
+                waiter
+                    .poll("sample-session", "main", "permission-request-main")
+                    .unwrap(),
+            ),
+            (
+                json!({
+                    "status": StatusCode::OK.as_u16(),
+                    "body": { "ok": true },
+                    "calls": [],
+                }),
+                store::PermissionRequestWait::Decision(expected_decision),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::approve_without_body("approve", None)]
+    #[case::approve_without_request_id("approve", Some(json!({})))]
+    #[case::approve_with_empty_request_id(
+        "approve",
+        Some(json!({ "requestId": "" })),
+    )]
+    #[case::approve_with_whitespace_request_id(
+        "approve",
+        Some(json!({ "requestId": "   " })),
+    )]
+    #[case::reject_without_body("reject", None)]
+    #[case::reject_without_request_id("reject", Some(json!({})))]
+    #[case::reject_with_empty_request_id("reject", Some(json!({ "requestId": "" })))]
+    #[case::reject_with_whitespace_request_id("reject", Some(json!({ "requestId": "   " })))]
+    #[tokio::test]
+    async fn permission_actions_require_a_request_id(
+        #[case] action: &str,
+        #[case] payload: Option<Value>,
+        action_context: ActionContext,
+    ) {
+        let mut session = session("sample-session");
+        action_context.save_pending_permission_request(
+            &mut session,
+            MAIN_THREAD_AGENT_KEY,
+            "permission-request-main",
+            "Bash",
+        );
+
+        let uri = format!("/sessions/sample-session/permission/{action}");
+        let request = payload.map_or_else(|| post_empty(&uri), |payload| post(&uri, payload));
+        let response = action_context.router().oneshot(request).await.unwrap();
+        let mut waiter =
+            store::PermissionRequestWaiter::open(&action_context.temp_dir.path().join("sessions"))
+                .unwrap();
+
+        assert_eq!(
+            (
+                response_snapshot(response, &action_context).await,
+                waiter
+                    .poll(
+                        "sample-session",
+                        MAIN_THREAD_AGENT_KEY,
+                        "permission-request-main",
+                    )
+                    .unwrap(),
+            ),
+            (
+                json!({
+                    "status": StatusCode::BAD_REQUEST.as_u16(),
+                    "body": { "error": "requestId is required" },
+                    "calls": [],
+                }),
+                store::PermissionRequestWait::Pending,
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn permission_capability_is_enabled_for_a_subagent_only_request() {
+        let action_context = action_context();
+        let mut session = session("sample-session");
+        session.tmux_info = None;
+        action_context.save_pending_permission_request(
+            &mut session,
+            "agent-fixture",
+            "permission-request-subagent",
+            "Bash",
+        );
+
+        let response = action_context
+            .router()
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/sample-session/actions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -968,25 +1158,129 @@ mod tests {
             response_snapshot(response, &action_context).await,
             json!({
                 "status": StatusCode::OK.as_u16(),
-                "body": { "ok": true },
-                "calls": [{
-                    "kind": "pane-command",
-                    "paneId": "%4",
-                    "socketPath": "/tmp/example-tmux.sock",
-                }, {
-                    "kind": "guarded-keys",
-                    "paneId": "%4",
-                    "engine": "claude",
-                    "currentCommand": "claude",
-                    "keys": expected_keys,
-                    "paneHasAgentProcess": true,
-                    "paneCommandMatches": true,
-                }, {
-                    "kind": "keys",
-                    "paneId": "%4",
-                    "socketPath": "/tmp/example-tmux.sock",
-                    "keys": expected_keys,
-                }],
+                "body": {
+                    "message": true,
+                    "answerQuestion": false,
+                    "permission": { "approve": true, "reject": true },
+                    "interrupt": false,
+                    "openInTerminal": false,
+                },
+                "calls": [],
+            }),
+        );
+    }
+
+    #[tokio::test]
+    async fn permission_action_resolves_only_the_requested_subagent() {
+        let action_context = action_context();
+        let mut session = session("sample-session");
+        action_context.save_pending_permission_request(
+            &mut session,
+            "main",
+            "permission-request-main",
+            "Bash",
+        );
+        action_context.save_pending_permission_request(
+            &mut session,
+            "agent-fixture-a",
+            "permission-request-a",
+            "Write",
+        );
+        action_context.save_pending_permission_request(
+            &mut session,
+            "agent-fixture-b",
+            "permission-request-b",
+            "Bash",
+        );
+
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/permission/reject",
+                json!({ "requestId": "permission-request-b" }),
+            ))
+            .await
+            .unwrap();
+        let sessions_dir = action_context.temp_dir.path().join("sessions");
+        let mut waiter = store::PermissionRequestWaiter::open(&sessions_dir).unwrap();
+
+        assert_eq!(
+            (
+                response_snapshot(response, &action_context).await,
+                waiter
+                    .poll("sample-session", "agent-fixture-b", "permission-request-b")
+                    .unwrap(),
+                store::permission_request_data(
+                    &sessions_dir,
+                    "sample-session",
+                    "permission-request-main",
+                )
+                .unwrap(),
+                store::permission_request_data(
+                    &sessions_dir,
+                    "sample-session",
+                    "permission-request-a",
+                )
+                .unwrap(),
+            ),
+            (
+                json!({
+                    "status": StatusCode::OK.as_u16(),
+                    "body": { "ok": true },
+                    "calls": [],
+                }),
+                store::PermissionRequestWait::Decision(store::PermissionRequestDecision::Deny {
+                    message: "Rejected from watch-web.".to_string(),
+                    interrupt: false,
+                }),
+                Some(store::PermissionRequestData {
+                    tool_name: Some("Bash".to_string()),
+                    tool_input: json!({}),
+                    pending: true,
+                }),
+                Some(store::PermissionRequestData {
+                    tool_name: Some("Write".to_string()),
+                    tool_input: json!({}),
+                    pending: true,
+                }),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn permission_action_for_expired_request_guides_user_to_terminal() {
+        let action_context = action_context();
+        let mut session = session("sample-session");
+        action_context.save_pending_permission_request(
+            &mut session,
+            "main",
+            "permission-request-main",
+            "Bash",
+        );
+        let mut waiter =
+            store::PermissionRequestWaiter::open(&action_context.temp_dir.path().join("sessions"))
+                .unwrap();
+        waiter
+            .expire("sample-session", "main", "permission-request-main")
+            .unwrap();
+
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/permission/approve",
+                json!({ "requestId": "permission-request-main" }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::CONFLICT.as_u16(),
+                "body": {
+                    "error": "permission request is no longer pending; answer it in the terminal"
+                },
+                "calls": [],
             }),
         );
     }
@@ -1050,7 +1344,7 @@ mod tests {
             .clone()
             .oneshot(post(
                 "/sessions/sample-session/permission/approve",
-                json!({}),
+                json!({ "requestId": "missing-request" }),
             ))
             .await
             .unwrap();
@@ -1305,9 +1599,6 @@ mod tests {
     #[case::answer_missing("answer", None, true, true)]
     #[case::answer_shell("answer", Some("zsh"), true, true)]
     #[case::answer_other_program("answer", Some("nvim"), false, true)]
-    #[case::permission_missing("permission", None, true, true)]
-    #[case::permission_shell("permission", Some("bash"), true, true)]
-    #[case::permission_other_program("permission", Some("nvim"), false, true)]
     #[case::interrupt_missing("interrupt", None, true, true)]
     #[case::interrupt_shell("interrupt", Some("fish"), true, true)]
     #[case::interrupt_other_program("interrupt", Some("nvim"), false, true)]
@@ -1327,16 +1618,6 @@ mod tests {
                 (
                     "/sessions/sample-session/answer",
                     json!({ "choice": 1 }),
-                    vec!["Enter"],
-                )
-            }
-            "permission" => {
-                session
-                    .pending_permission_agent_ids
-                    .insert("main".to_string());
-                (
-                    "/sessions/sample-session/permission/approve",
-                    json!({}),
                     vec!["Enter"],
                 )
             }
@@ -1425,7 +1706,10 @@ mod tests {
             .unwrap();
         let permission = app
             .clone()
-            .oneshot(post_empty("/sessions/sample-session/permission/approve"))
+            .oneshot(post(
+                "/sessions/sample-session/permission/approve",
+                json!({ "requestId": "permission-request-main" }),
+            ))
             .await
             .unwrap();
         let interrupt = app

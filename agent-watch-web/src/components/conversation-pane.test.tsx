@@ -19,6 +19,10 @@ import type {
   SessionTreeNode,
 } from '#types'
 
+type PendingPermissionAction = NonNullable<
+  Parameters<typeof ConversationPaneView>[0]['pendingPermissionActions']
+>[string]
+
 const { optimizeImageAttachmentMock } = vi.hoisted(() => ({
   optimizeImageAttachmentMock: vi.fn<(file: File) => Promise<File>>(),
 }))
@@ -157,12 +161,14 @@ function requestUrl(input: RequestInfo | URL) {
 
 const permission: ChatItem = {
   type: 'permission',
+  requestId: 'permission-request-main',
   tool: 'Shell',
   description: 'Run the formatter on changed files.',
 }
 
 const otherPermission: ChatItem = {
   type: 'permission',
+  requestId: 'permission-request-subagent',
   tool: 'Subagent sample-agent',
   description: 'Waiting for permission approval.',
 }
@@ -227,12 +233,7 @@ function renderView(
   viewSessions: readonly Session[] = [],
   statusPanelOpen = false,
   onToggleStatusPanel?: () => void,
-  pendingPermissionAction?: {
-    action: 'approve' | 'reject'
-    status: 'sending' | 'sent'
-    tool: string
-    description: string
-  } | null,
+  pendingPermissionAction?: PendingPermissionAction | null,
   decisionsPanelOpen = false,
   onToggleDecisionsPanel?: () => void,
   today: {
@@ -249,7 +250,14 @@ function renderView(
         messages={viewMessages}
         backgroundTasks={viewBackgroundTasks}
         actions={viewActions}
-        pendingPermissionAction={pendingPermissionAction}
+        pendingPermissionActions={
+          pendingPermissionAction === undefined ||
+          pendingPermissionAction === null
+            ? {}
+            : {
+                [pendingPermissionAction.requestId]: pendingPermissionAction,
+              }
+        }
         loading={false}
         error={null}
         onAction={onAction}
@@ -1164,8 +1172,7 @@ it('shows pending and sent permission action feedback', () => {
       {
         action: 'approve',
         status,
-        tool: 'Shell',
-        description: 'Run the formatter on changed files.',
+        requestId: 'permission-request-main',
       },
     )
   }
@@ -1222,7 +1229,7 @@ it('shows pending and sent permission action feedback', () => {
         {
           labels: ['Approve', 'Reject'],
           disabled: [true, true],
-          status: 'Approval sent. Session is resuming…',
+          status: 'Approval sent. Waiting for Claude Code…',
         },
         {
           labels: ['Approve', 'Reject'],
@@ -1232,6 +1239,27 @@ it('shows pending and sent permission action feedback', () => {
       ],
     },
   })
+})
+
+it('sends the request id from the selected permission card', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [permission, otherPermission])
+
+  act(() => {
+    requireElement(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.chat-permission-card .permission-actions button',
+      )[2] ?? null,
+    ).click()
+  })
+
+  expect(onAction.mock.calls).toEqual([
+    [
+      'permission/approve',
+      { requestId: 'permission-request-subagent' },
+      { requestId: 'permission-request-subagent' },
+    ],
+  ])
 })
 
 it('copies the session ID from desktop and mobile headers', async () => {
@@ -3680,6 +3708,7 @@ it('directs Codex questions and permissions to the terminal', () => {
       question,
       {
         type: 'permission',
+        requestId: 'permission-request-codex',
         tool: 'Shell',
         description: 'Run the project formatter.',
       },
@@ -4634,6 +4663,7 @@ it.each([
         messagesResponse([
           {
             type: 'permission',
+            requestId: 'permission-request-api-test',
             tool: 'Shell',
             description: 'Run the formatter on changed files.',
           },
@@ -4650,7 +4680,13 @@ it.each([
       }),
     )
     .mockResolvedValueOnce(
-      jsonResponse({ error: 'session pane is idle or unavailable' }, 409),
+      jsonResponse(
+        {
+          error:
+            'permission request is no longer pending; answer it in the terminal',
+        },
+        409,
+      ),
     )
   vi.stubGlobal('fetch', fetcher)
   root = createRoot(container)
@@ -4682,9 +4718,11 @@ it.each([
       : actionRequest instanceof URL
         ? actionRequest.href
         : actionRequest?.url
+  const actionRequestBody = fetcher.mock.calls[2]?.[1]?.body
   const expected = JSON.stringify([
-    'session pane is idle or unavailable',
+    'permission request is no longer pending; answer it in the terminal',
     `/api/sessions/sample-session/permission/${action}`,
+    JSON.stringify({ requestId: 'permission-request-api-test' }),
     [
       { label: 'Approve', disabled: false },
       { label: 'Reject', disabled: false },
@@ -4697,6 +4735,7 @@ it.each([
   const actual = JSON.stringify([
     container.querySelector('[role="alert"]')?.textContent,
     actionRequestUrl,
+    actionRequestBody,
     buttonStates,
   ])
   expect(actual).toBe(expected)
@@ -4706,12 +4745,12 @@ it.each([
   {
     action: 'approve' as const,
     pendingLabel: 'Approving…',
-    sentMessage: 'Approval sent. Session is resuming…',
+    sentMessage: 'Approval sent. Waiting for Claude Code…',
   },
   {
     action: 'reject' as const,
     pendingLabel: 'Rejecting…',
-    sentMessage: 'Rejection sent. Session is resuming…',
+    sentMessage: 'Rejection sent. Waiting for Claude Code…',
   },
 ])(
   'keeps a successful permission $action pending until it resolves',
@@ -5102,6 +5141,7 @@ it('keeps the conversation and focused draft while a feed refresh is pending', a
           question,
           {
             type: 'permission',
+            requestId: 'permission-request-refresh',
             tool: 'Shell',
             description: 'Run the project formatter.',
           },
@@ -5592,6 +5632,7 @@ it('keeps question and permission actions active after a refresh error', async (
           question,
           {
             type: 'permission',
+            requestId: 'permission-request-refresh-error',
             tool: 'Shell',
             description: 'Run the project formatter.',
           },

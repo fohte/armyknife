@@ -7,7 +7,7 @@ import { MarkdownMessage } from '#components/markdown-message'
 import { formatMessageTime } from '#components/message-time'
 import { PeerMessage } from '#components/peer-message'
 import {
-  type PendingPermissionAction,
+  type PendingPermissionActionState,
   PermissionCard,
   type PermissionRequestIdentity,
 } from '#components/permission-card'
@@ -34,7 +34,7 @@ export type ConversationMessageRowProps = {
   decisionPosition: string | undefined
   onSelectDecision: (seq: number) => void
   message: ChatItem
-  pendingAction: PendingPermissionAction
+  pendingAction: PendingPermissionActionState
   openInTerminalStatus: OpenInTerminalStatus
   onAction: (
     action: string,
@@ -237,7 +237,11 @@ export function renderConversationMessage({
       openInTerminalStatus={openInTerminalStatus}
       isCodex={sessionEngine === 'Codex'}
       onAction={(action, permissionIdentity) => {
-        void onAction(action, undefined, permissionIdentity)
+        void onAction(
+          action,
+          { requestId: permissionIdentity.requestId },
+          permissionIdentity,
+        )
       }}
       onOpenInTerminal={onOpenInTerminal}
     />

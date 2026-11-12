@@ -5,6 +5,7 @@ import type { ChatItem, SessionActions } from '#types'
 
 const permission: ChatItem = {
   type: 'permission',
+  requestId: 'permission-request-example',
   tool: 'Shell',
   description: 'Run the formatter on changed files.',
 }
@@ -47,8 +48,7 @@ export const ApprovalIsSending: Story = {
     pendingAction: {
       action: 'approve',
       status: 'sending',
-      tool: 'Shell',
-      description: 'Run the formatter on changed files.',
+      requestId: 'permission-request-example',
     },
   },
 }
@@ -59,8 +59,7 @@ export const RejectionIsSending: Story = {
     pendingAction: {
       action: 'reject',
       status: 'sending',
-      tool: 'Shell',
-      description: 'Run the formatter on changed files.',
+      requestId: 'permission-request-example',
     },
   },
 }
@@ -71,8 +70,7 @@ export const ApprovalWasSent: Story = {
     pendingAction: {
       action: 'approve',
       status: 'sent',
-      tool: 'Shell',
-      description: 'Run the formatter on changed files.',
+      requestId: 'permission-request-example',
     },
   },
 }
@@ -83,8 +81,7 @@ export const RejectionWasSent: Story = {
     pendingAction: {
       action: 'reject',
       status: 'sent',
-      tool: 'Shell',
-      description: 'Run the formatter on changed files.',
+      requestId: 'permission-request-example',
     },
   },
 }

@@ -278,6 +278,7 @@ export const PermissionWaitsForApproval: Story = {
       },
       {
         type: 'permission',
+        requestId: 'permission-request-main',
         tool: 'Shell',
         description: 'Run the formatter on changed files.',
       },
@@ -288,15 +289,17 @@ export const PermissionWaitsForApproval: Story = {
 export const PermissionApprovalIsSending: Story = {
   name: 'The approval button shows that the request is being sent',
   args: {
-    pendingPermissionAction: {
-      action: 'approve',
-      status: 'sending',
-      tool: 'Shell',
-      description: 'Run the formatter on changed files.',
+    pendingPermissionActions: {
+      'permission-request-main': {
+        action: 'approve',
+        status: 'sending',
+        requestId: 'permission-request-main',
+      },
     },
     messages: [
       {
         type: 'permission',
+        requestId: 'permission-request-main',
         tool: 'Shell',
         description: 'Run the formatter on changed files.',
       },
@@ -307,15 +310,17 @@ export const PermissionApprovalIsSending: Story = {
 export const PermissionRejectionIsSending: Story = {
   name: 'The rejection button shows that the request is being sent',
   args: {
-    pendingPermissionAction: {
-      action: 'reject',
-      status: 'sending',
-      tool: 'Shell',
-      description: 'Run the formatter on changed files.',
+    pendingPermissionActions: {
+      'permission-request-main': {
+        action: 'reject',
+        status: 'sending',
+        requestId: 'permission-request-main',
+      },
     },
     messages: [
       {
         type: 'permission',
+        requestId: 'permission-request-main',
         tool: 'Shell',
         description: 'Run the formatter on changed files.',
       },
@@ -326,15 +331,17 @@ export const PermissionRejectionIsSending: Story = {
 export const PermissionApprovalWasSent: Story = {
   name: 'The permission card confirms that approval was sent',
   args: {
-    pendingPermissionAction: {
-      action: 'approve',
-      status: 'sent',
-      tool: 'Shell',
-      description: 'Run the formatter on changed files.',
+    pendingPermissionActions: {
+      'permission-request-main': {
+        action: 'approve',
+        status: 'sent',
+        requestId: 'permission-request-main',
+      },
     },
     messages: [
       {
         type: 'permission',
+        requestId: 'permission-request-main',
         tool: 'Shell',
         description: 'Run the formatter on changed files.',
       },
@@ -381,6 +388,7 @@ export const CodexOnlyOpensInTerminal: Story = {
       },
       {
         type: 'permission',
+        requestId: 'permission-request-review',
         tool: 'Shell',
         description: 'Run the project formatter.',
       },
@@ -548,6 +556,7 @@ export const AnActionFailureIsVisible: Story = {
     messages: [
       {
         type: 'permission',
+        requestId: 'permission-request-error',
         tool: 'Shell',
         description: 'Run the formatter on changed files.',
       },
