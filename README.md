@@ -1140,7 +1140,7 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 - `POST /api/sessions/{id}/focus`
 - `POST /api/sessions/{id}/read`
 - `POST /api/sessions/{id}/primary-task` with `{"taskId":"..."}` to choose the primary linked tq task
-- `POST /api/sessions/{id}/archive`
+- `POST /api/sessions/{id}/close` to close a session; send `{"keepWorktree":true}` to preserve its linked worktree
 - `POST /api/sessions/{id}/later` with `{"preset":"one_hour"}` (also accepts `this_evening`, `tomorrow`, `next_week`, `until_it_changes`, and `back_now`)
 - `POST /api/sessions/{id}/today` with `{"isToday":true}` or `{"isToday":false}`
 - `POST /api/sessions/{id}/decisions/{seq}/ok` to mark a decision reviewed

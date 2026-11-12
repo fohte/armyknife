@@ -45,7 +45,11 @@ pub(super) async fn close_worktree(
     close_worktree_with(
         context,
         refuse_current_session,
-        worktree_delete::prepare(worktree_root, args.force),
+        worktree_delete::prepare(
+            worktree_root,
+            args.force,
+            crate::shared::worktree_delete::UnmergedWorktreePolicy::Confirm,
+        ),
         |session, force, current_pane_id| {
             validate_worktree_session(session, force, current_pane_id, &LiveCloseRuntime)
         },

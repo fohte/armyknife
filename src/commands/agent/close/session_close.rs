@@ -12,6 +12,39 @@ pub(super) async fn close_session_value(
     args: &CloseArgs,
     child_parent_session_id: Option<&str>,
 ) -> Result<()> {
+    close_session_value_with_policy(
+        session,
+        args,
+        child_parent_session_id,
+        crate::shared::worktree_delete::UnmergedWorktreePolicy::Confirm,
+    )
+    .await
+}
+
+pub(crate) async fn close_session_value_from_watch_web(
+    session: &Session,
+    keep_worktree: bool,
+) -> Result<()> {
+    let args = CloseArgs {
+        target: Some(session.session_id.clone()),
+        keep_worktree,
+        ..CloseArgs::default()
+    };
+    close_session_value_with_policy(
+        session,
+        &args,
+        None,
+        crate::shared::worktree_delete::UnmergedWorktreePolicy::Reject,
+    )
+    .await
+}
+
+async fn close_session_value_with_policy(
+    session: &Session,
+    args: &CloseArgs,
+    child_parent_session_id: Option<&str>,
+    unmerged_policy: crate::shared::worktree_delete::UnmergedWorktreePolicy,
+) -> Result<()> {
     let linked_worktree_root = super::worktree::linked_worktree_root(&session.cwd);
     let runtime = super::LiveCloseRuntime;
 
@@ -30,7 +63,11 @@ pub(super) async fn close_session_value(
                     worktree_root: &worktree_root,
                 },
                 find_shared_worktree_session_ids,
-                crate::shared::worktree_delete::prepare(&worktree_root, args.force),
+                crate::shared::worktree_delete::prepare(
+                    &worktree_root,
+                    args.force,
+                    unmerged_policy,
+                ),
                 super::close_tracked_session,
                 || {
                     let current_pane_id = crate::shared::caller_pane::resolve_caller_pane_id();

@@ -469,11 +469,11 @@ export const DoneSessionNeedsDecisionReview: Story = {
   },
 }
 
-export const DoneSessionCanBeArchived: Story = {
-  name: 'A Done session exposes its Archive action',
+export const DoneSessionCanBeClosed: Story = {
+  name: 'A Done session exposes its Close action',
   args: {
     session: { ...session, category: 'done', kind: null },
-    onArchive: () => undefined,
+    onClose: () => undefined,
   },
 }
 

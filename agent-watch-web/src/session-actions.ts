@@ -41,23 +41,66 @@ export function setSessionBackNow(sessionId: string) {
   return postSessionAction(sessionId, 'later', { preset: 'back_now' })
 }
 
-function archiveSession(sessionId: string) {
-  return postSessionAction(sessionId, 'archive', {})
+class CloseSessionError extends Error {
+  readonly code: string | null
+
+  constructor(message: string, code: string | null) {
+    super(message)
+    this.code = code
+  }
 }
 
-export async function archiveDoneSessions(
+function closeSession(sessionId: string, keepWorktree: boolean) {
+  return ResultAsync.fromPromise(
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/close`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keepWorktree }),
+    }),
+    requestError,
+  ).andThen((response) => {
+    if (response.ok) return ok(undefined)
+    return ResultAsync.fromPromise(response.json(), requestError).andThen(
+      (body: unknown) => {
+        const error = isRecord(body) ? body['error'] : undefined
+        const code = isRecord(body) ? body['code'] : undefined
+        return err(
+          new CloseSessionError(
+            typeof error === 'string' ? error : 'Could not close the session.',
+            typeof code === 'string' ? code : null,
+          ),
+        )
+      },
+    )
+  })
+}
+
+export async function closeDoneSessions(
   sessions: readonly Pick<Session, 'category' | 'id' | 'title'>[],
+  keepWorktree = false,
 ) {
   for (const session of sessions) {
     if (session.category !== 'done') continue
 
-    const archived = await archiveSession(session.id).match(
-      () => true,
-      () => false,
+    const failure = await closeSession(session.id, keepWorktree).match(
+      () => null,
+      (error) => ({
+        message: error.message,
+        unmergedSessionId:
+          error instanceof CloseSessionError &&
+          error.code === 'unmerged_worktree'
+            ? session.id
+            : null,
+      }),
     )
-    if (!archived) return `Could not archive ${session.title}.`
+    if (failure !== null) {
+      return {
+        failure: failure.message || `Could not close ${session.title}.`,
+        unmergedSessionId: failure.unmergedSessionId,
+      }
+    }
   }
-  return null
+  return { failure: null, unmergedSessionId: null }
 }
 
 export function openSessionInTerminal(sessionId: string) {

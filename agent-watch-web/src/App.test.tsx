@@ -2221,7 +2221,7 @@ it('opens a selected project on Board at the mobile breakpoint', async () => {
   })
 })
 
-it('archives each done session from the palette command', async () => {
+it('closes each done session from the palette command', async () => {
   const fetchMock = vi
     .fn<typeof fetch>()
     .mockImplementation(mockSessionActionFetch)
@@ -2244,26 +2244,33 @@ it('archives each done session from the palette command', async () => {
   if (input === null) throw new Error('Palette input was not rendered')
 
   await act(async () => {
-    await userEvent.type(input, '>Archive all done')
+    await userEvent.type(input, '>Close all done')
     await userEvent.keyboard('{Enter}')
     await flushAsyncState()
   })
 
-  const archivedUrls = fetchMock.mock.calls
+  const closeUrls = fetchMock.mock.calls
     .map(([request]) => requestUrl(request))
-    .filter((url) => url.endsWith('/archive'))
-  expect(archivedUrls).toEqual([
-    '/api/sessions/session-done-a/archive',
-    '/api/sessions/session-done-b/archive',
+    .filter((url) => url.endsWith('/close'))
+  expect(closeUrls).toEqual([
+    '/api/sessions/session-done-a/close',
+    '/api/sessions/session-done-b/close',
   ])
 })
 
-it('stops the archive batch and reports the failed session', async () => {
+it('stops the close batch and reports the failed session', async () => {
   const fetchMock = vi
     .fn<typeof fetch>()
     .mockImplementation((input) =>
-      requestUrl(input).endsWith('/archive')
-        ? Promise.resolve(new Response(null, { status: 500 }))
+      requestUrl(input).endsWith('/close')
+        ? Promise.resolve(
+            new Response(
+              JSON.stringify({
+                error: 'Could not close Unarchivable session.',
+              }),
+              { status: 500 },
+            ),
+          )
         : mockSessionActionFetch(input),
     )
   vi.stubGlobal('fetch', fetchMock)
@@ -2271,7 +2278,7 @@ it('stops the archive batch and reports the failed session', async () => {
   publishSessions({
     revision: 1,
     sessions: [
-      session('session-failed-archive', 'Unarchivable session', 'done'),
+      session('session-failed-close', 'Unarchivable session', 'done'),
       session('session-not-attempted', 'Later done session', 'done'),
     ],
   })
@@ -2284,29 +2291,36 @@ it('stops the archive batch and reports the failed session', async () => {
   if (input === null) throw new Error('Palette input was not rendered')
 
   await act(async () => {
-    await userEvent.type(input, '>Archive all done')
+    await userEvent.type(input, '>Close all done')
     await userEvent.keyboard('{Enter}')
     await flushAsyncState()
   })
 
   const snapshot = () => ({
     error: container.querySelector('.load-message.is-error')?.textContent,
-    archiveUrls: fetchMock.mock.calls
+    closeUrls: fetchMock.mock.calls
       .map(([request]) => requestUrl(request))
-      .filter((url) => url.endsWith('/archive')),
+      .filter((url) => url.endsWith('/close')),
   })
   expect(snapshot()).toEqual({
-    error: 'Could not archive Unarchivable session.',
-    archiveUrls: ['/api/sessions/session-failed-archive/archive'],
+    error: 'Could not close Unarchivable session.',
+    closeUrls: ['/api/sessions/session-failed-close/close'],
   })
 })
 
-it('archives all Done sessions from the Inbox heading and reports failures', async () => {
+it('closes all Done sessions from the Inbox heading and reports failures', async () => {
   const fetchMock = vi
     .fn<typeof fetch>()
     .mockImplementation((input) =>
-      requestUrl(input).endsWith('/archive')
-        ? Promise.resolve(new Response(null, { status: 500 }))
+      requestUrl(input).endsWith('/close')
+        ? Promise.resolve(
+            new Response(
+              JSON.stringify({
+                error: 'Could not close Unarchivable session.',
+              }),
+              { status: 500 },
+            ),
+          )
         : mockSessionActionFetch(input),
     )
   vi.stubGlobal('fetch', fetchMock)
@@ -2314,31 +2328,94 @@ it('archives all Done sessions from the Inbox heading and reports failures', asy
   publishSessions({
     revision: 1,
     sessions: [
-      session('session-failed-archive', 'Unarchivable session', 'done'),
+      session('session-failed-close', 'Unarchivable session', 'done'),
       session('session-not-attempted', 'Later done session', 'done'),
     ],
   })
 
   await act(async () => {
     container
-      .querySelector<HTMLButtonElement>('.done-section .inbox-archive-all')
+      .querySelector<HTMLButtonElement>('.done-section .inbox-close-all')
       ?.click()
     await flushAsyncState()
   })
 
   const snapshot = () => ({
     error: container.querySelector('.load-message.is-error')?.textContent,
-    archiveUrls: fetchMock.mock.calls
+    closeUrls: fetchMock.mock.calls
       .map(([request]) => requestUrl(request))
-      .filter((url) => url.endsWith('/archive')),
+      .filter((url) => url.endsWith('/close')),
   })
   expect(snapshot()).toEqual({
-    error: 'Could not archive Unarchivable session.',
-    archiveUrls: ['/api/sessions/session-failed-archive/archive'],
+    error: 'Could not close Unarchivable session.',
+    closeUrls: ['/api/sessions/session-failed-close/close'],
   })
 })
 
-it('archives the selected Done session with E and leaves other categories alone', async () => {
+it('offers to keep an unmerged worktree and retries Close with that choice', async () => {
+  const closeBodies: string[] = []
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation((input, init) => {
+    if (!requestUrl(input).endsWith('/close')) {
+      return mockSessionActionFetch(input)
+    }
+    closeBodies.push(typeof init?.body === 'string' ? init.body : '')
+    return Promise.resolve(
+      closeBodies.length === 1
+        ? new Response(
+            JSON.stringify({
+              error:
+                'Branch `sample-branch` is not merged (pull request is open); close the session while keeping its worktree to continue',
+              code: 'unmerged_worktree',
+            }),
+            { status: 409 },
+          )
+        : new Response(null, { status: 204 }),
+    )
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-unmerged', 'Unmerged session', 'done')],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  await act(async () => {
+    await flushAsyncState()
+  })
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>('.conversation-close')?.click()
+    await flushAsyncState()
+  })
+  function closeFailureSnapshot() {
+    return {
+      error: container.querySelector('.load-message.is-error p')?.textContent,
+      choice: container.querySelector('.load-message.is-error button')
+        ?.textContent,
+      closeBodies: closeBodies.map((body) => JSON.parse(body) as unknown),
+    }
+  }
+  expect(closeFailureSnapshot()).toEqual({
+    error:
+      'Branch `sample-branch` is not merged (pull request is open); close the session while keeping its worktree to continue',
+    choice: 'Close and keep worktree',
+    closeBodies: [{ keepWorktree: false }],
+  })
+  await act(async () => {
+    container
+      .querySelector<HTMLButtonElement>('.load-message.is-error button')
+      ?.click()
+    await flushAsyncState()
+  })
+
+  expect(closeBodies.map((body) => JSON.parse(body) as unknown)).toEqual([
+    { keepWorktree: false },
+    { keepWorktree: true },
+  ])
+})
+
+it('closes the selected Done session with E and leaves other categories alone', async () => {
   const fetchMock = vi
     .fn<typeof fetch>()
     .mockImplementation(mockSessionActionFetch)
@@ -2370,13 +2447,13 @@ it('archives the selected Done session with E and leaves other categories alone'
     await flushAsyncState()
   })
 
-  const archiveUrls = fetchMock.mock.calls
+  const closeUrls = fetchMock.mock.calls
     .map(([request]) => requestUrl(request))
-    .filter((url) => url.endsWith('/archive'))
-  expect(archiveUrls).toEqual(['/api/sessions/session-done/archive'])
+    .filter((url) => url.endsWith('/close'))
+  expect(closeUrls).toEqual(['/api/sessions/session-done/close'])
 })
 
-it('shows and runs Archive in a Done conversation header', async () => {
+it('shows and runs Close in a Done conversation header', async () => {
   const fetchMock = vi
     .fn<typeof fetch>()
     .mockImplementation(mockSessionActionFetch)
@@ -2398,7 +2475,7 @@ it('shows and runs Archive in a Done conversation header', async () => {
   await act(async () => {
     await flushAsyncState()
   })
-  expect(container.querySelector('.conversation-archive')).toBeNull()
+  expect(container.querySelector('.conversation-close')).toBeNull()
 
   act(() => {
     container
@@ -2408,34 +2485,34 @@ it('shows and runs Archive in a Done conversation header', async () => {
   await act(async () => {
     await flushAsyncState()
   })
-  const archiveButton = container.querySelector<HTMLButtonElement>(
-    '.conversation-archive',
+  const closeButton = container.querySelector<HTMLButtonElement>(
+    '.conversation-close',
   )
   await act(async () => {
-    archiveButton?.click()
+    closeButton?.click()
     await flushAsyncState()
   })
 
   const snapshot = () => ({
-    archiveButtonText: archiveButton?.textContent,
-    archiveUrls: fetchMock.mock.calls
+    closeButtonText: closeButton?.textContent,
+    closeUrls: fetchMock.mock.calls
       .map(([request]) => requestUrl(request))
-      .filter((url) => url.endsWith('/archive')),
+      .filter((url) => url.endsWith('/close')),
   })
   expect(snapshot()).toEqual({
-    archiveButtonText: 'Archive',
-    archiveUrls: ['/api/sessions/session-done/archive'],
+    closeButtonText: 'Close',
+    closeUrls: ['/api/sessions/session-done/close'],
   })
 })
 
-it('does not start a second archive batch while the first is pending', async () => {
-  const archiveRequest = {
+it('does not start a second close batch while the first is pending', async () => {
+  const closeRequest = {
     resolve: null as ((response: Response) => void) | null,
   }
   const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) =>
-    requestUrl(input).endsWith('/archive')
+    requestUrl(input).endsWith('/close')
       ? new Promise<Response>((resolve) => {
-          archiveRequest.resolve = resolve
+          closeRequest.resolve = resolve
         })
       : mockSessionActionFetch(input),
   )
@@ -2443,10 +2520,10 @@ it('does not start a second archive batch while the first is pending', async () 
   renderApp()
   publishSessions({
     revision: 1,
-    sessions: [session('session-pending-archive', 'Pending archive', 'done')],
+    sessions: [session('session-pending-close', 'Pending close', 'done')],
   })
 
-  async function openAndRunArchiveCommand() {
+  async function openAndRunCloseCommand() {
     act(() => {
       dispatchKey(window, 'k', { ctrlKey: true })
     })
@@ -2455,36 +2532,35 @@ it('does not start a second archive batch while the first is pending', async () 
     )
     if (input === null) throw new Error('Palette input was not rendered')
     await act(async () => {
-      await userEvent.type(input, '>Archive all done')
+      await userEvent.type(input, '>Close all done')
       await userEvent.keyboard('{Enter}')
     })
   }
 
-  await openAndRunArchiveCommand()
-  await openAndRunArchiveCommand()
+  await openAndRunCloseCommand()
+  await openAndRunCloseCommand()
   const urlsBeforeCompletion = fetchMock.mock.calls
     .map(([request]) => requestUrl(request))
-    .filter((url) => url.endsWith('/archive'))
-  const resolveArchive = archiveRequest.resolve
-  if (resolveArchive === null)
-    throw new Error('Archive request was not started')
+    .filter((url) => url.endsWith('/close'))
+  const resolveClose = closeRequest.resolve
+  if (resolveClose === null) throw new Error('Close request was not started')
   await act(async () => {
-    resolveArchive(new Response(null, { status: 204 }))
+    resolveClose(new Response(null, { status: 204 }))
     await flushAsyncState()
   })
 
   expect(urlsBeforeCompletion).toEqual([
-    '/api/sessions/session-pending-archive/archive',
+    '/api/sessions/session-pending-close/close',
   ])
 })
 
-it('queues an Archive action for another Done session while one is pending', async () => {
-  const archiveResolvers = new Map<string, (response: Response) => void>()
+it('queues a Close action for another Done session while one is pending', async () => {
+  const closeResolvers = new Map<string, (response: Response) => void>()
   const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
     const url = requestUrl(input)
-    return url.endsWith('/archive')
+    return url.endsWith('/close')
       ? new Promise<Response>((resolve) => {
-          archiveResolvers.set(url, resolve)
+          closeResolvers.set(url, resolve)
         })
       : mockSessionActionFetch(input)
   })
@@ -2509,47 +2585,45 @@ it('queues an Archive action for another Done session while one is pending', asy
     })
   }
 
-  async function archiveSelectedSession() {
+  async function closeSelectedSession() {
     await act(async () => {
-      container
-        .querySelector<HTMLButtonElement>('.conversation-archive')
-        ?.click()
+      container.querySelector<HTMLButtonElement>('.conversation-close')?.click()
       await flushAsyncState()
     })
   }
 
   await selectDoneSession(0)
-  await archiveSelectedSession()
+  await closeSelectedSession()
   await selectDoneSession(1)
-  await archiveSelectedSession()
+  await closeSelectedSession()
 
-  const archiveUrls = () =>
+  const closeUrls = () =>
     fetchMock.mock.calls
       .map(([request]) => requestUrl(request))
-      .filter((url) => url.endsWith('/archive'))
-  expect(archiveUrls()).toEqual(['/api/sessions/session-done-a/archive'])
+      .filter((url) => url.endsWith('/close'))
+  expect(closeUrls()).toEqual(['/api/sessions/session-done-a/close'])
 
-  const resolveFirstArchive = archiveResolvers.get(
-    '/api/sessions/session-done-a/archive',
+  const resolveFirstClose = closeResolvers.get(
+    '/api/sessions/session-done-a/close',
   )
-  if (resolveFirstArchive === undefined)
-    throw new Error('First archive request was not started')
+  if (resolveFirstClose === undefined)
+    throw new Error('First close request was not started')
   await act(async () => {
-    resolveFirstArchive(new Response(null, { status: 204 }))
+    resolveFirstClose(new Response(null, { status: 204 }))
     await flushAsyncState()
   })
-  expect(archiveUrls()).toEqual([
-    '/api/sessions/session-done-a/archive',
-    '/api/sessions/session-done-b/archive',
+  expect(closeUrls()).toEqual([
+    '/api/sessions/session-done-a/close',
+    '/api/sessions/session-done-b/close',
   ])
 
-  const resolveSecondArchive = archiveResolvers.get(
-    '/api/sessions/session-done-b/archive',
+  const resolveSecondClose = closeResolvers.get(
+    '/api/sessions/session-done-b/close',
   )
-  if (resolveSecondArchive === undefined)
-    throw new Error('Second archive request was not started')
+  if (resolveSecondClose === undefined)
+    throw new Error('Second close request was not started')
   await act(async () => {
-    resolveSecondArchive(new Response(null, { status: 204 }))
+    resolveSecondClose(new Response(null, { status: 204 }))
     await flushAsyncState()
   })
 })

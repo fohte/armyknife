@@ -41,7 +41,7 @@ const inboxProps = {
   onToggleInProgress: () => undefined,
   doneExpanded: false,
   onToggleDone: () => undefined,
-  onArchiveDone: () => undefined,
+  onCloseDone: () => undefined,
 }
 
 const meta = {
@@ -54,7 +54,7 @@ const meta = {
     showMobileConversation: false,
     onBack: () => undefined,
     onLater: () => undefined,
-    onArchiveSession: () => undefined,
+    onCloseSession: () => undefined,
     onSelectSession: () => undefined,
   },
   decorators: [
@@ -128,8 +128,8 @@ export const NarrowDesktopOverlaysTheStatusPanel: Story = {
   ],
 }
 
-export const DoneSessionCanBeArchived: Story = {
-  name: 'A Done session exposes Archive in its conversation header',
+export const DoneSessionCanBeClosed: Story = {
+  name: 'A Done session exposes Close in its conversation header',
   args: {
     selectedSession: { ...session, category: 'done', kind: null },
   },

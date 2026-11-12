@@ -116,7 +116,7 @@ function renderInbox(props: Partial<ComponentProps<typeof InboxView>> = {}) {
         onToggleInProgress={() => undefined}
         doneExpanded
         onToggleDone={() => undefined}
-        onArchiveDone={() => undefined}
+        onCloseDone={() => undefined}
         {...props}
       />,
     )
@@ -358,45 +358,45 @@ it('shows the downward chevron for expanded iPhone Done rows with pending review
   })
 })
 
-it('archives the Done sessions from the section action', () => {
-  const onArchiveDone = vi.fn()
-  renderInbox({ onArchiveDone })
+it('closes the Done sessions from the section action', () => {
+  const onCloseDone = vi.fn()
+  renderInbox({ onCloseDone })
 
   act(() => {
     container
-      .querySelector<HTMLButtonElement>('.done-section .inbox-archive-all')
+      .querySelector<HTMLButtonElement>('.done-section .inbox-close-all')
       ?.click()
   })
 
-  expect(onArchiveDone.mock.calls).toEqual([
+  expect(onCloseDone.mock.calls).toEqual([
     [sessions.filter((s) => s.category === 'done')],
   ])
 })
 
-it('archives the Done sessions from the mobile collapse row', () => {
-  const onArchiveDone = vi.fn()
-  renderInbox({ isMobile: true, onArchiveDone })
+it('closes the Done sessions from the mobile collapse row', () => {
+  const onCloseDone = vi.fn()
+  renderInbox({ isMobile: true, onCloseDone })
 
   act(() => {
-    container.querySelector<HTMLButtonElement>('.mobile-archive-all')?.click()
+    container.querySelector<HTMLButtonElement>('.mobile-close-all')?.click()
   })
 
-  expect(onArchiveDone.mock.calls).toEqual([
+  expect(onCloseDone.mock.calls).toEqual([
     [sessions.filter((s) => s.category === 'done')],
   ])
 })
 
-it('archives all Done sessions even when filters hide them', () => {
-  const onArchiveDone = vi.fn()
-  renderInbox({ filterQuery: 'project:missing', onArchiveDone })
+it('closes all Done sessions even when filters hide them', () => {
+  const onCloseDone = vi.fn()
+  renderInbox({ filterQuery: 'project:missing', onCloseDone })
 
   act(() => {
     container
-      .querySelector<HTMLButtonElement>('.done-section .inbox-archive-all')
+      .querySelector<HTMLButtonElement>('.done-section .inbox-close-all')
       ?.click()
   })
 
-  expect(onArchiveDone.mock.calls).toEqual([
+  expect(onCloseDone.mock.calls).toEqual([
     [sessions.filter((s) => s.category === 'done')],
   ])
 })

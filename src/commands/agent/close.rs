@@ -32,6 +32,10 @@ const MAX_DESCENDANT_NODES: usize = 64;
 const SIGTERM_GRACE_PERIOD: Duration = Duration::from_secs(5);
 const DEFAULT_AUTO_PAUSE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
+pub(crate) async fn close_from_watch_web(session: &Session, keep_worktree: bool) -> Result<()> {
+    session_close::close_session_value_from_watch_web(session, keep_worktree).await
+}
+
 #[derive(Args, Clone, Default, PartialEq, Eq)]
 pub struct CloseArgs {
     /// Session ID, worktree name, or worktree path to close.

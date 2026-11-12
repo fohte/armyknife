@@ -1,4 +1,6 @@
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -64,7 +66,7 @@ fn router_with_state(state: ActionState) -> Router {
         .route("/sessions/{id}/focus", post(focus))
         .route("/sessions/{id}/read", post(mark_read))
         .route("/sessions/{id}/primary-task", post(set_primary_task))
-        .route("/sessions/{id}/archive", post(archive))
+        .route("/sessions/{id}/close", post(close))
         .with_state(state)
 }
 
@@ -89,6 +91,11 @@ trait ActionRuntime: Send + Sync {
         keys: &[&str],
     ) -> Result<bool>;
     fn focus(&self, tmux_info: &TmuxInfo) -> Result<()>;
+    fn close_session<'a>(
+        &'a self,
+        session: &'a Session,
+        keep_worktree: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 }
 
 struct LiveActionRuntime;
@@ -147,12 +154,24 @@ impl ActionRuntime for LiveActionRuntime {
         )
         .map_err(anyhow::Error::from)
     }
+
+    fn close_session<'a>(
+        &'a self,
+        session: &'a Session,
+        keep_worktree: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(crate::commands::agent::close_from_watch_web(
+            session,
+            keep_worktree,
+        ))
+    }
 }
 
 #[derive(Debug)]
 struct ApiError {
     status: StatusCode,
     message: String,
+    code: Option<&'static str>,
 }
 
 impl ApiError {
@@ -160,6 +179,7 @@ impl ApiError {
         Self {
             status: StatusCode::BAD_REQUEST,
             message: message.into(),
+            code: None,
         }
     }
 
@@ -167,6 +187,7 @@ impl ApiError {
         Self {
             status: StatusCode::NOT_FOUND,
             message: "session not found".to_string(),
+            code: None,
         }
     }
 
@@ -174,6 +195,7 @@ impl ApiError {
         Self {
             status: StatusCode::NOT_FOUND,
             message: "decision not found".to_string(),
+            code: None,
         }
     }
 
@@ -181,6 +203,7 @@ impl ApiError {
         Self {
             status: StatusCode::CONFLICT,
             message: message.into(),
+            code: None,
         }
     }
 
@@ -188,6 +211,7 @@ impl ApiError {
         Self {
             status: StatusCode::BAD_GATEWAY,
             message: error.to_string(),
+            code: None,
         }
     }
 
@@ -195,13 +219,29 @@ impl ApiError {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message: error.to_string(),
+            code: None,
+        }
+    }
+
+    fn close(error: anyhow::Error) -> Self {
+        let code = error
+            .downcast_ref::<crate::shared::worktree_delete::UnmergedWorktreeError>()
+            .map(|_| "unmerged_worktree");
+        Self {
+            status: StatusCode::CONFLICT,
+            message: error.to_string(),
+            code,
         }
     }
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.status, Json(json!({ "error": self.message }))).into_response()
+        let body = match self.code {
+            Some(code) => json!({ "error": self.message, "code": code }),
+            None => json!({ "error": self.message }),
+        };
+        (self.status, Json(body)).into_response()
     }
 }
 
@@ -384,37 +424,37 @@ async fn set_primary_task(
     Ok(Json(Success::new()))
 }
 
-async fn archive(
-    State(state): State<ActionState>,
-    RoutePath(id): RoutePath<String>,
-) -> Result<Json<Success>, ApiError> {
-    let session = load_session(state.clone(), id.clone()).await?;
-    let sessions_dir = resolve_sessions_dir(state.sessions_dir).map_err(ApiError::internal)?;
-    let active = run_blocking(move || {
-        let mut active = false;
-        store::update_session_in(&sessions_dir, &session.session_id, |stored| {
-            if stored.archived_at.is_some() {
-                return false;
-            }
-            if is_active_session(stored) {
-                active = true;
-                return false;
-            }
-            stored.archived_at = Some(Utc::now());
-            true
-        })?;
-        Ok(active)
-    })
-    .await?;
-    if active {
-        return Err(ApiError::conflict("cannot archive an active session"));
-    }
-    Ok(Json(Success::new()))
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CloseRequest {
+    keep_worktree: bool,
 }
 
-fn is_active_session(session: &Session) -> bool {
-    session.status != SessionStatus::Ended
-        && (session.has_active_work(session.status) || session.has_pending_permission_requests())
+async fn close(
+    State(state): State<ActionState>,
+    RoutePath(id): RoutePath<String>,
+    request: Option<Json<CloseRequest>>,
+) -> Result<Json<Success>, ApiError> {
+    let session = load_session(state.clone(), id).await?;
+    state
+        .runtime
+        .close_session(
+            &session,
+            request
+                .map(|Json(request)| request.keep_worktree)
+                .unwrap_or(false),
+        )
+        .await
+        .map_err(ApiError::close)?;
+    let sessions_dir = resolve_sessions_dir(state.sessions_dir).map_err(ApiError::internal)?;
+    run_blocking(move || {
+        store::update_session_in(&sessions_dir, &session.session_id, |stored| {
+            stored.archived_at = Some(Utc::now());
+            true
+        })
+    })
+    .await?;
+    Ok(Json(Success::new()))
 }
 
 #[derive(Serialize)]
@@ -550,6 +590,7 @@ mod tests {
         pane_command: Mutex<Option<String>>,
         pane_has_agent_process: Mutex<bool>,
         pane_command_matches: Mutex<bool>,
+        close_unmerged_worktree: Mutex<bool>,
     }
 
     impl Default for FakeRuntime {
@@ -562,6 +603,7 @@ mod tests {
                 pane_command: Mutex::new(Some("claude".to_string())),
                 pane_has_agent_process: Mutex::new(true),
                 pane_command_matches: Mutex::new(true),
+                close_unmerged_worktree: Mutex::new(false),
             }
         }
     }
@@ -633,6 +675,29 @@ mod tests {
             }));
             Ok(())
         }
+
+        fn close_session<'a>(
+            &'a self,
+            session: &'a Session,
+            keep_worktree: bool,
+        ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+            let fail_for_unmerged_worktree = *self.close_unmerged_worktree.lock().unwrap();
+            self.calls.lock().unwrap().push(json!({
+                "kind": "close",
+                "sessionId": session.session_id,
+                "keepWorktree": keep_worktree,
+            }));
+            Box::pin(async move {
+                if fail_for_unmerged_worktree {
+                    return Err(crate::shared::worktree_delete::UnmergedWorktreeError::new(
+                        "sample-branch",
+                        "not merged",
+                    )
+                    .into());
+                }
+                Ok(())
+            })
+        }
     }
 
     struct ActionContext {
@@ -688,6 +753,10 @@ mod tests {
 
         fn set_message_error(&self, message: &str) {
             *self.runtime.message_error.lock().unwrap() = Some(message.to_string());
+        }
+
+        fn set_close_unmerged_worktree(&self, value: bool) {
+            *self.runtime.close_unmerged_worktree.lock().unwrap() = value;
         }
 
         fn set_after_message(&self, callback: impl FnOnce() + Send + 'static) {
@@ -1305,25 +1374,16 @@ mod tests {
     }
 
     #[rstest]
-    #[case::stopped(SessionStatus::Stopped, false)]
-    #[case::ended_with_pending_task(SessionStatus::Ended, true)]
     #[tokio::test]
-    async fn archive_hides_the_session_from_later_actions_lookups(
-        #[case] status: SessionStatus,
-        #[case] pending_task: bool,
-        action_context: ActionContext,
-    ) {
+    async fn close_hides_the_session_from_later_actions_lookups(action_context: ActionContext) {
         let mut session = session("sample-session");
-        session.status = status;
-        if pending_task {
-            session.pending_bg_task_ids.insert("task".to_string());
-        }
+        session.status = SessionStatus::Stopped;
         action_context.save_session(&session);
         let app = action_context.router();
 
-        let archived = app
+        let closed = app
             .clone()
-            .oneshot(post_empty("/sessions/sample-session/archive"))
+            .oneshot(post_empty("/sessions/sample-session/close"))
             .await
             .unwrap();
         let lookup = app
@@ -1337,13 +1397,21 @@ mod tests {
             .unwrap();
         assert_eq!(
             (
-                response_snapshot(archived, &action_context).await,
+                response_snapshot(closed, &action_context).await,
                 response_snapshot(lookup, &action_context).await,
                 normalize_session(action_context.load_session("sample-session")),
             ),
             (
-                json!({ "status": StatusCode::OK.as_u16(), "body": { "ok": true }, "calls": [] }),
-                json!({ "status": StatusCode::NOT_FOUND.as_u16(), "body": { "error": "session not found" }, "calls": [] }),
+                json!({ "status": StatusCode::OK.as_u16(), "body": { "ok": true }, "calls": [{
+                    "kind": "close",
+                    "sessionId": "sample-session",
+                    "keepWorktree": false,
+                }] }),
+                json!({ "status": StatusCode::NOT_FOUND.as_u16(), "body": { "error": "session not found" }, "calls": [{
+                    "kind": "close",
+                    "sessionId": "sample-session",
+                    "keepWorktree": false,
+                }] }),
                 normalize_session({
                     let mut expected = session;
                     expected.archived_at = Some(Utc::now());
@@ -1537,47 +1605,68 @@ mod tests {
     }
 
     #[rstest]
-    #[case::running(SessionStatus::Running, false, false)]
-    #[case::waiting_for_input(SessionStatus::WaitingInput, false, false)]
-    #[case::failed_with_pending_permission(SessionStatus::Failed, true, false)]
-    #[case::stopped_with_pending_task(SessionStatus::Stopped, false, true)]
     #[tokio::test]
-    async fn archive_rejects_active_sessions(
-        #[case] status: SessionStatus,
-        #[case] pending_permission: bool,
-        #[case] pending_task: bool,
-        action_context: ActionContext,
-    ) {
+    async fn close_forwards_keep_worktree_choice_to_common_close(action_context: ActionContext) {
         let mut session = session("sample-session");
-        session.status = status;
-        if pending_permission {
-            session
-                .pending_permission_agent_ids
-                .insert("subagent".to_string());
-        }
-        if pending_task {
-            session.pending_bg_task_ids.insert("task".to_string());
-        }
+        session.status = SessionStatus::Stopped;
         action_context.save_session(&session);
-
         let response = action_context
             .router()
-            .oneshot(post_empty("/sessions/sample-session/archive"))
+            .oneshot(post(
+                "/sessions/sample-session/close",
+                json!({ "keepWorktree": true }),
+            ))
             .await
             .unwrap();
 
+        let response = response_snapshot(response, &action_context).await;
+        let mut expected = session;
+        expected.archived_at = Some(Utc::now());
         assert_eq!(
             json!({
-                "response": response_snapshot(response, &action_context).await,
+                "response": response,
                 "session": normalize_session(action_context.load_session("sample-session")),
             }),
             json!({
                 "response": {
-                    "status": StatusCode::CONFLICT.as_u16(),
-                    "body": { "error": "cannot archive an active session" },
-                    "calls": [],
+                    "status": StatusCode::OK.as_u16(),
+                    "body": { "ok": true },
+                    "calls": [{
+                        "kind": "close",
+                        "sessionId": "sample-session",
+                        "keepWorktree": true,
+                    }],
                 },
-                "session": normalize_session(session),
+                "session": normalize_session(expected),
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn close_returns_unmerged_worktree_choice_with_the_reason(action_context: ActionContext) {
+        action_context.save_session(&session("sample-session"));
+        action_context.set_close_unmerged_worktree(true);
+
+        let response = action_context
+            .router()
+            .oneshot(post_empty("/sessions/sample-session/close"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::CONFLICT.as_u16(),
+                "body": {
+                    "error": "Branch `sample-branch` is not merged (not merged); close the session while keeping its worktree to continue",
+                    "code": "unmerged_worktree",
+                },
+                "calls": [{
+                    "kind": "close",
+                    "sessionId": "sample-session",
+                    "keepWorktree": false,
+                }],
             }),
         );
     }

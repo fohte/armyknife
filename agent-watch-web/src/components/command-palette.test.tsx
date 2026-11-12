@@ -293,7 +293,7 @@ it('shows an em dash when a task has no priority', () => {
 it.each([
   ['switch board', '>Switch to Board'],
   ['switch inbox', '>Switch to Inbox'],
-  ['archive done', '>Archive all done'],
+  ['close done', '>Close all done'],
 ] as const)(
   'does not show an inactive keyboard shortcut for the %s command',
   (_name, query) => {
