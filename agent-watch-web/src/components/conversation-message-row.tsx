@@ -11,7 +11,6 @@ function areConversationMessagePropsEqual(
 ): boolean {
   if (
     previous.message !== next.message ||
-    previous.index !== next.index ||
     previous.isMobile !== next.isMobile
   ) {
     return false

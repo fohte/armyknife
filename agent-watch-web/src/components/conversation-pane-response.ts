@@ -97,6 +97,7 @@ function isChatItem(value: unknown): value is ChatItem {
     case 'event':
       return (
         (value['kind'] === 'armyknife' ||
+          value['kind'] === 'compact_boundary' ||
           value['kind'] === 'system' ||
           value['kind'] === 'hook') &&
         typeof value['text'] === 'string' &&

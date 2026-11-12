@@ -54,9 +54,9 @@ async fn completing_a_todo_notifies_the_session_before_persisting(action_context
                     "kind": "message",
                     "sessionId": "sample-session",
                     "content": indoc! {"
-                        ユーザーが todo『Check the page』を済にした。
+                        <armyknife-todo-completed>The user marked the to-do as done: Check the page.
 
-                        The header fits.
+                        The header fits.</armyknife-todo-completed>
                     "}.trim_end(),
                 }],
             }),
@@ -145,9 +145,9 @@ async fn failed_session_notification_does_not_complete_the_todo(action_context: 
                     "kind": "message",
                     "sessionId": "sample-session",
                     "content": indoc! {"
-                        ユーザーが todo『Check the page』を済にした。
+                        <armyknife-todo-completed>The user marked the to-do as done: Check the page.
 
-                        The header fits.
+                        The header fits.</armyknife-todo-completed>
                     "}.trim_end(),
                 }],
             }),

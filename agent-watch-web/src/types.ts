@@ -47,7 +47,7 @@ type ParentSession = {
 
 export type Session = {
   id: string
-  engine?: 'Claude' | 'Codex' | (string & {})
+  engine?: 'claude' | 'codex'
   workType?: string | null
   category: SessionCategory
   isPaused: boolean
@@ -139,7 +139,7 @@ export type ChatItem =
     }
   | {
       type: 'event'
-      kind: 'armyknife' | 'system' | 'hook'
+      kind: 'armyknife' | 'compact_boundary' | 'system' | 'hook'
       text: string
       failed: boolean
       timestamp?: string

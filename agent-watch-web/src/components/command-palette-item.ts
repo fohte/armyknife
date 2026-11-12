@@ -1,4 +1,5 @@
 import type { PaletteItem } from '#command-palette-model'
+import { sessionKindTone } from '#session-kind-label'
 import { formatLinkedTaskCount } from '#session-task-count'
 import type { Session } from '#types'
 
@@ -87,27 +88,8 @@ export function itemDetail(item: PaletteItem) {
   }
 }
 
-export function sessionKindLabel(session: Session) {
-  if (session.kind !== null) return session.kind
-  switch (session.category) {
-    case 'needs_action':
-      return 'Needs action'
-    case 'in_progress':
-      return 'Working'
-    case 'later':
-      return 'Later'
-    case 'done':
-      return 'Done'
-    default:
-      return session.category.replace('_', ' ')
-  }
-}
-
 export function itemColor(item: PaletteItem) {
-  if (item.type === 'session') {
-    if (item.session.kind === 'Error') return 'error'
-    return item.session.category.replace('_', '-')
-  }
+  if (item.type === 'session') return sessionKindTone(item.session)
   if (item.type === 'command') return 'command'
   return item.type
 }

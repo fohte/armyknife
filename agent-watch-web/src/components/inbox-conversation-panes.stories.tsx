@@ -49,7 +49,7 @@ const meta = {
   args: {
     inboxProps,
     selectedSession: session,
-    refreshKey: 0,
+    sessionRefreshRevisions: new Map([[session.id, 0]]),
     isMobile: false,
     showMobileConversation: false,
     onBack: () => undefined,

@@ -5,7 +5,7 @@ import type { SessionLinkTarget } from '#types'
 
 const session: SessionLinkTarget = {
   id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-  engine: 'Claude',
+  engine: 'claude',
   workType: 'PM',
   kind: 'Review',
   title: 'Review a sample change',

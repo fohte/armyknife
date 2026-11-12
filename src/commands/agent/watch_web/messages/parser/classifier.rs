@@ -25,6 +25,7 @@ pub(super) enum MessageKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum EventKind {
     Armyknife,
+    CompactBoundary,
     System,
     Hook,
 }
@@ -67,23 +68,23 @@ pub(super) fn classify_inbound(
 
     if let Some((tag, body)) = tagged {
         if let Some((session_id, peer_body)) = peer_message_parts(text) {
-            if let Some(user_body) = marked_user_body(peer_body, user_marker) {
-                return MessageKind::User { text: user_body };
+            if let Some(message) = marked_user_message(peer_body, user_marker) {
+                return message;
             }
             return MessageKind::PeerIn {
                 session_id: session_id.to_owned(),
                 text: peer_body.to_owned(),
             };
         }
-        if let Some(user_body) = marked_user_body(text, user_marker) {
-            return MessageKind::User { text: user_body };
+        if let Some(message) = marked_user_message(text, user_marker) {
+            return message;
         }
         return event(tag, body, record);
     }
 
     if let Some((session_id, peer_body)) = peer_message_parts(text) {
-        if let Some(user_body) = marked_user_body(peer_body, user_marker) {
-            return MessageKind::User { text: user_body };
+        if let Some(message) = marked_user_message(peer_body, user_marker) {
+            return message;
         }
         return MessageKind::PeerIn {
             session_id: session_id.to_owned(),
@@ -91,8 +92,8 @@ pub(super) fn classify_inbound(
         };
     }
 
-    if let Some(user_body) = marked_user_body(text, user_marker) {
-        return MessageKind::User { text: user_body };
+    if let Some(message) = marked_user_message(text, user_marker) {
+        return message;
     }
 
     if record.get("type").and_then(Value::as_str) == Some("system") {
@@ -323,6 +324,11 @@ fn system_record(record: &Value, raw_text: &str) -> MessageKind {
         .get("subtype")
         .and_then(Value::as_str)
         .unwrap_or("system event");
+    let kind = if subtype == "compact_boundary" {
+        EventKind::CompactBoundary
+    } else {
+        EventKind::System
+    };
     let text = match subtype {
         "compact_boundary" => "Context compacted".to_owned(),
         "resume" | "session_resume" => "Session resumed".to_owned(),
@@ -331,7 +337,7 @@ fn system_record(record: &Value, raw_text: &str) -> MessageKind {
         _ => subtype.replace('_', " "),
     };
     MessageKind::Event {
-        kind: EventKind::System,
+        kind,
         failed: is_failure(record, subtype, &text),
         text,
     }
@@ -383,7 +389,7 @@ fn is_failure(record: &Value, label: &str, text: &str) -> bool {
         })
 }
 
-fn one_line(text: &str) -> String {
+pub(super) fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -396,9 +402,9 @@ fn nested_tag_value<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
         .map(|(value, _)| value)
 }
 
-fn tagged_body(text: &str) -> Option<(&str, &str)> {
+pub(super) fn tagged_body(text: &str) -> Option<(&str, &str)> {
     let tag = outer_tag(text)?;
-    let trimmed = text.trim_start();
+    let trimmed = text.trim();
     let opening = format!("<{tag}>");
     let closing = format!("</{tag}>");
     let body = trimmed
@@ -409,7 +415,7 @@ fn tagged_body(text: &str) -> Option<(&str, &str)> {
 }
 
 fn outer_tag(text: &str) -> Option<&str> {
-    let trimmed = text.trim_start();
+    let trimmed = text.trim();
     let tag = trimmed.strip_prefix('<')?.split_once('>')?.0;
     if tag.is_empty()
         || tag.starts_with('/')
@@ -469,6 +475,25 @@ pub(super) fn marked_user_body(text: &str, marker: Option<&str>) -> Option<Strin
     }
     let body = marked_text.strip_prefix(marker)?.strip_prefix('\n')?;
     Some(without_peer_transport_notice(body).to_owned())
+}
+
+fn marked_user_message(text: &str, marker: Option<&str>) -> Option<MessageKind> {
+    let body = marked_user_body(text, marker)?;
+    match tagged_body(&body) {
+        Some((tag, event_body)) if is_watch_web_action_tag(tag) => Some(MessageKind::Event {
+            kind: EventKind::Armyknife,
+            text: one_line(event_body),
+            failed: false,
+        }),
+        _ => Some(MessageKind::User { text: body }),
+    }
+}
+
+pub(super) fn is_watch_web_action_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "armyknife-todo-completed" | "armyknife-decision-change"
+    )
 }
 
 fn without_peer_transport_notice(body: &str) -> &str {
@@ -538,7 +563,49 @@ mod tests {
         }
     )]
     #[case::delegation_event(json!({"type":"user","isMeta":true}), "<delegation-update>Worker completed its fictional task.</delegation-update>", None, MessageKind::Event { kind: EventKind::Armyknife, text: "Worker completed its fictional task.".to_owned(), failed: false })]
+    #[case::marked_armyknife_action_is_an_event(
+        json!({"type":"user","isMeta":true,"origin":{"kind":"peer","from":"unknown"}}),
+        indoc! {"
+            ⟦armyknife-user:fixture-marker-cobalt⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            <armyknife-todo-completed>Investigate failed fixture tasks.
+
+            A failed attempt is still informative.</armyknife-todo-completed>
+        "},
+        Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
+        MessageKind::Event { kind: EventKind::Armyknife, text: "Investigate failed fixture tasks. A failed attempt is still informative.".to_owned(), failed: false },
+    )]
+    #[case::marked_decision_change_is_an_event(
+        json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
+        indoc! {"
+            ⟦armyknife-user:fixture-marker-cobalt⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            <armyknife-decision-change>Change requested for the fixture decision.
+
+            Please use the second fictional option.</armyknife-decision-change>
+        "},
+        Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
+        MessageKind::Event { kind: EventKind::Armyknife, text: "Change requested for the fixture decision. Please use the second fictional option.".to_owned(), failed: false },
+    )]
+    #[case::marked_unrecognized_armyknife_tag_stays_user_text(
+        json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
+        indoc! {"
+            ⟦armyknife-user:fixture-marker-cobalt⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            <armyknife-example>First line.
+            Second line.</armyknife-example>
+        "},
+        Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
+        MessageKind::User {
+            text: indoc! {"
+                <armyknife-example>First line.
+                Second line.</armyknife-example>
+            "}
+            .to_owned(),
+        },
+    )]
     #[case::unknown_tag_is_system(json!({"type":"user","isMeta":true}), "<future-notice>Future notice text.</future-notice>", None, MessageKind::Event { kind: EventKind::System, text: "Future notice text.".to_owned(), failed: false })]
+    #[case::compact_boundary_has_a_distinct_kind(json!({"type":"system","subtype":"compact_boundary"}), "", None, MessageKind::Event { kind: EventKind::CompactBoundary, text: "Context compacted".to_owned(), failed: false })]
     #[case::hook_output_is_one_line(json!({"type":"user"}), "<local-command-stdout>First line.\nSecond line.</local-command-stdout>", None, MessageKind::Event { kind: EventKind::Hook, text: "First line. Second line.".to_owned(), failed: false })]
     fn classifies_inbound_records(
         #[case] record: serde_json::Value,

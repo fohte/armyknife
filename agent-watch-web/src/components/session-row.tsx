@@ -3,7 +3,6 @@ import '#components/later-today.css'
 import { Button } from '@fohte/ui/button'
 import { Chip } from '@fohte/ui/chip'
 
-import { SessionPausedBadge } from '#components/session-paused-badge'
 import { cn } from '#lib/utils'
 import { formatSessionDecisionCount } from '#session-decision-count'
 import { formatLinkedTaskCount } from '#session-task-count'
@@ -44,9 +43,6 @@ function sessionStatus(session: Session) {
   }
 
   if (session.category === 'done') {
-    if (session.isPaused && session.pullRequest?.state !== 'Merged') {
-      return formatElapsedTime(session.elapsedSeconds)
-    }
     const detail =
       session.pullRequest?.state === 'Merged'
         ? `Merged #${String(session.pullRequest.number)}`
@@ -92,7 +88,9 @@ export function SessionRow({
   return (
     <li className="session-list-item">
       <div
-        className={`session-row-layout${actionsVisible ? ' actions-visible' : ''}`}
+        className={`session-row-layout${actionsVisible ? ' actions-visible' : ''}${
+          session.isToday === true ? ' is-starred' : ''
+        }`}
       >
         <Button
           type="button"
@@ -116,7 +114,6 @@ export function SessionRow({
               >
                 {session.title}
               </span>
-              <SessionPausedBadge isPaused={session.isPaused} />
               <span className="session-age">{sessionStatus(session)}</span>
             </span>
             {session.category === 'needs_action' ? (
@@ -173,8 +170,8 @@ export function SessionRow({
                 variant="plain"
                 aria-label={
                   session.isToday === true
-                    ? 'Remove from TODAY'
-                    : 'Add to TODAY'
+                    ? 'Remove from Starred'
+                    : 'Add to Starred'
                 }
                 aria-pressed={session.isToday ?? false}
                 className="session-action-button cursor-pointer"

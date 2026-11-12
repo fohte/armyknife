@@ -24,7 +24,6 @@ const meta = {
   args: {
     actions,
     actionsReady: true,
-    index: 0,
     isMobile: false,
     selected: false,
     decisionPosition: undefined,
@@ -34,7 +33,7 @@ const meta = {
     } satisfies ChatItem,
     pendingAction: null,
     openInTerminalStatus: null,
-    sessionEngine: 'Claude',
+    sessionEngine: 'claude',
     sessions,
     ...callbacks,
   },

@@ -24,13 +24,12 @@ type UseConversationStatusPanelOptions = {
   sessionTreeViewState?: SessionTreeViewState | null
   onSessionTreeViewStateChange?: (state: SessionTreeViewState) => void
   onSelectSession?: (id: string) => void
-  statusPanelOpen: boolean
+  statusPanelOpen?: boolean
   onAction: (
     action: string,
     payload?: Record<string, unknown>,
   ) => Promise<boolean>
   onCloseStatusPanel: () => void
-  onToggleStatusPanel: () => void
 }
 
 export function useConversationStatusPanel({
@@ -43,10 +42,9 @@ export function useConversationStatusPanel({
   sessionTreeViewState = null,
   onSessionTreeViewStateChange,
   onSelectSession = () => undefined,
-  statusPanelOpen,
+  statusPanelOpen = false,
   onAction,
   onCloseStatusPanel,
-  onToggleStatusPanel,
 }: UseConversationStatusPanelOptions) {
   const [activePanelTabId, setActivePanelTabId] = useState<string | null>(null)
   const [selectedDecisionSeq, setSelectedDecisionSeq] = useState<number | null>(
@@ -60,6 +58,9 @@ export function useConversationStatusPanel({
   const decisionCount = session.decisionCount ?? decisions.length
   const pullRequestListAvailable =
     session.task !== null || session.hasSessionTree === true
+  const unreviewedDecisionCount =
+    session.unreviewedDecisionCount ??
+    decisions.filter((decision) => decision.review === null).length
   const selectedDecision =
     decisions.find((decision) => decision.seq === selectedDecisionSeq) ??
     decisions.find((decision) => decision.review === null) ??
@@ -182,8 +183,11 @@ export function useConversationStatusPanel({
       ? [
           {
             id: 'decisions',
-            label: '◇ Decisions',
-            count: decisionCount,
+            label: 'Decisions',
+            count: unreviewedDecisionCount,
+            visible: true,
+            showCount: true,
+            countTone: 'warning' as const,
             content: (
               <DecisionsPanel
                 decisions={decisions}
@@ -213,22 +217,10 @@ export function useConversationStatusPanel({
   useEffect(() => {
     if (activePanelTabId !== activeTabId) setActivePanelTabId(activeTabId)
   }, [activePanelTabId, activeTabId])
-  const decisionsPanelOpen = statusPanelOpen && activeTabId === 'decisions'
-  const onToggleDecisionsPanel = () => {
-    if (decisionsPanelOpen) {
-      onToggleStatusPanel()
-      return
-    }
-    setActivePanelTabId('decisions')
-    if (!statusPanelOpen) onToggleStatusPanel()
-  }
-
   return {
     activeTabId,
-    decisionsPanelOpen,
     onSelectDecision: setSelectedDecisionSeq,
     onTabChange: setActivePanelTabId,
-    onToggleDecisionsPanel,
     selectedDecisionSeq: selectedDecision?.seq ?? null,
     tabs,
   }

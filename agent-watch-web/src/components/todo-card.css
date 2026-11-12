@@ -67,8 +67,9 @@
   opacity: 0.45;
 }
 
-.chat-todo-completed-label {
+.chat-todo-completed-comment {
+  margin: 0;
   color: var(--aw-text-muted);
   font-size: 13px;
-  font-weight: 700;
+  white-space: pre-wrap;
 }

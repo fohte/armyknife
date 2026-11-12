@@ -18,9 +18,9 @@ import {
   itemResultTitle,
   itemSubtitle,
   itemTitle,
-  sessionKindLabel,
 } from '#components/command-palette-item'
 import { useCopySessionId } from '#components/use-copy-session-id'
+import { sessionKindLabel } from '#session-kind-label'
 import type { Session } from '#types'
 
 type CommandPaletteProps = {

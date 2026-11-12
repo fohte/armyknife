@@ -10,7 +10,7 @@ import type { SessionLinkTarget } from '#types'
 
 const linkedSession: SessionLinkTarget = {
   id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-  engine: 'Claude',
+  engine: 'claude',
   workType: 'PM',
   kind: 'Plan',
   title: 'Inspect an example workflow',
@@ -30,7 +30,7 @@ const openBesideModifier =
     ? '⌘'
     : 'Ctrl'
 const expectedCardText =
-  `Inspect an example workflowPM · ClaudePlan · Review the sample configuration. · 2m` +
+  `Inspect an example workflowPM · claudePlan · Review the sample configuration. · 2m` +
   `P2 #24Inspect the example workflow +2sample-org/example-service` +
   `Click to open · ${openBesideModifier}-click to open beside`
 

@@ -1,6 +1,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { userEvent } from 'vitest/browser'
 
 import { SessionRow } from '#components/session-row'
 import type { Session } from '#types'
@@ -26,7 +27,12 @@ const session: Session = {
   pullRequest: null,
 }
 
-function renderRow(viewSession: Session, isMobile = false) {
+function renderRow(
+  viewSession: Session,
+  isMobile = false,
+  withActions = false,
+) {
+  if (root !== null) act(() => root?.unmount())
   root = createRoot(container)
   act(() => {
     root?.render(
@@ -35,6 +41,12 @@ function renderRow(viewSession: Session, isMobile = false) {
           session={viewSession}
           selected={false}
           onSelect={() => undefined}
+          {...(withActions
+            ? {
+                onLater: () => undefined,
+                onToggleToday: () => undefined,
+              }
+            : {})}
           compactRepo={isMobile}
           isMobile={isMobile}
         />
@@ -45,7 +57,9 @@ function renderRow(viewSession: Session, isMobile = false) {
 
 function snapshot() {
   return {
-    badge: container.querySelector('[data-slot="chip"]')?.textContent,
+    chips: Array.from(container.querySelectorAll('[data-slot="chip"]')).map(
+      (chip) => chip.textContent,
+    ),
     age: container.querySelector('.session-age')?.textContent,
     task: container.querySelector('.session-task')?.textContent,
   }
@@ -57,6 +71,30 @@ function mobileMetaSnapshot() {
     separator: container.querySelector('.mobile-session-meta-separator')
       ?.textContent,
     repo: container.querySelector('.session-repo')?.textContent,
+  }
+}
+
+function actionVisibilitySnapshot() {
+  const actions = container.querySelector('.session-row-actions')
+  const [starButton, laterButton] = container.querySelectorAll(
+    '.session-row-actions button',
+  )
+
+  return {
+    actionsOpacity: actions === null ? null : getComputedStyle(actions).opacity,
+    star: {
+      icon: starButton?.textContent,
+      pressed: starButton?.getAttribute('aria-pressed'),
+      opacity:
+        starButton === undefined ? null : getComputedStyle(starButton).opacity,
+    },
+    later:
+      laterButton === undefined
+        ? null
+        : {
+            opacity: getComputedStyle(laterButton).opacity,
+            pointerEvents: getComputedStyle(laterButton).pointerEvents,
+          },
   }
 }
 
@@ -73,14 +111,18 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it('labels a paused session while keeping its elapsed time visible', () => {
-  renderRow(session)
+it.each([
+  { name: 'paused', viewSession: session },
+  { name: 'not paused', viewSession: { ...session, isPaused: false } },
+])('shows the same completed row status when $name', ({ viewSession }) => {
+  renderRow(viewSession)
 
-  expect(snapshot()).toEqual({
-    badge: 'Paused',
-    age: '2m',
+  const expected = {
+    chips: [],
+    age: 'Finished · 2m',
     task: '— No task',
-  })
+  }
+  expect(snapshot()).toEqual(expected)
 })
 
 it('keeps the merged pull request label on a paused row', () => {
@@ -89,11 +131,23 @@ it('keeps the merged pull request label on a paused row', () => {
     pullRequest: { number: 2049, state: 'Merged' },
   })
 
-  expect(snapshot()).toEqual({
-    badge: 'Paused',
+  const expected = {
+    chips: [],
     age: 'Merged #2049 · 2m',
     task: '— No task',
-  })
+  }
+  expect(snapshot()).toEqual(expected)
+})
+
+it('keeps only the request chip on a paused needs-action row', () => {
+  renderRow({ ...session, category: 'needs_action', kind: 'Question' })
+
+  const expected = {
+    chips: ['Question'],
+    age: '2m',
+    task: '— No task',
+  }
+  expect(snapshot()).toEqual(expected)
 })
 
 it('shows the primary tq task and the number of other linked tasks', () => {
@@ -147,6 +201,25 @@ it('keeps the task, separator, and repository together on an iPhone row', () => 
     task: 'P1 #2048 Improve request reliability',
     separator: '·',
     repo: 'service',
+  })
+})
+
+it('shows only the star on a starred desktop row at rest', async () => {
+  renderRow({ ...session, isToday: true }, false, true)
+  const pointerTarget = document.createElement('div')
+  pointerTarget.style.position = 'fixed'
+  pointerTarget.style.inset = '0'
+  pointerTarget.style.opacity = '0'
+  document.body.append(pointerTarget)
+  await userEvent.hover(pointerTarget)
+
+  const actual = actionVisibilitySnapshot()
+  pointerTarget.remove()
+
+  expect(actual).toEqual({
+    actionsOpacity: '1',
+    star: { icon: '★', pressed: 'true', opacity: '1' },
+    later: { opacity: '0', pointerEvents: 'none' },
   })
 })
 
