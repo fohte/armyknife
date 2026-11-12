@@ -75,15 +75,13 @@ function getConversationMessageIdentity(message: ChatItem): string {
         ? `${message.type}:${JSON.stringify([message.tool, message.description])}`
         : `${message.type}:${message.requestId}`
     case 'tool_summary': {
-      const firstOperation = message.operations?.[0]
-      return `${message.type}:${JSON.stringify(
-        firstOperation === undefined
-          ? [message.summary]
-          : [firstOperation.tool, firstOperation.target ?? ''],
-      )}`
+      return `${message.type}:${JSON.stringify([
+        message.summary,
+        message.operations ?? [],
+      ])}`
     }
     case 'tool_in_progress':
-      return `${message.type}:${JSON.stringify([message.tool])}`
+      return `${message.type}:${JSON.stringify([message.tool, message.target ?? ''])}`
     case 'user':
       return message.timestamp === undefined
         ? `${message.type}:${JSON.stringify([message.from ?? '', message.text])}`

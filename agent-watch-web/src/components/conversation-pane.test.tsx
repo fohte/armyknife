@@ -7286,7 +7286,15 @@ it('keeps a question answer draft when a preceding conversation row arrives', ()
   )
 })
 
-it('keeps a tool summary expanded when its operations grow', () => {
+it('keeps repeated tool summaries attached to their batch when older rows arrive', () => {
+  const earlierSummary: ChatItem = {
+    type: 'tool_summary',
+    summary: 'Read ×2',
+    operations: [
+      { tool: 'Read', target: 'one.rs', failed: false },
+      { tool: 'Read', target: 'two.rs', failed: false },
+    ],
+  }
   const summary: ChatItem = {
     type: 'tool_summary',
     summary: 'Read ×1',
@@ -7300,32 +7308,21 @@ it('keeps a tool summary expanded when its operations grow', () => {
     requireElement(details.querySelector<HTMLElement>('summary')).click()
   })
 
-  renderConversationMessages(
-    [
-      {
-        ...summary,
-        summary: 'Read ×2',
-        operations: [
-          ...(summary.operations ?? []),
-          { tool: 'Read', target: 'two.rs', failed: false },
-        ],
-      },
-    ],
-    0,
-  )
+  renderConversationMessages([earlierSummary, summary], 0)
 
-  const currentDetails =
-    container.querySelector<HTMLDetailsElement>('.chat-tool-summary')
-  const snapshot = () => ({
-    sameDetails: details === currentDetails,
-    open: currentDetails?.open,
-    operationCount: currentDetails?.querySelectorAll('li').length,
-  })
-  expect(snapshot()).toEqual({
-    sameDetails: true,
-    open: true,
-    operationCount: 2,
-  })
+  const snapshot = () =>
+    Array.from(
+      container.querySelectorAll<HTMLDetailsElement>('.chat-tool-summary'),
+      (currentDetails) => ({
+        sameDetails: currentDetails === details,
+        open: currentDetails.open,
+        operationCount: currentDetails.querySelectorAll('li').length,
+      }),
+    )
+  expect(snapshot()).toEqual([
+    { sameDetails: false, open: false, operationCount: 2 },
+    { sameDetails: true, open: true, operationCount: 1 },
+  ])
 })
 
 it('keeps message rows memoized for elapsed and closed-task updates', () => {
