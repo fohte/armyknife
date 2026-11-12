@@ -1,3 +1,5 @@
+import '#components/mobile-layout.css'
+
 import { act, type ComponentProps } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -265,6 +267,17 @@ it('omits quick actions from iPhone inbox rows', () => {
   renderInbox({ isMobile: true })
 
   expect(container.querySelectorAll('.session-row-actions').length).toBe(0)
+})
+
+it('keeps the iPhone inbox brand below the safe area', () => {
+  container.className = 'agent-watch-shell'
+  container.setAttribute('data-layout', 'mobile')
+  renderInbox({ isMobile: true })
+
+  const brand = container.querySelector('.mobile-inbox-brand')
+  if (brand === null) throw new Error('Expected the mobile inbox brand')
+
+  expect(getComputedStyle(brand).paddingTop).toEqual('8px')
 })
 
 it('shows the connection time while the iPhone inbox is connected', () => {
