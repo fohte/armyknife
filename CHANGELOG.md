@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.623](https://github.com/fohte/armyknife/compare/v0.1.622...v0.1.623) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** hide prior replies ([#1614](https://github.com/fohte/armyknife/issues/1614)) ([5f2e40e](https://github.com/fohte/armyknife/commit/5f2e40e52911032d2925154ace9e31cfbfd3c352))
+
 ## [0.1.622](https://github.com/fohte/armyknife/compare/v0.1.621...v0.1.622) (2026-11-12)
 
 
