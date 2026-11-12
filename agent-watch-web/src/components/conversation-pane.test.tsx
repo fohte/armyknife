@@ -2418,6 +2418,48 @@ it('shows elapsed time while the session is working without an active tool', () 
   })
 })
 
+it('shows the agent status reason while the stopped session is waiting', () => {
+  renderView(vi.fn().mockResolvedValue(true), {
+    ...session,
+    category: 'in_progress',
+    activityStatus: 'waiting',
+    waitingReason: 'waiting for an external build',
+  })
+
+  const snapshot = () => ({
+    status: container.querySelector('.conversation-working-status')
+      ?.textContent,
+    workingDotVisible:
+      container.querySelector('.conversation-working-dot') !== null,
+  })
+
+  expect(snapshot()).toEqual({
+    status: 'Waiting · waiting for an external build',
+    workingDotVisible: false,
+  })
+})
+
+it('shows when the stopped session is waiting for background tasks', () => {
+  renderView(vi.fn().mockResolvedValue(true), {
+    ...session,
+    category: 'in_progress',
+    activityStatus: 'stopped',
+    waitingForBackgroundTasks: true,
+  })
+
+  const snapshot = () => ({
+    status: container.querySelector('.conversation-working-status')
+      ?.textContent,
+    workingDotVisible:
+      container.querySelector('.conversation-working-dot') !== null,
+  })
+
+  expect(snapshot()).toEqual({
+    status: 'Waiting for background tasks',
+    workingDotVisible: false,
+  })
+})
+
 it('shows background task descriptions and elapsed times on mobile', () => {
   renderView(
     vi.fn().mockResolvedValue(true),

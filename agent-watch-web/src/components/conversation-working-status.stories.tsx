@@ -21,6 +21,35 @@ export const WorkingWithoutAnActiveTool: Story = {
   name: 'The session is working without a known active tool',
 }
 
+export const WaitingForExternalWork: Story = {
+  name: 'The stopped session shows why it is waiting',
+  args: {
+    showWorking: false,
+    isWaiting: true,
+    waitingReason: 'waiting for an external build',
+  },
+}
+
+export const WaitingWithoutAReason: Story = {
+  name: 'The stopped session is waiting without a specific reason',
+  args: { showWorking: false, isWaiting: true },
+}
+
+export const WaitingForBackgroundTasks: Story = {
+  name: 'The stopped session is waiting for background tasks to finish',
+  args: { showWorking: false, waitingForBackgroundTasks: true },
+}
+
+export const WaitingForDelegatedWorkAndBackgroundTasks: Story = {
+  name: 'The session shows its reason and pending background tasks',
+  args: {
+    showWorking: false,
+    isWaiting: true,
+    waitingReason: 'waiting for an external build',
+    waitingForBackgroundTasks: true,
+  },
+}
+
 export const CompactingConversation: Story = {
   name: 'The conversation is being compacted',
   args: { isCompacting: true },

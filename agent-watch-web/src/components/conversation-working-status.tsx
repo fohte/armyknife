@@ -5,6 +5,9 @@ import type { BackgroundTask, ToolOperation } from '#types'
 
 type ConversationWorkingStatusProps = {
   showWorking?: boolean
+  isWaiting?: boolean
+  waitingReason?: string | null | undefined
+  waitingForBackgroundTasks?: boolean | undefined
   elapsedSeconds: number
   activeTool: ToolOperation | undefined
   backgroundTasks?: readonly BackgroundTask[]
@@ -14,6 +17,9 @@ type ConversationWorkingStatusProps = {
 
 export function ConversationWorkingStatus({
   showWorking = true,
+  isWaiting = false,
+  waitingReason = null,
+  waitingForBackgroundTasks = false,
   elapsedSeconds,
   activeTool,
   backgroundTasks = [],
@@ -41,6 +47,14 @@ export function ConversationWorkingStatus({
             </span>
           ) : null}
         </>
+      ) : null}
+      {!showWorking && !isCompacting && isWaiting ? (
+        <span>
+          {waitingReason == null ? 'Waiting' : `Waiting · ${waitingReason}`}
+        </span>
+      ) : null}
+      {!isCompacting && waitingForBackgroundTasks ? (
+        <span>Waiting for background tasks</span>
       ) : null}
       {showBackgroundTasks && backgroundTasks.length > 0 ? (
         <details className="conversation-background-tasks">
