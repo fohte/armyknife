@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.626](https://github.com/fohte/armyknife/compare/v0.1.625...v0.1.626) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** avoid reloading the Tree ([#1620](https://github.com/fohte/armyknife/issues/1620)) ([03c3920](https://github.com/fohte/armyknife/commit/03c3920f2df2073ba3d381fffc1d1dd54616dca1))
+
 ## [0.1.625](https://github.com/fohte/armyknife/compare/v0.1.624...v0.1.625) (2026-11-12)
 
 
