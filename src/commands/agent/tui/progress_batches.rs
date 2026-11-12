@@ -531,6 +531,7 @@ mod tests {
                 url: "https://github.com/sample-org/sample-project/pull/17".to_string(),
             },
             ci_state: PrCiState::Successful,
+            head_sha: None,
         }
     }
 
@@ -682,6 +683,7 @@ mod tests {
                         url: "https://github.com/sample-org/sample-project/pull/23".to_string(),
                     },
                     ci_state: PrCiState::InProgress,
+                    head_sha: None,
                 }),
                 lookup_unavailable: false,
             }],
@@ -817,6 +819,7 @@ mod tests {
                 url: "https://github.com/sample-org/sample-project/pull/17".to_string(),
             },
             ci_state: PrCiState::Successful,
+            head_sha: None,
         };
         let plan = build_implementation_plan(
             &checklist,

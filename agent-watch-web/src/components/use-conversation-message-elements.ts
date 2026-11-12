@@ -35,6 +35,7 @@ type UseConversationMessageElementsOptions = {
   onSelectSession: (id: string) => void
   pendingActions: PendingPermissionActions
   sessions: readonly SessionLinkTarget[]
+  now: Date
 }
 
 function contentIdentity(content: readonly UserContentPart[]): string[] {
@@ -138,6 +139,7 @@ export function useConversationMessageElements({
   onSelectSession,
   pendingActions,
   sessions,
+  now,
 }: UseConversationMessageElementsOptions) {
   return useMemo(() => {
     const activeTool = messages.findLast(
@@ -195,6 +197,7 @@ export function useConversationMessageElements({
         openInTerminalStatus,
         sessionEngine,
         sessions,
+        now,
       })
     })
 
@@ -211,6 +214,7 @@ export function useConversationMessageElements({
     isCompacting,
     isMobile,
     messages,
+    now,
     onAction,
     onOpenInTerminal,
     onSelectDecision,

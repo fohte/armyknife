@@ -1050,8 +1050,11 @@ mod tests {
             pull_requests: vec![
                 crate::commands::agent::tui::progress_fetch::PullRequestListItem {
                     number: 2048,
+                    owner: Some("example".to_string()),
+                    repo: Some("project".to_string()),
                     title: "Add session pull request links".to_string(),
                     url: "https://github.com/example/project/pull/2048".to_string(),
+                    head_sha: Some("confirmed-head".to_string()),
                     state: Some(PrState::Open),
                     ci_state: Some(crate::infra::github::PrCiState::InProgress),
                     review_status: "working".to_string(),
@@ -1071,8 +1074,11 @@ mod tests {
                 serde_json::json!({
                     "pullRequests": [{
                         "number": 2048,
+                        "owner": "example",
+                        "repo": "project",
                         "title": "Add session pull request links",
                         "url": "https://github.com/example/project/pull/2048",
+                        "headSha": "confirmed-head",
                         "state": "Open",
                         "ciState": "InProgress",
                         "reviewStatus": "working",

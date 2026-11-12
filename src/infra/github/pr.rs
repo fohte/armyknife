@@ -57,6 +57,8 @@ pub enum PrCiState {
 pub struct PrProgressInfo {
     pub pull_request: PrInfo,
     pub ci_state: PrCiState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_sha: Option<String>,
 }
 
 /// Parameters for updating a pull request.
@@ -278,7 +280,7 @@ impl PrBodyClient for GitHubClient {
 /// Maximum number of branch queries per single GraphQL request.
 /// GitHub GraphQL API has complexity limits; 50 branches keeps us well within bounds.
 const BATCH_SIZE: usize = 50;
-pub(super) const PR_PROGRESS_FIELDS: &str = "number title state url mergedAt commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }";
+pub(super) const PR_PROGRESS_FIELDS: &str = "number title state url mergedAt headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }";
 
 impl GitHubClient {
     /// Fetch PR status for multiple repo/branch combinations in a single GraphQL call.
@@ -479,6 +481,10 @@ pub(super) fn parse_pr_progress_node(node: &serde_json::Value) -> Option<PrProgr
     Some(PrProgressInfo {
         pull_request,
         ci_state,
+        head_sha: node
+            .get("headRefOid")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
     })
 }
 
@@ -540,6 +546,7 @@ mod tests {
             "state": "OPEN",
             "url": "https://github.com/example-org/example-project/pull/7",
             "mergedAt": null,
+            "headRefOid": "head-sha",
             "commits": {
                 "nodes": [{
                     "commit": {
@@ -573,6 +580,7 @@ mod tests {
                         url: "https://github.com/example-org/example-project/pull/7".to_string(),
                     },
                     ci_state: PrCiState::InProgress,
+                    head_sha: Some("head-sha".to_string()),
                 }),
             )]),
         );
@@ -673,6 +681,7 @@ mod tests {
             "state": "OPEN",
             "url": "https://github.com/example-org/example-project/pull/7",
             "mergedAt": null,
+            "headRefOid": "head-sha",
             "commits": {
                 "nodes": [{
                     "commit": {
@@ -692,6 +701,7 @@ mod tests {
                     url: "https://github.com/example-org/example-project/pull/7".to_string(),
                 },
                 ci_state: expected,
+                head_sha: Some("head-sha".to_string()),
             }),
         );
     }

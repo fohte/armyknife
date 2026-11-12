@@ -172,9 +172,11 @@ export function useConversationStatusPanel({
             content: (
               <PullRequestListPanel
                 key={`${session.id}:${session.task?.id ?? ''}`}
+                sessionId={session.id}
                 pullRequests={pullRequestList.pullRequests}
                 loading={pullRequestList.loading}
                 error={pullRequestList.error}
+                onRefresh={pullRequestList.refresh}
               />
             ),
           },

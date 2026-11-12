@@ -2,10 +2,12 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
+import { formatMessageTime } from '#components/message-time'
 import { UserWithContent } from '#components/user-with-content'
 import type { ChatItem } from '#types'
 
 const imageSource = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='
+const now = new Date(2026, 5, 2, 0, 3)
 
 let container: HTMLDivElement
 let root: Root | null = null
@@ -18,7 +20,7 @@ function render(
 ) {
   root ??= createRoot(container)
   act(() => {
-    root?.render(<UserWithContent message={message} />)
+    root?.render(<UserWithContent message={message} now={now} />)
   })
 }
 
@@ -84,11 +86,7 @@ it('renders the sender, text, and image in message order', () => {
 
 it('labels a queued prompt as You and keeps the user bubble style', () => {
   const timestamp = '2026-06-01T12:00:00Z'
-  const localTime = new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).format(new Date(timestamp))
+  const localTime = formatMessageTime(timestamp, now) ?? 'invalid timestamp'
   render({
     type: 'queued_user',
     content: [{ type: 'text', text: 'Please rerun the example check.' }],
@@ -111,11 +109,7 @@ it('labels a queued prompt as You and keeps the user bubble style', () => {
 
 it('shows the local send time above a user message', () => {
   const timestamp = '2026-06-01T12:00:00Z'
-  const localTime = new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).format(new Date(timestamp))
+  const localTime = formatMessageTime(timestamp, now) ?? 'invalid timestamp'
   render({
     type: 'user',
     text: 'Please rerun the example check.',

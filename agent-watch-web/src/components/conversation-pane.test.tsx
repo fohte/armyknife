@@ -9,6 +9,7 @@ import { ConversationMessageRow } from '#components/conversation-message-row'
 import { ConversationPane } from '#components/conversation-pane'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { InboxConversationPanes } from '#components/inbox-conversation-panes'
+import { formatMessageTime } from '#components/message-time'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import { useSessionPullRequests } from '#components/use-session-pull-requests'
@@ -75,6 +76,9 @@ function PullRequestHookTestView({
         {state.pullRequests.map((pullRequest) => pullRequest.title).join(', ')}
       </span>
       <span>{state.loading ? 'Loading' : 'Ready'}</span>
+      <button type="button" onClick={state.refresh}>
+        Refresh pull requests
+      </button>
     </div>
   )
 }
@@ -969,8 +973,11 @@ it('shows linked pull requests alongside partial lookup errors', async () => {
           pullRequests: [
             {
               number: 2048,
+              owner: 'example',
+              repo: 'project',
               title: 'Show linked work in the sidebar',
               url: 'https://github.com/example/project/pull/2048',
+              headSha: 'confirmed-head',
               state: 'Open',
               ciState: 'Successful',
               reviewStatus: 'done',
@@ -1138,8 +1145,11 @@ it('reuses recent pull request lists after keyed session remounts', async () => 
           pullRequests: [
             {
               number: 43,
+              owner: 'sample-owner',
+              repo: 'sample-repo',
               title: `Request for ${sessionId}`,
               url: 'https://github.com/sample-org/sample-project/pull/43',
+              headSha: 'sample-head',
               state: 'Open',
               ciState: 'Successful',
               reviewStatus: 'done',
@@ -1268,8 +1278,11 @@ it('fetches a fresh pull request list when the selected task changes', async () 
           pullRequests: [
             {
               number: 43,
+              owner: 'sample-owner',
+              repo: 'sample-repo',
               title: `Request ${String(responseNumber)}`,
               url: 'https://github.com/sample-org/sample-project/pull/43',
+              headSha: 'sample-head',
               state: 'Open',
               ciState: 'Successful',
               reviewStatus: 'done',
@@ -1324,6 +1337,74 @@ it('fetches a fresh pull request list when the selected task changes', async () 
     requests: [
       '/api/sessions/task-change-session/pull-requests',
       '/api/sessions/task-change-session/pull-requests',
+    ],
+  })
+})
+
+it('refreshes pull requests immediately when explicitly requested', async () => {
+  vi.useFakeTimers()
+  setPageVisibility('visible')
+  let responseNumber = 0
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/pull-requests')) {
+      responseNumber += 1
+      return Promise.resolve(
+        jsonResponse({
+          pullRequests: [
+            {
+              number: 43,
+              owner: 'sample-owner',
+              repo: 'sample-repo',
+              title: `Request ${String(responseNumber)}`,
+              url: 'https://github.com/sample-org/sample-project/pull/43',
+              headSha: 'sample-head',
+              state: 'Open',
+              ciState: 'Successful',
+              reviewStatus: 'done',
+            },
+          ],
+          error: null,
+        }),
+      )
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+
+  act(() => {
+    root?.render(
+      <PullRequestHookTestView
+        session={{ ...session, id: 'explicit-refresh-session' }}
+        enabled={true}
+      />,
+    )
+  })
+  const flushRequests = async () => {
+    await act(async () => {
+      for (let index = 0; index < 12; index += 1) await Promise.resolve()
+    })
+  }
+  await flushRequests()
+  const refreshButton = container.querySelector('button')
+  if (refreshButton === null) throw new Error('Refresh button is missing')
+  act(() => {
+    refreshButton.click()
+  })
+  await flushRequests()
+
+  const snapshot = () => ({
+    title: container.querySelector('span')?.textContent,
+    requests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/pull-requests')),
+  })
+  expect(snapshot()).toEqual({
+    title: 'Request 2',
+    requests: [
+      '/api/sessions/explicit-refresh-session/pull-requests',
+      '/api/sessions/explicit-refresh-session/pull-requests',
     ],
   })
 })
@@ -2845,11 +2926,7 @@ it('marks a queued prompt below the delivered conversation', () => {
 
 it('shows a local time on system event rows', () => {
   const timestamp = '2026-06-01T12:00:00Z'
-  const localTime = new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).format(new Date(timestamp))
+  const localTime = formatMessageTime(timestamp) ?? 'invalid timestamp'
   renderView(() => Promise.resolve(true), session, undefined, [
     {
       type: 'event',
@@ -7699,6 +7776,112 @@ it('skips committing an unchanged memoized conversation row', () => {
   })
 
   expect(renderMessage).toHaveBeenCalledTimes(1)
+})
+
+it('refreshes a memoized message time when the local day changes', () => {
+  const timestamp = new Date(2030, 8, 11, 23, 58).toISOString()
+  const message: ChatItem = {
+    type: 'event',
+    kind: 'system',
+    text: 'A fictional event occurred.',
+    failed: false,
+    timestamp,
+  }
+  const sessions: Session[] = []
+  const onAction = () => Promise.resolve(true)
+  const onOpenInTerminal = () => undefined
+  const onSelectDecision = () => undefined
+  const onSelectSession = () => undefined
+  const renderMessage = vi.mocked(renderConversationMessage)
+  renderMessage.mockClear()
+  const beforeMidnight = new Date(2030, 8, 11, 23, 59)
+  const rowProps = {
+    actions,
+    actionsReady: true,
+    isMobile: false,
+    selected: false,
+    decisionPosition: undefined,
+    message,
+    now: beforeMidnight,
+    pendingAction: null,
+    openInTerminalStatus: null,
+    sessionEngine: 'claude' as const,
+    sessions,
+    onAction,
+    onOpenInTerminal,
+    onSelectDecision,
+    onSelectSession,
+  }
+  const afterMidnight = new Date(2030, 8, 12, 0, 1)
+  root = createRoot(container)
+  act(() => {
+    root?.render(<ConversationMessageRow {...rowProps} />)
+  })
+  act(() => {
+    root?.render(<ConversationMessageRow {...rowProps} now={beforeMidnight} />)
+  })
+  act(() => {
+    root?.render(<ConversationMessageRow {...rowProps} now={afterMidnight} />)
+  })
+
+  const getActual = () => ({
+    renderCount: renderMessage.mock.calls.length,
+    time: container.querySelector('time')?.textContent ?? null,
+  })
+  expect(getActual()).toEqual({
+    renderCount: 2,
+    time: formatMessageTime(timestamp, afterMidnight),
+  })
+})
+
+it('passes the changed local day through the memoized message elements', () => {
+  const timestamp = new Date(2030, 8, 11, 23, 58).toISOString()
+  const beforeMidnight = new Date(2030, 8, 11, 23, 59)
+  const afterMidnight = new Date(2030, 8, 12, 0, 1)
+  const message: ChatItem = {
+    type: 'event',
+    kind: 'system',
+    text: 'A fictional event occurred.',
+    failed: false,
+    timestamp,
+  }
+  const messages = [message]
+  const sessions: Session[] = []
+  const pendingPermissionActions = {}
+  const onAction = () => Promise.resolve(true)
+  const onSelectDecision = () => undefined
+  const onSelectSession = () => undefined
+  const render = () => {
+    root ??= createRoot(container)
+    act(() => {
+      root?.render(
+        <ConversationPaneView
+          session={session}
+          sessions={sessions}
+          messages={messages}
+          actions={null}
+          pendingPermissionActions={pendingPermissionActions}
+          loading={false}
+          error={null}
+          onAction={onAction}
+          onSelectSession={onSelectSession}
+          onSelectDecision={onSelectDecision}
+        />,
+      )
+    })
+  }
+  vi.useFakeTimers()
+  try {
+    vi.setSystemTime(beforeMidnight)
+    render()
+    vi.setSystemTime(afterMidnight)
+    render()
+
+    const getActual = () => container.querySelector('time')?.textContent ?? null
+    expect(getActual()).toBe(formatMessageTime(timestamp, afterMidnight))
+  } finally {
+    vi.useRealTimers()
+  }
 })
 
 it('keeps a todo comment when a preceding conversation row arrives', () => {

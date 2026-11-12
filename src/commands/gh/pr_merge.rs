@@ -1,4 +1,4 @@
-use std::{future::Future, io::Write, path::PathBuf, process::Output};
+use std::{path::PathBuf, process::Output};
 
 use anyhow::{Context, bail};
 use clap::Args;
@@ -22,7 +22,12 @@ use crate::shared::{
 
 mod checks;
 mod merge_flow;
+mod watch_web;
 
+use watch_web::run_merge_and_close;
+pub(crate) use watch_web::{WatchWebPrMergeResult, run_watch_web_pr_merge};
+
+#[cfg(test)]
 use merge_flow::run_merge;
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -148,39 +153,6 @@ fn unmerged_lower_pr(
         .iter()
         .find(|stack_pull_request| stack_pull_request.merged_at.is_none())
         .map(|stack_pull_request| stack_pull_request.number))
-}
-
-async fn run_merge_and_close<C, F>(
-    client: &impl PrMergeClient,
-    hook_runner: &mut impl FnMut(&[(&str, &str)]) -> anyhow::Result<()>,
-    owner: &str,
-    repo: &str,
-    pr_number: u64,
-    close_worktree: C,
-) -> anyhow::Result<()>
-where
-    C: FnOnce(PrSnapshot) -> F,
-    F: Future<Output = anyhow::Result<()>>,
-{
-    match run_merge(client, hook_runner, owner, repo, pr_number).await? {
-        MergeOutcome::Merged(merged) => {
-            println!("PR #{pr_number} merged.");
-            let _ = std::io::stdout().flush();
-            if let Err(error) = close_worktree(merged.clone()).await {
-                eprintln!(
-                    "Could not close worktree for merged PR #{pr_number} (branch `{}`): {error:#}",
-                    merged.head_ref_name,
-                );
-            }
-        }
-        MergeOutcome::AlreadyMerged(_) => {
-            println!("PR #{pr_number} was already merged.");
-        }
-        MergeOutcome::Enqueued(message) => {
-            println!("PR #{pr_number} was added to the merge queue and has not merged: {message}");
-        }
-    }
-    Ok(())
 }
 
 async fn close_merged_head_worktree(merged_pr: &PrSnapshot) -> anyhow::Result<()> {
@@ -1445,6 +1417,44 @@ mod tests {
         assert_eq!(
             (result.is_err(), events.borrow().clone()),
             (true, vec!["view".to_string()]),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn run_watch_web_merge_stops_when_the_confirmed_head_is_stale(
+        events: Rc<RefCell<Vec<String>>>,
+    ) {
+        let client = fake_client(
+            &[snapshot(PrState::Open, "current-head", "CLEAN")],
+            Rc::clone(&events),
+            false,
+            false,
+        );
+        let mut hook = |_: &[(&str, &str)]| {
+            events.borrow_mut().push("hook".to_string());
+            Ok(())
+        };
+
+        let result = merge_flow::run_merge_with_expected_head(
+            &client,
+            &mut hook,
+            "sample-org",
+            "sample-repo",
+            42,
+            Some("confirmed-head"),
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.map(|_| ()).map_err(|error| error.to_string()),
+                events.borrow().clone(),
+            ),
+            (
+                Err("PR #42 head changed since confirmation.".to_string()),
+                vec!["view".to_string()],
+            ),
         );
     }
 

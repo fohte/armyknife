@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { isSessionPullRequestListResponse } from '#components/conversation-pane-response'
 import { requestJson } from '#components/conversation-requests'
@@ -46,8 +46,15 @@ export function useSessionPullRequests({
     loading: false,
     error: null,
   })
+  const [refreshVersion, setRefreshVersion] = useState(0)
+  const refreshNow = useCallback(() => {
+    setRefreshVersion((version) => version + 1)
+  }, [])
+  const handledRefreshVersion = useRef(0)
+
   useEffect(() => {
     if (!enabled) return
+    const forceRefresh = refreshVersion !== handledRefreshVersion.current
 
     const visibilityTarget =
       typeof document === 'undefined' ? undefined : document
@@ -158,7 +165,8 @@ export function useSessionPullRequests({
         return
       }
       const cached = getCachedPullRequestList(cacheKey)
-      if (isPullRequestListStale(cached)) {
+      if (forceRefresh || isPullRequestListStale(cached)) {
+        if (forceRefresh) handledRefreshVersion.current = refreshVersion
         refresh()
       } else {
         scheduleRefresh()
@@ -179,7 +187,8 @@ export function useSessionPullRequests({
       })
     }
     if (visible) {
-      if (isPullRequestListStale(cached)) {
+      if (forceRefresh || isPullRequestListStale(cached)) {
+        if (forceRefresh) handledRefreshVersion.current = refreshVersion
         refresh()
       } else {
         scheduleRefresh()
@@ -191,10 +200,10 @@ export function useSessionPullRequests({
       stopScheduledRefresh()
       unsubscribeVisibility()
     }
-  }, [enabled, session.id, cacheKey])
+  }, [enabled, session.id, session.task?.id, cacheKey, refreshVersion])
 
   if (state.cacheKey === cacheKey) {
-    return state
+    return { ...state, refresh: refreshNow }
   }
   const cached = getCachedPullRequestList(cacheKey)
   if (cached !== undefined) {
@@ -203,6 +212,7 @@ export function useSessionPullRequests({
       pullRequests: cached.pullRequests,
       loading: false,
       error: cached.error,
+      refresh: refreshNow,
     }
   }
   return {
@@ -210,5 +220,6 @@ export function useSessionPullRequests({
     pullRequests: [],
     loading: enabled,
     error: null,
+    refresh: refreshNow,
   }
 }

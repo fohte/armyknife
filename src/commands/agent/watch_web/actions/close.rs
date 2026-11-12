@@ -6,10 +6,11 @@ use serde::Deserialize;
 
 use super::*;
 
-pub(super) async fn run_close_on_blocking_worker<F, Fut>(operation: F) -> Result<()>
+pub(super) async fn run_on_blocking_worker<T, F, Fut>(operation: F) -> Result<T>
 where
     F: FnOnce() -> Fut + Send + 'static,
-    Fut: Future<Output = Result<()>> + Send + 'static,
+    Fut: Future<Output = Result<T>> + Send + 'static,
+    T: Send + 'static,
 {
     let runtime = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || runtime.block_on(operation()))
@@ -47,11 +48,11 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn close_operations_run_on_a_blocking_worker() {
+    async fn operations_run_on_a_blocking_worker() {
         let request_thread = std::thread::current().id();
         let (sender, receiver) = std::sync::mpsc::channel();
 
-        let result = run_close_on_blocking_worker(move || async move {
+        let result = run_on_blocking_worker(move || async move {
             sender
                 .send(std::thread::current().id())
                 .map_err(anyhow::Error::from)?;

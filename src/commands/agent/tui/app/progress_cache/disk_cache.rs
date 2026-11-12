@@ -682,6 +682,7 @@ mod tests {
                 url: "https://example.test/pull/7".to_string(),
             },
             ci_state: PrCiState::InProgress,
+            head_sha: None,
         };
         let checklist = TqChecklist {
             id: "checklist-placeholder".to_string(),
