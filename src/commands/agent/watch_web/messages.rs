@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
@@ -36,10 +36,7 @@ use self::proposals::proposal_chat_item;
 use self::range::MessageRange;
 
 mod cache;
-use self::cache::{
-    MessageCache, MessageCacheInputs, MessageCacheKey, PendingPermissionRequestCacheKey,
-    RunningBackgroundTaskCache,
-};
+use self::cache::{MessageCache, MessageCacheKey, RunningBackgroundTaskCache};
 mod session_titles;
 use self::session_titles::{parent_session, resolve_peer_session_titles};
 
@@ -263,45 +260,36 @@ fn load_conversation_with_queued_prompts(
     let main_permission_pending = session
         .pending_permission_agent_ids
         .contains(MAIN_THREAD_AGENT_KEY);
-    let main_permission_is_question = is_ask_user_question(&session);
-    let pending_question_data = if main_permission_pending
-        && main_permission_is_question
-        && session.engine == Engine::Claude
-    {
-        session
-            .pending_permission_request_ids
-            .get(MAIN_THREAD_AGENT_KEY)
-            .map(|request_id| (loaders.permission_request_data)(session_id, request_id))
-            .transpose()?
-            .flatten()
+    let main_permission_request_id = session
+        .pending_permission_request_ids
+        .get(MAIN_THREAD_AGENT_KEY)
+        .cloned();
+    let main_permission_data = main_permission_request_id
+        .as_deref()
+        .map(|request_id| (loaders.permission_request_data)(session_id, request_id))
+        .transpose()?
+        .flatten();
+    let main_permission_is_question = main_permission_data
+        .as_ref()
+        .and_then(|data| data.tool_name.as_deref())
+        == Some("AskUserQuestion")
+        || (main_permission_data.is_none() && is_ask_user_question(&session));
+    let pending_tool = if main_permission_pending && !main_permission_is_question {
+        main_permission_data
+            .as_ref()
+            .and_then(permission_request_pending_tool)
+            .or_else(|| session.current_tool.clone())
     } else {
         None
     };
-    let pending_permission_answers = pending_question_data
-        .as_ref()
-        .map(|data| data.answers.clone())
-        .unwrap_or_default();
-    let pending_permission_request =
-        pending_question_data
-            .as_ref()
-            .map(|data| PendingPermissionRequestCacheKey {
-                answers: pending_permission_answers.clone(),
-                pending: data.pending,
-            });
-    let pending_tool = (main_permission_pending && !main_permission_is_question)
-        .then_some(session.current_tool.as_deref())
-        .flatten();
     let cache_key = MessageCacheKey::new(
         &session,
-        MessageCacheInputs {
-            parent: parent.clone(),
-            pending_permission_request,
-            user_marker: user_marker.clone(),
-            decisions: decisions.clone(),
-            queued_prompts: queued_prompts.clone(),
-            peer_out_messages: peer_out_messages.clone(),
-            proposals: proposals.clone(),
-        },
+        parent.clone(),
+        user_marker.clone(),
+        decisions.clone(),
+        queued_prompts.clone(),
+        peer_out_messages.clone(),
+        proposals.clone(),
     )?;
     if let Some(mut cached) = loaders.message_cache.get(session_id, &cache_key) {
         let elapsed = cached.cached_at.elapsed().as_secs();
@@ -325,7 +313,7 @@ fn load_conversation_with_queued_prompts(
             path: session.transcript_path.as_deref(),
             engine: session.engine,
             parent: parent.as_ref(),
-            pending_tool,
+            pending_tool: pending_tool.as_deref(),
             watch_web_user_marker: user_marker.as_deref(),
             additions: parser::claude::ParserAdditions {
                 decisions: &decisions,
@@ -334,8 +322,13 @@ fn load_conversation_with_queued_prompts(
                 proposals: &proposal_items,
             },
         })?;
-    apply_pending_question_answers(&mut conversation.messages, &pending_permission_answers);
     resolve_peer_session_titles(&mut conversation.messages, &mut load_session)?;
+
+    for message in &mut conversation.messages {
+        if let ChatItem::Permission { request_id, .. } = message {
+            *request_id = main_permission_request_id.clone();
+        }
+    }
 
     let messages = &mut conversation.messages;
     if main_permission_pending
@@ -345,9 +338,11 @@ fn load_conversation_with_queued_prompts(
             .any(|message| matches!(message, ChatItem::Permission { .. }))
     {
         messages.push(ChatItem::Permission {
-            tool: session
-                .current_tool
-                .clone()
+            request_id: main_permission_request_id.clone(),
+            tool: main_permission_data
+                .as_ref()
+                .and_then(permission_request_pending_tool)
+                .or_else(|| session.current_tool.clone())
                 .unwrap_or_else(|| "Permission required".to_string()),
             description: "Waiting for permission".to_string(),
         });
@@ -367,19 +362,34 @@ fn load_conversation_with_queued_prompts(
         .iter()
         .filter(|agent_id| agent_id.as_str() != MAIN_THREAD_AGENT_KEY)
     {
+        let Some(request_id) = session
+            .pending_permission_request_ids
+            .get(agent_id)
+            .cloned()
+        else {
+            continue;
+        };
+        let permission_data = (loaders.permission_request_data)(session_id, &request_id)?;
+        if permission_data
+            .as_ref()
+            .and_then(|data| data.tool_name.as_deref())
+            == Some("AskUserQuestion")
+        {
+            continue;
+        }
         messages.push(ChatItem::Permission {
-            tool: format!("Subagent {agent_id}"),
+            request_id: Some(request_id),
+            tool: format!(
+                "Subagent {agent_id}: {}",
+                permission_data
+                    .and_then(|data| data.tool_name)
+                    .unwrap_or_else(|| "Permission required".to_string())
+            ),
             description: "Waiting for permission approval.".to_string(),
         });
     }
 
     conversation.update_metadata();
-    if pending_question_data
-        .as_ref()
-        .is_some_and(|request| !request.pending)
-    {
-        conversation.active_question_index = None;
-    }
 
     cache::delete_resolved_queued_prompts(loaders, session_id, &resolved_queued_prompt_ids);
     loaders.message_cache.insert(
@@ -391,17 +401,15 @@ fn load_conversation_with_queued_prompts(
     Ok(Some(conversation))
 }
 
-fn apply_pending_question_answers(messages: &mut [ChatItem], answers: &BTreeMap<String, String>) {
-    for (question, answer) in answers {
-        if let Some(ChatItem::Question {
-            answer: current_answer,
-            ..
-        }) = messages.iter_mut().rev().find(|message| {
-            matches!(message, ChatItem::Question { question: current, .. } if current == question)
-        }) {
-            *current_answer = Some(answer.clone());
-        }
-    }
+fn permission_request_pending_tool(data: &PermissionRequestData) -> Option<String> {
+    let tool_name = data.tool_name.as_deref()?;
+    let detail = ["command", "file_path", "pattern"]
+        .into_iter()
+        .find_map(|key| data.tool_input.get(key).and_then(Value::as_str));
+    Some(match detail {
+        Some(detail) => format!("{tool_name}({detail})"),
+        None => tool_name.to_string(),
+    })
 }
 
 pub(in crate::commands::agent::watch_web::messages) struct TranscriptInput<'a> {
@@ -637,6 +645,8 @@ enum ChatItem {
         resolved: bool,
     },
     Permission {
+        #[serde(rename = "requestId", skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
         tool: String,
         description: String,
     },
@@ -754,9 +764,7 @@ struct ParentSession {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
@@ -770,12 +778,13 @@ mod tests {
     use tower::ServiceExt;
 
     use super::{
-        ChatItem, QuestionChoice, RouteLoaders, load_messages_with,
-        routes_with_decisions_and_queued_prompts_and_peer_out_messages,
+        ChatItem, QuestionChoice, RouteLoaders, load_conversation_with_queued_prompts,
+        load_messages_with, routes_with_decisions_and_queued_prompts_and_peer_out_messages,
         routes_with_proposals_and_peer_out_messages,
     };
     use crate::commands::agent::store::{
-        AgentDecision, AgentProposal, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
+        AgentDecision, AgentProposal, PermissionRequestData, WatchWebPeerOutMessage,
+        WatchWebQueuedPrompt,
     };
     use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 
@@ -789,62 +798,6 @@ mod tests {
             "last_message": null,
         }))
         .unwrap()
-    }
-
-    #[test]
-    fn pending_question_answers_activate_the_last_unanswered_question() {
-        let mut response = super::ConversationResponse {
-            messages: vec![
-                super::ChatItem::Question {
-                    header: None,
-                    question: "Which display mode?".to_string(),
-                    choices: Vec::new(),
-                    multi_select: false,
-                    answer: None,
-                },
-                super::ChatItem::Question {
-                    header: None,
-                    question: "Include a legend?".to_string(),
-                    choices: Vec::new(),
-                    multi_select: false,
-                    answer: None,
-                },
-            ],
-            ..super::ConversationResponse::default()
-        };
-        super::apply_pending_question_answers(
-            &mut response.messages,
-            &BTreeMap::from([("Include a legend?".to_string(), "Yes".to_string())]),
-        );
-        response.update_metadata();
-
-        assert_eq!(
-            serde_json::to_value(response).unwrap(),
-            json!({
-                "messages": [
-                    {
-                        "type": "question",
-                        "question": "Which display mode?",
-                        "choices": [],
-                        "multi_select": false,
-                        "answer": null,
-                    },
-                    {
-                        "type": "question",
-                        "question": "Include a legend?",
-                        "choices": [],
-                        "multi_select": false,
-                        "answer": "Yes",
-                    },
-                ],
-                "backgroundTasks": [],
-                "start": 0,
-                "total": 2,
-                "decisions": [],
-                "hasUnansweredProposal": false,
-                "activeQuestionIndex": 0,
-            }),
-        );
     }
 
     fn background_task_output_router(transcript_path: &Path, output_path: &Path) -> Router {
@@ -1898,6 +1851,10 @@ mod tests {
     fn pending_permission_fallback_does_not_reuse_the_last_assistant_message() {
         let mut session = stored_session();
         session.pending_permission_agent_ids = BTreeSet::from([MAIN_THREAD_AGENT_KEY.to_string()]);
+        session.pending_permission_request_ids = BTreeMap::from([(
+            MAIN_THREAD_AGENT_KEY.to_string(),
+            "permission-request-main".to_string(),
+        )]);
         session.current_tool = Some("Bash(cargo test -p sample)".to_string());
         session.last_message = Some("Run the package tests".to_string());
 
@@ -1907,9 +1864,28 @@ mod tests {
             })
             .unwrap(),
             Some(vec![ChatItem::Permission {
+                request_id: Some("permission-request-main".to_string()),
                 tool: "Bash(cargo test -p sample)".to_string(),
                 description: "Waiting for permission".to_string(),
             }])
+        );
+    }
+
+    #[test]
+    fn permission_card_serializes_its_request_id_for_watch_web_actions() {
+        assert_eq!(
+            serde_json::to_value(ChatItem::Permission {
+                request_id: Some("permission-request-example".to_string()),
+                tool: "Bash".to_string(),
+                description: "Waiting for permission".to_string(),
+            })
+            .unwrap(),
+            json!({
+                "type": "permission",
+                "requestId": "permission-request-example",
+                "tool": "Bash",
+                "description": "Waiting for permission",
+            }),
         );
     }
 
@@ -1919,14 +1895,36 @@ mod tests {
 
         let mut session = stored_session();
         session.pending_permission_agent_ids = BTreeSet::from([MAIN_THREAD_AGENT_KEY.to_string()]);
-        session.current_tool = Some("AskUserQuestion".to_string());
+        session.pending_permission_request_ids = BTreeMap::from([(
+            MAIN_THREAD_AGENT_KEY.to_string(),
+            "permission-request-question".to_string(),
+        )]);
+        session.current_tool = Some("Bash(example subagent command)".to_string());
         session.transcript_path = Some(transcript_path);
+        let loaders = RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
+        .with_permission_request_data_loader(|_, _| {
+            Ok(Some(PermissionRequestData {
+                tool_name: Some("AskUserQuestion".to_string()),
+                tool_input: json!({ "questions": [] }),
+                pending: true,
+            }))
+        });
 
         assert_eq!(
-            load_messages_with("fixture-session", |id| {
-                Ok((id == "fixture-session").then(|| session.clone()))
-            })
-            .unwrap(),
+            load_conversation_with_queued_prompts(
+                "fixture-session",
+                |id| Ok((id == "fixture-session").then(|| session.clone())),
+                |_| Ok(None),
+                &loaders,
+            )
+            .unwrap()
+            .map(|conversation| conversation.messages),
             Some(vec![ChatItem::Question {
                 header: Some("Summary".to_string()),
                 question: "Should the summary be brief?".to_string(),
@@ -1950,6 +1948,16 @@ mod tests {
         session.pending_permission_agent_ids = BTreeSet::from([
             MAIN_THREAD_AGENT_KEY.to_string(),
             "fixture-agent-id".to_string(),
+        ]);
+        session.pending_permission_request_ids = BTreeMap::from([
+            (
+                MAIN_THREAD_AGENT_KEY.to_string(),
+                "permission-request-main".to_string(),
+            ),
+            (
+                "fixture-agent-id".to_string(),
+                "permission-request-subagent".to_string(),
+            ),
         ]);
         session.current_tool = Some("AskUserQuestion".to_string());
         session.last_message = Some("Should the summary be brief?".to_string());
@@ -1975,10 +1983,81 @@ mod tests {
                     answer: None,
                 },
                 ChatItem::Permission {
-                    tool: "Subagent fixture-agent-id".to_string(),
+                    request_id: Some("permission-request-subagent".to_string()),
+                    tool: "Subagent fixture-agent-id: Permission required".to_string(),
                     description: "Waiting for permission approval.".to_string(),
                 },
             ])
+        );
+    }
+
+    #[test]
+    fn pending_permission_cards_target_each_agent_and_omit_question_requests() {
+        let mut session = stored_session();
+        session.pending_permission_agent_ids = BTreeSet::from([
+            "agent-fixture-a".to_string(),
+            "agent-fixture-question".to_string(),
+            MAIN_THREAD_AGENT_KEY.to_string(),
+        ]);
+        session.pending_permission_request_ids = BTreeMap::from([
+            (
+                "agent-fixture-a".to_string(),
+                "permission-request-a".to_string(),
+            ),
+            (
+                "agent-fixture-question".to_string(),
+                "permission-request-question".to_string(),
+            ),
+            (
+                MAIN_THREAD_AGENT_KEY.to_string(),
+                "permission-request-main".to_string(),
+            ),
+        ]);
+        session.current_tool = Some("Bash(example command)".to_string());
+        let loaders = RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
+        .with_permission_request_data_loader(|_, request_id| {
+            let tool_name = match request_id {
+                "permission-request-a" => "Write",
+                "permission-request-question" => "AskUserQuestion",
+                _ => return Ok(None),
+            };
+            Ok(Some(PermissionRequestData {
+                tool_name: Some(tool_name.to_string()),
+                tool_input: json!({}),
+                pending: true,
+            }))
+        });
+
+        let actual = load_conversation_with_queued_prompts(
+            "fixture-session",
+            |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            &loaders,
+        )
+        .unwrap()
+        .unwrap()
+        .messages;
+
+        assert_eq!(
+            actual,
+            vec![
+                ChatItem::Permission {
+                    request_id: Some("permission-request-main".to_string()),
+                    tool: "Bash(example command)".to_string(),
+                    description: "Waiting for permission".to_string(),
+                },
+                ChatItem::Permission {
+                    request_id: Some("permission-request-a".to_string()),
+                    tool: "Subagent agent-fixture-a: Write".to_string(),
+                    description: "Waiting for permission approval.".to_string(),
+                },
+            ],
         );
     }
 

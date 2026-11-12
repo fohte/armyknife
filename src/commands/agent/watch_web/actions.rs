@@ -12,8 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::super::resume::SHELL_COMMANDS;
 use super::super::store;
-use super::super::store::PermissionRequestDecision;
-use super::super::types::{Engine, MAIN_THREAD_AGENT_KEY, Session, SessionStatus, TmuxInfo};
+use super::super::types::{Engine, Session, SessionStatus, TmuxInfo};
 use super::super::user_turn::is_ask_user_question;
 use super::messages::RouteLoaders;
 
@@ -26,9 +25,6 @@ mod proposals;
 
 pub(super) use api_error::ApiError;
 use proposal_answer_locks::ProposalAnswerLocks;
-
-const PERMISSION_REQUEST_EXPIRED_MESSAGE: &str =
-    "permission request is no longer available; answer in the terminal";
 
 pub(super) fn router(message_loaders: RouteLoaders) -> Router {
     router_with_state(ActionState {
@@ -199,11 +195,10 @@ async fn actions(
         message: has_live_session,
         answer_question: has_live_session
             && session.engine == Engine::Claude
-            && pending_main_permission_request_id(&session).is_some()
             && is_ask_user_question(&session),
         permission: (has_live_session
             && session.engine == Engine::Claude
-            && pending_main_permission_request_id(&session).is_some())
+            && session.has_pending_permission_requests())
         .then_some(PermissionCapabilities {
             approve: true,
             reject: true,
@@ -215,16 +210,9 @@ async fn actions(
 
 #[derive(Deserialize)]
 struct AnswerRequest {
-    question: Option<String>,
     choice: Option<u8>,
-    answer: Option<String>,
     #[serde(default)]
     skip: bool,
-}
-
-enum QuestionResponse<'a> {
-    Choice(u8),
-    Text(&'a str),
 }
 
 async fn answer_question(
@@ -233,103 +221,31 @@ async fn answer_question(
     Json(request): Json<AnswerRequest>,
 ) -> Result<Json<Success>, ApiError> {
     let session = load_session(state.clone(), id).await?;
-    if session.status == SessionStatus::Ended {
-        return Err(ApiError::conflict("session has ended"));
-    }
     if session.engine != Engine::Claude || !is_ask_user_question(&session) {
         return Err(ApiError::conflict(
             "session is not waiting for a question answer",
         ));
     }
-    let Some(request_id) = pending_main_permission_request_id(&session) else {
-        return Err(ApiError::conflict(
-            "session is not waiting for a question answer",
-        ));
-    };
-    let Some(question) = request.question.as_deref() else {
-        return Err(ApiError::bad_request("question is required"));
-    };
-    let sessions_dir = resolve_sessions_dir(state.sessions_dir).map_err(ApiError::internal)?;
-    let request_data = run_blocking({
-        let sessions_dir = sessions_dir.clone();
-        let session_id = session.session_id.clone();
-        let request_id = request_id.to_string();
-        move || store::permission_request_data(&sessions_dir, &session_id, &request_id)
-    })
-    .await?
-    .ok_or_else(|| ApiError::conflict(PERMISSION_REQUEST_EXPIRED_MESSAGE))?;
-    let question_data = question_request_data(&request_data, question)?;
+    let tmux_info = require_tmux(&session)?;
     if request.skip {
-        if request.choice.is_some() || request.answer.is_some() {
+        if request.choice.is_some() {
             return Err(ApiError::bad_request(
-                "an answer cannot be provided when skipping a question",
+                "choice cannot be provided when skipping a question",
             ));
         }
-        let decision = PermissionRequestDecision::Deny {
-            message: "Question skipped from watch-web.".to_string(),
-            interrupt: false,
+        send_keys(state.runtime, &session, tmux_info, vec!["Escape"]).await?;
+    } else {
+        let Some(choice) = request.choice else {
+            return Err(ApiError::bad_request(
+                "choice is required unless skipping a question",
+            ));
         };
-        let session_id = session.session_id.clone();
-        let request_id = request_id.to_string();
-        let resolution = run_blocking(move || {
-            store::resolve_permission_request(
-                &sessions_dir,
-                &session_id,
-                MAIN_THREAD_AGENT_KEY,
-                &request_id,
-                &decision,
-            )
-        })
-        .await?;
-        match resolution {
-            store::PermissionRequestResolution::Resolved => {}
-            store::PermissionRequestResolution::Missing => {
-                return Err(ApiError::conflict(PERMISSION_REQUEST_EXPIRED_MESSAGE));
-            }
-            store::PermissionRequestResolution::Finished => {
-                return Err(ApiError::conflict("question request is no longer pending"));
-            }
+        if !(1..=9).contains(&choice) {
+            return Err(ApiError::bad_request("choice must be between 1 and 9"));
         }
-        return Ok(Json(Success::new()));
-    }
-    let response = match (request.choice, request.answer.as_deref()) {
-        (Some(_), Some(_)) => {
-            return Err(ApiError::bad_request(
-                "choice and answer cannot both be provided",
-            ));
-        }
-        (Some(choice), None) => QuestionResponse::Choice(choice),
-        (None, Some(answer)) => QuestionResponse::Text(answer),
-        (None, None) => {
-            return Err(ApiError::bad_request(
-                "choice or answer is required unless skipping a question",
-            ));
-        }
-    };
-    let answer = question_answer_text(question_data, response)?;
-    let session_id = session.session_id.clone();
-    let request_id = request_id.to_string();
-    let question = question.to_string();
-    let answer_status = run_blocking(move || {
-        store::record_permission_question_answer(
-            &sessions_dir,
-            &session_id,
-            MAIN_THREAD_AGENT_KEY,
-            &request_id,
-            &question,
-            &answer,
-        )
-    })
-    .await?;
-    match answer_status {
-        store::PermissionQuestionAnswerStatus::Pending
-        | store::PermissionQuestionAnswerStatus::Complete => {}
-        store::PermissionQuestionAnswerStatus::Missing => {
-            return Err(ApiError::conflict(PERMISSION_REQUEST_EXPIRED_MESSAGE));
-        }
-        store::PermissionQuestionAnswerStatus::Finished => {
-            return Err(ApiError::conflict("question request is no longer pending"));
-        }
+        let mut keys = vec!["Down"; usize::from(choice - 1)];
+        keys.push("Enter");
+        send_keys(state.runtime, &session, tmux_info, keys).await?;
     }
     Ok(Json(Success::new()))
 }
@@ -337,54 +253,69 @@ async fn answer_question(
 async fn approve_permission(
     State(state): State<ActionState>,
     RoutePath(id): RoutePath<String>,
+    Json(request): Json<PermissionRequestAction>,
 ) -> Result<Json<Success>, ApiError> {
-    resolve_permission_action(state, id, true).await
+    resolve_permission_action(state, id, request.request_id, true).await
 }
 
 async fn reject_permission(
     State(state): State<ActionState>,
     RoutePath(id): RoutePath<String>,
+    Json(request): Json<PermissionRequestAction>,
 ) -> Result<Json<Success>, ApiError> {
-    resolve_permission_action(state, id, false).await
+    resolve_permission_action(state, id, request.request_id, false).await
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PermissionRequestAction {
+    request_id: String,
 }
 
 async fn resolve_permission_action(
     state: ActionState,
     id: String,
+    request_id: String,
     approved: bool,
 ) -> Result<Json<Success>, ApiError> {
     let session = load_session(state.clone(), id).await?;
-    if session.status == SessionStatus::Ended {
-        return Err(ApiError::conflict("session has ended"));
-    }
-    let Some(request_id) = pending_main_permission_request_id(&session) else {
-        return Err(ApiError::conflict(
-            "permission approval is unavailable for this session",
-        ));
-    };
     if session.engine != Engine::Claude {
         return Err(ApiError::conflict(
             "permission approval is unavailable for this session",
         ));
     }
+    if session.status == SessionStatus::Ended {
+        return Err(ApiError::conflict("session has ended"));
+    }
+    let Some(agent_key) = session
+        .pending_permission_request_ids
+        .iter()
+        .find(|(agent_key, pending_request_id)| {
+            pending_request_id.as_str() == request_id
+                && session
+                    .pending_permission_agent_ids
+                    .contains(agent_key.as_str())
+        })
+        .map(|(agent_key, _)| agent_key.clone())
+    else {
+        return Err(ApiError::conflict(
+            "permission request is no longer pending; answer it in the terminal",
+        ));
+    };
     let decision = if approved {
-        PermissionRequestDecision::Allow {
-            updated_input: None,
-        }
+        store::PermissionRequestDecision::Allow
     } else {
-        PermissionRequestDecision::Deny {
-            message: "Permission request rejected from watch-web.".to_string(),
+        store::PermissionRequestDecision::Deny {
+            message: "Rejected from watch-web.".to_string(),
             interrupt: false,
         }
     };
     let sessions_dir = resolve_sessions_dir(state.sessions_dir).map_err(ApiError::internal)?;
-    let session_id = session.session_id.clone();
-    let request_id = request_id.to_string();
     let resolution = run_blocking(move || {
         store::resolve_permission_request(
             &sessions_dir,
-            &session_id,
-            MAIN_THREAD_AGENT_KEY,
+            &session.session_id,
+            &agent_key,
             &request_id,
             &decision,
         )
@@ -392,85 +323,14 @@ async fn resolve_permission_action(
     .await?;
     match resolution {
         store::PermissionRequestResolution::Resolved => {}
-        store::PermissionRequestResolution::Missing => {
-            return Err(ApiError::conflict(PERMISSION_REQUEST_EXPIRED_MESSAGE));
-        }
-        store::PermissionRequestResolution::Finished => {
+        store::PermissionRequestResolution::Missing
+        | store::PermissionRequestResolution::Finished => {
             return Err(ApiError::conflict(
-                "permission approval is unavailable for this session",
+                "permission request is no longer pending; answer it in the terminal",
             ));
         }
     }
     Ok(Json(Success::new()))
-}
-
-fn pending_main_permission_request_id(session: &Session) -> Option<&str> {
-    session
-        .pending_permission_agent_ids
-        .contains(MAIN_THREAD_AGENT_KEY)
-        .then(|| {
-            session
-                .pending_permission_request_ids
-                .get(MAIN_THREAD_AGENT_KEY)
-        })
-        .flatten()
-        .map(String::as_str)
-}
-
-fn question_request_data<'a>(
-    request: &'a store::PermissionRequestData,
-    question: &str,
-) -> Result<&'a serde_json::Value, ApiError> {
-    if request.tool_name.as_deref() != Some("AskUserQuestion") || !request.pending {
-        return Err(ApiError::conflict("question request is no longer pending"));
-    }
-    let Some(questions) = request
-        .tool_input
-        .get("questions")
-        .and_then(serde_json::Value::as_array)
-    else {
-        return Err(ApiError::conflict("question request is no longer pending"));
-    };
-    let Some(question_data) = questions
-        .iter()
-        .find(|item| item.get("question").and_then(serde_json::Value::as_str) == Some(question))
-    else {
-        return Err(ApiError::conflict("question request is no longer pending"));
-    };
-    Ok(question_data)
-}
-
-fn question_answer_text(
-    question_data: &serde_json::Value,
-    response: QuestionResponse<'_>,
-) -> Result<String, ApiError> {
-    let answer = match response {
-        QuestionResponse::Choice(choice) => {
-            if !(1..=9).contains(&choice) {
-                return Err(ApiError::bad_request("choice must be between 1 and 9"));
-            }
-            let Some(label) = question_data
-                .get("options")
-                .and_then(serde_json::Value::as_array)
-                .and_then(|options| options.get(usize::from(choice - 1)))
-                .and_then(|option| option.get("label"))
-                .and_then(serde_json::Value::as_str)
-            else {
-                return Err(ApiError::bad_request(
-                    "choice is outside the available options",
-                ));
-            };
-            label
-        }
-        QuestionResponse::Text(answer) => {
-            let answer = answer.trim();
-            if answer.is_empty() {
-                return Err(ApiError::bad_request("answer must not be empty"));
-            }
-            answer
-        }
-    };
-    Ok(answer.to_string())
 }
 
 async fn interrupt(
@@ -643,7 +503,6 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
-    use crate::commands::agent::store::PermissionRequestWait;
     use crate::commands::agent::types::TmuxInfo;
 
     #[path = "send_message.rs"]
@@ -821,53 +680,24 @@ mod tests {
             store::save_session_to(&self.temp_dir.path().join("sessions"), session).unwrap();
         }
 
-        fn save_pending_request(&self, session: &mut Session, tool_name: &str, tool_input: Value) {
-            let request_id = "request-cobalt".to_string();
+        fn save_pending_permission_request(
+            &self,
+            session: &mut Session,
+            agent_key: &str,
+            request_id: &str,
+            tool_name: &str,
+        ) {
             session
                 .pending_permission_agent_ids
-                .insert(MAIN_THREAD_AGENT_KEY.to_string());
+                .insert(agent_key.to_string());
             session
                 .pending_permission_request_ids
-                .insert(MAIN_THREAD_AGENT_KEY.to_string(), request_id.clone());
-            self.save_session(session);
-            let lock = store::lock_session_for_update(
-                &self.temp_dir.path().join("sessions"),
-                &session.session_id,
-            )
-            .unwrap();
-            lock.register_permission_request(
-                MAIN_THREAD_AGENT_KEY,
-                &request_id,
-                Some(tool_name),
-                &tool_input,
-            )
-            .unwrap();
-            lock.save(session).unwrap();
-        }
-
-        fn expire_pending_request(&self) {
-            let mut waiter =
-                store::PermissionRequestWaiter::open(&self.temp_dir.path().join("sessions"))
-                    .unwrap();
-            assert_eq!(
-                waiter
-                    .expire("sample-session", MAIN_THREAD_AGENT_KEY, "request-cobalt")
-                    .unwrap(),
-                PermissionRequestWait::Finished,
-            );
-        }
-
-        fn take_permission_decision(&self) -> PermissionRequestDecision {
-            let mut waiter =
-                store::PermissionRequestWaiter::open(&self.temp_dir.path().join("sessions"))
-                    .unwrap();
-            let wait = waiter
-                .poll("sample-session", MAIN_THREAD_AGENT_KEY, "request-cobalt")
+                .insert(agent_key.to_string(), request_id.to_string());
+            let sessions_dir = self.temp_dir.path().join("sessions");
+            let lock = store::lock_session_for_update(&sessions_dir, &session.session_id).unwrap();
+            lock.register_permission_request(agent_key, request_id, Some(tool_name), &json!({}))
                 .unwrap();
-            let PermissionRequestWait::Decision(decision) = wait else {
-                panic!("expected a stored permission decision");
-            };
-            decision
+            lock.save(session).unwrap();
         }
 
         fn load_session(&self, session_id: &str) -> Session {
@@ -1054,290 +884,104 @@ mod tests {
     }
 
     #[rstest]
-    #[case::first_choice(1, "Option A")]
-    #[case::second_choice(2, "Option B")]
-    #[case::third_choice(3, "Option C")]
+    #[case::first_choice(1, vec!["Enter"])]
+    #[case::second_choice(2, vec!["Down", "Enter"])]
+    #[case::third_choice(3, vec!["Down", "Down", "Enter"])]
     #[tokio::test]
-    async fn answer_question_records_the_selected_answer(
+    async fn answer_question_sends_bounded_navigation_keys(
         #[case] choice: u8,
-        #[case] expected_answer: &str,
+        #[case] expected_keys: Vec<&str>,
         action_context: ActionContext,
     ) {
         let mut session = session("sample-session");
         session.current_tool = Some("AskUserQuestion".to_string());
-        action_context.save_pending_request(
-            &mut session,
-            "AskUserQuestion",
+        action_context.save_session(&session);
+
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/answer",
+                json!({ "choice": choice }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
             json!({
-                "questions": [{
-                    "question": "Which output format?",
-                    "options": [
-                        { "label": "Option A" },
-                        { "label": "Option B" },
-                        { "label": "Option C" },
-                    ],
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "pane-command",
+                    "paneId": "%4",
+                    "socketPath": "/tmp/example-tmux.sock",
+                }, {
+                    "kind": "guarded-keys",
+                    "paneId": "%4",
+                    "engine": "claude",
+                    "currentCommand": "claude",
+                    "keys": &expected_keys,
+                    "paneHasAgentProcess": true,
+                    "paneCommandMatches": true,
+                }, {
+                    "kind": "keys",
+                    "paneId": "%4",
+                    "socketPath": "/tmp/example-tmux.sock",
+                    "keys": &expected_keys,
                 }],
             }),
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn answer_question_skips_by_sending_escape(action_context: ActionContext) {
+        let mut session = session("sample-session");
+        session.current_tool = Some("AskUserQuestion".to_string());
+        action_context.save_session(&session);
 
         let response = action_context
             .router()
             .oneshot(post(
                 "/sessions/sample-session/answer",
-                json!({ "question": "Which output format?", "choice": choice }),
+                json!({ "skip": true }),
             ))
             .await
             .unwrap();
 
         assert_eq!(
+            response_snapshot(response, &action_context).await,
             json!({
-                "response": response_snapshot(response, &action_context).await,
-                "decision": serde_json::to_value(action_context.take_permission_decision()).unwrap(),
-            }),
-            json!({
-                "response": {
-                    "status": StatusCode::OK.as_u16(),
-                    "body": { "ok": true },
-                    "calls": [],
-                },
-                "decision": {
-                    "behavior": "allow",
-                    "updated_input": {
-                        "questions": [{
-                            "question": "Which output format?",
-                            "options": [
-                                { "label": "Option A" },
-                                { "label": "Option B" },
-                                { "label": "Option C" },
-                            ],
-                        }],
-                        "answers": { "Which output format?": expected_answer },
-                    },
-                },
-            }),
-        );
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn answer_question_records_a_freeform_answer(action_context: ActionContext) {
-        let mut session = session("sample-session");
-        session.current_tool = Some("AskUserQuestion".to_string());
-        action_context.save_pending_request(
-            &mut session,
-            "AskUserQuestion",
-            json!({
-                "questions": [{
-                    "question": "Which output format?",
-                    "options": [{ "label": "Option A" }],
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "pane-command",
+                    "paneId": "%4",
+                    "socketPath": "/tmp/example-tmux.sock",
+                }, {
+                    "kind": "guarded-keys",
+                    "paneId": "%4",
+                    "engine": "claude",
+                    "currentCommand": "claude",
+                    "keys": ["Escape"],
+                    "paneHasAgentProcess": true,
+                    "paneCommandMatches": true,
+                }, {
+                    "kind": "keys",
+                    "paneId": "%4",
+                    "socketPath": "/tmp/example-tmux.sock",
+                    "keys": ["Escape"],
                 }],
-            }),
-        );
-
-        let response = action_context
-            .router()
-            .oneshot(post(
-                "/sessions/sample-session/answer",
-                json!({
-                    "question": "Which output format?",
-                    "answer": "  A custom format  ",
-                }),
-            ))
-            .await
-            .unwrap();
-
-        assert_eq!(
-            json!({
-                "response": response_snapshot(response, &action_context).await,
-                "decision": serde_json::to_value(action_context.take_permission_decision()).unwrap(),
-            }),
-            json!({
-                "response": {
-                    "status": StatusCode::OK.as_u16(),
-                    "body": { "ok": true },
-                    "calls": [],
-                },
-                "decision": {
-                    "behavior": "allow",
-                    "updated_input": {
-                        "questions": [{
-                            "question": "Which output format?",
-                            "options": [{ "label": "Option A" }],
-                        }],
-                        "answers": { "Which output format?": "A custom format" },
-                    },
-                },
-            }),
-        );
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn answer_question_waits_for_every_question_before_resolving_the_hook(
-        action_context: ActionContext,
-    ) {
-        let mut session = session("sample-session");
-        session.current_tool = Some("AskUserQuestion".to_string());
-        let questions = json!([
-            {
-                "question": "Which display mode?",
-                "options": [{ "label": "Compact" }],
-            },
-            {
-                "question": "Include a legend?",
-                "options": [{ "label": "Yes" }],
-            },
-        ]);
-        action_context.save_pending_request(
-            &mut session,
-            "AskUserQuestion",
-            json!({ "questions": questions }),
-        );
-        let router = action_context.router();
-        let first_response = router
-            .clone()
-            .oneshot(post(
-                "/sessions/sample-session/answer",
-                json!({ "question": "Include a legend?", "choice": 1 }),
-            ))
-            .await
-            .unwrap();
-        let first_response = response_snapshot(first_response, &action_context).await;
-        let partial_request = store::permission_request_data(
-            &action_context.temp_dir.path().join("sessions"),
-            "sample-session",
-            "request-cobalt",
-        )
-        .unwrap()
-        .unwrap();
-        let mut waiter =
-            store::PermissionRequestWaiter::open(&action_context.temp_dir.path().join("sessions"))
-                .unwrap();
-        let partial_wait = waiter
-            .poll("sample-session", MAIN_THREAD_AGENT_KEY, "request-cobalt")
-            .unwrap();
-
-        let second_response = router
-            .oneshot(post(
-                "/sessions/sample-session/answer",
-                json!({ "question": "Which display mode?", "choice": 1 }),
-            ))
-            .await
-            .unwrap();
-        let second_response = response_snapshot(second_response, &action_context).await;
-        let final_wait = waiter
-            .poll("sample-session", MAIN_THREAD_AGENT_KEY, "request-cobalt")
-            .unwrap();
-        let final_decision = match final_wait {
-            PermissionRequestWait::Decision(decision) => serde_json::to_value(decision).unwrap(),
-            PermissionRequestWait::Pending | PermissionRequestWait::Finished => Value::Null,
-        };
-
-        assert_eq!(
-            json!({
-                "firstResponse": first_response,
-                "partialAnswers": partial_request.answers,
-                "partialWaitPending": partial_wait == PermissionRequestWait::Pending,
-                "secondResponse": second_response,
-                "finalDecision": final_decision,
-            }),
-            json!({
-                "firstResponse": {
-                    "status": StatusCode::OK.as_u16(),
-                    "body": { "ok": true },
-                    "calls": [],
-                },
-                "partialAnswers": { "Include a legend?": "Yes" },
-                "partialWaitPending": true,
-                "secondResponse": {
-                    "status": StatusCode::OK.as_u16(),
-                    "body": { "ok": true },
-                    "calls": [],
-                },
-                "finalDecision": {
-                    "behavior": "allow",
-                    "updated_input": {
-                        "questions": [
-                            {
-                                "question": "Which display mode?",
-                                "options": [{ "label": "Compact" }],
-                            },
-                            {
-                                "question": "Include a legend?",
-                                "options": [{ "label": "Yes" }],
-                            },
-                        ],
-                        "answers": {
-                            "Include a legend?": "Yes",
-                            "Which display mode?": "Compact",
-                        },
-                    },
-                },
-            }),
-        );
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn answer_question_skips_without_interrupting_the_turn(action_context: ActionContext) {
-        let mut session = session("sample-session");
-        session.current_tool = Some("AskUserQuestion".to_string());
-        action_context.save_pending_request(
-            &mut session,
-            "AskUserQuestion",
-            json!({ "questions": [{ "question": "Which output format?" }] }),
-        );
-
-        let response = action_context
-            .router()
-            .oneshot(post(
-                "/sessions/sample-session/answer",
-                json!({ "question": "Which output format?", "skip": true }),
-            ))
-            .await
-            .unwrap();
-
-        assert_eq!(
-            json!({
-                "response": response_snapshot(response, &action_context).await,
-                "decision": serde_json::to_value(action_context.take_permission_decision()).unwrap(),
-            }),
-            json!({
-                "response": {
-                    "status": StatusCode::OK.as_u16(),
-                    "body": { "ok": true },
-                    "calls": [],
-                },
-                "decision": {
-                    "behavior": "deny",
-                    "message": "Question skipped from watch-web.",
-                    "interrupt": false,
-                },
             }),
         );
     }
 
     #[rstest]
     #[case::choice_with_skip(
-        json!({ "question": "Which output format?", "skip": true, "choice": 1 }),
-        "an answer cannot be provided when skipping a question",
+        json!({ "skip": true, "choice": 1 }),
+        "choice cannot be provided when skipping a question",
     )]
-    #[case::freeform_with_skip(
-        json!({ "question": "Which output format?", "skip": true, "answer": "Option A" }),
-        "an answer cannot be provided when skipping a question",
-    )]
-    #[case::choice_and_freeform(
-        json!({ "question": "Which output format?", "choice": 1, "answer": "Option A" }),
-        "choice and answer cannot both be provided",
-    )]
-    #[case::missing_choice(
-        json!({ "question": "Which output format?" }),
-        "choice or answer is required unless skipping a question",
-    )]
-    #[case::empty_freeform(
-        json!({ "question": "Which output format?", "answer": "  " }),
-        "answer must not be empty",
-    )]
+    #[case::missing_choice(json!({}), "choice is required unless skipping a question")]
     #[tokio::test]
     async fn answer_question_rejects_invalid_requests(
         #[case] payload: Value,
@@ -1346,11 +990,7 @@ mod tests {
     ) {
         let mut session = session("sample-session");
         session.current_tool = Some("AskUserQuestion".to_string());
-        action_context.save_pending_request(
-            &mut session,
-            "AskUserQuestion",
-            json!({ "questions": [{ "question": "Which output format?" }] }),
-        );
+        action_context.save_session(&session);
 
         let response = action_context
             .router()
@@ -1369,173 +1009,158 @@ mod tests {
     }
 
     #[rstest]
+    #[case::approve(true, store::PermissionRequestDecision::Allow)]
+    #[case::reject(
+        false,
+        store::PermissionRequestDecision::Deny {
+            message: "Rejected from watch-web.".to_string(),
+            interrupt: false,
+        }
+    )]
     #[tokio::test]
-    async fn answer_question_rejects_a_question_outside_the_pending_request(
-        action_context: ActionContext,
-    ) {
-        let mut session = session("sample-session");
-        session.current_tool = Some("AskUserQuestion".to_string());
-        action_context.save_pending_request(
-            &mut session,
-            "AskUserQuestion",
-            json!({
-                "questions": [{
-                    "question": "Which display mode?",
-                    "options": [{ "label": "Compact" }],
-                }],
-            }),
-        );
-
-        let response = action_context
-            .router()
-            .oneshot(post(
-                "/sessions/sample-session/answer",
-                json!({ "question": "Which fictional theme?", "choice": 1 }),
-            ))
-            .await
-            .unwrap();
-        let response = response_snapshot(response, &action_context).await;
-        let request = store::permission_request_data(
-            &action_context.temp_dir.path().join("sessions"),
-            "sample-session",
-            "request-cobalt",
-        )
-        .unwrap();
-        let mut waiter =
-            store::PermissionRequestWaiter::open(&action_context.temp_dir.path().join("sessions"))
-                .unwrap();
-        let wait = waiter
-            .poll("sample-session", MAIN_THREAD_AGENT_KEY, "request-cobalt")
-            .unwrap();
-
-        assert_eq!(
-            json!({
-                "response": response,
-                "requestPending": request.is_some_and(|request| request.pending),
-                "hookWaitPending": wait == PermissionRequestWait::Pending,
-            }),
-            json!({
-                "response": {
-                    "status": StatusCode::CONFLICT.as_u16(),
-                    "body": { "error": "question request is no longer pending" },
-                    "calls": [],
-                },
-                "requestPending": true,
-                "hookWaitPending": true,
-            }),
-        );
-    }
-
-    #[rstest]
-    #[case::approve(true)]
-    #[case::reject(false)]
-    #[tokio::test]
-    async fn permission_actions_record_a_hook_decision(
+    async fn permission_actions_write_the_hook_decision(
         #[case] approved: bool,
+        #[case] expected_decision: store::PermissionRequestDecision,
         action_context: ActionContext,
     ) {
         let mut session = session("sample-session");
-        action_context.save_pending_request(
+        action_context.save_pending_permission_request(
             &mut session,
+            "main",
+            "permission-request-main",
             "Bash",
-            json!({
-                "command": "echo fictional",
-            }),
         );
         let action = if approved { "approve" } else { "reject" };
 
         let response = action_context
             .router()
-            .oneshot(post_empty(&format!(
-                "/sessions/sample-session/permission/{action}"
-            )))
+            .oneshot(post(
+                &format!("/sessions/sample-session/permission/{action}"),
+                json!({ "requestId": "permission-request-main" }),
+            ))
             .await
             .unwrap();
+        let mut waiter =
+            store::PermissionRequestWaiter::open(&action_context.temp_dir.path().join("sessions"))
+                .unwrap();
 
         assert_eq!(
-            json!({
-                "response": response_snapshot(response, &action_context).await,
-                "decision": serde_json::to_value(action_context.take_permission_decision()).unwrap(),
-            }),
-            json!({
-                "response": {
+            (
+                response_snapshot(response, &action_context).await,
+                waiter
+                    .poll("sample-session", "main", "permission-request-main")
+                    .unwrap(),
+            ),
+            (
+                json!({
                     "status": StatusCode::OK.as_u16(),
                     "body": { "ok": true },
                     "calls": [],
-                },
-                "decision": if approved {
-                    json!({ "behavior": "allow" })
-                } else {
-                    json!({
-                        "behavior": "deny",
-                        "message": "Permission request rejected from watch-web.",
-                        "interrupt": false,
-                    })
-                },
-            }),
+                }),
+                store::PermissionRequestWait::Decision(expected_decision),
+            ),
         );
     }
 
-    #[rstest]
-    #[case::approve("approve")]
-    #[case::reject("reject")]
     #[tokio::test]
-    async fn expired_permission_actions_direct_the_user_to_the_terminal(
-        #[case] action: &str,
-        action_context: ActionContext,
-    ) {
+    async fn permission_action_resolves_only_the_requested_subagent() {
+        let action_context = action_context();
         let mut session = session("sample-session");
-        action_context.save_pending_request(
+        action_context.save_pending_permission_request(
             &mut session,
+            "main",
+            "permission-request-main",
             "Bash",
-            json!({ "command": "echo fictional" }),
         );
-        action_context.expire_pending_request();
-
-        let response = action_context
-            .router()
-            .oneshot(post_empty(&format!(
-                "/sessions/sample-session/permission/{action}"
-            )))
-            .await
-            .unwrap();
-
-        assert_eq!(
-            response_snapshot(response, &action_context).await,
-            json!({
-                "status": StatusCode::CONFLICT.as_u16(),
-                "body": {
-                    "error": "permission request is no longer available; answer in the terminal",
-                },
-                "calls": [],
-            }),
-        );
-    }
-
-    #[rstest]
-    #[tokio::test]
-    async fn expired_question_answers_direct_the_user_to_the_terminal(
-        action_context: ActionContext,
-    ) {
-        let mut session = session("sample-session");
-        session.current_tool = Some("AskUserQuestion".to_string());
-        action_context.save_pending_request(
+        action_context.save_pending_permission_request(
             &mut session,
-            "AskUserQuestion",
-            json!({
-                "questions": [{
-                    "question": "Which output format?",
-                    "options": [{ "label": "Plain text" }],
-                }],
-            }),
+            "agent-fixture-a",
+            "permission-request-a",
+            "Write",
         );
-        action_context.expire_pending_request();
+        action_context.save_pending_permission_request(
+            &mut session,
+            "agent-fixture-b",
+            "permission-request-b",
+            "Bash",
+        );
 
         let response = action_context
             .router()
             .oneshot(post(
-                "/sessions/sample-session/answer",
-                json!({ "question": "Which output format?", "choice": 1 }),
+                "/sessions/sample-session/permission/reject",
+                json!({ "requestId": "permission-request-b" }),
+            ))
+            .await
+            .unwrap();
+        let sessions_dir = action_context.temp_dir.path().join("sessions");
+        let mut waiter = store::PermissionRequestWaiter::open(&sessions_dir).unwrap();
+
+        assert_eq!(
+            (
+                response_snapshot(response, &action_context).await,
+                waiter
+                    .poll("sample-session", "agent-fixture-b", "permission-request-b")
+                    .unwrap(),
+                store::permission_request_data(
+                    &sessions_dir,
+                    "sample-session",
+                    "permission-request-main",
+                )
+                .unwrap(),
+                store::permission_request_data(
+                    &sessions_dir,
+                    "sample-session",
+                    "permission-request-a",
+                )
+                .unwrap(),
+            ),
+            (
+                json!({
+                    "status": StatusCode::OK.as_u16(),
+                    "body": { "ok": true },
+                    "calls": [],
+                }),
+                store::PermissionRequestWait::Decision(store::PermissionRequestDecision::Deny {
+                    message: "Rejected from watch-web.".to_string(),
+                    interrupt: false,
+                }),
+                Some(store::PermissionRequestData {
+                    tool_name: Some("Bash".to_string()),
+                    tool_input: json!({}),
+                    pending: true,
+                }),
+                Some(store::PermissionRequestData {
+                    tool_name: Some("Write".to_string()),
+                    tool_input: json!({}),
+                    pending: true,
+                }),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn permission_action_for_expired_request_guides_user_to_terminal() {
+        let action_context = action_context();
+        let mut session = session("sample-session");
+        action_context.save_pending_permission_request(
+            &mut session,
+            "main",
+            "permission-request-main",
+            "Bash",
+        );
+        let mut waiter =
+            store::PermissionRequestWaiter::open(&action_context.temp_dir.path().join("sessions"))
+                .unwrap();
+        waiter
+            .expire("sample-session", "main", "permission-request-main")
+            .unwrap();
+
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/permission/approve",
+                json!({ "requestId": "permission-request-main" }),
             ))
             .await
             .unwrap();
@@ -1545,7 +1170,7 @@ mod tests {
             json!({
                 "status": StatusCode::CONFLICT.as_u16(),
                 "body": {
-                    "error": "permission request is no longer available; answer in the terminal",
+                    "error": "permission request is no longer pending; answer it in the terminal"
                 },
                 "calls": [],
             }),
@@ -1562,17 +1187,13 @@ mod tests {
     ) {
         let mut session = session("sample-session");
         session.current_tool = Some("AskUserQuestion".to_string());
-        action_context.save_pending_request(
-            &mut session,
-            "AskUserQuestion",
-            json!({ "questions": [{ "question": "Which output format?", "options": [] }] }),
-        );
+        action_context.save_session(&session);
 
         let response = action_context
             .router()
             .oneshot(post(
                 "/sessions/sample-session/answer",
-                json!({ "question": "Which output format?", "choice": choice }),
+                json!({ "choice": choice }),
             ))
             .await
             .unwrap();
@@ -1597,7 +1218,7 @@ mod tests {
         session.current_tool = Some("AskUserQuestion".to_string());
         session
             .pending_permission_agent_ids
-            .insert(MAIN_THREAD_AGENT_KEY.to_string());
+            .insert("main".to_string());
         action_context.save_session(&session);
         let app = action_context.router();
 
@@ -1615,7 +1236,7 @@ mod tests {
             .clone()
             .oneshot(post(
                 "/sessions/sample-session/permission/approve",
-                json!({}),
+                json!({ "requestId": "missing-request" }),
             ))
             .await
             .unwrap();
@@ -1867,20 +1488,31 @@ mod tests {
     }
 
     #[rstest]
+    #[case::answer_missing("answer", None, true, true)]
+    #[case::answer_shell("answer", Some("zsh"), true, true)]
+    #[case::answer_other_program("answer", Some("nvim"), false, true)]
     #[case::interrupt_missing("interrupt", None, true, true)]
     #[case::interrupt_shell("interrupt", Some("fish"), true, true)]
     #[case::interrupt_other_program("interrupt", Some("nvim"), false, true)]
     #[case::interrupt_command_changed("interrupt", Some("claude"), true, false)]
     #[tokio::test]
-    async fn interrupt_rejects_unavailable_or_idle_panes(
+    async fn key_actions_reject_unavailable_or_idle_panes(
         #[case] action: &str,
         #[case] pane_command: Option<&str>,
         #[case] pane_has_agent_process: bool,
         #[case] pane_command_matches: bool,
         action_context: ActionContext,
     ) {
-        let session = session("sample-session");
+        let mut session = session("sample-session");
         let (uri, body, keys) = match action {
+            "answer" => {
+                session.current_tool = Some("AskUserQuestion".to_string());
+                (
+                    "/sessions/sample-session/answer",
+                    json!({ "choice": 1 }),
+                    vec!["Enter"],
+                )
+            }
             "interrupt" => (
                 "/sessions/sample-session/interrupt",
                 json!({}),
@@ -1942,7 +1574,7 @@ mod tests {
         session.current_tool = Some("AskUserQuestion".to_string());
         session
             .pending_permission_agent_ids
-            .insert(MAIN_THREAD_AGENT_KEY.to_string());
+            .insert("main".to_string());
         action_context.save_session(&session);
         let app = action_context.router();
 
@@ -1966,7 +1598,10 @@ mod tests {
             .unwrap();
         let permission = app
             .clone()
-            .oneshot(post_empty("/sessions/sample-session/permission/approve"))
+            .oneshot(post(
+                "/sessions/sample-session/permission/approve",
+                json!({ "requestId": "permission-request-main" }),
+            ))
             .await
             .unwrap();
         let interrupt = app

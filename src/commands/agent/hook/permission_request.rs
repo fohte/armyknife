@@ -4,7 +4,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::super::store::{
     PermissionRequestDecision, PermissionRequestWait, PermissionRequestWaiter,
@@ -61,14 +61,7 @@ fn wait_until_deadline(
 
 fn write_response(decision: PermissionRequestDecision, mut output: impl Write) -> Result<()> {
     let decision = match decision {
-        PermissionRequestDecision::Allow { updated_input } => {
-            let mut decision =
-                serde_json::Map::from_iter([("behavior".to_string(), json!("allow"))]);
-            if let Some(updated_input) = updated_input {
-                decision.insert("updatedInput".to_string(), updated_input);
-            }
-            Value::Object(decision)
-        }
+        PermissionRequestDecision::Allow => json!({ "behavior": "allow" }),
         PermissionRequestDecision::Deny { message, interrupt } => json!({
             "behavior": "deny",
             "message": message,
@@ -171,7 +164,7 @@ mod tests {
         .expect("response should be written");
 
         assert_eq!(
-            serde_json::from_slice::<Value>(&output).expect("response should be JSON"),
+            serde_json::from_slice::<serde_json::Value>(&output).expect("response should be JSON"),
             json!({
                 "hookSpecificOutput": {
                     "hookEventName": "PermissionRequest",
@@ -186,53 +179,17 @@ mod tests {
     }
 
     #[test]
-    fn allow_without_updated_input_approves_the_original_tool_input() {
+    fn allow_approves_the_original_tool_input() {
         let mut output = Vec::new();
-        write_response(
-            PermissionRequestDecision::Allow {
-                updated_input: None,
-            },
-            &mut output,
-        )
-        .expect("response should be written");
+        write_response(PermissionRequestDecision::Allow, &mut output)
+            .expect("response should be written");
 
         assert_eq!(
-            serde_json::from_slice::<Value>(&output).expect("response should be JSON"),
+            serde_json::from_slice::<serde_json::Value>(&output).expect("response should be JSON"),
             json!({
                 "hookSpecificOutput": {
                     "hookEventName": "PermissionRequest",
                     "decision": { "behavior": "allow" },
-                },
-            }),
-        );
-    }
-
-    #[test]
-    fn allow_returns_updated_question_answers() {
-        let mut output = Vec::new();
-        write_response(
-            PermissionRequestDecision::Allow {
-                updated_input: Some(json!({
-                    "questions": [{ "question": "Which display mode?" }],
-                    "answers": { "Which display mode?": "Option A" },
-                })),
-            },
-            &mut output,
-        )
-        .expect("response should be written");
-
-        assert_eq!(
-            serde_json::from_slice::<Value>(&output).expect("response should be JSON"),
-            json!({
-                "hookSpecificOutput": {
-                    "hookEventName": "PermissionRequest",
-                    "decision": {
-                        "behavior": "allow",
-                        "updatedInput": {
-                            "questions": [{ "question": "Which display mode?" }],
-                            "answers": { "Which display mode?": "Option A" },
-                        },
-                    },
                 },
             }),
         );

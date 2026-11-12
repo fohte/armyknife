@@ -3843,7 +3843,7 @@ it('answers an Inbox question with a number key when the pane is not focused', a
       {
         path: '/api/sessions/session-question/answer',
         method: 'POST',
-        body: '{"question":"Which retry policy should be used?","choice":1}',
+        body: '{"choice":1}',
       },
       {
         path: '/api/sessions/session-question/messages',

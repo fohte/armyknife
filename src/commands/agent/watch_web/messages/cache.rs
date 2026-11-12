@@ -23,7 +23,7 @@ pub(super) struct MessageCacheKey {
     pub(super) transcript_fingerprint: Option<TranscriptFingerprint>,
     pub(super) parent: Option<ParentSession>,
     pub(super) pending_permission_agent_ids: BTreeSet<String>,
-    pub(super) pending_permission_request: Option<PendingPermissionRequestCacheKey>,
+    pub(super) pending_permission_request_ids: BTreeMap<String, String>,
     pub(super) current_tool: Option<String>,
     pub(super) user_marker: Option<String>,
     pub(super) decisions: Vec<AgentDecision>,
@@ -32,24 +32,16 @@ pub(super) struct MessageCacheKey {
     pub(super) proposals: Vec<AgentProposal>,
 }
 
-#[derive(Clone, PartialEq, Eq)]
-pub(super) struct PendingPermissionRequestCacheKey {
-    pub(super) answers: BTreeMap<String, String>,
-    pub(super) pending: bool,
-}
-
-pub(super) struct MessageCacheInputs {
-    pub(super) parent: Option<ParentSession>,
-    pub(super) pending_permission_request: Option<PendingPermissionRequestCacheKey>,
-    pub(super) user_marker: Option<String>,
-    pub(super) decisions: Vec<AgentDecision>,
-    pub(super) queued_prompts: Vec<WatchWebQueuedPrompt>,
-    pub(super) peer_out_messages: Vec<WatchWebPeerOutMessage>,
-    pub(super) proposals: Vec<AgentProposal>,
-}
-
 impl MessageCacheKey {
-    pub(super) fn new(session: &Session, inputs: MessageCacheInputs) -> anyhow::Result<Self> {
+    pub(super) fn new(
+        session: &Session,
+        parent: Option<ParentSession>,
+        user_marker: Option<String>,
+        decisions: Vec<AgentDecision>,
+        queued_prompts: Vec<WatchWebQueuedPrompt>,
+        peer_out_messages: Vec<WatchWebPeerOutMessage>,
+        proposals: Vec<AgentProposal>,
+    ) -> anyhow::Result<Self> {
         Ok(Self {
             engine: session.engine,
             transcript_path: session.transcript_path.clone(),
@@ -57,15 +49,15 @@ impl MessageCacheKey {
                 session.engine,
                 session.transcript_path.as_deref(),
             )?,
-            parent: inputs.parent,
+            parent,
             pending_permission_agent_ids: session.pending_permission_agent_ids.clone(),
-            pending_permission_request: inputs.pending_permission_request,
+            pending_permission_request_ids: session.pending_permission_request_ids.clone(),
             current_tool: session.current_tool.clone(),
-            user_marker: inputs.user_marker,
-            decisions: inputs.decisions,
-            queued_prompts: inputs.queued_prompts,
-            peer_out_messages: inputs.peer_out_messages,
-            proposals: inputs.proposals,
+            user_marker,
+            decisions,
+            queued_prompts,
+            peer_out_messages,
+            proposals,
         })
     }
 }
@@ -311,9 +303,7 @@ impl MessageCache {
 mod tests {
     use serde_json::json;
 
-    use super::{
-        ConversationResponse, MessageCacheInputs, MessageCacheKey, refresh_image_availability_with,
-    };
+    use super::{ConversationResponse, MessageCacheKey, refresh_image_availability_with};
     use crate::commands::agent::types::{MAIN_THREAD_AGENT_KEY, Session};
     use crate::commands::agent::watch_web::messages::{ChatItem, UserContentPart};
 
@@ -333,33 +323,71 @@ mod tests {
 
         let first_key = MessageCacheKey::new(
             &session,
-            MessageCacheInputs {
-                parent: None,
-                pending_permission_request: None,
-                user_marker: None,
-                decisions: Vec::new(),
-                queued_prompts: Vec::new(),
-                peer_out_messages: Vec::new(),
-                proposals: Vec::new(),
-            },
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
         )
         .unwrap();
         session.last_message = Some("Later response.".to_string());
         let second_key = MessageCacheKey::new(
             &session,
-            MessageCacheInputs {
-                parent: None,
-                pending_permission_request: None,
-                user_marker: None,
-                decisions: Vec::new(),
-                queued_prompts: Vec::new(),
-                peer_out_messages: Vec::new(),
-                proposals: Vec::new(),
-            },
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
         )
         .unwrap();
 
         assert!(first_key == second_key);
+    }
+
+    #[test]
+    fn message_cache_key_changes_when_a_permission_request_is_replaced() {
+        let mut session: Session = serde_json::from_value(json!({
+            "session_id": "fixture-session",
+            "cwd": "/fixture/project",
+            "status": "waiting_input",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "pending_permission_agent_ids": [MAIN_THREAD_AGENT_KEY],
+            "pending_permission_request_ids": {},
+        }))
+        .unwrap();
+        session.pending_permission_request_ids.insert(
+            MAIN_THREAD_AGENT_KEY.to_string(),
+            "permission-request-first".to_string(),
+        );
+        let first_key = MessageCacheKey::new(
+            &session,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        session.pending_permission_request_ids.insert(
+            MAIN_THREAD_AGENT_KEY.to_string(),
+            "permission-request-next".to_string(),
+        );
+        let next_key = MessageCacheKey::new(
+            &session,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+
+        assert!(first_key != next_key);
     }
 
     #[test]

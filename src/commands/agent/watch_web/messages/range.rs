@@ -43,7 +43,7 @@ impl ConversationResponse {
         self.active_question_index = self
             .messages
             .iter()
-            .rposition(|message| matches!(message, ChatItem::Question { answer: None, .. }));
+            .rposition(|message| matches!(message, ChatItem::Question { .. }));
     }
 
     pub(super) fn apply_range(&mut self, range: MessageRange) {

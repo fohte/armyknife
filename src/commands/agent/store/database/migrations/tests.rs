@@ -61,7 +61,7 @@ fn adds_permission_request_mailbox_to_version_nine_database() {
                 EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'permission_request_decision'),
                 EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'permission_request_decision_session_agent'),
                 EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'permission_request_decision_delete_session'),
-                EXISTS(SELECT 1 FROM pragma_table_info('permission_request_decision') WHERE name = 'answers'),
+                NOT EXISTS(SELECT 1 FROM pragma_table_info('permission_request_decision') WHERE name = 'answers'),
                 (SELECT title || ':' || why FROM agent_decision LIMIT 1)
                 "
             },

@@ -119,13 +119,13 @@ pub fn run(args: &HookArgs) -> Result<()> {
         let Some(session) = store::load_session_from(&sessions_dir, &session_id)? else {
             return Ok(());
         };
-        let Some(request_id) = session.pending_permission_request_ids.get(agent_key) else {
+        let Some(request_id) = session.pending_permission_request_ids.get(&agent_key) else {
             return Ok(());
         };
         return permission_request::wait_and_write(
             &sessions_dir,
             &session_id,
-            agent_key,
+            &agent_key,
             request_id,
             io::stdout().lock(),
         );
@@ -345,9 +345,9 @@ fn permission_request_agent_key(
     event: HookEvent,
     engine: Engine,
     agent_id: Option<&str>,
-) -> Option<&'static str> {
-    (event == HookEvent::PermissionRequest && engine == Engine::Claude && agent_id.is_none())
-        .then_some(MAIN_THREAD_AGENT_KEY)
+) -> Option<String> {
+    (event == HookEvent::PermissionRequest && engine == Engine::Claude)
+        .then(|| agent_id.unwrap_or(MAIN_THREAD_AGENT_KEY).to_string())
 }
 
 fn startup_metadata_for_resume(sessions_dir: &Path, input: &HookInput) -> Result<Option<Session>> {
@@ -952,7 +952,6 @@ fn process_hook_event_impl_with_settings(
     ensure_watch_web_user_marker(&session_lock, event, input.engine)?;
     if event == HookEvent::PermissionRequest
         && input.engine == Engine::Claude
-        && input.agent_id.is_none()
         && let Some(request_id) = session
             .pending_permission_request_ids
             .get(&permission_agent_key)
@@ -1833,7 +1832,46 @@ mod tests {
                         "options": [{ "label": "Option A" }],
                     }],
                 }),
-                answers: Default::default(),
+                pending: true,
+            }),
+        );
+    }
+
+    #[test]
+    fn claude_subagent_permission_request_registers_its_tool_input_for_watch_web() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+        let input = serde_json::from_value(serde_json::json!({
+            "session_id": "test-123",
+            "cwd": "/tmp/test",
+            "agent_id": "agent-fixture",
+            "tool_name": "Bash",
+            "tool_input": { "command": "echo fictional" },
+        }))
+        .expect("subagent permission input should deserialize");
+
+        process_hook_event_impl(
+            HookEvent::PermissionRequest,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("subagent permission request should save");
+
+        let session = store::load_session_from(sessions_dir, "test-123")
+            .expect("session should load")
+            .expect("session should exist");
+        let request_id = session
+            .pending_permission_request_ids
+            .get("agent-fixture")
+            .expect("subagent request ID should be recorded");
+
+        assert_eq!(
+            store::permission_request_data(sessions_dir, "test-123", request_id)
+                .expect("subagent request data should load"),
+            Some(store::PermissionRequestData {
+                tool_name: Some("Bash".to_string()),
+                tool_input: serde_json::json!({ "command": "echo fictional" }),
                 pending: true,
             }),
         );
@@ -2134,19 +2172,19 @@ mod tests {
         HookEvent::PermissionRequest,
         Engine::Claude,
         Some("agent-fixture"),
-        None
+        Some("agent-fixture")
     )]
     #[case::main_codex(HookEvent::PermissionRequest, Engine::Codex, None, None)]
     #[case::other_claude_event(HookEvent::PostToolUse, Engine::Claude, None, None)]
-    fn permission_request_waits_only_for_main_thread_claude_requests(
+    fn permission_request_waits_for_all_claude_agents(
         #[case] event: HookEvent,
         #[case] engine: Engine,
         #[case] agent_id: Option<&str>,
         #[case] expected_agent_key: Option<&str>,
     ) {
         assert_eq!(
-            permission_request_agent_key(event, engine, agent_id),
-            expected_agent_key,
+            permission_request_agent_key(event, engine, agent_id).as_deref(),
+            expected_agent_key
         );
     }
 

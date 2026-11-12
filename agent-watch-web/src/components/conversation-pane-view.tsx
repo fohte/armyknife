@@ -9,7 +9,7 @@ import { ConversationWorkingStatus } from '#components/conversation-working-stat
 import { MessageComposer } from '#components/message-composer'
 import { OpenInTerminalAction } from '#components/open-in-terminal-action'
 import type {
-  PendingPermissionAction,
+  PendingPermissionActions,
   PermissionRequestIdentity,
 } from '#components/permission-card'
 import { SessionHeading } from '#components/session-heading'
@@ -46,7 +46,7 @@ type ConversationPaneViewProps = {
   skills?: readonly SkillSuggestion[]
   actions: SessionActions | null
   actionsReady?: boolean
-  pendingPermissionAction?: PendingPermissionAction | undefined
+  pendingPermissionActions?: PendingPermissionActions | undefined
   openInTerminalStatus?: OpenInTerminalStatus
   loading: boolean
   sending?: boolean
@@ -89,7 +89,7 @@ export function ConversationPaneView({
   skills = [],
   actions,
   actionsReady = true,
-  pendingPermissionAction = null,
+  pendingPermissionActions = {},
   openInTerminalStatus = null,
   loading,
   sending = false,
@@ -187,7 +187,7 @@ export function ConversationPaneView({
     onOpenInTerminal: openInTerminal,
     openInTerminalStatus,
     onSelectSession: selectLinkedSession,
-    pendingAction: pendingPermissionAction,
+    pendingActions: pendingPermissionActions,
     sessions: sessionLinkTargets,
   })
   const parent = session.parent

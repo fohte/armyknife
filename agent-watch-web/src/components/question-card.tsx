@@ -28,9 +28,9 @@ type QuestionCardProps = {
   showTerminalFallback: boolean
   canOpenInTerminal: boolean
   openInTerminalStatus?: OpenInTerminalStatus
-  onAnswer: (question: string, choice: number) => Promise<boolean>
-  onSkip: (question: string) => Promise<boolean>
-  onFreeformAnswer: (question: string, answer: string) => Promise<boolean>
+  onAnswer: (choice: number) => Promise<boolean>
+  onSkip: () => Promise<boolean>
+  onFreeformAnswer: (answer: string) => Promise<boolean>
   onOpenInTerminal: () => void
 }
 
@@ -64,7 +64,8 @@ export function QuestionCard({
       ? answer
       : null
   const showFreeformForm =
-    canAnswer && !questionSkipped && !choiceAnswerAccepted
+    (canAnswer && !questionSkipped && !choiceAnswerAccepted) ||
+    (questionSkipped && draft.trim() !== '')
 
   const setSending = (sending: boolean) => {
     isSendingRef.current = sending
@@ -85,8 +86,7 @@ export function QuestionCard({
     event.preventDefault()
     const answerText = draft.trim()
     if (
-      !canAnswer ||
-      questionSkippedRef.current ||
+      (!canAnswer && !questionSkippedRef.current) ||
       choiceAnswerAcceptedRef.current ||
       isSendingRef.current ||
       answerText === ''
@@ -94,13 +94,19 @@ export function QuestionCard({
       return
     }
     setSending(true)
-    void onFreeformAnswer(question, answerText)
+    void (async () => {
+      if (!questionSkippedRef.current) {
+        const skipped = await onSkip()
+        if (!skipped) return null
+        markQuestionSkipped()
+      }
+      return onFreeformAnswer(answerText)
+    })()
       .then((sent) => {
-        if (sent) {
+        if (sent === true) {
           setDraft('')
           setSendFailed(false)
-          markChoiceAnswerAccepted()
-        } else {
+        } else if (sent === false) {
           setSendFailed(true)
         }
       })
@@ -119,7 +125,7 @@ export function QuestionCard({
       return
     }
     setSending(true)
-    void onSkip(question)
+    void onSkip()
       .then((skipped) => {
         if (skipped) markQuestionSkipped()
       })
@@ -139,7 +145,7 @@ export function QuestionCard({
       return false
     }
     setSending(true)
-    void onAnswer(question, choice)
+    void onAnswer(choice)
       .then((sent) => {
         if (sent) markChoiceAnswerAccepted()
       })

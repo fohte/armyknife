@@ -9,20 +9,24 @@ import type { ChatItem, OpenInTerminalStatus, SessionActions } from '#types'
 export type PendingPermissionAction = {
   action: 'approve' | 'reject'
   status: 'sending' | 'sent'
-  tool: string
-  description: string
-} | null
+  requestId: string
+}
+
+export type PendingPermissionActions = Readonly<
+  Record<string, PendingPermissionAction>
+>
+
+export type PendingPermissionActionState = PendingPermissionAction | null
 
 export type PermissionRequestIdentity = {
-  tool: string
-  description: string
+  requestId: string
 }
 
 type PermissionCardProps = {
   message: Extract<ChatItem, { type: 'permission' }>
   actions: SessionActions | null
   actionsReady: boolean
-  pendingAction: PendingPermissionAction
+  pendingAction: PendingPermissionActionState
   openInTerminalStatus?: OpenInTerminalStatus
   isCodex: boolean
   onAction: (
@@ -42,14 +46,14 @@ export function PermissionCard({
   onAction,
   onOpenInTerminal,
 }: PermissionCardProps) {
-  const canApprove = actions?.permission?.approve === true
-  const canReject = actions?.permission?.reject === true
+  const canApprove =
+    message.requestId !== undefined && actions?.permission?.approve === true
+  const canReject =
+    message.requestId !== undefined && actions?.permission?.reject === true
   const hasPermissionActions = canApprove || canReject
-  const matchingPendingAction =
-    pendingAction?.tool === message.tool &&
-    pendingAction.description === message.description
-      ? pendingAction
-      : null
+  const matchingPendingAction = pendingAction
+  const permissionIdentity =
+    message.requestId === undefined ? null : { requestId: message.requestId }
 
   return (
     <article className="chat-permission-card">
@@ -70,7 +74,9 @@ export function PermissionCard({
               matchingPendingAction.status === 'sending'
             }
             onClick={() => {
-              onAction('permission/approve', message)
+              if (permissionIdentity !== null) {
+                onAction('permission/approve', permissionIdentity)
+              }
             }}
           >
             {matchingPendingAction?.action === 'approve' &&
@@ -90,7 +96,9 @@ export function PermissionCard({
               matchingPendingAction.status === 'sending'
             }
             onClick={() => {
-              onAction('permission/reject', message)
+              if (permissionIdentity !== null) {
+                onAction('permission/reject', permissionIdentity)
+              }
             }}
           >
             {matchingPendingAction?.action === 'reject' &&
@@ -99,7 +107,7 @@ export function PermissionCard({
               : 'Reject'}
           </Button>
         </div>
-      ) : isCodex && actions !== null ? (
+      ) : (isCodex || message.requestId === undefined) && actions !== null ? (
         <div className="conversation-terminal-fallback">
           <span>Review this permission in terminal.</span>
           {actions.openInTerminal ? (

@@ -7,7 +7,7 @@ import { MarkdownMessage } from '#components/markdown-message'
 import { formatMessageTime } from '#components/message-time'
 import { PeerMessage } from '#components/peer-message'
 import {
-  type PendingPermissionAction,
+  type PendingPermissionActionState,
   PermissionCard,
   type PermissionRequestIdentity,
 } from '#components/permission-card'
@@ -34,7 +34,7 @@ export type ConversationMessageRowProps = {
   decisionPosition: string | undefined
   onSelectDecision: (seq: number) => void
   message: ChatItem
-  pendingAction: PendingPermissionAction
+  pendingAction: PendingPermissionActionState
   openInTerminalStatus: OpenInTerminalStatus
   onAction: (
     action: string,
@@ -172,13 +172,17 @@ export function renderConversationMessage({
         }
         canOpenInTerminal={actions?.openInTerminal === true}
         openInTerminalStatus={openInTerminalStatus}
-        onAnswer={(question, choice) =>
-          onAction('answer', { question, choice })
-        }
-        onSkip={(question) => onAction('answer', { question, skip: true })}
-        onFreeformAnswer={(question, answer) =>
-          onAction('answer', { question, answer })
-        }
+        onAnswer={(choice) => onAction('answer', { choice })}
+        onSkip={() => onAction('answer', { skip: true })}
+        onFreeformAnswer={(answer) => {
+          const questionContext =
+            message.header !== undefined && message.header.length > 0
+              ? `${message.header}: ${message.question}`
+              : message.question
+          return onAction('messages', {
+            content: `My answer to "${questionContext}" is:\n${answer}`,
+          })
+        }}
         onOpenInTerminal={onOpenInTerminal}
       />
     )
@@ -233,7 +237,11 @@ export function renderConversationMessage({
       openInTerminalStatus={openInTerminalStatus}
       isCodex={sessionEngine === 'Codex'}
       onAction={(action, permissionIdentity) => {
-        void onAction(action, undefined, permissionIdentity)
+        void onAction(
+          action,
+          { requestId: permissionIdentity.requestId },
+          permissionIdentity,
+        )
       }}
       onOpenInTerminal={onOpenInTerminal}
     />

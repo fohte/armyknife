@@ -9,6 +9,7 @@ import { ConversationMessageRow } from '#components/conversation-message-row'
 import { ConversationPane } from '#components/conversation-pane'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { InboxConversationPanes } from '#components/inbox-conversation-panes'
+import type { PendingPermissionAction } from '#components/permission-card'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import type {
@@ -149,12 +150,14 @@ function requestUrl(input: RequestInfo | URL) {
 
 const permission: ChatItem = {
   type: 'permission',
+  requestId: 'permission-request-main',
   tool: 'Shell',
   description: 'Run the formatter on changed files.',
 }
 
 const otherPermission: ChatItem = {
   type: 'permission',
+  requestId: 'permission-request-subagent',
   tool: 'Subagent sample-agent',
   description: 'Waiting for permission approval.',
 }
@@ -219,12 +222,7 @@ function renderView(
   viewSessions: readonly Session[] = [],
   statusPanelOpen = false,
   onToggleStatusPanel?: () => void,
-  pendingPermissionAction?: {
-    action: 'approve' | 'reject'
-    status: 'sending' | 'sent'
-    tool: string
-    description: string
-  } | null,
+  pendingPermissionAction?: PendingPermissionAction | null,
   decisionsPanelOpen = false,
   onToggleDecisionsPanel?: () => void,
   today: {
@@ -241,7 +239,14 @@ function renderView(
         messages={viewMessages}
         backgroundTasks={viewBackgroundTasks}
         actions={viewActions}
-        pendingPermissionAction={pendingPermissionAction}
+        pendingPermissionActions={
+          pendingPermissionAction === undefined ||
+          pendingPermissionAction === null
+            ? {}
+            : {
+                [pendingPermissionAction.requestId]: pendingPermissionAction,
+              }
+        }
         loading={false}
         error={null}
         onAction={onAction}
@@ -1149,8 +1154,7 @@ it('shows pending and sent permission action feedback', () => {
       {
         action: 'approve',
         status,
-        tool: 'Shell',
-        description: 'Run the formatter on changed files.',
+        requestId: 'permission-request-main',
       },
     )
   }
@@ -1217,6 +1221,27 @@ it('shows pending and sent permission action feedback', () => {
       ],
     },
   })
+})
+
+it('sends the request id from the selected permission card', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [permission, otherPermission])
+
+  act(() => {
+    requireElement(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.chat-permission-card .permission-actions button',
+      )[2] ?? null,
+    ).click()
+  })
+
+  expect(onAction.mock.calls).toEqual([
+    [
+      'permission/approve',
+      { requestId: 'permission-request-subagent' },
+      { requestId: 'permission-request-subagent' },
+    ],
+  ])
 })
 
 it('copies the session ID from desktop and mobile headers', async () => {
@@ -1486,15 +1511,13 @@ it('prevents a choice click from duplicating a number-key answer', async () => {
     )?.disabled,
   })
   expect(snapshot()).toEqual({
-    actionCalls: [
-      ['answer', { question: 'Which retry policy should be used?', choice: 2 }],
-    ],
+    actionCalls: [['answer', { choice: 2 }]],
     keyDefaultPrevented: true,
     choiceDisabled: true,
   })
 })
 
-it('submits a freeform question answer through the permission request', async () => {
+it('closes a question before sending a contextual freeform answer', async () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction, session, undefined, [
     {
@@ -1519,17 +1542,18 @@ it('submits a freeform question answer through the permission request', async ()
   })
 
   expect(onAction.mock.calls).toEqual([
+    ['answer', { skip: true }],
     [
-      'answer',
+      'messages',
       {
-        question: 'Which format should be used?',
-        answer: 'Use a fictional format',
+        content:
+          'My answer to "Output format: Which format should be used?" is:\nUse a fictional format',
       },
     ],
   ])
 })
 
-it('keeps a freeform question answer draft when submission fails', async () => {
+it('does not send a freeform answer when skipping the question fails', async () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   onAction.mockResolvedValueOnce(false)
   renderView(onAction, session, undefined, [question])
@@ -1548,31 +1572,16 @@ it('keeps a freeform question answer draft when submission fails', async () => {
     await Promise.resolve()
   })
 
-  const snapshot = () => ({
-    actionCalls: onAction.mock.calls,
-    draft: textarea.value,
-  })
-  expect(snapshot()).toEqual({
-    actionCalls: [
-      [
-        'answer',
-        {
-          question: 'Which retry policy should be used?',
-          answer: 'Use a fictional format',
-        },
-      ],
-    ],
-    draft: 'Use a fictional format',
-  })
+  expect(onAction.mock.calls).toEqual([['answer', { skip: true }]])
 })
 
 it('does not answer a choice shortcut while a freeform answer is sending', async () => {
-  let resolveAnswer: (sent: boolean) => void = () => undefined
-  const answerResult = new Promise<boolean>((resolve) => {
-    resolveAnswer = resolve
+  let resolveMessage: (sent: boolean) => void = () => undefined
+  const messageResult = new Promise<boolean>((resolve) => {
+    resolveMessage = resolve
   })
   const onAction = vi.fn((action: string) =>
-    action === 'answer' ? answerResult : Promise.resolve(true),
+    action === 'messages' ? messageResult : Promise.resolve(true),
   )
   renderView(onAction, session, undefined, [question])
 
@@ -1606,17 +1615,18 @@ it('does not answer a choice shortcut while a freeform answer is sending', async
   }
 
   await act(async () => {
-    resolveAnswer(true)
-    await answerResult
+    resolveMessage(true)
+    await messageResult
     await Promise.resolve()
   })
 
   const expectedCalls = [
+    ['answer', { skip: true }],
     [
-      'answer',
+      'messages',
       {
-        question: 'Which retry policy should be used?',
-        answer: 'Use a fictional format',
+        content:
+          'My answer to "Which retry policy should be used?" is:\nUse a fictional format',
       },
     ],
   ]
@@ -3679,6 +3689,7 @@ it('directs Codex questions and permissions to the terminal', () => {
       question,
       {
         type: 'permission',
+        requestId: 'permission-request-codex',
         tool: 'Shell',
         description: 'Run the project formatter.',
       },
@@ -4527,6 +4538,7 @@ it.each([
         messagesResponse([
           {
             type: 'permission',
+            requestId: 'permission-request-api-test',
             tool: 'Shell',
             description: 'Run the formatter on changed files.',
           },
@@ -4543,7 +4555,13 @@ it.each([
       }),
     )
     .mockResolvedValueOnce(
-      jsonResponse({ error: 'session pane is idle or unavailable' }, 409),
+      jsonResponse(
+        {
+          error:
+            'permission request is no longer pending; answer it in the terminal',
+        },
+        409,
+      ),
     )
   vi.stubGlobal('fetch', fetcher)
   root = createRoot(container)
@@ -4575,9 +4593,11 @@ it.each([
       : actionRequest instanceof URL
         ? actionRequest.href
         : actionRequest?.url
+  const actionRequestBody = fetcher.mock.calls[2]?.[1]?.body
   const expected = JSON.stringify([
-    'session pane is idle or unavailable',
+    'permission request is no longer pending; answer it in the terminal',
     `/api/sessions/sample-session/permission/${action}`,
+    JSON.stringify({ requestId: 'permission-request-api-test' }),
     [
       { label: 'Approve', disabled: false },
       { label: 'Reject', disabled: false },
@@ -4590,6 +4610,7 @@ it.each([
   const actual = JSON.stringify([
     container.querySelector('[role="alert"]')?.textContent,
     actionRequestUrl,
+    actionRequestBody,
     buttonStates,
   ])
   expect(actual).toBe(expected)
@@ -4995,6 +5016,7 @@ it('keeps the conversation and focused draft while a feed refresh is pending', a
           question,
           {
             type: 'permission',
+            requestId: 'permission-request-refresh',
             tool: 'Shell',
             description: 'Run the project formatter.',
           },
@@ -5485,6 +5507,7 @@ it('keeps question and permission actions active after a refresh error', async (
           question,
           {
             type: 'permission',
+            requestId: 'permission-request-refresh-error',
             tool: 'Shell',
             description: 'Run the project formatter.',
           },
