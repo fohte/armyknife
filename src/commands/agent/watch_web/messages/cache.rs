@@ -1,17 +1,21 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-
-use anyhow::Context;
 
 use crate::commands::agent::store::{
     AgentDecision, AgentProposal, AgentTodo, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
 };
 use crate::commands::agent::types::{Engine, Session};
 
+use super::parser::{claude::IncrementalClaudeParser, codex::CodexParserState};
 use super::{ChatItem, UserContentPart};
 use super::{ConversationResponse, ParentSession, RouteLoaders};
+
+mod transcript_fingerprint;
+
+use transcript_fingerprint::transcript_fingerprint;
+pub(super) use transcript_fingerprint::{TranscriptChange, TranscriptFingerprint};
 
 const MAX_CACHED_SESSIONS: usize = 8;
 const MAX_CACHED_BACKGROUND_TASK_SESSIONS: usize = 256;
@@ -70,94 +74,6 @@ impl MessageCacheKey {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
-pub(super) struct TranscriptFingerprint {
-    source_path: PathBuf,
-    len: u64,
-    modified: std::time::SystemTime,
-    // ctime catches same-size rewrites even if the modification time is restored.
-    #[cfg(unix)]
-    device: u64,
-    #[cfg(unix)]
-    inode: u64,
-    #[cfg(unix)]
-    changed_at_seconds: i64,
-    #[cfg(unix)]
-    changed_at_nanoseconds: i64,
-}
-
-fn transcript_fingerprint(
-    engine: Engine,
-    path: Option<&Path>,
-) -> anyhow::Result<Option<TranscriptFingerprint>> {
-    let Some(path) = path else {
-        return Ok(None);
-    };
-    let source_path = if engine == Engine::Codex {
-        match std::fs::metadata(path) {
-            Ok(_) => path.to_path_buf(),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let compressed_path = super::compressed_path(path);
-                match std::fs::metadata(&compressed_path) {
-                    Ok(_) => compressed_path,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                        return Ok(None);
-                    }
-                    Err(error) => {
-                        return Err(error).with_context(|| {
-                            format!("read transcript metadata {}", compressed_path.display())
-                        });
-                    }
-                }
-            }
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("read transcript metadata {}", path.display()));
-            }
-        }
-    } else {
-        path.to_path_buf()
-    };
-    let metadata = match std::fs::metadata(&source_path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("read transcript metadata {}", source_path.display()));
-        }
-    };
-    let modified = metadata.modified().with_context(|| {
-        format!(
-            "read transcript modification time {}",
-            source_path.display()
-        )
-    })?;
-    #[cfg(unix)]
-    let (device, inode, changed_at_seconds, changed_at_nanoseconds) = {
-        use std::os::unix::fs::MetadataExt;
-
-        (
-            metadata.dev(),
-            metadata.ino(),
-            metadata.ctime(),
-            metadata.ctime_nsec(),
-        )
-    };
-    Ok(Some(TranscriptFingerprint {
-        source_path,
-        len: metadata.len(),
-        modified,
-        #[cfg(unix)]
-        device,
-        #[cfg(unix)]
-        inode,
-        #[cfg(unix)]
-        changed_at_seconds,
-        #[cfg(unix)]
-        changed_at_nanoseconds,
-    }))
-}
-
 #[derive(Clone, Default)]
 pub(super) struct RunningBackgroundTaskCache {
     entries: Arc<Mutex<RunningBackgroundTaskEntries>>,
@@ -193,13 +109,12 @@ impl RunningBackgroundTaskCache {
             .entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !entries.contains_key(session_id)
-            && entries.len() >= MAX_CACHED_BACKGROUND_TASK_SESSIONS
-            && let Some(evicted_session_id) = entries.keys().next().cloned()
-        {
-            entries.remove(&evicted_session_id);
-        }
-        entries.insert(session_id.to_string(), (fingerprint, has_running_task));
+        insert_with_eviction(
+            &mut entries,
+            session_id.to_string(),
+            (fingerprint, has_running_task),
+            MAX_CACHED_BACKGROUND_TASK_SESSIONS,
+        );
     }
 }
 
@@ -257,23 +172,40 @@ pub(super) struct CachedConversation {
 #[derive(Clone, Default)]
 pub(super) struct MessageCache {
     entries: Arc<Mutex<HashMap<String, (MessageCacheKey, CachedConversation)>>>,
+    transcript_parsers: TranscriptParserCache,
 }
 
 impl MessageCache {
+    pub(super) fn transcript_parser_slot(
+        &self,
+        session_id: &str,
+    ) -> Arc<Mutex<Option<CachedTranscriptParser>>> {
+        self.transcript_parsers.get_or_create_slot(session_id)
+    }
+
     pub(super) fn get(
         &self,
         session_id: &str,
         key: &MessageCacheKey,
-    ) -> Option<CachedConversation> {
+    ) -> anyhow::Result<Option<CachedConversation>> {
         let entries = self
             .entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (cached_key, cached) = entries.get(session_id)?;
+        let Some((cached_key, cached)) = entries.get(session_id) else {
+            return Ok(None);
+        };
         if cached_key != key {
-            return None;
+            return Ok(None);
         }
-        Some(cached.clone())
+        let cached = cached.clone();
+        drop(entries);
+        if transcript_fingerprint(key.engine, key.transcript_path.as_deref())?
+            != key.transcript_fingerprint
+        {
+            return Ok(None);
+        }
+        Ok(Some(cached))
     }
 
     pub(super) fn insert(
@@ -287,13 +219,8 @@ impl MessageCache {
             .entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !entries.contains_key(session_id)
-            && entries.len() >= MAX_CACHED_SESSIONS
-            && let Some(evicted_session_id) = entries.keys().next().cloned()
-        {
-            entries.remove(&evicted_session_id);
-        }
-        entries.insert(
+        insert_with_eviction(
+            &mut entries,
             session_id.to_string(),
             (
                 key,
@@ -303,8 +230,64 @@ impl MessageCache {
                     cached_at: Instant::now(),
                 },
             ),
+            MAX_CACHED_SESSIONS,
         );
     }
+}
+
+#[derive(Clone, Default)]
+pub(super) struct TranscriptParserCache {
+    entries: Arc<Mutex<TranscriptParserEntries>>,
+}
+
+type TranscriptParserSlot = Arc<Mutex<Option<CachedTranscriptParser>>>;
+type TranscriptParserEntries = HashMap<String, TranscriptParserSlot>;
+
+pub(super) struct CachedTranscriptParser {
+    pub(super) fingerprint: TranscriptFingerprint,
+    pub(super) tail: Vec<u8>,
+    pub(super) engine: Engine,
+    #[cfg(test)]
+    pub(super) last_change: TranscriptChange,
+    pub(super) parser: IncrementalTranscriptParser,
+}
+
+pub(super) enum IncrementalTranscriptParser {
+    Claude(Box<IncrementalClaudeParser>),
+    Codex(CodexParserState),
+}
+
+impl TranscriptParserCache {
+    pub(super) fn get_or_create_slot(&self, session_id: &str) -> TranscriptParserSlot {
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let slot = entries
+            .get(session_id)
+            .cloned()
+            .unwrap_or_else(|| Arc::new(Mutex::new(None)));
+        insert_with_eviction(
+            &mut entries,
+            session_id.to_string(),
+            Arc::clone(&slot),
+            MAX_CACHED_SESSIONS,
+        );
+        slot
+    }
+}
+
+fn insert_with_eviction<K, V>(entries: &mut HashMap<K, V>, key: K, value: V, capacity: usize)
+where
+    K: Clone + Eq + std::hash::Hash,
+{
+    if !entries.contains_key(&key)
+        && entries.len() >= capacity
+        && let Some(evicted_key) = entries.keys().next().cloned()
+    {
+        entries.remove(&evicted_key);
+    }
+    entries.insert(key, value);
 }
 
 #[cfg(test)]

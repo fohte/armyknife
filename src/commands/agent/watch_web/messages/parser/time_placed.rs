@@ -11,15 +11,16 @@ pub(super) trait TimePlaced {
     fn chat_item(&self) -> ChatItem;
 }
 
-pub(super) struct TimePlacedTimeline<'a, T> {
-    entries: &'a [T],
+#[derive(Clone)]
+pub(super) struct TimePlacedTimeline<T> {
+    entries: Vec<T>,
     inserted_seqs: HashSet<i64>,
 }
 
-impl<'a, T: TimePlaced> TimePlacedTimeline<'a, T> {
-    pub(super) fn new(entries: &'a [T]) -> Self {
+impl<T: TimePlaced + Clone> TimePlacedTimeline<T> {
+    pub(super) fn new(entries: &[T]) -> Self {
         Self {
-            entries,
+            entries: entries.to_vec(),
             inserted_seqs: HashSet::new(),
         }
     }

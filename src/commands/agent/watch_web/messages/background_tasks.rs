@@ -43,10 +43,10 @@ pub(super) fn running_background_task_session_ids(
                 match parse_session_transcript(TranscriptInput {
                     path: session.transcript_path.as_deref(),
                     engine: Engine::Claude,
-                    parent: None,
-                    pending_tool: None,
-                    watch_web_user_marker: None,
                     additions: ParserAdditions {
+                        parent: None,
+                        pending_tool: None,
+                        user_marker: None,
                         decisions: &decisions,
                         queued_prompts: &queued_prompts,
                         peer_out_messages: &peer_out_messages,

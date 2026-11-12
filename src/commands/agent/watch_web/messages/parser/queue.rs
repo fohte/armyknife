@@ -9,7 +9,101 @@ use super::append_text_with_user_marker_and_image_directory;
 use super::classifier::marked_user_body;
 use crate::commands::agent::store::WatchWebQueuedPrompt;
 
-#[derive(Default)]
+#[derive(Clone)]
+pub(super) struct QueueReplayEvent {
+    kind: QueueRecordKind,
+    timestamp: Option<DateTime<Utc>>,
+    prompt: Option<String>,
+    source_tool_assistant_uuid_present: bool,
+    has_tool_use_result: bool,
+    pub(super) active_branch_delivery: bool,
+}
+
+#[derive(Clone, Copy)]
+enum QueueRecordKind {
+    Operation(QueueOperation),
+    QueuedCommand,
+    User,
+}
+
+#[derive(Clone, Copy)]
+enum QueueOperation {
+    Enqueue,
+    Dequeue,
+    Remove,
+    PopAll,
+}
+
+impl QueueReplayEvent {
+    pub(super) fn from_record(record: &Value) -> Option<Self> {
+        let kind = record.get("type").and_then(Value::as_str);
+        let attachment_type = record
+            .get("attachment")
+            .and_then(|attachment| attachment.get("type"))
+            .and_then(Value::as_str);
+        let timestamp = super::record_timestamp(record);
+
+        if kind == Some("queue-operation") {
+            let operation = match record.get("operation").and_then(Value::as_str) {
+                Some("enqueue") => QueueOperation::Enqueue,
+                Some("dequeue") => QueueOperation::Dequeue,
+                Some("remove") => QueueOperation::Remove,
+                Some("popAll") => QueueOperation::PopAll,
+                _ => return None,
+            };
+            let prompt = match operation {
+                QueueOperation::Enqueue => record
+                    .get("content")
+                    .filter(|content| !content.is_null())
+                    .map(|content| claude_content_text(Some(content))),
+                QueueOperation::Remove => record
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                QueueOperation::Dequeue | QueueOperation::PopAll => None,
+            };
+            return Some(Self {
+                kind: QueueRecordKind::Operation(operation),
+                timestamp,
+                prompt,
+                source_tool_assistant_uuid_present: false,
+                has_tool_use_result: false,
+                active_branch_delivery: false,
+            });
+        }
+
+        if attachment_type == Some("queued_command") {
+            return Some(Self {
+                kind: QueueRecordKind::QueuedCommand,
+                timestamp,
+                prompt: record
+                    .get("attachment")
+                    .and_then(|attachment| attachment.get("prompt"))
+                    .map(|prompt| claude_content_text(Some(prompt))),
+                source_tool_assistant_uuid_present: false,
+                has_tool_use_result: false,
+                active_branch_delivery: false,
+            });
+        }
+
+        if kind == Some("user") {
+            return Some(Self {
+                kind: QueueRecordKind::User,
+                timestamp,
+                prompt: user_prompt(record),
+                source_tool_assistant_uuid_present: record.get("sourceToolAssistantUUID").is_some(),
+                has_tool_use_result: record
+                    .get("toolUseResult")
+                    .is_some_and(|result| !result.is_null()),
+                active_branch_delivery: false,
+            });
+        }
+
+        None
+    }
+}
+
+#[derive(Clone, Default)]
 pub(super) struct Queue {
     pending: VecDeque<PendingPrompt>,
     removed: VecDeque<Option<String>>,
@@ -17,6 +111,7 @@ pub(super) struct Queue {
     resolved_queued_prompt_ids: Vec<i64>,
 }
 
+#[derive(Clone)]
 struct PendingPrompt {
     content: Option<String>,
     timestamp: Option<DateTime<Utc>>,
@@ -30,28 +125,22 @@ impl Queue {
         }
     }
 
-    pub(super) fn observe(&mut self, record: &Value) {
-        if record.get("type").and_then(Value::as_str) == Some("queue-operation") {
-            match record.get("operation").and_then(Value::as_str) {
-                Some("enqueue") => {
+    pub(super) fn observe(&mut self, event: &QueueReplayEvent) {
+        match event.kind {
+            QueueRecordKind::Operation(operation) => match operation {
+                QueueOperation::Enqueue => {
                     self.pending.push_back(PendingPrompt {
-                        content: record
-                            .get("content")
-                            .filter(|content| !content.is_null())
-                            .map(|content| claude_content_text(Some(content))),
-                        timestamp: super::record_timestamp(record),
+                        content: event.prompt.clone(),
+                        timestamp: event.timestamp,
                     });
                 }
-                Some("dequeue") => {
+                QueueOperation::Dequeue => {
                     if let Some(prompt) = self.pending.pop_front() {
                         self.removed.push_back(prompt.content);
                     }
                 }
-                Some("remove") => {
-                    let content = record
-                        .get("content")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned);
+                QueueOperation::Remove => {
+                    let content = event.prompt.clone();
                     let index = content
                         .as_ref()
                         .and_then(|content| pending_prompt_index(&self.pending, content));
@@ -72,11 +161,11 @@ impl Queue {
                         self.removed.push_back(removed);
                     }
                 }
-                Some("popAll") => {
+                QueueOperation::PopAll => {
                     self.pending.clear();
                     self.removed.clear();
                     // Popped prompts have no delivery row, so discard their saved watch-web entries here.
-                    if let Some(popped_at) = super::record_timestamp(record) {
+                    if let Some(popped_at) = event.timestamp {
                         let mut cancelled_ids = Vec::new();
                         self.queued_prompts.retain(|queued| {
                             if queued.sent_at <= popped_at {
@@ -89,71 +178,44 @@ impl Queue {
                         self.resolved_queued_prompt_ids.extend(cancelled_ids);
                     }
                 }
-                _ => {}
-            }
-        } else if record
-            .get("attachment")
-            .and_then(|attachment| attachment.get("type"))
-            .and_then(Value::as_str)
-            == Some("queued_command")
-        {
-            if let Some(prompt) = record
-                .get("attachment")
-                .and_then(|attachment| attachment.get("prompt"))
-            {
-                let prompt = claude_content_text(Some(prompt));
-                if !self.consume_removed_prompt(&prompt)
-                    && let Some(index) = pending_prompt_index(&self.pending, &prompt)
+            },
+            QueueRecordKind::QueuedCommand => {
+                if let Some(prompt) = event.prompt.as_deref()
+                    && !self.consume_removed_prompt(prompt)
+                    && let Some(index) = pending_prompt_index(&self.pending, prompt)
                 {
                     self.pending.remove(index);
                 }
             }
-        } else if record.get("type").and_then(Value::as_str) == Some("user")
-            && let Some(prompt) = user_prompt(record)
-        {
-            self.consume_removed_prompt(&prompt);
+            QueueRecordKind::User => {
+                if let Some(prompt) = event.prompt.as_deref() {
+                    self.consume_removed_prompt(prompt);
+                }
+            }
         }
     }
 
     pub(super) fn observe_queued_prompt_delivery(
         &mut self,
-        record: &Value,
+        event: &QueueReplayEvent,
         user_marker: Option<&str>,
     ) {
-        let is_queued_command = record
-            .get("attachment")
-            .and_then(|attachment| attachment.get("type"))
-            .and_then(Value::as_str)
-            == Some("queued_command");
-        let prompt = if is_queued_command {
-            record
-                .get("attachment")
-                .and_then(|attachment| attachment.get("prompt"))
-        } else if record.get("type").and_then(Value::as_str) == Some("user") {
-            let Some(message) = record.get("message") else {
-                return;
-            };
-            if record.get("sourceToolAssistantUUID").is_some()
-                || record
-                    .get("toolUseResult")
-                    .is_some_and(|result| !result.is_null())
-            {
-                return;
-            }
-            message.get("content")
-        } else {
+        let is_queued_command = matches!(event.kind, QueueRecordKind::QueuedCommand);
+        if matches!(event.kind, QueueRecordKind::Operation(_))
+            || (matches!(event.kind, QueueRecordKind::User)
+                && (event.source_tool_assistant_uuid_present || event.has_tool_use_result))
+        {
+            return;
+        }
+        let Some(prompt_text) = event.prompt.as_deref() else {
             return;
         };
-        let Some(prompt) = prompt else {
-            return;
-        };
-        let prompt_text = claude_content_text(Some(prompt));
-        let body = match marked_user_body(&prompt_text, user_marker) {
+        let body = match marked_user_body(prompt_text, user_marker) {
             Some(body) => body,
-            None if is_queued_command => prompt_text.clone(),
+            None if is_queued_command => prompt_text.to_owned(),
             None => return,
         };
-        let received_at = super::record_timestamp(record);
+        let received_at = event.timestamp;
         let matching_index = self.queued_prompts.iter().position(|queued| {
             queued.content == body
                 && received_at.is_none_or(|received_at| queued.sent_at <= received_at)
@@ -288,7 +350,7 @@ mod tests {
     use std::io::Cursor;
 
     use chrono::{DateTime, Utc};
-    use indoc::indoc;
+    use indoc::{formatdoc, indoc};
     use rstest::rstest;
 
     use super::super::claude::ParserAdditions;
@@ -461,6 +523,54 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::source_tool_assistant_uuid(
+        serde_json::json!({"sourceToolAssistantUUID":"fixture-tool-row"})
+    )]
+    #[case::non_null_tool_use_result(
+        serde_json::json!({"toolUseResult":{"result":"fixture output"}})
+    )]
+    fn user_tool_metadata_keeps_the_saved_prompt_pending(#[case] metadata: serde_json::Value) {
+        let marker = "⟦armyknife-user:fixture-marker-cobalt⟧";
+        let mut record = serde_json::json!({
+            "type": "user",
+            "timestamp": "2026-01-01T00:00:01Z",
+            "message": {
+                "content": formatdoc! {"
+                    {marker}
+                    This message was typed by the human user in armyknife watch-web.
+                    Delivered request.
+                "},
+            },
+        });
+        record
+            .as_object_mut()
+            .expect("user record should be an object")
+            .extend(
+                metadata
+                    .as_object()
+                    .expect("test metadata should be an object")
+                    .clone(),
+            );
+        let transcript = format!("{}\n", serde_json::to_string(&record).unwrap());
+
+        assert_eq!(
+            parse_with_saved_prompts(
+                &transcript,
+                &[saved_prompt(7, "Delivered request.")],
+                Some(marker),
+            ),
+            (
+                vec![queued_user_at(
+                    "Delivered request.",
+                    "2026-01-01T00:00:00+00:00",
+                )],
+                Vec::<BackgroundTask>::new(),
+                Vec::new(),
+            ),
+        );
+    }
+
     #[test]
     fn confirms_a_queued_command_attachment_without_a_marker() {
         let transcript = indoc! {r#"
@@ -629,11 +739,11 @@ mod tests {
     ) -> Vec<ChatItem> {
         super::super::claude::parse_with_queued_prompts_and_peer_out_messages_and_proposals(
             Cursor::new(transcript),
-            parent,
-            None,
-            marker,
             Utc::now(),
             ParserAdditions {
+                parent,
+                pending_tool: None,
+                user_marker: marker,
                 decisions: &[],
                 queued_prompts: &[],
                 peer_out_messages: &[],
@@ -652,11 +762,11 @@ mod tests {
     ) -> (Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>) {
         super::super::claude::parse_with_queued_prompts_and_peer_out_messages_and_proposals(
             Cursor::new(transcript),
-            None,
-            None,
-            marker,
             Utc::now(),
             ParserAdditions {
+                parent: None,
+                pending_tool: None,
+                user_marker: marker,
                 decisions: &[],
                 queued_prompts: prompts,
                 peer_out_messages: &[],

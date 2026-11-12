@@ -27,12 +27,14 @@ use crate::commands::agent::user_turn::is_ask_user_question;
 
 mod background_task_outputs;
 mod background_tasks;
+mod incremental;
 mod parser;
 mod proposals;
 mod questions;
 mod range;
 mod subagent_reports;
 
+use self::incremental::parse_session_transcript_incrementally;
 use self::proposals::proposal_chat_item;
 #[cfg(test)]
 use self::questions::QuestionChoice;
@@ -312,7 +314,7 @@ fn load_conversation_with_queued_prompts(
             todos: todos.clone(),
         },
     )?;
-    if let Some(mut cached) = loaders.message_cache.get(session_id, &cache_key) {
+    if let Some(mut cached) = loaders.message_cache.get(session_id, &cache_key)? {
         let elapsed = cached.cached_at.elapsed().as_secs();
         for task in &mut cached.conversation.background_tasks {
             task.elapsed_seconds = task.elapsed_seconds.saturating_add(elapsed);
@@ -334,21 +336,26 @@ fn load_conversation_with_queued_prompts(
         );
         return Ok(Some(cached.conversation));
     }
-    let (mut conversation, resolved_queued_prompt_ids) =
-        parse_session_transcript(TranscriptInput {
-            path: session.transcript_path.as_deref(),
-            engine: session.engine,
+    let transcript_input = TranscriptInput {
+        path: session.transcript_path.as_deref(),
+        engine: session.engine,
+        additions: parser::claude::ParserAdditions {
             parent: parent.as_ref(),
             pending_tool: pending_tool.as_deref(),
-            watch_web_user_marker: user_marker.as_deref(),
-            additions: parser::claude::ParserAdditions {
-                decisions: &decisions,
-                queued_prompts: &queued_prompts,
-                peer_out_messages: &peer_out_messages,
-                proposals: &proposal_items,
-                todos: &todos,
-            },
-        })?;
+            user_marker: user_marker.as_deref(),
+            decisions: &decisions,
+            queued_prompts: &queued_prompts,
+            peer_out_messages: &peer_out_messages,
+            proposals: &proposal_items,
+            todos: &todos,
+        },
+    };
+    let (mut conversation, resolved_queued_prompt_ids) = parse_session_transcript_incrementally(
+        session_id,
+        transcript_input,
+        cache_key.transcript_fingerprint.clone(),
+        &loaders.message_cache,
+    )?;
     resolve_peer_session_titles(&mut conversation.messages, &mut load_session)?;
 
     attach_question_request_if_present(
@@ -457,99 +464,13 @@ fn permission_request_tool_detail(tool_input: &Value) -> Option<&str> {
 pub(in crate::commands::agent::watch_web::messages) struct TranscriptInput<'a> {
     path: Option<&'a Path>,
     engine: Engine,
-    parent: Option<&'a ParentSession>,
-    pending_tool: Option<&'a str>,
-    watch_web_user_marker: Option<&'a str>,
     additions: parser::claude::ParserAdditions<'a>,
 }
 
 pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript(
-    TranscriptInput {
-        path,
-        engine,
-        parent,
-        pending_tool,
-        watch_web_user_marker,
-        additions,
-    }: TranscriptInput<'_>,
+    input: TranscriptInput<'_>,
 ) -> Result<(ConversationResponse, Vec<i64>)> {
-    match engine {
-        Engine::Claude => {
-            let reader = match path {
-                Some(path) => open_seekable_transcript(path)?,
-                None => None,
-            };
-            let reader = reader.unwrap_or_else(|| Box::new(Cursor::new(Vec::new())));
-            let (mut messages, background_tasks, resolved_ids, skills) =
-                parser::claude::parse_with_queued_prompts_and_peer_out_messages_and_proposals_and_skills(
-                    reader,
-                    parent,
-                    pending_tool,
-                    watch_web_user_marker,
-                    chrono::Utc::now(),
-                    additions,
-                )?;
-            if let Some(path) = path {
-                subagent_reports::add_descriptions(path, &mut messages);
-            }
-            Ok((
-                ConversationResponse {
-                    messages,
-                    background_tasks,
-                    skills,
-                    ..ConversationResponse::default()
-                },
-                resolved_ids,
-            ))
-        }
-        Engine::Codex => {
-            let Some(path) = path else {
-                return Ok((
-                    ConversationResponse {
-                        messages: additions
-                            .decisions
-                            .iter()
-                            .cloned()
-                            .map(ChatItem::from)
-                            .collect(),
-                        background_tasks: Vec::new(),
-                        ..ConversationResponse::default()
-                    },
-                    Vec::new(),
-                ));
-            };
-            let Some(reader) = open_transcript(path, true)? else {
-                return Ok((
-                    ConversationResponse {
-                        messages: additions
-                            .decisions
-                            .iter()
-                            .cloned()
-                            .map(ChatItem::from)
-                            .collect(),
-                        background_tasks: Vec::new(),
-                        ..ConversationResponse::default()
-                    },
-                    Vec::new(),
-                ));
-            };
-            let (messages, skills) = parser::codex::parse_with_skills(
-                reader,
-                parent,
-                additions.decisions,
-                additions.todos,
-            )?;
-            Ok((
-                ConversationResponse {
-                    messages,
-                    background_tasks: Vec::new(),
-                    skills,
-                    ..ConversationResponse::default()
-                },
-                Vec::new(),
-            ))
-        }
-    }
+    incremental::parse_session_transcript(input)
 }
 
 trait SeekableBufRead: BufRead + Seek {}
@@ -808,6 +729,7 @@ struct ParentSession {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
+    use std::io::Write;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
@@ -820,6 +742,7 @@ mod tests {
     use serde_json::json;
     use tower::ServiceExt;
 
+    use super::cache::TranscriptChange;
     use super::{
         ChatItem, QuestionChoice, QuestionPrompt, RouteLoaders,
         load_conversation_with_queued_prompts, load_messages_with,
@@ -943,6 +866,209 @@ mod tests {
                     Some("application/json".to_string()),
                     json!({"messages":[{"type":"assistant","text":"Other response."}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
                 ),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::claude(false)]
+    #[case::codex(true)]
+    #[tokio::test]
+    async fn messages_route_parses_appended_transcript_records(#[case] use_codex_transcript: bool) {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("fixture.jsonl");
+        let (first_record, appended_record) = if use_codex_transcript {
+            (
+                json!({
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "First response."}],
+                    },
+                }),
+                json!({
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Appended response."}],
+                    },
+                }),
+            )
+        } else {
+            (
+                json!({
+                    "uuid": "fixture-first-record",
+                    "parentUuid": null,
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "First response."}]},
+                }),
+                json!({
+                    "uuid": "fixture-appended-record",
+                    "parentUuid": "fixture-first-record",
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "Appended response."}]},
+                }),
+            )
+        };
+        std::fs::write(&transcript_path, format!("{}\n", first_record)).unwrap();
+
+        let mut session = stored_session();
+        session.engine = if use_codex_transcript {
+            Engine::Codex
+        } else {
+            Engine::Claude
+        };
+        session.transcript_path = Some(transcript_path.clone());
+        let loaders = RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        );
+        let message_cache = loaders.message_cache.clone();
+        let router = routes_with_proposals_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            loaders,
+        );
+
+        let first = message_response(&router).await;
+        let mut transcript = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&transcript_path)
+            .unwrap();
+        writeln!(transcript, "{appended_record}").unwrap();
+        let appended = message_response(&router).await;
+
+        let expected_first = (
+            StatusCode::OK,
+            Some("application/json".to_string()),
+            json!({
+                "messages": [{"type": "assistant", "text": "First response."}],
+                "backgroundTasks": [],
+                "start": 0,
+                "total": 1,
+                "decisions": [],
+                "hasUnansweredProposal": false,
+                "activeQuestionIndex": null,
+            }),
+        );
+        let expected_appended = (
+            StatusCode::OK,
+            Some("application/json".to_string()),
+            json!({
+                "messages": [
+                    {"type": "assistant", "text": "First response."},
+                    {"type": "assistant", "text": "Appended response."},
+                ],
+                "backgroundTasks": [],
+                "start": 0,
+                "total": 2,
+                "decisions": [],
+                "hasUnansweredProposal": false,
+                "activeQuestionIndex": null,
+            }),
+        );
+
+        let slot = message_cache.transcript_parser_slot("fixture-session");
+        let last_change = slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|entry| entry.last_change);
+
+        assert_eq!(
+            (first, appended, last_change),
+            (
+                expected_first,
+                expected_appended,
+                Some(TranscriptChange::Appended),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn messages_route_renders_new_decisions_without_reparsing_the_transcript() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("fixture.jsonl");
+        std::fs::write(
+            &transcript_path,
+            indoc::indoc! {r#"
+                {"type":"assistant","timestamp":"2026-11-10T00:00:00Z","message":{"content":[{"type":"text","text":"Fixture response."}]}}
+            "#},
+        )
+        .unwrap();
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path);
+        let decision_enabled = Arc::new(AtomicBool::new(false));
+        let decision_loader_enabled = Arc::clone(&decision_enabled);
+        let loaders = RouteLoaders::new(
+            move |_| {
+                Ok(if decision_loader_enabled.load(Ordering::Relaxed) {
+                    vec![fixture_decision(1)]
+                } else {
+                    Vec::new()
+                })
+            },
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        );
+        let message_cache = loaders.message_cache.clone();
+        let router = routes_with_proposals_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            loaders,
+        );
+
+        let initial = message_response(&router).await;
+        decision_enabled.store(true, Ordering::Relaxed);
+        let updated = message_response(&router).await;
+        let decision = fixture_decision_json(1);
+        let slot = message_cache.transcript_parser_slot("fixture-session");
+        let last_change = slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|entry| entry.last_change);
+
+        assert_eq!(
+            (initial, updated, last_change),
+            (
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({
+                        "messages": [{"type": "assistant", "text": "Fixture response."}],
+                        "backgroundTasks": [],
+                        "start": 0,
+                        "total": 1,
+                        "decisions": [],
+                        "hasUnansweredProposal": false,
+                        "activeQuestionIndex": null,
+                    }),
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({
+                        "messages": [
+                            {"type": "assistant", "text": "Fixture response."},
+                            decision.clone(),
+                        ],
+                        "backgroundTasks": [],
+                        "start": 0,
+                        "total": 2,
+                        "decisions": [decision],
+                        "hasUnansweredProposal": false,
+                        "activeQuestionIndex": null,
+                    }),
+                ),
+                Some(TranscriptChange::Unchanged),
             ),
         );
     }

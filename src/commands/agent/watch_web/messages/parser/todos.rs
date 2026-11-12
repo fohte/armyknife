@@ -4,7 +4,7 @@ use super::time_placed::{TimePlaced, TimePlacedTimeline};
 use crate::commands::agent::store::AgentTodo;
 use crate::commands::agent::watch_web::messages::ChatItem;
 
-pub(super) type TodoTimeline<'a> = TimePlacedTimeline<'a, AgentTodo>;
+pub(super) type TodoTimeline = TimePlacedTimeline<AgentTodo>;
 
 impl TimePlaced for AgentTodo {
     fn seq(&self) -> i64 {

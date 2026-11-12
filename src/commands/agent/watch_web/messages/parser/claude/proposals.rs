@@ -4,7 +4,7 @@ use super::super::super::ChatItem;
 use super::super::super::proposals::ProposalItem;
 use super::super::time_placed::{TimePlaced, TimePlacedTimeline};
 
-pub(super) type ProposalTimeline<'a> = TimePlacedTimeline<'a, ProposalItem>;
+pub(super) type ProposalTimeline = TimePlacedTimeline<ProposalItem>;
 
 impl TimePlaced for ProposalItem {
     fn seq(&self) -> i64 {
