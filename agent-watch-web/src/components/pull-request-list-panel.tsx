@@ -2,6 +2,7 @@ import '#components/pull-request-list-panel.css'
 
 import { useState } from 'react'
 
+import { CompletedItemsToggle } from '#components/completed-items-toggle'
 import type { SessionPullRequest } from '#types'
 
 type PullRequestListPanelProps = {
@@ -111,17 +112,14 @@ export function PullRequestListPanel({
         ))}
       </ul>
       {completedPullRequests.length === 0 ? null : (
-        <button
-          className="pull-request-list-completed-toggle"
-          type="button"
-          aria-expanded={showCompleted}
-          onClick={() => {
+        <CompletedItemsToggle
+          count={completedPullRequests.length}
+          expanded={showCompleted}
+          onToggle={() => {
             setShowCompleted((expanded) => !expanded)
           }}
-        >
-          {showCompleted ? 'Hide' : 'Show'}{' '}
-          {String(completedPullRequests.length)} completed
-        </button>
+          placement="pull-request-list"
+        />
       )}
     </div>
   )

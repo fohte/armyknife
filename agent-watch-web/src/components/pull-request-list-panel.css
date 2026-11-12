@@ -66,18 +66,6 @@
   color: var(--aw-color-neutral);
 }
 
-.pull-request-list-completed-toggle {
-  align-self: flex-start;
-  margin: 4px 14px 10px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--aw-text-muted);
-  cursor: pointer;
-  font: inherit;
-  font-size: 11px;
-}
-
 .pull-request-list-feedback {
   display: grid;
   min-height: 0;

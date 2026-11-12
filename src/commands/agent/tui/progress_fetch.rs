@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
+use std::hash::Hash;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
@@ -21,10 +22,62 @@ use super::progress_batches::{
 
 type BranchPrKey = (String, String, String);
 type PrNumberKey = (String, String, u64);
-type BranchProgressMap = HashMap<BranchPrKey, PrProgressInfo>;
-type NumberProgressMap = HashMap<PrNumberKey, PrProgressInfo>;
-type BranchProgressResults = HashMap<BranchPrKey, Option<PrProgressInfo>>;
-type NumberProgressResults = HashMap<PrNumberKey, Option<PrProgressInfo>>;
+type ProgressResults<K> = HashMap<K, Option<PrProgressInfo>>;
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum PullRequestCacheKey {
+    Branch(BranchPrKey),
+    Number(PrNumberKey),
+}
+
+trait PullRequestCacheQuery: Clone {
+    type Key: Eq + Hash + Clone;
+
+    fn key(&self) -> Self::Key;
+    fn cache_key(key: &Self::Key) -> PullRequestCacheKey;
+    fn related_cache_key(
+        _key: &Self::Key,
+        _progress: &PrProgressInfo,
+    ) -> Option<PullRequestCacheKey> {
+        None
+    }
+}
+
+impl PullRequestCacheQuery for BranchPrQuery {
+    type Key = BranchPrKey;
+
+    fn key(&self) -> Self::Key {
+        BranchPrQuery::key(self)
+    }
+
+    fn cache_key(key: &Self::Key) -> PullRequestCacheKey {
+        PullRequestCacheKey::Branch(key.clone())
+    }
+
+    fn related_cache_key(
+        key: &Self::Key,
+        progress: &PrProgressInfo,
+    ) -> Option<PullRequestCacheKey> {
+        let (owner, repo, _) = key;
+        Some(PullRequestCacheKey::Number((
+            owner.clone(),
+            repo.clone(),
+            progress.pull_request.number,
+        )))
+    }
+}
+
+impl PullRequestCacheQuery for PrNumberQuery {
+    type Key = PrNumberKey;
+
+    fn key(&self) -> Self::Key {
+        PrNumberQuery::key(self)
+    }
+
+    fn cache_key(key: &Self::Key) -> PullRequestCacheKey {
+        PullRequestCacheKey::Number(key.clone())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,24 +99,24 @@ pub(in crate::commands::agent) struct PullRequestListResponse {
 
 #[derive(Clone, Default)]
 pub(in crate::commands::agent) struct PullRequestListCache {
-    branches: Arc<Mutex<BranchProgressMap>>,
-    numbers: Arc<Mutex<NumberProgressMap>>,
+    progress: Arc<Mutex<HashMap<PullRequestCacheKey, PrProgressInfo>>>,
 }
 
 impl PullRequestListCache {
-    fn branches_to_fetch(
+    fn queries_to_fetch<Q: PullRequestCacheQuery>(
         &self,
-        queries: &[BranchPrQuery],
-    ) -> (Vec<BranchPrQuery>, BranchProgressResults) {
+        queries: &[Q],
+    ) -> (Vec<Q>, ProgressResults<Q::Key>) {
         let cached = self
-            .branches
+            .progress
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut to_fetch = Vec::new();
         let mut results = HashMap::new();
         for query in queries {
-            if let Some(progress) = cached.get(&query.key()) {
-                results.insert(query.key(), Some(progress.clone()));
+            let key = query.key();
+            if let Some(progress) = cached.get(&Q::cache_key(&key)) {
+                results.insert(key, Some(progress.clone()));
             } else {
                 to_fetch.push(query.clone());
             }
@@ -71,61 +124,23 @@ impl PullRequestListCache {
         (to_fetch, results)
     }
 
-    fn numbers_to_fetch(
-        &self,
-        queries: &[PrNumberQuery],
-    ) -> (Vec<PrNumberQuery>, NumberProgressResults) {
-        let cached = self
-            .numbers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut to_fetch = Vec::new();
-        let mut results = HashMap::new();
-        for query in queries {
-            if let Some(progress) = cached.get(&query.key()) {
-                results.insert(query.key(), Some(progress.clone()));
-            } else {
-                to_fetch.push(query.clone());
-            }
-        }
-        (to_fetch, results)
-    }
-
-    fn remember_branches(&self, results: &BranchProgressResults) {
-        let terminal = results
-            .iter()
-            .filter_map(|(key, progress)| {
-                progress
-                    .as_ref()
-                    .filter(|progress| is_terminal(&progress.pull_request.state))
-                    .map(|progress| (key.clone(), progress.clone()))
-            })
-            .collect::<Vec<_>>();
+    fn remember<Q: PullRequestCacheQuery>(&self, results: &ProgressResults<Q::Key>) {
         let mut cached = self
-            .branches
+            .progress
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        cached.extend(terminal.iter().cloned());
-        let mut cached_numbers = self
-            .numbers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        cached_numbers.extend(terminal.into_iter().map(|((owner, repo, _), progress)| {
-            ((owner, repo, progress.pull_request.number), progress)
-        }));
-    }
-
-    fn remember_numbers(&self, results: &NumberProgressResults) {
-        let mut cached = self
-            .numbers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        cached.extend(results.iter().filter_map(|(key, progress)| {
-            progress
+        for (key, progress) in results {
+            let Some(progress) = progress
                 .as_ref()
                 .filter(|progress| is_terminal(&progress.pull_request.state))
-                .map(|progress| (key.clone(), progress.clone()))
-        }));
+            else {
+                continue;
+            };
+            cached.insert(Q::cache_key(key), progress.clone());
+            if let Some(related_key) = Q::related_cache_key(key, progress) {
+                cached.insert(related_key, progress.clone());
+            }
+        }
     }
 }
 
@@ -161,17 +176,18 @@ pub(in crate::commands::agent) async fn fetch_pull_request_list(
     })
 }
 
-async fn fetch_branch_progress<F, Fut>(
+async fn fetch_query_progress<Q, F, Fut>(
     cache: Option<&PullRequestListCache>,
-    queries: &[BranchPrQuery],
+    queries: &[Q],
     fetcher: F,
-) -> (BranchProgressResults, Option<String>)
+) -> (ProgressResults<Q::Key>, Option<String>)
 where
-    F: FnOnce(Vec<BranchPrQuery>) -> Fut,
-    Fut: Future<Output = Result<BranchProgressResults, String>>,
+    Q: PullRequestCacheQuery,
+    F: FnOnce(Vec<Q>) -> Fut,
+    Fut: Future<Output = Result<ProgressResults<Q::Key>, String>>,
 {
     let (queries_to_fetch, mut results) = match cache {
-        Some(cache) => cache.branches_to_fetch(queries),
+        Some(cache) => cache.queries_to_fetch(queries),
         None => (queries.to_vec(), HashMap::new()),
     };
     if queries_to_fetch.is_empty() {
@@ -181,36 +197,7 @@ where
     match fetcher(queries_to_fetch).await {
         Ok(fetched) => {
             if let Some(cache) = cache {
-                cache.remember_branches(&fetched);
-            }
-            results.extend(fetched);
-            (results, None)
-        }
-        Err(error) => (results, Some(error)),
-    }
-}
-
-async fn fetch_number_progress<F, Fut>(
-    cache: Option<&PullRequestListCache>,
-    queries: &[PrNumberQuery],
-    fetcher: F,
-) -> (NumberProgressResults, Option<String>)
-where
-    F: FnOnce(Vec<PrNumberQuery>) -> Fut,
-    Fut: Future<Output = Result<NumberProgressResults, String>>,
-{
-    let (queries_to_fetch, mut results) = match cache {
-        Some(cache) => cache.numbers_to_fetch(queries),
-        None => (queries.to_vec(), HashMap::new()),
-    };
-    if queries_to_fetch.is_empty() {
-        return (results, None);
-    }
-
-    match fetcher(queries_to_fetch).await {
-        Ok(fetched) => {
-            if let Some(cache) = cache {
-                cache.remember_numbers(&fetched);
+                cache.remember::<Q>(&fetched);
             }
             results.extend(fetched);
             (results, None)
@@ -309,7 +296,7 @@ async fn fetch_progress_for_sessions(
         .map(|(checklist, github_links)| pull_request_queries(checklist, github_links))
         .unwrap_or_default();
 
-    let (prs, mut github_error) = fetch_branch_progress(
+    let (prs, mut github_error) = fetch_query_progress(
         pull_request_cache,
         &query_data.queries,
         |queries| async move {
@@ -322,7 +309,7 @@ async fn fetch_progress_for_sessions(
         },
     )
     .await;
-    let (linked_prs, linked_pr_error) = fetch_number_progress(
+    let (linked_prs, linked_pr_error) = fetch_query_progress(
         pull_request_cache,
         &linked_pr_queries,
         |queries| async move {
@@ -558,8 +545,7 @@ mod tests {
 
     use super::{
         BranchLookup, ProgressFetchScope, PullRequestListCache, Resolution, branch_query_for_with,
-        direct_children, fetch_branch_progress, fetch_number_progress, progress_scope,
-        task_descendant_children,
+        direct_children, fetch_query_progress, progress_scope, task_descendant_children,
     };
     use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionStatus};
     use crate::infra::github::{
@@ -586,7 +572,7 @@ mod tests {
         let queries = vec![terminal.clone(), open.clone(), missing.clone()];
         let fetched_queries = RefCell::new(Vec::new());
         let (first_results, first_error) =
-            fetch_branch_progress(Some(&cache), &queries, |requested| {
+            fetch_query_progress(Some(&cache), &queries, |requested| {
                 fetched_queries.borrow_mut().push(requested);
                 let results = HashMap::from([
                     (terminal.key(), Some(terminal_progress.clone())),
@@ -604,14 +590,14 @@ mod tests {
         };
         let number_fetch_called = Cell::new(false);
         let (number_results, number_error) =
-            fetch_number_progress(Some(&cache), std::slice::from_ref(&terminal_number), |_| {
+            fetch_query_progress(Some(&cache), std::slice::from_ref(&terminal_number), |_| {
                 number_fetch_called.set(true);
                 async { Ok(HashMap::new()) }
             })
             .await;
 
         let (second_results, second_error) =
-            fetch_branch_progress(Some(&cache), &queries, |requested| {
+            fetch_query_progress(Some(&cache), &queries, |requested| {
                 fetched_queries.borrow_mut().push(requested.clone());
                 let results = requested
                     .iter()
@@ -671,7 +657,7 @@ mod tests {
         let queries = vec![closed.clone(), open.clone()];
         let fetched_queries = RefCell::new(Vec::new());
         let (first_results, first_error) =
-            fetch_number_progress(Some(&cache), &queries, |requested| {
+            fetch_query_progress(Some(&cache), &queries, |requested| {
                 fetched_queries.borrow_mut().push(requested);
                 let results = HashMap::from([
                     (closed.key(), Some(progress(PrState::Closed, 2048))),
@@ -681,7 +667,7 @@ mod tests {
             })
             .await;
         let (second_results, second_error) =
-            fetch_number_progress(Some(&cache), &queries, |requested| {
+            fetch_query_progress(Some(&cache), &queries, |requested| {
                 fetched_queries.borrow_mut().push(requested.clone());
                 let results = requested
                     .iter()

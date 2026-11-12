@@ -1,7 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { isSessionPullRequestListResponse } from '#components/conversation-pane-response'
 import { requestJson } from '#components/conversation-requests'
+import type { CachedPullRequestList } from '#components/session-pull-request-cache'
+import {
+  beginPullRequestListRequest,
+  getCachedPullRequestList,
+  isCurrentPullRequestListRequest,
+  setCachedPullRequestList,
+} from '#components/session-pull-request-cache'
 import { isPageVisible, subscribeToPageVisibility } from '#session-visibility'
 import type { Session, SessionPullRequest } from '#types'
 
@@ -12,13 +19,6 @@ type PullRequestListState = {
   pullRequests: SessionPullRequest[]
   loading: boolean
   error: string | null
-}
-
-type CachedPullRequestList = {
-  pullRequests: SessionPullRequest[]
-  error: string | null
-  fetchedAt: number
-  lastAttemptAt: number
 }
 
 type UseSessionPullRequestsOptions = {
@@ -46,9 +46,6 @@ export function useSessionPullRequests({
     loading: false,
     error: null,
   })
-  const cache = useRef(new Map<string, CachedPullRequestList>())
-  const requestGeneration = useRef(new Map<string, number>())
-
   useEffect(() => {
     if (!enabled) return
 
@@ -68,7 +65,7 @@ export function useSessionPullRequests({
     const scheduleRefresh = () => {
       stopScheduledRefresh()
       if (!current || !visible) return
-      const cached = cache.current.get(cacheKey)
+      const cached = getCachedPullRequestList(cacheKey)
       const dueAt =
         (cached?.lastAttemptAt ?? Date.now()) + PULL_REQUEST_REFRESH_INTERVAL
       refreshTimeout = window.setTimeout(
@@ -85,25 +82,29 @@ export function useSessionPullRequests({
         return
       }
       inFlight = true
-      setState((previous) => ({
-        cacheKey,
-        pullRequests:
-          previous.cacheKey === cacheKey ? previous.pullRequests : [],
-        loading: previous.cacheKey !== cacheKey,
-        error: previous.cacheKey === cacheKey ? previous.error : null,
-      }))
+      const cached = getCachedPullRequestList(cacheKey)
+      setState((previous) => {
+        const hasCurrentList = previous.cacheKey === cacheKey
+        return {
+          cacheKey,
+          pullRequests: hasCurrentList
+            ? previous.pullRequests
+            : (cached?.pullRequests ?? []),
+          loading: !hasCurrentList && cached === undefined,
+          error: hasCurrentList ? previous.error : (cached?.error ?? null),
+        }
+      })
       const requestedAt = Date.now()
-      const generation = (requestGeneration.current.get(cacheKey) ?? 0) + 1
-      requestGeneration.current.set(cacheKey, generation)
+      const generation = beginPullRequestListRequest(cacheKey)
       void requestJson(
         `/api/sessions/${encodeURIComponent(session.id)}/pull-requests`,
         isSessionPullRequestListResponse,
       )
         .match(
           (response) => {
-            if (requestGeneration.current.get(cacheKey) !== generation) return
+            if (!isCurrentPullRequestListRequest(cacheKey, generation)) return
             const fetchedAt = Date.now()
-            cache.current.set(cacheKey, {
+            setCachedPullRequestList(cacheKey, {
               pullRequests: response.pullRequests,
               error: response.error,
               fetchedAt,
@@ -119,9 +120,9 @@ export function useSessionPullRequests({
             }
           },
           (error) => {
-            if (requestGeneration.current.get(cacheKey) !== generation) return
-            const previous = cache.current.get(cacheKey)
-            cache.current.set(cacheKey, {
+            if (!isCurrentPullRequestListRequest(cacheKey, generation)) return
+            const previous = getCachedPullRequestList(cacheKey)
+            setCachedPullRequestList(cacheKey, {
               pullRequests: previous?.pullRequests ?? [],
               error: error.message,
               fetchedAt: previous?.fetchedAt ?? requestedAt,
@@ -156,7 +157,7 @@ export function useSessionPullRequests({
         stopScheduledRefresh()
         return
       }
-      const cached = cache.current.get(cacheKey)
+      const cached = getCachedPullRequestList(cacheKey)
       if (isPullRequestListStale(cached)) {
         refresh()
       } else {
@@ -168,7 +169,7 @@ export function useSessionPullRequests({
       onVisibilityChange,
     )
 
-    const cached = cache.current.get(cacheKey)
+    const cached = getCachedPullRequestList(cacheKey)
     if (cached !== undefined) {
       setState({
         cacheKey,
@@ -195,7 +196,7 @@ export function useSessionPullRequests({
   if (state.cacheKey === cacheKey) {
     return state
   }
-  const cached = cache.current.get(cacheKey)
+  const cached = getCachedPullRequestList(cacheKey)
   if (cached !== undefined) {
     return {
       cacheKey,

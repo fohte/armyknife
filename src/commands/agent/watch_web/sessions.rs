@@ -152,6 +152,10 @@ trait SessionSource: Clone + Send + Sync + 'static {
         sessions: &[Session],
     ) -> impl Future<Output = HashMap<String, Option<PrInfo>>> + Send;
 
+    fn pull_request_list_cache(&self) -> PullRequestListCache {
+        PullRequestListCache::default()
+    }
+
     fn fetch_session_pull_request_list(
         &self,
         selected_session_id: String,
@@ -160,7 +164,7 @@ trait SessionSource: Clone + Send + Sync + 'static {
         task_ids_by_session: HashMap<String, Vec<String>>,
         agent_config: AgentConfig,
     ) -> impl Future<Output = Result<PullRequestListResponse, String>> + Send {
-        let cache = PullRequestListCache::default();
+        let cache = self.pull_request_list_cache();
         async move {
             fetch_pull_request_list(
                 selected_session_id,
@@ -204,26 +208,8 @@ impl SessionSource for LiveSessionSource {
         self.enrichment.pull_requests(sessions).await
     }
 
-    fn fetch_session_pull_request_list(
-        &self,
-        selected_session_id: String,
-        task_id: Option<String>,
-        sessions: Vec<Session>,
-        task_ids_by_session: HashMap<String, Vec<String>>,
-        agent_config: AgentConfig,
-    ) -> impl Future<Output = Result<PullRequestListResponse, String>> + Send {
-        let cache = self.pull_request_list_cache.clone();
-        async move {
-            fetch_pull_request_list(
-                selected_session_id,
-                task_id.as_deref(),
-                &sessions,
-                &task_ids_by_session,
-                &agent_config,
-                &cache,
-            )
-            .await
-        }
+    fn pull_request_list_cache(&self) -> PullRequestListCache {
+        self.pull_request_list_cache.clone()
     }
 
     async fn running_background_task_session_ids(

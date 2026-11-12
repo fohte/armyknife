@@ -1,0 +1,19 @@
+.completed-items-toggle {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--aw-text-muted);
+  cursor: pointer;
+  font: inherit;
+}
+
+.completed-items-toggle--pull-request-list {
+  align-self: flex-start;
+  margin: 4px 14px 10px;
+  font-size: 11px;
+}
+
+.completed-items-toggle--linked-task-menu {
+  margin: 4px 14px 10px 38px;
+  font-size: 12px;
+}

@@ -947,8 +947,9 @@ it('loads and shows the session tree from the tree endpoint', async () => {
 it('shows linked pull requests alongside partial lookup errors', async () => {
   const taskSession: Session = {
     ...session,
+    id: 'linked-pull-request-session',
     task: {
-      id: 'synthetic-task-id',
+      id: 'linked-pull-request-task',
       number: 2048,
       title: 'Show linked work in the sidebar',
       priority: null,
@@ -1020,7 +1021,7 @@ it('shows linked pull requests alongside partial lookup errors', async () => {
   })
 
   expect(snapshot()).toEqual({
-    requests: ['/api/sessions/sample-session/pull-requests'],
+    requests: ['/api/sessions/linked-pull-request-session/pull-requests'],
     tabs: [{ label: 'PRs1', selected: 'true' }],
     pullRequests: [
       {
@@ -1038,8 +1039,9 @@ it('pauses pull request refresh while hidden and refreshes when visible again', 
   setPageVisibility('hidden')
   const taskSession: Session = {
     ...session,
+    id: 'visibility-pull-request-session',
     task: {
-      id: 'synthetic-task-id',
+      id: 'visibility-pull-request-task',
       number: 2048,
       title: 'Show linked work in the sidebar',
       priority: null,
@@ -1109,16 +1111,20 @@ it('pauses pull request refresh while hidden and refreshes when visible again', 
   })
   expect(snapshot()).toEqual({
     hiddenBeforeFirstRequest: [],
-    visibleAfterResume: ['/api/sessions/sample-session/pull-requests'],
-    hiddenAfterRefreshInterval: ['/api/sessions/sample-session/pull-requests'],
+    visibleAfterResume: [
+      '/api/sessions/visibility-pull-request-session/pull-requests',
+    ],
+    hiddenAfterRefreshInterval: [
+      '/api/sessions/visibility-pull-request-session/pull-requests',
+    ],
     visibleAfterSecondResume: [
-      '/api/sessions/sample-session/pull-requests',
-      '/api/sessions/sample-session/pull-requests',
+      '/api/sessions/visibility-pull-request-session/pull-requests',
+      '/api/sessions/visibility-pull-request-session/pull-requests',
     ],
   })
 })
 
-it('reuses recent pull request lists when switching between sessions', async () => {
+it('reuses recent pull request lists after keyed session remounts', async () => {
   vi.useFakeTimers()
   setPageVisibility('visible')
   const firstSession = { ...session, id: 'first-session' }
@@ -1155,7 +1161,11 @@ it('reuses recent pull request lists when switching between sessions', async () 
   const render = (currentSession: Session, enabled: boolean) => {
     act(() => {
       root?.render(
-        <PullRequestHookTestView session={currentSession} enabled={enabled} />,
+        <PullRequestHookTestView
+          key={currentSession.id}
+          session={currentSession}
+          enabled={enabled}
+        />,
       )
     })
   }
@@ -1171,7 +1181,6 @@ it('reuses recent pull request lists when switching between sessions', async () 
     .map(([input]) => requestUrl(input))
     .filter((url) => url.endsWith('/pull-requests'))
 
-  render(firstSession, false)
   render(secondSession, true)
   await flushRequests()
   render(firstSession, true)
@@ -1283,7 +1292,7 @@ it('fetches a fresh pull request list when the selected task changes', async () 
     act(() => {
       root?.render(
         <PullRequestHookTestView
-          session={{ ...session, task }}
+          session={{ ...session, id: 'task-change-session', task }}
           enabled={true}
         />,
       )
@@ -1313,8 +1322,8 @@ it('fetches a fresh pull request list when the selected task changes', async () 
     titleAfterFirstTask: 'Request 1',
     titleAfterTaskChange: 'Request 2',
     requests: [
-      '/api/sessions/sample-session/pull-requests',
-      '/api/sessions/sample-session/pull-requests',
+      '/api/sessions/task-change-session/pull-requests',
+      '/api/sessions/task-change-session/pull-requests',
     ],
   })
 })
