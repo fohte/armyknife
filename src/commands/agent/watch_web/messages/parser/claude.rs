@@ -995,6 +995,7 @@ mod tests {
                     ChatItem::Assistant {
                         text: "before".to_string(),
                     },
+                    proposal,
                     question_group(vec![super::super::super::QuestionPrompt {
                         header: Some("Display".to_string()),
                         question: "Which display mode?".to_string(),
@@ -1002,7 +1003,6 @@ mod tests {
                         multi_select: false,
                         answer: Some("Option A".to_string()),
                     }]),
-                    proposal,
                     ChatItem::ToolSummary {
                         summary: "Bash ×1".to_string(),
                         operations: vec![ToolOperation {
