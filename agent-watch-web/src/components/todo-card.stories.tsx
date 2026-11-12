@@ -26,6 +26,11 @@ export const TodoHasNoAdditionalDetail: Story = {
 }
 
 export const TodoIsCompleted: Story = {
-  name: 'A completed to-do remains visible in the conversation',
-  args: { completed: true },
+  name: 'A completed to-do shows its title and saved comment compactly',
+  args: { completed: true, defaultComment: 'The sample is ready.' },
+}
+
+export const TodoIsCompletedWithoutAComment: Story = {
+  name: 'A completed to-do without a comment shows only its title',
+  args: { completed: true, defaultComment: '' },
 }

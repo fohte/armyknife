@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.1.648](https://github.com/fohte/armyknife/compare/v0.1.647...v0.1.648) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align todo and action UI ([#1669](https://github.com/fohte/armyknife/issues/1669)) ([a9f2e96](https://github.com/fohte/armyknife/commit/a9f2e9613c1bde1e6d9c45f1fba1dd0aa763bed2))
+
+## [0.1.647](https://github.com/fohte/armyknife/compare/v0.1.646...v0.1.647) (2026-11-12)
+
+
+### Features
+
+* **agent-watch-web:** label Starred, show states ([#1666](https://github.com/fohte/armyknife/issues/1666)) ([2bda142](https://github.com/fohte/armyknife/commit/2bda142295cc9238189e52aa2a82593b58c2a9f2))
+
+## [0.1.646](https://github.com/fohte/armyknife/compare/v0.1.645...v0.1.646) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show inbox stars at rest ([#1664](https://github.com/fohte/armyknife/issues/1664)) ([e82f878](https://github.com/fohte/armyknife/commit/e82f8781d6a0f18212858ed9b9bd9405a0e8e079))
+
+## [0.1.645](https://github.com/fohte/armyknife/compare/v0.1.644...v0.1.645) (2026-11-12)
+
+
+### Bug Fixes
+
+* **watch-web:** hide paused badges in inbox ([#1659](https://github.com/fohte/armyknife/issues/1659)) ([1df9429](https://github.com/fohte/armyknife/commit/1df942992d8debecdaca386768637096984a1550))
+
 ## [0.1.644](https://github.com/fohte/armyknife/compare/v0.1.643...v0.1.644) (2026-11-12)
 
 

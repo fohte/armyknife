@@ -50,28 +50,6 @@
   white-space: nowrap;
 }
 
-.today-start {
-  color: var(--aw-text-secondary);
-  font-size: 11px;
-}
-
-.today-indicator {
-  width: 6px;
-  height: 6px;
-  background: transparent;
-}
-
-.today-indicator.kind-question,
-.today-indicator.kind-approve,
-.today-indicator.kind-review,
-.today-indicator.kind-plan {
-  background: var(--aw-color-warning);
-}
-
-.today-indicator.kind-error {
-  background: var(--aw-color-error);
-}
-
 .session-row-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -98,6 +76,20 @@
   .session-row-layout.actions-visible .session-row-actions {
     opacity: 1;
     pointer-events: auto;
+  }
+
+  .session-row-layout.is-starred .session-row-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .session-row-layout.is-starred:not(:hover):not(:focus-within):not(
+      .actions-visible
+    )
+    .session-row-actions
+    > :not([aria-pressed='true']) {
+    opacity: 0;
+    pointer-events: none;
   }
 }
 

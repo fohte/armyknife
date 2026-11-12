@@ -197,7 +197,7 @@ export const PausedSessionIsVisibleOnIPhone: Story = {
 }
 
 export const TodayCanBeChangedFromTheIPhoneConversation: Story = {
-  name: 'The iPhone conversation header shows the active TODAY toggle',
+  name: 'The iPhone conversation header shows the active Starred toggle',
   args: {
     isMobile: true,
     isToday: true,
@@ -682,6 +682,28 @@ export const OlderMessagesAreLoading: Story = {
       {
         type: 'assistant',
         text: 'The earlier part of the conversation is available on demand.',
+      },
+    ],
+  },
+}
+
+export const CompactBoundarySeparatesConversation: Story = {
+  name: 'A divider marks where the conversation was compacted',
+  args: {
+    messages: [
+      {
+        type: 'assistant',
+        text: 'The earlier part of the conversation is summarized.',
+      },
+      {
+        type: 'event',
+        kind: 'compact_boundary',
+        text: 'Context compacted',
+        failed: false,
+      },
+      {
+        type: 'assistant',
+        text: 'The assistant continues after the conversation is compacted.',
       },
     ],
   },

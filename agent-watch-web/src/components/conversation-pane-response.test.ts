@@ -12,6 +12,27 @@ const response = (message: unknown) => ({
   activeQuestionIndex: null,
 })
 
+it('accepts a compact boundary event from the conversation API', () => {
+  expect(
+    isConversationResponse({
+      messages: [
+        {
+          type: 'event',
+          kind: 'compact_boundary',
+          text: 'Context compacted',
+          failed: false,
+        },
+      ],
+      backgroundTasks: [],
+      start: 0,
+      total: 1,
+      decisions: [],
+      hasUnansweredProposal: false,
+      activeQuestionIndex: null,
+    }),
+  ).toBe(true)
+})
+
 it('accepts todo cards with completion metadata', () => {
   expect(
     isConversationResponse(

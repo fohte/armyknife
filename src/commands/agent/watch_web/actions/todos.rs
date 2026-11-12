@@ -89,11 +89,13 @@ pub(super) async fn complete_todo(
 }
 
 fn todo_completion_message(title: &str, comment: Option<&str>) -> String {
-    let mut content = format!("ユーザーが todo『{title}』を済にした。");
+    let mut content =
+        format!("<armyknife-todo-completed>The user marked the to-do as done: {title}.");
     if let Some(comment) = comment {
         content.push('\n');
         content.push('\n');
         content.push_str(comment);
     }
+    content.push_str("</armyknife-todo-completed>");
     content
 }
