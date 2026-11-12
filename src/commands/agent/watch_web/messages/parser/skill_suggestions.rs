@@ -70,10 +70,10 @@ fn parse_codex_available_skills(text: &str) -> Option<Vec<SkillSuggestion>> {
 
 fn parse_skill_bullet(line: &str) -> Option<SkillSuggestion> {
     let entry = line.trim().strip_prefix("- ")?;
-    let (name, description) = entry.split_once(':')?;
+    let (name, description) = entry.split_once(": ").unwrap_or((entry, ""));
     let name = name.trim().trim_matches('`').trim_matches('*');
     let description = description.trim();
-    (!name.is_empty() && !description.is_empty()).then(|| SkillSuggestion {
+    (!name.is_empty()).then(|| SkillSuggestion {
         name: name.to_owned(),
         description: description.to_owned(),
     })

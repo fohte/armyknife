@@ -746,7 +746,7 @@ mod tests {
     fn uses_the_latest_skill_listing_from_the_transcript() {
         let transcript = indoc! {r#"
             {"attachment":{"type":"skill_listing","content":"- legacy-tool: An older entry."}}
-            {"attachment":{"type":"skill_listing","content":"- design-flow: Help shape a design.\n- debug-flow: Investigate a failure."}}
+            {"attachment":{"type":"skill_listing","content":"- design-flow: Help shape a design.\n- debug-flow: Investigate a failure.\n- example:review-tool: Review generated examples.\n- bare-tool\n- example:init"}}
         "#};
         let (_, _, _, skills) =
             parse_with_queued_prompts_and_peer_out_messages_and_proposals_and_skills(
@@ -774,6 +774,18 @@ mod tests {
                 SkillSuggestion {
                     name: "debug-flow".to_string(),
                     description: "Investigate a failure.".to_string(),
+                },
+                SkillSuggestion {
+                    name: "example:review-tool".to_string(),
+                    description: "Review generated examples.".to_string(),
+                },
+                SkillSuggestion {
+                    name: "bare-tool".to_string(),
+                    description: String::new(),
+                },
+                SkillSuggestion {
+                    name: "example:init".to_string(),
+                    description: String::new(),
                 },
             ],
         );
