@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.647](https://github.com/fohte/armyknife/compare/v0.1.646...v0.1.647) (2026-11-12)
+
+
+### Features
+
+* **agent-watch-web:** label Starred, show states ([#1666](https://github.com/fohte/armyknife/issues/1666)) ([2bda142](https://github.com/fohte/armyknife/commit/2bda142295cc9238189e52aa2a82593b58c2a9f2))
+
 ## [0.1.646](https://github.com/fohte/armyknife/compare/v0.1.645...v0.1.646) (2026-11-12)
 
 
