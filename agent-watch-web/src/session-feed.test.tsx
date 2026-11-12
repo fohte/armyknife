@@ -78,6 +78,7 @@ it('requests deltas and restores the ordered full session response', async () =>
   const sessionA = session('session-a', 'First session', 10)
   const sessionB = session('session-b', 'Second session', 11)
   const updatedSessionB = session('session-b', 'Updated session', 12)
+  const elapsedSessionB = { ...updatedSessionB, elapsedSeconds: 13 }
   const sessionC = session('session-c', 'New session', 13)
   const updatedSessionC = session('session-c', 'Updated new session', 14)
   const fetcher = vi
@@ -112,7 +113,8 @@ it('requests deltas and restores the ordered full session response', async () =>
         sessionOrder: ['session-c', 'session-b'],
       }),
     )
-  const now = vi.spyOn(Date, 'now').mockReturnValue(1_000)
+  let currentTime = 1_000
+  vi.spyOn(Date, 'now').mockImplementation(() => currentTime)
 
   const stop = startSessionFeed(
     (response) => {
@@ -130,12 +132,13 @@ it('requests deltas and restores the ordered full session response', async () =>
   )
 
   await firstReceived.promise
+  currentTime = 2_000
   source.emit('sessions')
   await secondReceived.promise
+  currentTime = 3_000
   source.emit('sessions')
   await thirdReceived.promise
   stop()
-  now.mockRestore()
 
   const snapshot = () => ({
     requests: fetcher.mock.calls.map(([url]) => String(url)),
@@ -162,7 +165,7 @@ it('requests deltas and restores the ordered full session response', async () =>
       {
         revision: 3,
         workTypeNavLabels: { 'type-a': 'Updated Type A' },
-        sessions: [updatedSessionC, updatedSessionB],
+        sessions: [updatedSessionC, elapsedSessionB],
       },
     ],
   })
