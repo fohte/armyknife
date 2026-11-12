@@ -37,6 +37,11 @@ it.each([
     expected: 'Working',
   },
   {
+    label: 'paused sessions without a kind use the category label',
+    session: { category: 'in_progress', isPaused: true, kind: null },
+    expected: 'Working',
+  },
+  {
     label: 'later has a fallback label',
     session: { category: 'later', kind: null },
     expected: 'Later',
