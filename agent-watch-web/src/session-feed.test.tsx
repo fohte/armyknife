@@ -25,12 +25,16 @@ class FakeEventSource {
     this.closed = true
   }
 
-  emit(type: string) {
+  emit(type: string, data?: string) {
+    const event = new Event(type)
+    if (data !== undefined) {
+      Object.defineProperty(event, 'data', { value: data })
+    }
     const listener = this.listeners.get(type)
     if (typeof listener === 'function') {
-      listener(new Event(type))
+      listener(event)
     } else {
-      listener?.handleEvent(new Event(type))
+      listener?.handleEvent(event)
     }
   }
 }
@@ -788,7 +792,7 @@ it('stops stream retries and clears connection errors while hidden', async () =>
   })
 })
 
-it('reconnects when visible and reloads after being hidden', async () => {
+it('reconnects when visible without reloading when the server instance is unchanged', async () => {
   const visibilityTarget = new FakeVisibilityTarget()
   const sources: FakeEventSource[] = []
   const received = deferred<undefined>()
@@ -816,33 +820,67 @@ it('reconnects when visible and reloads after being hidden', async () => {
   )
 
   await received.promise
+  sources[0]?.emit('instance', 'fixture-server-instance')
   visibilityTarget.setVisibility('hidden')
   visibilityTarget.setVisibility('visible')
   sources[1]?.emit('open')
+  sources[1]?.emit('instance', 'fixture-server-instance')
   stop()
 
-  const snapshot = () => ({
-    connections: sources.length,
-    closed: sources.map((source) => source.closed),
-    requests: fetcher.mock.calls.length,
-    reloads,
-  })
-  expect(snapshot()).toEqual({
-    connections: 2,
-    closed: [true, true],
-    requests: 1,
-    reloads: ['reloaded'],
-  })
+  expect(reloads).toEqual([])
 })
 
-it('waits for visibility before starting the stream when initially hidden', () => {
+it('reloads when the server instance changes after a hidden period', async () => {
+  const visibilityTarget = new FakeVisibilityTarget()
+  const sources: FakeEventSource[] = []
+  const received = deferred<undefined>()
+  const reloads: string[] = []
+  const fetcher = vi
+    .fn()
+    .mockResolvedValue(jsonResponse({ revision: 1, sessions: [] }))
+  const stop = startSessionFeed(
+    () => {
+      received.resolve(undefined)
+    },
+    () => {},
+    {
+      fetcher,
+      createEventSource: () => {
+        const source = new FakeEventSource()
+        sources.push(source)
+        return source
+      },
+      reloadPage: () => {
+        reloads.push('reloaded')
+      },
+      visibilityTarget,
+    },
+  )
+
+  await received.promise
+  sources[0]?.emit('instance', 'fixture-server-instance-before')
+  visibilityTarget.setVisibility('hidden')
+  visibilityTarget.setVisibility('visible')
+  sources[1]?.emit('open')
+  sources[1]?.emit('instance', 'fixture-server-instance-after')
+  stop()
+
+  expect(reloads).toEqual(['reloaded'])
+})
+
+it('waits for visibility before starting the stream when initially hidden', async () => {
   const visibilityTarget = new FakeVisibilityTarget()
   visibilityTarget.setVisibility('hidden')
   const sources: FakeEventSource[] = []
   const reloads: string[] = []
-  const fetcher = vi.fn()
+  const received = deferred<undefined>()
+  const fetcher = vi
+    .fn()
+    .mockResolvedValue(jsonResponse({ revision: 1, sessions: [] }))
   const stop = startSessionFeed(
-    () => {},
+    () => {
+      received.resolve(undefined)
+    },
     () => {},
     {
       fetcher,
@@ -865,6 +903,8 @@ it('waits for visibility before starting the stream when initially hidden', () =
   }
   visibilityTarget.setVisibility('visible')
   sources[0]?.emit('open')
+  sources[0]?.emit('instance', 'fixture-server-instance')
+  await received.promise
   stop()
 
   const snapshot = () => ({
@@ -881,8 +921,8 @@ it('waits for visibility before starting the stream when initially hidden', () =
     afterVisible: {
       connections: 1,
       closed: [true],
-      requests: 0,
-      reloads: ['reloaded'],
+      requests: 1,
+      reloads: [],
     },
   })
 })

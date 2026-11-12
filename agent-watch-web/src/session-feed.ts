@@ -268,11 +268,11 @@ export function startSessionFeed(
   let requestError = false
   let streamError = false
   let restartPending = false
+  let serverInstanceId: string | null = null
   let currentSessions: CurrentSessions | null = null
   let requestRetryTimer: ReturnType<typeof setTimeout> | null = null
   let reconnectPollTimer: ReturnType<typeof setInterval> | null = null
   let eventSource: SessionEventSource | null = null
-  let reloadOnNextOpen = !visible
 
   const reportStatus = () => {
     if (requestError) {
@@ -374,13 +374,28 @@ export function startSessionFeed(
   const onServerRestart: EventListener = () => {
     restartPending = true
   }
+  const onServerInstance: EventListener = (event) => {
+    if (!active || !visible) {
+      return
+    }
+    const instanceId = 'data' in event ? event.data : null
+    if (typeof instanceId !== 'string' || instanceId.length === 0) {
+      return
+    }
+
+    const instanceChanged =
+      serverInstanceId !== null && serverInstanceId !== instanceId
+    serverInstanceId = instanceId
+    if (instanceChanged) {
+      reloadPage()
+    }
+  }
   const onConnectionOpen: EventListener = () => {
     if (!active || !visible) {
       return
     }
-    const restartDetected = restartPending || reloadOnNextOpen
+    const restartDetected = restartPending
     restartPending = false
-    reloadOnNextOpen = false
     streamError = false
     if (reconnectPollTimer !== null) {
       clearInterval(reconnectPollTimer)
@@ -401,6 +416,7 @@ export function startSessionFeed(
     eventSource = createEventSource('/api/events')
     eventSource.addEventListener('sessions', onSessionsEvent)
     eventSource.addEventListener('restart', onServerRestart)
+    eventSource.addEventListener('instance', onServerInstance)
     eventSource.addEventListener('error', onConnectionError)
     eventSource.addEventListener('open', onConnectionOpen)
   }
@@ -411,6 +427,7 @@ export function startSessionFeed(
     }
     eventSource.removeEventListener('sessions', onSessionsEvent)
     eventSource.removeEventListener('restart', onServerRestart)
+    eventSource.removeEventListener('instance', onServerInstance)
     eventSource.removeEventListener('error', onConnectionError)
     eventSource.removeEventListener('open', onConnectionOpen)
     eventSource.close()
@@ -425,7 +442,6 @@ export function startSessionFeed(
 
     visible = nextVisible
     if (!visible) {
-      reloadOnNextOpen = true
       refreshQueued = false
       clearRequestRetry()
       if (reconnectPollTimer !== null) {
