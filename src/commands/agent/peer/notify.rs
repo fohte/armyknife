@@ -76,6 +76,26 @@ pub fn run(args: &NotifyArgs) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn notify_with_retry(session_id: &str, message: &str) -> Result<()> {
+    let args = NotifyArgs {
+        session_id: Some(session_id.to_string()),
+        parent: false,
+        message: message.to_string(),
+    };
+    run_with(
+        &args,
+        || anyhow::bail!("parent resolution is unavailable for an explicit recipient"),
+        notify,
+        bg::save_undelivered,
+        |_, _| {},
+        |from, to, message| {
+            store::insert_watch_web_peer_out_message(from, to, message, chrono::Utc::now())
+                .map(|_| ())
+        },
+    )?;
+    Ok(())
+}
+
 fn run_with(
     args: &NotifyArgs,
     resolve_parent: impl FnOnce() -> Result<Session>,
