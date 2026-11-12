@@ -2,6 +2,7 @@ import { ResultAsync } from 'neverthrow'
 import { useEffect, useRef, useState } from 'react'
 
 import type { ComposerAttachment } from '#components/message-composer'
+import { optimizeImageAttachment } from '#lib/image-attachment'
 
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
 const MAX_ATTACHMENTS_PER_MESSAGE = 16
@@ -105,8 +106,11 @@ export function useComposerMessage({
     [],
   )
 
-  const onPasteFiles = (files: File[]) => {
-    const added = files.map((file) => ({
+  const onPasteFiles = async (files: File[]) => {
+    const optimizedFiles = await Promise.all(
+      files.map((file) => optimizeImageAttachment(file)),
+    )
+    const added = optimizedFiles.map((file) => ({
       id: crypto.randomUUID(),
       name: file.name || 'Pasted file',
       size: file.size,

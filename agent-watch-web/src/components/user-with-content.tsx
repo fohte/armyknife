@@ -33,6 +33,8 @@ function UserImage({
       className="chat-user-image"
       src={source}
       alt="Attached image"
+      loading="lazy"
+      decoding="async"
       onError={() => {
         setIsAvailable(false)
       }}

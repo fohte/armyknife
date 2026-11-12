@@ -91,6 +91,8 @@ export function PeerMessage({
               key={`image-${String(index)}`}
               src={part.source}
               alt="Attached image"
+              loading="lazy"
+              decoding="async"
             />
           ) : part.type === 'image' ? (
             <p

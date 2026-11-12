@@ -196,7 +196,7 @@ export function ConversationPaneView({
     session.tasks ?? (session.task === null ? [] : [session.task])
 
   const handlePasteFiles = (files: File[]) => {
-    onPasteFiles(files)
+    void onPasteFiles(files)
     onClearError()
   }
   const {
