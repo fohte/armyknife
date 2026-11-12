@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.643](https://github.com/fohte/armyknife/compare/v0.1.642...v0.1.643) (2026-11-12)
+
+
+### Features
+
+* **agent-watch-web:** scope refreshes by session ([#1655](https://github.com/fohte/armyknife/issues/1655)) ([fa32a2b](https://github.com/fohte/armyknife/commit/fa32a2b1259b0e353d8d1b479c19dcc9db5d31d1))
+
 ## [0.1.642](https://github.com/fohte/armyknife/compare/v0.1.641...v0.1.642) (2026-11-12)
 
 
