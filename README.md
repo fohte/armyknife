@@ -1203,9 +1203,10 @@ To access the server from another device in your tailnet, keep `a agent watch-we
 
 ```sh
 tailscale serve 4317
+tailscale serve --bg --https=8443 http://127.0.0.1:4318
 ```
 
-Open the `https://example-device.example-tailnet.ts.net` address printed by Tailscale. See the [Tailscale Serve CLI reference](https://tailscale.com/docs/reference/tailscale-cli/serve) for details. The server listens only on `127.0.0.1`; it does not bind to `0.0.0.0`.
+Open the `https://example-device.example-tailnet.ts.net` address printed by Tailscale. The second serve rule publishes Crit reviews through the local relay on port `4318`. See the [Tailscale Serve CLI reference](https://tailscale.com/docs/reference/tailscale-cli/serve) for details. Both servers listen only on `127.0.0.1`; they do not bind to `0.0.0.0`.
 
 ### `a agent clean`
 

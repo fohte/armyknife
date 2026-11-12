@@ -1,10 +1,11 @@
+use std::future::Future;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::body::{Body, to_bytes};
+use axum::body::{Body, Bytes, to_bytes};
 use axum::extract::{Request, State};
-use axum::http::header::{ACCEPT, CONTENT_TYPE, COOKIE, SET_COOKIE};
-use axum::http::{HeaderName, HeaderValue, StatusCode, Uri};
+use axum::http::header::{ACCEPT, CONTENT_TYPE, COOKIE, HOST, SET_COOKIE};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::middleware::from_fn;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
@@ -35,40 +36,92 @@ const FORWARDED_RESPONSE_HEADERS: [HeaderName; 8] = [
 ];
 
 #[derive(Clone)]
-struct CritProxyState {
-    load_recorded_ports: Arc<dyn Fn() -> anyhow::Result<Vec<u16>> + Send + Sync>,
-    client: Client,
+struct CritProxyState<T> {
+    load_recorded_urls: Arc<dyn Fn() -> anyhow::Result<Vec<String>> + Send + Sync>,
+    client: T,
 }
 
-pub(super) fn router(
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct UpstreamRequest {
+    method: Method,
+    url: String,
+    headers: HeaderMap,
+    body: Bytes,
+}
+
+pub(super) struct UpstreamResponse {
+    status: StatusCode,
+    headers: HeaderMap,
+    body: Body,
+}
+
+pub(super) trait CritTransport: Clone + Send + Sync + 'static {
+    fn send(
+        &self,
+        request: UpstreamRequest,
+    ) -> impl Future<Output = anyhow::Result<UpstreamResponse>> + Send;
+}
+
+impl CritTransport for Client {
+    fn send(
+        &self,
+        request: UpstreamRequest,
+    ) -> impl Future<Output = anyhow::Result<UpstreamResponse>> + Send {
+        let client = self.clone();
+        async move {
+            let mut upstream_request = client
+                .request(request.method, request.url)
+                .body(request.body);
+            for (name, value) in &request.headers {
+                upstream_request = upstream_request.header(name, value);
+            }
+            let response = upstream_request.send().await?;
+            let status =
+                StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let mut headers = HeaderMap::new();
+            for header in FORWARDED_RESPONSE_HEADERS {
+                for value in response.headers().get_all(&header) {
+                    headers.append(header.clone(), value.clone());
+                }
+            }
+            Ok(UpstreamResponse {
+                status,
+                headers,
+                body: Body::from_stream(response.bytes_stream()),
+            })
+        }
+    }
+}
+
+pub(super) fn router<T: CritTransport>(
     load_sessions: impl Fn() -> anyhow::Result<Vec<Session>> + Send + Sync + 'static,
-    client: Client,
+    client: T,
 ) -> Router {
-    router_with_port_loader(
+    router_with_url_loader(
         move || {
             let sessions = load_sessions()?;
             Ok(sessions
                 .iter()
                 .flat_map(|session| session.crit_urls.iter())
-                .filter_map(|url| recorded_crit_port(url))
+                .cloned()
                 .collect())
         },
         client,
     )
 }
 
-fn router_with_port_loader(
-    load_recorded_ports: impl Fn() -> anyhow::Result<Vec<u16>> + Send + Sync + 'static,
-    client: Client,
+fn router_with_url_loader<T: CritTransport>(
+    load_recorded_urls: impl Fn() -> anyhow::Result<Vec<String>> + Send + Sync + 'static,
+    client: T,
 ) -> Router {
     let state = CritProxyState {
-        load_recorded_ports: Arc::new(load_recorded_ports),
+        load_recorded_urls: Arc::new(load_recorded_urls),
         client,
     };
     Router::new()
-        .route("/_crit/{port}", get(select_crit))
-        .route("/_crit/{port}/{*path}", get(select_crit))
-        .fallback(any(proxy_request))
+        .route("/_crit/{port}", get(select_crit::<T>))
+        .route("/_crit/{port}/{*path}", get(select_crit::<T>))
+        .fallback(any(proxy_request::<T>))
         .layer(from_fn(security::validate_request))
         .with_state(state)
 }
@@ -84,21 +137,32 @@ fn recorded_crit_port(url: &str) -> Option<u16> {
     .filter(|port| *port != 0)
 }
 
-async fn recorded_ports(state: &CritProxyState) -> Result<Vec<u16>, StatusCode> {
-    let load_recorded_ports = state.load_recorded_ports.clone();
-    tokio::task::spawn_blocking(move || load_recorded_ports())
-        .await
-        .map_err(|error| {
-            tracing::warn!(%error, "failed to join crit proxy port lookup");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?
-        .map_err(|error| {
-            tracing::warn!(%error, "failed to load crit proxy ports");
-            StatusCode::INTERNAL_SERVER_ERROR
+async fn recorded_ports<T: CritTransport>(
+    state: &CritProxyState<T>,
+) -> Result<Vec<u16>, StatusCode> {
+    let load_recorded_urls = state.load_recorded_urls.clone();
+    tokio::task::spawn_blocking(move || {
+        load_recorded_urls().map(|urls| {
+            urls.iter()
+                .filter_map(|url| recorded_crit_port(url))
+                .collect()
         })
+    })
+    .await
+    .map_err(|error| {
+        tracing::warn!(%error, "failed to join crit proxy port lookup");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?
+    .map_err(|error| {
+        tracing::warn!(%error, "failed to load crit proxy ports");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })
 }
 
-async fn select_crit(State(state): State<CritProxyState>, request: Request) -> Response {
+async fn select_crit<T: CritTransport>(
+    State(state): State<CritProxyState<T>>,
+    request: Request,
+) -> Response {
     let Some(port) = request
         .uri()
         .path()
@@ -108,11 +172,15 @@ async fn select_crit(State(state): State<CritProxyState>, request: Request) -> R
     else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    if !matches!(recorded_ports(&state).await, Ok(ports) if ports.contains(&port)) {
-        return StatusCode::NOT_FOUND.into_response();
+    match recorded_ports(&state).await {
+        Ok(ports) if ports.contains(&port) => {}
+        Ok(_) => return StatusCode::NOT_FOUND.into_response(),
+        Err(status) => return status.into_response(),
     }
 
-    let path_and_query = selection_target(request.uri(), port);
+    let Some(path_and_query) = selection_target(request.uri(), port) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
     let mut response = StatusCode::SEE_OTHER.into_response();
     if let Ok(location) = HeaderValue::from_str(&path_and_query) {
         response
@@ -121,7 +189,7 @@ async fn select_crit(State(state): State<CritProxyState>, request: Request) -> R
     }
     let secure = request
         .headers()
-        .get(axum::http::header::HOST)
+        .get(HOST)
         .and_then(|host| host.to_str().ok())
         .is_some_and(|host| {
             host.split(':')
@@ -139,17 +207,23 @@ async fn select_crit(State(state): State<CritProxyState>, request: Request) -> R
     response
 }
 
-fn selection_target(uri: &Uri, port: u16) -> String {
+fn selection_target(uri: &Uri, port: u16) -> Option<String> {
     let selector = format!("/_crit/{port}");
-    let path = uri.path().strip_prefix(&selector).unwrap_or("/");
+    let path = uri.path().strip_prefix(&selector)?;
     let path = if path.is_empty() { "/" } else { path };
+    if !path.starts_with('/') || path.starts_with("//") {
+        return None;
+    }
     match uri.query() {
-        Some(query) => format!("{path}?{query}"),
-        None => path.to_owned(),
+        Some(query) => Some(format!("{path}?{query}")),
+        None => Some(path.to_owned()),
     }
 }
 
-async fn proxy_request(State(state): State<CritProxyState>, request: Request) -> Response {
+async fn proxy_request<T: CritTransport>(
+    State(state): State<CritProxyState<T>>,
+    request: Request,
+) -> Response {
     let Some(port) = request
         .headers()
         .get(COOKIE)
@@ -158,8 +232,10 @@ async fn proxy_request(State(state): State<CritProxyState>, request: Request) ->
     else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    if !matches!(recorded_ports(&state).await, Ok(ports) if ports.contains(&port)) {
-        return StatusCode::NOT_FOUND.into_response();
+    match recorded_ports(&state).await {
+        Ok(ports) if ports.contains(&port) => {}
+        Ok(_) => return StatusCode::NOT_FOUND.into_response(),
+        Err(status) => return status.into_response(),
     }
 
     let uri = request.uri().clone();
@@ -173,31 +249,32 @@ async fn proxy_request(State(state): State<CritProxyState>, request: Request) ->
         uri.path_and_query()
             .map_or("/", |path_and_query| path_and_query.as_str())
     );
-    let mut upstream_request = state.client.request(parts.method, upstream_url).body(body);
+    let mut headers = HeaderMap::new();
     for header in FORWARDED_REQUEST_HEADERS {
         for value in parts.headers.get_all(&header) {
-            upstream_request = upstream_request.header(&header, value);
+            headers.append(header.clone(), value.clone());
         }
     }
 
-    let upstream_response = match upstream_request.send().await {
+    let upstream_response = match state
+        .client
+        .send(UpstreamRequest {
+            method: parts.method,
+            url: upstream_url,
+            headers,
+            body,
+        })
+        .await
+    {
         Ok(response) => response,
         Err(error) => {
             tracing::warn!(%error, port, "crit proxy request failed");
             return StatusCode::BAD_GATEWAY.into_response();
         }
     };
-    let status = StatusCode::from_u16(upstream_response.status().as_u16())
-        .unwrap_or(StatusCode::BAD_GATEWAY);
-    let headers = upstream_response.headers().clone();
-    let body = Body::from_stream(upstream_response.bytes_stream());
-    let mut response = Response::new(body);
-    *response.status_mut() = status;
-    for header in FORWARDED_RESPONSE_HEADERS {
-        for value in headers.get_all(&header) {
-            response.headers_mut().append(header.clone(), value.clone());
-        }
-    }
+    let mut response = Response::new(upstream_response.body);
+    *response.status_mut() = upstream_response.status;
+    *response.headers_mut() = upstream_response.headers;
     response
 }
 
@@ -212,64 +289,111 @@ fn cookie_port(cookies: &str) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
-    use axum::body::Body;
-    use axum::http::header::{HOST, LOCATION, SET_COOKIE};
-    use axum::http::{Request, StatusCode};
+    use std::convert::Infallible;
+    use std::sync::{Arc, Mutex};
+
+    use axum::body::{Body, Bytes, to_bytes};
+    use axum::http::header::{
+        ACCEPT, CACHE_CONTROL, CONTENT_TYPE, COOKIE, HOST, LOCATION, ORIGIN, SET_COOKIE,
+    };
+    use axum::http::{HeaderMap, Method, Request, StatusCode};
+    use futures_util::stream;
+    use indoc::indoc;
     use rstest::rstest;
     use tower::ServiceExt;
 
-    use super::{cookie_port, recorded_crit_port, router_with_port_loader, selection_target};
+    use super::{CritTransport, UpstreamRequest, UpstreamResponse, router_with_url_loader};
 
-    fn client() -> reqwest::Client {
-        reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap()
+    #[derive(Clone)]
+    struct FakeTransport {
+        sent_request: Arc<Mutex<Option<UpstreamRequest>>>,
+        response_body: Arc<Mutex<Option<Body>>>,
+    }
+
+    impl CritTransport for FakeTransport {
+        fn send(
+            &self,
+            request: UpstreamRequest,
+        ) -> impl std::future::Future<Output = anyhow::Result<UpstreamResponse>> + Send {
+            let sent_request = self.sent_request.clone();
+            let response_body = self.response_body.clone();
+            async move {
+                *sent_request.lock().unwrap() = Some(request);
+                let body = response_body.lock().unwrap().take().unwrap();
+                let mut headers = axum::http::HeaderMap::new();
+                headers.insert(CONTENT_TYPE, "text/event-stream".parse().unwrap());
+                headers.insert(CACHE_CONTROL, "no-cache".parse().unwrap());
+                Ok(UpstreamResponse {
+                    status: StatusCode::OK,
+                    headers,
+                    body,
+                })
+            }
+        }
+    }
+
+    fn fake_transport() -> (FakeTransport, Arc<Mutex<Option<UpstreamRequest>>>) {
+        let sent_request = Arc::new(Mutex::new(None));
+        let response_body = Body::from_stream(stream::iter([
+            Ok::<_, Infallible>(Bytes::from_static(
+                indoc! {"
+                event: update
+            "}
+                .as_bytes(),
+            )),
+            Ok::<_, Infallible>(Bytes::from_static(
+                indoc! {"
+                data: ready
+
+            "}
+                .as_bytes(),
+            )),
+        ]));
+        (
+            FakeTransport {
+                sent_request: sent_request.clone(),
+                response_body: Arc::new(Mutex::new(Some(response_body))),
+            },
+            sent_request,
+        )
     }
 
     #[rstest]
-    #[case::loopback_ipv4("http://127.0.0.1:48761/review/sample", Some(48761))]
-    #[case::localhost("http://localhost:48762/review/sample", Some(48762))]
-    #[case::remote_host("http://review.example.invalid:48761/review/sample", None)]
-    #[case::secure_scheme("https://localhost:48761/review/sample", None)]
-    #[case::missing_port("http://localhost/review/sample", None)]
-    #[case::userinfo("http://user@localhost:48761/review/sample", None)]
-    fn only_http_loopback_urls_with_explicit_ports_are_recorded(
-        #[case] url: &str,
-        #[case] expected: Option<u16>,
-    ) {
-        assert_eq!(recorded_crit_port(url), expected);
-    }
-
-    #[rstest]
-    #[case::path(
-        "/_crit/48761/review/sample?mode=compact",
-        48761,
-        "/review/sample?mode=compact"
+    #[case::loopback_ipv4(
+        "http://127.0.0.1:48761/review/sample",
+        StatusCode::SEE_OTHER,
+        Some("/review/sample?mode=compact"),
+        Some("armyknife_crit_port=48761; Path=/; HttpOnly; SameSite=Lax")
     )]
-    #[case::root("/_crit/48761", 48761, "/")]
-    fn selection_preserves_the_crit_path_and_query(
-        #[case] uri: &str,
-        #[case] port: u16,
-        #[case] expected: &str,
-    ) {
-        assert_eq!(selection_target(&uri.parse().unwrap(), port), expected);
-    }
-
-    #[rstest]
-    #[case::matching_cookie("theme=dark; armyknife_crit_port=48761", Some(48761))]
-    #[case::missing_cookie("theme=dark", None)]
-    #[case::malformed_cookie("armyknife_crit_port=nope", None)]
-    fn cookie_selection_requires_a_valid_port(
-        #[case] cookies: &str,
-        #[case] expected: Option<u16>,
-    ) {
-        assert_eq!(cookie_port(cookies), expected);
-    }
-
+    #[case::localhost(
+        "http://localhost:48761/review/sample",
+        StatusCode::SEE_OTHER,
+        Some("/review/sample?mode=compact"),
+        Some("armyknife_crit_port=48761; Path=/; HttpOnly; SameSite=Lax")
+    )]
+    #[case::remote_host(
+        "http://review.example.invalid:48761/review/sample",
+        StatusCode::NOT_FOUND,
+        None,
+        None
+    )]
+    #[case::secure_scheme(
+        "https://localhost:48761/review/sample",
+        StatusCode::NOT_FOUND,
+        None,
+        None
+    )]
+    #[case::missing_port("http://localhost/review/sample", StatusCode::NOT_FOUND, None, None)]
     #[tokio::test]
-    async fn recorded_ports_are_selected_with_a_same_origin_redirect() {
-        let app = router_with_port_loader(|| Ok(vec![48761]), client());
+    async fn selection_only_accepts_recorded_loopback_http_urls(
+        #[case] recorded_url: &str,
+        #[case] expected_status: StatusCode,
+        #[case] expected_location: Option<&str>,
+        #[case] expected_cookie: Option<&str>,
+    ) {
+        let recorded_url = recorded_url.to_owned();
+        let app =
+            router_with_url_loader(move || Ok(vec![recorded_url.clone()]), fake_transport().0);
         let response = app
             .oneshot(
                 Request::builder()
@@ -288,20 +412,16 @@ mod tests {
                 response.headers().get(SET_COOKIE).cloned(),
             ),
             (
-                StatusCode::SEE_OTHER,
-                Some("/review/sample?mode=compact".parse().unwrap()),
-                Some(
-                    "armyknife_crit_port=48761; Path=/; HttpOnly; SameSite=Lax"
-                        .parse()
-                        .unwrap()
-                ),
+                expected_status,
+                expected_location.map(|location| location.parse().unwrap()),
+                expected_cookie.map(|cookie| cookie.parse().unwrap()),
             ),
         );
     }
 
     #[tokio::test]
     async fn unrecorded_ports_are_not_selected_or_proxied() {
-        let app = router_with_port_loader(|| Ok(Vec::new()), client());
+        let app = router_with_url_loader(|| Ok(Vec::new()), fake_transport().0);
         let selected = app
             .clone()
             .oneshot(
@@ -318,7 +438,7 @@ mod tests {
                 Request::builder()
                     .uri("/review/sample")
                     .header(HOST, "localhost:4318")
-                    .header("cookie", "armyknife_crit_port=48761")
+                    .header(COOKIE, "armyknife_crit_port=48761")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -332,8 +452,132 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn crit_requests_forward_to_a_recorded_port_and_stream_the_response() {
+        let (transport, sent_request) = fake_transport();
+        let app = router_with_url_loader(
+            || Ok(vec!["http://localhost:48761/review/sample".to_owned()]),
+            transport,
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/comments?review=main")
+                    .header(HOST, "localhost:4318")
+                    .header(ORIGIN, "http://localhost:4318")
+                    .header(COOKIE, "armyknife_crit_port=48761")
+                    .header(CONTENT_TYPE, "application/json")
+                    .header(ACCEPT, "text/event-stream")
+                    .header("last-event-id", "fixture-event")
+                    .body(Body::from("{\"message\":\"fixture comment\"}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let response_status = response.status();
+        let response_headers = (
+            response.headers().get(CONTENT_TYPE).cloned(),
+            response.headers().get(CACHE_CONTROL).cloned(),
+        );
+        let response_body = to_bytes(response.into_body(), 1024).await.unwrap();
+        let sent_request = sent_request.lock().unwrap().take().unwrap();
+        let mut expected_request_headers = HeaderMap::new();
+        expected_request_headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+        expected_request_headers.insert(ACCEPT, "text/event-stream".parse().unwrap());
+        expected_request_headers.insert("last-event-id", "fixture-event".parse().unwrap());
+
+        assert_eq!(
+            (
+                sent_request,
+                response_status,
+                response_headers,
+                response_body,
+            ),
+            (
+                UpstreamRequest {
+                    method: Method::POST,
+                    url: "http://127.0.0.1:48761/api/comments?review=main".into(),
+                    headers: expected_request_headers,
+                    body: Bytes::from_static(b"{\"message\":\"fixture comment\"}"),
+                },
+                StatusCode::OK,
+                (
+                    Some("text/event-stream".parse().unwrap()),
+                    Some("no-cache".parse().unwrap()),
+                ),
+                Bytes::from_static(
+                    indoc! {"
+                        event: update
+                        data: ready
+
+                    "}
+                    .as_bytes(),
+                ),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn double_slash_selection_paths_are_rejected() {
+        let app = router_with_url_loader(
+            || Ok(vec!["http://localhost:48761/review/sample".to_owned()]),
+            fake_transport().0,
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/_crit/48761//review/sample")
+                    .header(HOST, "localhost:4318")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn session_store_failures_are_reported_as_server_errors() {
+        let app = router_with_url_loader(
+            || Err(anyhow::anyhow!("fixture session store failure")),
+            fake_transport().0,
+        );
+        let selected = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/_crit/48761/review/sample")
+                    .header(HOST, "localhost:4318")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let proxied = app
+            .oneshot(
+                Request::builder()
+                    .uri("/review/sample")
+                    .header(HOST, "localhost:4318")
+                    .header(COOKIE, "armyknife_crit_port=48761")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (selected.status(), proxied.status()),
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::INTERNAL_SERVER_ERROR
+            )
+        );
+    }
+
+    #[tokio::test]
     async fn requests_from_unapproved_hosts_are_rejected() {
-        let app = router_with_port_loader(|| Ok(Vec::new()), client());
+        let app = router_with_url_loader(|| Ok(Vec::new()), fake_transport().0);
         let response = app
             .oneshot(
                 Request::builder()
