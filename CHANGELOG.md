@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.633](https://github.com/fohte/armyknife/compare/v0.1.632...v0.1.633) (2026-11-12)
+
+
+### Features
+
+* **agent-watch-web:** support mobile status panel ([#1632](https://github.com/fohte/armyknife/issues/1632)) ([9c0d05a](https://github.com/fohte/armyknife/commit/9c0d05a2a23bb5797162cb1a51ab6f50143630af))
+
 ## [0.1.632](https://github.com/fohte/armyknife/compare/v0.1.631...v0.1.632) (2026-11-12)
 
 
