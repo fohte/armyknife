@@ -965,6 +965,7 @@ it('loads task-linked pull requests in the session status panel', async () => {
     root?.render(
       <ConversationPane
         session={taskSession}
+        sessionTreeRefreshKey={0}
         refreshKey={0}
         statusPanelOpen
         onSelectSession={() => undefined}
@@ -1039,6 +1040,7 @@ it('pauses pull request refresh while hidden and refreshes when visible again', 
     root?.render(
       <ConversationPane
         session={taskSession}
+        sessionTreeRefreshKey={0}
         refreshKey={0}
         statusPanelOpen
         onSelectSession={() => undefined}
