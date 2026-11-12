@@ -8,7 +8,7 @@ A synchronous hook fails the calling command if it exits with a non-zero status,
 
 ## `post-worktree-create`
 
-Runs after `a agent new --worktree` finishes creating a worktree. If the hook exits non-zero, `a agent new --worktree` removes the worktree it just created and rewinds the associated branch before propagating the error:
+Runs after `a agent new --worktree` creates a worktree. It does not run when the command reuses an existing linked worktree. If the hook exits non-zero, `a agent new --worktree` removes the worktree it just created and rewinds the associated branch before propagating the error:
 
 - A branch newly created in this invocation is deleted.
 - A branch that pre-existed and was only checked out is left alone.
@@ -26,7 +26,7 @@ Worktree creation hooks run under a per-repository lock because they may update 
 
 ## `pre-session-start`
 
-Runs immediately before `a agent new` starts the selected engine, with or without `--worktree`. When a worktree is created, `post-worktree-create` runs first. A non-zero exit or a non-executable hook aborts startup; with `--worktree`, armyknife removes the newly created worktree and rolls back its branch as it does for a `post-worktree-create` failure.
+Runs immediately before `a agent new` starts the selected engine, with or without `--worktree`. When a worktree is created, `post-worktree-create` runs first. When an existing linked worktree is reused, only `pre-session-start` runs. A non-zero exit or a non-executable hook aborts startup; a newly created worktree is removed and its branch is rolled back, while a reused worktree and branch are kept intact.
 
 With `--worktree`, this hook runs under the per-repository worktree creation lock. Other `a agent new --worktree` calls for the same repository wait until the hooks or their rollback finish; invoking one from this hook would wait for the outer call to release the lock. Without `--worktree`, no worktree creation lock is held.
 

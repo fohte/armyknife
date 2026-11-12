@@ -145,10 +145,10 @@ struct WorktreeEntry {
     short_hash: String,
 }
 
-/// Run `git worktree list --porcelain` and parse the result. First entry is
+/// Run `git worktree list --porcelain -z` and parse the result. First entry is
 /// the main worktree.
 fn list_worktrees_raw(repo: &GitRepo) -> anyhow::Result<Vec<WorktreeEntry>> {
-    let stdout = run_git(repo.workdir(), ["worktree", "list", "--porcelain"])?;
+    let stdout = run_git(repo.workdir(), ["worktree", "list", "--porcelain", "-z"])?;
     Ok(parse_worktree_porcelain(&stdout))
 }
 
@@ -180,7 +180,7 @@ fn parse_worktree_porcelain(text: &str) -> Vec<WorktreeEntry> {
         }
     }
 
-    for line in text.lines() {
+    for line in text.split('\0') {
         if line.is_empty() {
             flush(current.take(), &mut out);
             continue;
@@ -434,27 +434,39 @@ mod tests {
     }
 
     #[test]
-    fn parse_worktree_porcelain_handles_basic() {
-        let input = indoc::indoc! {"
-            worktree /repo
-            HEAD abcdef0123456789
-            branch refs/heads/main
-
-            worktree /repo/.worktrees/feature
-            HEAD fedcba9876543210
-            branch refs/heads/feature
-
-            worktree /repo/.worktrees/detached
-            HEAD 1111111222222222
-            detached
-        "};
-        let entries = parse_worktree_porcelain(input);
-        assert_eq!(entries.len(), 3);
-        assert_eq!(entries[0].name, "repo");
-        assert_eq!(entries[0].branch, "main");
-        assert_eq!(entries[0].short_hash, "abcdef0");
-        assert_eq!(entries[1].name, "feature");
-        assert_eq!(entries[1].branch, "feature");
-        assert_eq!(entries[2].branch, "(detached)");
+    fn parse_worktree_porcelain_handles_basic_and_unusual_paths() {
+        let unusual_path = format!("/repo/.worktrees/feature branch{}preview", char::from(10));
+        let input = format!(
+            "worktree /repo\0HEAD abcdef0123456789\0branch refs/heads/main\0\0\
+             worktree {unusual_path}\0HEAD fedcba9876543210\0branch refs/heads/feature\0\0\
+             worktree /repo/.worktrees/detached\0HEAD 1111111222222222\0detached\0\0"
+        );
+        let entries = parse_worktree_porcelain(&input);
+        assert_eq!(
+            entries
+                .into_iter()
+                .map(|entry| (entry.name, entry.path, entry.branch, entry.short_hash))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "repo".to_string(),
+                    PathBuf::from("/repo"),
+                    "main".to_string(),
+                    "abcdef0".to_string(),
+                ),
+                (
+                    format!("feature branch{}preview", char::from(10)),
+                    PathBuf::from(unusual_path),
+                    "feature".to_string(),
+                    "fedcba9".to_string(),
+                ),
+                (
+                    "detached".to_string(),
+                    PathBuf::from("/repo/.worktrees/detached"),
+                    "(detached)".to_string(),
+                    "1111111".to_string(),
+                ),
+            ],
+        );
     }
 }
