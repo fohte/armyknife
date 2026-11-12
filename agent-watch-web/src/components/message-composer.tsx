@@ -1,7 +1,7 @@
 import '#components/message-composer.css'
 
 import { Button } from '@fohte/ui/button'
-import { ArrowUp } from 'lucide-react'
+import { ArrowUp, CircleStop } from 'lucide-react'
 import type { ClipboardEvent, KeyboardEvent, SubmitEvent } from 'react'
 import { useId, useLayoutEffect, useRef, useState } from 'react'
 
@@ -292,9 +292,10 @@ export function MessageComposer({
             className="mobile-interrupt-button"
             type="button"
             variant="plain"
+            aria-label="Interrupt"
             onClick={onInterrupt}
           >
-            Interrupt
+            <CircleStop aria-hidden="true" size={18} />
           </Button>
         ) : null}
         <Button

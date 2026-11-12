@@ -1540,30 +1540,53 @@ it('resizes the mobile shell with the visual viewport', () => {
     throw new Error('Expected a visual viewport')
   }
   let viewportHeight = 800
+  let viewportTop = 0
   vi.spyOn(visualViewport, 'height', 'get').mockImplementation(
     () => viewportHeight,
+  )
+  vi.spyOn(visualViewport, 'offsetTop', 'get').mockImplementation(
+    () => viewportTop,
   )
   renderApp()
   act(() => {
     setMobileViewport(true)
   })
-  const initialHeight = document.documentElement.style.getPropertyValue(
-    '--mobile-viewport-height',
-  )
+  const initialViewport = {
+    top: document.documentElement.style.getPropertyValue(
+      '--mobile-viewport-top',
+    ),
+    height: document.documentElement.style.getPropertyValue(
+      '--mobile-viewport-height',
+    ),
+  }
   viewportHeight = 420
   act(() => {
     visualViewport.dispatchEvent(new Event('resize'))
   })
+  const resizedHeight = document.documentElement.style.getPropertyValue(
+    '--mobile-viewport-height',
+  )
+  viewportTop = 180
+  act(() => {
+    visualViewport.dispatchEvent(new Event('scroll'))
+  })
 
   const snapshot = () => ({
-    initialHeight,
-    resizedHeight: document.documentElement.style.getPropertyValue(
-      '--mobile-viewport-height',
-    ),
+    initialViewport,
+    resizedHeight,
+    scrolledViewport: {
+      top: document.documentElement.style.getPropertyValue(
+        '--mobile-viewport-top',
+      ),
+      height: document.documentElement.style.getPropertyValue(
+        '--mobile-viewport-height',
+      ),
+    },
   })
   expect(snapshot()).toEqual({
-    initialHeight: '800px',
+    initialViewport: { top: '0px', height: '800px' },
     resizedHeight: '420px',
+    scrolledViewport: { top: '180px', height: '420px' },
   })
 })
 

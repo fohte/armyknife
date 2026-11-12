@@ -1877,8 +1877,9 @@ it('keeps Enter for newlines and exposes mobile conversation actions', () => {
       container.querySelectorAll('.chat-question-choices kbd'),
       (element) => element.textContent,
     ),
-    interruptLabel: container.querySelector('.mobile-interrupt-button')
-      ?.textContent,
+    interruptLabel: container
+      .querySelector('.mobile-interrupt-button')
+      ?.getAttribute('aria-label'),
   })
   expect(snapshot()).toEqual({
     actions: [['interrupt']],

@@ -164,7 +164,7 @@
 }
 
 .conversation-composer[data-mobile='true'] textarea {
-  grid-column: 1;
+  grid-column: 1 / -1;
   grid-row: 1;
   min-height: 44px;
   padding: 8px 12px;
@@ -186,7 +186,7 @@
   .composer-footer
   [data-slot='button'] {
   grid-column: 2;
-  grid-row: 1;
+  grid-row: 2;
   width: 44px;
   height: 44px;
   min-height: 44px;
@@ -197,14 +197,18 @@
   .mobile-interrupt-button {
   grid-column: 1;
   grid-row: 2;
-  width: auto;
+  width: 44px;
+  height: 44px;
   min-height: 44px;
-  padding: 0 12px;
-  border: 1px solid var(--aw-border-control);
-  color: var(--aw-text-body);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--aw-text-muted);
 }
 
 .conversation-composer[data-mobile='true']:has(.composer-attachments)
-  .mobile-interrupt-button {
+  .composer-footer
+  [data-slot='button'] {
   grid-row: 3;
 }
