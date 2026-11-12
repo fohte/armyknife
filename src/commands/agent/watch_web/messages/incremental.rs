@@ -73,6 +73,7 @@ pub(super) fn parse_session_transcript_incrementally(
         fingerprint,
         tail,
         engine: input.engine,
+        #[cfg(test)]
         last_change: TranscriptChange::Rewritten,
         parser,
     });
@@ -110,7 +111,10 @@ fn advance_cached_parser(
     let (change, suffix) = fingerprint.read_delta_from(&entry.fingerprint, &entry.tail)?;
     match change {
         TranscriptChange::Unchanged => {
-            entry.last_change = change;
+            #[cfg(test)]
+            {
+                entry.last_change = change;
+            }
             Ok(true)
         }
         TranscriptChange::Rewritten => Ok(false),
@@ -128,7 +132,10 @@ fn advance_cached_parser(
             if appended {
                 entry.tail = fingerprint.tail_bytes()?;
                 entry.fingerprint = fingerprint.clone();
-                entry.last_change = change;
+                #[cfg(test)]
+                {
+                    entry.last_change = change;
+                }
             }
             Ok(appended)
         }

@@ -15,6 +15,7 @@ use super::user_input::{content_blocks, is_tool_result_only_user_record, user_co
 pub(super) struct ClaudeParserState {
     pub(super) transcript_nodes: BTreeMap<String, TranscriptNode>,
     pub(super) latest_uuid: Option<String>,
+    pub(super) tool_result_parent: Option<String>,
     pub(super) events: Vec<TimedClaudeEvent>,
     pub(super) queue_events: Vec<QueueReplayEvent>,
     pub(super) tool_uses: Vec<ToolUse>,
@@ -28,6 +29,7 @@ impl ClaudeParserState {
         Self {
             transcript_nodes: BTreeMap::new(),
             latest_uuid: None,
+            tool_result_parent: None,
             events: Vec::new(),
             queue_events: Vec::new(),
             tool_uses: Vec::new(),
@@ -71,6 +73,17 @@ impl ClaudeParserState {
         }
         if !active_record {
             return;
+        }
+
+        if is_tool_result_only {
+            self.tool_result_parent = record_parent_uuid(&record);
+        } else if task_notification.is_none()
+            && matches!(
+                record.get("type").and_then(Value::as_str),
+                Some("user" | "assistant")
+            )
+        {
+            self.tool_result_parent = None;
         }
 
         let effects = self.record_effects(&record, task_notification.as_deref(), now);
@@ -266,6 +279,18 @@ impl ClaudeParserState {
     }
 }
 
+pub(super) fn record_parent_uuid(record: &Value) -> Option<String> {
+    match record.get("parentUuid") {
+        Some(Value::String(parent)) => Some(parent.clone()),
+        Some(Value::Null) => match record.get("logicalParentUuid") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(parent)) => Some(parent.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct ToolUse {
     pub(super) id: String,
@@ -346,14 +371,16 @@ fn classifier_record(record: &Value) -> Value {
             projected.insert((*field).to_owned(), value.clone());
         }
     }
-    if let Some(origin) = record
-        .get("attachment")
-        .and_then(|attachment| attachment.get("origin"))
-    {
-        projected.insert(
-            "attachment".to_owned(),
-            serde_json::json!({"origin": origin}),
-        );
+    if let Some(attachment) = record.get("attachment") {
+        let mut projected_attachment = Map::new();
+        for field in ["origin", "isMeta", "isSidechain", "isCompactSummary"] {
+            if let Some(value) = attachment.get(field) {
+                projected_attachment.insert(field.to_owned(), value.clone());
+            }
+        }
+        if !projected_attachment.is_empty() {
+            projected.insert("attachment".to_owned(), Value::Object(projected_attachment));
+        }
     }
     Value::Object(projected)
 }

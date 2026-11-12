@@ -247,6 +247,7 @@ pub(super) struct CachedTranscriptParser {
     pub(super) fingerprint: TranscriptFingerprint,
     pub(super) tail: Vec<u8>,
     pub(super) engine: Engine,
+    #[cfg(test)]
     pub(super) last_change: TranscriptChange,
     pub(super) parser: IncrementalTranscriptParser,
 }

@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use super::super::super::parser::jsonl::JsonlLineBuffer;
-use super::state::ClaudeParserState;
+use super::state::{ClaudeParserState, record_parent_uuid};
 use super::transcript_branch::{BranchMembership, TranscriptNode, mark_active_branch};
 use super::user_input::is_tool_result_only_user_record;
 use super::{ParsedTranscript, ParserAdditions};
@@ -84,9 +84,9 @@ impl IncrementalClaudeParser {
         suffix: &[u8],
         now: DateTime<Utc>,
     ) -> io::Result<IncrementalAppend> {
-        let mut state = self.state.clone();
-        let mut lines = self.lines.clone();
         let mut restart_required = false;
+        let state = &mut self.state;
+        let lines = &mut self.lines;
         lines.feed(suffix, |line| {
             if restart_required {
                 return;
@@ -94,21 +94,19 @@ impl IncrementalClaudeParser {
             let Some(record) = parse_record(line) else {
                 return;
             };
-            if !ingest_record(&mut state, record, now, RecordOrigin::Appended) {
+            if !ingest_record(state, record, now, RecordOrigin::Appended) {
                 restart_required = true;
             }
         });
         if !restart_required
             && let Some(record) = parse_record(lines.pending())
-            && !is_active_branch_continuation(&state, &record)
+            && !is_active_branch_continuation(state, &record)
         {
             restart_required = true;
         }
         if restart_required {
             return Ok(IncrementalAppend::RestartRequired);
         }
-        self.state = state;
-        self.lines = lines;
         self.pending_is_initial = false;
         Ok(IncrementalAppend::Applied)
     }
@@ -189,7 +187,7 @@ fn ingest_record(
     true
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::commands::agent::watch_web::messages) enum IncrementalAppend {
     Applied,
     RestartRequired,
@@ -198,18 +196,6 @@ pub(in crate::commands::agent::watch_web::messages) enum IncrementalAppend {
 fn parse_record(line: &[u8]) -> Option<Value> {
     let line = std::str::from_utf8(line).ok()?;
     serde_json::from_str(line).ok()
-}
-
-fn record_parent_uuid(record: &Value) -> Option<String> {
-    match record.get("parentUuid") {
-        Some(Value::String(parent)) => Some(parent.clone()),
-        Some(Value::Null) => match record.get("logicalParentUuid") {
-            None | Some(Value::Null) => None,
-            Some(Value::String(parent)) => Some(parent.clone()),
-            _ => None,
-        },
-        _ => None,
-    }
 }
 
 fn is_active_branch_continuation(state: &ClaudeParserState, record: &Value) -> bool {
@@ -222,6 +208,17 @@ fn is_active_branch_continuation(state: &ClaudeParserState, record: &Value) -> b
         return true;
     }
     let parent_uuid = record_parent_uuid(record);
+    if record.get("type").and_then(Value::as_str) == Some("user")
+        && parent_uuid.as_deref() != state.latest_uuid.as_deref()
+    {
+        return false;
+    }
+    if record.get("type").and_then(Value::as_str) == Some("assistant")
+        && parent_uuid.as_deref() != state.latest_uuid.as_deref()
+        && parent_uuid.as_deref() != state.tool_result_parent.as_deref()
+    {
+        return false;
+    }
     let Some(parent_uuid) = parent_uuid else {
         return state.latest_uuid.is_none();
     };
@@ -239,3 +236,6 @@ fn is_active_branch_continuation(state: &ClaudeParserState, record: &Value) -> b
             .get(uuid)
             .is_some_and(|node| node.membership == BranchMembership::Active)
 }
+
+#[cfg(test)]
+mod tests;

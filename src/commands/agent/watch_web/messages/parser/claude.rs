@@ -1808,6 +1808,40 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::meta("isMeta")]
+    #[case::sidechain("isSidechain")]
+    #[case::compact_summary("isCompactSummary")]
+    fn hides_legacy_flags_nested_in_queued_command_attachments(#[case] flag: &str) {
+        let mut attachment = json!({
+            "type": "queued_command",
+            "prompt": "Legacy queued command.",
+        });
+        attachment
+            .as_object_mut()
+            .unwrap()
+            .insert(flag.to_owned(), json!(true));
+        let mut transcript = serde_json::to_vec(&json!({"attachment": attachment})).unwrap();
+        transcript.push(b'\n');
+        transcript.extend_from_slice(
+            &serde_json::to_vec(&json!({
+                "type": "user",
+                "message": {"content": "Visible user message."},
+            }))
+            .unwrap(),
+        );
+        transcript.push(b'\n');
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
+            vec![ChatItem::User {
+                text: "Visible user message.".to_string(),
+                timestamp: None,
+                from: None,
+            }],
+        );
+    }
+
     #[test]
     fn skips_claude_harness_rows_and_keeps_tool_results_for_action_counts() {
         let transcript = indoc! {r#"

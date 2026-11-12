@@ -4,7 +4,8 @@ use chrono::{DateTime, TimeZone, Utc};
 use indoc::indoc;
 use rstest::rstest;
 
-use super::super::{IncrementalAppend, IncrementalClaudeParser, ParserAdditions};
+use super::super::ParserAdditions;
+use super::{IncrementalAppend, IncrementalClaudeParser};
 use crate::commands::agent::store::{AgentDecision, AgentTodo};
 
 fn fixed_time() -> DateTime<Utc> {
@@ -35,15 +36,22 @@ fn parse_all(bytes: &[u8], additions: ParserAdditions<'_>) -> super::ParsedTrans
         .unwrap()
 }
 
-fn incremental_result(prefix: &[u8], suffix: &[u8]) -> super::ParsedTranscript {
+fn incremental_result(
+    prefix: &[u8],
+    suffix: &[u8],
+) -> (IncrementalAppend, super::ParsedTranscript) {
     let mut parser = incremental_parser(prefix);
-    match parser.append_bytes(suffix, fixed_time()).unwrap() {
-        IncrementalAppend::Applied => {}
-        IncrementalAppend::RestartRequired => {
-            panic!("the case continues the active transcript branch")
-        }
-    }
-    parser.render_with(fixed_time(), empty_additions()).unwrap()
+    let mut transcript = prefix.to_vec();
+    transcript.extend_from_slice(suffix);
+    let append = parser.append_bytes(suffix, fixed_time()).unwrap();
+    let parser = match append {
+        IncrementalAppend::Applied => parser,
+        IncrementalAppend::RestartRequired => incremental_parser(&transcript),
+    };
+    (
+        append,
+        parser.render_with(fixed_time(), empty_additions()).unwrap(),
+    )
 }
 
 #[rstest]
@@ -54,16 +62,19 @@ fn incremental_result(prefix: &[u8], suffix: &[u8]) -> super::ParsedTranscript {
     indoc! {r#"
         {"type":"user","uuid":"tool-result","parentUuid":"tool-call","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-a","content":"fixture output"}]}}
     "#},
+    IncrementalAppend::Applied,
 )]
 #[case::partial_json_at_delta_end(
     indoc! {r#"
         {"type":"user","uuid":"message-one","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"A question."}}
     "#},
     r#"{"type":"assistant","uuid":"message-two","parentUuid":"message-one","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"text","text":"unfinished"#,
+    IncrementalAppend::Applied,
 )]
 #[case::initial_final_line_has_no_newline(
     r#"{"type":"user","uuid":"message-one","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"A question."}}"#,
     "",
+    IncrementalAppend::Applied,
 )]
 #[case::queue_operation_crosses_append_boundary(
     indoc! {r#"
@@ -71,6 +82,7 @@ fn incremental_result(prefix: &[u8], suffix: &[u8]) -> super::ParsedTranscript {
         {"type":"queue-operation","operation":"enqueue","content":"Queued
     "#}.trim_end_matches('\n'),
     " request.\"}\n",
+    IncrementalAppend::Applied,
 )]
 #[case::ask_user_question_answer_arrives_later(
     indoc! {r#"
@@ -79,6 +91,7 @@ fn incremental_result(prefix: &[u8], suffix: &[u8]) -> super::ParsedTranscript {
     indoc! {r#"
         {"type":"user","uuid":"answer","parentUuid":"question","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"ask-1","content":"Your questions have been answered: \"Choose a fixture option\"=\"Second option\""}]}}
     "#},
+    IncrementalAppend::Applied,
 )]
 #[case::background_task_notification_completes_later(
     indoc! {r#"
@@ -88,6 +101,7 @@ fn incremental_result(prefix: &[u8], suffix: &[u8]) -> super::ParsedTranscript {
         {"type":"user","uuid":"task-started","parentUuid":"task-call","timestamp":"2026-01-01T00:00:02Z","toolUseResult":{"task_id":"fixture-task"},"message":{"content":[{"type":"tool_result","tool_use_id":"task-call-id","content":"Background task started (id: fixture-task)"}]}}
         {"type":"user","uuid":"task-finished","parentUuid":"task-started","timestamp":"2026-01-01T00:00:03Z","origin":{"kind":"task-notification"},"message":{"content":"<task-notification><task-id>fixture-task</task-id><status>completed</status><summary>Fixture task completed</summary></task-notification>"}}
     "#},
+    IncrementalAppend::Applied,
 )]
 #[case::compaction_boundary_is_appended(
     indoc! {r#"
@@ -96,6 +110,7 @@ fn incremental_result(prefix: &[u8], suffix: &[u8]) -> super::ParsedTranscript {
     indoc! {r#"
         {"type":"system","uuid":"compact","parentUuid":"message-one","timestamp":"2026-01-01T00:00:02Z","subtype":"compact_boundary"}
     "#},
+    IncrementalAppend::Applied,
 )]
 #[case::parallel_tool_results_share_the_same_parent(
     indoc! {r#"
@@ -106,13 +121,38 @@ fn incremental_result(prefix: &[u8], suffix: &[u8]) -> super::ParsedTranscript {
         {"type":"user","uuid":"result-b","parentUuid":"parallel-calls","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-b","content":"second result"}]}}
         {"type":"assistant","uuid":"parallel-answer","parentUuid":"parallel-calls","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"text","text":"Parallel work is complete."}]}}
     "#},
+    IncrementalAppend::Applied,
 )]
-fn appended_transcript_matches_a_full_parse(#[case] prefix: &str, #[case] suffix: &str) {
+#[case::user_message_branching_from_an_active_ancestor_restarts(
+    indoc! {r#"
+        {"type":"user","uuid":"root","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"The original request."}}
+        {"type":"assistant","uuid":"current","parentUuid":"root","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"text","text":"The current branch response."}]}}
+    "#},
+    indoc! {r#"
+        {"type":"user","uuid":"replacement","parentUuid":"root","timestamp":"2026-01-01T00:00:03Z","message":{"content":"The replacement request."}}
+    "#},
+    IncrementalAppend::RestartRequired,
+)]
+#[case::assistant_message_branching_without_tool_results_restarts(
+    indoc! {r#"
+        {"type":"user","uuid":"root","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"The original request."}}
+        {"type":"assistant","uuid":"current","parentUuid":"root","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"text","text":"The current branch response."}]}}
+    "#},
+    indoc! {r#"
+        {"type":"assistant","uuid":"replacement","parentUuid":"root","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"text","text":"The replacement response."}]}}
+    "#},
+    IncrementalAppend::RestartRequired,
+)]
+fn appended_transcript_matches_a_full_parse(
+    #[case] prefix: &str,
+    #[case] suffix: &str,
+    #[case] expected_append: IncrementalAppend,
+) {
     let mut transcript = prefix.as_bytes().to_vec();
     transcript.extend_from_slice(suffix.as_bytes());
     assert_eq!(
         incremental_result(prefix.as_bytes(), suffix.as_bytes()),
-        parse_all(&transcript, empty_additions()),
+        (expected_append, parse_all(&transcript, empty_additions()),),
     );
 }
 
