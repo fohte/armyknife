@@ -35,6 +35,15 @@ function isSession(value: unknown): value is Session {
   return (
     typeof value['id'] === 'string' &&
     typeof value['isPaused'] === 'boolean' &&
+    (value['activityStatus'] === undefined ||
+      value['activityStatus'] === 'working' ||
+      value['activityStatus'] === 'waiting' ||
+      value['activityStatus'] === 'stopped') &&
+    (value['waitingReason'] === undefined ||
+      value['waitingReason'] === null ||
+      typeof value['waitingReason'] === 'string') &&
+    (value['waitingForBackgroundTasks'] === undefined ||
+      typeof value['waitingForBackgroundTasks'] === 'boolean') &&
     (value['hasSessionTree'] === undefined ||
       typeof value['hasSessionTree'] === 'boolean') &&
     (value['workType'] === undefined ||

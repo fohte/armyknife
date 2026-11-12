@@ -468,7 +468,15 @@ export function ConversationPaneView({
       session.category === 'in_progress' ||
       (isMobile && backgroundTasks.length > 0) ? (
         <ConversationWorkingStatus
-          showWorking={session.category === 'in_progress'}
+          showWorking={
+            session.activityStatus === 'working' ||
+            (session.activityStatus == null &&
+              session.category === 'in_progress' &&
+              session.waitingForBackgroundTasks !== true)
+          }
+          isWaiting={session.activityStatus === 'waiting'}
+          waitingReason={session.waitingReason}
+          waitingForBackgroundTasks={session.waitingForBackgroundTasks}
           elapsedSeconds={session.elapsedSeconds}
           activeTool={activeTool}
           backgroundTasks={backgroundTasks}
