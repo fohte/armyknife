@@ -25,3 +25,10 @@ export const Expanded: Story = {
     expanded: true,
   },
 }
+
+export const LinkedTaskMenuPlacement: Story = {
+  name: 'The toggle uses compact styling in the linked task menu.',
+  args: {
+    placement: 'linked-task-menu',
+  },
+}

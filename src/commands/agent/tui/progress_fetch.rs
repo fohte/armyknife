@@ -139,9 +139,13 @@ impl PullRequestListCache {
             else {
                 continue;
             };
-            cached.insert(Q::cache_key(key), progress.clone());
+            cached
+                .entry(Q::cache_key(key))
+                .or_insert_with(|| progress.clone());
             if let Some(related_key) = Q::related_cache_key(key, progress) {
-                cached.insert(related_key, progress.clone());
+                cached
+                    .entry(related_key)
+                    .or_insert_with(|| progress.clone());
             }
         }
     }
@@ -700,6 +704,87 @@ mod tests {
                     (open.key(), Some(progress(PrState::Open, 2046))),
                 ]),
                 None,
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn pull_request_list_fetch_keeps_a_newer_terminal_result_when_an_older_lookup_finishes_late()
+     {
+        let cache = PullRequestListCache::default();
+        let query = BranchPrQuery {
+            owner: "sample-owner".to_string(),
+            repo: "sample-repo".to_string(),
+            branch: "sample-branch".to_string(),
+        };
+        let (older_tx, older_rx) = tokio::sync::oneshot::channel();
+        let (older_started_tx, older_started_rx) = tokio::sync::oneshot::channel();
+        let older_cache = cache.clone();
+        let older_query = query.clone();
+        let older_request = tokio::spawn(async move {
+            fetch_query_progress(
+                Some(&older_cache),
+                std::slice::from_ref(&older_query),
+                move |_| async move {
+                    older_started_tx.send(()).unwrap();
+                    Ok(older_rx.await.unwrap())
+                },
+            )
+            .await
+        });
+        older_started_rx.await.unwrap();
+
+        let (newer_tx, newer_rx) = tokio::sync::oneshot::channel();
+        let (newer_started_tx, newer_started_rx) = tokio::sync::oneshot::channel();
+        let newer_cache = cache.clone();
+        let newer_query = query.clone();
+        let newer_request = tokio::spawn(async move {
+            fetch_query_progress(
+                Some(&newer_cache),
+                std::slice::from_ref(&newer_query),
+                move |_| async move {
+                    newer_started_tx.send(()).unwrap();
+                    Ok(newer_rx.await.unwrap())
+                },
+            )
+            .await
+        });
+        newer_started_rx.await.unwrap();
+
+        let newer_progress = progress(PrState::Merged, 2048);
+        newer_tx
+            .send(HashMap::from([(query.key(), Some(newer_progress.clone()))]))
+            .unwrap();
+        let newer_result = newer_request.await.unwrap();
+
+        let older_progress = progress(PrState::Closed, 2048);
+        older_tx
+            .send(HashMap::from([(query.key(), Some(older_progress.clone()))]))
+            .unwrap();
+        let older_result = older_request.await.unwrap();
+
+        let fetch_called = Cell::new(false);
+        let (cached_result, cache_error) =
+            fetch_query_progress(Some(&cache), std::slice::from_ref(&query), |_| {
+                fetch_called.set(true);
+                async { Ok(HashMap::new()) }
+            })
+            .await;
+
+        assert_eq!(
+            (
+                newer_result,
+                older_result,
+                cached_result,
+                cache_error,
+                fetch_called.get(),
+            ),
+            (
+                (HashMap::from([(query.key(), Some(newer_progress))]), None),
+                (HashMap::from([(query.key(), Some(older_progress))]), None),
+                HashMap::from([(query.key(), Some(progress(PrState::Merged, 2048)))]),
+                None,
+                false,
             ),
         );
     }

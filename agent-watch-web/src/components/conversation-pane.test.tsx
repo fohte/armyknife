@@ -1409,6 +1409,100 @@ it('refreshes pull requests immediately when explicitly requested', async () => 
   })
 })
 
+it('keeps the newest pull request response when an older refresh finishes late', async () => {
+  vi.useFakeTimers()
+  setPageVisibility('visible')
+  let resolveOlder: ((response: Response) => void) | undefined
+  let resolveNewer: ((response: Response) => void) | undefined
+  const olderResponse = new Promise<Response>((resolve) => {
+    resolveOlder = resolve
+  })
+  const newerResponse = new Promise<Response>((resolve) => {
+    resolveNewer = resolve
+  })
+  const requests: string[] = []
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (!url.endsWith('/pull-requests'))
+      return Promise.resolve(jsonResponse({}))
+    requests.push(url)
+    return requests.length === 1 ? olderResponse : newerResponse
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  const firstSession = { ...session, id: 'out-of-order-pull-request-session' }
+  const secondSession = { ...session, id: 'other-out-of-order-session' }
+  const render = (currentSession: Session, key: string, enabled: boolean) => {
+    act(() => {
+      root?.render(
+        <PullRequestHookTestView
+          key={key}
+          session={currentSession}
+          enabled={enabled}
+        />,
+      )
+    })
+  }
+  const flushRequests = async () => {
+    await act(async () => {
+      for (let index = 0; index < 12; index += 1) await Promise.resolve()
+    })
+  }
+  const response = (title: string) =>
+    jsonResponse({
+      pullRequests: [
+        {
+          number: 43,
+          owner: 'sample-owner',
+          repo: 'sample-repo',
+          title,
+          url: 'https://github.com/sample-org/sample-project/pull/43',
+          headSha: 'sample-head',
+          state: 'Open',
+          ciState: 'Successful',
+          reviewStatus: 'done',
+        },
+      ],
+      error: null,
+    })
+
+  render(firstSession, 'first-pane', true)
+  await flushRequests()
+  const refreshButton = container.querySelector('button')
+  if (refreshButton === null) throw new Error('Refresh button is missing')
+  act(() => {
+    refreshButton.click()
+  })
+  await flushRequests()
+
+  await act(async () => {
+    resolveNewer?.(response('Newest response'))
+    await Promise.resolve()
+  })
+  await act(async () => {
+    resolveOlder?.(response('Older response'))
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  render(secondSession, 'second-pane', false)
+  render(firstSession, 'returned-pane', true)
+  await flushRequests()
+
+  const snapshot = () => ({
+    title: container.querySelector('span')?.textContent,
+    state: container.querySelectorAll('span')[1]?.textContent,
+    requests,
+  })
+  expect(snapshot()).toEqual({
+    title: 'Newest response',
+    state: 'Ready',
+    requests: [
+      '/api/sessions/out-of-order-pull-request-session/pull-requests',
+      '/api/sessions/out-of-order-pull-request-session/pull-requests',
+    ],
+  })
+})
+
 it('shows a tree request error instead of hiding the tree tab', async () => {
   const treeSession = { ...session, hasSessionTree: true }
   const fetcher = vi.fn<typeof fetch>((input) => {
