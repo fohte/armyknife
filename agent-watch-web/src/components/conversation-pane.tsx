@@ -98,10 +98,8 @@ export function ConversationPane({
 }: ConversationPaneProps) {
   const sessionConversationCache = useSessionConversationCache()
   const setCachedConversation = sessionConversationCache?.setCachedConversation
-  const touchCachedConversation =
-    sessionConversationCache?.touchCachedConversation
   const [initialCachedConversation] = useState(() =>
-    sessionConversationCache?.conversations.get(session.id),
+    sessionConversationCache?.getCachedConversation(session.id),
   )
   const [conversation, setConversation] = useState<ConversationResponse>(
     initialCachedConversation?.conversation ?? EMPTY_CONVERSATION,
@@ -292,12 +290,6 @@ export function ConversationPane({
       },
     )
   }, [markMessagesLoaded, session.id, updateConversation])
-
-  useEffect(() => {
-    if (initialCachedConversation !== undefined) {
-      touchCachedConversation?.(session.id)
-    }
-  }, [initialCachedConversation, session.id, touchCachedConversation])
 
   useEffect(() => {
     refresh()
