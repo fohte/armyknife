@@ -1,5 +1,7 @@
 use serde_json::Value;
 
+mod system_record;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum MessageKind {
     User {
@@ -97,7 +99,7 @@ pub(super) fn classify_inbound(
     }
 
     if record.get("type").and_then(Value::as_str) == Some("system") {
-        return system_record(record, text);
+        return system_record::classify(record, text);
     }
 
     if let Some(origin_kind) = origin(record)
@@ -316,33 +318,6 @@ pub(super) fn peer_notification_failed(record: &Value, text: &str) -> bool {
     is_failure(record, "peer-notify", text)
 }
 
-fn system_record(record: &Value, raw_text: &str) -> MessageKind {
-    if record.get("subtype").and_then(Value::as_str).is_none() && raw_text.trim().is_empty() {
-        return MessageKind::Hidden;
-    }
-    let subtype = record
-        .get("subtype")
-        .and_then(Value::as_str)
-        .unwrap_or("system event");
-    let kind = if subtype == "compact_boundary" {
-        EventKind::CompactBoundary
-    } else {
-        EventKind::System
-    };
-    let text = match subtype {
-        "compact_boundary" => "Context compacted".to_owned(),
-        "resume" | "session_resume" => "Session resumed".to_owned(),
-        "model_change" | "model_changed" => "Model changed".to_owned(),
-        _ if !raw_text.trim().is_empty() => one_line(raw_text),
-        _ => subtype.replace('_', " "),
-    };
-    MessageKind::Event {
-        kind,
-        failed: is_failure(record, subtype, &text),
-        text,
-    }
-}
-
 fn event(tag: &str, body: &str, record: &Value) -> MessageKind {
     let kind = if tag == "local-command-stdout" || tag.starts_with("hook-") {
         EventKind::Hook
@@ -352,13 +327,21 @@ fn event(tag: &str, body: &str, record: &Value) -> MessageKind {
         EventKind::System
     };
     let text = if tag == "task-notification" {
-        match (
-            nested_tag_value(body, "task-id"),
-            nested_tag_value(body, "status"),
-        ) {
-            (Some(task_id), Some(status)) => format!("Background task {task_id} {status}"),
-            _ => one_line(body),
-        }
+        nested_tag_value(body, "summary")
+            .filter(|summary| !summary.trim().is_empty())
+            .map(one_line)
+            .or_else(|| {
+                match (
+                    nested_tag_value(body, "task-id"),
+                    nested_tag_value(body, "status"),
+                ) {
+                    (Some(task_id), Some(status)) => {
+                        Some(format!("Background task {task_id} {status}"))
+                    }
+                    _ => None,
+                }
+            })
+            .unwrap_or_else(|| one_line(body))
     } else {
         one_line(body)
     };
@@ -606,6 +589,14 @@ mod tests {
     )]
     #[case::unknown_tag_is_system(json!({"type":"user","isMeta":true}), "<future-notice>Future notice text.</future-notice>", None, MessageKind::Event { kind: EventKind::System, text: "Future notice text.".to_owned(), failed: false })]
     #[case::compact_boundary_has_a_distinct_kind(json!({"type":"system","subtype":"compact_boundary"}), "", None, MessageKind::Event { kind: EventKind::CompactBoundary, text: "Context compacted".to_owned(), failed: false })]
+    #[case::background_task_uses_summary(json!({"type":"user"}), "<task-notification><task-id>fixture-task-id</task-id><status>completed</status><summary>Background command \"Check the fictional build\" completed (exit code 0)</summary></task-notification>", None, MessageKind::Event { kind: EventKind::System, text: "Background command \"Check the fictional build\" completed (exit code 0)".to_owned(), failed: false })]
+    #[case::background_task_without_summary_uses_id_and_status(json!({"type":"user"}), "<task-notification><task-id>fixture-task-id</task-id><status>completed</status></task-notification>", None, MessageKind::Event { kind: EventKind::System, text: "Background task fixture-task-id completed".to_owned(), failed: false })]
+    #[case::away_summary_uses_record_content(json!({"type":"system","subtype":"away_summary","content":"The fictional task finished while the user was away."}), "", None, MessageKind::Event { kind: EventKind::System, text: "recap: The fictional task finished while the user was away.".to_owned(), failed: false })]
+    #[case::away_summary_uses_raw_text_when_content_is_empty(json!({"type":"system","subtype":"away_summary","content":"  "}), "The fictional task finished while the user was away.", None, MessageKind::Event { kind: EventKind::System, text: "recap: The fictional task finished while the user was away.".to_owned(), failed: false })]
+    #[case::empty_stop_hook_summary_is_hidden(json!({"type":"system","subtype":"stop_hook_summary","hookErrors":[],"preventedContinuation":false}), "", None, MessageKind::Hidden)]
+    #[case::stop_hook_error_is_visible_and_marked_failed(json!({"type":"system","subtype":"stop_hook_summary","hookErrors":[{"hookName":"fixture-hook","error":"Synthetic hook failure."}],"preventedContinuation":false}), "", None, MessageKind::Event { kind: EventKind::System, text: "Stop hook summary: fixture-hook: Synthetic hook failure.".to_owned(), failed: true })]
+    #[case::prevented_continuation_is_visible(json!({"type":"system","subtype":"stop_hook_summary","hookErrors":[],"preventedContinuation":true}), "", None, MessageKind::Event { kind: EventKind::System, text: "Stop hook summary: continuation was prevented".to_owned(), failed: false })]
+    #[case::turn_duration_shows_elapsed_time_only(json!({"type":"system","subtype":"turn_duration","durationMs":30314,"messageCount":5,"timestamp":"2026-06-01T12:34:00Z"}), "", None, MessageKind::Event { kind: EventKind::System, text: "Took 30s".to_owned(), failed: false })]
     #[case::hook_output_is_one_line(json!({"type":"user"}), "<local-command-stdout>First line.\nSecond line.</local-command-stdout>", None, MessageKind::Event { kind: EventKind::Hook, text: "First line. Second line.".to_owned(), failed: false })]
     fn classifies_inbound_records(
         #[case] record: serde_json::Value,
