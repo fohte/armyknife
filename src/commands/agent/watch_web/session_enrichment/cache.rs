@@ -154,63 +154,24 @@ pub(super) fn prune_session_task_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionStatus};
     use crate::infra::github::PrState;
-    use chrono::{TimeZone, Utc};
     use rstest::{fixture, rstest};
-    use std::path::PathBuf;
     use std::sync::Arc;
-    use std::time::Duration;
     use tokio::sync::watch;
 
     use super::super::super::EnrichmentUpdates;
+    use super::super::test_support::{
+        branch_key, cache_with_fetchers, linked_task, metadata, session, session_with_branch_name,
+        wait_for_refresh,
+    };
     use super::super::{
-        BranchPrKey, FETCH_TIMEOUT, PullRequestFetcher, SessionEnrichmentCache,
-        SessionTaskMetadata, TaskMetadataFetcher,
+        FETCH_TIMEOUT, PullRequestFetcher, SessionTaskMetadata, TaskMetadataFetcher,
     };
 
     #[fixture]
     fn updates_and_receiver() -> (EnrichmentUpdates, watch::Receiver<()>) {
         let updates = EnrichmentUpdates::new();
         (updates.clone(), updates.subscribe())
-    }
-
-    fn cache_with_fetchers(
-        updates: EnrichmentUpdates,
-        task_fetcher: TaskMetadataFetcher,
-        pull_request_fetcher: PullRequestFetcher,
-    ) -> SessionEnrichmentCache {
-        SessionEnrichmentCache::with_fetchers(
-            updates,
-            FETCH_TIMEOUT,
-            task_fetcher,
-            pull_request_fetcher,
-        )
-    }
-
-    fn metadata(session_ids: HashSet<String>) -> SessionTaskMetadata {
-        let links = session_ids
-            .into_iter()
-            .map(|session_id| {
-                let task_id = format!("task-{session_id}");
-                (
-                    session_id,
-                    vec![crate::commands::agent::tq_session_tasks::SessionTask {
-                        task_id,
-                        task_number: 7,
-                        task_title: "Example task".to_string(),
-                        parent_task_id: None,
-                        is_closed: false,
-                    }],
-                )
-            })
-            .collect();
-        SessionTaskMetadata {
-            links,
-            priorities: HashMap::new(),
-            priority_order: HashMap::new(),
-            task_projects: HashMap::new(),
-        }
     }
 
     fn metadata_with_task_details(session_ids: HashSet<String>) -> SessionTaskMetadata {
@@ -229,64 +190,6 @@ mod tests {
         result
     }
 
-    fn session(session_id: &str, pr_context: Option<SessionPrContext>) -> Session {
-        let timestamp = Utc.timestamp_opt(1_234_567, 0).single().unwrap();
-        Session {
-            session_id: session_id.to_string(),
-            archived_at: None,
-            pr_context,
-            crit_urls: Vec::new(),
-            pending_human_review_ids: Default::default(),
-            cwd: PathBuf::from("/workspace/example"),
-            transcript_path: None,
-            tty: None,
-            tmux_info: None,
-            status: SessionStatus::Stopped,
-            agent_status: None,
-            agent_status_clear_pending: false,
-            created_at: timestamp,
-            updated_at: timestamp,
-            last_message: None,
-            current_tool: None,
-            label: None,
-            work_type: None,
-            vibe_enabled: false,
-            launched_with_vibe: false,
-            work_type_pinned: false,
-            child_launch: Default::default(),
-            ancestor_session_ids: Vec::new(),
-            pending_bg_task_ids: Default::default(),
-            pending_agent_task_ids: Default::default(),
-            pending_permission_agent_ids: Default::default(),
-            pending_permission_request_ids: Default::default(),
-            read_at: None,
-            sweep_signaled: false,
-            stop_blocked_by_armyknife: false,
-            engine: Engine::Claude,
-            model: None,
-            effort: None,
-        }
-    }
-
-    fn session_with_branch(session_id: &str, branch: &str) -> Session {
-        session(
-            session_id,
-            Some(SessionPrContext {
-                owner: "example-owner".to_string(),
-                repo: "example-repository".to_string(),
-                branch: branch.to_string(),
-                checklist_item_id: None,
-            }),
-        )
-    }
-
-    async fn wait_for_refresh(receiver: &mut watch::Receiver<()>) {
-        tokio::time::timeout(Duration::from_secs(1), receiver.changed())
-            .await
-            .unwrap()
-            .unwrap();
-    }
-
     #[rstest]
     #[tokio::test]
     async fn alternating_session_sets_keep_each_sessions_task_metadata(
@@ -298,7 +201,7 @@ mod tests {
         });
         let pull_request_fetcher: PullRequestFetcher =
             Arc::new(|_| Box::pin(async { Ok(HashMap::new()) }));
-        let cache = cache_with_fetchers(updates, task_fetcher, pull_request_fetcher);
+        let cache = cache_with_fetchers(updates, FETCH_TIMEOUT, task_fetcher, pull_request_fetcher);
         let session_a = session("session-a", None);
         let session_b = session("session-b", None);
 
@@ -359,9 +262,9 @@ mod tests {
         });
         let task_fetcher: TaskMetadataFetcher =
             Arc::new(|_, previous| Box::pin(async move { Ok(previous) }));
-        let cache = cache_with_fetchers(updates, task_fetcher, pull_request_fetcher);
-        let session_a = session_with_branch("session-a", "branch-a");
-        let session_b = session_with_branch("session-b", "branch-b");
+        let cache = cache_with_fetchers(updates, FETCH_TIMEOUT, task_fetcher, pull_request_fetcher);
+        let session_a = session_with_branch_name("session-a", "branch-a");
+        let session_b = session_with_branch_name("session-b", "branch-b");
 
         let initial = cache.pull_requests(std::slice::from_ref(&session_a)).await;
         wait_for_refresh(&mut receiver).await;
@@ -431,35 +334,41 @@ mod tests {
             ("task-session-a".to_string(), "project-a".to_string()),
             ("task-session-b".to_string(), "project-b".to_string()),
         ]);
+        cached
+            .links
+            .get_mut("session-b")
+            .unwrap()
+            .push(linked_task("task-session-a"));
 
         prune_session_task_metadata(&mut cached, &HashSet::from(["session-a".to_string()]));
 
         assert_eq!(
             cached,
             SessionTaskMetadata {
-                links: metadata(HashSet::from(["session-b".to_string()])).links,
-                priorities: HashMap::from([("task-session-b".to_string(), Some(1))]),
-                priority_order: HashMap::from([("task-session-b".to_string(), 1)]),
-                task_projects: HashMap::from([(
-                    "task-session-b".to_string(),
-                    "project-b".to_string()
+                links: HashMap::from([(
+                    "session-b".to_string(),
+                    vec![linked_task("task-session-b"), linked_task("task-session-a"),],
                 )]),
+                priorities: HashMap::from([
+                    ("task-session-a".to_string(), Some(0)),
+                    ("task-session-b".to_string(), Some(1)),
+                ]),
+                priority_order: HashMap::from([
+                    ("task-session-a".to_string(), 0),
+                    ("task-session-b".to_string(), 1),
+                ]),
+                task_projects: HashMap::from([
+                    ("task-session-a".to_string(), "project-a".to_string()),
+                    ("task-session-b".to_string(), "project-b".to_string()),
+                ]),
             }
         );
     }
 
     #[test]
     fn prunes_stale_pull_request_branch_results() {
-        let branch_a: BranchPrKey = (
-            "example-owner".to_string(),
-            "example-repository".to_string(),
-            "branch-a".to_string(),
-        );
-        let branch_b: BranchPrKey = (
-            "example-owner".to_string(),
-            "example-repository".to_string(),
-            "branch-b".to_string(),
-        );
+        let branch_a = branch_key("branch-a");
+        let branch_b = branch_key("branch-b");
         let mut cached = HashMap::from([
             (branch_a.clone(), None),
             (
