@@ -10,7 +10,7 @@ use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 use thiserror::Error;
 
-pub(super) const MAX_ATTACHMENT_BYTES: usize = 50 * 1024 * 1024;
+pub(super) use super::limits::MAX_REQUEST_BODY_BYTES as MAX_ATTACHMENT_BYTES;
 pub(super) const MAX_ATTACHMENTS_PER_MESSAGE: usize = 16;
 const MAX_STORAGE_BYTES: u64 = 1024 * 1024 * 1024;
 const STORAGE_FILE_OVERHEAD_BYTES: u64 = 64 * 1024;
