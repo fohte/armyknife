@@ -7276,6 +7276,66 @@ it('skips committing an unchanged memoized conversation row', () => {
   expect(renderMessage).toHaveBeenCalledTimes(1)
 })
 
+it('refreshes a memoized message time when the local day changes', () => {
+  const timestamp = new Date(2030, 8, 11, 23, 58).toISOString()
+  const message: ChatItem = {
+    type: 'event',
+    kind: 'system',
+    text: 'A fictional event occurred.',
+    failed: false,
+    timestamp,
+  }
+  const sessions: Session[] = []
+  const onAction = () => Promise.resolve(true)
+  const onOpenInTerminal = () => undefined
+  const onSelectDecision = () => undefined
+  const onSelectSession = () => undefined
+  const renderMessage = vi.mocked(renderConversationMessage)
+  renderMessage.mockClear()
+  const rowProps = {
+    actions,
+    actionsReady: true,
+    isMobile: false,
+    selected: false,
+    decisionPosition: undefined,
+    message,
+    now: new Date(2030, 8, 11, 23, 59),
+    pendingAction: null,
+    openInTerminalStatus: null,
+    sessionEngine: 'claude' as const,
+    sessions,
+    onAction,
+    onOpenInTerminal,
+    onSelectDecision,
+    onSelectSession,
+  }
+  const afterMidnight = new Date(2030, 8, 12, 0, 1)
+  root = createRoot(container)
+  act(() => {
+    root?.render(<ConversationMessageRow {...rowProps} />)
+  })
+  act(() => {
+    root?.render(
+      <ConversationMessageRow
+        {...rowProps}
+        now={new Date(2030, 8, 11, 23, 59, 30)}
+      />,
+    )
+  })
+  act(() => {
+    root?.render(<ConversationMessageRow {...rowProps} now={afterMidnight} />)
+  })
+
+  const getActual = () => ({
+    renderCount: renderMessage.mock.calls.length,
+    time: container.querySelector('time')?.textContent ?? null,
+  })
+  expect(getActual()).toEqual({
+    renderCount: 2,
+    time: formatMessageTime(timestamp, afterMidnight),
+  })
+})
+
 it('keeps a todo comment when a preceding conversation row arrives', () => {
   const todo: ChatItem = {
     type: 'todo',
