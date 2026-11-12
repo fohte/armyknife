@@ -8,6 +8,7 @@ type SessionKind =
   | 'Error'
   | 'Plan'
   | 'Proposal'
+  | 'Todo'
   | 'Stopped'
   | (string & {})
 
@@ -148,6 +149,14 @@ export type ChatItem =
       options: ProposalOption[]
       answer: ProposalAnswer | null
       resolved: boolean
+    }
+  | {
+      type: 'todo'
+      seq: number
+      title: string
+      detail: string | null
+      completed: boolean
+      comment: string | null
     }
   | {
       type: 'permission'

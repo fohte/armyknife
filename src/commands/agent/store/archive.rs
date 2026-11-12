@@ -12,7 +12,9 @@ pub(crate) enum ArchiveLogContext {
     WorktreeCleanup,
 }
 
-pub(crate) fn delete_session_with_archive(session_id: &str) -> Result<()> {
+/// Archives a Codex thread before deleting its session row.
+/// Returns false when an incomplete todo keeps the row available or it was already absent.
+pub(crate) fn delete_session_with_archive(session_id: &str) -> Result<bool> {
     delete_session_with_archive_in(
         &super::sessions_dir()?,
         session_id,
@@ -24,7 +26,7 @@ fn delete_session_with_archive_in(
     sessions_dir: &Path,
     session_id: &str,
     mut archive_codex_thread: impl FnMut(&str) -> anyhow::Result<()>,
-) -> Result<()> {
+) -> Result<bool> {
     if let Some(session) = super::load_session_from(sessions_dir, session_id)? {
         archive_codex_thread_before_delete_with(
             &session,

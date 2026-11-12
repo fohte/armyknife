@@ -19,12 +19,16 @@ mod answer_question;
 mod api_error;
 mod close;
 mod decisions;
+mod keyed_mutex_registry;
 mod messages;
 mod proposal_answer_locks;
 mod proposals;
+mod todo_completion_locks;
+mod todos;
 
 pub(super) use api_error::ApiError;
 use proposal_answer_locks::ProposalAnswerLocks;
+use todo_completion_locks::TodoCompletionLocks;
 
 pub(super) fn router(message_loaders: RouteLoaders) -> Router {
     router_with_state(ActionState {
@@ -32,6 +36,7 @@ pub(super) fn router(message_loaders: RouteLoaders) -> Router {
         attachment_dir: None,
         runtime: Arc::new(LiveActionRuntime),
         proposal_answer_locks: ProposalAnswerLocks::default(),
+        todo_completion_locks: TodoCompletionLocks::default(),
         message_loaders,
     })
 }
@@ -55,6 +60,10 @@ fn router_with_state(state: ActionState) -> Router {
         .route(
             "/sessions/{id}/proposals/{seq}/answer",
             post(proposals::answer_proposal),
+        )
+        .route(
+            "/sessions/{id}/todos/{seq}/complete",
+            post(todos::complete_todo),
         )
         .route(
             "/sessions/{id}/answer",
@@ -81,6 +90,7 @@ struct ActionState {
     message_loaders: RouteLoaders,
     // Delivery precedes persistence, so repeated answers for one proposal must serialize.
     proposal_answer_locks: ProposalAnswerLocks,
+    todo_completion_locks: TodoCompletionLocks,
 }
 
 trait ActionRuntime: Send + Sync {
@@ -486,6 +496,9 @@ mod tests {
     #[path = "proposals.rs"]
     mod proposals;
 
+    #[path = "todos.rs"]
+    mod todos;
+
     struct FakeRuntime {
         calls: Mutex<Vec<Value>>,
         message_error: Mutex<Option<String>>,
@@ -643,6 +656,7 @@ mod tests {
                 attachment_dir: Some(self.temp_dir.path().join("attachments")),
                 runtime: self.runtime.clone(),
                 proposal_answer_locks: proposal_answer_locks.clone(),
+                todo_completion_locks: TodoCompletionLocks::default(),
                 message_loaders,
             });
             (router, proposal_answer_locks)

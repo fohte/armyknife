@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use rusqlite_migration::{Error as MigrationError, M, MigrationDefinitionError, Migrations};
 
 // Migrations must stay readable by older binaries: add tables or nullable columns only.
-static MIGRATION_ENTRIES: [M<'static>; 11] = [
+static MIGRATION_ENTRIES: [M<'static>; 12] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -120,6 +120,25 @@ static MIGRATION_ENTRIES: [M<'static>; 11] = [
             END;",
     ),
     M::up("ALTER TABLE permission_request_decision ADD COLUMN answers TEXT;"),
+    M::up(
+        "CREATE TABLE agent_todo (
+            session_id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            detail TEXT,
+            created_at TEXT NOT NULL,
+            completed_at TEXT,
+            comment TEXT,
+            PRIMARY KEY (session_id, seq)
+        );
+        CREATE INDEX agent_todo_incomplete_session_id
+            ON agent_todo (session_id) WHERE completed_at IS NULL;
+        CREATE TRIGGER agent_todo_delete_session
+            AFTER DELETE ON sessions
+            BEGIN
+                DELETE FROM agent_todo WHERE session_id = OLD.session_id;
+            END;",
+    ),
 ];
 
 static MIGRATIONS: LazyLock<Migrations<'static>> =

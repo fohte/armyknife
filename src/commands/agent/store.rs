@@ -20,6 +20,7 @@ mod peer_out_messages;
 mod queued_prompts;
 
 pub(crate) use archive::{ArchiveLogContext, archive_codex_thread_before_delete_with};
+pub(crate) use database::AgentTodo;
 pub(crate) use database::set_watch_web_compacting;
 pub(crate) use database::{
     AgentDecision, AgentDecisionCounts, AgentProposal, PermissionRequestData,
@@ -338,22 +339,23 @@ pub(crate) fn update_session_tmux_pane_id_in(
 }
 
 /// Archives a Codex thread before deleting its session record.
-/// Returns Ok(()) even if the record doesn't exist or archiving fails.
-pub fn delete_session(session_id: &str) -> Result<()> {
+/// Returns false when an incomplete todo keeps the row available or it was already absent.
+pub fn delete_session(session_id: &str) -> Result<bool> {
     archive::delete_session_with_archive(session_id)
 }
 
 /// Deletes a session without archiving its Codex thread.
 /// Used when cleanup handles archive ordering separately.
-pub(crate) fn delete_session_without_archive(session_id: &str) -> Result<()> {
-    delete_session_from(&sessions_dir()?, session_id)
+/// Returns false when an incomplete todo keeps the row available or it was already absent.
+pub(crate) fn delete_session_without_archive(session_id: &str) -> Result<bool> {
+    database::delete_session(&sessions_dir()?, session_id)
 }
 
 /// Deletes a session from a specific directory.
 /// Allows testing with temporary directories.
-pub(crate) fn delete_session_from(sessions_dir: &Path, session_id: &str) -> Result<()> {
-    database::delete_session(sessions_dir, session_id)?;
-    Ok(())
+/// Returns false when an incomplete todo keeps the row available or it was already absent.
+pub(crate) fn delete_session_from(sessions_dir: &Path, session_id: &str) -> Result<bool> {
+    database::delete_session(sessions_dir, session_id)
 }
 
 /// Sorts sessions by updated_at descending with stability threshold.
@@ -451,6 +453,47 @@ pub(crate) fn write_agent_proposal_answer_from(
     answer: &str,
 ) -> Result<bool> {
     database::write_agent_proposal_answer(sessions_dir, session_id, seq, answer)
+}
+
+pub(crate) fn add_agent_todo_in(
+    sessions_dir: &Path,
+    session_id: &str,
+    title: &str,
+    detail: Option<&str>,
+) -> Result<i64> {
+    database::add_agent_todo(sessions_dir, session_id, title, detail)
+}
+
+pub(crate) fn agent_todos_from(sessions_dir: &Path, session_id: &str) -> Result<Vec<AgentTodo>> {
+    database::agent_todos(sessions_dir, session_id)
+}
+
+pub(crate) fn agent_todos(session_id: &str) -> Result<Vec<AgentTodo>> {
+    agent_todos_from(&sessions_dir()?, session_id)
+}
+
+pub(crate) fn incomplete_agent_todo_titles_from(
+    sessions_dir: &Path,
+    session_ids: &[String],
+) -> Result<Vec<(String, String)>> {
+    database::incomplete_agent_todo_titles(sessions_dir, session_ids)
+}
+
+pub(crate) fn complete_agent_todo_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    comment: Option<&str>,
+) -> Result<bool> {
+    database::complete_agent_todo(sessions_dir, session_id, seq, comment)
+}
+
+pub(crate) fn complete_agent_todo(
+    session_id: &str,
+    seq: i64,
+    comment: Option<&str>,
+) -> Result<bool> {
+    complete_agent_todo_from(&sessions_dir()?, session_id, seq, comment)
 }
 
 pub(crate) fn watch_web_session_states_from(

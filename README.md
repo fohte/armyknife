@@ -563,6 +563,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `status set <kind> <note>`                                                                            |         | Set the calling session's reason for stopping                                               |
 | `decision add <TITLE> --why <WHY> --considered <ALT> [--considered <ALT>...] --easy-to-change <TEXT>` |         | Record a provisional decision for later review                                              |
 | `proposal add`                                                                                        |         | Record a structured proposal from JSON read from stdin                                      |
+| `todo add`                                                                                            |         | Record one task the user needs to do from JSON read from stdin                              |
 | `profile use <profile> / show`                                                                        |         | Select a profile and show its effective settings for every type                             |
 | `vibe on / off / status / grant <session-id>`                                                         |         | Enable, disable, check, or grant vibe mode to a descendant session                          |
 | `resume [session_id]`                                                                                 | `r`     | Resume the pane's Claude Code session (reads pane option if no argument)                    |
@@ -618,6 +619,18 @@ $ cat <<'JSON' | a agent proposal add
 }
 JSON
 Recorded proposal 1
+```
+
+Run `a agent todo add` from a tracked Claude Code or Codex session and pipe a JSON object to stdin. The required field is `title`; `detail` is optional. The todo stays in the watch-web conversation after completion and is shown as done. Use a proposal when the user should choose from options. The command prints `Recorded todo <seq>` after saving the todo.
+
+```console
+$ cat <<'JSON' | a agent todo add
+{
+  "title": "Check the mobile layout",
+  "detail": "Confirm the navigation fits on a narrow screen."
+}
+JSON
+Recorded todo 1
 ```
 
 Vibe mode is an opt-in marker recorded by armyknife. Vibe-gated actions are denied for every repository by default, even when the marker is enabled. Set `orgs.<owner>.vibe` to `true` to allow repositories for an owner; `repos.<owner>/<repo>.vibe` can override that value for one repository. The effective repository value defaults to `false`.

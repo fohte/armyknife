@@ -14,6 +14,7 @@ import {
 import { ProposalCard } from '#components/proposal-card'
 import { QuestionCard } from '#components/question-card'
 import { SubagentReport } from '#components/subagent-report'
+import { TodoCard } from '#components/todo-card'
 import { ToolSummary } from '#components/tool-summary'
 import { UserWithContent } from '#components/user-with-content'
 import type {
@@ -211,6 +212,20 @@ export function renderConversationMessage({
             choice: answer.choice,
             comment: answer.comment,
           })
+        }
+      />
+    )
+  }
+  if (message.type === 'todo') {
+    return (
+      <TodoCard
+        key={`todo-${String(message.seq)}`}
+        title={message.title}
+        detail={message.detail}
+        completed={message.completed}
+        defaultComment={message.comment ?? ''}
+        onComplete={(comment) =>
+          onAction(`todos/${String(message.seq)}/complete`, { comment })
         }
       />
     )

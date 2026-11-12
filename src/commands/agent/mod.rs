@@ -46,6 +46,7 @@ mod status_inference;
 pub(crate) mod store;
 mod sweep;
 pub(crate) mod tmux_sync;
+mod todo;
 pub(crate) mod tq_session_tasks;
 mod transcript;
 mod tui;
@@ -91,6 +92,7 @@ pub use resurrect::ResurrectCommands;
 pub use status::StatusCommands;
 pub use status_inference::StatusInferenceArgs;
 pub use sweep::SweepArgs;
+pub use todo::TodoCommands;
 pub(crate) use vibe::ensure_repo_vibe_access;
 pub use vibe::{VibeCommands, is_vibe_enabled};
 pub use watch::WatchArgs;
@@ -165,6 +167,10 @@ pub enum AgentCommands {
     /// Record structured proposals for watch-web
     #[command(subcommand)]
     Proposal(ProposalCommands),
+
+    /// Record user tasks for watch-web
+    #[command(subcommand)]
+    Todo(TodoCommands),
     /// Internal: infer a missing stop status from a forked session.
     #[command(name = "status-inference", hide = true)]
     StatusInference(StatusInferenceArgs),
@@ -249,6 +255,7 @@ impl AgentCommands {
             Self::Status(command) => status::run(command)?,
             Self::Decision(command) => decision::run(command)?,
             Self::Proposal(command) => proposal::run(command)?,
+            Self::Todo(command) => todo::run(command)?,
             Self::StatusInference(args) => status_inference::run(args)?,
             Self::Profile(command) => profile::run(command)?,
             Self::Vibe(command) => vibe::run(command)?,

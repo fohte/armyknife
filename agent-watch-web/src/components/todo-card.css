@@ -1,0 +1,74 @@
+.chat-todo-card {
+  width: min(100%, 880px);
+  padding: 14px;
+  border: 1px solid var(--aw-border);
+  border-radius: var(--aw-radius);
+}
+
+.chat-todo-card[data-completed='true'] {
+  border-color: var(--aw-border-emphasis);
+}
+
+.chat-todo-card h2 {
+  margin: 0 0 7px;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.chat-todo-card h3 {
+  margin: 0 0 6px;
+  color: var(--aw-text-primary);
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.chat-todo-detail {
+  margin: 0 0 12px;
+  color: var(--aw-text-body);
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+.chat-todo-comment-label {
+  display: block;
+  margin: 12px 0 5px;
+  color: var(--aw-text-body);
+  font-size: 12px;
+}
+
+.chat-todo-comment {
+  display: block;
+  width: 100%;
+  min-height: 46px;
+  padding: 8px 10px;
+  border: 1px solid var(--aw-border-control);
+  border-radius: var(--aw-radius);
+  background: var(--aw-bg-surface);
+  color: var(--aw-text-primary);
+  font: inherit;
+  resize: vertical;
+}
+
+.chat-todo-comment:focus-visible {
+  outline: 2px solid var(--aw-text-primary);
+  outline-offset: 1px;
+}
+
+.chat-todo-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.chat-todo-footer .aw-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.chat-todo-completed-label {
+  color: var(--aw-text-muted);
+  font-size: 13px;
+  font-weight: 700;
+}

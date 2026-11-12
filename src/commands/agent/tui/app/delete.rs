@@ -49,7 +49,7 @@ impl App {
 
     pub(crate) fn confirm_delete_with(
         &mut self,
-        delete_session: impl FnOnce(&str) -> anyhow::Result<()>,
+        delete_session: impl FnOnce(&str) -> anyhow::Result<bool>,
     ) -> anyhow::Result<()> {
         let current_selection = self.selection_anchor();
         let (session_id, is_alive, worktree_cleanup) = match &self.mode {
@@ -71,9 +71,14 @@ impl App {
             );
         }
 
-        delete_session(&session_id)?;
-        self.remove_session(&session_id);
+        let removed = delete_session(&session_id)?;
         self.mode = AppMode::Normal;
+        if !removed {
+            self.refresh_after_mutation(current_selection);
+            return Ok(());
+        }
+
+        self.remove_session(&session_id);
 
         // Re-verify siblings at delete time: between request_delete and here
         // the user may have sat on the confirm prompt while a new session was

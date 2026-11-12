@@ -17,6 +17,7 @@ mod peer_out_messages;
 mod permission_requests;
 mod proposals;
 mod queued_prompts;
+mod todos;
 mod wake;
 mod web_state;
 
@@ -41,6 +42,10 @@ pub(crate) use proposals::{
 pub(crate) use queued_prompts::WatchWebQueuedPrompt;
 pub(crate) use queued_prompts::{
     delete_watch_web_queued_prompts, insert_watch_web_queued_prompt, watch_web_queued_prompts,
+};
+pub(crate) use todos::AgentTodo;
+pub(crate) use todos::{
+    add_agent_todo, agent_todos, complete_agent_todo, incomplete_agent_todo_titles,
 };
 pub(crate) use web_state::WatchWebSessionState;
 pub(crate) use web_state::set_watch_web_compacting;
@@ -269,6 +274,8 @@ pub(crate) fn touch_session(sessions_dir: &Path, session_id: &str) -> Result<()>
     Ok(())
 }
 
+/// Deletes a session unless an incomplete todo still needs the user's attention.
+/// Returns false when a todo keeps the row available or the row was already absent.
 pub(crate) fn delete_session(sessions_dir: &Path, session_id: &str) -> Result<bool> {
     validate_session_id(session_id)?;
     if !sessions_dir.exists() {
@@ -439,7 +446,21 @@ fn read_revision(connection: &Connection) -> Result<i64> {
     )?)
 }
 
+/// Keeps sessions with incomplete todos available to watch-web.
+/// Returns false when a todo keeps the row available or the row was already absent.
 fn delete_session_row(connection: &Connection, session_id: &str) -> Result<bool> {
+    let has_incomplete_todos: bool = connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM agent_todo
+            WHERE session_id = ?1 AND completed_at IS NULL
+        )",
+        [session_id],
+        |row| row.get(0),
+    )?;
+    if has_incomplete_todos {
+        return Ok(false);
+    }
+
     let changed = connection.execute("DELETE FROM sessions WHERE session_id = ?1", [session_id])?;
     if changed > 0 {
         connection.execute(

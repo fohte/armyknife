@@ -180,7 +180,7 @@ fn should_sigterm_session(status: SessionStatus) -> bool {
 ///    after this cleanup process exits.
 /// 2. If the session's Claude process is still expected to be alive and the
 ///    tmux pane is alive, sends SIGTERM to it
-/// 3. Deletes the session record unless the session has already ended
+/// 3. Retains the session record while an incomplete todo needs the user to finish it in watch-web
 /// 4. Removes the notification group on a best-effort basis
 ///
 /// Returns the number of sessions cleaned up.
@@ -265,7 +265,7 @@ fn cleanup_sessions_with_deferred_archive<
 ) -> usize
 where
     SendSigterm: FnMut(Option<&str>, &str),
-    DeleteSession: FnMut(&str) -> anyhow::Result<()>,
+    DeleteSession: FnMut(&str) -> anyhow::Result<bool>,
     RemoveNotification: FnMut(&str) -> anyhow::Result<()>,
     Archive: FnMut(&str) -> anyhow::Result<()>,
     DeferArchive: FnMut(&str) -> anyhow::Result<()>,
@@ -325,7 +325,7 @@ fn cleanup_sessions(
     sessions: &[Session],
     context: SessionCleanupContext<'_>,
     mut send_sigterm: impl FnMut(Option<&str>, &str),
-    mut delete_session: impl FnMut(&str) -> anyhow::Result<()>,
+    mut delete_session: impl FnMut(&str) -> anyhow::Result<bool>,
     mut remove_notification_group: impl FnMut(&str) -> anyhow::Result<()>,
     mut archive_codex_thread: impl FnMut(&str) -> anyhow::Result<()>,
 ) -> usize {
@@ -356,13 +356,15 @@ fn cleanup_sessions(
             }
 
             if session.status != SessionStatus::Ended {
-                if let Err(e) = delete_session(&session.session_id) {
-                    eprintln!(
-                        "Warning: Failed to delete session {}: {e}",
-                        session.session_id
-                    );
-                } else {
-                    cleaned += 1;
+                match delete_session(&session.session_id) {
+                    Ok(true) => cleaned += 1,
+                    Ok(false) => {}
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: Failed to delete session {}: {e}",
+                            session.session_id
+                        );
+                    }
                 }
             }
 
@@ -444,6 +446,27 @@ mod tests {
     }
 
     #[test]
+    fn a_preserved_session_is_not_counted_as_cleaned_up() {
+        let worktree_path = PathBuf::from("/tmp/example-worktree");
+        let sessions = vec![make_session("session-a", &worktree_path, Engine::Claude)];
+
+        let cleaned = cleanup_sessions(
+            &sessions,
+            SessionCleanupContext {
+                worktree_path: &worktree_path,
+                alive_panes_by_socket: &tmux::PaneLiveness::default(),
+                own_codex_session_id: None,
+            },
+            |_, _| {},
+            |_| Ok(false),
+            |_| Ok(()),
+            |_| Ok(()),
+        );
+
+        assert_eq!(cleaned, 0);
+    }
+
+    #[test]
     fn cleanup_uses_each_recorded_socket_and_does_not_signal_when_listing_fails() {
         let worktree_path = PathBuf::from("/tmp/armyknife-test-worktree");
         let private_socket = "/tmp/armyknife-test-tmux-private";
@@ -510,7 +533,7 @@ mod tests {
                     .borrow_mut()
                     .push((socket_path.map(str::to_string), pane_id.to_string()));
             },
-            |_| Ok(()),
+            |_| Ok(true),
             |_| Ok(()),
             |_| Ok(()),
         );
@@ -554,7 +577,7 @@ mod tests {
                 send_sigterm: |_socket_path: Option<&str>, _pane_id: &str| {},
                 delete_session: |session_id: &str| {
                     events.borrow_mut().push(format!("delete:{session_id}"));
-                    Ok(())
+                    Ok(true)
                 },
                 remove_notification_group: |session_id: &str| {
                     events

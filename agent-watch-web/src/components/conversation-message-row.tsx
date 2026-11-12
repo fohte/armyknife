@@ -46,6 +46,8 @@ function areConversationMessagePropsEqual(
       )
     case 'proposal':
       return previous.onAction === next.onAction
+    case 'todo':
+      return previous.onAction === next.onAction
     case 'permission':
       return (
         previous.actions === next.actions &&

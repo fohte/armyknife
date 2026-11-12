@@ -26,7 +26,8 @@ use crate::shared::config::{self, AgentConfig};
 
 mod category;
 use self::category::{
-    SessionCategory, SessionKind, category_for_with_interruption, category_for_with_later, kind_for,
+    SessionCategory, SessionKind, category_for_with_interruption, category_for_with_later,
+    kind_for_with_todo,
 };
 mod sorting;
 use self::sorting::sort_session_views;
@@ -127,6 +128,7 @@ struct SessionSnapshot {
     repo_by_id: HashMap<String, String>,
     decision_counts: HashMap<String, store::AgentDecisionCounts>,
     unanswered_proposal_titles: HashMap<String, String>,
+    unanswered_todo_titles: HashMap<String, String>,
     agent_config: AgentConfig,
 }
 
@@ -245,8 +247,26 @@ async fn list_sessions<S: SessionSource>(
         }
     };
 
-    let sessions_to_check = snapshot
-        .sessions
+    let mut response_sessions = snapshot.sessions.clone();
+    let mut response_session_ids = response_sessions
+        .iter()
+        .map(|session| session.session_id.clone())
+        .collect::<HashSet<_>>();
+    response_sessions.extend(
+        snapshot
+            .all_sessions
+            .iter()
+            .filter(|session| {
+                session.status == SessionStatus::Ended
+                    && snapshot
+                        .unanswered_todo_titles
+                        .contains_key(&session.session_id)
+            })
+            .filter(|session| response_session_ids.insert(session.session_id.clone()))
+            .cloned(),
+    );
+
+    let sessions_to_check = response_sessions
         .iter()
         .filter(|session| {
             session.engine == Engine::Claude && session.status == SessionStatus::Running
@@ -255,8 +275,7 @@ async fn list_sessions<S: SessionSource>(
         .collect::<Vec<_>>();
     let interrupted_sessions =
         tokio::task::spawn_blocking(move || interrupted_session_ids(sessions_to_check));
-    let stopped_claude_sessions = snapshot
-        .sessions
+    let stopped_claude_sessions = response_sessions
         .iter()
         .filter(|session| {
             session.engine == Engine::Claude && session.status == SessionStatus::Stopped
@@ -265,8 +284,8 @@ async fn list_sessions<S: SessionSource>(
         .collect::<Vec<_>>();
 
     let (task_metadata, pull_requests, running_background_task_sessions) = tokio::join!(
-        source.fetch_task_metadata(&snapshot.sessions),
-        source.fetch_pull_requests(&snapshot.sessions),
+        source.fetch_task_metadata(&response_sessions),
+        source.fetch_pull_requests(&response_sessions),
         source.running_background_task_session_ids(stopped_claude_sessions),
     );
     let running_background_task_sessions = running_background_task_sessions.map_err(|error| {
@@ -279,7 +298,7 @@ async fn list_sessions<S: SessionSource>(
     let interrupted_session_ids = interrupted_sessions
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let turn_kinds = user_turns(snapshot.sessions.iter(), &snapshot.agent_config)
+    let turn_kinds = user_turns(response_sessions.iter(), &snapshot.agent_config)
         .into_iter()
         .map(|turn| (turn.session.session_id.as_str(), turn.kind))
         .collect::<HashMap<_, _>>();
@@ -290,10 +309,10 @@ async fn list_sessions<S: SessionSource>(
         .map(|state| (state.session_id.clone(), state))
         .collect::<HashMap<_, _>>();
     let unanswered_proposal_titles = snapshot.unanswered_proposal_titles;
+    let unanswered_todo_titles = snapshot.unanswered_todo_titles;
     let tree_related_session_ids = session_tree_related_ids(&snapshot.all_sessions);
 
-    let mut sessions = snapshot
-        .sessions
+    let mut sessions = response_sessions
         .iter()
         .map(|session| {
             let tasks = task_metadata
@@ -359,7 +378,8 @@ async fn list_sessions<S: SessionSource>(
             let agent_is_waiting = session.status == SessionStatus::Stopped
                 && agent_status_state == Some(config::AgentStatusState::Waiting);
             let proposal_title = unanswered_proposal_titles.get(&session.session_id);
-            let needs_action = interrupted || proposal_title.is_some();
+            let todo_title = unanswered_todo_titles.get(&session.session_id);
+            let needs_action = interrupted || proposal_title.is_some() || todo_title.is_some();
             let category_when_not_later = category_for_with_interruption(
                 session,
                 turn,
@@ -369,15 +389,19 @@ async fn list_sessions<S: SessionSource>(
             );
             let waiting =
                 agent_is_waiting && category_when_not_later == SessionCategory::InProgress;
-            let category = category_for_with_later(
-                session,
-                turn,
-                needs_action,
-                has_running_background_task,
-                agent_status_state,
-                state,
-                now,
-            );
+            let category = if todo_title.is_some() {
+                SessionCategory::NeedsAction
+            } else {
+                category_for_with_later(
+                    session,
+                    turn,
+                    needs_action,
+                    has_running_background_task,
+                    agent_status_state,
+                    state,
+                    now,
+                )
+            };
             SessionView {
                 id: session.session_id.clone(),
                 engine: session.engine,
@@ -405,10 +429,11 @@ async fn list_sessions<S: SessionSource>(
                     && has_running_background_task
                     && category_when_not_later == SessionCategory::InProgress,
                 category_when_not_later,
-                kind: kind_for(
+                kind: kind_for_with_todo(
                     session,
                     turn,
                     proposal_title.is_some(),
+                    todo_title.is_some(),
                     has_running_background_task,
                 ),
                 title: snapshot
@@ -418,6 +443,7 @@ async fn list_sessions<S: SessionSource>(
                     .unwrap_or_default(),
                 preview: proposal_title
                     .cloned()
+                    .or_else(|| todo_title.cloned())
                     .or_else(|| session.last_message.clone()),
                 updated_at: session.updated_at,
                 elapsed_seconds: now
@@ -499,6 +525,7 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
     let sessions_dir = store::sessions_dir()?;
     let decision_counts = store::agent_decision_counts_by_session_from(&sessions_dir)?;
     let mut unanswered_proposal_titles = HashMap::new();
+    let mut unanswered_todo_titles = HashMap::new();
     let visible_session_ids = all_sessions
         .iter()
         .map(|session| session.session_id.clone())
@@ -508,6 +535,11 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         unanswered_proposal_titles
             .entry(session_id)
             .or_insert(proposal.title);
+    }
+    for (session_id, title) in
+        store::incomplete_agent_todo_titles_from(&sessions_dir, &visible_session_ids)?
+    {
+        unanswered_todo_titles.entry(session_id).or_insert(title);
     }
 
     Ok(SessionSnapshot {
@@ -519,6 +551,7 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         repo_by_id,
         decision_counts,
         unanswered_proposal_titles,
+        unanswered_todo_titles,
         agent_config: config::load_config_or_default().agent,
     })
 }
@@ -607,6 +640,7 @@ mod tests {
         title_by_id: HashMap<String, String>,
         repo_by_id: HashMap<String, String>,
         unanswered_proposal_titles: HashMap<String, String>,
+        unanswered_todo_titles: HashMap<String, String>,
         task_links: HashMap<String, Vec<LinkedSessionTask>>,
         task_priorities: HashMap<String, Option<i32>>,
         task_priority_order: HashMap<String, usize>,
@@ -630,6 +664,7 @@ mod tests {
                 repo_by_id: self.repo_by_id.clone(),
                 decision_counts: self.decision_counts.clone(),
                 unanswered_proposal_titles: self.unanswered_proposal_titles.clone(),
+                unanswered_todo_titles: self.unanswered_todo_titles.clone(),
                 agent_config: AgentConfig {
                     work_types: self
                         .work_type_nav_labels
@@ -800,6 +835,7 @@ mod tests {
                 ),
             ]),
             unanswered_proposal_titles: HashMap::new(),
+            unanswered_todo_titles: HashMap::new(),
             task_links: HashMap::from([
                 (
                     "child-session".to_string(),
@@ -1435,6 +1471,79 @@ mod tests {
         );
         expected["sessions"][0]["activityStatus"] = serde_json::json!("working");
         expected["sessions"][0]["preview"] = serde_json::json!("Sample proposal");
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn incomplete_todo_moves_a_running_session_to_needs_action(
+        mut source: TestSessionSource,
+    ) {
+        source.sessions[0].status = SessionStatus::Running;
+        source
+            .unanswered_todo_titles
+            .insert("child-session".to_string(), "Check the page".to_string());
+
+        let mut expected = expected_response(
+            "needs_action",
+            Some("1970-01-01T01:18:20Z"),
+            true,
+            ExpectedSessionDetails {
+                kind: Some("Todo"),
+                category_when_not_later: "needs_action",
+                is_paused: false,
+                unread: false,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["activityStatus"] = serde_json::json!("working");
+        expected["sessions"][0]["preview"] = serde_json::json!("Check the page");
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn incomplete_todo_keeps_ended_session_available_for_conversation(
+        mut source: TestSessionSource,
+    ) {
+        source.sessions.clear();
+        source.all_sessions.truncate(1);
+        source.all_sessions[0].status = SessionStatus::Ended;
+        source
+            .unanswered_todo_titles
+            .insert("child-session".to_string(), "Check the page".to_string());
+
+        let mut expected = expected_response(
+            "needs_action",
+            Some("1970-01-01T01:18:20Z"),
+            true,
+            ExpectedSessionDetails {
+                kind: Some("Todo"),
+                category_when_not_later: "needs_action",
+                is_paused: false,
+                unread: false,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["preview"] = serde_json::json!("Check the page");
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
