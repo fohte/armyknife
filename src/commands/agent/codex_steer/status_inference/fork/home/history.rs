@@ -23,7 +23,7 @@ pub(super) fn copy_lineage_and_rewrite(
     state_database_path: &Path,
     thread: &CodexThreadMetadata,
     deadline: Instant,
-) -> Result<()> {
+) -> Result<Vec<String>> {
     let source_home = source_home
         .canonicalize()
         .context("resolve source Codex home for rollout history")?;
@@ -46,7 +46,8 @@ pub(super) fn copy_lineage_and_rewrite(
         &mut visiting,
         &mut complete,
         &mut budget,
-    )
+    )?;
+    Ok(complete.into_iter().collect())
 }
 
 #[expect(

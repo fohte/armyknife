@@ -9,11 +9,12 @@ use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use rusqlite::{
     Connection, OpenFlags, OptionalExtension,
     backup::{Backup, StepResult},
-    params,
+    params, params_from_iter,
 };
 use serde_json::Value;
 
 use super::super::super::super::history::CodexThreadMetadata;
+use super::ensure_snapshot_time;
 
 pub(super) const STATE_DB_FILENAME: &str = "state_5.sqlite";
 pub(super) const THREAD_HISTORY_DB_FILENAME: &str = "thread_history_1.sqlite";
@@ -31,61 +32,263 @@ pub(super) struct ThreadRecord {
     pub(super) history_mode: String,
 }
 
-pub(super) fn backup_databases(
-    source_home: &Path,
-    private_home: &Path,
+pub(super) fn backup_state_database(
+    source_path: &Path,
+    destination_path: &Path,
     deadline: Instant,
 ) -> Result<()> {
-    for filename in [STATE_DB_FILENAME, THREAD_HISTORY_DB_FILENAME] {
-        let source_path = source_home.join(filename);
-        let destination_path = private_home.join(filename);
-        let metadata = fs::symlink_metadata(&source_path)
-            .with_context(|| format!("inspect source Codex {filename}"))?;
-        ensure!(
-            metadata.file_type().is_file(),
-            "source Codex database is not a regular file"
-        );
-        ensure_wal_sidecars_are_readable(&source_path)?;
-        let source_uri = readonly_source_uri(&source_path)?;
-        let source = Connection::open_with_flags(
-            source_uri,
-            OpenFlags::SQLITE_OPEN_READ_ONLY
-                | OpenFlags::SQLITE_OPEN_NO_MUTEX
-                | OpenFlags::SQLITE_OPEN_NOFOLLOW
-                | OpenFlags::SQLITE_OPEN_URI,
-        )
-        .with_context(|| format!("open source Codex {filename} read-only"))?;
-        source
-            .busy_timeout(Duration::from_secs(10))
-            .with_context(|| format!("set source Codex {filename} backup timeout"))?;
-        let mut destination = Connection::open(&destination_path)
-            .with_context(|| format!("create private Codex {filename}"))?;
-        {
-            let backup = Backup::new(&source, &mut destination)
-                .with_context(|| format!("start online backup of Codex {filename}"))?;
-            loop {
-                ensure!(
-                    Instant::now() < deadline,
-                    "Codex private home snapshot exceeded its time limit"
-                );
-                match backup
-                    .step(128)
-                    .with_context(|| format!("complete online backup of Codex {filename}"))?
-                {
-                    StepResult::Done => break,
-                    StepResult::More | StepResult::Busy | StepResult::Locked => {
-                        thread::sleep(Duration::from_millis(25));
-                    }
-                    _ => bail!("Codex SQLite online backup returned an unsupported state"),
+    validate_database_file(source_path)?;
+    ensure_wal_sidecars_are_readable(source_path)?;
+    let source_uri = readonly_source_uri(source_path)?;
+    let source = Connection::open_with_flags(
+        source_uri,
+        OpenFlags::SQLITE_OPEN_READ_ONLY
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW
+            | OpenFlags::SQLITE_OPEN_URI,
+    )
+    .context("open source Codex state database read-only")?;
+    source
+        .busy_timeout(Duration::from_secs(10))
+        .context("set source Codex state backup timeout")?;
+    let mut destination =
+        Connection::open(destination_path).context("create private Codex state database")?;
+    backup_in_one_step(&source, &mut destination, deadline)?;
+    ensure_snapshot_time(deadline)?;
+    destination
+        .close()
+        .map_err(|(_, error)| error)
+        .context("close private Codex state database backup")?;
+    Ok(())
+}
+
+fn backup_in_one_step(
+    source: &Connection,
+    destination: &mut Connection,
+    deadline: Instant,
+) -> Result<()> {
+    {
+        // SQLite restarts a backup between steps when another connection writes to the source.
+        let backup = Backup::new(source, destination)
+            .context("start online backup of Codex state database")?;
+        loop {
+            ensure!(
+                Instant::now() < deadline,
+                "Codex private home snapshot exceeded its time limit"
+            );
+            match backup
+                .step(-1)
+                .context("complete online backup of Codex state database")?
+            {
+                StepResult::Done => break,
+                StepResult::Busy | StepResult::Locked => {
+                    thread::sleep(Duration::from_millis(25));
                 }
+                StepResult::More => {
+                    bail!("Codex SQLite full backup did not complete in one step")
+                }
+                _ => bail!("Codex SQLite online backup returned an unsupported state"),
             }
         }
-        destination
-            .close()
-            .map_err(|(_, error)| error)
-            .with_context(|| format!("close private Codex {filename} backup"))?;
     }
+    ensure_snapshot_time(deadline)
+}
+
+pub(super) fn copy_thread_history_database(
+    source_path: &Path,
+    destination_path: &Path,
+    lineage_thread_ids: &[String],
+    deadline: Instant,
+) -> Result<()> {
+    validate_database_file(source_path)?;
+    ensure_wal_sidecars_are_readable(source_path)?;
+    ensure!(
+        !lineage_thread_ids.is_empty(),
+        "Codex thread history lineage is empty"
+    );
+    let source_uri = readonly_source_uri(source_path)?;
+    let destination = Connection::open(destination_path)
+        .context("create private Codex thread-history database")?;
+    destination
+        .busy_timeout(Duration::from_secs(10))
+        .context("set private Codex thread-history timeout")?;
+    destination
+        .execute("ATTACH DATABASE ?1 AS source", [&source_uri])
+        .context("attach source Codex thread history read-only")?;
+    destination
+        .progress_handler(1_000, Some(move || Instant::now() >= deadline))
+        .context("set private Codex history time limit")?;
+    destination
+        .execute_batch("BEGIN IMMEDIATE")
+        .context("begin private Codex thread-history copy")?;
+
+    let result = (|| {
+        let schema = read_schema(&destination, deadline)?;
+        let table_names = schema
+            .iter()
+            .filter(|object| object.kind == "table")
+            .map(|object| object.name.clone())
+            .collect::<Vec<_>>();
+        for object in schema.iter().filter(|object| object.kind == "table") {
+            ensure_snapshot_time(deadline)?;
+            destination
+                .execute_batch(
+                    object
+                        .sql
+                        .as_deref()
+                        .context("Codex history table has no schema")?,
+                )
+                .with_context(|| format!("create private Codex history table {}", object.name))?;
+        }
+
+        for table_name in &table_names {
+            ensure_snapshot_time(deadline)?;
+            if table_name == "sqlite_sequence" {
+                continue;
+            }
+            let has_thread_id = table_has_column(&destination, table_name, "thread_id")?;
+            ensure!(
+                has_thread_id || table_name == "_sqlx_migrations",
+                "Codex thread-history table has no thread_id column"
+            );
+            let table = quote_identifier(table_name);
+            let copy_result = if has_thread_id {
+                let placeholders = (1..=lineage_thread_ids.len())
+                    .map(|index| format!("?{index}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let sql = format!(
+                    "INSERT INTO main.{table} SELECT * FROM source.{table} WHERE thread_id IN ({placeholders})"
+                );
+                let ids = lineage_thread_ids
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>();
+                destination.execute(&sql, params_from_iter(ids))
+            } else {
+                let sql = format!("INSERT INTO main.{table} SELECT * FROM source.{table}");
+                destination.execute(&sql, [])
+            };
+            if let Err(error) = copy_result {
+                return Err(error)
+                    .with_context(|| format!("copy private Codex history table {table_name}"));
+            }
+        }
+
+        let has_sequence_table: bool = destination.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM source.sqlite_master WHERE name = 'sqlite_sequence'
+             )",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_sequence_table {
+            destination
+                .execute(
+                    "INSERT INTO main.sqlite_sequence SELECT * FROM source.sqlite_sequence",
+                    [],
+                )
+                .context("copy Codex thread-history sequence values")?;
+        }
+
+        for object in schema.iter().filter(|object| object.kind != "table") {
+            ensure_snapshot_time(deadline)?;
+            destination
+                .execute_batch(
+                    object
+                        .sql
+                        .as_deref()
+                        .context("Codex history object has no schema")?,
+                )
+                .with_context(|| {
+                    format!(
+                        "create private Codex history {} {}",
+                        object.kind, object.name
+                    )
+                })?;
+        }
+
+        let application_id: i64 =
+            destination.pragma_query_value(Some("source"), "application_id", |row| row.get(0))?;
+        let user_version: i64 =
+            destination.pragma_query_value(Some("source"), "user_version", |row| row.get(0))?;
+        destination.pragma_update(None, "application_id", application_id)?;
+        destination.pragma_update(None, "user_version", user_version)?;
+        ensure_snapshot_time(deadline)?;
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => destination
+            .execute_batch("COMMIT")
+            .context("commit private Codex thread-history copy")?,
+        Err(error) => {
+            if Instant::now() >= deadline {
+                return Err(error).context("Codex private home snapshot exceeded its time limit");
+            }
+            let _ = destination.execute_batch("ROLLBACK");
+            return Err(error);
+        }
+    }
+    destination
+        .execute_batch("DETACH DATABASE source")
+        .context("detach source Codex thread history")?;
+    destination
+        .close()
+        .map_err(|(_, error)| error)
+        .context("close private Codex thread-history database")?;
     Ok(())
+}
+
+fn validate_database_file(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path).context("inspect source Codex database")?;
+    ensure!(
+        metadata.file_type().is_file(),
+        "source Codex database is not a regular file"
+    );
+    Ok(())
+}
+
+struct SchemaObject {
+    kind: String,
+    name: String,
+    sql: Option<String>,
+}
+
+fn read_schema(connection: &Connection, deadline: Instant) -> Result<Vec<SchemaObject>> {
+    ensure_snapshot_time(deadline)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT type, name, sql FROM source.sqlite_master
+             WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+             ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END, name",
+        )
+        .context("read source Codex thread-history schema")?;
+    statement
+        .query_map([], |row| {
+            Ok(SchemaObject {
+                kind: row.get(0)?,
+                name: row.get(1)?,
+                sql: row.get(2)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .context("collect source Codex thread-history schema")
+}
+
+fn table_has_column(connection: &Connection, table_name: &str, column_name: &str) -> Result<bool> {
+    let sql = format!("PRAGMA source.table_info({})", quote_identifier(table_name));
+    let mut statement = connection
+        .prepare(&sql)
+        .context("inspect Codex thread-history table columns")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(columns.iter().any(|column| column == column_name))
+}
+
+fn quote_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
 }
 
 fn readonly_source_uri(path: &Path) -> Result<String> {
@@ -230,13 +433,19 @@ pub(super) fn validate_target_history(path: &Path, thread: &CodexThreadMetadata)
 mod tests {
     use std::collections::BTreeMap;
     use std::ffi::OsString;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::sync_channel;
+    use std::thread;
     use std::time::Duration;
     use std::time::SystemTime;
 
     use rusqlite::{Connection, OpenFlags};
     use tempfile::TempDir;
 
-    use super::{STATE_DB_FILENAME, THREAD_HISTORY_DB_FILENAME, backup_databases};
+    use super::{
+        STATE_DB_FILENAME, THREAD_HISTORY_DB_FILENAME, backup_in_one_step, backup_state_database,
+    };
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct FileObservation {
@@ -282,24 +491,18 @@ mod tests {
              INSERT INTO threads VALUES ('fixture-thread', '/source/sessions/fixture.jsonl', 'paginated');",
         )?;
         writer.busy_timeout(Duration::from_secs(1))?;
-        Connection::open(writer_home.join(THREAD_HISTORY_DB_FILENAME))?
-            .execute_batch("CREATE TABLE fixture_history (id TEXT)")?;
         for suffix in ["", "-wal", "-shm"] {
             std::fs::copy(
                 writer_path.with_file_name(format!("{STATE_DB_FILENAME}{suffix}")),
                 source_home.join(format!("{STATE_DB_FILENAME}{suffix}")),
             )?;
         }
-        std::fs::copy(
-            writer_home.join(THREAD_HISTORY_DB_FILENAME),
-            source_home.join(THREAD_HISTORY_DB_FILENAME),
-        )?;
         drop(writer);
         let source_before = snapshot_directory(&source_home)?;
 
-        backup_databases(
-            &source_home,
-            &private_home,
+        backup_state_database(
+            &source_path,
+            &private_home.join(STATE_DB_FILENAME),
             std::time::Instant::now() + Duration::from_secs(10),
         )?;
         let source_after = snapshot_directory(&source_home)?;
@@ -330,6 +533,125 @@ mod tests {
                 true,
                 true,
             ),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn full_state_backup_completes_while_the_source_is_being_written() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let source_home = root.path().join("source");
+        let private_home = root.path().join("private");
+        std::fs::create_dir_all(&source_home)?;
+        std::fs::create_dir_all(&private_home)?;
+        let source_path = source_home.join(STATE_DB_FILENAME);
+        let source = Connection::open(&source_path)?;
+        source.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA wal_autocheckpoint=0;
+             CREATE TABLE state_rows (id INTEGER PRIMARY KEY, payload BLOB NOT NULL);
+             CREATE TABLE writer_heartbeat (value INTEGER NOT NULL);
+             INSERT INTO writer_heartbeat VALUES (0);",
+        )?;
+        let transaction = source.unchecked_transaction()?;
+        for id in 0..8_192 {
+            transaction.execute(
+                "INSERT INTO state_rows (id, payload) VALUES (?1, zeroblob(4096))",
+                [id],
+            )?;
+        }
+        transaction.commit()?;
+
+        let snapshot_source = Connection::open(&source_path)?;
+
+        let is_writing = Arc::new(AtomicBool::new(true));
+        let writer_is_writing = Arc::clone(&is_writing);
+        let (writer_started_sender, writer_started_receiver) = sync_channel(1);
+        let writer = thread::spawn(move || -> anyhow::Result<Connection> {
+            if let Err(error) = source.execute("UPDATE writer_heartbeat SET value = value + 1", [])
+            {
+                let _ = writer_started_sender.send(Err(error.to_string()));
+                return Err(error.into());
+            }
+            let _ = writer_started_sender.send(Ok(()));
+            while writer_is_writing.load(Ordering::Relaxed) {
+                source.execute("UPDATE writer_heartbeat SET value = value + 1", [])?;
+                thread::sleep(Duration::from_millis(1));
+            }
+            Ok(source)
+        });
+        match writer_started_receiver.recv_timeout(Duration::from_secs(1)) {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                is_writing.store(false, Ordering::Relaxed);
+                let _ = writer.join();
+                anyhow::bail!("state writer failed before the backup started: {error}");
+            }
+            Err(error) => {
+                is_writing.store(false, Ordering::Relaxed);
+                writer.join().expect("state writer thread should finish")?;
+                anyhow::bail!("state writer did not start before the timeout: {error}");
+            }
+        }
+
+        let mut destination = Connection::open(private_home.join(STATE_DB_FILENAME))?;
+        let snapshot = backup_in_one_step(
+            &snapshot_source,
+            &mut destination,
+            std::time::Instant::now() + Duration::from_secs(5),
+        );
+        is_writing.store(false, Ordering::Relaxed);
+        drop(writer.join().expect("state writer thread should finish")?);
+        snapshot?;
+        destination.close().map_err(|(_, error)| error)?;
+
+        let copied = Connection::open_with_flags(
+            private_home.join(STATE_DB_FILENAME),
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        let row_count: i64 =
+            copied.query_row("SELECT count(*) FROM state_rows", [], |row| row.get(0))?;
+        assert_eq!(row_count, 8_192);
+        Ok(())
+    }
+
+    #[test]
+    fn thread_history_copy_stops_when_the_snapshot_deadline_expires() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let source_path = root.path().join(THREAD_HISTORY_DB_FILENAME);
+        let private_home = root.path().join("private");
+        std::fs::create_dir_all(&private_home)?;
+        let destination_path = private_home.join(THREAD_HISTORY_DB_FILENAME);
+        let source = Connection::open(&source_path)?;
+        source.execute_batch(
+            "CREATE TABLE thread_items (
+                 thread_id TEXT NOT NULL,
+                 item_id INTEGER NOT NULL,
+                 item_json TEXT NOT NULL,
+                 PRIMARY KEY (thread_id, item_id)
+             );
+             WITH RECURSIVE item_ids(id) AS (
+                 SELECT 1
+                 UNION ALL
+                 SELECT id + 1 FROM item_ids WHERE id < 500000
+             )
+             INSERT INTO thread_items
+             SELECT 'fixture-thread', id, 'fixture payload' FROM item_ids;",
+        )?;
+        drop(source);
+
+        let result = super::copy_thread_history_database(
+            &source_path,
+            &destination_path,
+            &["fixture-thread".to_string()],
+            std::time::Instant::now() + Duration::from_millis(25),
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            result,
+            Err("Codex private home snapshot exceeded its time limit".to_string()),
         );
         Ok(())
     }
@@ -367,9 +689,9 @@ mod tests {
         drop(writer);
         let before = snapshot_directory(&source_home)?;
 
-        let result = backup_databases(
-            &source_home,
-            &private_home,
+        let result = backup_state_database(
+            &source_home.join(STATE_DB_FILENAME),
+            &private_home.join(STATE_DB_FILENAME),
             std::time::Instant::now() + Duration::from_secs(10),
         )
         .map_err(|_| ());

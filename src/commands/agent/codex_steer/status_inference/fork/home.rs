@@ -47,13 +47,26 @@ fn prepare_from_source(
     ensure_snapshot_time(deadline)?;
     config::copy_startup_files(&source.codex_home, &codex_home)?;
     ensure_snapshot_time(deadline)?;
-    database::backup_databases(&source.sqlite_home, &sqlite_home, deadline)?;
+    database::backup_state_database(
+        &source.sqlite_home.join(database::STATE_DB_FILENAME),
+        &sqlite_home.join(database::STATE_DB_FILENAME),
+        deadline,
+    )?;
     ensure_snapshot_time(deadline)?;
-    history::copy_lineage_and_rewrite(
+    let lineage_thread_ids = history::copy_lineage_and_rewrite(
         &source.codex_home,
         &codex_home,
         &sqlite_home.join(database::STATE_DB_FILENAME),
         thread,
+        deadline,
+    )?;
+    ensure_snapshot_time(deadline)?;
+    database::copy_thread_history_database(
+        &source
+            .sqlite_home
+            .join(database::THREAD_HISTORY_DB_FILENAME),
+        &sqlite_home.join(database::THREAD_HISTORY_DB_FILENAME),
+        &lineage_thread_ids,
         deadline,
     )?;
     ensure_snapshot_time(deadline)?;
@@ -182,6 +195,11 @@ mod tests {
         let thread_history = Connection::open(thread_history_path)?;
         thread_history.execute_batch(
             "PRAGMA journal_mode=WAL;
+             CREATE TABLE _sqlx_migrations (
+                 version BIGINT PRIMARY KEY,
+                 description TEXT NOT NULL,
+                 installed_on TEXT NOT NULL
+             );
              CREATE TABLE thread_turns (
                  thread_id TEXT NOT NULL,
                  turn_id TEXT NOT NULL,
@@ -195,11 +213,88 @@ mod tests {
                  rollout_ordinal INTEGER NOT NULL,
                  item_json TEXT NOT NULL,
                  PRIMARY KEY (thread_id, turn_id, item_id)
-             );",
+             );
+             CREATE TABLE thread_history_projection_state (
+                 thread_id TEXT PRIMARY KEY,
+                 last_processed_turn_id TEXT NOT NULL
+             );
+             CREATE TABLE thread_realtime_items (
+                 thread_id TEXT NOT NULL,
+                 item_id TEXT NOT NULL,
+                 payload TEXT NOT NULL,
+                 PRIMARY KEY (thread_id, item_id)
+             );
+             CREATE INDEX thread_items_thread_turn_idx ON thread_items(thread_id, turn_id);
+             CREATE TRIGGER thread_turns_cleanup AFTER DELETE ON thread_turns
+             BEGIN
+                 DELETE FROM thread_items WHERE thread_id = OLD.thread_id;
+             END;
+             CREATE VIEW terminal_turns AS
+             SELECT thread_id, turn_id FROM thread_turns
+             WHERE status IN ('completed', 'interrupted', 'failed');
+             INSERT INTO _sqlx_migrations VALUES (1, 'fixture migration', 'fixture timestamp');",
         )?;
         thread_history.execute(
             "INSERT INTO thread_turns (thread_id, turn_id, status) VALUES (?1, ?2, ?3)",
             (THREAD_ID, TURN_ID, "completed"),
+        )?;
+        for lineage_thread in [THREAD_ID, PARENT_ID] {
+            thread_history.execute(
+                "INSERT INTO thread_turns (thread_id, turn_id, status) VALUES (?1, ?2, ?3)",
+                (lineage_thread, "fixture-parent-turn", "completed"),
+            )?;
+            thread_history.execute(
+                "INSERT INTO thread_items
+                    (thread_id, turn_id, item_id, rollout_ordinal, item_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                (
+                    lineage_thread,
+                    "fixture-parent-turn",
+                    "fixture-parent-item",
+                    1,
+                    "{}",
+                ),
+            )?;
+            thread_history.execute(
+                "INSERT INTO thread_history_projection_state VALUES (?1, ?2)",
+                (lineage_thread, "fixture-parent-turn"),
+            )?;
+            thread_history.execute(
+                "INSERT INTO thread_realtime_items VALUES (?1, ?2, ?3)",
+                (lineage_thread, "fixture-realtime-item", "fixture payload"),
+            )?;
+        }
+        thread_history.execute(
+            "INSERT INTO thread_turns (thread_id, turn_id, status) VALUES (?1, ?2, ?3)",
+            (
+                "fixture-unrelated-thread",
+                "fixture-unrelated-turn",
+                "completed",
+            ),
+        )?;
+        thread_history.execute(
+            "INSERT INTO thread_items
+                (thread_id, turn_id, item_id, rollout_ordinal, item_json)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            (
+                "fixture-unrelated-thread",
+                "fixture-unrelated-turn",
+                "fixture-unrelated-item",
+                1,
+                "fixture unrelated content",
+            ),
+        )?;
+        thread_history.execute(
+            "INSERT INTO thread_history_projection_state VALUES (?1, ?2)",
+            ("fixture-unrelated-thread", "fixture-unrelated-turn"),
+        )?;
+        thread_history.execute(
+            "INSERT INTO thread_realtime_items VALUES (?1, ?2, ?3)",
+            (
+                "fixture-unrelated-thread",
+                "fixture-unrelated-item",
+                "fixture unrelated payload",
+            ),
         )?;
         thread_history.execute(
             "INSERT INTO thread_items
@@ -255,6 +350,17 @@ mod tests {
         }
     }
 
+    fn schema_objects(connection: &Connection) -> Result<Vec<(String, String, String)>> {
+        Ok(connection
+            .prepare(
+                "SELECT type, name, sql FROM sqlite_master
+                 WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+                 ORDER BY type, name",
+            )?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     #[derive(Debug, PartialEq, Eq)]
     struct PrivateHomeObservation {
         target_rollout_path: String,
@@ -271,6 +377,9 @@ mod tests {
         source_plain_history_exists: bool,
         source_compressed_history_exists: bool,
         source_parent_history_exists: bool,
+        history_schema: Vec<(String, String, String)>,
+        lineage_and_unrelated_row_counts: Vec<(String, i64, i64)>,
+        migration_count: i64,
     }
 
     #[test]
@@ -326,6 +435,34 @@ mod tests {
             (THREAD_ID, TURN_ID),
             |row| row.get(0),
         )?;
+        let history_schema = schema_objects(&copied_history)?;
+        let source_history_schema = schema_objects(&fixture._thread_history)?;
+        let lineage_and_unrelated_row_counts = [
+            "thread_turns",
+            "thread_items",
+            "thread_history_projection_state",
+            "thread_realtime_items",
+        ]
+        .map(|table| {
+            let query = format!(
+                "SELECT
+                     (SELECT count(*) FROM {table} WHERE thread_id IN (?1, ?2)),
+                     (SELECT count(*) FROM {table} WHERE thread_id = ?3)"
+            );
+            copied_history
+                .query_row(
+                    &query,
+                    (THREAD_ID, PARENT_ID, "fixture-unrelated-thread"),
+                    |row| Ok((table.to_string(), row.get(0)?, row.get(1)?)),
+                )
+                .map_err(Into::into)
+        })
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
+        let migration_count: i64 =
+            copied_history.query_row("SELECT count(*) FROM _sqlx_migrations", [], |row| {
+                row.get(0)
+            })?;
 
         assert_eq!(
             PrivateHomeObservation {
@@ -349,6 +486,9 @@ mod tests {
                     .with_extension("jsonl.zst")
                     .exists(),
                 source_parent_history_exists: fixture.parent_rollout.exists(),
+                history_schema,
+                lineage_and_unrelated_row_counts,
+                migration_count,
             },
             PrivateHomeObservation {
                 target_rollout_path: private_target.to_string_lossy().into_owned(),
@@ -367,6 +507,14 @@ mod tests {
                 source_plain_history_exists: false,
                 source_compressed_history_exists: true,
                 source_parent_history_exists: true,
+                history_schema: source_history_schema,
+                lineage_and_unrelated_row_counts: vec![
+                    ("thread_turns".to_string(), 3, 0),
+                    ("thread_items".to_string(), 3, 0),
+                    ("thread_history_projection_state".to_string(), 2, 0),
+                    ("thread_realtime_items".to_string(), 2, 0),
+                ],
+                migration_count: 1,
             },
         );
         Ok(())
