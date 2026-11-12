@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.628](https://github.com/fohte/armyknife/compare/v0.1.627...v0.1.628) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** display pasted HEIC photos ([#1624](https://github.com/fohte/armyknife/issues/1624)) ([daaa605](https://github.com/fohte/armyknife/commit/daaa605ec11fc9d0d49f005a62ccf3b0d688f953))
+
 ## [0.1.627](https://github.com/fohte/armyknife/compare/v0.1.626...v0.1.627) (2026-11-12)
 
 
