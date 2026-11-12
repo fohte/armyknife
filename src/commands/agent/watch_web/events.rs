@@ -6,13 +6,13 @@ use axum::Router;
 use axum::extract::State;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::get;
-use futures_util::stream::{self, Stream};
+use futures_util::stream::{self, Stream, StreamExt};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tokio::sync::watch;
 use tokio::time::{self, Interval};
 
-use super::EnrichmentUpdates;
+use super::{EnrichmentUpdates, SERVER_INSTANCE_ID};
 use crate::commands::agent::session_store_event::is_session_store_change;
 use crate::commands::agent::store;
 
@@ -39,7 +39,8 @@ async fn events(
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let (signal_tx, signal_rx) = mpsc::unbounded_channel();
     let watcher = create_watcher(signal_tx).await;
-    let stream = revision_stream(
+    let stream = event_stream(
+        SERVER_INSTANCE_ID.clone(),
         signal_rx,
         updates.enrichment.subscribe(),
         watcher,
@@ -51,6 +52,29 @@ async fn events(
         KeepAlive::new()
             .interval(KEEP_ALIVE_INTERVAL)
             .text("keep-alive"),
+    )
+}
+
+fn event_stream<F, Fut>(
+    instance_id: String,
+    signals: UnboundedReceiver<()>,
+    enrichment_updates: watch::Receiver<()>,
+    watcher: Option<RecommendedWatcher>,
+    restart_signal: watch::Receiver<bool>,
+    read_revision: F,
+) -> impl Stream<Item = Result<Event, Infallible>>
+where
+    F: Fn() -> Fut + Send + 'static,
+    Fut: Future<Output = Option<i64>> + Send + 'static,
+{
+    stream::once(async move { Ok(Event::default().event("instance").data(instance_id)) }).chain(
+        revision_stream(
+            signals,
+            enrichment_updates,
+            watcher,
+            restart_signal,
+            read_revision,
+        ),
     )
 }
 
@@ -206,6 +230,44 @@ mod tests {
     use indoc::indoc;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicI64, Ordering};
+
+    #[tokio::test]
+    async fn sends_the_server_instance_before_session_revisions() {
+        let (_signal_tx, signal_rx) = mpsc::unbounded_channel();
+        let (_enrichment_tx, enrichment_rx) = watch::channel(());
+        let (_restart_tx, restart_rx) = watch::channel(false);
+        let body = Sse::new(event_stream(
+            "fixture-server-instance".to_string(),
+            signal_rx,
+            enrichment_rx,
+            None,
+            restart_rx,
+            || async { Some(12) },
+        ))
+        .into_response()
+        .into_body();
+        let mut chunks = body.into_data_stream();
+        let instance = next_chunk(&mut chunks).await;
+        let sessions = next_chunk(&mut chunks).await;
+
+        assert_eq!(
+            (instance, sessions),
+            (
+                indoc! {"
+                    event: instance
+                    data: fixture-server-instance
+
+                "}
+                .to_string(),
+                indoc! {"
+                    event: sessions
+                    data: 12
+
+                "}
+                .to_string(),
+            ),
+        );
+    }
 
     #[tokio::test]
     async fn sends_current_revision_on_connect_and_after_store_or_enrichment_changes() {

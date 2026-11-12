@@ -9,8 +9,13 @@ pub(super) static DIST: Dir<'static> = include_dir!("$AGENT_WATCH_WEB_ASSETS");
 const BUILD_INSTRUCTIONS: &str = "The Agent Watch Web UI has not been built. Run `cd agent-watch-web && pnpm install --frozen-lockfile && pnpm run build`, then rebuild armyknife.";
 const IMMUTABLE_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
 const NO_CACHE_CONTROL: &str = "no-cache";
+const SERVER_INSTANCE_ID_PLACEHOLDER: &str = "__AGENT_WATCH_SERVER_INSTANCE_ID__";
 
-pub(super) fn serve_from(uri: &Uri, dist: &'static Dir<'static>) -> Response<Body> {
+pub(super) fn serve_from(
+    uri: &Uri,
+    dist: &'static Dir<'static>,
+    server_instance_id: &str,
+) -> Response<Body> {
     if dist.get_file("index.html").is_none() {
         return (StatusCode::SERVICE_UNAVAILABLE, BUILD_INSTRUCTIONS).into_response();
     }
@@ -32,11 +37,19 @@ pub(super) fn serve_from(uri: &Uri, dist: &'static Dir<'static>) -> Response<Bod
     } else {
         NO_CACHE_CONTROL
     };
+    let body = if resolved_path == "index.html" {
+        Body::from(
+            String::from_utf8_lossy(file.contents())
+                .replace(SERVER_INSTANCE_ID_PLACEHOLDER, server_instance_id),
+        )
+    } else {
+        Body::from(file.contents())
+    };
     match Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, content_type)
         .header(CACHE_CONTROL, cache_control)
-        .body(Body::from(file.contents()))
+        .body(body)
     {
         Ok(response) => response,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
@@ -76,16 +89,23 @@ mod tests {
     use axum::http::{StatusCode, Uri};
     use include_dir::{Dir, include_dir};
 
-    use super::{BUILD_INSTRUCTIONS, serve_from};
+    use super::{BUILD_INSTRUCTIONS, SERVER_INSTANCE_ID_PLACEHOLDER, serve_from};
 
     static TEST_DIST: Dir<'_> =
         include_dir!("$CARGO_MANIFEST_DIR/src/commands/agent/watch_web/test_assets");
+    static TEST_DIST_WITH_INSTANCE_ID: Dir<'_> = include_dir!(
+        "$CARGO_MANIFEST_DIR/src/commands/agent/watch_web/test_assets_with_instance_id"
+    );
     static EMPTY_DIST: Dir<'_> =
         include_dir!("$CARGO_MANIFEST_DIR/src/commands/agent/watch_web/empty_test_assets");
 
     #[tokio::test]
     async fn unknown_client_routes_serve_the_index_file() {
-        let response = serve_from(&"/sessions/example".parse::<Uri>().unwrap(), &TEST_DIST);
+        let response = serve_from(
+            &"/sessions/example".parse::<Uri>().unwrap(),
+            &TEST_DIST,
+            "fixture-server-instance",
+        );
         let status = response.status();
         let content_type = response
             .headers()
@@ -105,7 +125,11 @@ mod tests {
 
     #[tokio::test]
     async fn direct_assets_use_their_mime_type() {
-        let response = serve_from(&"/assets/app.css".parse::<Uri>().unwrap(), &TEST_DIST);
+        let response = serve_from(
+            &"/assets/app.css".parse::<Uri>().unwrap(),
+            &TEST_DIST,
+            "fixture-server-instance",
+        );
         let status = response.status();
         let content_type = response
             .headers()
@@ -125,7 +149,11 @@ mod tests {
 
     #[tokio::test]
     async fn missing_assets_return_build_instructions() {
-        let response = serve_from(&"/".parse::<Uri>().unwrap(), &EMPTY_DIST);
+        let response = serve_from(
+            &"/".parse::<Uri>().unwrap(),
+            &EMPTY_DIST,
+            "fixture-server-instance",
+        );
         let status = response.status();
         let content_type = response
             .headers()
@@ -141,5 +169,20 @@ mod tests {
                 BUILD_INSTRUCTIONS.as_bytes().to_vec()
             )
         );
+    }
+
+    #[tokio::test]
+    async fn serves_the_server_instance_id_in_the_index() {
+        let response = serve_from(
+            &"/".parse::<Uri>().unwrap(),
+            &TEST_DIST_WITH_INSTANCE_ID,
+            "fixture-server-instance",
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let expected =
+            String::from_utf8_lossy(include_bytes!("test_assets_with_instance_id/index.html"))
+                .replace(SERVER_INSTANCE_ID_PLACEHOLDER, "fixture-server-instance");
+
+        assert_eq!(body.to_vec(), expected.into_bytes());
     }
 }
