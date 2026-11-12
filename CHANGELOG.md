@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.620](https://github.com/fohte/armyknife/compare/v0.1.619...v0.1.620) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent:** notify delegators of Codex failures ([#1607](https://github.com/fohte/armyknife/issues/1607)) ([bf7f0db](https://github.com/fohte/armyknife/commit/bf7f0db7606b95f3be2f2592df13d2c982fb051f))
+
 ## [0.1.619](https://github.com/fohte/armyknife/compare/v0.1.618...v0.1.619) (2026-11-12)
 
 
