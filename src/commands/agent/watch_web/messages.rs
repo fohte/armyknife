@@ -367,8 +367,8 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript(
                 None => None,
             };
             let reader = reader.unwrap_or_else(|| Box::new(Cursor::new(Vec::new())));
-            let (mut messages, background_tasks, resolved_ids) =
-                parser::claude::parse_with_queued_prompts_and_peer_out_messages_and_proposals(
+            let (mut messages, background_tasks, resolved_ids, skills) =
+                parser::claude::parse_with_queued_prompts_and_peer_out_messages_and_proposals_and_skills(
                     reader,
                     parent,
                     pending_tool,
@@ -383,6 +383,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript(
                 ConversationResponse {
                     messages,
                     background_tasks,
+                    skills,
                     ..ConversationResponse::default()
                 },
                 resolved_ids,
@@ -419,12 +420,13 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript(
                     Vec::new(),
                 ));
             };
-            let mut messages = parser::codex::parse(reader, parent)?;
+            let (mut messages, skills) = parser::codex::parse_with_skills(reader, parent)?;
             messages.extend(additions.decisions.iter().cloned().map(ChatItem::from));
             Ok((
                 ConversationResponse {
                     messages,
                     background_tasks: Vec::new(),
+                    skills,
                     ..ConversationResponse::default()
                 },
                 Vec::new(),
@@ -630,11 +632,20 @@ enum EventKind {
 struct ConversationResponse {
     messages: Vec<ChatItem>,
     background_tasks: Vec<BackgroundTask>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    skills: Vec<SkillSuggestion>,
     start: usize,
     total: usize,
     decisions: Vec<ChatItem>,
     has_unanswered_proposal: bool,
     active_question_index: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct SkillSuggestion {
+    pub(super) name: String,
+    pub(super) description: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -814,6 +825,83 @@ mod tests {
                     Some("application/json".to_string()),
                     json!({"messages":[{"type":"assistant","text":"Other response."}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
                 ),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::claude(false)]
+    #[case::codex(true)]
+    #[tokio::test]
+    async fn messages_route_returns_session_skill_suggestions(#[case] use_codex_transcript: bool) {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("fixture.jsonl");
+        let record = if use_codex_transcript {
+            json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{
+                        "type": "input_text",
+                        "text": indoc::indoc! {"
+                            <skills_instructions>
+                            ## Skills
+                            ### Available skills
+                            - design-flow: Help shape a design.
+                            - debug-flow: Investigate a failure.
+                            </skills_instructions>
+                        "},
+                    }],
+                },
+            })
+        } else {
+            json!({
+                "attachment": {
+                    "type": "skill_listing",
+                    "content": indoc::indoc! {"
+                        - design-flow: Help shape a design.
+                        - debug-flow: Investigate a failure.
+                    "},
+                },
+            })
+        };
+        std::fs::write(&transcript_path, record.to_string()).unwrap();
+
+        let mut session = stored_session();
+        session.engine = if use_codex_transcript {
+            Engine::Codex
+        } else {
+            Engine::Claude
+        };
+        session.transcript_path = Some(transcript_path);
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+        );
+
+        assert_eq!(
+            message_response(&router).await,
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                json!({
+                    "messages": [],
+                    "backgroundTasks": [],
+                    "skills": [
+                        {"name": "design-flow", "description": "Help shape a design."},
+                        {"name": "debug-flow", "description": "Investigate a failure."},
+                    ],
+                    "start": 0,
+                    "total": 0,
+                    "decisions": [],
+                    "hasUnansweredProposal": false,
+                    "activeQuestionIndex": null,
+                }),
             ),
         );
     }

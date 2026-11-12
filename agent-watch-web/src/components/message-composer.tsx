@@ -3,7 +3,9 @@ import '#components/message-composer.css'
 import { Button } from '@fohte/ui/button'
 import { ArrowUp } from 'lucide-react'
 import type { ClipboardEvent, KeyboardEvent, SubmitEvent } from 'react'
-import { useLayoutEffect, useRef } from 'react'
+import { useId, useLayoutEffect, useRef, useState } from 'react'
+
+import type { Session, SkillSuggestion } from '#types'
 
 type MessageComposerProps = {
   draft: string
@@ -13,6 +15,8 @@ type MessageComposerProps = {
   isMobile: boolean
   canInterrupt: boolean
   attachments: readonly ComposerAttachment[]
+  engine?: Session['engine']
+  skills?: readonly SkillSuggestion[]
   onDraftChange: (draft: string) => void
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void
   onPasteFiles: (files: File[]) => void
@@ -46,6 +50,8 @@ export function MessageComposer({
   isMobile,
   canInterrupt,
   attachments,
+  engine,
+  skills = [],
   onDraftChange,
   onKeyDown,
   onPasteFiles,
@@ -54,6 +60,39 @@ export function MessageComposer({
   onInterrupt,
 }: MessageComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const pendingCursorPosition = useRef<number | null>(null)
+  const suggestionsId = useId()
+  const [activeSkillIndex, setActiveSkillIndex] = useState(0)
+  const [dismissedCompletion, setDismissedCompletion] = useState<string | null>(
+    null,
+  )
+  const [caret, setCaret] = useState<{
+    draft: string
+    position: number
+  } | null>(null)
+
+  const cursorPosition = caret?.draft === draft ? caret.position : draft.length
+  const completion = findSkillCompletion(draft, engine, cursorPosition)
+  const matchingSkills =
+    completion === null
+      ? []
+      : skills.filter((skill) =>
+          skill.name
+            .toLocaleLowerCase()
+            .startsWith(completion.query.toLocaleLowerCase()),
+        )
+  const completionKey =
+    completion === null
+      ? null
+      : `${String(completion.start)}:${completion.trigger}:${completion.query}`
+  const isCompletionOpen =
+    completion !== null &&
+    matchingSkills.length > 0 &&
+    completionKey !== dismissedCompletion
+  const selectedSkillIndex = Math.min(
+    activeSkillIndex,
+    Math.max(0, matchingSkills.length - 1),
+  )
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current
@@ -67,6 +106,12 @@ export function MessageComposer({
       ? Math.min(textarea.scrollHeight, maxHeight)
       : textarea.scrollHeight
     textarea.style.height = `${String(height)}px`
+    if (pendingCursorPosition.current !== null) {
+      const cursor = pendingCursorPosition.current
+      pendingCursorPosition.current = null
+      textarea.focus()
+      textarea.setSelectionRange(cursor, cursor)
+    }
   }, [draft])
 
   const handleSubmit = (event: SubmitEvent<HTMLFormElement>) => {
@@ -81,6 +126,60 @@ export function MessageComposer({
     onPasteFiles(files)
   }
 
+  const selectSkill = (skill: SkillSuggestion) => {
+    if (completion === null || completionKey === null) return
+    const afterToken = draft.slice(completion.end)
+    const separator = /^\s/.test(afterToken) ? '' : ' '
+    const insertion = `${completion.trigger}${skill.name}${separator}`
+    const nextDraft = draft.slice(0, completion.start) + insertion + afterToken
+    const nextCursor = completion.start + insertion.length
+    if (nextDraft === draft) {
+      pendingCursorPosition.current = null
+      const textarea = textareaRef.current
+      textarea?.focus()
+      textarea?.setSelectionRange(nextCursor, nextCursor)
+    } else {
+      pendingCursorPosition.current = nextCursor
+    }
+    setCaret({ draft: nextDraft, position: nextCursor })
+    onDraftChange(nextDraft)
+    setDismissedCompletion(
+      `${String(completion.start)}:${completion.trigger}:${skill.name}`,
+    )
+  }
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (
+      isCompletionOpen &&
+      !event.nativeEvent.isComposing &&
+      Reflect.get(event.nativeEvent, 'keyCode') !== 229
+    ) {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault()
+        const direction = event.key === 'ArrowDown' ? 1 : -1
+        setActiveSkillIndex(
+          (index) =>
+            (index + direction + matchingSkills.length) % matchingSkills.length,
+        )
+        return
+      }
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        const skill = matchingSkills[selectedSkillIndex]
+        if (skill !== undefined) {
+          event.preventDefault()
+          selectSkill(skill)
+          return
+        }
+      }
+      if (event.key === 'Escape' && completionKey !== null) {
+        event.preventDefault()
+        setDismissedCompletion(completionKey)
+        return
+      }
+    }
+    onKeyDown(event)
+  }
+
   return (
     <form
       className="conversation-composer"
@@ -93,13 +192,66 @@ export function MessageComposer({
         placeholder={placeholder}
         value={draft}
         onChange={(event) => {
-          onDraftChange(event.currentTarget.value)
+          const nextDraft = event.currentTarget.value
+          setCaret({
+            draft: nextDraft,
+            position: event.currentTarget.selectionStart,
+          })
+          setDismissedCompletion(null)
+          setActiveSkillIndex(0)
+          onDraftChange(nextDraft)
         }}
-        onKeyDown={onKeyDown}
+        onSelect={(event) => {
+          setCaret({
+            draft: event.currentTarget.value,
+            position: event.currentTarget.selectionStart,
+          })
+        }}
+        onKeyDown={handleKeyDown}
         onPaste={handlePaste}
         disabled={disabled}
         rows={isMobile ? 1 : 2}
+        aria-autocomplete={isCompletionOpen ? 'list' : undefined}
+        aria-expanded={isCompletionOpen}
+        aria-controls={isCompletionOpen ? suggestionsId : undefined}
+        aria-activedescendant={
+          isCompletionOpen
+            ? `${suggestionsId}-skill-${String(selectedSkillIndex)}`
+            : undefined
+        }
       />
+      {isCompletionOpen ? (
+        <ul
+          id={suggestionsId}
+          className="composer-skill-suggestions"
+          role="listbox"
+          aria-label="Available skills"
+        >
+          {matchingSkills.map((skill, index) => (
+            <li key={skill.name} role="presentation">
+              <button
+                id={`${suggestionsId}-skill-${String(index)}`}
+                className="composer-skill-option"
+                type="button"
+                role="option"
+                aria-selected={index === selectedSkillIndex}
+                onMouseDown={(event) => {
+                  event.preventDefault()
+                }}
+                onClick={() => {
+                  selectSkill(skill)
+                }}
+              >
+                <span>
+                  {completion.trigger}
+                  {skill.name}
+                </span>
+                <small>{skill.description}</small>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {attachments.length > 0 ? (
         <ul className="composer-attachments" aria-label="Attachments">
           {attachments.map((attachment) => (
@@ -160,4 +312,28 @@ export function MessageComposer({
       </div>
     </form>
   )
+}
+
+function findSkillCompletion(
+  draft: string,
+  engine: Session['engine'],
+  cursor: number,
+) {
+  if (engine !== 'Claude' && engine !== 'Codex') return null
+  const beforeCursor = draft.slice(0, cursor)
+  const match = /(?:^|\s)([/$])([^\s]*)$/.exec(beforeCursor)
+  if (match === null || match[1] === undefined || match[2] === undefined) {
+    return null
+  }
+  const trigger = match[1]
+  if (
+    (engine === 'Claude' && trigger !== '/') ||
+    (engine === 'Codex' && trigger !== '$')
+  ) {
+    return null
+  }
+  const start = cursor - match[0].length + match[0].lastIndexOf(trigger)
+  let end = cursor
+  while (end < draft.length && !/\s/.test(draft[end] ?? '')) end += 1
+  return { trigger, query: match[2], start, end }
 }

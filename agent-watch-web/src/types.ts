@@ -198,9 +198,15 @@ export type BackgroundTask = {
   agentType?: string
 }
 
+export type SkillSuggestion = {
+  name: string
+  description: string
+}
+
 export type ConversationResponse = {
   messages: ChatItem[]
   backgroundTasks: BackgroundTask[]
+  skills?: SkillSuggestion[]
   start: number
   total: number
   decisions: Extract<ChatItem, { type: 'decision' }>[]
