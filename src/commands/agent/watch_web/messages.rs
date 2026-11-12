@@ -300,6 +300,17 @@ fn load_conversation_with_queued_prompts(
         if let Some(path) = session.transcript_path.as_deref() {
             subagent_reports::add_descriptions(path, &mut cached.conversation.messages);
         }
+        if let (Some(request_id), Some(data)) = (
+            main_permission_request_id.as_deref(),
+            main_permission_data.as_ref(),
+        ) && data.tool_name.as_deref() == Some("AskUserQuestion")
+        {
+            attach_question_request(
+                &mut cached.conversation.messages,
+                request_id,
+                &data.tool_input,
+            );
+        }
         resolve_peer_session_titles(&mut cached.conversation.messages, &mut load_session)?;
         cache::delete_resolved_queued_prompts(
             loaders,
@@ -323,6 +334,14 @@ fn load_conversation_with_queued_prompts(
             },
         })?;
     resolve_peer_session_titles(&mut conversation.messages, &mut load_session)?;
+
+    if let (Some(request_id), Some(data)) = (
+        main_permission_request_id.as_deref(),
+        main_permission_data.as_ref(),
+    ) && data.tool_name.as_deref() == Some("AskUserQuestion")
+    {
+        attach_question_request(&mut conversation.messages, request_id, &data.tool_input);
+    }
 
     for message in &mut conversation.messages {
         if let ChatItem::Permission { request_id, .. } = message {
@@ -372,9 +391,14 @@ fn load_conversation_with_queued_prompts(
         let permission_data = (loaders.permission_request_data)(session_id, &request_id)?;
         if permission_data
             .as_ref()
-            .and_then(|data| data.tool_name.as_deref())
-            == Some("AskUserQuestion")
+            .is_some_and(|data| data.tool_name.as_deref() == Some("AskUserQuestion"))
         {
+            let Some(data) = permission_data.as_ref() else {
+                continue;
+            };
+            if let Some(question) = question_item_from_input(Some(request_id), &data.tool_input) {
+                messages.push(question);
+            }
             continue;
         }
         messages.push(ChatItem::Permission {
@@ -408,6 +432,43 @@ fn permission_request_pending_tool(data: &PermissionRequestData) -> Option<Strin
         Some(detail) => format!("{tool_name}({detail})"),
         None => tool_name.to_string(),
     })
+}
+
+fn attach_question_request(
+    messages: &mut Vec<ChatItem>,
+    request_id: &str,
+    tool_input: &serde_json::Value,
+) {
+    let Some(ChatItem::Question {
+        questions: pending_questions,
+        ..
+    }) = question_item_from_input(Some(request_id.to_owned()), tool_input)
+    else {
+        return;
+    };
+    let pending_question_texts = pending_questions
+        .iter()
+        .map(|question| question.question.as_str())
+        .collect::<Vec<_>>();
+    let matching_question = messages.iter_mut().rev().find(|message| {
+        let ChatItem::Question { questions, .. } = message else {
+            return false;
+        };
+        questions
+            .iter()
+            .map(|question| question.question.as_str())
+            .eq(pending_question_texts.iter().copied())
+    });
+    if let Some(ChatItem::Question {
+        request_id: current_request_id,
+        ..
+    }) = matching_question
+    {
+        *current_request_id = Some(request_id.to_owned());
+    } else if let Some(question) = question_item_from_input(Some(request_id.to_owned()), tool_input)
+    {
+        messages.push(question);
+    }
 }
 
 fn permission_request_tool_detail(tool_input: &Value) -> Option<&str> {
@@ -633,12 +694,9 @@ enum ChatItem {
         target: Option<String>,
     },
     Question {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        header: Option<String>,
-        question: String,
-        choices: Vec<QuestionChoice>,
-        multi_select: bool,
-        answer: Option<String>,
+        #[serde(rename = "requestId", skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
+        questions: Vec<QuestionPrompt>,
     },
     Proposal {
         seq: i64,
@@ -687,6 +745,67 @@ struct QuestionChoice {
     label: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QuestionPrompt {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    header: Option<String>,
+    question: String,
+    choices: Vec<QuestionChoice>,
+    #[serde(rename = "multi_select")]
+    multi_select: bool,
+    answer: Option<String>,
+}
+
+fn question_item_from_input(
+    request_id: Option<String>,
+    input: &serde_json::Value,
+) -> Option<ChatItem> {
+    let questions = input.get("questions")?.as_array()?;
+    let questions = questions
+        .iter()
+        .filter_map(|question| {
+            Some(QuestionPrompt {
+                header: question
+                    .get("header")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                question: question
+                    .get("question")
+                    .and_then(serde_json::Value::as_str)?
+                    .to_owned(),
+                choices: question
+                    .get("options")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|option| {
+                        Some(QuestionChoice {
+                            label: option
+                                .get("label")
+                                .and_then(serde_json::Value::as_str)?
+                                .to_owned(),
+                            description: option
+                                .get("description")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_owned),
+                        })
+                    })
+                    .collect(),
+                multi_select: question
+                    .get("multiSelect")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                answer: None,
+            })
+        })
+        .collect::<Vec<_>>();
+    (!questions.is_empty()).then_some(ChatItem::Question {
+        request_id,
+        questions,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -782,8 +901,9 @@ mod tests {
     use tower::ServiceExt;
 
     use super::{
-        ChatItem, QuestionChoice, RouteLoaders, load_conversation_with_queued_prompts,
-        load_messages_with, routes_with_decisions_and_queued_prompts_and_peer_out_messages,
+        ChatItem, QuestionChoice, QuestionPrompt, RouteLoaders,
+        load_conversation_with_queued_prompts, load_messages_with,
+        routes_with_decisions_and_queued_prompts_and_peer_out_messages,
         routes_with_proposals_and_peer_out_messages,
     };
     use crate::commands::agent::store::{
@@ -1915,7 +2035,14 @@ mod tests {
         .with_permission_request_data_loader(|_, _| {
             Ok(Some(PermissionRequestData {
                 tool_name: Some("AskUserQuestion".to_string()),
-                tool_input: json!({ "questions": [] }),
+                tool_input: json!({
+                    "questions": [{
+                        "header": "Summary",
+                        "question": "Should the summary be brief?",
+                        "options": [{ "label": "Yes" }, { "label": "No" }],
+                        "multiSelect": true,
+                    }],
+                }),
                 pending: true,
             }))
         });
@@ -1930,17 +2057,20 @@ mod tests {
             .unwrap()
             .map(|conversation| conversation.messages),
             Some(vec![ChatItem::Question {
-                header: Some("Summary".to_string()),
-                question: "Should the summary be brief?".to_string(),
-                choices: vec![
-                    QuestionChoice {
-                        label: "Yes".to_string(),
-                        description: Some("Keep it concise.".to_string()),
-                    },
-                    question_choice("No"),
-                ],
-                multi_select: true,
-                answer: None,
+                request_id: Some("permission-request-question".to_string()),
+                questions: vec![QuestionPrompt {
+                    header: Some("Summary".to_string()),
+                    question: "Should the summary be brief?".to_string(),
+                    choices: vec![
+                        QuestionChoice {
+                            label: "Yes".to_string(),
+                            description: Some("Keep it concise.".to_string()),
+                        },
+                        question_choice("No"),
+                    ],
+                    multi_select: true,
+                    answer: None,
+                }],
             }])
         );
     }
@@ -1974,17 +2104,20 @@ mod tests {
             .unwrap(),
             Some(vec![
                 ChatItem::Question {
-                    header: Some("Summary".to_string()),
-                    question: "Should the summary be brief?".to_string(),
-                    choices: vec![
-                        QuestionChoice {
-                            label: "Yes".to_string(),
-                            description: Some("Keep it concise.".to_string()),
-                        },
-                        question_choice("No"),
-                    ],
-                    multi_select: true,
-                    answer: None,
+                    request_id: None,
+                    questions: vec![QuestionPrompt {
+                        header: Some("Summary".to_string()),
+                        question: "Should the summary be brief?".to_string(),
+                        choices: vec![
+                            QuestionChoice {
+                                label: "Yes".to_string(),
+                                description: Some("Keep it concise.".to_string()),
+                            },
+                            question_choice("No"),
+                        ],
+                        multi_select: true,
+                        answer: None,
+                    }],
                 },
                 ChatItem::Permission {
                     request_id: Some("permission-request-subagent".to_string()),
@@ -2382,7 +2515,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"{"messages":[{"type":"question","header":"Summary","question":"Should the summary be brief?","choices":[{"label":"Yes","description":"Keep it concise."},{"label":"No"}],"multi_select":true,"answer":null}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":0}"#
+                r#"{"messages":[{"type":"question","questions":[{"header":"Summary","question":"Should the summary be brief?","choices":[{"label":"Yes","description":"Keep it concise."},{"label":"No"}],"multi_select":true,"answer":null}]}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":0}"#
                     .to_string(),
             )
         );

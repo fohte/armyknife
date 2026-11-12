@@ -73,11 +73,18 @@ const codexTerminalActions: SessionActions = {
   openInTerminal: true,
 }
 
+const questionPrompt = {
+  header: 'Cache policy',
+  question: 'Which cache window should be used?',
+  choices: [{ label: 'Window A' }, { label: 'Window B' }],
+  multi_select: false,
+  answer: null,
+}
+
 const question: ChatItem = {
   type: 'question',
-  question: 'Which retry policy should be used?',
-  choices: [{ label: 'Retry a few times' }, { label: 'Retry once' }],
-  answer: null,
+  requestId: 'ask-request-main',
+  questions: [questionPrompt],
 }
 
 const proposal: ChatItem = {
@@ -1501,162 +1508,162 @@ it('announces copy failure and removes the textarea when execCommand throws', as
   })
 })
 
-it('prevents a choice click from duplicating a number-key answer', async () => {
+it('sends a selected answer with its request ID', async () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction, session, undefined, [question])
 
-  const keyEvent = new KeyboardEvent('keydown', {
-    key: '2',
-    bubbles: true,
-    cancelable: true,
-  })
-  await act(async () => {
-    requireElement(container.querySelector('.conversation-pane')).dispatchEvent(
-      keyEvent,
-    )
-    container
-      .querySelector<HTMLButtonElement>('.chat-question-choices button')
-      ?.click()
-    await Promise.resolve()
-    await Promise.resolve()
+  const choice = requireElement(
+    Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.chat-question-choices button',
+      ),
+    ).find((button) => button.textContent.includes('Window B')) ?? null,
+  )
+  act(() => {
+    choice.click()
   })
 
-  const snapshot = () => ({
-    actionCalls: onAction.mock.calls,
-    keyDefaultPrevented: keyEvent.defaultPrevented,
-    choiceDisabled: container.querySelector<HTMLButtonElement>(
-      '.chat-question-choices button',
-    )?.disabled,
-  })
-  expect(snapshot()).toEqual({
-    actionCalls: [['answer', { choice: 2 }]],
-    keyDefaultPrevented: true,
-    choiceDisabled: true,
-  })
-})
-
-it('closes a question before sending a contextual freeform answer', async () => {
-  const onAction = vi.fn(() => Promise.resolve(true))
-  renderView(onAction, session, undefined, [
-    {
-      ...question,
-      header: 'Output format',
-      question: 'Which format should be used?',
-    },
-  ])
-
-  const textarea = requireElement(
-    container.querySelector<HTMLTextAreaElement>(
-      '.chat-question-card textarea',
+  const submit = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-question-actions button.aw-button--primary',
     ),
   )
-  setTextareaValue(textarea, 'Use a fictional format')
   await act(async () => {
-    requireElement(
-      container.querySelector('.chat-question-card form'),
-    ).dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
-    await Promise.resolve()
+    submit.click()
     await Promise.resolve()
   })
 
   expect(onAction.mock.calls).toEqual([
-    ['answer', { skip: true }],
     [
-      'messages',
+      'answer',
       {
-        content:
-          'My answer to "Output format: Which format should be used?" is:\nUse a fictional format',
+        requestId: 'ask-request-main',
+        answers: { 'Which cache window should be used?': 'Window B' },
       },
     ],
   ])
 })
 
-it('does not send a freeform answer when skipping the question fails', async () => {
+it('skips a question with its request ID', async () => {
   const onAction = vi.fn(() => Promise.resolve(true))
-  onAction.mockResolvedValueOnce(false)
   renderView(onAction, session, undefined, [question])
 
-  const textarea = requireElement(
-    container.querySelector<HTMLTextAreaElement>(
-      '.chat-question-card textarea',
-    ),
+  const skip = requireElement(
+    Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(
+      (button) => button.textContent.includes('No answer'),
+    ) ?? null,
   )
-  setTextareaValue(textarea, 'Use a fictional format')
   await act(async () => {
-    requireElement(
-      container.querySelector('.chat-question-card form'),
-    ).dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
-    await Promise.resolve()
+    skip.click()
     await Promise.resolve()
   })
 
-  expect(onAction.mock.calls).toEqual([['answer', { skip: true }]])
+  expect(onAction.mock.calls).toEqual([
+    ['answer', { requestId: 'ask-request-main', skip: true }],
+  ])
 })
 
-it('does not answer a choice shortcut while a freeform answer is sending', async () => {
-  let resolveMessage: (sent: boolean) => void = () => undefined
-  const messageResult = new Promise<boolean>((resolve) => {
-    resolveMessage = resolve
-  })
-  const onAction = vi.fn((action: string) =>
-    action === 'messages' ? messageResult : Promise.resolve(true),
-  )
-  renderView(onAction, session, undefined, [question])
-
-  const textarea = requireElement(
-    container.querySelector<HTMLTextAreaElement>(
-      '.chat-question-card textarea',
-    ),
-  )
-  setTextareaValue(textarea, 'Use a fictional format')
-  await act(async () => {
-    requireElement(
-      container.querySelector('.chat-question-card form'),
-    ).dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
-    await Promise.resolve()
-    await Promise.resolve()
-  })
-
-  const event = new KeyboardEvent('keydown', {
-    key: '1',
-    bubbles: true,
-    cancelable: true,
-  })
-  act(() => {
-    document.body.dispatchEvent(event)
-  })
-  const duringSend = {
-    textareaDisabled: textarea.disabled,
-    eventTargetIsBody: event.target === document.body,
-    eventDefaultPrevented: event.defaultPrevented,
-    actionCalls: onAction.mock.calls,
-  }
-
-  await act(async () => {
-    resolveMessage(true)
-    await messageResult
-    await Promise.resolve()
-  })
-
-  const expectedCalls = [
-    ['answer', { skip: true }],
-    [
-      'messages',
+it('keeps every pending main and subagent question answerable', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  const subagentQuestion: ChatItem = {
+    type: 'question',
+    requestId: 'ask-request-subagent',
+    questions: [
       {
-        content:
-          'My answer to "Which retry policy should be used?" is:\nUse a fictional format',
+        ...questionPrompt,
+        question: 'Which icon should the helper use?',
       },
     ],
-  ]
-  const snapshot = () => ({ duringSend, actionCalls: onAction.mock.calls })
+  }
+  renderView(onAction, session, undefined, [question, subagentQuestion])
+
+  const cards = Array.from(
+    container.querySelectorAll<HTMLElement>('.chat-question-card'),
+  )
+  const choiceButtons = cards.map((card) =>
+    Array.from(
+      card.querySelectorAll<HTMLButtonElement>('.chat-question-choices button'),
+      (button) => button.disabled,
+    ),
+  )
+  act(() => {
+    cards[0]
+      ?.querySelector<HTMLButtonElement>('.chat-question-choices button')
+      ?.click()
+    cards[1]
+      ?.querySelector<HTMLButtonElement>('.chat-question-choices button')
+      ?.click()
+  })
+  const submits = cards.map((card) =>
+    card.querySelector<HTMLButtonElement>(
+      '.chat-question-actions button.aw-button--primary',
+    ),
+  )
+  await act(async () => {
+    for (const submit of submits) {
+      submit?.click()
+      await Promise.resolve()
+    }
+  })
+
+  const snapshot = () => ({
+    choiceButtons,
+    requests: onAction.mock.calls,
+    cardCount: cards.length,
+  })
   expect(snapshot()).toEqual({
-    duringSend: {
-      textareaDisabled: true,
-      eventTargetIsBody: true,
-      eventDefaultPrevented: false,
-      actionCalls: expectedCalls,
-    },
-    actionCalls: expectedCalls,
+    choiceButtons: [
+      [false, false],
+      [false, false],
+    ],
+    requests: [
+      [
+        'answer',
+        {
+          requestId: 'ask-request-main',
+          answers: { 'Which cache window should be used?': 'Window A' },
+        },
+      ],
+      [
+        'answer',
+        {
+          requestId: 'ask-request-subagent',
+          answers: { 'Which icon should the helper use?': 'Window A' },
+        },
+      ],
+    ],
+    cardCount: 2,
+  })
+})
+
+it('shows terminal guidance for an unanswered question without a request ID', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  const noRequestQuestion: ChatItem = {
+    type: 'question',
+    questions: [questionPrompt],
+  }
+  renderView(onAction, session, undefined, [noRequestQuestion])
+
+  const snapshot = () => ({
+    choicesDisabled: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.chat-question-choices button',
+      ),
+      (button) => button.disabled,
+    ),
+    terminalMessage: container.querySelector(
+      '.conversation-terminal-fallback span',
+    )?.textContent,
+    submitButton: container.querySelector(
+      '.chat-question-actions button.aw-button--primary',
+    ),
+    actionCalls: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    choicesDisabled: [true, true],
+    terminalMessage: 'Answer in terminal to continue.',
+    submitButton: null,
+    actionCalls: [],
   })
 })
 
@@ -1717,9 +1724,14 @@ it('shows a selected answer, dims other choices, and renders Markdown', () => {
   renderView(onAction, session, undefined, [
     {
       ...question,
-      question: 'Which **retry** policy should be used?',
-      choices: [{ label: 'Retry *a few* times' }, { label: 'Retry once' }],
-      answer: 'Retry once',
+      questions: [
+        {
+          ...questionPrompt,
+          question: 'Which **retry** policy should be used?',
+          choices: [{ label: 'Retry *a few* times' }, { label: 'Retry once' }],
+          answer: 'Retry once',
+        },
+      ],
     },
   ])
   dispatchKeyInAct(window, '1')
@@ -1774,7 +1786,15 @@ it('shows a selected answer, dims other choices, and renders Markdown', () => {
 it('shows a freeform answer below the choices', () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction, session, undefined, [
-    { ...question, answer: 'Wait until the next deployment' },
+    {
+      ...question,
+      questions: [
+        {
+          ...questionPrompt,
+          answer: 'Wait until the next deployment',
+        },
+      ],
+    },
   ])
 
   const snapshot = () => ({
@@ -1916,10 +1936,9 @@ it('keeps Enter for newlines and exposes mobile conversation actions', () => {
     ],
     keyboardHint: container.querySelector('.composer-footer > span')
       ?.textContent,
-    choiceLabels: Array.from(
-      container.querySelectorAll('.chat-question-choices kbd'),
-      (element) => element.textContent,
-    ),
+    choiceShortcutBadges: container.querySelectorAll(
+      '.chat-question-choices kbd',
+    ).length,
     interruptLabel: container
       .querySelector('.mobile-interrupt-button')
       ?.getAttribute('aria-label'),
@@ -1928,7 +1947,7 @@ it('keeps Enter for newlines and exposes mobile conversation actions', () => {
     actions: [['interrupt']],
     defaultPrevented: [false, false],
     keyboardHint: undefined,
-    choiceLabels: ['1', '2'],
+    choiceShortcutBadges: 0,
     interruptLabel: 'Interrupt',
   })
 })
@@ -6503,12 +6522,22 @@ it('uses full conversation metadata for questions, proposals, and decisions', as
   })
   const firstQuestion: ChatItem = {
     ...question,
-    question: 'The active question from the loaded page?',
+    questions: [
+      {
+        ...questionPrompt,
+        question: 'The active question from the loaded page?',
+      },
+    ],
   }
   const laterQuestion: ChatItem = {
     ...question,
-    question: 'A later, already answered question?',
-    answer: 'Retry once',
+    questions: [
+      {
+        ...questionPrompt,
+        question: 'A later, already answered question?',
+        answer: 'Window B',
+      },
+    ],
   }
   const visibleDecision = decision(2, 'Visible decision')
   const fullDecisions = [
@@ -6595,7 +6624,6 @@ it('skips committing an unchanged memoized conversation row', () => {
   const rowProps = {
     actions,
     actionsReady: true,
-    activeQuestion: false,
     index: 0,
     isMobile: false,
     selected: false,

@@ -124,20 +124,28 @@ function isChatItem(value: unknown): value is ChatItem {
       )
     case 'question':
       return (
-        typeof value['question'] === 'string' &&
-        (value['header'] === undefined ||
-          typeof value['header'] === 'string') &&
-        Array.isArray(value['choices']) &&
-        value['choices'].every(
-          (choice) =>
-            isRecord(choice) &&
-            typeof choice['label'] === 'string' &&
-            (choice['description'] === undefined ||
-              typeof choice['description'] === 'string'),
-        ) &&
-        (value['multi_select'] === undefined ||
-          typeof value['multi_select'] === 'boolean') &&
-        (value['answer'] === null || typeof value['answer'] === 'string')
+        (value['requestId'] === undefined ||
+          typeof value['requestId'] === 'string') &&
+        Array.isArray(value['questions']) &&
+        value['questions'].length > 0 &&
+        value['questions'].every(
+          (question) =>
+            isRecord(question) &&
+            typeof question['question'] === 'string' &&
+            (question['header'] === undefined ||
+              typeof question['header'] === 'string') &&
+            Array.isArray(question['choices']) &&
+            question['choices'].every(
+              (choice) =>
+                isRecord(choice) &&
+                typeof choice['label'] === 'string' &&
+                (choice['description'] === undefined ||
+                  typeof choice['description'] === 'string'),
+            ) &&
+            typeof question['multi_select'] === 'boolean' &&
+            (question['answer'] === null ||
+              typeof question['answer'] === 'string'),
+        )
       )
     case 'proposal':
       return (

@@ -1068,22 +1068,13 @@ mod tests {
                     ChatItem::Assistant {
                         text: "before".to_string(),
                     },
-                    ChatItem::Question {
+                    question_group(vec![super::super::super::QuestionPrompt {
                         header: Some("Display".to_string()),
                         question: "Which display mode?".to_string(),
-                        choices: vec![
-                            QuestionChoice {
-                                label: "Option A".to_string(),
-                                description: None,
-                            },
-                            QuestionChoice {
-                                label: "Option B".to_string(),
-                                description: None,
-                            },
-                        ],
+                        choices: vec![question_choice("Option A"), question_choice("Option B")],
                         multi_select: false,
                         answer: Some("Option A".to_string()),
-                    },
+                    }]),
                     proposal,
                     ChatItem::Assistant {
                         text: "after".to_string(),
@@ -1463,6 +1454,28 @@ mod tests {
         QuestionChoice {
             label: label.to_string(),
             description: None,
+        }
+    }
+
+    fn question_prompt(
+        question: &str,
+        choices: Vec<QuestionChoice>,
+        multi_select: bool,
+        answer: Option<&str>,
+    ) -> super::super::super::QuestionPrompt {
+        super::super::super::QuestionPrompt {
+            header: None,
+            question: question.to_string(),
+            choices,
+            multi_select,
+            answer: answer.map(str::to_string),
+        }
+    }
+
+    fn question_group(questions: Vec<super::super::super::QuestionPrompt>) -> ChatItem {
+        ChatItem::Question {
+            request_id: None,
+            questions,
         }
     }
 
@@ -1992,7 +2005,7 @@ mod tests {
                         operation("Edit", Some("fixture/flow.rs")),
                     ],
                 },
-                ChatItem::Question {
+                question_group(vec![super::super::super::QuestionPrompt {
                     header: None,
                     question: "Should notifications be grouped?".to_string(),
                     choices: vec![
@@ -2007,7 +2020,7 @@ mod tests {
                     ],
                     multi_select: false,
                     answer: None,
-                },
+                }]),
                 ChatItem::Peer {
                     direction: PeerDirection::From,
                     session_id: "fixture-parent-id".to_string(),
@@ -2064,99 +2077,91 @@ mod tests {
             {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-one","name":"AskUserQuestion","input":{"questions":[{"question":"Should the summary be brief?","options":[{"label":"Yes"},{"label":"No"}]}]}}]}}
             {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-one","content":"Your questions have been answered: \"Should the summary be brief?\"=\"Yes\". You can now continue with these answers in mind."}]}}
         "#},
-        vec![ChatItem::Question {
-            header: None,
-            question: "Should the summary be brief?".to_string(),
-            choices: vec![question_choice("Yes"), question_choice("No")],
-            multi_select: false,
-            answer: Some("Yes".to_string()),
-        }]
+        vec![question_group(vec![question_prompt(
+            "Should the summary be brief?",
+            vec![question_choice("Yes"), question_choice("No")],
+            false,
+            Some("Yes"),
+        )])]
     )]
     #[case::multiple_questions(
         indoc! {r#"
             {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-many","name":"AskUserQuestion","input":{"questions":[{"question":"Which output format?","options":[{"label":"Markdown"},{"label":"Plain text"}]},{"question":"Include examples?","options":[{"label":"Yes"},{"label":"No"}]}]}}]}}
             {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-many","content":"Your questions have been answered: \"Which output format?\"=\"Markdown\", \"Include examples?\"=\"No\". You can now continue with these answers in mind."}]}}
         "#},
-        vec![
-            ChatItem::Question {
-                header: None,
-                question: "Which output format?".to_string(),
-                choices: vec![question_choice("Markdown"), question_choice("Plain text")],
-                multi_select: false,
-                answer: Some("Markdown".to_string()),
-            },
-            ChatItem::Question {
-                header: None,
-                question: "Include examples?".to_string(),
-                choices: vec![question_choice("Yes"), question_choice("No")],
-                multi_select: false,
-                answer: Some("No".to_string()),
-            },
-        ]
+        vec![question_group(vec![
+            question_prompt(
+                "Which output format?",
+                vec![question_choice("Markdown"), question_choice("Plain text")],
+                false,
+                Some("Markdown"),
+            ),
+            question_prompt(
+                "Include examples?",
+                vec![question_choice("Yes"), question_choice("No")],
+                false,
+                Some("No"),
+            ),
+        ])]
     )]
     #[case::answer_outside_choices(
         indoc! {r#"
             {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-custom","name":"AskUserQuestion","input":{"questions":[{"question":"How should the cache expire?","options":[{"label":"After one hour"},{"label":"After one day"}]}]}}]}}
             {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-custom","content":"The user answered: \"How should the cache expire?\"=\"Keep it until deployment\". You can now continue with these answers in mind."}]}}
         "#},
-        vec![ChatItem::Question {
-            header: None,
-            question: "How should the cache expire?".to_string(),
-            choices: vec![question_choice("After one hour"), question_choice("After one day")],
-            multi_select: false,
-            answer: Some("Keep it until deployment".to_string()),
-        }]
+        vec![question_group(vec![question_prompt(
+            "How should the cache expire?",
+            vec![question_choice("After one hour"), question_choice("After one day")],
+            false,
+            Some("Keep it until deployment"),
+        )])]
     )]
     #[case::tool_use_result_answers(
         indoc! {r#"
             {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-structured","name":"AskUserQuestion","input":{"questions":[{"question":"Which color theme?","options":[{"label":"Light"},{"label":"Dark"}]}]}}]}}
             {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-structured","content":"Your questions have been answered: \"Which color theme?\"=\"Dark\". You can now continue with these answers in mind."}]},"toolUseResult":{"questions":[{"question":"Which color theme?"}],"answers":{"Which color theme?":"Use a fictional palette"},"annotations":{}}}
         "#},
-        vec![ChatItem::Question {
-            header: None,
-            question: "Which color theme?".to_string(),
-            choices: vec![question_choice("Light"), question_choice("Dark")],
-            multi_select: false,
-            answer: Some("Use a fictional palette".to_string()),
-        }]
+        vec![question_group(vec![question_prompt(
+            "Which color theme?",
+            vec![question_choice("Light"), question_choice("Dark")],
+            false,
+            Some("Use a fictional palette"),
+        )])]
     )]
     #[case::null_tool_use_result_uses_text_answer(
         indoc! {r#"
             {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-null-result","name":"AskUserQuestion","input":{"questions":[{"question":"Should weekends be shown?","options":[{"label":"Yes"},{"label":"No"}]}]}}]}}
             {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-null-result","content":"The user answered: \"Should weekends be shown?\"=\"No\". You can now continue with these answers in mind."}]},"toolUseResult":null}
         "#},
-        vec![ChatItem::Question {
-            header: None,
-            question: "Should weekends be shown?".to_string(),
-            choices: vec![question_choice("Yes"), question_choice("No")],
-            multi_select: false,
-            answer: Some("No".to_string()),
-        }]
+        vec![question_group(vec![question_prompt(
+            "Should weekends be shown?",
+            vec![question_choice("Yes"), question_choice("No")],
+            false,
+            Some("No"),
+        )])]
     )]
     #[case::no_answer(
         indoc! {r#"
             {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-pending","name":"AskUserQuestion","input":{"questions":[{"question":"Should the report include a chart?","options":[{"label":"Yes"},{"label":"No"}]}]}}]}}
         "#},
-        vec![ChatItem::Question {
-            header: None,
-            question: "Should the report include a chart?".to_string(),
-            choices: vec![question_choice("Yes"), question_choice("No")],
-            multi_select: false,
-            answer: None,
-        }]
+        vec![question_group(vec![question_prompt(
+            "Should the report include a chart?",
+            vec![question_choice("Yes"), question_choice("No")],
+            false,
+            None,
+        )])]
     )]
     #[case::answer_extraction_fails(
         indoc! {r#"
             {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-cancelled","name":"AskUserQuestion","input":{"questions":[{"question":"Should the report include a chart?","options":[{"label":"Yes"},{"label":"No"}]}]}}]}}
             {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-cancelled","content":"The user cancelled this question."}]}}
         "#},
-        vec![ChatItem::Question {
-            header: None,
-            question: "Should the report include a chart?".to_string(),
-            choices: vec![question_choice("Yes"), question_choice("No")],
-            multi_select: false,
-            answer: None,
-        }]
+        vec![question_group(vec![question_prompt(
+            "Should the report include a chart?",
+            vec![question_choice("Yes"), question_choice("No")],
+            false,
+            None,
+        )])]
     )]
     fn parses_question_answers_from_tool_results(
         #[case] transcript: &str,

@@ -436,7 +436,6 @@ export function ConversationPane({
       start={conversation.start}
       decisions={conversation.decisions}
       hasUnansweredProposal={conversation.hasUnansweredProposal}
-      activeQuestionIndex={conversation.activeQuestionIndex}
       loadingOlder={loadingOlder}
       onLoadOlder={loadOlder}
       onPruneOldMessages={pruneOldMessages}

@@ -565,11 +565,6 @@ html[data-mobile-layout='true'] {
   font-size: var(--aw-font-size-mobile-body);
 }
 
-.conversation-pane[data-mobile='true'] .chat-question-choices kbd {
-  color: var(--aw-text-secondary);
-  font-size: 13px;
-}
-
 .conversation-pane[data-mobile='true'] .chat-question-card h2 {
   padding: 10px 14px;
   font-size: 12.5px;

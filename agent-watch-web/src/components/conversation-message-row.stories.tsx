@@ -24,7 +24,6 @@ const meta = {
   args: {
     actions,
     actionsReady: true,
-    activeQuestion: false,
     index: 0,
     isMobile: false,
     selected: false,
@@ -49,14 +48,20 @@ export const AssistantMessage: Story = {
 }
 
 export const AnswerableQuestion: Story = {
-  name: 'An active question offers answer choices',
+  name: 'A pending question offers answer choices',
   args: {
-    activeQuestion: true,
     message: {
       type: 'question',
-      question: 'Which retry policy should be used?',
-      choices: [{ label: 'Retry three times' }, { label: 'Retry once' }],
-      answer: null,
+      requestId: 'ask-request-story',
+      questions: [
+        {
+          header: 'Cache policy',
+          question: 'Which cache window should be used?',
+          choices: [{ label: 'Window A' }, { label: 'Window B' }],
+          multi_select: false,
+          answer: null,
+        },
+      ],
     },
   },
 }

@@ -52,16 +52,34 @@ fn wait_until_deadline(
                 thread::sleep(POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())))
             }
             PermissionRequestWait::Finished => return Ok(()),
-            PermissionRequestWait::Decision(decision) => {
-                return write_response(decision, &mut output);
+            PermissionRequestWait::Decision {
+                decision,
+                tool_input,
+                answers,
+            } => {
+                return write_response(decision, tool_input, answers, &mut output);
             }
         }
     }
 }
 
-fn write_response(decision: PermissionRequestDecision, mut output: impl Write) -> Result<()> {
+fn write_response(
+    decision: PermissionRequestDecision,
+    mut tool_input: serde_json::Value,
+    answers: Option<serde_json::Value>,
+    mut output: impl Write,
+) -> Result<()> {
     let decision = match decision {
-        PermissionRequestDecision::Allow => json!({ "behavior": "allow" }),
+        PermissionRequestDecision::Allow => match answers {
+            Some(answers) => {
+                let Some(updated_input) = tool_input.as_object_mut() else {
+                    anyhow::bail!("permission request input must be an object to apply answers");
+                };
+                updated_input.insert("answers".to_string(), answers);
+                json!({ "behavior": "allow", "updatedInput": tool_input })
+            }
+            None => json!({ "behavior": "allow" }),
+        },
         PermissionRequestDecision::Deny { message, interrupt } => json!({
             "behavior": "deny",
             "message": message,
@@ -159,6 +177,8 @@ mod tests {
                 message: "Permission request rejected from watch-web.".to_string(),
                 interrupt: false,
             },
+            json!({ "command": "echo fictional" }),
+            None,
             &mut output,
         )
         .expect("response should be written");
@@ -181,8 +201,13 @@ mod tests {
     #[test]
     fn allow_approves_the_original_tool_input() {
         let mut output = Vec::new();
-        write_response(PermissionRequestDecision::Allow, &mut output)
-            .expect("response should be written");
+        write_response(
+            PermissionRequestDecision::Allow,
+            json!({ "command": "echo fictional" }),
+            None,
+            &mut output,
+        )
+        .expect("response should be written");
 
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&output).expect("response should be JSON"),
@@ -190,6 +215,36 @@ mod tests {
                 "hookSpecificOutput": {
                     "hookEventName": "PermissionRequest",
                     "decision": { "behavior": "allow" },
+                },
+            }),
+        );
+    }
+
+    #[test]
+    fn allow_returns_answers_with_the_original_tool_input() {
+        let mut output = Vec::new();
+        write_response(
+            PermissionRequestDecision::Allow,
+            json!({
+                "questions": [{ "question": "Which format?" }],
+            }),
+            Some(json!({ "Which format?": "Markdown" })),
+            &mut output,
+        )
+        .expect("response should be written");
+
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&output).expect("response should be JSON"),
+            json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "decision": {
+                        "behavior": "allow",
+                        "updatedInput": {
+                            "questions": [{ "question": "Which format?" }],
+                            "answers": { "Which format?": "Markdown" },
+                        },
+                    },
                 },
             }),
         );
