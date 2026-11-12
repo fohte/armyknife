@@ -644,7 +644,7 @@ it('shows pending and sent permission action feedback', () => {
         {
           labels: ['Approve', 'Reject'],
           disabled: [true, true],
-          status: 'Approval sent. Session is resuming…',
+          status: 'Approval sent. Waiting for Claude Code…',
         },
         {
           labels: ['Approve', 'Reject'],
@@ -923,13 +923,15 @@ it('prevents a choice click from duplicating a number-key answer', async () => {
     )?.disabled,
   })
   expect(snapshot()).toEqual({
-    actionCalls: [['answer', { choice: 2 }]],
+    actionCalls: [
+      ['answer', { question: 'Which retry policy should be used?', choice: 2 }],
+    ],
     keyDefaultPrevented: true,
     choiceDisabled: true,
   })
 })
 
-it('closes a question before sending a contextual freeform answer', async () => {
+it('submits a freeform question answer through the permission request', async () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction, session, undefined, [
     {
@@ -954,18 +956,17 @@ it('closes a question before sending a contextual freeform answer', async () => 
   })
 
   expect(onAction.mock.calls).toEqual([
-    ['answer', { skip: true }],
     [
-      'messages',
+      'answer',
       {
-        content:
-          'My answer to "Output format: Which format should be used?" is:\nUse a fictional format',
+        question: 'Which format should be used?',
+        answer: 'Use a fictional format',
       },
     ],
   ])
 })
 
-it('does not send a freeform answer when skipping the question fails', async () => {
+it('keeps a freeform question answer draft when submission fails', async () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   onAction.mockResolvedValueOnce(false)
   renderView(onAction, session, undefined, [question])
@@ -984,16 +985,25 @@ it('does not send a freeform answer when skipping the question fails', async () 
     await Promise.resolve()
   })
 
-  expect(onAction.mock.calls).toEqual([['answer', { skip: true }]])
+  expect(onAction.mock.calls).toEqual([
+    [
+      'answer',
+      {
+        question: 'Which retry policy should be used?',
+        answer: 'Use a fictional format',
+      },
+    ],
+  ])
+  expect(textarea.value).toBe('Use a fictional format')
 })
 
 it('does not answer a choice shortcut while a freeform answer is sending', async () => {
-  let resolveMessage: (sent: boolean) => void = () => undefined
-  const messageResult = new Promise<boolean>((resolve) => {
-    resolveMessage = resolve
+  let resolveAnswer: (sent: boolean) => void = () => undefined
+  const answerResult = new Promise<boolean>((resolve) => {
+    resolveAnswer = resolve
   })
   const onAction = vi.fn((action: string) =>
-    action === 'messages' ? messageResult : Promise.resolve(true),
+    action === 'answer' ? answerResult : Promise.resolve(true),
   )
   renderView(onAction, session, undefined, [question])
 
@@ -1027,18 +1037,17 @@ it('does not answer a choice shortcut while a freeform answer is sending', async
   }
 
   await act(async () => {
-    resolveMessage(true)
-    await messageResult
+    resolveAnswer(true)
+    await answerResult
     await Promise.resolve()
   })
 
   const expectedCalls = [
-    ['answer', { skip: true }],
     [
-      'messages',
+      'answer',
       {
-        content:
-          'My answer to "Which retry policy should be used?" is:\nUse a fictional format',
+        question: 'Which retry policy should be used?',
+        answer: 'Use a fictional format',
       },
     ],
   ]
@@ -3979,12 +3988,12 @@ it.each([
   {
     action: 'approve' as const,
     pendingLabel: 'Approving…',
-    sentMessage: 'Approval sent. Session is resuming…',
+    sentMessage: 'Approval sent. Waiting for Claude Code…',
   },
   {
     action: 'reject' as const,
     pendingLabel: 'Rejecting…',
-    sentMessage: 'Rejection sent. Session is resuming…',
+    sentMessage: 'Rejection sent. Waiting for Claude Code…',
   },
 ])(
   'keeps a successful permission $action pending until it resolves',

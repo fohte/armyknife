@@ -170,7 +170,7 @@ it('shows a link destination as text and answers only the selected choice', asyn
     destinationText: 'https://example.org/guide',
     destinationTag: 'SPAN',
     anchorCount: 0,
-    actionCalls: [[1]],
+    actionCalls: [['Which **retry policy** should be used?', 1]],
   })
 })
 
@@ -213,7 +213,9 @@ it('skips a question from the no-answer button', async () => {
   })
   await act(async () => Promise.resolve())
 
-  expect(onSkip.mock.calls).toEqual([[]])
+  expect(onSkip.mock.calls).toEqual([
+    ['Which **retry policy** should be used?'],
+  ])
 })
 
 it('keeps the question actionable after a no-answer request fails', async () => {
@@ -277,7 +279,10 @@ it('keeps the question actionable after a no-answer request fails', async () => 
       formPresent: false,
       skipButtonPresent: false,
     },
-    skipCalls: [[], []],
+    skipCalls: [
+      ['Which **retry policy** should be used?'],
+      ['Which **retry policy** should be used?'],
+    ],
   })
 })
 
@@ -322,7 +327,10 @@ it('skips a question when Escape is pressed elsewhere in the card', async () => 
     skipCalls: onSkip.mock.calls,
     defaultPrevented: event.defaultPrevented,
   })
-  expect(snapshot()).toEqual({ skipCalls: [[]], defaultPrevented: true })
+  expect(snapshot()).toEqual({
+    skipCalls: [['Which **retry policy** should be used?']],
+    defaultPrevented: true,
+  })
 })
 
 it('prevents skip and repeat shortcuts while a choice answer is being sent', async () => {
@@ -393,14 +401,14 @@ it('prevents skip and repeat shortcuts while a choice answer is being sent', asy
       skipCalls: [],
       escapeDefaultPrevented: false,
       shortcutDefaultPrevented: false,
-      answerCalls: [[1]],
+      answerCalls: [['Which **retry policy** should be used?', 1]],
     },
     afterFailure: {
       choiceDisabled: false,
       skipDisabled: false,
       skipCalls: [],
     },
-    answerCalls: [[1]],
+    answerCalls: [['Which **retry policy** should be used?', 1]],
   })
 })
 
@@ -440,24 +448,17 @@ it('keeps the question closed after a choice answer succeeds', async () => {
     freeformFormPresent: false,
     skipButtonPresent: false,
     shortcutDefaultPrevented: false,
-    answerCalls: [[1]],
+    answerCalls: [['Which **retry policy** should be used?', 1]],
   })
 })
 
-it('keeps a freeform answer available to retry after the question closes', async () => {
-  const events: string[] = []
-  const onSkip = vi.fn(() => {
-    events.push('skip')
-    return Promise.resolve(true)
-  })
-  let messageAttempts = 0
-  const onFreeformAnswer = vi.fn(() => {
-    events.push('message')
-    messageAttempts += 1
-    return Promise.resolve(messageAttempts > 1)
-  })
-  const cardProps = props({ onSkip, onFreeformAnswer })
-  renderQuestion(cardProps)
+it('keeps a failed freeform answer available to retry', async () => {
+  const onSkip = vi.fn(() => Promise.resolve(true))
+  const onFreeformAnswer = vi
+    .fn(() => Promise.resolve(false))
+    .mockImplementationOnce(() => Promise.resolve(false))
+    .mockImplementationOnce(() => Promise.resolve(true))
+  renderQuestion(props({ onSkip, onFreeformAnswer }))
 
   const textarea = requireElement(
     container.querySelector<HTMLTextAreaElement>('textarea'),
@@ -473,18 +474,10 @@ it('keeps a freeform answer available to retry after the question closes', async
     await Promise.resolve()
   })
 
-  renderQuestion(props({ ...cardProps, canAnswer: false }))
-  const retryTextarea = requireElement(
-    container.querySelector<HTMLTextAreaElement>('textarea'),
-  )
-  const retryButton = requireElement(
-    container.querySelector<HTMLButtonElement>('button[type="submit"]'),
-  )
-  const failedSendSnapshot = {
-    draft: retryTextarea.value,
-    retryDisabled: retryButton.disabled,
+  const failedSend = {
+    draft: textarea.value,
     error: container.querySelector('[role="alert"]')?.textContent,
-    events: [...events],
+    formPresent: container.querySelector('form') !== null,
   }
 
   await act(async () => {
@@ -495,23 +488,23 @@ it('keeps a freeform answer available to retry after the question closes', async
   })
 
   const snapshot = () => ({
-    failedSendSnapshot,
+    failedSend,
     errorAfterRetry: container.querySelector('[role="alert"]')?.textContent,
-    events,
     skipCalls: onSkip.mock.calls,
     answerCalls: onFreeformAnswer.mock.calls,
   })
   expect(snapshot()).toEqual({
-    failedSendSnapshot: {
+    failedSend: {
       draft: 'Use a fictional format',
-      retryDisabled: false,
       error:
         'Your answer was not sent. Your draft is still available; select Send answer to retry.',
-      events: ['skip', 'message'],
+      formPresent: true,
     },
     errorAfterRetry: undefined,
-    events: ['skip', 'message', 'message'],
-    skipCalls: [[]],
-    answerCalls: [['Use a fictional format'], ['Use a fictional format']],
+    skipCalls: [],
+    answerCalls: [
+      ['Which **retry policy** should be used?', 'Use a fictional format'],
+      ['Which **retry policy** should be used?', 'Use a fictional format'],
+    ],
   })
 })

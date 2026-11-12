@@ -172,17 +172,13 @@ export function renderConversationMessage({
         }
         canOpenInTerminal={actions?.openInTerminal === true}
         openInTerminalStatus={openInTerminalStatus}
-        onAnswer={(choice) => onAction('answer', { choice })}
-        onSkip={() => onAction('answer', { skip: true })}
-        onFreeformAnswer={(answer) => {
-          const questionContext =
-            message.header !== undefined && message.header.length > 0
-              ? `${message.header}: ${message.question}`
-              : message.question
-          return onAction('messages', {
-            content: `My answer to "${questionContext}" is:\n${answer}`,
-          })
-        }}
+        onAnswer={(question, choice) =>
+          onAction('answer', { question, choice })
+        }
+        onSkip={(question) => onAction('answer', { question, skip: true })}
+        onFreeformAnswer={(question, answer) =>
+          onAction('answer', { question, answer })
+        }
         onOpenInTerminal={onOpenInTerminal}
       />
     )

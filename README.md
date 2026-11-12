@@ -872,6 +872,8 @@ The pane is normally found by walking the hook process's ancestry up to it. A Co
 
 `a agent hook <event> --engine <claude|codex>` (default: `claude`) records which coding agent CLI fired the hook; this is the engine `a agent resume` reads back to pick which binary to relaunch (see `--engine` on `new` above). Event names and JSON payload shape are the same regardless of engine: an allowed `stop` resolves to `Stopped` ("waiting for the next prompt"), while an unclassified stop remains `Running` until the agent reports its status. Both `permission-request` and `notification` with `notification_type: "permission_prompt"` resolve to `WaitingInput` ("waiting for tool-call approval") -- so a Codex hook configuration that maps Codex's own hook events onto these same `--event` values and payload fields gets the same approval-wait/input-wait distinction in `a agent list` for free.
 
+Claude Code's `PermissionRequest` hook waits for a watch-web decision. Approve returns an allow decision, while reject and question skip return a deny decision with `interrupt: false`; answering a question returns the selected label through `updatedInput`. If the terminal resolves the request first, the hook exits without a decision.
+
 Register these in Codex's `hooks.json` (each command with `--engine codex`) to track Codex sessions the same way as Claude Code sessions:
 
 | Codex event         | Command                                          |
@@ -1132,7 +1134,7 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 - `GET /api/images/{name}` for saved conversation images
 - `GET /api/sessions/later-options` for server-calculated return times
 - `POST /api/sessions/{id}/messages` with `{"content":"..."}`
-- `POST /api/sessions/{id}/answer` with `{"choice":1}` or `{"skip":true}`
+- `POST /api/sessions/{id}/answer` with `{"question":"Which display mode?","choice":1}`, `{"question":"Which display mode?","answer":"A custom mode"}`, or `{"question":"Which display mode?","skip":true}`
 - `POST /api/sessions/{id}/proposals/{seq}/answer` with `{"choice":0,"comment":"..."}`; `choice` is a zero-based option index or `null` to request another proposal, and `comment` may be `null`
 - `POST /api/sessions/{id}/permission/approve`
 - `POST /api/sessions/{id}/permission/reject`

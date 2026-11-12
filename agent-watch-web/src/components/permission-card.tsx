@@ -114,8 +114,8 @@ export function PermissionCard({
       {matchingPendingAction?.status === 'sent' ? (
         <p className="permission-action-status" role="status">
           {matchingPendingAction.action === 'approve'
-            ? 'Approval sent. Session is resuming…'
-            : 'Rejection sent. Session is resuming…'}
+            ? 'Approval sent. Waiting for Claude Code…'
+            : 'Rejection sent. Waiting for Claude Code…'}
         </p>
       ) : null}
     </article>

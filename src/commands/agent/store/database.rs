@@ -14,6 +14,7 @@ mod decisions;
 mod migration;
 mod migrations;
 mod peer_out_messages;
+mod permission_requests;
 mod proposals;
 mod queued_prompts;
 mod wake;
@@ -26,6 +27,10 @@ pub(crate) use decisions::{
 pub(crate) use peer_out_messages::WatchWebPeerOutMessage;
 pub(crate) use peer_out_messages::{
     insert_watch_web_peer_out_message, watch_web_peer_out_messages,
+};
+pub(crate) use permission_requests::{
+    PermissionRequestData, PermissionRequestDecision, PermissionRequestWait,
+    PermissionRequestWaiter, permission_request_data, resolve_permission_request,
 };
 pub(crate) use proposals::AgentProposal;
 pub(crate) use proposals::{
@@ -148,6 +153,33 @@ impl SessionLock {
         self.connection.execute_batch("COMMIT")?;
         self.transaction_active.set(false);
         Ok(marker)
+    }
+
+    pub(crate) fn register_permission_request(
+        &self,
+        agent_key: &str,
+        request_id: &str,
+        tool_name: Option<&str>,
+        tool_input: &serde_json::Value,
+    ) -> Result<()> {
+        self.ensure_transaction()?;
+        permission_requests::insert_permission_request(
+            &self.connection,
+            &self.session_id,
+            agent_key,
+            request_id,
+            tool_name,
+            tool_input,
+        )
+    }
+
+    pub(crate) fn remove_permission_request(&self, request_id: &str) -> Result<()> {
+        self.ensure_transaction()?;
+        self.connection.execute(
+            "DELETE FROM permission_request_decision WHERE session_id = ?1 AND request_id = ?2",
+            params![self.session_id, request_id],
+        )?;
+        Ok(())
     }
 
     pub(crate) fn save(&self, session: &Session) -> Result<()> {
