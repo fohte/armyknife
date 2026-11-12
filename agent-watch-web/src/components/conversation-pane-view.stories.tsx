@@ -1,6 +1,7 @@
 import type { Decorator, Meta, StoryObj } from '@storybook/react-vite'
 
 import { ConversationPaneView } from '#components/conversation-pane-view'
+import { SessionStatusPanel } from '#components/session-status-panel'
 import type { ChatItem, Session, SessionActions } from '#types'
 
 const session: Session = {
@@ -187,6 +188,60 @@ export const TodayCanBeChangedFromTheIPhoneConversation: Story = {
   args: {
     isMobile: true,
     isToday: true,
+  },
+  decorators: [iPhoneViewportDecorator],
+}
+
+export const IPhoneConversationShowsTheStatusPanel: Story = {
+  name: 'The iPhone conversation shows the full-screen status panel',
+  args: {
+    isMobile: true,
+    statusPanelOpen: true,
+    backgroundTasks: [
+      {
+        id: 'sample-background-task',
+        description: 'Check the request retry flow',
+        elapsedSeconds: 42,
+        kind: 'subagent',
+        agentType: 'Explorer',
+      },
+    ],
+    mobileStatusPanel: (
+      <SessionStatusPanel
+        tabs={[
+          {
+            id: 'tree',
+            label: 'Tree',
+            count: 1,
+            visible: true,
+            content: <div className="session-tree-feedback">Session tree</div>,
+          },
+          {
+            id: 'crit',
+            label: 'crit',
+            count: 1,
+            content: <div className="session-tree-feedback">Crit review</div>,
+          },
+          {
+            id: 'decisions',
+            label: '◇ Decisions',
+            count: 1,
+            content: <div className="session-tree-feedback">Decisions</div>,
+          },
+          {
+            id: 'running',
+            label: 'Running',
+            count: 1,
+            content: (
+              <div className="session-tree-feedback">Background tasks</div>
+            ),
+          },
+        ]}
+        activeTabId="tree"
+        onTabChange={() => undefined}
+        onClose={() => undefined}
+      />
+    ),
   },
   decorators: [iPhoneViewportDecorator],
 }

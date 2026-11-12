@@ -461,6 +461,16 @@ export function ConversationPane({
       onToggleStatusPanel={onToggleStatusPanel}
       onToggleDecisionsPanel={onToggleDecisionsPanel}
       onSelectDecision={onSelectDecision}
+      mobileStatusPanel={
+        statusPanelOpen ? (
+          <SessionStatusPanel
+            tabs={panelTabs}
+            activeTabId={activeTabId}
+            onTabChange={onTabChange}
+            onClose={onCloseStatusPanel}
+          />
+        ) : null
+      }
       onBack={onBack}
       onLater={onLater}
       {...(onClose === undefined ? {} : { onClose })}
