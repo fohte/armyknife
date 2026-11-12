@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.645](https://github.com/fohte/armyknife/compare/v0.1.644...v0.1.645) (2026-11-12)
+
+
+### Bug Fixes
+
+* **watch-web:** hide paused badges in inbox ([#1659](https://github.com/fohte/armyknife/issues/1659)) ([1df9429](https://github.com/fohte/armyknife/commit/1df942992d8debecdaca386768637096984a1550))
+
 ## [0.1.644](https://github.com/fohte/armyknife/compare/v0.1.643...v0.1.644) (2026-11-12)
 
 
