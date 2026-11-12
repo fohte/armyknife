@@ -427,6 +427,14 @@ export function ConversationPane({
     onCloseStatusPanel,
     onToggleStatusPanel,
   })
+  const statusPanel = statusPanelOpen ? (
+    <SessionStatusPanel
+      tabs={panelTabs}
+      activeTabId={activeTabId}
+      onTabChange={onTabChange}
+      onClose={onCloseStatusPanel}
+    />
+  ) : null
 
   const conversationView = (
     <ConversationPaneView
@@ -461,16 +469,7 @@ export function ConversationPane({
       onToggleStatusPanel={onToggleStatusPanel}
       onToggleDecisionsPanel={onToggleDecisionsPanel}
       onSelectDecision={onSelectDecision}
-      mobileStatusPanel={
-        statusPanelOpen ? (
-          <SessionStatusPanel
-            tabs={panelTabs}
-            activeTabId={activeTabId}
-            onTabChange={onTabChange}
-            onClose={onCloseStatusPanel}
-          />
-        ) : null
-      }
+      mobileStatusPanel={statusPanel}
       onBack={onBack}
       onLater={onLater}
       {...(onClose === undefined ? {} : { onClose })}
@@ -485,16 +484,7 @@ export function ConversationPane({
     <div className="conversation-status-panel-container">
       <ResizableColumns
         first={conversationView}
-        second={
-          statusPanelOpen ? (
-            <SessionStatusPanel
-              tabs={panelTabs}
-              activeTabId={activeTabId}
-              onTabChange={onTabChange}
-              onClose={onCloseStatusPanel}
-            />
-          ) : null
-        }
+        second={statusPanel}
         overlaySecondPane
         storageKey="agent-watch:conversation-width"
         firstSize={560}

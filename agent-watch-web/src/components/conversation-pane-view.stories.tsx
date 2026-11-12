@@ -409,10 +409,11 @@ export const StatusPanelToggleIsActive: Story = {
   args: { statusPanelOpen: true },
 }
 
-export const ReviewGuidanceFitsAnIPhone: Story = {
-  name: 'A review directs iPhone users to their Mac',
+export const IPhoneReviewHeaderOffersStatusPanel: Story = {
+  name: 'The iPhone review header offers the status panel toggle',
   args: {
     isMobile: true,
+    statusPanelOpen: false,
     session: {
       ...session,
       category: 'needs_action',

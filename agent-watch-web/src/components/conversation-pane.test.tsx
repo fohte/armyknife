@@ -3638,7 +3638,7 @@ it('opens and closes the existing status panel over the mobile conversation', as
       .mockResolvedValueOnce(jsonResponse(actions)),
   )
   function ToggleHarness() {
-    const [statusPanelOpen, setStatusPanelOpen] = useState(true)
+    const [statusPanelOpen, setStatusPanelOpen] = useState(false)
     return (
       <ConversationPane
         session={session}
@@ -3659,6 +3659,13 @@ it('opens and closes the existing status panel over the mobile conversation', as
   act(() => root?.render(<ToggleHarness />))
   await act(async () => {
     for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.mobile-conversation-status-toggle',
+      ),
+    ).click()
   })
 
   const opened = {
