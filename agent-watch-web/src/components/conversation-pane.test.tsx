@@ -1234,6 +1234,91 @@ it('reuses recent pull request lists when switching between sessions', async () 
   })
 })
 
+it('fetches a fresh pull request list when the selected task changes', async () => {
+  vi.useFakeTimers()
+  setPageVisibility('visible')
+  const firstTask = {
+    id: 'first-task',
+    number: 51,
+    title: 'First task',
+    priority: null,
+  }
+  const secondTask = {
+    id: 'second-task',
+    number: 52,
+    title: 'Second task',
+    priority: null,
+  }
+  let responseNumber = 0
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/pull-requests')) {
+      responseNumber += 1
+      return Promise.resolve(
+        jsonResponse({
+          pullRequests: [
+            {
+              number: 43,
+              title: `Request ${String(responseNumber)}`,
+              url: 'https://github.com/sample-org/sample-project/pull/43',
+              state: 'Open',
+              ciState: 'Successful',
+              reviewStatus: 'done',
+            },
+          ],
+          error: null,
+        }),
+      )
+    }
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+
+  const render = (task: Session['task']) => {
+    act(() => {
+      root?.render(
+        <PullRequestHookTestView
+          session={{ ...session, task }}
+          enabled={true}
+        />,
+      )
+    })
+  }
+  const flushRequests = async () => {
+    await act(async () => {
+      for (let index = 0; index < 12; index += 1) await Promise.resolve()
+    })
+  }
+
+  render(firstTask)
+  await flushRequests()
+  const titleAfterFirstTask = container.querySelector('span')?.textContent
+
+  render(secondTask)
+  await flushRequests()
+
+  const snapshot = () => ({
+    titleAfterFirstTask,
+    titleAfterTaskChange: container.querySelector('span')?.textContent,
+    requests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/pull-requests')),
+  })
+  expect(snapshot()).toEqual({
+    titleAfterFirstTask: 'Request 1',
+    titleAfterTaskChange: 'Request 2',
+    requests: [
+      '/api/sessions/sample-session/pull-requests',
+      '/api/sessions/sample-session/pull-requests',
+    ],
+  })
+})
+
 it('shows a tree request error instead of hiding the tree tab', async () => {
   const treeSession = { ...session, hasSessionTree: true }
   const fetcher = vi.fn<typeof fetch>((input) => {

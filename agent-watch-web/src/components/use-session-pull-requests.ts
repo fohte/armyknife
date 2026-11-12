@@ -26,6 +26,15 @@ type UseSessionPullRequestsOptions = {
   enabled: boolean
 }
 
+function isPullRequestListStale(
+  cached: CachedPullRequestList | undefined,
+): boolean {
+  return (
+    cached === undefined ||
+    Date.now() - cached.fetchedAt >= PULL_REQUEST_REFRESH_INTERVAL
+  )
+}
+
 export function useSessionPullRequests({
   session,
   enabled,
@@ -38,6 +47,7 @@ export function useSessionPullRequests({
     error: null,
   })
   const cache = useRef(new Map<string, CachedPullRequestList>())
+  const requestGeneration = useRef(new Map<string, number>())
 
   useEffect(() => {
     if (!enabled) return
@@ -83,12 +93,15 @@ export function useSessionPullRequests({
         error: previous.cacheKey === cacheKey ? previous.error : null,
       }))
       const requestedAt = Date.now()
+      const generation = (requestGeneration.current.get(cacheKey) ?? 0) + 1
+      requestGeneration.current.set(cacheKey, generation)
       void requestJson(
         `/api/sessions/${encodeURIComponent(session.id)}/pull-requests`,
         isSessionPullRequestListResponse,
       )
         .match(
           (response) => {
+            if (requestGeneration.current.get(cacheKey) !== generation) return
             const fetchedAt = Date.now()
             cache.current.set(cacheKey, {
               pullRequests: response.pullRequests,
@@ -106,6 +119,7 @@ export function useSessionPullRequests({
             }
           },
           (error) => {
+            if (requestGeneration.current.get(cacheKey) !== generation) return
             const previous = cache.current.get(cacheKey)
             cache.current.set(cacheKey, {
               pullRequests: previous?.pullRequests ?? [],
@@ -143,10 +157,7 @@ export function useSessionPullRequests({
         return
       }
       const cached = cache.current.get(cacheKey)
-      if (
-        cached === undefined ||
-        Date.now() - cached.fetchedAt >= PULL_REQUEST_REFRESH_INTERVAL
-      ) {
+      if (isPullRequestListStale(cached)) {
         refresh()
       } else {
         scheduleRefresh()
@@ -167,10 +178,7 @@ export function useSessionPullRequests({
       })
     }
     if (visible) {
-      if (
-        cached === undefined ||
-        Date.now() - cached.fetchedAt >= PULL_REQUEST_REFRESH_INTERVAL
-      ) {
+      if (isPullRequestListStale(cached)) {
         refresh()
       } else {
         scheduleRefresh()

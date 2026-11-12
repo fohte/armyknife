@@ -120,7 +120,7 @@ export function PullRequestListPanel({
           }}
         >
           {showCompleted ? 'Hide' : 'Show'}{' '}
-          {String(completedPullRequests.length)} merged
+          {String(completedPullRequests.length)} completed
         </button>
       )}
     </div>

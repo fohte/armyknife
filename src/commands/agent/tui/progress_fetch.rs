@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
@@ -160,6 +161,64 @@ pub(in crate::commands::agent) async fn fetch_pull_request_list(
     })
 }
 
+async fn fetch_branch_progress<F, Fut>(
+    cache: Option<&PullRequestListCache>,
+    queries: &[BranchPrQuery],
+    fetcher: F,
+) -> (BranchProgressResults, Option<String>)
+where
+    F: FnOnce(Vec<BranchPrQuery>) -> Fut,
+    Fut: Future<Output = Result<BranchProgressResults, String>>,
+{
+    let (queries_to_fetch, mut results) = match cache {
+        Some(cache) => cache.branches_to_fetch(queries),
+        None => (queries.to_vec(), HashMap::new()),
+    };
+    if queries_to_fetch.is_empty() {
+        return (results, None);
+    }
+
+    match fetcher(queries_to_fetch).await {
+        Ok(fetched) => {
+            if let Some(cache) = cache {
+                cache.remember_branches(&fetched);
+            }
+            results.extend(fetched);
+            (results, None)
+        }
+        Err(error) => (results, Some(error)),
+    }
+}
+
+async fn fetch_number_progress<F, Fut>(
+    cache: Option<&PullRequestListCache>,
+    queries: &[PrNumberQuery],
+    fetcher: F,
+) -> (NumberProgressResults, Option<String>)
+where
+    F: FnOnce(Vec<PrNumberQuery>) -> Fut,
+    Fut: Future<Output = Result<NumberProgressResults, String>>,
+{
+    let (queries_to_fetch, mut results) = match cache {
+        Some(cache) => cache.numbers_to_fetch(queries),
+        None => (queries.to_vec(), HashMap::new()),
+    };
+    if queries_to_fetch.is_empty() {
+        return (results, None);
+    }
+
+    match fetcher(queries_to_fetch).await {
+        Ok(fetched) => {
+            if let Some(cache) = cache {
+                cache.remember_numbers(&fetched);
+            }
+            results.extend(fetched);
+            (results, None)
+        }
+        Err(error) => (results, Some(error)),
+    }
+}
+
 fn progress_scope(
     selected_session_id: &str,
     task_id: Option<&str>,
@@ -250,62 +309,35 @@ async fn fetch_progress_for_sessions(
         .map(|(checklist, github_links)| pull_request_queries(checklist, github_links))
         .unwrap_or_default();
 
-    let mut github_error = None;
-    let mut linked_pr_lookup_failed = false;
-    let (branch_queries, mut prs) = pull_request_cache.map_or_else(
-        || (query_data.queries.clone(), HashMap::new()),
-        |cache| cache.branches_to_fetch(&query_data.queries),
-    );
-    let (number_queries, mut linked_prs) = pull_request_cache.map_or_else(
-        || (linked_pr_queries.clone(), HashMap::new()),
-        |cache| cache.numbers_to_fetch(&linked_pr_queries),
-    );
-    let mut fetched_branches = HashMap::new();
-    let mut fetched_numbers = HashMap::new();
-    if !branch_queries.is_empty() || !number_queries.is_empty() {
-        match GitHubClient::get() {
-            Ok(client) => {
-                if !branch_queries.is_empty() {
-                    match client
-                        .get_pr_progress_for_branches_batch(&branch_queries)
-                        .await
-                    {
-                        Ok(found) => {
-                            prs.extend(found.clone());
-                            fetched_branches = found;
-                        }
-                        Err(error) => {
-                            github_error = Some(format!("failed to fetch PR progress: {error:#}"));
-                        }
-                    }
-                }
-                if !number_queries.is_empty() {
-                    match client
-                        .get_pr_progress_for_numbers_batch(&number_queries)
-                        .await
-                    {
-                        Ok(found) => {
-                            linked_prs.extend(found.clone());
-                            fetched_numbers = found;
-                        }
-                        Err(error) => {
-                            linked_pr_lookup_failed = true;
-                            github_error.get_or_insert_with(|| {
-                                format!("failed to fetch linked PR progress: {error:#}")
-                            });
-                        }
-                    }
-                }
-            }
-            Err(error) => {
-                linked_pr_lookup_failed = !linked_pr_queries.is_empty();
-                github_error = Some(format!("GitHub is unavailable: {error:#}"));
-            }
-        }
-    }
-    if let Some(cache) = pull_request_cache {
-        cache.remember_branches(&fetched_branches);
-        cache.remember_numbers(&fetched_numbers);
+    let (prs, mut github_error) = fetch_branch_progress(
+        pull_request_cache,
+        &query_data.queries,
+        |queries| async move {
+            let client =
+                GitHubClient::get().map_err(|error| format!("GitHub is unavailable: {error:#}"))?;
+            client
+                .get_pr_progress_for_branches_batch(&queries)
+                .await
+                .map_err(|error| format!("failed to fetch PR progress: {error:#}"))
+        },
+    )
+    .await;
+    let (linked_prs, linked_pr_error) = fetch_number_progress(
+        pull_request_cache,
+        &linked_pr_queries,
+        |queries| async move {
+            let client =
+                GitHubClient::get().map_err(|error| format!("GitHub is unavailable: {error:#}"))?;
+            client
+                .get_pr_progress_for_numbers_batch(&queries)
+                .await
+                .map_err(|error| format!("failed to fetch linked PR progress: {error:#}"))
+        },
+    )
+    .await;
+    let linked_pr_lookup_failed = linked_pr_error.is_some();
+    if let Some(error) = linked_pr_error {
+        github_error.get_or_insert(error);
     }
 
     let delegated: Vec<FetchedDelegate> = delegated
@@ -517,7 +549,7 @@ fn branch_query_from_context(context: SessionPrContext) -> BranchLookup {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
     use std::path::PathBuf;
 
@@ -526,15 +558,16 @@ mod tests {
 
     use super::{
         BranchLookup, ProgressFetchScope, PullRequestListCache, Resolution, branch_query_for_with,
-        direct_children, progress_scope, task_descendant_children,
+        direct_children, fetch_branch_progress, fetch_number_progress, progress_scope,
+        task_descendant_children,
     };
     use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionStatus};
     use crate::infra::github::{
         BranchPrQuery, PrCiState, PrInfo, PrNumberQuery, PrProgressInfo, PrState,
     };
 
-    #[test]
-    fn pull_request_list_cache_reuses_terminal_branches_only() {
+    #[tokio::test]
+    async fn pull_request_list_fetch_skips_terminal_branches_but_refreshes_open_and_missing() {
         let cache = PullRequestListCache::default();
         let terminal = BranchPrQuery {
             owner: "sample-owner".to_string(),
@@ -550,44 +583,81 @@ mod tests {
             ..terminal.clone()
         };
         let terminal_progress = progress(PrState::Merged, 2048);
-        let (initial_queries, initial_cached) =
-            cache.branches_to_fetch(&[terminal.clone(), open.clone(), missing.clone()]);
-        assert_eq!(
-            initial_queries,
-            vec![terminal.clone(), open.clone(), missing.clone()]
-        );
-        assert_eq!(initial_cached, HashMap::new());
-
-        cache.remember_branches(&HashMap::from([
-            (terminal.key(), Some(terminal_progress.clone())),
-            (open.key(), Some(progress(PrState::Open, 2046))),
-            (missing.key(), None),
-        ]));
+        let queries = vec![terminal.clone(), open.clone(), missing.clone()];
+        let fetched_queries = RefCell::new(Vec::new());
+        let (first_results, first_error) =
+            fetch_branch_progress(Some(&cache), &queries, |requested| {
+                fetched_queries.borrow_mut().push(requested);
+                let results = HashMap::from([
+                    (terminal.key(), Some(terminal_progress.clone())),
+                    (open.key(), Some(progress(PrState::Open, 2046))),
+                    (missing.key(), None),
+                ]);
+                async move { Ok(results) }
+            })
+            .await;
 
         let terminal_number = PrNumberQuery {
             owner: terminal.owner.clone(),
             repo: terminal.repo.clone(),
             number: 2048,
         };
-        assert_eq!(
-            cache.numbers_to_fetch(std::slice::from_ref(&terminal_number)),
-            (
-                vec![],
-                HashMap::from([(terminal_number.key(), Some(terminal_progress.clone()))])
-            )
-        );
+        let number_fetch_called = Cell::new(false);
+        let (number_results, number_error) =
+            fetch_number_progress(Some(&cache), std::slice::from_ref(&terminal_number), |_| {
+                number_fetch_called.set(true);
+                async { Ok(HashMap::new()) }
+            })
+            .await;
 
-        let (queries, cached) =
-            cache.branches_to_fetch(&[terminal.clone(), open.clone(), missing.clone()]);
-        assert_eq!(queries, vec![open, missing]);
+        let (second_results, second_error) =
+            fetch_branch_progress(Some(&cache), &queries, |requested| {
+                fetched_queries.borrow_mut().push(requested.clone());
+                let results = requested
+                    .iter()
+                    .map(|query| {
+                        let progress = (query == &open).then(|| progress(PrState::Open, 2046));
+                        (query.key(), progress)
+                    })
+                    .collect::<HashMap<_, _>>();
+                async move { Ok(results) }
+            })
+            .await;
+
         assert_eq!(
-            cached,
-            HashMap::from([(terminal.key(), Some(terminal_progress))])
+            (
+                fetched_queries.into_inner(),
+                first_results,
+                first_error,
+                number_results,
+                number_fetch_called.get(),
+                number_error,
+                second_results,
+                second_error,
+            ),
+            (
+                vec![queries.clone(), vec![open.clone(), missing.clone()]],
+                HashMap::from([
+                    (terminal.key(), Some(terminal_progress.clone())),
+                    (open.key(), Some(progress(PrState::Open, 2046))),
+                    (missing.key(), None),
+                ]),
+                None,
+                HashMap::from([(terminal_number.key(), Some(terminal_progress.clone()))]),
+                false,
+                None,
+                HashMap::from([
+                    (terminal.key(), Some(terminal_progress)),
+                    (open.key(), Some(progress(PrState::Open, 2046))),
+                    (missing.key(), None),
+                ]),
+                None,
+            ),
         );
     }
 
-    #[test]
-    fn pull_request_list_cache_reuses_closed_number_queries() {
+    #[tokio::test]
+    async fn pull_request_list_fetch_skips_cached_closed_number_queries() {
         let cache = PullRequestListCache::default();
         let closed = PrNumberQuery {
             owner: "sample-owner".to_string(),
@@ -598,16 +668,50 @@ mod tests {
             number: 2046,
             ..closed.clone()
         };
-        cache.remember_numbers(&HashMap::from([
-            (closed.key(), Some(progress(PrState::Closed, 2048))),
-            (open.key(), Some(progress(PrState::Open, 2046))),
-        ]));
+        let queries = vec![closed.clone(), open.clone()];
+        let fetched_queries = RefCell::new(Vec::new());
+        let (first_results, first_error) =
+            fetch_number_progress(Some(&cache), &queries, |requested| {
+                fetched_queries.borrow_mut().push(requested);
+                let results = HashMap::from([
+                    (closed.key(), Some(progress(PrState::Closed, 2048))),
+                    (open.key(), Some(progress(PrState::Open, 2046))),
+                ]);
+                async move { Ok(results) }
+            })
+            .await;
+        let (second_results, second_error) =
+            fetch_number_progress(Some(&cache), &queries, |requested| {
+                fetched_queries.borrow_mut().push(requested.clone());
+                let results = requested
+                    .iter()
+                    .map(|query| (query.key(), Some(progress(PrState::Open, 2046))))
+                    .collect::<HashMap<_, _>>();
+                async move { Ok(results) }
+            })
+            .await;
 
-        let (queries, cached) = cache.numbers_to_fetch(&[closed.clone(), open.clone()]);
-        assert_eq!(queries, vec![open.clone()]);
         assert_eq!(
-            cached,
-            HashMap::from([(closed.key(), Some(progress(PrState::Closed, 2048)))])
+            (
+                fetched_queries.into_inner(),
+                first_results,
+                first_error,
+                second_results,
+                second_error,
+            ),
+            (
+                vec![queries, vec![open.clone()]],
+                HashMap::from([
+                    (closed.key(), Some(progress(PrState::Closed, 2048))),
+                    (open.key(), Some(progress(PrState::Open, 2046))),
+                ]),
+                None,
+                HashMap::from([
+                    (closed.key(), Some(progress(PrState::Closed, 2048))),
+                    (open.key(), Some(progress(PrState::Open, 2046))),
+                ]),
+                None,
+            ),
         );
     }
 

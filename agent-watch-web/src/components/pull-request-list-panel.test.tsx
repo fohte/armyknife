@@ -86,7 +86,7 @@ it('collapses merged and closed pull requests until requested', () => {
   expect(snapshot()).toEqual([
     {
       titles: ['#43Keep active work visible'],
-      toggle: 'Show 2 merged',
+      toggle: 'Show 2 completed',
       expanded: 'false',
     },
     {
@@ -95,7 +95,7 @@ it('collapses merged and closed pull requests until requested', () => {
         '#42Finish an earlier change',
         '#41Close an abandoned change',
       ],
-      toggle: 'Hide 2 merged',
+      toggle: 'Hide 2 completed',
       expanded: 'true',
     },
   ])
