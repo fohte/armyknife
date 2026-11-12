@@ -3,7 +3,6 @@ import '#components/later-today.css'
 import { Button } from '@fohte/ui/button'
 import { Chip } from '@fohte/ui/chip'
 
-import { SessionPausedBadge } from '#components/session-paused-badge'
 import { cn } from '#lib/utils'
 import { formatSessionDecisionCount } from '#session-decision-count'
 import { formatLinkedTaskCount } from '#session-task-count'
@@ -44,9 +43,6 @@ function sessionStatus(session: Session) {
   }
 
   if (session.category === 'done') {
-    if (session.isPaused && session.pullRequest?.state !== 'Merged') {
-      return formatElapsedTime(session.elapsedSeconds)
-    }
     const detail =
       session.pullRequest?.state === 'Merged'
         ? `Merged #${String(session.pullRequest.number)}`
@@ -116,7 +112,6 @@ export function SessionRow({
               >
                 {session.title}
               </span>
-              <SessionPausedBadge isPaused={session.isPaused} />
               <span className="session-age">{sessionStatus(session)}</span>
             </span>
             {session.category === 'needs_action' ? (
