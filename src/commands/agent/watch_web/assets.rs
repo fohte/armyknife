@@ -1,5 +1,5 @@
 use axum::body::Body;
-use axum::http::header::CONTENT_TYPE;
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use axum::http::{Response, StatusCode, Uri};
 use axum::response::IntoResponse;
 use include_dir::{Dir, include_dir};
@@ -7,6 +7,8 @@ use include_dir::{Dir, include_dir};
 pub(super) static DIST: Dir<'static> = include_dir!("$AGENT_WATCH_WEB_ASSETS");
 
 const BUILD_INSTRUCTIONS: &str = "The Agent Watch Web UI has not been built. Run `cd agent-watch-web && pnpm install --frozen-lockfile && pnpm run build`, then rebuild armyknife.";
+const IMMUTABLE_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
+const NO_CACHE_CONTROL: &str = "no-cache";
 
 pub(super) fn serve_from(uri: &Uri, dist: &'static Dir<'static>) -> Response<Body> {
     if dist.get_file("index.html").is_none() {
@@ -25,14 +27,41 @@ pub(super) fn serve_from(uri: &Uri, dist: &'static Dir<'static>) -> Response<Bod
     let content_type = mime_guess::from_path(resolved_path)
         .first_or_octet_stream()
         .to_string();
+    let cache_control = if is_hashed_asset(resolved_path) {
+        IMMUTABLE_CACHE_CONTROL
+    } else {
+        NO_CACHE_CONTROL
+    };
     match Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, content_type)
+        .header(CACHE_CONTROL, cache_control)
         .body(Body::from(file.contents()))
     {
         Ok(response) => response,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
+}
+
+fn is_hashed_asset(path: &str) -> bool {
+    if !path.starts_with("assets/") {
+        return false;
+    }
+
+    let Some((stem, _)) = path.rsplit_once('.') else {
+        return false;
+    };
+    let Some(hash_start) = stem.len().checked_sub(8) else {
+        return false;
+    };
+    let Some((prefix, hash)) = stem.split_at_checked(hash_start) else {
+        return false;
+    };
+
+    prefix.ends_with('-')
+        && hash
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "_-".contains(character))
 }
 
 fn asset_path(uri: &Uri) -> &str {
@@ -69,7 +98,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("text/html".to_owned()),
-                b"<main>fixture</main>\n".to_vec(),
+                include_bytes!("test_assets/index.html").to_vec(),
             )
         );
     }
