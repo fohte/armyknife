@@ -24,7 +24,6 @@ pub(super) struct MessageCacheKey {
     pub(super) parent: Option<ParentSession>,
     pub(super) pending_permission_agent_ids: BTreeSet<String>,
     pub(super) current_tool: Option<String>,
-    pub(super) last_message: Option<String>,
     pub(super) user_marker: Option<String>,
     pub(super) decisions: Vec<AgentDecision>,
     pub(super) queued_prompts: Vec<WatchWebQueuedPrompt>,
@@ -52,7 +51,6 @@ impl MessageCacheKey {
             parent,
             pending_permission_agent_ids: session.pending_permission_agent_ids.clone(),
             current_tool: session.current_tool.clone(),
-            last_message: session.last_message.clone(),
             user_marker,
             decisions,
             queued_prompts,
@@ -301,8 +299,50 @@ impl MessageCache {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConversationResponse, refresh_image_availability_with};
+    use serde_json::json;
+
+    use super::{ConversationResponse, MessageCacheKey, refresh_image_availability_with};
+    use crate::commands::agent::types::{MAIN_THREAD_AGENT_KEY, Session};
     use crate::commands::agent::watch_web::messages::{ChatItem, UserContentPart};
+
+    #[test]
+    fn message_cache_key_ignores_last_assistant_message() {
+        let mut session: Session = serde_json::from_value(json!({
+            "session_id": "fixture-session",
+            "cwd": "/fixture/project",
+            "status": "ended",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": "Earlier response.",
+            "pending_permission_agent_ids": [MAIN_THREAD_AGENT_KEY],
+            "current_tool": "Bash(echo fixture)",
+        }))
+        .unwrap();
+
+        let first_key = MessageCacheKey::new(
+            &session,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        session.last_message = Some("Later response.".to_string());
+        let second_key = MessageCacheKey::new(
+            &session,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+
+        assert!(first_key == second_key);
+    }
 
     #[test]
     fn refreshes_external_image_status_but_keeps_inline_images_available() {
