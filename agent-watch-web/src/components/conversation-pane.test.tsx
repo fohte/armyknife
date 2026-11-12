@@ -7332,6 +7332,56 @@ it('refreshes a memoized message time when the local day changes', () => {
   })
 })
 
+it('passes the changed local day through the memoized message elements', () => {
+  const timestamp = new Date(2030, 8, 11, 23, 58).toISOString()
+  const beforeMidnight = new Date(2030, 8, 11, 23, 59)
+  const afterMidnight = new Date(2030, 8, 12, 0, 1)
+  const message: ChatItem = {
+    type: 'event',
+    kind: 'system',
+    text: 'A fictional event occurred.',
+    failed: false,
+    timestamp,
+  }
+  const messages = [message]
+  const sessions: Session[] = []
+  const pendingPermissionActions = {}
+  const onAction = () => Promise.resolve(true)
+  const onSelectDecision = () => undefined
+  const onSelectSession = () => undefined
+  const render = () => {
+    root ??= createRoot(container)
+    act(() => {
+      root?.render(
+        <ConversationPaneView
+          session={session}
+          sessions={sessions}
+          messages={messages}
+          actions={null}
+          pendingPermissionActions={pendingPermissionActions}
+          loading={false}
+          error={null}
+          onAction={onAction}
+          onSelectSession={onSelectSession}
+          onSelectDecision={onSelectDecision}
+        />,
+      )
+    })
+  }
+  vi.useFakeTimers()
+  try {
+    vi.setSystemTime(beforeMidnight)
+    render()
+    vi.setSystemTime(afterMidnight)
+    render()
+
+    const getActual = () => container.querySelector('time')?.textContent ?? null
+    expect(getActual()).toBe(formatMessageTime(timestamp, afterMidnight))
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
 it('keeps a todo comment when a preceding conversation row arrives', () => {
   const todo: ChatItem = {
     type: 'todo',
