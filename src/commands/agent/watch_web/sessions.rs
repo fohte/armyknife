@@ -971,40 +971,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn session_tree_relation_flag_excludes_sessions_related_only_through_ended_children() {
-        let mut parent = session(SessionStatus::Running);
-        parent.session_id = "parent-session".to_string();
-        let mut child = session(SessionStatus::Ended);
-        child.session_id = "child-session".to_string();
-        child.ancestor_session_ids = vec!["parent-session".to_string()];
-
-        assert_eq!(
-            super::session_tree_related_ids(&[parent, child]),
-            HashSet::new()
-        );
-    }
-
-    #[test]
-    fn session_tree_relation_flag_keeps_live_relatives_across_ended_ancestors() {
-        let mut parent = session(SessionStatus::Running);
-        parent.session_id = "parent-session".to_string();
-        let mut ended_intermediate = session(SessionStatus::Ended);
-        ended_intermediate.session_id = "ended-intermediate".to_string();
-        ended_intermediate.ancestor_session_ids = vec!["parent-session".to_string()];
-        let mut child = session(SessionStatus::Running);
-        child.session_id = "child-session".to_string();
-        child.ancestor_session_ids = vec![
-            "parent-session".to_string(),
-            "ended-intermediate".to_string(),
-        ];
-
-        assert_eq!(
-            super::session_tree_related_ids(&[parent, ended_intermediate, child]),
-            HashSet::from(["child-session".to_string(), "parent-session".to_string(),]),
-        );
-    }
-
     struct ExpectedSessionDetails<'a> {
         kind: Option<&'a str>,
         category_when_not_later: &'a str,
@@ -1121,6 +1087,52 @@ mod tests {
                 ),
             ),
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_route_marks_tree_available_for_live_relatives_across_ended_ancestors(
+        mut source: TestSessionSource,
+    ) {
+        source.sessions[0].status = SessionStatus::Running;
+        source.all_sessions[0] = source.sessions[0].clone();
+        let mut ended_intermediate = session(SessionStatus::Ended);
+        ended_intermediate.session_id = "ended-intermediate-session".to_string();
+        ended_intermediate.ancestor_session_ids =
+            vec!["parent-session".to_string(), "child-session".to_string()];
+        let mut descendant = session(SessionStatus::Running);
+        descendant.session_id = "live-descendant-session".to_string();
+        descendant.ancestor_session_ids = vec![
+            "parent-session".to_string(),
+            "child-session".to_string(),
+            "ended-intermediate-session".to_string(),
+        ];
+        source.all_sessions.extend([ended_intermediate, descendant]);
+        source.web_states[0].later_until = None;
+
+        let mut expected = expected_response(
+            "in_progress",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: None,
+                category_when_not_later: "in_progress",
+                is_paused: false,
+                unread: false,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["hasSessionTree"] = serde_json::json!(true);
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
 
     #[rstest]
