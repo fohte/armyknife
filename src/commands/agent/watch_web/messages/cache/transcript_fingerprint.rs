@@ -178,92 +178,73 @@ pub(super) fn transcript_fingerprint(
     } else {
         path.to_path_buf()
     };
-    for _ in 0..TRANSCRIPT_SNAPSHOT_ATTEMPTS {
-        let mut file = match File::open(&source_path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("open transcript {}", source_path.display()));
-            }
-        };
-        let metadata = file
-            .metadata()
-            .with_context(|| format!("read transcript metadata {}", source_path.display()))?;
-        let modified = metadata.modified().with_context(|| {
-            format!(
-                "read transcript modification time {}",
-                source_path.display()
-            )
-        })?;
-        let Some(prefix_probes) =
-            transcript_prefix_probes(&mut file, &source_path, metadata.len())?
-        else {
-            continue;
-        };
-        if !metadata_matches_snapshot(&source_path, &metadata, modified, &file)? {
-            continue;
-        }
-        #[cfg(unix)]
-        let (device, inode, changed_at_seconds, changed_at_nanoseconds) = {
-            use std::os::unix::fs::MetadataExt;
-
-            (
-                metadata.dev(),
-                metadata.ino(),
-                metadata.ctime(),
-                metadata.ctime_nsec(),
-            )
-        };
-        return Ok(Some(TranscriptFingerprint {
-            source_path,
-            len: metadata.len(),
-            modified,
-            prefix_probes,
-            #[cfg(unix)]
-            device,
-            #[cfg(unix)]
-            inode,
-            #[cfg(unix)]
-            changed_at_seconds,
-            #[cfg(unix)]
-            changed_at_nanoseconds,
-        }));
-    }
-    anyhow::bail!(
-        "transcript changed while reading its fingerprint {}",
-        source_path.display()
-    )
+    retry_transcript_fingerprint_capture(|| read_transcript_fingerprint_snapshot(&source_path))
 }
 
-fn metadata_matches_snapshot(
-    path: &Path,
-    snapshot: &std::fs::Metadata,
-    snapshot_modified: std::time::SystemTime,
-    file: &File,
-) -> anyhow::Result<bool> {
-    let current = file
-        .metadata()
-        .with_context(|| format!("read transcript metadata {}", path.display()))?;
-    let current_modified = current
-        .modified()
-        .with_context(|| format!("read transcript modification time {}", path.display()))?;
-    if current.len() != snapshot.len() || current_modified != snapshot_modified {
-        return Ok(false);
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-
-        if current.dev() != snapshot.dev()
-            || current.ino() != snapshot.ino()
-            || current.ctime() != snapshot.ctime()
-            || current.ctime_nsec() != snapshot.ctime_nsec()
-        {
-            return Ok(false);
+fn retry_transcript_fingerprint_capture(
+    mut capture: impl FnMut() -> anyhow::Result<Option<TranscriptFingerprint>>,
+) -> anyhow::Result<Option<TranscriptFingerprint>> {
+    for _ in 0..TRANSCRIPT_SNAPSHOT_ATTEMPTS {
+        if let Some(fingerprint) = capture()? {
+            return Ok(Some(fingerprint));
         }
     }
-    Ok(true)
+    Ok(None)
+}
+
+fn read_transcript_fingerprint_snapshot(
+    source_path: &Path,
+) -> anyhow::Result<Option<TranscriptFingerprint>> {
+    let mut file = match File::open(source_path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("open transcript {}", source_path.display()));
+        }
+    };
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("read transcript metadata {}", source_path.display()))?;
+    let modified = metadata.modified().with_context(|| {
+        format!(
+            "read transcript modification time {}",
+            source_path.display()
+        )
+    })?;
+    let Some(prefix_probes) = transcript_prefix_probes(&mut file, source_path, metadata.len())?
+    else {
+        return Ok(None);
+    };
+    #[cfg(unix)]
+    let (device, inode, changed_at_seconds, changed_at_nanoseconds) = {
+        use std::os::unix::fs::MetadataExt;
+
+        (
+            metadata.dev(),
+            metadata.ino(),
+            metadata.ctime(),
+            metadata.ctime_nsec(),
+        )
+    };
+    let fingerprint = TranscriptFingerprint {
+        source_path: source_path.to_path_buf(),
+        len: metadata.len(),
+        modified,
+        prefix_probes,
+        #[cfg(unix)]
+        device,
+        #[cfg(unix)]
+        inode,
+        #[cfg(unix)]
+        changed_at_seconds,
+        #[cfg(unix)]
+        changed_at_nanoseconds,
+    };
+    if !fingerprint.matches_file_metadata(&file)? {
+        return Ok(None);
+    }
+    Ok(Some(fingerprint))
 }
 
 fn transcript_prefix_probes(
@@ -330,12 +311,14 @@ fn prefix_matches(
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
     use std::io::Write;
 
     use rstest::rstest;
 
-    use super::{TranscriptChange, transcript_fingerprint, transcript_prefix_probes};
+    use super::{
+        TRANSCRIPT_SNAPSHOT_ATTEMPTS, TranscriptChange, retry_transcript_fingerprint_capture,
+        transcript_fingerprint,
+    };
     use crate::commands::agent::types::Engine;
 
     #[test]
@@ -386,16 +369,18 @@ mod tests {
     }
 
     #[test]
-    fn transcript_prefix_probe_rejects_an_unstable_snapshot() {
-        let directory = tempfile::tempdir().expect("temporary directory should be created");
-        let path = directory.path().join("transcript.jsonl");
-        std::fs::write(&path, b"x").expect("transcript should be written");
-        let mut file = File::open(&path).expect("transcript should open");
+    fn unstable_transcript_fingerprint_falls_back_after_bounded_retries() {
+        let mut attempts = 0;
+
+        let fingerprint = retry_transcript_fingerprint_capture(|| {
+            attempts += 1;
+            Ok(None)
+        })
+        .expect("unstable transcript snapshots should fall back");
 
         assert_eq!(
-            transcript_prefix_probes(&mut file, &path, 2)
-                .expect("shortened transcript is an unstable snapshot"),
-            None,
+            (fingerprint.is_none(), attempts),
+            (true, TRANSCRIPT_SNAPSHOT_ATTEMPTS)
         );
     }
 
