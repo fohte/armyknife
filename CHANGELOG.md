@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.677](https://github.com/fohte/armyknife/compare/v0.1.676...v0.1.677) (2026-11-13)
+
+
+### Features
+
+* **watch-web:** edit review documents ([#1729](https://github.com/fohte/armyknife/issues/1729)) ([ba0dfcc](https://github.com/fohte/armyknife/commit/ba0dfcc1a1e1eb53df899de84ba9774ff81e36bd))
+
 ## [0.1.676](https://github.com/fohte/armyknife/compare/v0.1.675...v0.1.676) (2026-11-13)
 
 
