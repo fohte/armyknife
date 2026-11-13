@@ -26,6 +26,7 @@ import type { Session } from '#types'
 type CommandPaletteProps = {
   sessions: readonly Session[]
   recentSessionIds: readonly string[]
+  workTypeNavLabels?: Readonly<Record<string, string>>
   initialQuery?: string
   initialScope?: PaletteScope
   initialActionItemId?: string
@@ -49,6 +50,7 @@ const SCOPES: Array<{ key: PaletteScope; label: string; marker?: string }> = [
 export function CommandPalette({
   sessions,
   recentSessionIds,
+  workTypeNavLabels = {},
   initialQuery = '',
   initialScope = 'all',
   initialActionItemId,
@@ -76,8 +78,15 @@ export function CommandPalette({
   const [activeActionIndex, setActiveActionIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const groups = useMemo(
-    () => buildCommandPaletteGroups(sessions, query, scope, recentSessionIds),
-    [query, recentSessionIds, scope, sessions],
+    () =>
+      buildCommandPaletteGroups(
+        sessions,
+        query,
+        scope,
+        recentSessionIds,
+        workTypeNavLabels,
+      ),
+    [query, recentSessionIds, scope, sessions, workTypeNavLabels],
   )
   const items = groups.flatMap((group) => group.items)
   const openBesideShortcut = getCommandPaletteShortcut(navigator.platform)
