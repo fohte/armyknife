@@ -187,6 +187,16 @@ export type ChatItem =
       description: string
     }
   | {
+      type: 'permission_denied'
+      seq: number
+      toolUseId?: string
+      tool: string
+      inputSummary: string
+      reason: string | null
+      retryable: boolean
+      resolved: boolean
+    }
+  | {
       type: 'decision'
       seq: number
       title: string

@@ -58,6 +58,13 @@ function areConversationMessagePropsEqual(
         previous.openInTerminalStatus === next.openInTerminalStatus &&
         previous.sessionEngine === next.sessionEngine
       )
+    case 'permission_denied':
+      return (
+        previous.actions === next.actions &&
+        previous.actionsReady === next.actionsReady &&
+        previous.pendingAction === next.pendingAction &&
+        previous.onAction === next.onAction
+      )
     case 'event':
     case 'tool_summary':
     case 'tool_in_progress':

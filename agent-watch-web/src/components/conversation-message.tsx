@@ -11,6 +11,7 @@ import {
   PermissionCard,
   type PermissionRequestIdentity,
 } from '#components/permission-card'
+import { PermissionDeniedCard } from '#components/permission-denied-card'
 import { ProposalCard } from '#components/proposal-card'
 import { QuestionCard } from '#components/question-card'
 import { SubagentReport } from '#components/subagent-report'
@@ -211,6 +212,24 @@ export function renderConversationMessage({
         onComplete={(comment) =>
           onAction(`todos/${String(message.seq)}/complete`, { comment })
         }
+      />
+    )
+  }
+  if (message.type === 'permission_denied') {
+    const identity = { requestId: `permission-denied-${String(message.seq)}` }
+    return (
+      <PermissionDeniedCard
+        message={message}
+        canRetry={actions?.message === true}
+        actionsReady={actionsReady}
+        pendingAction={pendingAction}
+        onRetry={() => {
+          void onAction(
+            `permission-denials/${String(message.seq)}/retry`,
+            undefined,
+            identity,
+          )
+        }}
       />
     )
   }

@@ -1,0 +1,49 @@
+.chat-permission-denied-card {
+  display: grid;
+  gap: 0.5rem;
+  max-width: 34rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--aw-color-border, #c8c8c8);
+  border-radius: 0.75rem;
+  background: var(--aw-color-surface, #fff);
+}
+
+.chat-permission-denied-card h2,
+.chat-permission-denied-card p {
+  margin: 0;
+}
+
+.chat-permission-denied-card h2 {
+  font-size: 0.95rem;
+}
+
+.permission-denied-tool {
+  font-weight: 600;
+}
+
+.permission-denied-input {
+  max-height: 8rem;
+  margin: 0;
+  overflow: auto;
+  padding: 0.55rem 0.65rem;
+  border-radius: 0.45rem;
+  background: var(--aw-color-muted, #f3f3f3);
+  font: inherit;
+  font-family: var(--aw-font-mono, monospace);
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.permission-denied-reason,
+.permission-denied-unavailable,
+.permission-denied-complete,
+.permission-denied-sent {
+  color: var(--aw-color-muted-foreground, #555);
+  font-size: 0.85rem;
+}
+
+.permission-denied-actions {
+  display: flex;
+  justify-content: flex-end;
+}

@@ -75,6 +75,8 @@ function getConversationMessageIdentity(message: ChatItem): string {
       return message.requestId === undefined
         ? `${message.type}:${JSON.stringify([message.tool, message.description])}`
         : `${message.type}:${message.requestId}`
+    case 'permission_denied':
+      return `${message.type}:${String(message.seq)}`
     case 'tool_summary': {
       return `${message.type}:${JSON.stringify([
         message.summary,
@@ -172,7 +174,10 @@ export function useConversationMessageElements({
       const messagePendingAction: PendingPermissionActionState =
         message.type === 'permission' && message.requestId !== undefined
           ? (pendingActions[message.requestId] ?? null)
-          : null
+          : message.type === 'permission_denied'
+            ? (pendingActions[`permission-denied-${String(message.seq)}`] ??
+              null)
+            : null
       const identity = getConversationMessageIdentity(message)
       const occurrence = keyOccurrences.get(identity) ?? 0
       keyOccurrences.set(identity, occurrence + 1)

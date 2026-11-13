@@ -7,7 +7,7 @@ import { OpenInTerminalAction } from '#components/open-in-terminal-action'
 import type { ChatItem, OpenInTerminalStatus, SessionActions } from '#types'
 
 type PendingPermissionAction = {
-  action: 'approve' | 'reject'
+  action: 'approve' | 'reject' | 'retry'
   status: 'sending' | 'sent'
   requestId: string
 }

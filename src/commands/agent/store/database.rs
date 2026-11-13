@@ -14,6 +14,7 @@ mod decisions;
 mod migration;
 mod migrations;
 mod peer_out_messages;
+mod permission_denied;
 mod permission_requests;
 mod proposals;
 mod queued_prompts;
@@ -28,6 +29,10 @@ pub(crate) use decisions::{
 pub(crate) use peer_out_messages::WatchWebPeerOutMessage;
 pub(crate) use peer_out_messages::{
     insert_watch_web_peer_out_message, watch_web_peer_out_messages,
+};
+pub(crate) use permission_denied::PermissionDeniedOperation;
+pub(crate) use permission_denied::{
+    add_permission_denied, permission_denied_operations, resolve_permission_denied,
 };
 pub(crate) use permission_requests::{
     PermissionRequestData, PermissionRequestDecision, PermissionRequestResolution,
