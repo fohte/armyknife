@@ -314,3 +314,122 @@ ${unknownId}
   }
   expect(getActual()).toEqual(expected)
 })
+
+it('confirms the cwd before execution and shows the returned status', async () => {
+  const requests: { url: string; body: unknown }[] = []
+  const onCommandExecuted = vi.fn()
+  const execution: { resolve?: (response: Response) => void } = {}
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url =
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.href
+            : input.url
+      const bodyText = init?.body
+      const body = JSON.parse(
+        typeof bodyText === 'string' ? bodyText : '{}',
+      ) as unknown
+      requests.push({ url, body })
+      if (url.endsWith('/commands/execute')) {
+        return new Promise<Response>((resolve) => {
+          execution.resolve = resolve
+        })
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ cwd: '/workspace/example' }), {
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+    }),
+  )
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <MarkdownMessage
+        onCommandExecuted={onCommandExecuted}
+        sessionId="sample-session"
+      >
+        {'Run `! printf safe`.'}
+      </MarkdownMessage>,
+    )
+  })
+
+  const runButton = container.querySelector('button')
+  if (!(runButton instanceof HTMLButtonElement)) {
+    throw new Error('Expected a command button')
+  }
+  await act(async () => userEvent.click(runButton))
+  const dialog = document.body.querySelector('[role="dialog"]')
+  if (!(dialog instanceof HTMLElement)) {
+    throw new Error('Expected a confirmation dialog')
+  }
+  const confirmButton = Array.from(dialog.querySelectorAll('button')).find(
+    (button) => button.textContent === 'Run command',
+  )
+  if (!(confirmButton instanceof HTMLButtonElement)) {
+    throw new Error('Expected the confirmation button')
+  }
+  const confirmation = {
+    cwd: Array.from(
+      dialog.querySelectorAll('dd code'),
+      (node) => node.textContent,
+    ),
+    commands: Array.from(
+      dialog.querySelectorAll('dd pre'),
+      (node) => node.textContent,
+    ),
+  }
+  await act(async () => userEvent.click(confirmButton))
+  const disabledWhileRunning = runButton.disabled
+  const completeExecution = execution.resolve
+  if (completeExecution === undefined) {
+    throw new Error('Expected the execution request to start')
+  }
+  await act(async () => {
+    completeExecution(
+      new Response(
+        JSON.stringify({ exitCode: 0, succeeded: true, timedOut: false }),
+        { headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+  })
+
+  const getSnapshot = () => ({
+    confirmation,
+    dialog: document.body.querySelector('[role="dialog"]')?.textContent ?? null,
+    status: container.querySelector('[role="status"]')?.textContent ?? null,
+    disabledWhileRunning,
+    refreshCalls: onCommandExecuted.mock.calls.length,
+    requests,
+  })
+  expect(getSnapshot()).toEqual({
+    confirmation: {
+      cwd: ['/workspace/example'],
+      commands: ['printf safe'],
+    },
+    dialog: null,
+    status: 'Completed',
+    disabledWhileRunning: true,
+    refreshCalls: 1,
+    requests: [
+      {
+        url: '/api/sessions/sample-session/commands/preview',
+        body: {
+          messageText: 'Run `! printf safe`.',
+          commands: ['printf safe'],
+        },
+      },
+      {
+        url: '/api/sessions/sample-session/commands/execute',
+        body: {
+          messageText: 'Run `! printf safe`.',
+          commands: ['printf safe'],
+        },
+      },
+    ],
+  })
+})

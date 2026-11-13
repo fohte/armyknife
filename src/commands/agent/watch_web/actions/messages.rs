@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use anyhow::Result;
 use axum::Json;
 use axum::extract::{Path as RoutePath, State};
@@ -72,28 +74,47 @@ pub(super) async fn send_message(
     let cleanup_paths = attachment_paths;
     let runtime = state.runtime;
     run_blocking(move || {
-        let sent_at = Utc::now();
-        let result = runtime.send_message(&session, &content);
+        let result = deliver_user_message(
+            runtime.as_ref(),
+            &session,
+            sessions_dir.as_deref(),
+            &content,
+            &queued_content,
+        );
         if result.is_err() {
             attachments::remove(&cleanup_paths);
-        } else if let Some(sessions_dir) = sessions_dir.as_ref()
-            && let Err(error) = store::insert_watch_web_queued_prompt_from(
-                sessions_dir,
-                &session.session_id,
-                &queued_content,
-                sent_at,
-            )
-        {
-            tracing::warn!(
-                    session_id = %session.session_id,
-                %error,
-                "failed to save sent watch-web queued prompt"
-            );
         }
         result
     })
     .await?;
     Ok(Json(Success::new()))
+}
+
+pub(super) fn deliver_user_message(
+    runtime: &dyn super::ActionRuntime,
+    session: &Session,
+    sessions_dir: Option<&Path>,
+    content: &str,
+    queued_content: &str,
+) -> Result<()> {
+    let sent_at = Utc::now();
+    let result = runtime.send_message(session, content);
+    if result.is_ok()
+        && let Some(sessions_dir) = sessions_dir
+        && let Err(error) = store::insert_watch_web_queued_prompt_from(
+            sessions_dir,
+            &session.session_id,
+            queued_content,
+            sent_at,
+        )
+    {
+        tracing::warn!(
+            session_id = %session.session_id,
+            %error,
+            "failed to save sent watch-web queued prompt"
+        );
+    }
+    result
 }
 
 pub(super) fn watch_web_message_content(

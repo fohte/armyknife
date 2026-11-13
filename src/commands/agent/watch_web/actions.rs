@@ -17,6 +17,7 @@ use super::messages::RouteLoaders;
 
 mod answer_question;
 mod api_error;
+mod bang_commands;
 mod close;
 mod decisions;
 mod keyed_mutex_registry;
@@ -31,6 +32,7 @@ mod todo_completion_locks;
 mod todos;
 
 pub(super) use api_error::ApiError;
+use keyed_mutex_registry::KeyedMutexRegistry;
 use permission_denied_locks::PermissionDeniedRetryLocks;
 use proposal_answer_locks::ProposalAnswerLocks;
 use runtime::LiveActionRuntime;
@@ -44,6 +46,7 @@ pub(super) fn router(message_loaders: RouteLoaders) -> Router {
         proposal_answer_locks: ProposalAnswerLocks::default(),
         permission_denied_retry_locks: PermissionDeniedRetryLocks::default(),
         todo_completion_locks: TodoCompletionLocks::default(),
+        bang_command_locks: KeyedMutexRegistry::default(),
         message_loaders,
     })
 }
@@ -55,6 +58,14 @@ fn router_with_state(state: ActionState) -> Router {
             "/sessions/{id}/messages",
             post(messages::send_message)
                 .layer(DefaultBodyLimit::max(messages::MAX_MESSAGE_BODY_BYTES)),
+        )
+        .route(
+            "/sessions/{id}/commands/preview",
+            post(bang_commands::preview),
+        )
+        .route(
+            "/sessions/{id}/commands/execute",
+            post(bang_commands::execute),
         )
         .route(
             "/sessions/{id}/decisions/{seq}/ok",
@@ -107,10 +118,20 @@ struct ActionState {
     proposal_answer_locks: ProposalAnswerLocks,
     permission_denied_retry_locks: PermissionDeniedRetryLocks,
     todo_completion_locks: TodoCompletionLocks,
+    bang_command_locks: KeyedMutexRegistry<(String, String, Vec<String>)>,
+}
+
+#[derive(Clone)]
+struct CommandResult {
+    exit_code: i32,
+    stdout: String,
+    stderr: String,
+    timed_out: bool,
 }
 
 trait ActionRuntime: Send + Sync {
     fn send_message(&self, session: &Session, content: &str) -> Result<()>;
+    fn execute_command(&self, cwd: &std::path::Path, command: &str) -> Result<CommandResult>;
     fn pane_current_command(&self, tmux_info: &TmuxInfo) -> Option<String>;
     fn send_keys_if_agent_is_running(
         &self,
@@ -444,6 +465,9 @@ mod tests {
     #[path = "send_message.rs"]
     mod send_message;
 
+    #[path = "bang_commands.rs"]
+    mod bang_commands;
+
     #[path = "decisions.rs"]
     mod decisions;
 
@@ -474,6 +498,7 @@ mod tests {
         pane_command_matches: Mutex<bool>,
         close_unmerged_worktree: Mutex<bool>,
         sessions_dir: Mutex<Option<PathBuf>>,
+        command_result: Mutex<Option<CommandResult>>,
         merge_error: Mutex<Option<String>>,
         merge_result: Mutex<crate::commands::gh::WatchWebPrMergeResult>,
     }
@@ -490,6 +515,7 @@ mod tests {
                 pane_command_matches: Mutex::new(true),
                 close_unmerged_worktree: Mutex::new(false),
                 sessions_dir: Mutex::new(None),
+                command_result: Mutex::new(None),
                 merge_error: Mutex::new(None),
                 merge_result: Mutex::new(crate::commands::gh::WatchWebPrMergeResult::Merged),
             }
@@ -514,6 +540,25 @@ mod tests {
                 return Err(anyhow::anyhow!(message));
             }
             Ok(())
+        }
+
+        fn execute_command(&self, cwd: &std::path::Path, command: &str) -> Result<CommandResult> {
+            self.calls.lock().unwrap().push(json!({
+                "kind": "execute-command",
+                "cwd": cwd,
+                "command": command,
+            }));
+            Ok(self
+                .command_result
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or(CommandResult {
+                    exit_code: 0,
+                    stdout: "fixture output".to_string(),
+                    stderr: String::new(),
+                    timed_out: false,
+                }))
         }
 
         fn pane_current_command(&self, tmux_info: &TmuxInfo) -> Option<String> {
@@ -649,6 +694,7 @@ mod tests {
                 proposal_answer_locks: ProposalAnswerLocks::default(),
                 permission_denied_retry_locks: permission_denied_retry_locks.clone(),
                 todo_completion_locks: TodoCompletionLocks::default(),
+                bang_command_locks: KeyedMutexRegistry::default(),
                 message_loaders: empty_message_loaders(),
             });
             (router, permission_denied_retry_locks)
@@ -666,6 +712,7 @@ mod tests {
                 proposal_answer_locks: proposal_answer_locks.clone(),
                 permission_denied_retry_locks: PermissionDeniedRetryLocks::default(),
                 todo_completion_locks: TodoCompletionLocks::default(),
+                bang_command_locks: KeyedMutexRegistry::default(),
                 message_loaders,
             });
             (router, proposal_answer_locks)
@@ -732,6 +779,10 @@ mod tests {
 
         fn set_message_error(&self, message: &str) {
             *self.runtime.message_error.lock().unwrap() = Some(message.to_string());
+        }
+
+        fn set_command_result(&self, result: CommandResult) {
+            *self.runtime.command_result.lock().unwrap() = Some(result);
         }
 
         fn set_close_unmerged_worktree(&self, value: bool) {

@@ -84,3 +84,19 @@ ${linkedSession.id}
     onSelectSession: () => undefined,
   },
 }
+
+export const InlineBangCommand: Story = {
+  name: 'The message includes an inline command',
+  args: {
+    children: 'Run `! printf result` after review.',
+    sessionId: 'sample-session',
+  },
+}
+
+export const FencedBangCommands: Story = {
+  name: 'The message includes several fenced commands',
+  args: {
+    children: '```sh\n! printf first\n! printf second\n```',
+    sessionId: 'sample-session',
+  },
+}

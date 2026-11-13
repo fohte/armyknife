@@ -509,6 +509,7 @@ export function ConversationPane({
         setError(null)
       }}
       onAction={onAction}
+      onCommandExecuted={refresh}
       onOpenInTerminal={onOpenInTerminal}
       onSelectSession={onSelectSession}
       isMobile={isMobile}

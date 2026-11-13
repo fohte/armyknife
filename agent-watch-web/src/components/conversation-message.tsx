@@ -41,9 +41,11 @@ export type ConversationMessageRowProps = {
     payload?: Record<string, unknown>,
     permissionIdentity?: PermissionRequestIdentity,
   ) => Promise<boolean>
+  onCommandExecuted?: () => void
   onOpenInTerminal: () => void
   onSelectSession: (id: string) => void
   sessionEngine: Session['engine']
+  sessionId?: string
   sessions: readonly SessionLinkTarget[]
   now?: Date
 }
@@ -59,9 +61,11 @@ export function renderConversationMessage({
   pendingAction,
   openInTerminalStatus,
   onAction,
+  onCommandExecuted,
   onOpenInTerminal,
   onSelectSession,
   sessionEngine,
+  sessionId,
   sessions,
   now,
 }: ConversationMessageRowProps): ReactNode {
@@ -120,7 +124,12 @@ export function renderConversationMessage({
   if (message.type === 'assistant') {
     return (
       <article className="chat-assistant-message">
-        <MarkdownMessage onSelectSession={onSelectSession} sessions={sessions}>
+        <MarkdownMessage
+          onSelectSession={onSelectSession}
+          sessions={sessions}
+          {...(sessionId === undefined ? {} : { sessionId })}
+          {...(onCommandExecuted === undefined ? {} : { onCommandExecuted })}
+        >
           {message.text}
         </MarkdownMessage>
       </article>
