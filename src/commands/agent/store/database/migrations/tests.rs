@@ -62,6 +62,7 @@ fn adds_permission_request_mailbox_to_version_nine_database() {
                 EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'permission_request_decision_session_agent'),
                 EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'permission_request_decision_delete_session'),
                 EXISTS(SELECT 1 FROM pragma_table_info('permission_request_decision') WHERE name = 'answers' AND [notnull] = 0),
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'agent_proposal_unanswered_session_id'),
                 (SELECT title || ':' || why FROM agent_decision LIMIT 1)
                 "
             },
@@ -76,6 +77,7 @@ fn adds_permission_request_mailbox_to_version_nine_database() {
                     row.get(5)?,
                     row.get(6)?,
                     row.get(7)?,
+                    row.get(8)?,
                 ))
             },
         )
@@ -89,6 +91,7 @@ fn adds_permission_request_mailbox_to_version_nine_database() {
         (
             9,
             (
+                true,
                 true,
                 true,
                 true,
