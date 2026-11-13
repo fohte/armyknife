@@ -31,7 +31,7 @@ schema-gen = ["dep:schemars"]
 
 [dependencies]
 anyhow = "=1.0.104"
-axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "query", "tokio"] }
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "query", "tokio", "ws"] }
 base64 = "=0.23.1"
 chrono = { version = "=0.4.45", features = ["serde"] }
 clap = { version = "=4.6.6", features = ["derive"] }
@@ -40,6 +40,7 @@ futures-util = "=0.3.34"
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "json", "query", "stream"] }
 percent-encoding = "=2.3.2"
 tokio = { version = "=1.52.3", features = ["rt-multi-thread", "macros", "net", "time"] }
+tokio-tungstenite = { version = "=0.29.0", default-features = false, features = ["connect"] }
 tower-http = { version = "=0.6.11", features = ["compression-gzip"] }
 httparse = "=1.10.1"
 indoc = "=2.0.7"

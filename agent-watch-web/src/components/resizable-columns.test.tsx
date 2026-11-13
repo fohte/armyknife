@@ -2,9 +2,9 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
-import { CritPane } from '#components/crit-pane'
 import { ResizableColumns } from '#components/resizable-columns'
 import { SessionStatusPanel } from '#components/session-status-panel'
+import { WebUiPane } from '#components/web-ui-pane'
 
 let container: HTMLDivElement
 let root: Root | null = null
@@ -235,7 +235,8 @@ it('keeps the status panel visible on narrow desktop viewports', () => {
                 label: 'crit',
                 count: 1,
                 content: (
-                  <CritPane
+                  <WebUiPane
+                    name="crit"
                     url="http://127.0.0.1:5000/review/sample"
                     onClose={() => undefined}
                   />
@@ -265,12 +266,12 @@ it('keeps the status panel visible on narrow desktop viewports', () => {
   const secondPane = container.querySelector<HTMLDivElement>(
     '.resizable-columns-second-pane',
   )
-  const critPane = container.querySelector<HTMLDivElement>('.crit-pane')
+  const webUiPane = container.querySelector<HTMLDivElement>('.web-ui-pane')
   if (
     firstPane === null ||
     separator === null ||
     secondPane === null ||
-    critPane === null
+    webUiPane === null
   ) {
     throw new Error('Expected both panes and a separator')
   }
@@ -281,7 +282,7 @@ it('keeps the status panel visible on narrow desktop viewports', () => {
     firstPaneWidth: firstPane.getBoundingClientRect().width,
     separatorDisplay: window.getComputedStyle(separator).display,
     secondPaneDisplay: window.getComputedStyle(secondPane).display,
-    critPaneDisplay: window.getComputedStyle(critPane).display,
+    webUiPaneDisplay: window.getComputedStyle(webUiPane).display,
   })
 
   expect(snapshot()).toEqual({
@@ -290,7 +291,7 @@ it('keeps the status panel visible on narrow desktop viewports', () => {
     firstPaneWidth: 400,
     separatorDisplay: 'block',
     secondPaneDisplay: 'flex',
-    critPaneDisplay: 'flex',
+    webUiPaneDisplay: 'flex',
   })
 })
 

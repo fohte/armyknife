@@ -70,6 +70,7 @@ mod tests {
             session_id: "target-session".to_string(),
             pr_context: None,
             crit_urls: Vec::new(),
+            web_uis: Vec::new(),
             pending_human_review_ids: BTreeSet::new(),
             cwd: PathBuf::from("/tmp/target-worktree"),
             transcript_path: None,
