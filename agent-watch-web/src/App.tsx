@@ -431,26 +431,29 @@ function AppContent() {
       sessionsLoaded: loaded,
       navigate,
     })
-  useEffect(() => {
-    if (!isMobile || showMobileConversation) setMobileNavOpen(false)
-  }, [isMobile, showMobileConversation])
-  const openMobilePalette = useCallback(() => {
+  const closeMobileNav = useCallback(() => {
     setMobileNavOpen(false)
-    setCommandPaletteOpen(true)
   }, [])
+  useEffect(() => {
+    if (!isMobile || showMobileConversation) closeMobileNav()
+  }, [closeMobileNav, isMobile, showMobileConversation])
+  const openMobilePalette = useCallback(() => {
+    closeMobileNav()
+    setCommandPaletteOpen(true)
+  }, [closeMobileNav])
   const openSessionFromNavigation = useCallback(
     (id: string) => {
-      setMobileNavOpen(false)
+      closeMobileNav()
       openSessionInInbox(id)
     },
-    [openSessionInInbox],
+    [closeMobileNav, openSessionInInbox],
   )
   const selectSavedViewFromNavigation = useCallback(
     (id: string) => {
-      setMobileNavOpen(false)
+      closeMobileNav()
       selectInboxSavedView(id)
     },
-    [selectInboxSavedView],
+    [closeMobileNav, selectInboxSavedView],
   )
   const inboxProps = {
     error: error ?? savedViews.storageError,
@@ -515,7 +518,7 @@ function AppContent() {
       workTypeNavGroups={workTypeNavGroups}
       onViewChange={(nextView) => {
         navigate((current) => ({ ...current, view: nextView }))
-        setMobileNavOpen(false)
+        closeMobileNav()
       }}
       onSelectSavedView={selectSavedViewFromNavigation}
       onDeleteSavedView={savedViews.deleteView}
@@ -527,7 +530,10 @@ function AppContent() {
     />
   )
   const main = (
-    <main className="agent-watch-main">
+    <main
+      className="agent-watch-main"
+      inert={isMobile && mobileNavOpen ? true : undefined}
+    >
       {view === 'inbox' ? (
         <InboxConversationPanes
           inboxProps={inboxProps}
@@ -589,12 +595,7 @@ function AppContent() {
         />
       )}
       {isMobile && !showMobileConversation ? (
-        <MobileNavDrawer
-          onClose={() => {
-            setMobileNavOpen(false)
-          }}
-          open={mobileNavOpen}
-        >
+        <MobileNavDrawer onClose={closeMobileNav} open={mobileNavOpen}>
           {navigation}
         </MobileNavDrawer>
       ) : null}

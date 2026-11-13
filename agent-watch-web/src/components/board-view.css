@@ -312,8 +312,9 @@
     gap: 7px;
   }
 
-  .board-header-title .mobile-nav-action {
+  .board-header-title .mobile-nav-actions {
     margin-left: -6px;
+    margin-right: 4px;
   }
 
   .board-header-title span,

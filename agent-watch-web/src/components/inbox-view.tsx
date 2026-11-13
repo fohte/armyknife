@@ -1,11 +1,12 @@
 import '#components/later-today.css'
 
 import { Button } from '@fohte/ui/button'
-import { Filter, Menu, Search, X } from 'lucide-react'
+import { Filter, X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 
 import { InboxFilterBar } from '#components/inbox-filter-bar'
 import { InboxFilterDialog } from '#components/inbox-filter-dialog'
+import { MobileNavigationActions } from '#components/mobile-navigation-actions'
 import { SessionRow } from '#components/session-row'
 import { filterInboxSessions, parseInboxFilterQuery } from '#inbox-filter'
 import { renderInboxSessionSection } from '#inbox-session-section'
@@ -94,8 +95,8 @@ export function InboxView({
   selectedSavedViewId = null,
   onSelectSavedView,
   onDeleteSavedView,
-  onOpenNavigation,
-  onOpenPalette,
+  onOpenNavigation = () => undefined,
+  onOpenPalette = () => undefined,
 }: InboxViewProps) {
   const [localFilterQuery, setLocalFilterQuery] = useState('')
   const [localDialogOpen, setLocalDialogOpen] = useState(false)
@@ -191,24 +192,10 @@ export function InboxView({
         </span>
         <span>agent watch</span>
         {isMobile ? (
-          <div className="mobile-nav-actions">
-            <button
-              aria-label="Open navigation"
-              className="mobile-nav-action"
-              onClick={onOpenNavigation}
-              type="button"
-            >
-              <Menu aria-hidden="true" size={19} />
-            </button>
-            <button
-              aria-label="Open command palette"
-              className="mobile-nav-action"
-              onClick={onOpenPalette}
-              type="button"
-            >
-              <Search aria-hidden="true" size={18} />
-            </button>
-          </div>
+          <MobileNavigationActions
+            onOpenNavigation={onOpenNavigation}
+            onOpenPalette={onOpenPalette}
+          />
         ) : null}
         <span className="mobile-inbox-connection">
           <span
