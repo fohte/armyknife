@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ja"><head>
+<meta charset="utf-8">
+<title>追加分の仕様</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&amp;family=Noto+Sans+JP:wght@400;500;700&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="width: 1440px; height: 1300px; box-sizing: border-box; padding: 44px 48px; display: flex; flex-direction: column; gap: 24px; background: #0a0a0a; color: #fafafa; font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'Noto Sans JP', sans-serif; font-size: 13.5px; line-height: 1.65">
+
+<div>
+<h1 style="margin: 0; font-size: 26px; font-weight: 700">追加分の仕様 (10〜17)</h1>
+<p style="margin: 4px 0 0; color: #a1a1aa">0 枚目「設計のまとめ」に足す内容。画面は 10〜17 を参照。</p>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; align-items: start">
+
+<section style="padding: 18px 20px; background: #141414">
+<h2 style="margin: 0 0 8px; font-size: 15px"><span style="font-family: 'JetBrains Mono', monospace; color: #ef4444">#</span> Inbox の絞り込み (10・11)</h2>
+<ul style="margin: 0; padding-left: 18px; color: #d4d4d8">
+<li>Inbox の見出しの下に常に置く。<span style="font-family: 'JetBrains Mono', monospace">/</span> で入る</li>
+<li>条件: <span style="font-family: 'JetBrains Mono', monospace">project: kind: task: repo: engine: has:decision</span>。メニューでも文字でも指定できる</li>
+<li>絞っても Needs action / Later / In progress / Done の区分と tq の優先度順はそのまま。件数だけ変わる</li>
+<li>条件はチップで出し × で外す。右に「3 of 6」</li>
+<li>Save view で左のナビの VIEWS に残す。VIEWS には Needs action の件数を出す</li>
+</ul>
+</section>
+
+<section style="padding: 18px 20px; background: #141414">
+<h2 style="margin: 0 0 8px; font-size: 15px"><span style="font-family: 'JetBrains Mono', monospace; color: #ef4444">#</span> ⌘K (12・13)</h2>
+<ul style="margin: 0; padding-left: 18px; color: #d4d4d8">
+<li>どこからでも、セッション・tq タスク・プロジェクト・コマンドへ移動する</li>
+<li>空のとき: Needs action の上位 3 件、最近開いたもの、よく使うコマンド</li>
+<li>入力したとき: 種類ごとに分けて出す。セッションはタイトルとブランチ名で当たる。行には tq とリポジトリを添える</li>
+<li><span style="font-family: 'JetBrains Mono', monospace"># @ &gt;</span> で tq タスク・プロジェクト・コマンドに絞る。Tab でも切り替え</li>
+<li>↵ 開く · ⌘↵ 会話の横に開く · → そのほかの操作</li>
+<li>絞り込み (/) は「いまの一覧を狭める」、⌘K は「別の場所へ飛ぶ」。役割を混ぜない</li>
+</ul>
+</section>
+
+<section style="padding: 18px 20px; background: #141414">
+<h2 style="margin: 0 0 8px; font-size: 15px"><span style="font-family: 'JetBrains Mono', monospace; color: #ef4444">#</span> セッションの状況欄と右のパネル (14・15)</h2>
+<ul style="margin: 0; padding-left: 18px; color: #d4d4d8">
+<li>タブは右のパネルの上に置く: Running · Tree · Decisions · crit。会話の側にはタブを置かない</li>
+<li>会話のヘッダーの右端にパネルの開閉ボタン (⌘.)。閉じているときも、動いている数 (◐ 4) をボタンに出す</li>
+<li>パネルは 1 つだけで、閉じれば会話が広がる</li>
+<li>0 件の項目は出さない</li>
+<li>Inbox の列は <span style="font-family: 'JetBrains Mono', monospace">[</span> か、左のナビの一番上 (⌘K の横) の開閉ボタンで完全に畳む (帯も残さない)。戻すのも同じボタンか <span style="font-family: 'JetBrains Mono', monospace">[</span>。畳んでいる間はボタンを点灯させる。Needs action の件数はナビの Inbox に出ているのでそれで足りる。j / k は畳んだままでも次のセッションへ移る</li>
+<li>右のパネル (Running・Tree・crit など) を開くと Inbox は自動で畳み、パネルを閉じると元に戻す。手で開いたらその状態を優先する</li>
+</ul>
+</section>
+
+<section style="padding: 18px 20px; background: #141414">
+<h2 style="margin: 0 0 8px; font-size: 15px"><span style="font-family: 'JetBrains Mono', monospace; color: #ef4444">#</span> Subagent と background task (14)</h2>
+<ul style="margin: 0; padding-left: 18px; color: #d4d4d8">
+<li>Running タブには、いま動いているものだけを出す。終わったもの・失敗したものは出さない (Claude Code の TUI と同じ)</li>
+<li>Subagent: 種類 (Explore など)、description、経過時間、ツールの回数、直近のツール呼び出し</li>
+<li>Background task: コマンド、経過時間。Output と Stop</li>
+<li>会話の中にも開始した位置に枠つきの 1 行で出す。終わったらツールの実行の 1 行 (Task ×1 / Bash ×1) に畳む</li>
+</ul>
+</section>
+
+<section style="padding: 18px 20px; background: #141414">
+<h2 style="margin: 0 0 8px; font-size: 15px"><span style="font-family: 'JetBrains Mono', monospace; color: #ef4444">#</span> 親子の木 (15)</h2>
+<ul style="margin: 0; padding-left: 18px; color: #d4d4d8">
+<li>右のパネルの Tree タブに、親子関係を木で出す。いちばん上の親から、子・孫まで</li>
+<li>いま開いているセッションの行は明るい背景と左の白線。子を開いても同じ木が出て、自分の位置がわかる</li>
+<li>行は状態・タイトル・種類と最後の発言。tq とリポジトリは親と違うときだけ出す</li>
+<li>自分の祖先と子は開いた状態、それ以外の枝は畳む (▸)。← / → で開け閉め、j / k で移動、↵ で開く</li>
+<li>Needs action の子孫がいれば Tree タブの件数を黄色にする。畳んだ枝の中にいる場合は、その枝の行にも件数を出す</li>
+</ul>
+</section>
+
+<section style="padding: 18px 20px; background: #141414">
+<h2 style="margin: 0 0 8px; font-size: 15px"><span style="font-family: 'JetBrains Mono', monospace; color: #ef4444">#</span> tq タスクが複数のセッション (16)</h2>
+<ul style="margin: 0; padding-left: 18px; color: #d4d4d8">
+<li>1 つを primary にする。既定は優先度が一番高いもの。手で変えられる</li>
+<li>Inbox・⌘K・Board の行には primary だけを出し、後ろに「+2」</li>
+<li>並び順と Board の列は primary で決める。絞り込みの <span style="font-family: 'JetBrains Mono', monospace">task:</span> はどれか 1 つに当たれば出す</li>
+<li>会話のヘッダーの「+2 tasks」で一覧を開き、primary の変更・追加・解除をする。変えたら armyknife event として会話に残す</li>
+</ul>
+</section>
+
+<section style="padding: 18px 20px; background: #141414; grid-column: 1 / -1">
+<h2 style="margin: 0 0 8px; font-size: 15px"><span style="font-family: 'JetBrains Mono', monospace; color: #ef4444">#</span> 会話に出るメッセージの種類 (17)</h2>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; color: #d4d4d8">
+<div><b>向き</b><br>右はこちらから出たもの: You (塗りの吹き出し) と Peer message の TO (点線の枠)。左は外から来たもの: エージェントの発言と Peer message の FROM (実線の枠と白い FROM の札)。</div>
+<div><b>開けるもの (枠つき)</b><br>動いている Subagent・Background task と Peer message。押すと Running タブか相手のセッションを開く。peer message は札の横に相手のセッション名を必ず出す。</div>
+<div><b>出来事 (文字だけの 1 行)</b><br>armyknife event (状態の変化・紐付け)、system event (compact・resume・モデル変更)、hook の出力。失敗やブロックだけ赤。<br><br><b>ツールの実行</b><br>出力やコマンドは解析しない。畳んだ 1 行は「Edit queue.rs, mod.rs · Read ×3 · Bash ×1」: ツール名と回数、ファイルを扱うツール (Read 以外の Edit / Write) だけ file_path のファイル名を最大 2 つ。失敗は tool_result の is_error の件数だけ赤で足す。開くと 1 回 1 行で「ツール名 · 主な引数を 1 行で省略 · ✓/×」。行を開くと入力と出力の末尾 20 行をそのまま出す。<br><br><b>セッション名</b><br>どこに出ても点線の下線つきリンク。hover で状態・tq・リポジトリのカード、クリックで開く。</div>
+</div>
+</section>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1300}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+
+
+</body></html>

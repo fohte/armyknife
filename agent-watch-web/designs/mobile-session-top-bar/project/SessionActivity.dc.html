@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="ja"><head>
+<meta charset="utf-8">
+<title>Session with activity</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&amp;family=Noto+Sans+JP:wght@400;500;700&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="position: relative; width: 1440px; height: 900px; display: flex; overflow: hidden; background: #0a0a0a; color: #fafafa; font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'Noto Sans JP', sans-serif; font-size: 14px; line-height: 1.55">
+
+<div style="width: 240px; flex: none; height: 900px"><dc-import name="V8Nav" mode="inbox" inbox-open="{{ false }}" hint-size="240px,900px"></dc-import></div>
+
+<main style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+<header style="flex: none; padding: 10px 24px 0; border-bottom: 1px solid #2a2a2a">
+<div style="display: flex; align-items: center; gap: 10px; font-size: 12px; color: #8b8b94">
+<span style="color: #d4d4d8"><span style="font-family: 'JetBrains Mono', monospace; font-weight: 700">P1 #123</span> 通知機能の刷新</span>
+<button type="button" style="height: 22px; padding: 0 7px; border: 1px solid {{taskChipLine}}; background: {{taskChipBg}}; color: #d4d4d8; font-family: inherit; font-size: 12px">+2 tasks ▾</button>
+<span style="font-family: 'JetBrains Mono', monospace">example/web-app</span><span>PM</span>
+<span style="margin-left: auto; display: flex; gap: 6px"><button type="button" style="height: 26px; padding: 0 10px; border: 1px solid #2a2a2a; background: transparent; color: #d4d4d8; font-family: inherit; font-size: 12px">Later</button><button type="button" style="height: 26px; padding: 0 10px; border: 1px solid #2a2a2a; background: transparent; color: #d4d4d8; font-family: inherit; font-size: 12px">Open in terminal</button><button type="button" aria-pressed="true" aria-label="Toggle side panel (⌘.)" title="Side panel  ⌘." style="height: 26px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid #a1a1aa; background: #262626; color: #fafafa; font-family: inherit; font-size: 12px"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="16"></rect><path d="M15 4v16"></path></svg><span style="color: #60a5fa">◐ 4</span></button></span>
+</div>
+<h1 style="margin: 2px 0 12px; font-size: 16px; font-weight: 700">web-app PM</h1>
+</header>
+
+<div style="flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end">
+<div style="width: 100%; max-width: 720px; box-sizing: border-box; margin: 0 auto; padding: 0 24px 20px; display: flex; flex-direction: column; gap: 14px">
+
+<div style="display: flex; align-items: center; gap: 10px; font-size: 12px; color: #8b8b94"><span style="flex: 1; height: 1px; background: #2a2a2a"></span>Context compacted · 21:40<span style="flex: 1; height: 1px; background: #2a2a2a"></span></div>
+
+<div style="align-self: flex-end; max-width: 80%"><div style="margin-bottom: 4px; text-align: right; font-size: 12px; color: #8b8b94">You · 21:58</div><div style="padding: 10px 14px; background: #1f1f1f">PR 2 と PR 3 の進み具合を確認して、止まっているほうを動かして</div></div>
+
+<p style="margin: 0; color: #d4d4d8">子セッションの状況を確認します。</p>
+
+<div style="display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid #2a2a2a; font-size: 13px"><span style="color: #60a5fa">◐</span><span style="color: #8b8b94">Subagent</span><b>Explore</b><span style="color: #d4d4d8">子セッションの transcript を読む</span><span style="margin-left: auto; font-size: 12px; color: #8b8b94">1m 12s · 9 tools ▸</span></div>
+
+<div style="max-width: 88%; border: 1px solid #3f3f46; background: #141414">
+<div style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: #1f1f1f; font-size: 12px"><span style="padding: 0 6px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; background: #fafafa; color: #0a0a0a">FROM</span><a href="#" style="color: #fafafa; font-weight: 700; text-decoration: underline dotted #71717a; text-underline-offset: 3px">PR 2: 配信キューを実装</a><span style="margin-left: auto; color: #8b8b94">21:59</span></div>
+<div style="padding: 8px 12px; color: #d4d4d8">テスト 12 件が通りました。再送の上限について、あなたに質問を出しています。</div>
+</div>
+
+<div style="align-self: flex-end; width: 88%; box-sizing: border-box; border: 1px dashed #71717a">
+<div style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px dashed #3f3f46; font-size: 12px"><span style="padding: 0 5px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; border: 1px solid #a1a1aa; color: #d4d4d8">TO</span><a href="#" style="color: #fafafa; font-weight: 700; text-decoration: underline dotted #71717a; text-underline-offset: 3px">PR 3: 設定画面に項目を追加</a><span style="margin-left: auto; color: #8b8b94">sent by this session · 22:00</span></div>
+<div style="padding: 8px 12px; color: #d4d4d8">PR 2 の merge を待たずに着手してください。設定のキーは notify.retry.max です。</div>
+</div>
+
+<div style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: #8b8b94"><span>armyknife</span><span>·</span><span>PR 3 moved from Later to In progress</span><span style="margin-left: auto">22:00</span></div>
+
+<div style="display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid #2a2a2a; font-size: 13px"><span style="color: #60a5fa">▶</span><span style="color: #8b8b94">Background</span><span style="font-family: 'JetBrains Mono', monospace; font-size: 12.5px">crit docs/notify-redesign.md</span><span style="margin-left: auto; font-size: 12px; color: #8b8b94">running · 127.0.0.1:52413</span></div>
+
+<p style="margin: 0; color: #d4d4d8">PR 3 を再開させました。設計書のレビューは crit で待っています。</p>
+</div>
+</div>
+
+<div style="flex: none; padding: 0 24px 20px"><div style="max-width: 672px; margin: 0 auto; height: 44px; display: flex; align-items: center; padding: 0 14px; border: 1px solid #3f3f46; background: #141414; font-size: 13px; color: #8b8b94">Message web-app PM</div></div>
+</main>
+
+<aside aria-label="Session panel" style="width: 420px; flex: none; display: flex; flex-direction: column; background: #0f0f0f; border-left: 1px solid #2a2a2a">
+<div role="tablist" aria-label="Session panel" style="height: 48px; flex: none; box-sizing: border-box; display: flex; align-items: stretch; gap: 16px; padding: 0 10px 0 18px; border-bottom: 1px solid #2a2a2a">
+<sc-for list="{{chips}}" as="c" hint-placeholder-count="4">
+<button type="button" role="tab" aria-selected="{{c.on}}" style="display: inline-flex; align-items: center; gap: 5px; padding: 0; border: 0; background: transparent; font-family: inherit; font-size: 12.5px; {{c.style}}">{{c.label}}<span style="font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: {{c.nc}}">{{c.n}}</span></button>
+</sc-for>
+<button type="button" aria-label="Close panel" style="margin-left: auto; align-self: center; width: 28px; height: 28px; border: 0; background: transparent; color: #a1a1aa; font-size: 16px">×</button>
+</div>
+
+<sc-if value="{{isActivity}}" hint-placeholder-val="{{ true }}">
+<div style="flex: 1; min-height: 0; overflow: hidden; padding: 6px 0">
+<div style="height: 30px; display: flex; align-items: center; padding: 0 18px; font-size: 11.5px; font-weight: 700; color: #8b8b94; letter-spacing: 0.04em">SUBAGENTS</div>
+<sc-for list="{{subagents}}" as="s" hint-placeholder-count="3">
+<div style="display: flex; gap: 10px; padding: 8px 18px">
+<span style="width: 14px; flex: none; color: {{s.ic}}">{{s.icon}}</span>
+<span style="flex: 1; min-width: 0">
+<span style="display: flex; gap: 8px"><b>{{s.type}}</b><span style="flex: 1; min-width: 0; color: #d4d4d8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{s.desc}}</span></span>
+<span style="display: block; font-size: 12px; color: #8b8b94">{{s.meta}}</span>
+<span style="display: block; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #a1a1aa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{s.last}}</span>
+</span>
+</div>
+</sc-for>
+<div style="height: 30px; margin-top: 8px; display: flex; align-items: center; padding: 0 18px; border-top: 1px solid #2a2a2a; font-size: 11.5px; font-weight: 700; color: #8b8b94; letter-spacing: 0.04em">BACKGROUND TASKS</div>
+<sc-for list="{{tasks}}" as="t" hint-placeholder-count="4">
+<div style="display: flex; gap: 10px; padding: 8px 18px">
+<span style="width: 14px; flex: none; color: {{t.ic}}">{{t.icon}}</span>
+<span style="flex: 1; min-width: 0">
+<span style="display: block; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{t.cmd}}</span>
+<span style="display: block; font-size: 12px; color: {{t.mc}}">{{t.meta}}</span>
+</span>
+<span style="flex: none; display: flex; gap: 4px; align-self: center"><sc-for list="{{t.actions}}" as="a" hint-placeholder-count="1"><button type="button" style="height: 24px; padding: 0 8px; border: 1px solid #3f3f46; background: transparent; color: #d4d4d8; font-family: inherit; font-size: 11.5px">{{a}}</button></sc-for></span>
+</div>
+</sc-for>
+</div>
+</sc-if>
+
+<sc-if value="{{isChildren}}" hint-placeholder-val="{{ false }}">
+<div style="flex: 1; min-height: 0; overflow: hidden; padding-top: 6px">
+<sc-for list="{{children}}" as="r" hint-placeholder-count="8">
+<div style="display: flex; gap: 6px; padding: 7px 18px 7px 0; {{r.rowStyle}}">
+<span style="flex: none; {{r.indent}}"></span>
+<span style="width: 14px; flex: none; text-align: center; font-size: 10px; line-height: 21px; color: #8b8b94">{{r.caret}}</span>
+<span style="width: 8px; flex: none; padding-top: 7px"><span style="display: block; width: 8px; height: 8px; {{r.dotStyle}}"></span></span>
+<span style="flex: 1; min-width: 0; padding-left: 4px">
+<span style="display: flex; gap: 8px"><span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; {{r.tstyle}}">{{r.title}}</span><span style="flex: none; font-size: 11.5px; color: #8b8b94">{{r.ago}}</span></span>
+<span style="display: block; font-size: 12.5px; color: #a1a1aa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis"><b style="color: {{r.kc}}">{{r.kind}}</b> · {{r.preview}}</span>
+<span style="display: flex; gap: 8px; font-size: 11.5px; color: #8b8b94"><span style="font-family: 'JetBrains Mono', monospace; color: #a1a1aa">{{r.task}}</span><span>{{r.taskTitle}}</span><span style="margin-left: auto; font-family: 'JetBrains Mono', monospace">{{r.repo}}</span></span>
+</span>
+</div>
+</sc-for>
+<div style="padding: 12px 18px; font-size: 12px; color: #8b8b94">tq and repo are shown only when they differ from the parent. ← / → fold.</div>
+</div>
+</sc-if>
+</aside>
+
+<sc-if value="{{tasksOpen}}" hint-placeholder-val="{{ false }}">
+<div role="dialog" aria-label="Linked tq tasks" style="position: absolute; left: 400px; top: 40px; width: 420px; background: #1f1f1f; border: 1px solid #3f3f46; font-size: 13px">
+<div style="padding: 10px 14px 6px; font-size: 12px; color: #8b8b94">Linked tq tasks · Inbox and Board use the primary one</div>
+<sc-for list="{{linked}}" as="k" hint-placeholder-count="3">
+<div style="display: flex; align-items: center; gap: 10px; padding: 8px 14px; background: {{k.bg}}">
+<span style="width: 14px; color: #fafafa">{{k.mark}}</span>
+<span style="flex: 1; min-width: 0"><span style="display: block"><span style="font-family: 'JetBrains Mono', monospace; font-weight: 700">{{k.p}} {{k.id}}</span> {{k.title}}</span><span style="display: block; font-size: 11.5px; color: #8b8b94">{{k.meta}}</span></span>
+<span style="font-size: 11.5px; color: #a1a1aa">{{k.action}}</span>
+</div>
+</sc-for>
+<div style="display: flex; gap: 14px; padding: 8px 14px; border-top: 1px solid #3f3f46; font-size: 12px; color: #a1a1aa"><span>+ Link a tq task</span><span>Unlink…</span></div>
+</div>
+</sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"tab":{"editor":"enum","options":["activity","children"],"default":"activity"},"tasksOpen":{"editor":"boolean","default":false},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const tab = this.props.tab ?? 'activity';
+    const tasksOpen = this.props.tasksOpen ?? false;
+    const chipDef = [
+      ['activity', 'Running', '4', '#60a5fa'],
+      ['children', 'Tree', '7', '#fbbf24'],
+      ['decisions', 'Decisions', '2', '#8b8b94'],
+      ['crit', 'crit', '', '#8b8b94']
+    ];
+    const chips = chipDef.map(([k, label, n, nc]) => {
+      const on = k === tab;
+      return { label, n, nc, on: on ? 'true' : 'false', style: on ? 'color: #fafafa; font-weight: 700; box-shadow: inset 0 -2px 0 #fafafa' : 'color: #a1a1aa' };
+    });
+    const subagents = [
+      ['◐', '#60a5fa', 'Explore', '子セッションの transcript を読む', '1m 12s · 9 tool uses', 'Read ~/.armyknife/sessions/pr-2.jsonl'],
+      ['◐', '#60a5fa', 'general-purpose', '再送の既定値を他のリポジトリから調べる', '40s · 4 tool uses', 'Grep retry']
+    ].map(([icon, ic, type, desc, meta, last]) => ({ icon, ic, type, desc, meta, last }));
+    const tasks = [
+      ['▶', '#60a5fa', 'crit docs/notify-redesign.md', '32m', '#8b8b94', ['Output', 'Stop']],
+      ['▶', '#60a5fa', 'pnpm test --watch notify', '12m', '#8b8b94', ['Output', 'Stop']]
+    ].map(([icon, ic, cmd, meta, mc, actions]) => ({ icon, ic, cmd, meta, mc, actions }));
+    const K = { Question: '#fbbf24', Working: '#60a5fa', Later: '#a1a1aa', Done: '#a1a1aa' };
+    const DOT = { Question: 'background: #fbbf24', Working: 'background: #60a5fa; border-radius: 50%', Later: 'border: 1px solid #a1a1aa; box-sizing: border-box', Done: 'background: transparent' };
+    const children = [
+      [0, '▾', 'web-app PM', 'now', 'Working', 'Reading the child transcript', 'P1 #123', '通知機能の刷新', 'example/web-app', true],
+      [1, '', 'PR 2: 配信キューを実装', '8s', 'Question', '設定キーを追加してよいですか？', '', '', ''],
+      [1, '▾', 'PR 3: 設定画面に項目を追加', '1m', 'Working', '設定画面にフォームを足しています', '', '', ''],
+      [2, '', '設定画面のスクリーンショットを撮る', '30s', 'Working', 'Playwright で撮っています', '', '', 'example/e2e'],
+      [1, '▸', '決済 Webhook の署名検証', '20m', 'Working', 'テストを書いています · 2 children', 'P4 #140', '決済 API の移行', 'example/web-api'],
+      [1, '', '請求書 PDF のフォント調査', '3h', 'Later', 'Back tomorrow 9:00', 'P9 #129', '請求書 PDF の刷新', ''],
+      [1, '▸', 'PR 1: 通知の型を追加', '1h', 'Done', 'Merged #38 · ◇ 2 decisions · 1 child', '', '', '']
+    ].map(([depth, caret, title, ago, kind, preview, task, taskTitle, repo, self]) => ({
+      caret, title, ago, kind, preview, task, taskTitle, repo, kc: K[kind], dotStyle: DOT[kind],
+      indent: `width: ${depth * 18 + 12}px`,
+      rowStyle: self ? 'background: #1f1f1f; box-shadow: inset 2px 0 0 #fafafa' : 'background: transparent',
+      tstyle: kind === 'Question' ? 'color: #fafafa; font-weight: 700' : self ? 'color: #fafafa; font-weight: 700' : 'color: #d4d4d8'
+    }));
+    const linked = [
+      ['✓', 'P1', '#123', '通知機能の刷新', '4 sessions · 2 need action', 'Primary', true],
+      ['', 'P4', '#140', '決済 API の移行', '2 sessions', 'Make primary'],
+      ['', 'P9', '#129', '請求書 PDF の刷新', '1 session · Later', 'Make primary']
+    ].map(([mark, p, id, title, meta, action, sel]) => ({ mark, p, id, title, meta, action, bg: sel ? '#2a2a2e' : 'transparent' }));
+    const isChildren = tab === 'children';
+    return {
+      chips, subagents, tasks, children, linked, tasksOpen,
+      isActivity: !isChildren, isChildren,
+      panelTitle: isChildren ? 'Children' : 'Activity',
+      panelSub: isChildren ? '5 started by this session' : '2 subagents · 2 background tasks running',
+      taskChipLine: tasksOpen ? '#a1a1aa' : '#3f3f46', taskChipBg: tasksOpen ? '#262626' : 'transparent'
+    };
+  }
+}
+</script>
+
+
+</body></html>

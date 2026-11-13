@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Board mode</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&amp;family=Noto+Sans+JP:wght@400;500;700&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; display: flex; overflow: hidden; background: #0a0a0a; color: #fafafa; font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'Noto Sans JP', sans-serif; font-size: 13px; line-height: 1.5">
+
+<div style="width: 240px; flex: none; height: 900px"><dc-import name="V8Nav" mode="board" hint-size="240px,900px"></dc-import></div>
+
+<main style="position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column">
+<div style="height: 48px; flex: none; display: flex; align-items: center; gap: 14px; padding: 0 20px; border-bottom: 1px solid #2a2a2a">
+<h1 style="margin: 0; font-size: 15px; font-weight: 700">Board</h1>
+<span style="font-size: 12px; color: #8b8b94">Projects that need you come first</span>
+<label style="margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: #d4d4d8"><input type="checkbox" checked style="accent-color: #fafafa">Hide quiet projects (5)</label>
+</div>
+
+<div style="flex: 1; min-height: 0; overflow: hidden; display: flex; gap: 12px; padding: 16px 20px">
+<sc-for list="{{cols}}" as="c" hint-placeholder-count="5">
+<section style="width: 280px; flex: none; display: flex; flex-direction: column; gap: 6px; padding: 12px; background: #111111">
+<div style="padding-bottom: 8px; border-bottom: 1px solid #2a2a2a">
+<div style="display: flex; align-items: baseline; gap: 8px"><span style="font-size: 15px; font-weight: 700">{{c.name}}</span><span style="margin-left: auto; font-size: 12px; font-weight: 700; color: {{c.nc}}">{{c.needLabel}}</span></div>
+<div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8b8b94; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{c.repos}}</div>
+</div>
+<sc-for list="{{c.groups}}" as="g" hint-placeholder-count="3">
+<div style="margin-top: 6px; display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; color: {{g.hc}}">{{g.label}}<span style="font-family: 'JetBrains Mono', monospace">{{g.n}}</span></div>
+<sc-for list="{{g.cards}}" as="k" hint-placeholder-count="2">
+<div style="padding: 7px 9px; background: {{k.bg}}">
+<div style="display: flex; gap: 6px; font-size: 11.5px"><span style="font-weight: 700; color: {{k.kc}}">{{k.kind}}</span><span style="margin-left: auto; color: #8b8b94">{{k.ago}}</span></div>
+<div style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; {{k.tstyle}}">{{k.title}}</div>
+<div style="font-size: 11.5px; color: #8b8b94; white-space: nowrap; overflow: hidden; text-overflow: ellipsis"><span style="font-family: 'JetBrains Mono', monospace; color: #a1a1aa">{{k.task}}</span> {{k.taskTitle}}</div>
+</div>
+</sc-for>
+<span style="font-size: 11.5px; color: #8b8b94">{{g.more}}</span>
+</sc-for>
+</section>
+</sc-for>
+</div>
+
+<div style="position: absolute; right: 0; top: 48px; bottom: 0; width: 120px; display: flex; align-items: center; justify-content: flex-end; padding-right: 16px; background: linear-gradient(90deg, rgba(10,10,10,0), #0a0a0a 70%); font-size: 12px; color: #a1a1aa">2 more →</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const KC = { Question: '#fbbf24', Review: '#fbbf24', Plan: '#fbbf24', Error: '#f87171', Working: '#60a5fa', Later: '#a1a1aa', Done: '#a1a1aa', Paused: '#8b8b94' };
+    const card = (kind, title, task, taskTitle, ago) => {
+      const need = ['Question', 'Review', 'Plan', 'Error'].includes(kind);
+      return { kind, title, task, taskTitle, ago, kc: KC[kind], bg: need ? '#1c1c1c' : '#161616', tstyle: need ? 'color: #fafafa; font-weight: 700' : 'color: #d4d4d8' };
+    };
+    const g = (label, n, hc, cards, more) => ({ label, n, hc, cards, more: more || '' });
+    const cols = [
+      { name: 'web-app', repos: 'example/web-app, example/web-api', need: 5, groups: [
+        g('Needs action', 5, '#fbbf24', [
+          card('Question', 'PR 2: 配信キューを実装', 'P1 #123', '通知機能の刷新', '8s'),
+          card('Review', 'web-app PM', 'P1 #123', '通知機能の刷新', '2m'),
+          card('Error', 'ログイン後の白い画面を修正', 'P2 #131', 'ログイン後に白い画面', '12m')
+        ], '2 more'),
+        g('In progress', 6, '#60a5fa', [card('Working', '調査: ビルドが遅い原因', 'P3 #118', 'ビルドが遅い原因の調査', '30s')], '5 more'),
+        g('Later', 1, '#a1a1aa', [card('Review', '調査: Lighthouse のスコア低下', '—', 'No task', 'until it changes')]),
+        g('Done', 3, '#a1a1aa', [], 'PR 1: 通知の型を追加 and 2 more')
+      ] },
+      { name: 'tq', repos: 'fohte/tq', need: 1, groups: [
+        g('Needs action', 1, '#fbbf24', [card('Question', '通知の許可ダイアログ', 'P4 #207', '通知の許可を求める', '20m')]),
+        g('In progress', 2, '#60a5fa', [card('Working', 'iOS の入力ズーム対策', 'P4 #207', '通知の許可を求める', '1m')], '1 more'),
+        g('Done', 1, '#a1a1aa', [], 'Storybook の更新')
+      ] },
+      { name: 'dotfiles', repos: 'fohte/dotfiles', need: 0, groups: [
+        g('Later', 1, '#a1a1aa', [card('Plan', 'zsh の起動を速くする', '—', 'No task', 'until tomorrow')]),
+        g('Done', 2, '#a1a1aa', [], 'tmux の設定整理 and 1 more')
+      ] },
+      { name: 't-rader', repos: 'fohte/t-rader', need: 0, groups: [
+        g('In progress', 2, '#60a5fa', [card('Working', 'バックテストの高速化', 'P8 #301', 'バックテストの高速化', '40s'), card('Working', 'データ取得の並列化', 'P8 #301', 'バックテストの高速化', '2m')]),
+        g('Done', 1, '#a1a1aa', [card('Done', 'バックテストのデータ取得', 'P8 #301', 'バックテストの高速化', '3h')])
+      ] },
+      { name: 'blog', repos: 'fohte/blog', need: 0, groups: [
+        g('In progress', 1, '#60a5fa', [card('Working', '記事の下書き', '#410', '技術記事を書く', '5m')])
+      ] }
+    ].map((c) => ({ ...c, needLabel: c.need ? `${c.need} need action` : 'Nothing needed', nc: c.need ? '#fbbf24' : '#8b8b94' }));
+    return { cols };
+  }
+}
+</script>
+</body>
+</html>

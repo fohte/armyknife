@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Inbox mode</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&amp;family=Noto+Sans+JP:wght@400;500;700&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="position: relative; width: 1440px; height: 900px; display: flex; overflow: hidden; background: #0a0a0a; color: #fafafa; font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'Noto Sans JP', sans-serif; font-size: 13.5px; line-height: 1.5">
+
+<div style="width: 240px; flex: none; height: 900px"><dc-import name="V8Nav" mode="{{navMode}}" hint-size="240px,900px"></dc-import></div>
+
+<section aria-label="Inbox" style="width: 460px; flex: none; display: flex; flex-direction: column; background: #0c0c0c; border-right: 1px solid #2a2a2a">
+<div style="height: 48px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 18px; border-bottom: 1px solid #2a2a2a"><h1 style="margin: 0; font-size: 15px; font-weight: 700">Inbox</h1><span style="margin-left: auto; font-size: 12px; color: #8b8b94">Sorted by tq priority</span></div>
+<div style="flex: none; min-height: 44px; box-sizing: border-box; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 14px; border-bottom: 1px solid #2a2a2a">
+<sc-if value="{{noFilter}}" hint-placeholder-val="{{ true }}">
+<button type="button" style="height: 28px; flex: 1; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid #2a2a2a; background: #141414; color: #8b8b94; font-family: inherit; font-size: 12.5px; text-align: left"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 5h16l-6 8v5l-4 2v-7z"></path></svg>Filter by project, kind, tq task, repo<span style="margin-left: auto; font-family: 'JetBrains Mono', monospace; font-size: 11.5px">/</span></button>
+</sc-if>
+<sc-if value="{{hasFilter}}" hint-placeholder-val="{{ false }}">
+<sc-for list="{{chips}}" as="c" hint-placeholder-count="2">
+<span style="height: 26px; display: inline-flex; align-items: center; gap: 6px; padding: 0 4px 0 9px; background: #262626; font-size: 12.5px"><span style="color: #a1a1aa">{{c.k}}</span><b>{{c.v}}</b><button type="button" aria-label="Remove filter" style="width: 20px; height: 20px; border: 0; background: transparent; color: #a1a1aa; font-size: 13px">×</button></span>
+</sc-for>
+<button type="button" style="height: 26px; padding: 0 8px; border: 1px dashed #3f3f46; background: transparent; color: #a1a1aa; font-family: inherit; font-size: 12px">+ Filter</button>
+<span style="margin-left: auto; font-size: 12px; color: #8b8b94">{{shown}}</span>
+<button type="button" style="height: 26px; padding: 0 8px; border: 1px solid #3f3f46; background: transparent; color: #d4d4d8; font-family: inherit; font-size: 12px">Save view</button>
+</sc-if>
+</div>
+
+<div style="flex: 1; min-height: 0; overflow: hidden">
+<div style="height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 18px; font-size: 12.5px; font-weight: 700">Needs action<span style="font-family: 'JetBrains Mono', monospace; color: #fbbf24">{{needN}}</span></div>
+<sc-for list="{{need}}" as="r" hint-placeholder-count="6">
+<div style="display: flex; gap: 10px; padding: 8px 18px 9px 16px; border-bottom: 1px solid #1a1a1a; background: {{r.bg}}; outline: 1px solid {{r.ol}}; outline-offset: -1px">
+<span style="width: 7px; flex: none; padding-top: 7px"><span style="display: block; width: 7px; height: 7px; background: {{r.dot}}"></span></span>
+<span style="flex: 1; min-width: 0">
+<span style="display: flex; gap: 8px"><span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; {{r.tstyle}}">{{r.title}}</span><span style="flex: none; font-size: 11.5px; color: #8b8b94">{{r.ago}}</span></span>
+<span style="display: block; font-size: 12.5px; color: #d4d4d8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis"><span style="font-weight: 700; color: {{r.kc}}">{{r.kind}}</span> · {{r.preview}}</span>
+<span style="display: flex; gap: 8px; font-size: 11.5px; color: #8b8b94; white-space: nowrap; overflow: hidden"><span style="font-family: 'JetBrains Mono', monospace; color: #a1a1aa">{{r.p}} {{r.task}}</span><span style="overflow: hidden; text-overflow: ellipsis">{{r.taskTitle}}</span><sc-if value="{{r.hasDec}}" hint-placeholder-val="{{ false }}"><span style="flex: none; color: #d4d4d8">◇ {{r.dec}}</span></sc-if><span style="margin-left: auto; flex: none; font-family: 'JetBrains Mono', monospace">{{r.repo}}</span></span>
+</span>
+</div>
+</sc-for>
+
+<button type="button" style="width: 100%; height: 38px; display: flex; align-items: center; gap: 8px; padding: 0 18px; border: 0; border-bottom: 1px solid #2a2a2a; background: #141414; color: #d4d4d8; font-family: inherit; font-size: 12.5px; text-align: left"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg><span style="font-weight: 700">Later</span><span style="font-family: 'JetBrains Mono', monospace; color: #a1a1aa">{{laterN}}</span><span style="margin-left: auto; color: #8b8b94">{{laterNext}} ▸</span></button>
+
+<div style="height: 32px; margin-top: 6px; display: flex; align-items: center; gap: 8px; padding: 0 18px; font-size: 12.5px; font-weight: 700; color: #d4d4d8">In progress<span style="font-family: 'JetBrains Mono', monospace; color: #60a5fa">{{workN}}</span></div>
+<sc-for list="{{work}}" as="r" hint-placeholder-count="2">
+<div style="display: flex; gap: 10px; padding: 6px 18px 6px 16px">
+<span style="width: 7px; flex: none; padding-top: 7px"><span style="display: block; width: 7px; height: 7px; border-radius: 50%; background: #60a5fa"></span></span>
+<span style="flex: 1; min-width: 0">
+<span style="display: flex; gap: 8px"><span style="flex: 1; min-width: 0; color: #d4d4d8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{r.title}}</span><span style="flex: none; font-size: 11.5px; color: #8b8b94">{{r.ago}}</span></span>
+<span style="display: flex; gap: 8px; font-size: 11.5px; color: #8b8b94; white-space: nowrap; overflow: hidden"><span style="font-family: 'JetBrains Mono', monospace; color: #a1a1aa">{{r.p}} {{r.task}}</span><span style="overflow: hidden; text-overflow: ellipsis">{{r.taskTitle}}</span><sc-if value="{{r.hasDec}}" hint-placeholder-val="{{ false }}"><span style="flex: none; color: #d4d4d8">◇ {{r.dec}}</span></sc-if><span style="margin-left: auto; flex: none; font-family: 'JetBrains Mono', monospace">{{r.repo}}</span></span>
+</span>
+</div>
+</sc-for>
+<div style="padding: 2px 18px 6px 33px; font-size: 12px; color: #8b8b94">{{workMore}}</div>
+
+<div style="height: 32px; margin-top: 4px; display: flex; align-items: center; gap: 8px; padding: 0 18px; border-top: 1px solid #2a2a2a; font-size: 12.5px; font-weight: 700; color: #d4d4d8">Done<span style="font-family: 'JetBrains Mono', monospace; color: #a1a1aa">{{doneN}}</span><button type="button" style="margin-left: auto; height: 22px; padding: 0 8px; border: 1px solid #3f3f46; background: transparent; color: #d4d4d8; font-family: inherit; font-size: 11.5px">Archive all</button></div>
+<sc-for list="{{done}}" as="r" hint-placeholder-count="2">
+<div style="display: flex; gap: 10px; padding: 6px 18px 6px 16px">
+<span style="width: 7px; flex: none; padding-top: 3px; font-size: 10px; color: #a1a1aa">✓</span>
+<span style="flex: 1; min-width: 0">
+<span style="display: flex; gap: 8px"><span style="flex: 1; min-width: 0; color: #d4d4d8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{r.title}}</span><span style="flex: none; font-size: 11.5px; color: #8b8b94">{{r.ago}}</span></span>
+<span style="display: flex; gap: 8px; font-size: 11.5px; color: #8b8b94; white-space: nowrap; overflow: hidden"><span style="font-family: 'JetBrains Mono', monospace; color: #a1a1aa">{{r.p}} {{r.task}}</span><span style="overflow: hidden; text-overflow: ellipsis">{{r.taskTitle}}</span><sc-if value="{{r.hasDec}}" hint-placeholder-val="{{ false }}"><span style="flex: none; color: #d4d4d8">◇ {{r.dec}}</span></sc-if><span style="margin-left: auto; flex: none; font-family: 'JetBrains Mono', monospace">{{r.repo}}</span></span>
+</span>
+</div>
+</sc-for>
+</div>
+
+<div style="height: 32px; flex: none; display: flex; align-items: center; gap: 14px; padding: 0 18px; border-top: 1px solid #2a2a2a; font-size: 11.5px; color: #8b8b94"><span>j k Move</span><span>L Later</span><span>E Done</span><span>⇧B Board</span></div>
+</section>
+
+<div style="flex: 1; min-width: 0; height: 900px"><dc-import name="ChatPane" hint-size="100%,900px"></dc-import></div>
+
+<sc-if value="{{filterMenu}}" hint-placeholder-val="{{ false }}">
+<div role="dialog" aria-label="Filter" style="position: absolute; left: 254px; top: 134px; width: 500px; background: #1f1f1f; border: 1px solid #3f3f46; font-size: 13px">
+<label style="height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid #3f3f46"><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Filter</span><input type="text" value="kind:" style="flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: #fafafa; font-family: 'JetBrains Mono', monospace; font-size: 13px"><span style="font-size: 11.5px; color: #8b8b94">↵ apply · esc close</span></label>
+<div style="display: grid; grid-template-columns: 170px minmax(0, 1fr)">
+<div style="padding: 6px 0; border-right: 1px solid #3f3f46">
+<sc-for list="{{fields}}" as="f" hint-placeholder-count="6">
+<div style="height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 12px; background: {{f.bg}}"><span style="flex: 1">{{f.name}}</span><span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8b8b94">{{f.key}}</span></div>
+</sc-for>
+</div>
+<div style="padding: 6px 0">
+<sc-for list="{{kinds}}" as="k" hint-placeholder-count="7">
+<label style="height: 30px; display: flex; align-items: center; gap: 10px; padding: 0 12px"><input type="checkbox" checked="{{k.on}}" style="accent-color: #fafafa"><span style="flex: 1; color: {{k.c}}">{{k.name}}</span><span style="font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #8b8b94">{{k.n}}</span></label>
+</sc-for>
+</div>
+</div>
+<div style="padding: 8px 12px; border-top: 1px solid #3f3f46; font-size: 11.5px; color: #8b8b94">Type to filter: <span style="font-family: 'JetBrains Mono', monospace; color: #d4d4d8">project:web-app kind:review,question task:#123 has:decision</span></div>
+</div>
+</sc-if>
+
+<sc-if value="{{menu}}" hint-placeholder-val="{{ false }}">
+<div style="position: absolute; inset: 0; background: rgba(0,0,0,0.35)"></div>
+<div role="menu" aria-label="Later" style="position: absolute; left: 560px; top: 514px; width: 280px; padding: 6px 0; background: #1f1f1f; border: 1px solid #3f3f46; font-size: 13px">
+<div style="padding: 4px 14px 8px; font-size: 12px; color: #8b8b94">Later: <span style="color: #fafafa">zsh の起動を速くする</span></div>
+<sc-for list="{{opts}}" as="o" hint-placeholder-count="5">
+<button type="button" role="menuitem" style="width: 100%; height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 14px; border: 0; background: {{o.bg}}; color: #fafafa; font-family: inherit; font-size: 13px; text-align: left"><span style="flex: 1">{{o.label}}</span><span style="font-size: 12px; color: #8b8b94">{{o.when}}</span><span style="width: 14px; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #8b8b94">{{o.key}}</span></button>
+</sc-for>
+<div style="height: 1px; margin: 6px 0; background: #3f3f46"></div>
+<div style="padding: 2px 14px 4px; font-size: 11.5px; color: #8b8b94">New activity in the session also brings it back.</div>
+</div>
+</sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"menu":{"editor":"boolean","default":false},"filter":{"editor":"enum","options":["none","menu","applied"],"default":"none"},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const menu = this.props.menu ?? false;
+    const K = { Question: '#fbbf24', Review: '#fbbf24', Plan: '#fbbf24', Proposal: '#fbbf24', Approve: '#fbbf24', Error: '#f87171', Stopped: '#a1a1aa' };
+    const DEC = { 'PR 2: 配信キューを実装': '1 decision', '調査: ビルドが遅い原因': '2 decisions', 'PR 1: 通知の型を追加': '2 decisions to review' };
+    const withDec = (o) => ({ ...o, hasDec: !!DEC[o.title], dec: DEC[o.title] || '' });
+    const raw = [
+      ['PR 2: 配信キューを実装', '8s', 'Question', '設定キー notify.retry.max を追加してよいですか？', 'P1', '#123', '通知機能の刷新', 'example/web-app', true, !menu],
+      ['web-app PM', '2m', 'Review', '設計書を crit で見てください', 'P1', '#123', '通知機能の刷新 +2', 'example/web-app', true],
+      ['ログイン後の白い画面を修正', '12m', 'Error', 'E2E の実行中に例外で止まりました', 'P2', '#131', 'ログイン後に白い画面', 'example/web-app', true],
+      ['下調べ: キャッシュの効き', '5m', 'Review', '調査が終わりました。ヒット率は 12%', 'P3', '#118', 'ビルドが遅い原因の調査', 'example/web-app', true],
+      ['通知の許可ダイアログ', '20m', 'Proposal', '文言の案が 2 つあります', 'P4', '#207', '通知の許可を求める', 'fohte/tq', true],
+      ['zsh の起動を速くする', '2h', 'Plan', 'プラグインを 3 つ外す計画です', '—', '', 'No task', 'fohte/dotfiles', false, false, menu]
+    ];
+    const need = raw.map(([title, ago, kind, preview, p, task, taskTitle, repo, unread, sel, target]) => ({
+      title, ago, kind, preview, p, task, taskTitle, repo, kc: K[kind],
+      dot: unread ? '#fbbf24' : 'transparent',
+      bg: sel ? '#262626' : target ? '#1f1f1f' : 'transparent',
+      ol: target ? '#a1a1aa' : 'transparent',
+      tstyle: unread ? 'color: #fafafa; font-weight: 700' : 'color: #d4d4d8'
+    })).map(withDec);
+    const work = [
+      ['調査: ビルドが遅い原因', 'Working · 30s', 'P3', '#118', 'ビルドが遅い原因の調査', 'example/web-app'],
+      ['iOS の入力ズーム対策', 'Working · 1m', 'P4', '#207', '通知の許可を求める', 'fohte/tq']
+    ].map(([title, ago, p, task, taskTitle, repo]) => withDec({ title, ago, p, task, taskTitle, repo }));
+    const done = [
+      ['PR 1: 通知の型を追加', 'Merged #38 · 1h', 'P1', '#123', '通知機能の刷新', 'example/web-app'],
+      ['バックテストのデータ取得', 'Finished · 3h', 'P8', '#301', 'バックテストの高速化', 'fohte/t-rader']
+    ].map(([title, ago, p, task, taskTitle, repo]) => withDec({ title, ago, p, task, taskTitle, repo }));
+    const opts = [
+      ['In 1 hour', '16:00', '1', true], ['This evening', '19:00', '2'], ['Tomorrow', 'Mon 9:00', '3'],
+      ['Next week', 'Mon 11/16', '4'], ['Until it changes', 'next activity', '5']
+    ].map(([label, when, key, sel]) => ({ label, when, key, bg: sel ? '#3f3f46' : 'transparent' }));
+    const filter = this.props.filter ?? 'none';
+    const applied = filter === 'applied';
+    const filterMenu = filter === 'menu';
+    const KEEP = ['Question', 'Review'];
+    const needShown = applied ? need.filter((r) => r.repo === 'example/web-app' && KEEP.includes(r.kind)) : need;
+    const workShown = applied ? work.filter((r) => r.repo === 'example/web-app') : work;
+    const doneShown = applied ? done.filter((r) => r.repo === 'example/web-app') : done;
+    const fields = [['Project', 'project:'], ['Kind', 'kind:', true], ['tq task', 'task:'], ['Repository', 'repo:'], ['Engine', 'engine:'], ['Has decisions', 'has:decision']]
+      .map(([name, key, sel]) => ({ name, key, bg: sel ? '#3f3f46' : 'transparent' }));
+    const KC2 = { Question: '#fbbf24', Approve: '#fbbf24', Plan: '#fbbf24', Proposal: '#fbbf24', Review: '#fbbf24', Error: '#f87171', Stopped: '#a1a1aa' };
+    const kinds = [['Question', 1, true], ['Approve', 0], ['Plan', 1], ['Proposal', 1], ['Review', 2, true], ['Error', 1], ['Stopped', 0]]
+      .map(([name, n, on]) => ({ name, n, on: !!on, c: KC2[name] }));
+    return {
+      menu, need: needShown, work: workShown, done: doneShown, opts,
+      navMode: applied ? 'view' : 'inbox',
+      noFilter: !applied, hasFilter: applied, filterMenu, fields, kinds,
+      chips: [{ k: 'Project', v: 'web-app' }, { k: 'Kind', v: 'Question, Review' }],
+      shown: `${needShown.length} of ${need.length}`,
+      needN: needShown.length, laterN: applied ? 1 : 2, laterNext: applied ? 'Back when it changes' : 'Next back tomorrow 9:00',
+      workN: applied ? 6 : 15, workMore: applied ? '5 more ▸' : '13 more ▸', doneN: applied ? 3 : 4
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,59 +1,174 @@
-<!doctype html>
-<html lang="ja">
-<head>
+<!DOCTYPE html>
+<html lang="ja"><head>
 <meta charset="utf-8">
-<title>Current</title>
+<title>agent watch 設計のまとめ</title>
 <script src="./support.js"></script>
 </head>
 <body>
 <x-dc>
 <helmet>
-<style>body{margin:0}</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&amp;family=Noto+Sans+JP:wght@400;500;700&amp;display=swap">
+<style>
+body{margin:0}
+</style>
 </helmet>
-<div style="position: relative; width: 390px; height: 844px; box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; background: #0a0a0a; color: #fafafa; font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'Noto Sans JP', sans-serif; font-size: 15px; line-height: 1.55;">
-  <header style="box-sizing: border-box; display: flex; flex: none; min-height: 97px; align-items: center; gap: 4px; padding: 47px 12px 6px 4px; border-bottom: 1px solid #2a2a2a; background: #0a0a0a;">
-    <button type="button" aria-label="Back to Inbox" style="display: inline-flex; flex: none; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 0; background: transparent; color: #d4d4d8;"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button>
-    <div style="display: flex; min-width: 0; flex: 1; flex-direction: column;">
-      <div style="display: flex; min-width: 0; align-items: center; gap: 6px;">
-        <h1 style="overflow: hidden; min-width: 0; flex: 0 1 auto; margin: 2px 0 0; color: #fafafa; font-size: 15px; font-weight: 400; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap;">検索 API にキャッシュ層を追加する</h1>
-        <button type="button" aria-label="Copy session ID" style="display: inline-flex; flex: none; align-items: center; justify-content: center; box-sizing: border-box; width: 26px; height: 26px; padding: 0; border: 1px solid #2a2a2a; border-radius: 0; background: transparent; color: #d4d4d8;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg></button>
-      </div>
-      <div style="display: flex; min-width: 0; align-items: baseline; gap: 5px; overflow: hidden; color: #a1a1aa; font-family: 'JetBrains Mono Variable', monospace; font-size: 11.5px; line-height: 1.55; white-space: nowrap;">
-        <span style="overflow: hidden; min-width: 0; color: #d4d4d8; font-size: 12px; text-overflow: ellipsis; white-space: nowrap;"><b style="font-weight: 700;">P2 #418</b> 検索結果のキャッシュ</span>
-        <span aria-hidden="true">·</span>
-        <span style="overflow: hidden; min-width: 0; text-overflow: ellipsis;">harbor</span>
-      </div>
-    </div>
-    <button type="button" aria-label="Open session status panel" aria-expanded="false" style="display: inline-flex; flex: none; align-items: center; justify-content: center; gap: 3px; box-sizing: border-box; width: 44px; height: 44px; padding: 0 5px; border: 1px solid #3f3f46; border-radius: 0; background: transparent; color: #60a5fa; font-family: inherit; font-size: 12px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/><path d="m10 15-3-3 3-3"/></svg><span>2</span></button>
-    <button type="button" lang="en" style="display: inline-flex; flex: none; align-items: center; justify-content: center; box-sizing: border-box; min-width: 36px; min-height: 36px; padding: 0 10px; border: 1px solid #3f3f46; border-radius: 0; background: transparent; color: #d4d4d8; font-family: inherit; font-size: 12px;">Later</button>
-    <button type="button" aria-label="Add to Starred" aria-pressed="false" style="display: inline-flex; flex: none; align-items: center; justify-content: center; box-sizing: border-box; width: 36px; min-height: 36px; padding: 0; border: 1px solid #3f3f46; border-radius: 0; background: transparent; color: #d4d4d8; font-family: inherit; font-size: 12px;">☆</button>
-  </header>
-  <div style="display: flex; flex: 1; min-height: 0; flex-direction: column; justify-content: flex-end; gap: 14px; overflow: hidden; padding: 0 16px 16px;">
-    <div style="color: #d4d4d8;">検索 API のアクセスログを見ました。同じクエリが 1 分間に数十回届いていて、どれも同じ結果を返しています。</div>
-    <div style="display: flex; max-width: 92%; align-self: flex-end; flex-direction: column; gap: 4px;">
-      <div lang="en" style="color: #8b8b94; font-size: 12px; text-align: right;">You</div>
-      <div style="padding: 10px 14px; background: #1f1f1f;">キャッシュのキーは何にする?</div>
-    </div>
-    <div style="color: #d4d4d8;">クエリ文字列とフィルタを正規化して、その組み合わせをキーにします。インデックスを更新したときは、まとめて無効化します。</div>
-    <div style="display: flex; max-width: 92%; align-self: flex-end; flex-direction: column; gap: 4px;">
-      <div lang="en" style="color: #8b8b94; font-size: 12px; text-align: right;">You</div>
-      <div style="padding: 10px 14px; background: #1f1f1f;">保持期間は 1 時間で。</div>
-    </div>
-    <div style="color: #d4d4d8;">了解です。保持期間は 1 時間にして、設定で変えられるようにします。いまテストを書いています。</div>
-  </div>
-  <form style="box-sizing: border-box; display: grid; flex: none; grid-template-columns: minmax(0, 1fr) 44px 44px; align-items: end; gap: 8px; padding: 10px 12px 34px; border-top: 1px solid #2a2a2a; background: #141414;">
-    <textarea rows="1" aria-label="Message" placeholder="Message session" style="box-sizing: border-box; display: block; width: 100%; min-height: 44px; padding: 8px 12px; border: 1px solid #3f3f46; border-radius: 0; outline: none; background: #0a0a0a; color: #fafafa; font-family: inherit; font-size: 16px; line-height: 1.6; resize: none;"></textarea>
-    <button type="button" aria-label="Interrupt" style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 0; background: transparent; color: #a1a1aa;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg></button>
-    <button type="submit" aria-label="Send message" style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 0; background: #fafafa; color: #141414;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg></button>
-  </form>
+<div style="width: 1440px; height: 1640px; box-sizing: border-box; padding: 48px; display: flex; flex-direction: column; gap: 28px; background: #0a0a0a; color: #fafafa; font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'Noto Sans JP', sans-serif; font-size: 13.5px; line-height: 1.65">
+
+<div>
+<div style="font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 700"><span style="color: #ef4444">&gt;</span> agent watch</div>
+<h1 style="margin: 6px 0 0; font-size: 30px; font-weight: 700">Claude Code / Codex のセッションを、この画面だけで捌く</h1>
+<p style="margin: 6px 0 0; font-size: 15px; color: #a1a1aa">普段は Inbox で「対応が必要なもの」を tq の優先度順に上から片付ける。全体は Board で見直す。会話も、crit のレビューも、ターミナルに戻らずにここで終える。</p>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; align-items: start">
+
+<section style="padding: 20px; background: #141414">
+<h2 style="margin: 0 0 10px; font-size: 15px"><span style="font-family: 'JetBrains Mono', monospace; color: #ef4444">#</span> 画面の構成</h2>
+<div style="display: grid; grid-template-columns: 56px 92px minmax(0, 1fr) 64px; gap: 4px; height: 96px; margin-bottom: 12px; font-size: 10.5px; color: #a1a1aa">
+<span style="padding: 6px; background: #1f1f1f">Nav</span><span style="padding: 6px; background: #1f1f1f">Inbox</span><span style="padding: 6px; background: #262626; color: #fafafa">会話</span><span style="padding: 6px; background: #1f1f1f">crit / 判断</span>
+</div>
+<ul style="margin: 0; padding-left: 18px; color: #d4d4d8">
+<li><b>Nav</b>: Inbox / Board の切り替え、VIEWS (保存した絞り込み)、TODAY (星を付けたもの)、PM (全プロジェクト分、畳まない)</li>
+<li><b>会話</b>: transcript をチャットとして表示。pane に移らずに返信・承認できる</li>
+<li><b>横のパネル</b>: crit の設計書、セッションの判断の一覧</li>
+</ul>
+</section>
+
+<section style="padding: 20px; background: #141414">
+<h2 style="margin: 0 0 10px; font-size: 15px"><span style="font-family: 'JetBrains Mono', monospace; color: #ef4444">#</span> 状態は 4 つ</h2>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; gap: 10px"><span style="width: 8px; height: 8px; margin-top: 8px; flex: none; background: #fbbf24"></span><span><b>Needs action</b> · 止まって、あなたを待っている</span></div>
+<div style="display: flex; gap: 10px"><span style="width: 8px; height: 8px; margin-top: 8px; flex: none; border: 1px solid #a1a1aa; box-sizing: border-box"></span><span><b>Later</b> · 自分で後回しにした。時刻か新しい動きで戻る</span></div>
+<div style="display: flex; gap: 10px"><span style="width: 8px; height: 8px; margin-top: 8px; flex: none; border-radius: 50%; background: #60a5fa"></span><span><b>In progress</b> · AI が進めている。見なくてよい</span></div>
+<div style="display: flex; gap: 10px"><span style="width: 8px; margin-top: 2px; flex: none; font-size: 10px; color: #a1a1aa">✓</span><span><b>Done</b> · 終わった。確認して Archive する</span></div>
+</div>
+<p style="margin: 10px 0 0; color: #a1a1aa">「読むだけ」という区分は作らない。報告も、確認が要るなら Needs action (Review) に入る。</p>
+</section>
+
+<section style="padding: 20px; background: #141414">
+<h2 style="margin: 0 0 10px; font-size: 15px"><span style="font-family: 'JetBrains Mono', monospace; color: #ef4444">#</span> 行に必ず出すもの</h2>
+<div style="padding: 10px 12px; margin-bottom: 10px; background: #0a0a0a">
+<div style="display: flex"><b style="flex: 1">PR 2: 配信キューを実装</b><span style="font-size: 11.5px; color: #8b8b94">8s</span></div>
+<div style="font-size: 12.5px"><b style="color: #fbbf24">Question</b> · 設定キーを追加してよいですか？</div>
+<div style="display: flex; gap: 8px; font-size: 11.5px; color: #8b8b94"><span style="font-family: 'JetBrains Mono', monospace; color: #a1a1aa">P1 #123</span>通知機能の刷新<span style="color: #d4d4d8">◇ 1 decision</span><span style="margin-left: auto; font-family: 'JetBrains Mono', monospace">example/web-app</span></div>
+</div>
+<ol style="margin: 0; padding-left: 18px; color: #d4d4d8">
+<li>セッションのタイトル (armyknife の優先順位で決める)</li>
+<li>何を求めているか (種類 + 最後の発言)</li>
+<li>tq の優先度・ID・タスク名、リポジトリ</li>
+<li>仮置きの判断の件数</li>
+</ol>
+</section>
+
+<section style="padding: 20px; background: #141414">
+<h2 style="margin: 0 0 10px; font-size: 15px"><span style="font-family: 'JetBrains Mono', monospace; color: #ef4444">#</span> 止まる理由 (Needs action)</h2>
+<div style="display: grid; grid-template-columns: 80px minmax(0, 1fr); row-gap: 5px; column-gap: 10px">
+<b style="color: #fbbf24">Question</b><span style="color: #d4d4d8">AskUserQuestion などの質問</span>
+<b style="color: #fbbf24">Approve</b><span style="color: #d4d4d8">コマンドやツールの実行許可</span>
+<b style="color: #fbbf24">Plan</b><span style="color: #d4d4d8">計画の承認</span>
+<b style="color: #fbbf24">Proposal</b><span style="color: #d4d4d8">案を並べて選んでもらう (armyknife に新設)</span>
+<b style="color: #fbbf24">Review</b><span style="color: #d4d4d8">crit の設計書・PR・調査結果</span>
+<b style="color: #f87171">Error</b><span style="color: #d4d4d8">エラーで止まった</span>
+<b style="color: #a1a1aa">Stopped</b><span style="color: #d4d4d8">理由を言わずに止まった。少ないほどよい</span>
+</div>
+<p style="margin: 10px 0 0; color: #a1a1aa">止まるときは必ずどれかの理由を付けて止まるよう、エージェントに求める。選択肢は会話の中で縦に並べる。</p>
+</section>
+
+<section style="padding: 20px; background: #141414">
+<h2 style="margin: 0 0 10px; font-size: 15px"><span style="font-family: 'JetBrains Mono', monospace; color: #ef4444">#</span> 仮置きの判断 (◇ Decision)</h2>
+<ul style="margin: 0; padding-left: 18px; color: #d4d4d8">
+<li>迷っても止まらずに進め、「何を選び、他に何を考え、なぜそうしたか」を残す (armyknife に新設)</li>
+<li>会話の中は 1 行。開くと理由と OK / Change</li>
+<li>Inbox では Needs action に数えず、行に「◇ 2 decisions」とだけ出す</li>
+<li>Done になったら「to review」と出して見返すきっかけにする</li>
+<li>見返すのはセッションの横のパネル。別の一覧は持たない</li>
+</ul>
+</section>
+
+<section style="padding: 20px; background: #141414">
+<h2 style="margin: 0 0 10px; font-size: 15px"><span style="font-family: 'JetBrains Mono', monospace; color: #ef4444">#</span> Later (後回し)</h2>
+<ul style="margin: 0; padding-left: 18px; color: #d4d4d8">
+<li>L キーで後回し。In 1 hour / This evening / Tomorrow / Next week / Until it changes</li>
+<li>どれを選んでも、セッションに新しい動きがあれば戻る</li>
+<li>Inbox では 1 行に畳み、次に戻る時刻だけ出す</li>
+<li>ずっと議論しているセッションは TODAY に星を付けて別枠で持つ</li>
+</ul>
+</section>
+
+<section style="padding: 20px; background: #141414">
+<h2 style="margin: 0 0 10px; font-size: 15px"><span style="font-family: 'JetBrains Mono', monospace; color: #ef4444">#</span> 並び順</h2>
+<ul style="margin: 0; padding-left: 18px; color: #d4d4d8">
+<li>各区分の中は tq の優先度順。同じなら待っている時間が長い順</li>
+<li>tq のタスクがないものは同じ区分の最後</li>
+<li>グループで見出しを作らない。まとまりは行のラベルで分かるようにする</li>
+<li>親子はツリーにしない。会話のヘッダーから親へ移る</li>
+</ul>
+</section>
+
+<section style="padding: 20px; background: #141414">
+<h2 style="margin: 0 0 10px; font-size: 15px"><span style="font-family: 'JetBrains Mono', monospace; color: #ef4444">#</span> プロジェクトと Board</h2>
+<p style="margin: 0 0 6px; color: #d4d4d8">セッションは上から順に判定して、最初に当てはまったプロジェクトに入る。</p>
+<ol style="margin: 0 0 10px; padding-left: 18px; color: #d4d4d8"><li>手で移したもの</li><li>親と同じプロジェクト</li><li>tq のタスクのプロジェクト</li><li>作業したリポジトリ (複数登録できる)</li></ol>
+<p style="margin: 0; color: #d4d4d8">どれにも当てはまらなければ Unsorted。Board は列がプロジェクトで、対応が必要なプロジェクトほど左。動きのないプロジェクトは隠す。</p>
+</section>
+
+<section style="padding: 20px; background: #141414">
+<h2 style="margin: 0 0 10px; font-size: 15px"><span style="font-family: 'JetBrains Mono', monospace; color: #ef4444">#</span> キーボード</h2>
+<div style="display: grid; grid-template-columns: 72px minmax(0, 1fr); row-gap: 3px; column-gap: 10px; color: #d4d4d8">
+<b style="font-family: 'JetBrains Mono', monospace">j k</b><span>上下に移動</span>
+<b style="font-family: 'JetBrains Mono', monospace">1–9</b><span>選択肢を選ぶ</span>
+<b style="font-family: 'JetBrains Mono', monospace">⌘↵</b><span>送信</span>
+<b style="font-family: 'JetBrains Mono', monospace">L</b><span>Later</span>
+<b style="font-family: 'JetBrains Mono', monospace">E</b><span>Done / Archive</span>
+<b style="font-family: 'JetBrains Mono', monospace">Y C</b><span>判断を OK / 変更</span>
+<b style="font-family: 'JetBrains Mono', monospace">⇧B</b><span>Board に切り替え</span>
+<b style="font-family: 'JetBrains Mono', monospace">⌘K</b><span>セッション・tq タスク・プロジェクト・コマンドへ移動 (# @ &gt; で絞る)</span>
+<b style="font-family: 'JetBrains Mono', monospace">/</b><span>Inbox を絞り込む (project: kind: task: repo: has:decision)</span>
+<b style="font-family: 'JetBrains Mono', monospace">Esc</b><span>エージェントを中断</span>
+</div>
+</section>
+
+<section style="padding: 20px; background: #141414">
+<h2 style="margin: 0 0 10px; font-size: 15px"><span style="font-family: 'JetBrains Mono', monospace; color: #ef4444">#</span> 見た目</h2>
+<ul style="margin: 0; padding-left: 18px; color: #d4d4d8">
+<li>ダークのみ。fohte.net Design System の配色・書体・角丸なし</li>
+<li>UI の文言は英語。会話の本文はそのまま</li>
+<li>色の意味は 4 つだけ: <span style="color: #fbbf24">黄 = 対応が必要</span> / <span style="color: #f87171">赤 = エラー</span> / <span style="color: #60a5fa">青 = 作業中</span> / 灰 = それ以外</li>
+<li>赤のアクセントは # 見出し・リンク・&gt; の印だけ</li>
+</ul>
+</section>
+
+<section style="padding: 20px; background: #141414">
+<h2 style="margin: 0 0 10px; font-size: 15px"><span style="font-family: 'JetBrains Mono', monospace; color: #ef4444">#</span> iPhone</h2>
+<ul style="margin: 0; padding-left: 18px; color: #d4d4d8">
+<li>Inbox と会話だけ。Board と pane への移動は出さない</li>
+<li>Needs action の行は Mac と同じ情報を出す</li>
+<li>選択肢は 44px 以上のボタンで縦に並べる</li>
+<li>Mac と繋がっていないときは最終更新の時刻を出す</li>
+</ul>
+</section>
+
+<section style="padding: 20px; background: #141414; outline: 1px solid #3f3f46; outline-offset: -1px">
+<h2 style="margin: 0 0 10px; font-size: 15px"><span style="font-family: 'JetBrains Mono', monospace; color: #ef4444">#</span> まだ決めていないこと</h2>
+<ul style="margin: 0; padding-left: 18px; color: #d4d4d8">
+<li>判断を見ていないセッションを Archive できるか</li>
+<li>Stopped を Needs action に入れるか</li>
+<li>見出し「Needs action」の短い名前</li>
+<li>セッションのタイトルの優先順位 (armyknife の今の規則)</li>
+<li>Codex の承認待ちの取り方、crit を iframe に入れられるか (実装時に確認)</li>
+</ul>
+</section>
+
+</div>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1640}}'>
 class Component extends DCLogic {
-renderVals() {
-return {};
-}
+  renderVals() {
+    return {};
+  }
 }
 </script>
-</body>
-</html>
+
+
+</body></html>

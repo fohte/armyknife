@@ -5,7 +5,7 @@ Design files for agent-watch-web, edited with the [baoyu-design](https://github.
 | Folder                       | Skill                  | Contents                                                                           |
 | ---------------------------- | ---------------------- | ---------------------------------------------------------------------------------- |
 | `agent-watch-design-system/` | `claude-design-system` | Tokens, type, and static renditions of five components, written from the app's CSS |
-| `mobile-session-top-bar/`    | `claude-design`        | The current mobile session top bar beside three redesign options                   |
+| `mobile-session-top-bar/`    | `claude-design`        | The agent watch UI mock screens, plus three mobile top bar redesign options        |
 
 The design system is written by hand from `agent-watch-web/src`. It does not follow code changes by itself.
 

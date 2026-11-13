@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="ja"><head>
+<meta charset="utf-8">
+<title>会話に出るメッセージの種類</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&amp;family=Noto+Sans+JP:wght@400;500;700&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="width: 1440px; height: 1950px; box-sizing: border-box; padding: 36px 48px; display: flex; flex-direction: column; background: #0a0a0a; color: #fafafa; font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'Noto Sans JP', sans-serif; font-size: 14px; line-height: 1.55">
+
+<div style="display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 32px; padding-bottom: 10px; border-bottom: 1px solid #2a2a2a; font-size: 12px; color: #8b8b94"><span>種類 · 出どころ · 置き方</span><span>会話の中での見た目 (幅 720px の会話欄)</span></div>
+
+<sc-for list="{{rows}}" as="r" hint-placeholder-count="11">
+<div style="display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 32px; align-items: center; padding: 12px 0; border-bottom: 1px solid #1a1a1a">
+<div><div style="font-weight: 700">{{r.name}}</div><div style="font-size: 12.5px; color: #a1a1aa">{{r.note}}</div></div>
+<div style="max-width: 720px">
+<sc-if value="{{r.you}}" hint-placeholder-val="{{ false }}"><div style="display: flex; justify-content: flex-end"><div style="max-width: 80%"><div style="margin-bottom: 4px; text-align: right; font-size: 12px; color: #8b8b94">You · 21:58</div><div style="padding: 10px 14px; background: #1f1f1f">PR 2 と PR 3 の進み具合を確認して</div></div></div></sc-if>
+<sc-if value="{{r.agent}}" hint-placeholder-val="{{ false }}"><p style="margin: 0; color: #d4d4d8">子セッションの状況を確認します。</p></sc-if>
+<sc-if value="{{r.tools}}" hint-placeholder-val="{{ false }}"><div style="display: flex; flex-direction: column; gap: 14px">
+<div><div style="font-size: 11px; color: #71717a; margin-bottom: 2px">Collapsed · ツール名と、ファイルを扱うものはファイル名だけ</div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; font-size: 12.5px; color: #a1a1aa"><span>Edit <span style="font-family: 'JetBrains Mono', monospace; color: #d4d4d8">queue.rs</span>, <span style="font-family: 'JetBrains Mono', monospace; color: #d4d4d8">mod.rs</span></span><span>Read ×3</span><span>Grep ×1</span><span>Bash ×1</span><span style="color: #71717a">›</span></div>
+<div style="margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; font-size: 12.5px; color: #a1a1aa"><span>Read ×2</span><span>Bash ×2 <span style="color: #f87171">· 1 failed</span></span><span style="color: #71717a">›</span></div></div>
+<div><div style="font-size: 11px; color: #71717a; margin-bottom: 4px">Expanded · 1 行 = 1 回。2 列目は入力のいちばん大事な引数を 1 行で切る</div>
+<div style="border-left: 1px solid #3f3f46; padding-left: 14px; font-size: 12.5px">
+<div style="display: flex; margin-bottom: 6px; font-size: 12px; color: #8b8b94"><span>6 tool calls</span><span style="margin-left: auto">‹ Collapse</span></div>
+<div style="display: grid; grid-template-columns: 44px minmax(0, 1fr) 16px; column-gap: 12px; row-gap: 3px; align-items: baseline">
+<span style="color: #8b8b94">Read</span><span style="font-family: 'JetBrains Mono', monospace; color: #d4d4d8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">docs/notify-redesign.md</span><span style="color: #8b8b94">✓</span>
+<span style="color: #8b8b94">Read</span><span style="font-family: 'JetBrains Mono', monospace; color: #d4d4d8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">src/notify/mod.rs</span><span style="color: #8b8b94">✓</span>
+<span style="color: #8b8b94">Grep</span><span style="font-family: 'JetBrains Mono', monospace; color: #d4d4d8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">send_notice</span><span style="color: #8b8b94">✓</span>
+<span style="color: #8b8b94">Edit</span><span style="font-family: 'JetBrains Mono', monospace; color: #d4d4d8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">src/notify/queue.rs ▸</span><span style="color: #8b8b94">✓</span>
+<span style="color: #8b8b94">Edit</span><span style="font-family: 'JetBrains Mono', monospace; color: #d4d4d8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">src/notify/mod.rs ▸</span><span style="color: #8b8b94">✓</span>
+<span style="color: #fafafa">Bash</span><span style="font-family: 'JetBrains Mono', monospace; color: #fafafa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">RUST_LOG=debug cargo test -p notify --features full,queue -- --nocapture --test-threads=1 2&gt;&amp;1 | tee /tmp/notify-test.log ▾</span><span style="color: #8b8b94">✓</span>
+</div>
+<div style="margin: 6px 0 4px 56px; display: flex; flex-direction: column; gap: 6px">
+<div style="font-size: 11px; color: #71717a">Input</div>
+<div style="padding: 8px 10px; background: #111111; font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; color: #d4d4d8">RUST_LOG=debug cargo test -p notify --features full,queue -- --nocapture --test-threads=1 2&gt;&amp;1 | tee /tmp/notify-test.log</div>
+<div style="font-size: 11px; color: #71717a">Output · last 20 lines, as is</div>
+<div style="padding: 8px 10px; background: #111111; font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.6; white-space: pre; overflow: hidden; color: #a1a1aa">test queue::retry_backoff ... ok
+test queue::retry_max_from_config ... ok
+test result: ok. 12 passed; 0 failed; 0 ignored</div>
+</div>
+</div></div>
+</div></sc-if>
+<sc-if value="{{r.sub}}" hint-placeholder-val="{{ false }}"><div style="display: flex; flex-direction: column; gap: 6px"><div style="display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid #2a2a2a; font-size: 13px"><span style="color: #60a5fa">◐</span><span style="color: #8b8b94">Subagent</span><b>Explore</b><span style="color: #d4d4d8">子セッションの transcript を読む</span><span style="margin-left: auto; font-size: 12px; color: #8b8b94">1m 12s · 9 tools ▸</span></div></div></sc-if>
+<sc-if value="{{r.bg}}" hint-placeholder-val="{{ false }}"><div style="display: flex; flex-direction: column; gap: 6px"><div style="display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid #2a2a2a; font-size: 13px"><span style="color: #60a5fa">▶</span><span style="color: #8b8b94">Background</span><span style="font-family: 'JetBrains Mono', monospace; font-size: 12.5px">pnpm test --watch notify</span><span style="margin-left: auto; font-size: 12px; color: #8b8b94">running · 12m</span></div></div></sc-if>
+<sc-if value="{{r.peerIn}}" hint-placeholder-val="{{ false }}"><div style="max-width: 88%; border: 1px solid #3f3f46; background: #141414"><div style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: #1f1f1f; font-size: 12px"><span style="padding: 0 6px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; background: #fafafa; color: #0a0a0a">FROM</span><a href="#" style="color: #fafafa; font-weight: 700; text-decoration: underline dotted #71717a; text-underline-offset: 3px">PR 2: 配信キューを実装</a><span style="margin-left: auto; color: #8b8b94">21:59</span></div><div style="padding: 8px 12px; color: #d4d4d8">テスト 12 件が通りました。再送の上限について質問を出しています。</div></div></sc-if>
+<sc-if value="{{r.peerOut}}" hint-placeholder-val="{{ false }}"><div style="display: flex; justify-content: flex-end"><div style="width: 88%; box-sizing: border-box; border: 1px dashed #71717a"><div style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px dashed #3f3f46; font-size: 12px"><span style="padding: 0 5px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; border: 1px solid #a1a1aa; color: #d4d4d8">TO</span><a href="#" style="color: #fafafa; font-weight: 700; text-decoration: underline dotted #71717a; text-underline-offset: 3px">PR 3: 設定画面に項目を追加</a><span style="margin-left: auto; color: #8b8b94">sent by this session · 22:00</span></div><div style="padding: 8px 12px; color: #d4d4d8">PR 2 の merge を待たずに着手してください。</div></div></div></sc-if>
+<sc-if value="{{r.ak}}" hint-placeholder-val="{{ false }}"><div style="display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #8b8b94"><div style="display: flex; gap: 8px"><span>armyknife</span><span>·</span><span>PR 3 moved from Later to In progress</span><span style="margin-left: auto">22:00</span></div><div style="display: flex; gap: 8px"><span>armyknife</span><span>·</span><span>Linked to tq #140 決済 API の移行</span><span style="margin-left: auto">21:12</span></div></div></sc-if>
+<sc-if value="{{r.sys}}" hint-placeholder-val="{{ false }}"><div style="display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: #8b8b94"><div style="display: flex; align-items: center; gap: 10px"><span style="flex: 1; height: 1px; background: #2a2a2a"></span>Context compacted · 21:40<span style="flex: 1; height: 1px; background: #2a2a2a"></span></div><div style="display: flex; align-items: center; gap: 10px"><span style="flex: 1; height: 1px; background: #2a2a2a"></span>Session resumed by you · 21:58<span style="flex: 1; height: 1px; background: #2a2a2a"></span></div></div></sc-if>
+<sc-if value="{{r.hook}}" hint-placeholder-val="{{ false }}"><div style="display: flex; flex-direction: column; gap: 4px; font-size: 12px"><div style="display: flex; gap: 8px; color: #8b8b94"><span>Hook</span><span>·</span><span style="font-family: 'JetBrains Mono', monospace">PostToolUse</span><span>formatted 2 files</span></div><div style="display: flex; gap: 8px; color: #f87171"><span>Hook</span><span>·</span><span style="font-family: 'JetBrains Mono', monospace">PreToolUse</span><span>blocked: git push to main ▸</span></div></div></sc-if>
+<sc-if value="{{r.dec}}" hint-placeholder-val="{{ false }}"><div style="display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #111111; font-size: 13px"><span style="color: #a1a1aa">◇</span><span style="color: #8b8b94">Decided</span><span>再送は <b>キュー側</b> で持つ</span><span style="margin-left: auto; font-size: 12px; color: #8b8b94">▸</span></div></sc-if>
+<sc-if value="{{r.hover}}" hint-placeholder-val="{{ false }}"><div style="position: relative; height: 170px">
+<p style="margin: 0; color: #d4d4d8">設計は <a href="#" style="padding: 0 2px; background: #262626; color: #fafafa; text-decoration: underline dotted #a1a1aa; text-underline-offset: 3px">web-app PM</a> が持っている docs/notify-redesign.md の 3 章に従います。</p>
+<div role="tooltip" style="position: absolute; left: 48px; top: 30px; width: 340px; background: #1f1f1f; border: 1px solid #3f3f46; font-size: 12.5px">
+<div style="padding: 10px 12px 8px"><div style="display: flex; gap: 8px; align-items: baseline"><b style="font-size: 14px">web-app PM</b><span style="color: #8b8b94">PM · Claude Code</span></div>
+<div style="margin-top: 2px"><b style="color: #fbbf24">Review</b> <span style="color: #d4d4d8">· 設計書を crit で見てください · 2m</span></div>
+<div style="margin-top: 2px; color: #8b8b94"><span style="font-family: 'JetBrains Mono', monospace; color: #a1a1aa">P1 #123</span> 通知機能の刷新 +2 · <span style="font-family: 'JetBrains Mono', monospace">example/web-app</span></div></div>
+<div style="padding: 6px 12px; border-top: 1px solid #3f3f46; color: #8b8b94">Click to open · ⌘-click to open beside</div>
+</div>
+</div></sc-if>
+<sc-if value="{{r.need}}" hint-placeholder-val="{{ false }}"><div style="border: 1px solid #fbbf24"><div style="padding: 8px 14px 2px; font-size: 12px; font-weight: 700; color: #fbbf24">Question</div><div style="padding: 0 14px 8px">設定キー notify.retry.max を追加してよいですか？</div><div style="padding: 7px 14px; border-top: 1px solid #2a2a2a; font-size: 13px"><span style="font-family: 'JetBrains Mono', monospace; color: #8b8b94">1</span> はい</div></div></sc-if>
+</div>
+</div>
+</sc-for>
+
+<div style="margin-top: 18px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; font-size: 13px; color: #d4d4d8">
+<div style="padding: 14px 16px; background: #141414"><b>向きで送り手が分かる</b><br>右はこちらから出たもの (You は塗りの吹き出し、TO は点線)。左は外から来たもの (エージェント、FROM は白い札の枠)。</div>
+<div style="padding: 14px 16px; background: #141414"><b>枠つき = 開ける</b><br>subagent・background・peer message は枠で囲み、押すと右のパネルや相手のセッションを開く。</div>
+<div style="padding: 14px 16px; background: #141414"><b>小さな 1 行 = 出来事</b><br>armyknife・hook・system の出来事は文字だけの 1 行。失敗やブロックだけ赤にする。</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1950}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const defs = [
+      ['you', 'You', 'あなたが送ったもの。iPhone から送ったものも同じ'],
+      ['agent', 'Agent', 'エージェントの発言'],
+      ['tools', 'Tool activity', '続いたツールの実行は、ツール名と回数の 1 行に畳む。出力は解析しない。成否は tool_result の is_error だけで出す'],
+      ['sub', 'Subagent', '動いている間だけ枠つきの行。終わったらツールの実行の 1 行 (Task ×1) に畳む'],
+      ['bg', 'Background task', '動いている間だけ枠つきの行。終わったら Bash ×1 に畳む。成否は出さない'],
+      ['peerIn', 'Peer message · FROM', '他のセッションから届いた。左寄せ、実線の枠、白い FROM の札'],
+      ['peerOut', 'Peer message · TO', 'このセッションが他へ送った。右寄せ、点線の枠、TO の札'],
+      ['hover', 'Session link', 'セッション名はどこでもリンク (点線の下線)。hover でカード、クリックで開く'],
+      ['ak', 'armyknife event', '状態の変化、tq タスクの紐付けなど'],
+      ['sys', 'System event', 'compact、resume、モデルの変更など'],
+      ['hook', 'Hook', 'hook の出力。ブロックしたときだけ赤'],
+      ['dec', 'Decision', '仮置きの判断 (9 枚目の仕様)'],
+      ['need', 'Needs action', '止まって待つカード (Question など 7 種類)']
+    ];
+    const rows = defs.map(([k, name, note]) => {
+      const o = { name, note };
+      ['you', 'agent', 'tools', 'sub', 'bg', 'peerIn', 'peerOut', 'hover', 'ak', 'sys', 'hook', 'dec', 'need'].forEach((x) => { o[x] = x === k; });
+      return o;
+    });
+    return { rows };
+  }
+}
+</script>
+
+
+</body></html>

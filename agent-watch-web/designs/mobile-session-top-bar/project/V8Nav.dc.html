@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Navigation</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&amp;family=Noto+Sans+JP:wght@400;500;700&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="width: 240px; height: 900px; box-sizing: border-box; display: flex; flex-direction: column; padding: 0 8px; overflow: hidden; background: #0f0f0f; border-right: 1px solid #2a2a2a; color: #fafafa; font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'Noto Sans JP', sans-serif; font-size: 13px; line-height: 1.5">
+
+<div style="height: 48px; flex: none; display: flex; align-items: center; padding: 0 8px"><span style="font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 700"><span style="color: #ef4444">&gt;</span> agent watch</span><button type="button" aria-label="Search (⌘K)" title="Search  ⌘K" style="margin-left: auto; height: 28px; display: inline-flex; align-items: center; gap: 5px; padding: 0 6px; border: 0; background: transparent; color: #8b8b94; font-family: 'JetBrains Mono', monospace; font-size: 11.5px"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="m20 20-4.5-4.5"></path></svg>⌘K</button><button type="button" aria-label="{{inboxToggleLabel}}" aria-pressed="{{inboxOpenStr}}" title="{{inboxToggleLabel}}" style="width: 28px; height: 28px; margin-right: -6px; display: inline-flex; align-items: center; justify-content: center; border: 0; {{inboxToggleStyle}}"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="16"></rect><path d="M9 4v16"></path></svg></button></div>
+
+<div role="group" aria-label="Mode" style="flex: none; display: grid; grid-template-columns: 1fr 1fr; padding: 2px; margin: 0 4px 12px; background: #1a1a1a">
+<button type="button" aria-pressed="{{inboxOn}}" style="height: 28px; border: 0; font-family: inherit; font-size: 12.5px; {{inboxStyle}}">Inbox <span style="font-family: 'JetBrains Mono', monospace; color: #fbbf24">6</span></button>
+<button type="button" aria-pressed="{{boardOn}}" style="height: 28px; border: 0; font-family: inherit; font-size: 12.5px; {{boardStyle}}">Board</button>
+</div>
+
+<div style="height: 26px; display: flex; align-items: center; padding: 0 8px; font-size: 11.5px; font-weight: 700; color: #8b8b94; letter-spacing: 0.04em">VIEWS</div>
+<a href="#" style="height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 8px; text-decoration: none; {{viewStyle}}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 5h16l-6 8v5l-4 2v-7z"></path></svg><span style="flex: 1">web-app reviews</span><span style="font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #fbbf24">3</span></a>
+<a href="#" style="height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 8px; text-decoration: none; color: #d4d4d8"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 5h16l-6 8v5l-4 2v-7z"></path></svg><span style="flex: 1">Errors</span><span style="font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #f87171">1</span></a>
+<div style="height: 12px"></div>
+
+<div style="height: 26px; display: flex; align-items: center; padding: 0 8px; font-size: 11.5px; font-weight: 700; color: #8b8b94; letter-spacing: 0.04em">TODAY</div>
+<a href="#" style="display: block; padding: 5px 8px; text-decoration: none; color: #fafafa"><span style="display: flex; align-items: center; gap: 8px"><span style="color: #fbbf24; font-size: 10px">★</span><span style="flex: 1; min-width: 0; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">通知機能の刷新</span><span style="width: 6px; height: 6px; background: #fbbf24"></span></span><span style="display: block; margin-left: 18px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8b8b94">#123 · web-app</span></a>
+<a href="#" style="display: block; padding: 5px 8px; text-decoration: none; color: #fafafa"><span style="display: flex; align-items: center; gap: 8px"><span style="color: #fbbf24; font-size: 10px">★</span><span style="flex: 1; min-width: 0; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">ログイン後に白い画面</span><span style="width: 6px; height: 6px; background: #f87171"></span></span><span style="display: block; margin-left: 18px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8b8b94">#131 · web-app</span></a>
+<a href="#" style="display: block; padding: 5px 8px; text-decoration: none; color: #d4d4d8"><span style="display: flex; align-items: center; gap: 8px"><span style="color: #fbbf24; font-size: 10px">★</span><span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">検索のインデックス再構築</span><span style="font-size: 11px; color: #8b8b94">Start</span></span><span style="display: block; margin-left: 18px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8b8b94">#126 · web-app</span></a>
+
+<div style="height: 26px; margin-top: 14px; display: flex; align-items: center; padding: 0 8px; font-size: 11.5px; font-weight: 700; color: #8b8b94; letter-spacing: 0.04em">PM</div>
+<sc-for list="{{pms}}" as="m" hint-placeholder-count="9">
+<a href="#" style="height: 28px; display: flex; align-items: center; gap: 8px; padding: 0 8px; text-decoration: none; color: {{m.tc}}"><span style="width: 6px; height: 6px; flex: none; background: {{m.dot}}"></span><span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: {{m.w}}">{{m.name}}</span><span style="font-size: 11.5px; color: {{m.sc}}">{{m.state}}</span></a>
+</sc-for>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"mode":{"editor":"enum","options":["inbox","board","decisions","view"],"default":"inbox"},"inboxOpen":{"editor":"boolean","default":true},"$preview":{"width":240,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const mode = this.props.mode ?? 'inbox';
+    const inboxOpen = this.props.inboxOpen ?? true;
+    const on = 'background: #3f3f46; color: #fafafa; font-weight: 700';
+    const off = 'background: transparent; color: #a1a1aa';
+    const C = { need: '#fbbf24', work: '#60a5fa', idle: '#8b8b94' };
+    const pms = [
+      ['web-app', 'Review', 'need'], ['tq', 'Working', 'work'], ['t-rader', 'Working', 'work'],
+      ['dotfiles', 'Idle', 'idle'], ['blog', 'Idle', 'idle'], ['infra', 'Idle', 'idle'],
+      ['notes', 'Idle', 'idle'], ['mobile', 'Idle', 'idle'], ['docs', 'Idle', 'idle']
+    ].map(([name, state, k]) => ({
+      name, state, sc: C[k],
+      dot: k === 'need' ? C.need : 'transparent',
+      tc: k === 'idle' ? '#a1a1aa' : '#fafafa',
+      w: k === 'need' ? 700 : 400
+    }));
+    return {
+      inboxOpenStr: inboxOpen ? 'true' : 'false',
+      inboxToggleLabel: inboxOpen ? 'Hide inbox  [' : 'Show inbox  [',
+      inboxToggleStyle: inboxOpen ? 'background: transparent; color: #a1a1aa' : 'background: #1f1f1f; color: #fafafa',
+      pms,
+      inboxOn: mode === 'inbox' ? 'true' : 'false', boardOn: mode === 'board' ? 'true' : 'false',
+      inboxStyle: (mode === 'inbox' || mode === 'view') ? on : off, boardStyle: mode === 'board' ? on : off,
+      viewStyle: mode === 'view' ? 'background: #262626; color: #fafafa; font-weight: 700' : 'color: #d4d4d8',
+      decStyle: mode === 'decisions' ? 'background: #262626; color: #fafafa; font-weight: 700' : 'color: #d4d4d8'
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ja"><head>
+<meta charset="utf-8">
+<title>Top bar · C</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&amp;family=Noto+Sans+JP:wght@400;500;700&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#fafafa}a:hover{color:#fafafa}
+</style>
+</helmet>
+<div style="position: relative; width: 390px; height: 844px; box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; background: #0a0a0a; color: #fafafa; font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'Noto Sans JP', sans-serif; font-size: 15px; line-height: 1.55">
+
+  <header style="box-sizing: border-box; display: flex; flex: none; min-height: 100px; align-items: center; gap: 4px; padding: 50px 12px 6px 4px; border-bottom: 1px solid #2a2a2a; background: #0a0a0a;">
+    <button type="button" aria-label="Back to Inbox" style="display: inline-flex; flex: none; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 0; background: transparent; color: #d4d4d8;"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button>
+    <div style="display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px;">
+      <h1 style="display: -webkit-box; overflow: hidden; margin: 0; color: #fafafa; font-size: 15px; font-weight: 700; line-height: 1.3; -webkit-box-orient: vertical; -webkit-line-clamp: 2;">PR 2: 配信キューを実装</h1>
+      <div style="display: flex; min-width: 0; align-items: baseline; gap: 5px; overflow: hidden; color: #a1a1aa; font-family: 'JetBrains Mono Variable', monospace; font-size: 11.5px; line-height: 1.55; white-space: nowrap;">
+        <span style="overflow: hidden; min-width: 0; color: #d4d4d8; font-size: 12px; text-overflow: ellipsis; white-space: nowrap;"><b style="font-weight: 700;">P1 #123</b> 通知機能の刷新</span>
+        <span aria-hidden="true">·</span>
+        <span style="overflow: hidden; min-width: 0; text-overflow: ellipsis;">web-app</span>
+      </div>
+    </div>
+    <button type="button" aria-label="Open session status panel" aria-expanded="false" style="display: inline-flex; flex: none; align-items: center; justify-content: center; gap: 3px; box-sizing: border-box; width: 44px; height: 44px; margin-left: 4px; padding: 0 5px; border: 1px solid #3f3f46; border-radius: 0; background: transparent; color: #60a5fa; font-family: inherit; font-size: 12px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/><path d="m10 15-3-3 3-3"/></svg><span>2</span></button>
+  </header>
+
+<div style="flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; gap: 14px; padding: 0 16px 16px">
+<div style="max-width: 92%; border: 1px solid #3f3f46; background: #141414"><div style="display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: #1f1f1f; font-size: 12px"><span style="padding: 0 5px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; background: #fafafa; color: #0a0a0a">FROM</span><a href="#" style="color: #fafafa; font-weight: 700; text-decoration: underline dotted #71717a; text-underline-offset: 3px">web-app PM</a></div><div style="padding: 8px 10px; font-size: 14.5px; color: #d4d4d8">PR 2 として配信キューを実装してください。</div></div>
+<div style="font-size: 14.5px"><p style="margin: 0">モジュールとテストを追加し、draft PR <span style="font-family: 'JetBrains Mono', monospace; color: #ef4444">#41</span> を出しました。</p><div style="margin-top: 4px; font-size: 12.5px; color: #a1a1aa">Edit <span style="font-family: 'JetBrains Mono', monospace; color: #d4d4d8">queue.rs</span> · Read ×3 · Bash ×1 <span style="color: #71717a">›</span></div></div>
+<div style="padding: 8px 12px; background: #111111; font-size: 13.5px; color: #d4d4d8"><span style="color: #a1a1aa">◇</span> <span style="color: #8b8b94">Decided</span> 再送の間隔は 1 分から倍々</div>
+<section style="border: 1px solid #fbbf24">
+<div style="padding: 10px 14px 2px; font-size: 12.5px; font-weight: 700; color: #fbbf24">Question</div>
+<p style="margin: 0; padding: 0 14px 10px">設定キー notify.retry.max を追加してよいですか？ 既定値は 5 回にします。</p>
+<button type="button" style="width: 100%; min-height: 48px; display: flex; align-items: center; gap: 12px; padding: 0 14px; border: 0; border-top: 1px solid #2a2a2a; background: transparent; color: #fafafa; font-family: inherit; font-size: 15px; text-align: left"><span style="font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #8b8b94">1</span>はい</button>
+<button type="button" style="width: 100%; min-height: 48px; display: flex; align-items: center; gap: 12px; padding: 0 14px; border: 0; border-top: 1px solid #2a2a2a; background: transparent; color: #fafafa; font-family: inherit; font-size: 15px; text-align: left"><span style="font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #8b8b94">2</span>いいえ、別の方法を指示する</button>
+</section>
+</div>
+
+<div style="flex: none; padding: 10px 12px 30px; border-top: 1px solid #2a2a2a; background: #141414; display: flex; flex-direction: column; gap: 8px">
+    <div style="display: flex; gap: 8px;">
+      <button type="button" lang="en" style="display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; min-height: 44px; padding: 0 14px; border: 1px solid #3f3f46; border-radius: 0; background: transparent; color: #d4d4d8; font-family: inherit; font-size: 12px;">Later</button>
+      <button type="button" aria-label="Add to Starred" aria-pressed="false" style="display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; width: 44px; height: 44px; padding: 0; border: 1px solid #3f3f46; border-radius: 0; background: transparent; color: #d4d4d8;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></svg></button>
+      <button type="button" aria-label="Copy session ID" style="display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; width: 44px; height: 44px; padding: 0; border: 1px solid #3f3f46; border-radius: 0; background: transparent; color: #d4d4d8;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg></button>
+    </div>
+<div style="display: flex; align-items: flex-end; gap: 8px">
+<label style="flex: 1; min-width: 0"><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Message</span>
+<textarea rows="1" placeholder="Message" style="display: block; width: 100%; box-sizing: border-box; resize: none; padding: 10px 12px; border: 1px solid #3f3f46; border-radius: 0; background: #0a0a0a; color: #fafafa; font-family: inherit; font-size: 16px; line-height: 1.4"></textarea></label>
+<button type="button" aria-label="Send" style="width: 44px; height: 44px; flex: none; display: inline-flex; align-items: center; justify-content: center; border: 0; background: #fafafa; color: #0a0a0a"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"></path></svg></button>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+
+
+</body></html>

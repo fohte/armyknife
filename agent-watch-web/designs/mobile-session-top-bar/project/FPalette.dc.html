@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Command palette</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&amp;family=Noto+Sans+JP:wght@400;500;700&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="position: relative; width: 1440px; height: 900px; overflow: hidden; background: #0a0a0a; color: #fafafa; font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'Noto Sans JP', sans-serif; font-size: 13.5px; line-height: 1.5">
+<dc-import name="V8Inbox" hint-size="1440px,900px"></dc-import>
+<div style="position: absolute; inset: 0; background: rgba(0,0,0,0.6)"></div>
+
+<div role="dialog" aria-label="Jump to" style="position: absolute; left: 380px; top: 96px; width: 680px; background: #161616; border: 1px solid #3f3f46">
+<label style="height: 54px; display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid #2a2a2a">
+<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#8b8b94" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+<span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Jump to</span>
+<input type="search" value="{{q}}" placeholder="Jump to a session, tq task or project, or type &gt; for commands" style="flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: #fafafa; font-family: inherit; font-size: 16px">
+<kbd style="font-family: 'JetBrains Mono', monospace; font-size: 11px; padding: 0 5px; border: 1px solid #3f3f46; color: #a1a1aa">esc</kbd>
+</label>
+
+<div role="tablist" aria-label="Scope" style="display: flex; gap: 16px; padding: 0 16px; border-bottom: 1px solid #2a2a2a; font-size: 12.5px">
+<sc-for list="{{scopes}}" as="s" hint-placeholder-count="5">
+<button type="button" role="tab" aria-selected="{{s.on}}" style="height: 34px; padding: 0; border: 0; background: transparent; font-family: inherit; font-size: 12.5px; {{s.style}}">{{s.name}}<span style="margin-left: 5px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8b8b94">{{s.prefix}}</span></button>
+</sc-for>
+</div>
+
+<div style="padding: 6px 0 8px">
+<sc-for list="{{groups}}" as="g" hint-placeholder-count="3">
+<div style="height: 28px; display: flex; align-items: center; padding: 0 16px; font-size: 11.5px; font-weight: 700; color: #8b8b94; letter-spacing: 0.04em">{{g.title}}</div>
+<sc-for list="{{g.items}}" as="r" hint-placeholder-count="3">
+<div style="min-height: 44px; display: flex; align-items: center; gap: 12px; padding: 5px 16px; background: {{r.bg}}">
+<span style="width: 16px; flex: none; text-align: center; font-size: 12px; color: {{r.ic}}">{{r.icon}}</span>
+<span style="flex: 1; min-width: 0">
+<span style="display: flex; gap: 8px; align-items: baseline"><span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: {{r.w}}">{{r.title}}</span><span style="flex: none; font-size: 12px; font-weight: 700; color: {{r.kc}}">{{r.kind}}</span></span>
+<span style="display: block; font-size: 11.5px; color: #8b8b94; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{r.sub}}</span>
+</span>
+<span style="flex: none; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #8b8b94">{{r.right}}</span>
+</div>
+</sc-for>
+</sc-for>
+</div>
+
+<div style="height: 36px; display: flex; align-items: center; gap: 16px; padding: 0 16px; border-top: 1px solid #2a2a2a; font-size: 11.5px; color: #8b8b94">
+<span>↵ Open</span><span>⌘↵ Open beside</span><span>→ More actions</span><span>Tab Scope</span><span style="margin-left: auto"># task · @ project · &gt; command</span>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"query":{"editor":"enum","options":["empty","notify"],"default":"empty"},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const query = (this.props.query ?? 'empty') === 'notify';
+    const KC = { Question: '#fbbf24', Review: '#fbbf24', Proposal: '#fbbf24', Error: '#f87171', Working: '#60a5fa', Later: '#a1a1aa', Done: '#a1a1aa' };
+    const item = (icon, ic, title, kind, sub, right, sel, w) => ({ icon, ic, title, kind, kc: KC[kind] || '#8b8b94', sub, right: right || '', bg: sel ? '#2a2a2e' : 'transparent', w: w || 400 });
+    const S = (icon) => icon;
+    const groups = query ? [
+      { title: 'SESSIONS', items: [
+        item('◆', '#fbbf24', 'PR 2: 配信キューを実装', 'Question', 'P1 #123 通知機能の刷新 · example/web-app · feat/notify-queue', '8s', true, 700),
+        item('◆', '#fbbf24', 'web-app PM', 'Review', 'P1 #123 通知機能の刷新 · example/web-app', '2m', false, 700),
+        item('◷', '#a1a1aa', 'PR 3: 設定画面に項目を追加', 'Later', 'P1 #123 通知機能の刷新 · feat/notify-settings', ''),
+        item('✓', '#a1a1aa', 'PR 1: 通知の型を追加', 'Done', 'P1 #123 通知機能の刷新 · ◇ 2 decisions to review', '')
+      ] },
+      { title: 'TQ TASKS', items: [
+        item('#', '#a1a1aa', '#123 通知機能の刷新', '', 'P1 · 4 sessions · 2 need action · example/web-app', 'Show in Board'),
+        item('#', '#a1a1aa', '#207 通知の許可を求める', '', 'P4 · 2 sessions · 1 needs action · fohte/tq', 'Show in Board')
+      ] },
+      { title: 'COMMANDS', items: [
+        item('›', '#a1a1aa', 'Filter inbox by task #123', '', 'Same as typing task:#123 in the inbox filter', '/'),
+        item('›', '#a1a1aa', 'Start a session for #123 通知機能の刷新', '', 'Opens a new Claude Code session in example/web-app', '⌘N')
+      ] }
+    ] : [
+      { title: 'NEEDS ACTION', items: [
+        item('◆', '#fbbf24', 'PR 2: 配信キューを実装', 'Question', 'P1 #123 通知機能の刷新 · example/web-app', '8s', true, 700),
+        item('◆', '#fbbf24', 'web-app PM', 'Review', 'P1 #123 通知機能の刷新 · example/web-app', '2m', false, 700),
+        item('×', '#f87171', 'ログイン後の白い画面を修正', 'Error', 'P2 #131 ログイン後に白い画面 · example/web-app', '12m', false, 700)
+      ] },
+      { title: 'RECENT', items: [
+        item('●', '#60a5fa', '調査: ビルドが遅い原因', 'Working', 'P3 #118 ビルドが遅い原因の調査 · ◇ 2 decisions', '30s'),
+        item('▤', '#a1a1aa', 'tq PM', '', 'PM · fohte/tq', '')
+      ] },
+      { title: 'COMMANDS', items: [
+        item('›', '#a1a1aa', 'New session…', '', 'Pick a project and a tq task', '⌘N'),
+        item('›', '#a1a1aa', 'Switch to Board', '', '', '⇧B'),
+        item('›', '#a1a1aa', 'Archive all done', '', '4 sessions · 2 have decisions to review', '')
+      ] }
+    ];
+    const scopes = [['All', '', true], ['Sessions', ''], ['tq tasks', '#'], ['Projects', '@'], ['Commands', '>']]
+      .map(([name, prefix, on]) => ({ name, prefix, on: on ? 'true' : 'false', style: on ? 'color: #fafafa; font-weight: 700; box-shadow: inset 0 -2px 0 #fafafa' : 'color: #a1a1aa' }));
+    return { q: query ? 'notify' : '', groups, scopes };
+  }
+}
+</script>
+</body>
+</html>

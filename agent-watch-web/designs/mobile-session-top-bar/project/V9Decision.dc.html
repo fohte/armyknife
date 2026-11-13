@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Decision</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&amp;family=Noto+Sans+JP:wght@400;500;700&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="width: 1200px; height: 900px; display: flex; flex-direction: column; overflow: hidden; background: #0a0a0a; color: #fafafa; font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'Noto Sans JP', sans-serif; font-size: 14px; line-height: 1.55">
+
+<header style="height: 56px; flex: none; box-sizing: border-box; display: flex; align-items: center; gap: 12px; padding: 0 24px; border-bottom: 1px solid #2a2a2a">
+<div style="min-width: 0">
+<div style="display: flex; gap: 10px; font-size: 12px; color: #8b8b94"><span style="color: #d4d4d8"><span style="font-family: 'JetBrains Mono', monospace; font-weight: 700">P3 #118</span> ビルドが遅い原因の調査</span><span style="font-family: 'JetBrains Mono', monospace">example/web-app</span></div>
+<h1 style="margin: 0; font-size: 15px; font-weight: 700">調査: ビルドが遅い原因</h1>
+</div>
+<span style="margin-left: 8px; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #60a5fa"><span style="width: 7px; height: 7px; border-radius: 50%; background: #60a5fa"></span>Working · 30s</span>
+<div style="margin-left: auto; display: flex; gap: 6px"><button type="button" style="height: 28px; padding: 0 10px; border: 1px solid #3f3f46; background: transparent; color: #fafafa; font-family: inherit; font-size: 12px">◇ 2 decisions</button><button type="button" style="height: 28px; padding: 0 10px; border: 1px solid #2a2a2a; background: transparent; color: #d4d4d8; font-family: inherit; font-size: 12px">Open in terminal</button></div>
+</header>
+
+<div style="flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end">
+<div style="width: 100%; max-width: 820px; box-sizing: border-box; margin: 0 auto; padding: 0 24px 24px; display: flex; flex-direction: column; gap: 14px">
+
+<p style="margin: 0; color: #d4d4d8">CI のログを区間ごとに集計しました。依存のインストールに 5 分、テストに 4 分かかっています。</p>
+
+<div style="padding: 8px 12px; border-left: 0; background: #111111; display: flex; align-items: center; gap: 10px; font-size: 13px">
+<span style="color: #a1a1aa">◇</span><span style="color: #8b8b94">Decided</span><span>キャッシュの対象は <b>pnpm の store</b></span><span style="color: #8b8b94">· also considered 1</span><span style="margin-left: auto; font-size: 12px; color: #8b8b94">▸</span>
+</div>
+
+<p style="margin: 0; color: #d4d4d8">store のキャッシュを入れる PR を作っています。テストは 4 つに分けて並列にします。</p>
+
+<div style="background: #111111; font-size: 13px">
+<div style="padding: 8px 12px; display: flex; align-items: center; gap: 10px"><span style="color: #a1a1aa">◇</span><span style="color: #8b8b94">Decided</span><span>テストの分け方は <b>ファイル数で 4 等分</b></span><span style="color: #8b8b94">· also considered 2</span><span style="margin-left: auto; font-size: 12px; color: #8b8b94">▾</span></div>
+<div style="padding: 0 12px 10px 34px; display: flex; flex-direction: column; gap: 6px; color: #d4d4d8">
+<div><span style="color: #8b8b94">Why ·</span> 実行時間の記録がまだないので、まずは一番単純な分け方にした</div>
+<div><span style="color: #8b8b94">Also considered ·</span> 前回の実行時間で均等に分ける / パッケージごとに分ける</div>
+<div><span style="color: #8b8b94">Easy to change ·</span> CI の設定 1 か所だけ</div>
+<div style="display: flex; gap: 6px; margin-top: 2px"><button type="button" style="height: 26px; padding: 0 10px; border: 1px solid #3f3f46; background: transparent; color: #fafafa; font-family: inherit; font-size: 12px">OK</button><button type="button" style="height: 26px; padding: 0 10px; border: 1px solid #3f3f46; background: transparent; color: #fafafa; font-family: inherit; font-size: 12px">Change…</button><span style="margin-left: auto; align-self: center; font-size: 11.5px; color: #8b8b94">Not blocking · keeps working</span></div>
+</div>
+</div>
+
+<div style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #8b8b94"><span style="width: 7px; height: 7px; border-radius: 50%; background: #60a5fa"></span>CI の設定を書き換えています…</div>
+</div>
+</div>
+
+<div style="flex: none; padding: 0 24px 20px">
+<div style="max-width: 772px; margin: 0 auto; border: 1px solid #3f3f46; background: #141414">
+<label style="display: block"><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Message</span>
+<textarea rows="2" placeholder="Message 調査: ビルドが遅い原因 (it keeps working)" style="display: block; width: 100%; box-sizing: border-box; resize: none; padding: 12px 14px 4px; border: 0; outline: none; background: transparent; color: #fafafa; font-family: inherit; font-size: 14px; line-height: 1.6"></textarea></label>
+<div style="display: flex; align-items: center; padding: 6px 8px 8px 14px; font-size: 11.5px; color: #8b8b94"><span>↵ Send · Esc Interrupt</span><button type="button" aria-label="Send" style="margin-left: auto; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border: 0; background: #fafafa; color: #0a0a0a"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"></path></svg></button></div>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1200,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ja"><head>
+<meta charset="utf-8">
+<title>Review in crit</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&amp;family=Noto+Sans+JP:wght@400;500;700&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; display: flex; overflow: hidden; background: #0a0a0a; color: #fafafa; font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'Noto Sans JP', sans-serif; font-size: 14px; line-height: 1.55">
+
+<div style="width: 240px; flex: none; height: 900px"><dc-import name="V8Nav" mode="inbox" inbox-open="{{ false }}" hint-size="240px,900px"></dc-import></div>
+
+<main style="width: 440px; flex: none; display: flex; flex-direction: column; border-right: 1px solid #2a2a2a">
+<header style="height: 56px; flex: none; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; padding: 0 20px; border-bottom: 1px solid #2a2a2a">
+<div style="display: flex; gap: 10px; font-size: 12px; color: #8b8b94"><span style="color: #d4d4d8"><span style="font-family: 'JetBrains Mono', monospace; font-weight: 700">P1 #123</span> 通知機能の刷新</span><span style="font-family: 'JetBrains Mono', monospace">example/web-app</span></div>
+<h1 style="margin: 0; font-size: 15px; font-weight: 700">web-app PM</h1>
+</header>
+<div style="flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; gap: 14px; padding: 0 20px 18px">
+<div style="align-self: flex-end; max-width: 85%; padding: 10px 14px; background: #1f1f1f">通知まわりを作り直したい。設計書を書いて crit でレビューに出して</div>
+<div><p style="margin: 0; color: #d4d4d8">設計書を書きました。PR は 3 本に分ける案です。</p><div style="margin-top: 6px; font-size: 12.5px; color: #a1a1aa">Write <span style="font-family: 'JetBrains Mono', monospace; color: #d4d4d8">notify-redesign.md</span> · Read ×9 · Bash ×1 <span style="color: #71717a">›</span></div></div>
+<div style="padding: 8px 12px; background: #111111; font-size: 13px; color: #d4d4d8"><span style="color: #a1a1aa">◇</span> <span style="color: #8b8b94">Decided</span> 再送は <b style="color: #fafafa">キュー側</b> で持つ</div>
+<section style="border: 1px solid #fbbf24">
+<div style="padding: 10px 14px 2px; font-size: 12px; font-weight: 700; color: #fbbf24">Review · waiting for you</div>
+<div style="padding: 0 14px 10px; font-family: 'JetBrains Mono', monospace; font-size: 13px">docs/notify-redesign.md</div>
+<div style="display: flex; flex-direction: column; border-top: 1px solid #2a2a2a; font-size: 13px">
+<span style="padding: 8px 14px; border-bottom: 1px solid #2a2a2a; color: #a1a1aa">Open beside the chat · open now</span>
+<span style="padding: 8px 14px">Send review (2 comments)</span>
+</div>
+</section>
+</div>
+<div style="flex: none; padding: 0 20px 20px"><div style="height: 44px; display: flex; align-items: center; padding: 0 14px; border: 1px solid #3f3f46; background: #141414; font-size: 13px; color: #8b8b94">Message web-app PM</div></div>
+</main>
+
+<section aria-label="crit" style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+<div style="height: 56px; flex: none; box-sizing: border-box; display: flex; align-items: center; gap: 10px; padding: 0 16px; background: #141414; border-bottom: 1px solid #2a2a2a">
+<span style="font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 700">crit</span>
+<span style="font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: #d4d4d8">docs/notify-redesign.md</span>
+<span style="font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #8b8b94">127.0.0.1:52413</span>
+<button type="button" style="margin-left: auto; height: 32px; padding: 0 14px; border: 0; background: #fafafa; color: #0a0a0a; font-family: inherit; font-size: 13px; font-weight: 700">Send review · 2</button>
+<button type="button" aria-label="Close" style="width: 32px; height: 32px; border: 0; background: transparent; color: #a1a1aa; font-size: 16px">×</button>
+</div>
+<div style="flex: 1; min-height: 0; overflow: hidden; padding: 20px 32px 20px 0">
+<div style="display: grid; grid-template-columns: 56px minmax(0, 1fr); column-gap: 16px; line-height: 1.75">
+<span style="text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #52525b">1</span><h2 style="margin: 0 0 6px; font-size: 22px">通知機能の刷新</h2>
+<span style="text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #52525b">3</span><h3 style="margin: 6px 0 2px; font-size: 16px"><span style="font-family: 'JetBrains Mono', monospace; color: #ef4444">## </span>背景</h3>
+<span style="text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #52525b">5</span><p style="margin: 0; color: #d4d4d8">通知はリクエスト処理の中で同期的に送っており、外部サービスが遅いと画面の応答も遅れる。</p>
+<span style="text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #52525b">7</span><h3 style="margin: 6px 0 2px; font-size: 16px"><span style="font-family: 'JetBrains Mono', monospace; color: #ef4444">## </span>PR の分け方</h3>
+<span style="text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #52525b">9</span><p style="margin: 0; color: #d4d4d8">1. 通知の型を追加 · 2. 配信キューを実装 · 3. 設定画面に項目を追加</p>
+</div>
+<div style="margin: 8px 0 0 72px; padding: 10px 12px; background: #141414; border: 1px solid #2a2a2a; font-size: 13px"><div style="font-size: 12px; color: #8b8b94">You · line 9</div>PR 1 と 2 は同時にレビューしたいので、1 本にまとめてもいい</div>
+<div style="display: grid; grid-template-columns: 56px minmax(0, 1fr); column-gap: 16px; margin-top: 10px; line-height: 1.75">
+<span style="text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #52525b">11</span><h3 style="margin: 6px 0 2px; font-size: 16px"><span style="font-family: 'JetBrains Mono', monospace; color: #ef4444">## </span>再送</h3>
+<span style="text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #52525b; background: rgba(251,191,36,0.12)">13</span><p style="margin: 0; background: rgba(251,191,36,0.12)">再送は最大 5 回、間隔は 1 分から倍々に伸ばす。</p>
+</div>
+<div style="margin: 8px 0 0 72px; border: 1px solid #a1a1aa; background: #141414">
+<div style="padding: 8px 12px 0; font-size: 12px; color: #8b8b94">Comment on line 13</div>
+<label style="display: block"><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Comment</span>
+<textarea rows="2" style="display: block; width: 100%; box-sizing: border-box; resize: none; padding: 6px 12px; border: 0; outline: none; background: transparent; color: #fafafa; font-family: inherit; font-size: 13px; line-height: 1.6">回数は設定で変えられるようにしたい</textarea></label>
+<div style="display: flex; justify-content: flex-end; gap: 6px; padding: 0 8px 8px"><button type="button" style="height: 28px; padding: 0 10px; border: 1px solid #2a2a2a; background: transparent; color: #d4d4d8; font-family: inherit; font-size: 12px">Cancel</button><button type="button" style="height: 28px; padding: 0 10px; border: 0; background: #fafafa; color: #0a0a0a; font-family: inherit; font-size: 12px; font-weight: 700">Comment</button></div>
+</div>
+</div>
+</section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+
+
+</body></html>

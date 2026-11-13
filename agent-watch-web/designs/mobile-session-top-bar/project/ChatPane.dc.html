@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>会話ペイン</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&amp;family=Noto+Sans+JP:wght@400;500;700&amp;display=swap">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="width: 100%; height: {{h}}px; box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; background: #0a0a0a; color: #fafafa; font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'Noto Sans JP', sans-serif; font-size: 14px; line-height: 1.5">
+
+<sc-if value="{{showHeader}}" hint-placeholder-val="{{ true }}">
+<header style="height: 56px; flex: none; box-sizing: border-box; display: flex; align-items: center; gap: 12px; padding: 0 24px; border-bottom: 1px solid #2a2a2a">
+<div style="min-width: 0">
+<div style="display: flex; align-items: center; gap: 10px; font-size: 12px; color: #8b8b94"><a href="#" style="color: #d4d4d8; text-decoration: none"><span style="font-family: 'JetBrains Mono', monospace; font-weight: 700">P1 #123</span> 通知機能の刷新</a><span style="font-family: 'JetBrains Mono', monospace">example/web-app</span><a href="#" style="display: inline-flex; align-items: center; gap: 4px; color: #8b8b94; text-decoration: none"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"></path></svg><span style="text-decoration: underline dotted #71717a; text-underline-offset: 3px">Parent: web-app PM</span></a></div>
+<h1 style="margin: 0; font-size: 15px; font-weight: 700; line-height: 1.4">PR 2: 配信キューを実装</h1>
+</div>
+<div style="margin-left: auto; display: flex; gap: 6px">
+<a href="#" style="height: 28px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid #2a2a2a; font-size: 12px; color: #d4d4d8; text-decoration: none"><span style="font-family: 'JetBrains Mono', monospace">#41</span>Draft</a>
+<button type="button" style="height: 28px; padding: 0 10px; border: 1px solid #2a2a2a; border-radius: 0; background: transparent; color: #d4d4d8; font-family: inherit; font-size: 12px">Later</button>
+<button type="button" style="height: 28px; padding: 0 10px; border: 1px solid #2a2a2a; border-radius: 0; background: transparent; color: #d4d4d8; font-family: inherit; font-size: 12px">Open in terminal</button>
+</div>
+</header>
+</sc-if>
+
+<div style="flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end">
+<div style="width: 100%; max-width: 760px; box-sizing: border-box; margin: 0 auto; padding: 0 24px 20px; display: flex; flex-direction: column; gap: 18px">
+<div style="display: flex; align-items: center; gap: 10px; font-size: 12px; color: #8b8b94"><span style="flex: 1; height: 1px; background: #2a2a2a"></span>1 hour ago<span style="flex: 1; height: 1px; background: #2a2a2a"></span></div>
+<div style="max-width: 88%; border: 1px solid #3f3f46; background: #141414">
+<div style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: #1f1f1f; font-size: 12px"><span style="padding: 0 6px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; background: #fafafa; color: #0a0a0a">FROM</span><a href="#" style="color: #fafafa; font-weight: 700; text-decoration: underline dotted #71717a; text-underline-offset: 3px">web-app PM</a><span style="margin-left: auto; color: #8b8b94">1 hour ago</span></div>
+<div style="padding: 8px 12px; color: #d4d4d8">PR 2 として配信キューを実装してください。設計は docs/notify-redesign.md の 3 章です。</div>
+</div>
+<div>
+<p style="margin: 0">notify::queue モジュールを追加して、テストを書きました。</p>
+<button type="button" style="margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; padding: 0; border: 0; background: transparent; color: #a1a1aa; font-family: inherit; font-size: 12.5px; text-align: left"><span>Edit <span style="font-family: 'JetBrains Mono', monospace; color: #d4d4d8">queue.rs</span>, <span style="font-family: 'JetBrains Mono', monospace; color: #d4d4d8">mod.rs</span></span><span>Read ×3</span><span>Bash ×1</span><span style="color: #71717a">›</span></button>
+</div>
+<p style="margin: 0">draft PR <span style="font-family: 'JetBrains Mono', monospace; color: #ef4444">#41</span> を出しました。次に、再送の上限を設定から読む形にします。</p>
+<div style="border: 1px solid #fbbf24">
+<div style="padding: 12px 16px 4px; font-size: 12px; font-weight: 700; color: #fbbf24">Question</div>
+<p style="margin: 0; padding: 0 16px 12px; font-size: 15px">設定キー notify.retry.max を追加してよいですか？ 既定値は 5 回にします。</p>
+<div style="display: flex; flex-direction: column; border-top: 1px solid #2a2a2a">
+<button type="button" style="height: 42px; display: flex; align-items: center; gap: 12px; padding: 0 16px; border: 0; border-bottom: 1px solid #2a2a2a; background: transparent; color: #fafafa; font-family: inherit; font-size: 14px; text-align: left"><span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #8b8b94">1</span>はい</button>
+<button type="button" style="height: 42px; display: flex; align-items: center; gap: 12px; padding: 0 16px; border: 0; background: transparent; color: #fafafa; font-family: inherit; font-size: 14px; text-align: left"><span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #8b8b94">2</span>いいえ、別の方法を指示する</button>
+</div>
+</div>
+</div>
+</div>
+
+<div style="flex: none; padding: 0 24px 20px">
+<div style="max-width: 712px; margin: 0 auto; border: 1px solid #3f3f46; background: #141414">
+<label style="display: block">
+<span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Message</span>
+<textarea rows="2" placeholder="Message PR 2" style="display: block; width: 100%; box-sizing: border-box; resize: none; padding: 12px 14px 4px; border: 0; outline: none; background: transparent; color: #fafafa; font-family: inherit; font-size: 14px; line-height: 1.6"></textarea>
+</label>
+<div style="display: flex; align-items: center; padding: 6px 8px 8px 14px; font-size: 11.5px; color: #8b8b94">
+<span>↵ Send · ⇧↵ New line · Esc Interrupt</span>
+<button type="button" aria-label="Send" style="margin-left: auto; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border: 0; background: #fafafa; color: #0a0a0a"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"></path></svg></button>
+</div>
+</div>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"showHeader":{"editor":"boolean","default":true},"h":{"editor":"int","default":900},"$preview":{"width":1180,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { showHeader: this.props.showHeader ?? true, h: this.props.h ?? 900 };
+  }
+}
+</script>
+</body>
+</html>

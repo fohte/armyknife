@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ja"><head>
+<meta charset="utf-8">
+<title>iPhone Inbox</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&amp;family=Noto+Sans+JP:wght@400;500;700&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#fafafa}a:hover{color:#fafafa}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; background: #0a0a0a; color: #fafafa; font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', 'Noto Sans JP', sans-serif; font-size: 15px; line-height: 1.4">
+
+<div style="padding: 54px 16px 8px">
+<div style="display: flex; align-items: center"><span style="font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 700"><span style="color: #ef4444">&gt;</span> agent watch</span><span style="margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; color: #a1a1aa"><span style="width: 6px; height: 6px; background: #a1a1aa"></span>Connected · 22:00</span></div>
+<h1 style="margin: 10px 0 0; font-size: 26px; font-weight: 700">Inbox</h1>
+</div>
+
+<div style="display: flex; gap: 6px; padding: 4px 16px 12px; overflow: hidden; white-space: nowrap">
+<a href="#" style="min-height: 36px; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; background: #1f1f1f; text-decoration: none; font-size: 13.5px; font-weight: 700"><span style="color: #fbbf24; font-size: 11px">★</span>通知機能の刷新</a>
+<a href="#" style="min-height: 36px; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; background: #1f1f1f; text-decoration: none; font-size: 13.5px; font-weight: 700"><span style="color: #fbbf24; font-size: 11px">★</span>ログイン後に白い画面</a>
+<a href="#" style="min-height: 36px; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; background: #1f1f1f; text-decoration: none; font-size: 13.5px"><span style="color: #fbbf24; font-size: 11px">★</span>検索</a>
+</div>
+
+<div style="flex: 1; min-height: 0; overflow: hidden">
+<div style="padding: 8px 16px 6px; font-size: 13px; font-weight: 700">Needs action <span style="font-family: 'JetBrains Mono', monospace; color: #fbbf24">6</span></div>
+<sc-for list="{{rows}}" as="r" hint-placeholder-count="5">
+<a href="FPhoneChat.dc.html" style="display: flex; gap: 12px; padding: 10px 16px; border-top: 1px solid #1f1f1f; text-decoration: none">
+<span style="width: 8px; flex: none; padding-top: 7px"><span style="display: block; width: 8px; height: 8px; background: {{r.dot}}"></span></span>
+<span style="flex: 1; min-width: 0">
+<span style="display: flex; gap: 8px"><span style="flex: 1; min-width: 0; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{r.title}}</span><span style="font-size: 12.5px; color: #8b8b94">{{r.ago}}</span></span>
+<span style="display: block; font-size: 13.5px; color: #d4d4d8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis"><b style="color: {{r.kc}}">{{r.kind}}</b> · {{r.preview}}</span>
+<span style="display: block; font-size: 12px; color: #8b8b94; white-space: nowrap; overflow: hidden; text-overflow: ellipsis"><span style="font-family: 'JetBrains Mono', monospace; color: #a1a1aa">{{r.task}}</span> {{r.taskTitle}} · {{r.repo}}</span>
+</span>
+</a>
+</sc-for>
+<a href="#" style="display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 16px; border-top: 1px solid #2a2a2a; text-decoration: none; font-size: 14px"><b>Later</b><span style="font-family: 'JetBrains Mono', monospace; color: #a1a1aa">2</span><span style="margin-left: auto; font-size: 12.5px; color: #8b8b94">Next back tomorrow 9:00 ›</span></a>
+<a href="#" style="display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 16px; border-top: 1px solid #2a2a2a; text-decoration: none; font-size: 14px; color: #d4d4d8"><b>In progress</b><span style="font-family: 'JetBrains Mono', monospace; color: #60a5fa">15</span><span style="margin-left: auto; color: #52525b">›</span></a>
+<a href="#" style="display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 16px; border-top: 1px solid #2a2a2a; border-bottom: 1px solid #2a2a2a; text-decoration: none; font-size: 14px; color: #d4d4d8"><b>Done</b><span style="font-family: 'JetBrains Mono', monospace; color: #a1a1aa">4</span><span style="margin-left: auto; font-size: 12.5px; color: #8b8b94">◇ 2 to review ›</span></a>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const K = { Question: '#fbbf24', Review: '#fbbf24', Proposal: '#fbbf24', Error: '#f87171' };
+    const rows = [
+      ['PR 2: 配信キューを実装', '8s', 'Question', '設定キーを追加してよいですか？', 'P1 #123', '通知機能の刷新', 'web-app'],
+      ['web-app PM', '2m', 'Review', '設計書を crit で見てください', 'P1 #123', '通知機能の刷新', 'web-app'],
+      ['ログイン後の白い画面を修正', '12m', 'Error', 'E2E の実行中に例外で止まりました', 'P2 #131', 'ログイン後に白い画面', 'web-app'],
+      ['下調べ: キャッシュの効き', '5m', 'Review', '調査が終わりました', 'P3 #118', 'ビルドが遅い原因の調査', 'web-app'],
+      ['通知の許可ダイアログ', '20m', 'Proposal', '文言の案が 2 つあります', 'P4 #207', '通知の許可を求める', 'tq']
+    ].map(([title, ago, kind, preview, task, taskTitle, repo]) => ({ title, ago, kind, preview, task, taskTitle, repo, kc: K[kind], dot: kind === 'Error' ? '#f87171' : '#fbbf24' }));
+    return { rows };
+  }
+}
+</script>
+
+
+</body></html>
