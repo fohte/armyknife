@@ -66,16 +66,12 @@ function requestFor(operation: SessionOperation) {
         },
       }
     case 'command_preview':
-      return {
-        path: 'commands/preview',
-        body: {
-          messageText: operation.messageText,
-          commands: operation.commands,
-        },
-      }
     case 'command_execute':
       return {
-        path: 'commands/execute',
+        path:
+          operation.type === 'command_preview'
+            ? 'commands/preview'
+            : 'commands/execute',
         body: {
           messageText: operation.messageText,
           commands: operation.commands,

@@ -1,4 +1,4 @@
-import type { Result } from 'neverthrow'
+import { err, type Result } from 'neverthrow'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -502,5 +502,73 @@ it('confirms the cwd before execution and shows the returned status', async () =
         commands: ['printf safe'],
       },
     ],
+  })
+})
+
+it('shows a preview error and allows the command to be retried', async () => {
+  runSessionOperationMock.mockImplementationOnce(() =>
+    Promise.resolve(err(new Error('Preview failed'))),
+  )
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(() => Promise.resolve(Response.json({ cwd: '/workspace/example' }))),
+  )
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <MarkdownMessage sessionId="sample-session">
+        {'Run `! printf safe`.'}
+      </MarkdownMessage>,
+    )
+  })
+
+  const runButton = container.querySelector('button')
+  if (!(runButton instanceof HTMLButtonElement)) {
+    throw new Error('Expected a command button')
+  }
+  await act(async () => userEvent.click(runButton))
+  const failure = {
+    dialog: document.body.querySelector('[role="dialog"]')?.textContent ?? null,
+    status: container.querySelector('[role="status"]')?.textContent ?? null,
+    buttonLabel: runButton.textContent,
+    buttonDisabled: runButton.disabled,
+  }
+
+  await act(async () => userEvent.click(runButton))
+  const retry = {
+    dialog: document.body.querySelector('[role="dialog"]')?.textContent ?? null,
+    buttonLabel: runButton.textContent,
+    runOperations: runSessionOperationMock.mock.calls.map(
+      ([operation]) => operation,
+    ),
+  }
+
+  const getSnapshot = () => ({ failure, retry })
+  expect(getSnapshot()).toEqual({
+    failure: {
+      dialog: null,
+      status: 'Preview failed',
+      buttonLabel: 'Failed',
+      buttonDisabled: false,
+    },
+    retry: {
+      dialog:
+        'Run agent command?Review the command and working directory before it runs.Working directory/workspace/exampleCommandprintf safeCancelRun command',
+      buttonLabel: 'Run command 1',
+      runOperations: [
+        {
+          type: 'command_preview',
+          sessionId: 'sample-session',
+          messageText: 'Run `! printf safe`.',
+          commands: ['printf safe'],
+        },
+        {
+          type: 'command_preview',
+          sessionId: 'sample-session',
+          messageText: 'Run `! printf safe`.',
+          commands: ['printf safe'],
+        },
+      ],
+    },
   })
 })
