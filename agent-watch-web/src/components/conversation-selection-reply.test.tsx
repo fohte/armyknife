@@ -39,13 +39,14 @@ function requireElement<T extends Element>(element: T | null): T {
   return element
 }
 
-function render(messages: readonly ChatItem[]) {
+function render(messages: readonly ChatItem[], isMobile = false) {
   root = createRoot(container)
   act(() => {
     root?.render(
       <ConversationPaneView
         session={session}
         messages={messages}
+        isMobile={isMobile}
         actions={actions}
         loading={false}
         error={null}
@@ -56,7 +57,7 @@ function render(messages: readonly ChatItem[]) {
   })
 }
 
-function selectText(element: Element) {
+function selectText(element: Element, rects?: readonly DOMRect[]) {
   const textNode = element.firstChild
   if (textNode === null || textNode.nodeType !== Node.TEXT_NODE) {
     throw new Error('Expected a text node')
@@ -64,6 +65,9 @@ function selectText(element: Element) {
   const range = document.createRange()
   range.setStart(textNode, 0)
   range.setEnd(textNode, textNode.textContent?.length ?? 0)
+  if (rects !== undefined) {
+    Object.defineProperty(range, 'getClientRects', { value: () => rects })
+  }
   act(() => {
     const selection = window.getSelection()
     selection?.removeAllRanges()
@@ -88,46 +92,61 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it('quotes each selected line and focuses the composer below it', () => {
-  window.localStorage.setItem(
-    `agent-watch-web:composer-draft:${session.id}`,
-    'Existing note',
-  )
-  render([{ type: 'assistant', text: 'First line\nSecond line' }])
+it.each([
+  {
+    name: 'existing draft',
+    initialDraft: 'Existing note',
+    expectedDraft: 'Existing note\n\n> First line\n> Second line\n',
+  },
+  {
+    name: 'empty draft',
+    initialDraft: '',
+    expectedDraft: '> First line\n> Second line\n',
+  },
+])(
+  'quotes each selected line into an $name',
+  ({ initialDraft, expectedDraft }) => {
+    if (initialDraft !== '') {
+      window.localStorage.setItem(
+        `agent-watch-web:composer-draft:${session.id}`,
+        initialDraft,
+      )
+    }
+    render([{ type: 'assistant', text: 'First line\nSecond line' }])
 
-  const paragraph = requireElement(
-    container.querySelector('.chat-assistant-message p'),
-  )
-  selectText(paragraph)
-  const replyButton = requireElement(
-    container.querySelector<HTMLButtonElement>(
-      '.conversation-selection-reply button',
-    ),
-  )
-  act(() => {
-    replyButton.click()
-  })
+    const paragraph = requireElement(
+      container.querySelector('.chat-assistant-message p'),
+    )
+    selectText(paragraph)
+    const replyButton = requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.conversation-selection-reply button',
+      ),
+    )
+    act(() => {
+      replyButton.click()
+    })
 
-  const textarea = requireElement(
-    container.querySelector<HTMLTextAreaElement>('textarea'),
-  )
-  const expectedDraft = 'Existing note\n\n> First line\n> Second line\n'
-  const snapshot = () => ({
-    draft: textarea.value,
-    focused: document.activeElement === textarea,
-    selectionStart: textarea.selectionStart,
-    selectionEnd: textarea.selectionEnd,
-    menuVisible:
-      container.querySelector('.conversation-selection-reply') !== null,
-  })
-  expect(snapshot()).toEqual({
-    draft: expectedDraft,
-    focused: true,
-    selectionStart: expectedDraft.length,
-    selectionEnd: expectedDraft.length,
-    menuVisible: false,
-  })
-})
+    const textarea = requireElement(
+      container.querySelector<HTMLTextAreaElement>('textarea'),
+    )
+    const snapshot = () => ({
+      draft: textarea.value,
+      focused: document.activeElement === textarea,
+      selectionStart: textarea.selectionStart,
+      selectionEnd: textarea.selectionEnd,
+      menuVisible:
+        container.querySelector('.conversation-selection-reply') !== null,
+    })
+    expect(snapshot()).toEqual({
+      draft: expectedDraft,
+      focused: true,
+      selectionStart: expectedDraft.length,
+      selectionEnd: expectedDraft.length,
+      menuVisible: false,
+    })
+  },
+)
 
 it('does not offer replies for text outside an assistant message', () => {
   render([{ type: 'user', text: 'A user message' }])
@@ -138,6 +157,32 @@ it('does not offer replies for text outside an assistant message', () => {
       container.querySelector('.conversation-selection-reply') !== null,
   })
   expect(snapshot()).toEqual({ menuVisible: false })
+})
+
+it('keeps the mobile reply menu visible near the bottom edge', () => {
+  render([{ type: 'assistant', text: 'Select this sentence.' }], true)
+  const selectionTop = window.innerHeight - 24
+  selectText(
+    requireElement(container.querySelector('.chat-assistant-message p')),
+    [new DOMRect(20, selectionTop, 100, 16)],
+  )
+
+  const menu = requireElement(
+    container.querySelector<HTMLElement>('.conversation-selection-reply'),
+  )
+  const menuTop = Number.parseFloat(menu.style.top)
+  const maxTop = Math.max(8, window.innerHeight - 50)
+  const expectedTop = Math.min(Math.max(selectionTop - 50, 8), maxTop)
+  const snapshot = () => ({
+    top: menuTop,
+    aboveSelection: menuTop < selectionTop,
+    insideViewport: menuTop >= 8 && menuTop + 42 <= window.innerHeight - 8,
+  })
+  expect(snapshot()).toEqual({
+    top: expectedTop,
+    aboveSelection: true,
+    insideViewport: true,
+  })
 })
 
 it.each([
