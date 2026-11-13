@@ -269,7 +269,7 @@ fn sessions_after_rewind(
 ) -> (Session, Session) {
     let now = Utc::now();
     let mut stopped_session = latest_session.clone();
-    stopped_session.status = SessionStatus::Paused;
+    stopped_session.status = SessionStatus::Ended;
     stopped_session.updated_at = now;
     stopped_session.read_at = None;
     stopped_session.sweep_signaled = false;
@@ -289,9 +289,6 @@ fn sessions_after_rewind(
     forked_session.pending_permission_agent_ids.clear();
     forked_session.pending_permission_request_ids.clear();
     forked_session.pending_human_review_ids.clear();
-    forked_session
-        .ancestor_session_ids
-        .push(stopped_session.session_id.clone());
     forked_session.sweep_signaled = false;
 
     (stopped_session, forked_session)
@@ -613,11 +610,8 @@ mod tests {
                 "fixture-fork".to_string(),
                 Some(transcript_path.clone()),
                 SessionStatus::Stopped,
-                vec![
-                    "fixture-ancestor".to_string(),
-                    "fixture-session".to_string()
-                ],
-                SessionStatus::Paused,
+                vec!["fixture-ancestor".to_string()],
+                SessionStatus::Ended,
                 false,
                 vec![
                     serde_json::json!({"stop": "fixture-session"}),
@@ -681,12 +675,9 @@ mod tests {
             (
                 true,
                 SessionStatus::Stopped,
-                SessionStatus::Paused,
+                SessionStatus::Ended,
                 false,
-                vec![
-                    "fixture-ancestor".to_string(),
-                    "fixture-session".to_string()
-                ],
+                vec!["fixture-ancestor".to_string()],
                 original.to_string(),
                 vec![
                     serde_json::json!({
@@ -774,7 +765,7 @@ mod tests {
                     "message": {"content": "Earlier request."}
                 })],
                 expected_calls,
-                SessionStatus::Paused,
+                SessionStatus::Ended,
             ),
         );
     }

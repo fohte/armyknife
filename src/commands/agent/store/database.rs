@@ -18,6 +18,7 @@ mod permission_denied;
 mod permission_requests;
 mod proposals;
 mod queued_prompts;
+mod replacements;
 mod todos;
 mod wake;
 mod web_state;
@@ -47,6 +48,9 @@ pub(crate) use proposals::{
 pub(crate) use queued_prompts::WatchWebQueuedPrompt;
 pub(crate) use queued_prompts::{
     delete_watch_web_queued_prompts, insert_watch_web_queued_prompt, watch_web_queued_prompts,
+};
+pub(crate) use replacements::{
+    all_unreplaced_sessions, resolve_current_session_id, save_rewind_sessions,
 };
 pub(crate) use todos::AgentTodo;
 pub(crate) use todos::{
@@ -124,42 +128,6 @@ pub(crate) fn save_session(sessions_dir: &Path, session: &Session) -> Result<()>
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     write_session(&transaction, session)?;
-    transaction.commit()?;
-    Ok(())
-}
-
-pub(crate) fn save_rewind_sessions(
-    sessions_dir: &Path,
-    previous: &Session,
-    forked: &Session,
-) -> Result<()> {
-    ensure!(
-        previous.session_id != forked.session_id,
-        "rewound session ID must differ from the original"
-    );
-    let mut connection = open_connection(sessions_dir)?;
-    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let previous_revision = write_session(&transaction, previous)?;
-    write_session(&transaction, forked)?;
-    transaction.execute(
-        "INSERT INTO watch_web_session_state (session_id, is_today, primary_task_id, watch_web_user_marker)
-         SELECT ?2, is_today, primary_task_id, watch_web_user_marker
-         FROM watch_web_session_state WHERE session_id = ?1
-         ON CONFLICT(session_id) DO UPDATE SET
-             is_today = excluded.is_today,
-             primary_task_id = excluded.primary_task_id,
-             watch_web_user_marker = excluded.watch_web_user_marker",
-        params![previous.session_id, forked.session_id],
-    )?;
-    let forked_revision = increment_revision(&transaction)?;
-    transaction.execute(
-        "UPDATE sessions SET rev = ?1 WHERE session_id = ?2",
-        params![forked_revision, forked.session_id],
-    )?;
-    ensure!(
-        previous_revision < forked_revision,
-        "rewind session revisions are not increasing"
-    );
     transaction.commit()?;
     Ok(())
 }
@@ -613,13 +581,22 @@ mod tests {
             "last_message": null,
         }))
         .unwrap();
+        previous.status = crate::commands::agent::types::SessionStatus::Ended;
         previous.ancestor_session_ids = vec!["fixture-parent".to_string()];
         let mut forked = previous.clone();
         forked.session_id = "fixture-fork".to_string();
         forked.status = crate::commands::agent::types::SessionStatus::Stopped;
-        forked
-            .ancestor_session_ids
-            .push(previous.session_id.clone());
+        let mut child = previous.clone();
+        child.session_id = "fixture-child".to_string();
+        child.ancestor_session_ids =
+            vec!["fixture-parent".to_string(), previous.session_id.clone()];
+        let mut grandchild = previous.clone();
+        grandchild.session_id = "fixture-grandchild".to_string();
+        grandchild.ancestor_session_ids = vec![
+            "fixture-parent".to_string(),
+            previous.session_id.clone(),
+            child.session_id.clone(),
+        ];
 
         let connection = open_connection(temp_dir.path()).unwrap();
         connection
@@ -631,13 +608,23 @@ mod tests {
             )
             .unwrap();
         drop(connection);
+        save_session(temp_dir.path(), &child).unwrap();
+        save_session(temp_dir.path(), &grandchild).unwrap();
 
         save_rewind_sessions(temp_dir.path(), &previous, &forked).unwrap();
 
         let previous_after = load_session(temp_dir.path(), &previous.session_id)
             .unwrap()
             .unwrap();
+        let replacement =
+            resolve_current_session_id(temp_dir.path(), &previous.session_id).unwrap();
         let forked_after = load_session(temp_dir.path(), &forked.session_id)
+            .unwrap()
+            .unwrap();
+        let child_after = load_session(temp_dir.path(), &child.session_id)
+            .unwrap()
+            .unwrap();
+        let grandchild_after = load_session(temp_dir.path(), &grandchild.session_id)
             .unwrap()
             .unwrap();
         let connection = open_connection(temp_dir.path()).unwrap();
@@ -659,14 +646,24 @@ mod tests {
         assert_eq!(
             (
                 previous_after.status,
+                replacement,
                 forked_after.session_id,
                 forked_after.ancestor_session_ids,
+                child_after.ancestor_session_ids,
+                grandchild_after.ancestor_session_ids,
                 copied_state,
             ),
             (
-                crate::commands::agent::types::SessionStatus::Paused,
+                crate::commands::agent::types::SessionStatus::Ended,
                 "fixture-fork".to_string(),
-                vec!["fixture-parent".to_string(), "fixture-session".to_string()],
+                "fixture-fork".to_string(),
+                vec!["fixture-parent".to_string()],
+                vec!["fixture-parent".to_string(), "fixture-fork".to_string()],
+                vec![
+                    "fixture-parent".to_string(),
+                    "fixture-fork".to_string(),
+                    "fixture-child".to_string(),
+                ],
                 (
                     true,
                     Some("fixture-task".to_string()),

@@ -9,6 +9,8 @@
 //! `claude_messaging`'s direct socket write, while a Codex target is steered
 //! through its app-server.
 
+use std::path::Path;
+
 use anyhow::Result;
 use clap::Args;
 
@@ -392,46 +394,67 @@ pub fn notify(
     from_engine_hint: Option<Engine>,
 ) -> Result<Delivery> {
     ensure_not_self_notify(session_id, from)?;
-
-    let initial_session =
-        store::load_session(session_id)?.ok_or_else(|| session_not_found_error(session_id))?;
-    if initial_session.sweep_signaled {
-        anyhow::bail!("Session '{session_id}' is being stopped; refusing to notify");
-    }
-    let woke_session = initial_session.status == SessionStatus::Paused;
-    if woke_session {
-        wake::wake(session_id)?;
-    }
-
     let sessions_dir = store::sessions_dir()?;
-    let _session_wake_lock = store::lock_session_for_wake(&sessions_dir, session_id)?;
-    let session = store::load_session_from(&sessions_dir, session_id)?
-        .ok_or_else(|| session_not_found_error(session_id))?;
+    let mut current_session_id = store::resolve_current_session_id_from(&sessions_dir, session_id)?;
+    loop {
+        let (resolved_session_id, initial_session) =
+            resolve_notification_target(&sessions_dir, &current_session_id)?;
+        current_session_id = resolved_session_id;
+        ensure_not_self_notify(&current_session_id, from)?;
+        if initial_session.sweep_signaled {
+            anyhow::bail!("Session '{current_session_id}' is being stopped; refusing to notify");
+        }
+        let woke_session = initial_session.status == SessionStatus::Paused;
+        if woke_session {
+            wake::wake(&current_session_id)?;
+        }
 
-    ensure_fresh_session(session_id, &initial_session, woke_session, &session)?;
-    notify_session(
-        session_id,
-        message,
-        from,
-        from_engine_hint,
-        &session,
-        |_| Ok(None),
-        |session, content| match session.engine {
-            Engine::Claude => {
-                send_to_claude(&session.session_id, content)?;
-                Ok(Delivery::Sent)
-            }
-            Engine::Codex => send_to_codex(
-                &session.session_id,
-                content,
-                matches!(
-                    session.status,
-                    SessionStatus::Running | SessionStatus::WaitingInput
+        let session_wake_lock = store::lock_session_for_wake(&sessions_dir, &current_session_id)?;
+        let (latest_session_id, session) =
+            resolve_notification_target(&sessions_dir, &current_session_id)?;
+        if latest_session_id != current_session_id {
+            drop(session_wake_lock);
+            current_session_id = latest_session_id;
+            continue;
+        }
+
+        ensure_fresh_session(
+            &current_session_id,
+            &initial_session,
+            woke_session,
+            &session,
+        )?;
+        return notify_session(
+            &current_session_id,
+            message,
+            from,
+            from_engine_hint,
+            &session,
+            |_| Ok(None),
+            |session, content| match session.engine {
+                Engine::Claude => {
+                    send_to_claude(&session.session_id, content)?;
+                    Ok(Delivery::Sent)
+                }
+                Engine::Codex => send_to_codex(
+                    &session.session_id,
+                    content,
+                    matches!(
+                        session.status,
+                        SessionStatus::Running | SessionStatus::WaitingInput
+                    ),
+                    codex_steer::send_message,
                 ),
-                codex_steer::send_message,
-            ),
-        },
-    )
+            },
+        );
+    }
+}
+
+fn resolve_notification_target(sessions_dir: &Path, session_id: &str) -> Result<(String, Session)> {
+    let current_session_id = store::resolve_current_session_id_from(sessions_dir, session_id)?;
+    let session = store::load_session_from(sessions_dir, &current_session_id)?
+        .ok_or_else(|| session_not_found_error(&current_session_id))?;
+    Ok((current_session_id, session))
 }
 
 fn ensure_fresh_session(
@@ -1133,6 +1156,45 @@ mod tests {
         assert_eq!(
             missing_session_error(&session_store, session_id, sessions),
             (expected.to_string(), true),
+        );
+    }
+
+    #[test]
+    fn notify_redirects_a_replaced_target_through_all_replacements() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut previous = suggestion_session("previous", SessionStatus::Ended, Engine::Claude);
+        let middle = suggestion_session("middle", SessionStatus::Stopped, Engine::Claude);
+        store::save_rewind_sessions(directory.path(), &previous, &middle).unwrap();
+
+        previous = middle.clone();
+        previous.status = SessionStatus::Ended;
+        let latest = suggestion_session("latest", SessionStatus::Stopped, Engine::Claude);
+        store::save_rewind_sessions(directory.path(), &previous, &latest).unwrap();
+
+        let (target_id, target) =
+            resolve_notification_target(directory.path(), "previous").unwrap();
+        let delivered_to = RefCell::new(Vec::new());
+        let actual = notify_session(
+            &target_id,
+            "hello",
+            None,
+            None,
+            &target,
+            |_| Ok(None),
+            |session, _| {
+                delivered_to.borrow_mut().push(session.session_id.clone());
+                Ok(Delivery::Sent)
+            },
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (target_id, actual, delivered_to.into_inner()),
+            (
+                "latest".to_string(),
+                Ok(Delivery::Sent),
+                vec!["latest".to_string()],
+            ),
         );
     }
 

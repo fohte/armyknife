@@ -1515,6 +1515,40 @@ mod tests {
     }
 
     #[rstest]
+    fn replaced_sessions_are_not_sweep_targets(test_dir: TestDir) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        let mut previous = make_session("rewound-session", SessionStatus::Ended, old);
+        let mut replacement =
+            make_session("replacement-session", SessionStatus::Stopped, Utc::now());
+        previous.ancestor_session_ids = vec!["fixture-parent".to_string()];
+        replacement.ancestor_session_ids = previous.ancestor_session_ids.clone();
+        super::super::store::save_rewind_sessions(&test_dir.path, &previous, &replacement)
+            .expect("replacement sessions should save");
+
+        let sender = RecordingSender::default();
+        let probe = FakeProbe::with_pids(&[("rewound-session", 4242)]);
+        let report = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(1),
+            &sender,
+            &probe,
+            &RecordingTmuxStatusSyncer::default(),
+            false,
+        )
+        .expect("sweep");
+
+        assert_eq!(
+            report,
+            SweepReport {
+                scanned: 1,
+                waiting: 1,
+                ..SweepReport::default()
+            },
+        );
+        assert!(sender.calls.borrow().is_empty());
+    }
+
+    #[rstest]
     fn counts_stopped_session_that_has_not_elapsed(test_dir: TestDir) {
         let recent = Utc::now();
         let session = make_session("sess-c", SessionStatus::Stopped, recent);

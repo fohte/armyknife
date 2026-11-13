@@ -102,3 +102,32 @@ fn adds_permission_request_mailbox_to_version_nine_database() {
         ),
     );
 }
+
+#[test]
+fn adds_session_replacement_table_to_version_thirteen_database() {
+    let temp_dir = tempfile::tempdir().expect("temporary database directory should be created");
+    let database_path = temp_dir.path().join("sessions.db");
+    let mut connection = Connection::open(&database_path).expect("temporary database should open");
+    Migrations::from_slice(&MIGRATION_ENTRIES[..13])
+        .to_latest(&mut connection)
+        .expect("version thirteen schema should be created");
+    drop(connection);
+
+    let connection = super::super::open_connection(temp_dir.path())
+        .expect("version thirteen database should migrate to the latest schema");
+    let actual = connection
+        .query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'session_replacement'
+             )",
+            [],
+            |row| row.get::<_, bool>(0),
+        )
+        .expect("replacement table should be queryable");
+    let actual_user_version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("database migration version should be readable");
+
+    assert_eq!((actual, actual_user_version), (true, current_version()));
+}

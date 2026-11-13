@@ -193,8 +193,9 @@ impl EnginePolicy for CodexPolicy {
 
 fn wake_with(host: &dyn Host, session_id: &str) -> Result<Option<String>> {
     let sessions_dir = host.sessions_dir()?;
-    let session = store::load_session_from(&sessions_dir, session_id)?
-        .ok_or_else(|| CcError::SessionNotFound(session_id.to_string()))?;
+    let current_session_id = store::resolve_current_session_id_from(&sessions_dir, session_id)?;
+    let session = store::load_session_from(&sessions_dir, &current_session_id)?
+        .ok_or_else(|| CcError::SessionNotFound(current_session_id.clone()))?;
     let policy = policy_for(session.engine);
 
     if session.status != SessionStatus::Paused {
@@ -204,16 +205,16 @@ fn wake_with(host: &dyn Host, session_id: &str) -> Result<Option<String>> {
     let tmux_info = session
         .tmux_info
         .as_ref()
-        .ok_or_else(|| CcError::NoTmuxInfo(session_id.to_string()))?;
+        .ok_or_else(|| CcError::NoTmuxInfo(current_session_id.clone()))?;
     let recorded = resolve_session_option(|option| {
         host.pane_option(tmux_info.socket_path.as_deref(), &tmux_info.pane_id, option)
     });
-    check_pane_matches_target(recorded.as_deref(), session_id)?;
+    check_pane_matches_target(recorded.as_deref(), &current_session_id)?;
 
     if let Some(name) = respawn_unless_awake(host, policy, &sessions_dir, &session, tmux_info)? {
         return Ok(Some(name));
     }
-    policy.await_awake(host, session_id)
+    policy.await_awake(host, &current_session_id)
 }
 
 /// Respawns the paused session's pane unless the session turns out to be

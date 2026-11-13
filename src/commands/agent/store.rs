@@ -138,6 +138,13 @@ pub(crate) fn save_rewind_sessions(
     database::save_rewind_sessions(sessions_dir, previous, forked)
 }
 
+pub(crate) fn resolve_current_session_id_from(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<String> {
+    database::resolve_current_session_id(sessions_dir, session_id)
+}
+
 pub(crate) fn watch_web_user_marker(session_id: &str) -> Result<Option<String>> {
     database::watch_web_user_marker(&sessions_dir()?, session_id)
 }
@@ -381,26 +388,25 @@ pub fn sort_sessions(sessions: &mut [Session]) {
     });
 }
 
-/// Lists all active sessions from disk, excluding ended sessions.
+/// Lists current active sessions from disk, excluding ended and replaced sessions.
 pub fn list_sessions() -> Result<Vec<Session>> {
-    let mut sessions = database::all_sessions(&sessions_dir()?)?;
+    let mut sessions = database::all_unreplaced_sessions(&sessions_dir()?)?;
     sessions.retain(|session| session.archived_at.is_none());
     sessions.retain(|s| s.status != SessionStatus::Ended);
     sort_sessions(&mut sessions);
     Ok(sessions)
 }
 
-/// Lists every non-archived session from disk, including ended ones. Unlike
-/// `list_sessions`, callers use this when a session must be resolvable
-/// after it ended -- e.g. reading `ancestor_session_ids` off a delegated
-/// session that already exited by the time its PR merged.
+/// Lists every non-archived, unreplaced session from disk, including ended ones.
+/// Callers use this when a session must be resolvable after it ended -- e.g.
+/// reading `ancestor_session_ids` off a delegated session that already exited.
 pub fn list_all_sessions() -> Result<Vec<Session>> {
     list_all_sessions_from(&sessions_dir()?)
 }
 
-/// Lists every non-archived session from a specific directory, including ended ones.
+/// Lists every non-archived, unreplaced session from a directory, including ended ones.
 pub(crate) fn list_all_sessions_from(sessions_dir: &Path) -> Result<Vec<Session>> {
-    let mut sessions = database::all_sessions(sessions_dir)?;
+    let mut sessions = database::all_unreplaced_sessions(sessions_dir)?;
     sessions.retain(|session| session.archived_at.is_none());
     sort_sessions(&mut sessions);
     Ok(sessions)
@@ -775,7 +781,7 @@ mod tests {
     }
 
     #[test]
-    fn list_sessions_excludes_ended_and_both_lists_exclude_archived_sessions() {
+    fn session_lists_exclude_ended_replaced_and_archived_sessions() {
         let temp_dir = TempDir::new().expect("temp dir creation should succeed");
         let cache_home = temp_dir.path().to_str().expect("utf8 path").to_string();
         let sessions_path = temp_dir
@@ -787,6 +793,11 @@ mod tests {
         let mut ended = create_test_session("ended-1");
         ended.status = SessionStatus::Ended;
         let running = create_test_session("running-1");
+        let mut replaced = create_test_session("replaced-1");
+        replaced.status = SessionStatus::Ended;
+        let mut replacement = replaced.clone();
+        replacement.session_id = "replacement-1".to_string();
+        replacement.status = SessionStatus::Stopped;
         let archived_at = Utc
             .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
             .single()
@@ -796,6 +807,8 @@ mod tests {
         save_session_to(&sessions_path, &ended).expect("save should succeed");
         save_session_to(&sessions_path, &running).expect("save should succeed");
         save_session_to(&sessions_path, &archived).expect("save should succeed");
+        save_rewind_sessions(&sessions_path, &replaced, &replacement)
+            .expect("rewind sessions should save");
 
         let (mut active_ids, mut all_ids, archived_record) =
             temp_env::with_vars([("XDG_CACHE_HOME", Some(cache_home.as_str()))], || {
@@ -823,8 +836,12 @@ mod tests {
         assert_eq!(
             (active_ids, all_ids, archived_record),
             (
-                vec!["running-1".to_string()],
-                vec!["ended-1".to_string(), "running-1".to_string()],
+                vec!["replacement-1".to_string(), "running-1".to_string()],
+                vec![
+                    "ended-1".to_string(),
+                    "replacement-1".to_string(),
+                    "running-1".to_string(),
+                ],
                 Some(Some(archived_at)),
             )
         );
@@ -839,9 +856,16 @@ mod tests {
         ended.status = SessionStatus::Ended;
         let mut archived = create_test_session("archived-session");
         archived.archived_at = Some(Utc::now());
+        let mut replaced = create_test_session("replaced-session");
+        replaced.status = SessionStatus::Ended;
+        let mut replacement = replaced.clone();
+        replacement.session_id = "replacement-session".to_string();
+        replacement.status = SessionStatus::Stopped;
         save_session_to(&temp_session_dir.sessions_path, &running).expect("save running session");
         save_session_to(&temp_session_dir.sessions_path, &ended).expect("save ended session");
         save_session_to(&temp_session_dir.sessions_path, &archived).expect("save archived session");
+        save_rewind_sessions(&temp_session_dir.sessions_path, &replaced, &replacement)
+            .expect("save replacement sessions");
         fs::write(
             temp_session_dir
                 .sessions_path
@@ -859,7 +883,11 @@ mod tests {
 
         assert_eq!(
             actual,
-            vec!["ended-session".to_string(), "running-session".to_string()]
+            vec![
+                "ended-session".to_string(),
+                "replacement-session".to_string(),
+                "running-session".to_string()
+            ]
         );
     }
 
