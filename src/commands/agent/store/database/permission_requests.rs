@@ -392,6 +392,7 @@ mod tests {
             updated_at: Utc.timestamp_opt(1, 0).single().unwrap(),
             last_message: None,
             current_tool: Some("Bash".to_string()),
+            current_tool_name: None,
             label: None,
             work_type: None,
             work_type_pinned: false,

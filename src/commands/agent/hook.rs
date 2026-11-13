@@ -313,6 +313,7 @@ fn new_session_record(
         updated_at: now,
         last_message: None,
         current_tool: None,
+        current_tool_name: None,
         label: env.session_label.clone(),
         child_launch: ChildLaunchPermission::from_env(env.session_child_launch.as_deref()),
         ancestor_session_ids,
@@ -701,7 +702,7 @@ fn process_hook_event_impl_with_settings(
     }
     let was_waiting_for_input = session.status == SessionStatus::WaitingInput;
     let had_pending_permission_requests = session.has_pending_permission_requests();
-    let was_asking_user = session.current_tool.as_deref() == Some("AskUserQuestion");
+    let was_asking_user = session.is_current_tool_named("AskUserQuestion");
 
     let work_type_config =
         (may_contain_work_type || session.work_type.is_some()).then(config::load_config_or_default);
@@ -911,6 +912,13 @@ fn process_hook_event_impl_with_settings(
         HookEvent::PostToolUse | HookEvent::Stop | HookEvent::StopFailure => None,
         _ => session.current_tool,
     };
+    session.current_tool_name = match event {
+        HookEvent::PreToolUse | HookEvent::PermissionRequest => {
+            input.tool_name.clone().or(session.current_tool_name)
+        }
+        HookEvent::PostToolUse | HookEvent::Stop | HookEvent::StopFailure => None,
+        _ => session.current_tool_name,
+    };
 
     if let Some(config) = &work_type_config {
         work_type::update_session_work_type(&mut session, event, &input, &config.agent);
@@ -953,7 +961,6 @@ fn process_hook_event_impl_with_settings(
     // database-wide writer lock. `sync_tmux` also reloads this session.
     ensure_watch_web_user_marker(&session_lock, event, input.engine)?;
     if event == HookEvent::PermissionRequest
-        && input.engine == Engine::Claude
         && let Some(request_id) = session
             .pending_permission_request_ids
             .get(&permission_agent_key)
@@ -964,12 +971,16 @@ fn process_hook_event_impl_with_settings(
             .map(|tool_input| &tool_input.raw)
             .cloned()
             .unwrap_or_else(|| serde_json::json!({}));
-        session_lock.register_permission_request(
-            &permission_agent_key,
-            request_id,
-            input.tool_name.as_deref(),
-            &tool_input,
-        )?;
+        if input.engine == Engine::Claude
+            || (input.tool_name.is_some() && input.tool_input.is_some())
+        {
+            session_lock.register_permission_request(
+                &permission_agent_key,
+                request_id,
+                input.tool_name.as_deref(),
+                &tool_input,
+            )?;
+        }
     }
     session_lock.save(&session)?;
     drop(session_lock);
@@ -2891,6 +2902,7 @@ mod tests {
             updated_at: Utc::now(),
             last_message: None,
             current_tool: None,
+            current_tool_name: None,
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
@@ -3161,10 +3173,27 @@ mod tests {
             .expect("load")
             .expect("session exists");
         assert_eq!(
-            (session.status, session.pending_permission_agent_ids),
+            (
+                session.status,
+                session.pending_permission_agent_ids,
+                store::permission_request_data(
+                    sessions_dir,
+                    "codex-lifecycle",
+                    session
+                        .pending_permission_request_ids
+                        .get(MAIN_THREAD_AGENT_KEY)
+                        .expect("Codex request should be tracked"),
+                )
+                .expect("permission data should load"),
+            ),
             (
                 SessionStatus::WaitingInput,
                 BTreeSet::from([MAIN_THREAD_AGENT_KEY.to_string()]),
+                Some(store::PermissionRequestData {
+                    tool_name: Some("Bash".to_string()),
+                    tool_input: serde_json::json!({"command": "echo waiting"}),
+                    pending: true,
+                }),
             ),
         );
     }
@@ -3365,6 +3394,7 @@ mod tests {
             updated_at: Utc::now(),
             last_message: None,
             current_tool: None,
+            current_tool_name: None,
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
@@ -3729,6 +3759,31 @@ mod tests {
     }
 
     #[test]
+    fn pre_tool_use_persists_the_structured_tool_name() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+
+        process_hook_event_impl(
+            HookEvent::PreToolUse,
+            create_test_input_with_tool("ExitPlanMode", None),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("hook should save the tool name");
+
+        let session = store::load_session_from(sessions_dir, "test-123")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(
+            (session.current_tool_name, session.current_tool),
+            (
+                Some("ExitPlanMode".to_string()),
+                Some("ExitPlanMode".to_string())
+            ),
+        );
+    }
+
+    #[test]
     fn sibling_agent_event_does_not_clear_another_agents_pending_permission() {
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
@@ -4028,6 +4083,7 @@ mod tests {
             updated_at: Utc::now(),
             last_message: None,
             current_tool: None,
+            current_tool_name: None,
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
@@ -4181,6 +4237,7 @@ mod tests {
             StopReason::PermissionPrompt => session.status = SessionStatus::WaitingInput,
             StopReason::AskUserQuestion => {
                 session.current_tool = Some("AskUserQuestion".to_string());
+                session.current_tool_name = Some("AskUserQuestion".to_string());
             }
             StopReason::Paused => session.status = SessionStatus::Paused,
         });
@@ -4431,6 +4488,7 @@ mod tests {
                 StopReason::PermissionPrompt => session.status = SessionStatus::WaitingInput,
                 StopReason::AskUserQuestion => {
                     session.current_tool = Some("AskUserQuestion".to_string());
+                    session.current_tool_name = Some("AskUserQuestion".to_string());
                 }
                 StopReason::Paused => session.status = SessionStatus::Paused,
                 StopReason::BackgroundTask
@@ -6260,6 +6318,7 @@ mod tests {
                 updated_at: now,
                 last_message: None,
                 current_tool: None,
+                current_tool_name: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
                 pending_bg_task_ids: BTreeSet::new(),

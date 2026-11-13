@@ -17,6 +17,7 @@ use super::proposals::ProposalTimeline;
 use super::questions::apply_question_answers;
 use super::state::{ClaudeParserState, ToolUse};
 use super::{ParsedTranscript, ParserAdditions};
+use crate::commands::agent::store::PermissionRequestData;
 
 pub(super) fn render(
     state: &ClaudeParserState,
@@ -206,16 +207,14 @@ fn send_user_file_item(
     })
 }
 
-fn active_tool_item(tool_uses: &[ToolUse], pending_tool: Option<&str>) -> Option<ChatItem> {
-    let tool_use = pending_tool
-        .and_then(|pending| {
-            tool_uses
-                .iter()
-                .rev()
-                .find(|tool_use| matches_pending_tool(tool_use, pending))
-        })
-        .or_else(|| tool_uses.last())?;
-    if pending_tool.is_some_and(|pending| matches_pending_tool(tool_use, pending)) {
+fn active_tool_item(
+    tool_uses: &[ToolUse],
+    pending_tool: Option<&PermissionRequestData>,
+) -> Option<ChatItem> {
+    let pending_tool_use =
+        pending_tool.and_then(|pending| latest_matching_pending_tool_use(tool_uses, pending));
+    let tool_use = pending_tool_use.or_else(|| tool_uses.last())?;
+    if pending_tool_use.is_some() {
         let command = super::super::super::permission_request_command(
             Some(&tool_use.name),
             tool_use.input.as_ref(),
@@ -243,23 +242,14 @@ fn active_tool_item(tool_uses: &[ToolUse], pending_tool: Option<&str>) -> Option
     }
 }
 
-fn matches_pending_tool(tool_use: &ToolUse, pending_tool: &str) -> bool {
-    let (name, detail) = pending_tool
-        .split_once('(')
-        .map_or((pending_tool, None), |(name, detail)| {
-            (name, detail.strip_suffix(')'))
-        });
-    if tool_use.name != name {
-        return false;
-    }
-    let Some(detail) = detail else {
-        return true;
-    };
-    tool_use
-        .input
-        .as_ref()
-        .and_then(super::super::super::permission_request_tool_detail)
-        == Some(detail)
+fn latest_matching_pending_tool_use<'a>(
+    tool_uses: &'a [ToolUse],
+    pending: &PermissionRequestData,
+) -> Option<&'a ToolUse> {
+    tool_uses
+        .iter()
+        .rev()
+        .find(|tool_use| tool_use.matches_permission_request(pending))
 }
 
 fn tool_detail(name: &str, input: Option<&Value>) -> String {
@@ -267,4 +257,48 @@ fn tool_detail(name: &str, input: Option<&Value>) -> String {
         return name.to_owned();
     };
     format!("{name}: {target}")
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::latest_matching_pending_tool_use;
+    use crate::commands::agent::store::PermissionRequestData;
+    use crate::commands::agent::watch_web::messages::parser::claude::state::ToolUse;
+
+    #[test]
+    fn pending_permission_selects_the_latest_equal_unresolved_tool_use() {
+        let tool_uses = [
+            ToolUse {
+                id: "first-call".to_string(),
+                name: "Bash".to_string(),
+                input: Some(json!({"command": "run fixture"})),
+                started_at: None,
+            },
+            ToolUse {
+                id: "different-call".to_string(),
+                name: "Read".to_string(),
+                input: Some(json!({"file_path": "fixture.txt"})),
+                started_at: None,
+            },
+            ToolUse {
+                id: "latest-call".to_string(),
+                name: "Bash".to_string(),
+                input: Some(json!({"command": "run fixture"})),
+                started_at: None,
+            },
+        ];
+        let permission = PermissionRequestData {
+            tool_name: Some("Bash".to_string()),
+            tool_input: json!({"command": "run fixture"}),
+            pending: true,
+        };
+
+        assert_eq!(
+            latest_matching_pending_tool_use(&tool_uses, &permission)
+                .map(|tool_use| tool_use.id.as_str()),
+            Some("latest-call"),
+        );
+    }
 }

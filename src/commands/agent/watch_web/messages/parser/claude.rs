@@ -1,4 +1,4 @@
-use std::io::{BufRead, Seek};
+use std::io::{self, BufRead, Seek};
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
@@ -23,8 +23,33 @@ use super::super::ParentSession;
 use super::super::SkillSuggestion;
 use super::super::proposals::ProposalItem;
 use crate::commands::agent::store::{
-    AgentDecision, AgentTodo, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
+    AgentDecision, AgentTodo, PermissionRequestData, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
 };
+
+pub(in crate::commands::agent::watch_web::messages) fn matching_pending_tool_use_exists(
+    reader: impl BufRead,
+    permission: &PermissionRequestData,
+) -> io::Result<bool> {
+    if permission.tool_name.is_none() {
+        return Ok(false);
+    }
+    let mut state = state::ClaudeParserState::new();
+    for line in reader.lines() {
+        let line = line?;
+        let Ok(record) = serde_json::from_str(&line) else {
+            continue;
+        };
+        state.process_record(record, Utc::now());
+        // Permission matching needs unresolved tool uses, not the render timelines.
+        state.events.clear();
+        state.queue_events.clear();
+    }
+    Ok(state
+        .tool_uses
+        .iter()
+        .rev()
+        .any(|tool_use| tool_use.matches_permission_request(permission)))
+}
 
 pub(in crate::commands::agent::watch_web::messages) type ParsedTranscript = (
     Vec<ChatItem>,
@@ -37,7 +62,8 @@ pub(in crate::commands::agent::watch_web::messages) type ParsedTranscript = (
 pub(in crate::commands::agent::watch_web::messages) struct ParserAdditions<'a> {
     pub(in crate::commands::agent::watch_web::messages) session_id: &'a str,
     pub(in crate::commands::agent::watch_web::messages) parent: Option<&'a ParentSession>,
-    pub(in crate::commands::agent::watch_web::messages) pending_tool: Option<&'a str>,
+    pub(in crate::commands::agent::watch_web::messages) pending_tool:
+        Option<&'a PermissionRequestData>,
     pub(in crate::commands::agent::watch_web::messages) user_marker: Option<&'a str>,
     pub(in crate::commands::agent::watch_web::messages) decisions: &'a [AgentDecision],
     pub(in crate::commands::agent::watch_web::messages) queued_prompts:
@@ -52,7 +78,7 @@ pub(in crate::commands::agent::watch_web::messages) struct ParserAdditions<'a> {
 fn parse(
     reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
-    pending_tool: Option<&str>,
+    pending_tool: Option<&PermissionRequestData>,
     user_marker: Option<&str>,
 ) -> std::io::Result<Vec<ChatItem>> {
     let image_directory = super::super::super::image_attachments::storage_directory().ok();
@@ -69,7 +95,7 @@ fn parse(
 fn parse_with_image_directory(
     reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
-    pending_tool: Option<&str>,
+    pending_tool: Option<&PermissionRequestData>,
     user_marker: Option<&str>,
     image_directory: Option<&Path>,
 ) -> std::io::Result<Vec<ChatItem>> {
@@ -96,7 +122,7 @@ fn parse_with_image_directory(
 fn parse_with_decisions_and_queued_prompts(
     reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
-    pending_tool: Option<&str>,
+    pending_tool: Option<&PermissionRequestData>,
     user_marker: Option<&str>,
     now: DateTime<Utc>,
     decisions: &[AgentDecision],
@@ -123,7 +149,7 @@ fn parse_with_decisions_and_queued_prompts(
 fn parse_with_background_tasks_and_peer_out_messages(
     reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
-    pending_tool: Option<&str>,
+    pending_tool: Option<&PermissionRequestData>,
     user_marker: Option<&str>,
     now: DateTime<Utc>,
     peer_out_messages: &[WatchWebPeerOutMessage],
@@ -150,7 +176,7 @@ fn parse_with_background_tasks_and_peer_out_messages(
 fn parse_with_queued_prompts_and_proposals(
     reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
-    pending_tool: Option<&str>,
+    pending_tool: Option<&PermissionRequestData>,
     user_marker: Option<&str>,
     now: DateTime<Utc>,
     queued_prompts: &[WatchWebQueuedPrompt],
@@ -222,7 +248,6 @@ mod tests {
         parse_with_queued_prompts_and_peer_out_messages_and_proposals_and_skills,
         parse_with_queued_prompts_and_proposals,
     };
-
     #[test]
     fn renders_send_user_file_as_a_conversation_attachment() {
         let directory = tempfile::tempdir().unwrap();
@@ -288,7 +313,9 @@ mod tests {
             }]
         );
     }
-    use crate::commands::agent::store::{AgentDecision, AgentTodo, TodoResolution};
+    use crate::commands::agent::store::{
+        AgentDecision, AgentTodo, PermissionRequestData, TodoResolution,
+    };
     use crate::commands::agent::watch_web::messages::{
         ChatItem, ParentSession, PeerDirection, ProposalOption, QuestionChoice, SkillSuggestion,
         ToolOperation, UserContentPart,
@@ -1013,7 +1040,7 @@ mod tests {
     #[rstest]
     #[case::permission_requested(
         "a agent decision add 'Decision 1'",
-        Some("Bash(a agent decision add 'Decision 1')"),
+        Some(serde_json::json!({"command": "a agent decision add 'Decision 1'"})),
         ChatItem::Permission {
             request_id: None,
             tool: "Bash".to_string(),
@@ -1023,7 +1050,7 @@ mod tests {
     )]
     #[case::compound_bash_permission_requested(
         "cd ./fixture && a agent decision add 'Decision 1'",
-        Some("Bash(cd ./fixture && a agent decision add 'Decision 1')"),
+        Some(serde_json::json!({"command": "cd ./fixture && a agent decision add 'Decision 1'"})),
         ChatItem::Permission {
             request_id: None,
             tool: "Bash".to_string(),
@@ -1041,7 +1068,7 @@ mod tests {
     )]
     fn pending_decision_add_keeps_normal_bash_status(
         #[case] decision_command: &str,
-        #[case] pending_tool: Option<&str>,
+        #[case] pending_tool_input: Option<serde_json::Value>,
         #[case] pending_item: ChatItem,
     ) {
         let transcript = [
@@ -1077,8 +1104,13 @@ mod tests {
         ]
         .join("\n");
 
+        let pending_tool = pending_tool_input.map(|tool_input| PermissionRequestData {
+            tool_name: Some("Bash".to_string()),
+            tool_input,
+            pending: true,
+        });
         assert_eq!(
-            parse(Cursor::new(transcript), None, pending_tool, None).unwrap(),
+            parse(Cursor::new(transcript), None, pending_tool.as_ref(), None).unwrap(),
             vec![
                 ChatItem::ToolSummary {
                     summary: "Bash ×1".to_string(),
@@ -1851,7 +1883,11 @@ mod tests {
             parse(
                 Cursor::new(transcript),
                 None,
-                Some("Bash(echo awaiting approval)"),
+                Some(&PermissionRequestData {
+                    tool_name: Some("Bash".to_string()),
+                    tool_input: serde_json::json!({"command": "echo awaiting approval"}),
+                    pending: true,
+                }),
                 None,
             )
             .unwrap(),

@@ -141,10 +141,7 @@ fn waiting_input_user_turn(session: &Session) -> Option<UserTurnKind> {
 }
 
 pub(crate) fn is_ask_user_question(session: &Session) -> bool {
-    session
-        .current_tool
-        .as_deref()
-        .is_some_and(|tool| tool == "AskUserQuestion" || tool.starts_with("AskUserQuestion("))
+    session.is_current_tool_named("AskUserQuestion")
 }
 
 fn compare_turns(left: &UserTurn<'_>, right: &UserTurn<'_>) -> Ordering {
@@ -191,6 +188,7 @@ mod tests {
             updated_at,
             last_message: None,
             current_tool: None,
+            current_tool_name: None,
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
@@ -285,7 +283,8 @@ mod tests {
                     .insert("agent".to_string());
             }
             UserTurnKind::Ask => {
-                session.current_tool = Some("AskUserQuestion".to_string());
+                session.current_tool = Some("AskUserQuestion(fixture details)".to_string());
+                session.current_tool_name = Some("AskUserQuestion".to_string());
                 session.status = SessionStatus::Running;
             }
             _ => unreachable!("test case only covers automatic markers"),
@@ -294,6 +293,18 @@ mod tests {
         assert_eq!(
             next_user_turn(&[session], &AgentConfig::default()).map(|turn| turn.kind),
             Some(expected)
+        );
+    }
+
+    #[test]
+    fn legacy_ask_user_question_display_name_marks_an_ask_turn() {
+        let mut session = session("waiting", timestamp(1));
+        session.current_tool = Some("AskUserQuestion".to_string());
+        session.status = SessionStatus::Running;
+
+        assert_eq!(
+            next_user_turn(&[session], &AgentConfig::default()).map(|turn| turn.kind),
+            Some(UserTurnKind::Ask)
         );
     }
 
