@@ -32,7 +32,7 @@ export function errorFromResponse(response: Response) {
   })
 }
 
-export function jsonFromResponse<T>(
+function jsonFromResponse<T>(
   response: Response,
   validate: (value: unknown) => value is T,
 ) {
