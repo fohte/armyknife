@@ -238,7 +238,7 @@ export function buildCommandPaletteGroups(
     )
     const workTypeGroups = buildWorkTypeNavGroups(sessions, workTypeNavLabels)
       .map((group) => ({
-        heading: group.label.toLocaleUpperCase('en'),
+        heading: group.label,
         items: group.projects.flatMap(({ sessionId }) => {
           const session = sessionsById.get(sessionId)
           return session === undefined || displayedSessionIds.has(sessionId)
