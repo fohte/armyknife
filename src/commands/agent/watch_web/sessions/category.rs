@@ -111,7 +111,7 @@ pub(super) fn category_for(
 ) -> SessionCategory {
     if (turn.is_some()
         && !(session.status == SessionStatus::Stopped && turn == Some(UserTurnKind::AgentStatus)))
-        || session.current_tool_name.as_deref() == Some("ExitPlanMode")
+        || session.is_current_tool_named("ExitPlanMode")
     {
         SessionCategory::NeedsAction
     } else if session.status == SessionStatus::Stopped {
@@ -154,7 +154,7 @@ pub(super) fn kind_for_with_todo(
     has_unanswered_todo: bool,
     has_running_background_task: bool,
 ) -> Option<SessionKind> {
-    if session.current_tool_name.as_deref() == Some("ExitPlanMode") {
+    if session.is_current_tool_named("ExitPlanMode") {
         return Some(SessionKind::Plan);
     }
 
@@ -324,6 +324,20 @@ mod tests {
         assert_eq!(
             kind_for(&session, Some(UserTurnKind::Ask), true, false),
             Some(SessionKind::Plan)
+        );
+    }
+
+    #[test]
+    fn legacy_exit_plan_mode_display_name_keeps_plan_classification() {
+        let mut session = session(SessionStatus::WaitingInput);
+        session.current_tool = Some("ExitPlanMode".to_string());
+
+        assert_eq!(
+            (
+                kind_for(&session, Some(UserTurnKind::Ask), true, false),
+                category_for(&session, None, false, None),
+            ),
+            (Some(SessionKind::Plan), SessionCategory::NeedsAction,),
         );
     }
 

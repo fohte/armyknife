@@ -522,7 +522,7 @@ mod tests {
         let transcript = concat!(
             r#"{"type":"response_item","payload":{"type":"function_call","call_id":"call-one","name":"Bash","arguments":"{\"command\":\"run fixture\"}"}}"#,
             "\n",
-            r#"{"type":"response_item","payload":{"type":"function_call","call_id":"call-two","name":"Bash","arguments":"{\"command\":\"run fixture\"}"}}"#,
+            r#"{"type":"response_item","payload":{"type":"function_call","call_id":"call-two","name":"Bash","arguments":"{\"command\":\"different fixture\"}"}}"#,
         );
         let mut parser = CodexParserState::new();
         parser.append(Cursor::new(transcript)).unwrap();

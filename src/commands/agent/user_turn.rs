@@ -141,7 +141,7 @@ fn waiting_input_user_turn(session: &Session) -> Option<UserTurnKind> {
 }
 
 pub(crate) fn is_ask_user_question(session: &Session) -> bool {
-    session.current_tool_name.as_deref() == Some("AskUserQuestion")
+    session.is_current_tool_named("AskUserQuestion")
 }
 
 fn compare_turns(left: &UserTurn<'_>, right: &UserTurn<'_>) -> Ordering {
@@ -292,6 +292,18 @@ mod tests {
         assert_eq!(
             next_user_turn(&[session], &AgentConfig::default()).map(|turn| turn.kind),
             Some(expected)
+        );
+    }
+
+    #[test]
+    fn legacy_ask_user_question_display_name_marks_an_ask_turn() {
+        let mut session = session("waiting", timestamp(1));
+        session.current_tool = Some("AskUserQuestion".to_string());
+        session.status = SessionStatus::Running;
+
+        assert_eq!(
+            next_user_turn(&[session], &AgentConfig::default()).map(|turn| turn.kind),
+            Some(UserTurnKind::Ask)
         );
     }
 

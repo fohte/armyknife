@@ -208,6 +208,14 @@ pub struct Session {
 }
 
 impl Session {
+    pub(crate) fn is_current_tool_named(&self, name: &str) -> bool {
+        // Legacy records store display values, and these built-in names have no display detail.
+        self.current_tool_name.as_deref() == Some(name)
+            || (self.current_tool_name.is_none()
+                && self.current_tool.as_deref() == Some(name)
+                && matches!(name, "AskUserQuestion" | "ExitPlanMode"))
+    }
+
     pub(crate) fn restore_from_archive(&mut self) -> bool {
         self.archived_at.take().is_some()
     }

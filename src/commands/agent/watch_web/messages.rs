@@ -456,13 +456,10 @@ fn load_conversation_with_queued_prompts(
         if session.engine == Engine::Claude
             && let Some(data) = permission_data.as_ref()
             && data.tool_name.is_some()
-            && let Some(path) = session
-                .transcript_path
-                .as_deref()
-                .and_then(|path| subagent_reports::transcript_path_for_agent(path, agent_id))
-            && let Some(reader) = open_seekable_transcript(&path)?
+            && let Some(parent_transcript_path) = session.transcript_path.as_deref()
         {
-            matched_tool = parser::claude::matching_pending_tool_use_exists(reader, data)?;
+            matched_tool =
+                matching_subagent_permission_tool_use(parent_transcript_path, agent_id, data);
         }
         let tool = if matched_tool {
             permission_data
@@ -500,6 +497,40 @@ fn permission_request_pending_tool(data: &PermissionRequestData) -> Option<Strin
         Some(detail) => format!("{tool_name}({detail})"),
         None => tool_name.to_string(),
     })
+}
+
+fn matching_subagent_permission_tool_use(
+    parent_transcript_path: &Path,
+    agent_id: &str,
+    permission: &PermissionRequestData,
+) -> bool {
+    let Some(path) = subagent_reports::transcript_path_for_agent(parent_transcript_path, agent_id)
+    else {
+        return false;
+    };
+    let reader = match open_seekable_transcript(&path) {
+        Ok(Some(reader)) => reader,
+        Ok(None) => return false,
+        Err(error) => {
+            tracing::warn!(
+                path = %path.display(),
+                %error,
+                "failed to open subagent permission transcript"
+            );
+            return false;
+        }
+    };
+    match parser::claude::matching_pending_tool_use_exists(reader, permission) {
+        Ok(matched) => matched,
+        Err(error) => {
+            tracing::warn!(
+                path = %path.display(),
+                %error,
+                "failed to match subagent permission transcript"
+            );
+            false
+        }
+    }
 }
 
 fn permission_denied_input_summary(tool_name: &str, input: &Value) -> String {
@@ -2605,11 +2636,26 @@ mod tests {
         );
     }
 
-    #[test]
-    fn subagent_permission_matches_an_unresolved_tool_use_from_its_transcript() {
+    #[rstest]
+    #[case::plain(false, false, "Subagent fixture-agent: Bash(run fixture)")]
+    #[case::compressed(true, false, "Subagent fixture-agent: Bash(run fixture)")]
+    #[case::malformed_compressed(true, true, "Subagent fixture-agent: Bash")]
+    fn subagent_permission_matches_an_unresolved_tool_use_from_its_transcript(
+        #[case] compressed: bool,
+        #[case] malformed: bool,
+        #[case] expected_tool: &str,
+    ) {
         let directory = tempfile::tempdir().unwrap();
-        let transcript_path = directory.path().join("fixture-session.jsonl");
-        std::fs::write(&transcript_path, "").unwrap();
+        let transcript_suffix = if compressed { ".jsonl.zst" } else { ".jsonl" };
+        let transcript_path = directory
+            .path()
+            .join(format!("fixture-session{transcript_suffix}"));
+        let parent_transcript = if compressed {
+            zstd::stream::encode_all(&b""[..], 0).unwrap()
+        } else {
+            Vec::new()
+        };
+        std::fs::write(&transcript_path, parent_transcript).unwrap();
         let subagent_directory = directory.path().join("fixture-session").join("subagents");
         std::fs::create_dir_all(&subagent_directory).unwrap();
         let subagent_transcript = indoc::indoc! {r#"
@@ -2617,8 +2663,15 @@ mod tests {
             {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"first-call","content":"done"}]}}
             {"type":"assistant","message":{"content":[{"type":"tool_use","id":"pending-call","name":"Bash","input":{"command":"run fixture"}}]}}
         "#};
+        let subagent_transcript = if malformed {
+            b"invalid compressed transcript".to_vec()
+        } else if compressed {
+            zstd::stream::encode_all(subagent_transcript.as_bytes(), 0).unwrap()
+        } else {
+            subagent_transcript.as_bytes().to_vec()
+        };
         std::fs::write(
-            subagent_directory.join("agent-fixture-agent.jsonl"),
+            subagent_directory.join(format!("agent-fixture-agent{transcript_suffix}")),
             subagent_transcript,
         )
         .unwrap();
@@ -2656,7 +2709,7 @@ mod tests {
             .map(|conversation| conversation.messages),
             Some(vec![ChatItem::Permission {
                 request_id: Some("permission-request-subagent".to_string()),
-                tool: "Subagent fixture-agent: Bash(run fixture)".to_string(),
+                tool: expected_tool.to_string(),
                 description: "Waiting for permission approval.".to_string(),
             }]),
         );

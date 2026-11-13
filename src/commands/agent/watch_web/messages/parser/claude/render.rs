@@ -184,10 +184,10 @@ fn latest_matching_pending_tool_use<'a>(
     tool_uses: &'a [ToolUse],
     pending: &PermissionRequestData,
 ) -> Option<&'a ToolUse> {
-    let tool_name = pending.tool_name.as_deref()?;
-    tool_uses.iter().rev().find(|tool_use| {
-        tool_use.name == tool_name && tool_use.input.as_ref() == Some(&pending.tool_input)
-    })
+    tool_uses
+        .iter()
+        .rev()
+        .find(|tool_use| tool_use.matches_permission_request(pending))
 }
 
 fn tool_detail(name: &str, input: Option<&Value>) -> String {

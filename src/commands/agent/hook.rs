@@ -701,7 +701,7 @@ fn process_hook_event_impl_with_settings(
     }
     let was_waiting_for_input = session.status == SessionStatus::WaitingInput;
     let had_pending_permission_requests = session.has_pending_permission_requests();
-    let was_asking_user = session.current_tool_name.as_deref() == Some("AskUserQuestion");
+    let was_asking_user = session.is_current_tool_named("AskUserQuestion");
 
     let work_type_config =
         (may_contain_work_type || session.work_type.is_some()).then(config::load_config_or_default);

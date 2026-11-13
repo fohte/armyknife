@@ -30,9 +30,9 @@ pub(in crate::commands::agent::watch_web::messages) fn matching_pending_tool_use
     reader: impl BufRead,
     permission: &PermissionRequestData,
 ) -> io::Result<bool> {
-    let Some(tool_name) = permission.tool_name.as_deref() else {
+    if permission.tool_name.is_none() {
         return Ok(false);
-    };
+    }
     let mut state = state::ClaudeParserState::new();
     for line in reader.lines() {
         let line = line?;
@@ -40,10 +40,15 @@ pub(in crate::commands::agent::watch_web::messages) fn matching_pending_tool_use
             continue;
         };
         state.process_record(record, Utc::now());
+        // Permission matching needs unresolved tool uses, not the render timelines.
+        state.events.clear();
+        state.queue_events.clear();
     }
-    Ok(state.tool_uses.iter().rev().any(|tool_use| {
-        tool_use.name == tool_name && tool_use.input.as_ref() == Some(&permission.tool_input)
-    }))
+    Ok(state
+        .tool_uses
+        .iter()
+        .rev()
+        .any(|tool_use| tool_use.matches_permission_request(permission)))
 }
 
 pub(in crate::commands::agent::watch_web::messages) type ParsedTranscript = (
