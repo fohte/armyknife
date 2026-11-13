@@ -19,7 +19,10 @@ mod caller;
 mod group;
 
 pub use caller::find_caller_pids_in_path;
-pub use group::run_in_process_group_with_timeout;
+pub use group::{
+    ProcessGroupOutput, run_in_process_group_with_timeout,
+    run_in_process_group_with_timeout_and_stderr,
+};
 
 /// Upper bound on how long we sleep between exit checks in [`run_with_timeout`].
 const MAX_POLL_INTERVAL: Duration = Duration::from_millis(20);

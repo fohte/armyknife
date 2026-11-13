@@ -1,7 +1,9 @@
 use std::path::Path;
+use std::sync::OnceLock;
 use std::time::Duration;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
+use regex::Regex;
 
 use self::command::{ForkCommandOptions, codex_fork_command};
 use self::sandbox::write_srt_settings;
@@ -18,6 +20,7 @@ mod sandbox;
 
 const FORK_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_RESULT_BYTES: u64 = 64 * 1024;
+const MAX_FORK_STDERR_BYTES: usize = 4 * 1024;
 
 pub(super) fn infer_status(
     session: &Session,
@@ -52,18 +55,113 @@ pub(super) fn infer_status(
                 &codex_path,
                 ExternalTool::SandboxRuntime.command(),
             )?;
-            let status = process::run_in_process_group_with_timeout(command, FORK_TIMEOUT)
-                .context("Codex status fork process failed")?;
+            let output = process::run_in_process_group_with_timeout_and_stderr(
+                command,
+                FORK_TIMEOUT,
+                MAX_FORK_STDERR_BYTES,
+            )
+            .context("Codex status fork process failed")?;
+            let stderr = output.stderr;
+            let status = match output.status {
+                Ok(status) => status,
+                Err(error) => bail!(
+                    "{}",
+                    fork_process_error_message(&error, &stderr, relay.credential())
+                ),
+            };
             ensure!(
                 status.success(),
-                "Codex status fork exited with code {:?}",
-                status.code()
+                "{}",
+                fork_failure_message(status.code(), &stderr, relay.credential())
             );
 
             let result = read_result(&result_path)?;
             parse_configured_status_response(&result, configured_kinds)
         },
     )
+}
+
+fn fork_failure_message(status_code: Option<i32>, stderr: &[u8], relay_credential: &str) -> String {
+    append_stderr(
+        format!("Codex status fork exited with code {status_code:?}"),
+        stderr,
+        relay_credential,
+    )
+}
+
+fn fork_process_error_message(
+    error: &std::io::Error,
+    stderr: &[u8],
+    relay_credential: &str,
+) -> String {
+    append_stderr(
+        format!("Codex status fork process failed: {error}"),
+        stderr,
+        relay_credential,
+    )
+}
+
+fn append_stderr(mut message: String, stderr: &[u8], relay_credential: &str) -> String {
+    if stderr.is_empty() {
+        return message;
+    }
+
+    let stderr = sanitize_fork_stderr(stderr, relay_credential);
+    message.push('\n');
+    message.push_str(&indoc::formatdoc! {"
+        Captured child stderr (max {MAX_FORK_STDERR_BYTES} bytes):
+        {stderr}"
+    });
+    message
+}
+
+fn sanitize_fork_stderr(stderr: &[u8], relay_credential: &str) -> String {
+    static CREDENTIAL_PATTERN: OnceLock<Option<Regex>> = OnceLock::new();
+    static BEARER_PATTERN: OnceLock<Option<Regex>> = OnceLock::new();
+    static JWT_PATTERN: OnceLock<Option<Regex>> = OnceLock::new();
+    static API_TOKEN_PATTERN: OnceLock<Option<Regex>> = OnceLock::new();
+    static OPAQUE_TOKEN_PATTERN: OnceLock<Option<Regex>> = OnceLock::new();
+
+    let Some(credential_pattern) = CREDENTIAL_PATTERN.get_or_init(|| {
+        Regex::new(
+            r#"(?i)([\"']?(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api\s*[_-]?\s*key|authorization|token|secret)[\"']?\s*[:=]\s*[\"']?)([^\"'\s,;}\]]+)"#,
+        )
+        .ok()
+    }) else {
+        return "[stderr omitted because credential redaction is unavailable]".to_string();
+    };
+    let Some(bearer_pattern) =
+        BEARER_PATTERN.get_or_init(|| Regex::new(r#"(?i)(bearer\s+)([^\s,;'\"]+)"#).ok())
+    else {
+        return "[stderr omitted because credential redaction is unavailable]".to_string();
+    };
+    let Some(jwt_pattern) = JWT_PATTERN.get_or_init(|| {
+        Regex::new(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b").ok()
+    }) else {
+        return "[stderr omitted because credential redaction is unavailable]".to_string();
+    };
+    let Some(api_token_pattern) = API_TOKEN_PATTERN.get_or_init(|| {
+        Regex::new(r"\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{12,})\b").ok()
+    }) else {
+        return "[stderr omitted because credential redaction is unavailable]".to_string();
+    };
+    let Some(opaque_token_pattern) =
+        OPAQUE_TOKEN_PATTERN.get_or_init(|| Regex::new(r"\b[A-Za-z0-9_-]{32,}\b").ok())
+    else {
+        return "[stderr omitted because credential redaction is unavailable]".to_string();
+    };
+
+    let stderr = String::from_utf8_lossy(stderr);
+    let stderr = bearer_pattern.replace_all(&stderr, "$1[REDACTED]");
+    let stderr = credential_pattern.replace_all(&stderr, "$1[REDACTED]");
+    let stderr = jwt_pattern.replace_all(&stderr, "[REDACTED]");
+    let stderr = api_token_pattern.replace_all(&stderr, "[REDACTED]");
+    let stderr = opaque_token_pattern.replace_all(&stderr, "[REDACTED]");
+    if relay_credential.is_empty() {
+        stderr.into_owned()
+    } else {
+        stderr.replace(relay_credential, "[REDACTED]")
+    }
 }
 
 fn with_fork_resources<T, H, L>(
@@ -108,13 +206,62 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
+    use indoc::indoc;
     use rstest::rstest;
     use serde_json::json;
 
-    use super::{infer_status, with_fork_resources};
+    use super::{
+        fork_failure_message, fork_process_error_message, infer_status, with_fork_resources,
+    };
     use crate::commands::agent::codex_steer::history::CodexThreadMetadata;
     use crate::commands::agent::codex_steer::status_inference::relay::Relay;
     use crate::commands::agent::types::Session;
+
+    #[test]
+    fn fork_failure_message_includes_stderr_after_redacting_credentials() {
+        let actual = fork_failure_message(
+            Some(1),
+            indoc! {
+                r#"
+                Authorization: Bearer fixture-bearer-token
+                {"access_token":"fixture-access-token"}
+                request URL: http://localhost:43817/fixture-relay-token/backend-api/codex
+                response: eyJfixtureheader.fixturepayload.fixturesignature
+                api key: sk-fixture-token-that-is-long-enough
+                "#
+            }
+            .as_bytes(),
+            "fixture-relay-token",
+        );
+
+        assert_eq!(
+            actual,
+            concat!(
+                "Codex status fork exited with code Some(1)\n",
+                "Captured child stderr (max 4096 bytes):\n",
+                "Authorization: [REDACTED] [REDACTED]\n",
+                "{\"access_token\":\"[REDACTED]\"}\n",
+                "request URL: http://localhost:43817/[REDACTED]/backend-api/codex\n",
+                "response: [REDACTED]\n",
+                "api key: [REDACTED]\n",
+            ),
+        );
+    }
+
+    #[test]
+    fn fork_process_error_message_includes_stderr() {
+        let error = io::Error::new(io::ErrorKind::TimedOut, "command timed out after 120s");
+        let actual = fork_process_error_message(&error, b"fixture timeout detail", "");
+
+        assert_eq!(
+            actual,
+            concat!(
+                "Codex status fork process failed: command timed out after 120s\n",
+                "Captured child stderr (max 4096 bytes):\n",
+                "fixture timeout detail",
+            ),
+        );
+    }
 
     #[derive(Clone, Copy)]
     enum ForkOutcome {

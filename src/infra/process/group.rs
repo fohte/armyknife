@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::io;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitStatus, Stdio};
@@ -9,6 +10,12 @@ use std::time::{Duration, Instant};
 use super::{INITIAL_POLL_INTERVAL, MAX_POLL_INTERVAL};
 
 const PROCESS_GROUP_TERMINATION_GRACE: Duration = Duration::from_millis(250);
+
+/// Process outcome plus the bounded stderr tail, including when the process times out.
+pub struct ProcessGroupOutput {
+    pub status: io::Result<ExitStatus>,
+    pub stderr: Vec<u8>,
+}
 
 static GROUP_RUNNER_CANCEL_SIGNAL: AtomicI32 = AtomicI32::new(0);
 static GROUP_RUNNER_LOCK: Mutex<()> = Mutex::new(());
@@ -58,19 +65,39 @@ extern "C" fn record_group_runner_signal(signal: libc::c_int) {
 /// The child's standard streams are redirected to `/dev/null`; callers that
 /// need output should use a separate bounded output channel.
 pub fn run_in_process_group_with_timeout(
-    mut command: Command,
+    command: Command,
     timeout: Duration,
 ) -> io::Result<ExitStatus> {
+    run_in_process_group(command, timeout, None).and_then(|output| output.status)
+}
+
+/// Runs a command in a new process group and returns only the bounded tail of
+/// its stderr alongside the exit status.
+pub fn run_in_process_group_with_timeout_and_stderr(
+    command: Command,
+    timeout: Duration,
+    max_stderr_bytes: usize,
+) -> io::Result<ProcessGroupOutput> {
+    run_in_process_group(command, timeout, Some(max_stderr_bytes))
+}
+
+fn run_in_process_group(
+    mut command: Command,
+    timeout: Duration,
+    max_stderr_bytes: Option<usize>,
+) -> io::Result<ProcessGroupOutput> {
     let _runner_lock = GROUP_RUNNER_LOCK
         .lock()
         .map_err(|_| io::Error::other("process-group runner lock was poisoned"))?;
     GROUP_RUNNER_CANCEL_SIGNAL.store(0, Ordering::Relaxed);
     let _signal_guard = install_group_runner_signal_handlers()?;
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .process_group(0);
+    command.stdin(Stdio::null()).stdout(Stdio::null());
+    command.stderr(if max_stderr_bytes.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    });
+    command.process_group(0);
     let mut child = command.spawn()?;
     let pid = match libc::pid_t::try_from(child.id()) {
         Ok(pid) => pid,
@@ -86,14 +113,34 @@ pub fn run_in_process_group_with_timeout(
         pgid: pid,
         active: true,
     };
+    let stderr_reader = if let Some(max_stderr_bytes) = max_stderr_bytes {
+        let Some(stderr) = child.stderr.take() else {
+            process_group.terminate();
+            let _ = child.wait();
+            return Err(io::Error::other("child stderr pipe was unavailable"));
+        };
+        match thread::Builder::new()
+            .name("armyknife-process-stderr-reader".to_string())
+            .spawn(move || read_stderr_tail(stderr, max_stderr_bytes))
+        {
+            Ok(reader) => Some(reader),
+            Err(error) => {
+                process_group.terminate();
+                let _ = child.wait();
+                return Err(error);
+            }
+        }
+    } else {
+        None
+    };
     let deadline = Instant::now() + timeout;
     let mut poll_interval = INITIAL_POLL_INTERVAL;
 
-    loop {
+    let status = loop {
         if GROUP_RUNNER_CANCEL_SIGNAL.load(Ordering::Relaxed) != 0 {
             process_group.terminate();
             let _ = child.wait();
-            return Err(io::Error::new(
+            break Err(io::Error::new(
                 io::ErrorKind::Interrupted,
                 "command interrupted",
             ));
@@ -102,20 +149,20 @@ pub fn run_in_process_group_with_timeout(
         match child_has_exited_without_reaping(pid) {
             Ok(true) => {
                 process_group.terminate();
-                return child.wait();
+                break child.wait();
             }
             Ok(false) => {}
             Err(error) => {
                 process_group.terminate();
                 let _ = child.wait();
-                return Err(error);
+                break Err(error);
             }
         }
 
         if Instant::now() >= deadline {
             process_group.terminate();
             let _ = child.wait();
-            return Err(io::Error::new(
+            break Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 format!("command timed out after {timeout:?}"),
             ));
@@ -123,7 +170,40 @@ pub fn run_in_process_group_with_timeout(
 
         thread::sleep(poll_interval);
         poll_interval = std::cmp::min(poll_interval * 2, MAX_POLL_INTERVAL);
+    };
+
+    let stderr = stderr_reader
+        .map(|reader| {
+            reader
+                .join()
+                .map_err(|_| io::Error::other("stderr reader thread panicked"))?
+        })
+        .transpose()?;
+    Ok(ProcessGroupOutput {
+        status,
+        stderr: stderr.unwrap_or_default(),
+    })
+}
+
+fn read_stderr_tail(mut reader: impl io::Read, max_bytes: usize) -> io::Result<Vec<u8>> {
+    let mut tail = VecDeque::with_capacity(max_bytes);
+    let mut chunk = [0; 4096];
+    loop {
+        let read = reader.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        if max_bytes == 0 {
+            continue;
+        }
+        for byte in &chunk[..read] {
+            if tail.len() == max_bytes {
+                tail.pop_front();
+            }
+            tail.push_back(*byte);
+        }
     }
+    Ok(tail.into_iter().collect())
 }
 
 fn install_group_runner_signal_handlers() -> io::Result<SignalHandlerGuard> {
@@ -207,6 +287,7 @@ mod tests {
     const GROUP_HELPER_ROLE_ENV: &str = "ARMYKNIFE_PROCESS_GROUP_HELPER_ROLE";
     const GROUP_HELPER_MODE_ENV: &str = "ARMYKNIFE_PROCESS_GROUP_HELPER_MODE";
     const GROUP_HELPER_PID_FILE_ENV: &str = "ARMYKNIFE_PROCESS_GROUP_HELPER_PID_FILE";
+    const GROUP_HELPER_STDERR_ENV: &str = "ARMYKNIFE_PROCESS_GROUP_HELPER_STDERR";
 
     #[test]
     #[ignore = "subprocess fixture for process-group cleanup tests"]
@@ -218,6 +299,19 @@ mod tests {
         let Ok(role) = std::env::var(GROUP_HELPER_ROLE_ENV) else {
             return;
         };
+        if role == "stderr" {
+            eprint!(
+                "{}",
+                std::env::var(GROUP_HELPER_STDERR_ENV)
+                    .expect("stderr helper needs its fixture output")
+            );
+            if std::env::var(GROUP_HELPER_MODE_ENV).as_deref() == Ok("wait") {
+                loop {
+                    thread::sleep(Duration::from_secs(1));
+                }
+            }
+            return;
+        }
         let pid_file = PathBuf::from(
             std::env::var_os(GROUP_HELPER_PID_FILE_ENV)
                 .expect("process group helper needs a PID file"),
@@ -314,6 +408,57 @@ mod tests {
         assert_eq!(
             (result.err().map(|error| error.kind()), alive),
             (Some(io::ErrorKind::Interrupted), vec![false, false]),
+        );
+    }
+
+    #[test]
+    fn stderr_tail_reader_keeps_only_the_configured_suffix() {
+        let actual = read_stderr_tail(&b"discard this; keep this suffix"[..], 16)
+            .expect("fixture stderr should be readable");
+
+        assert_eq!(actual, b"keep this suffix");
+    }
+
+    #[test]
+    fn process_group_runner_captures_only_the_configured_stderr_suffix() {
+        let mut command = Command::new(std::env::current_exe().expect("test executable exists"));
+        command
+            .args(["process_group_child_helper", "--ignored", "--nocapture"])
+            .env(GROUP_HELPER_ROLE_ENV, "stderr")
+            .env(GROUP_HELPER_STDERR_ENV, "discard this; keep this suffix");
+
+        let output =
+            run_in_process_group_with_timeout_and_stderr(command, Duration::from_secs(5), 16)
+                .expect("stderr fixture should exit successfully");
+
+        assert_eq!(
+            (
+                output
+                    .status
+                    .expect("fixture should exit successfully")
+                    .success(),
+                output.stderr,
+            ),
+            (true, b"keep this suffix".to_vec())
+        );
+    }
+
+    #[test]
+    fn process_group_runner_preserves_stderr_when_timed_out() {
+        let mut command = Command::new(std::env::current_exe().expect("test executable exists"));
+        command
+            .args(["process_group_child_helper", "--ignored", "--nocapture"])
+            .env(GROUP_HELPER_ROLE_ENV, "stderr")
+            .env(GROUP_HELPER_MODE_ENV, "wait")
+            .env(GROUP_HELPER_STDERR_ENV, "discard this; keep this suffix");
+
+        let output =
+            run_in_process_group_with_timeout_and_stderr(command, Duration::from_millis(100), 16)
+                .expect("timed out fixture should return its process output");
+
+        assert_eq!(
+            (output.status.err().map(|error| error.kind()), output.stderr),
+            (Some(io::ErrorKind::TimedOut), b"keep this suffix".to_vec()),
         );
     }
 
