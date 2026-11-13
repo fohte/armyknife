@@ -173,7 +173,7 @@ async fn actions(
             approve: true,
             reject: true,
         }),
-        interrupt: has_live_session && has_tmux,
+        interrupt: session.status == SessionStatus::Running && has_tmux,
         open_in_terminal: has_tmux,
     }))
 }
@@ -1641,7 +1641,7 @@ mod tests {
                     "body": {
                         "message": true,
                         "answerQuestion": false,
-                        "interrupt": true,
+                        "interrupt": false,
                         "openInTerminal": true,
                     },
                     "calls": [],
@@ -1657,6 +1657,46 @@ mod tests {
                     "calls": [],
                 }),
             ),
+        );
+    }
+
+    #[rstest]
+    #[case::running(SessionStatus::Running, true)]
+    #[case::waiting_input(SessionStatus::WaitingInput, false)]
+    #[case::stopped(SessionStatus::Stopped, false)]
+    #[tokio::test]
+    async fn interrupt_capability_is_available_only_while_running(
+        #[case] status: SessionStatus,
+        #[case] enabled: bool,
+        action_context: ActionContext,
+    ) {
+        let mut session = session("sample-session");
+        session.status = status;
+        action_context.save_session(&session);
+
+        let response = action_context
+            .router()
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/sample-session/actions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": {
+                    "message": true,
+                    "answerQuestion": false,
+                    "interrupt": enabled,
+                    "openInTerminal": true,
+                },
+                "calls": [],
+            }),
         );
     }
 
@@ -1771,7 +1811,7 @@ mod tests {
     #[case::claude(Engine::Claude, "claude")]
     #[case::codex(Engine::Codex, "a")]
     #[tokio::test]
-    async fn interrupt_sends_escape_to_the_session_pane(
+    async fn interrupt_uses_engine_specific_strategy(
         #[case] engine: Engine,
         #[case] current_command: &str,
         action_context: ActionContext,
