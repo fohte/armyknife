@@ -65,6 +65,10 @@ impl QueueEntry {
         self.placement == Placement::Visible
     }
 
+    pub(super) fn key(&self) -> &str {
+        &self.key
+    }
+
     /// Updates the queue labels once the session exists. A visible pane's
     /// shpool client creates the session asynchronously, and the queue drops
     /// reviews whose session is not alive, so wait for it first.

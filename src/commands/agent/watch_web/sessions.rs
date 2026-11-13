@@ -15,6 +15,7 @@ use super::EnrichmentUpdates;
 use super::interrupted::interrupted_session_ids;
 use super::session_enrichment::{SessionEnrichmentCache, SessionTaskMetadata};
 use crate::commands::agent::proposal::ProposalBody;
+use crate::commands::agent::review_queue::{ReviewDocumentQueue, review_document_queue};
 use crate::commands::agent::session_title::title_display_name;
 use crate::commands::agent::store;
 #[cfg(test)]
@@ -116,12 +117,8 @@ struct SessionView {
     is_compacting: bool,
     decision_count: i64,
     unreviewed_decision_count: i64,
-    #[serde(skip_serializing_if = "is_false")]
-    review_document_available: bool,
-}
-
-fn is_false(value: &bool) -> bool {
-    !value
+    #[serde(skip_serializing_if = "Option::is_none")]
+    review_document_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -191,6 +188,10 @@ trait SessionSource: Clone + Send + Sync + 'static {
         async { Ok(HashSet::new()) }
     }
 
+    fn review_document_queue(&self, _session: &Session) -> ReviewDocumentQueue {
+        ReviewDocumentQueue::Unmanaged
+    }
+
     fn now(&self) -> DateTime<Utc>;
 }
 
@@ -227,6 +228,10 @@ impl SessionSource for LiveSessionSource {
             loaders.running_background_task_session_ids(&sessions)
         })
         .await?)
+    }
+
+    fn review_document_queue(&self, session: &Session) -> ReviewDocumentQueue {
+        review_document_queue(session)
     }
 
     fn now(&self) -> DateTime<Utc> {
@@ -532,10 +537,9 @@ async fn list_sessions<S: SessionSource>(
                     .decision_counts
                     .get(&session.session_id)
                     .map_or(0, |counts| counts.unreviewed),
-                review_document_available: session.pending_human_review_ids.iter().any(
-                    |review_id| {
-                        crate::shared::human_in_the_loop::review_document_path(review_id).is_some()
-                    },
+                review_document_id: super::review_document::active_review_document_id(
+                    session,
+                    source.review_document_queue(session),
                 ),
             }
         })
@@ -1389,9 +1393,16 @@ mod tests {
         source.web_states[0].is_today = false;
         source.sessions[0].status = SessionStatus::WaitingInput;
         source.sessions[0].crit_urls = vec!["http://127.0.0.1:6000".to_string()];
-        source.sessions[0]
-            .pending_human_review_ids
-            .insert("fixture-review\0/fixture/draft.md".to_string());
+        let review_document_dir = tempfile::TempDir::new().unwrap();
+        let review_document_path = review_document_dir.path().join("fixture-draft.md");
+        std::fs::write(&review_document_path, "fixture").unwrap();
+        let _review_lock =
+            crate::shared::human_in_the_loop::LockGuard::acquire(&review_document_path).unwrap();
+        source.sessions[0].pending_human_review_ids.insert(format!(
+            "fixture-review\0v2\0{}\0{}\0",
+            42,
+            review_document_path.display()
+        ));
         source.sessions[0].work_type = Some("release-guide".to_string());
         source
             .work_type_nav_labels
@@ -1417,7 +1428,7 @@ mod tests {
                 can_open_in_terminal: true,
             },
         );
-        expected["sessions"][0]["reviewDocumentAvailable"] = serde_json::json!(true);
+        expected["sessions"][0]["reviewDocumentId"] = serde_json::json!("fixture-review");
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }

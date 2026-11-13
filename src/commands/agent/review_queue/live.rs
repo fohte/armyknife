@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 
-use super::{CRIT_KEY, QueueRuntime, QueueState, Review};
+use super::{CRIT_KEY, QueueRuntime, QueueState, Review, ReviewDocumentQueue};
 use crate::commands::agent::crit::toggle::{LiveCritPaneRuntime, show_review_pane};
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Session, resolve_session_option};
@@ -23,6 +23,25 @@ struct CritReview {
 
 pub(crate) struct LiveQueueRuntime {
     crit: Option<CritReview>,
+}
+
+pub(crate) fn review_document_queue(session: &Session) -> ReviewDocumentQueue {
+    let Some(tmux_info) = session.tmux_info.as_ref() else {
+        return ReviewDocumentQueue::Unmanaged;
+    };
+    let socket_path = tmux_info.socket_path.as_deref();
+    let editors = tmux::get_pane_option_for_socket(socket_path, &tmux_info.pane_id, EDITORS_OPTION);
+    let shown = tmux::get_pane_option_for_socket(socket_path, &tmux_info.pane_id, SHOWN_OPTION);
+
+    if editors.is_some() || shown.is_some() {
+        return ReviewDocumentQueue::Managed(shown);
+    }
+
+    if tmux::is_pane_alive_for_socket(socket_path, &tmux_info.pane_id).unwrap_or(false) {
+        ReviewDocumentQueue::Unmanaged
+    } else {
+        ReviewDocumentQueue::Unavailable
+    }
 }
 
 impl LiveQueueRuntime {

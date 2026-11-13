@@ -21,16 +21,24 @@ const session: Session = {
   parent: null,
   ancestorSessionIds: [],
   pullRequest: null,
+  reviewDocumentId: null,
 }
 
 let container: HTMLDivElement
 let root: Root | null = null
 
-function StatusPanelHarness({ currentSession }: { currentSession: Session }) {
+function StatusPanelHarness({
+  currentSession,
+  statusPanelOpen = false,
+}: {
+  currentSession: Session
+  statusPanelOpen?: boolean
+}) {
   const panel = useConversationStatusPanel({
     session: currentSession,
     messages: [],
     backgroundTasks: [],
+    statusPanelOpen,
     onAction: () => Promise.resolve(true),
     onCloseStatusPanel: () => undefined,
   })
@@ -42,6 +50,24 @@ function StatusPanelHarness({ currentSession }: { currentSession: Session }) {
       onClose={() => undefined}
     />
   )
+}
+
+function requestUrl(input: RequestInfo | URL): string {
+  return typeof input === 'string'
+    ? input
+    : input instanceof URL
+      ? input.href
+      : input.url
+}
+
+async function waitForState(condition: () => boolean) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (condition()) return
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    })
+  }
+  throw new Error('The expected review document state did not appear')
 }
 
 beforeEach(() => {
@@ -76,11 +102,168 @@ it('shows the Review tab only for sessions with an active review document', () =
 
   const states = [
     render(session),
-    render({ ...session, reviewDocumentAvailable: true }),
-    render({ ...session, reviewDocumentAvailable: false }),
+    render({ ...session, reviewDocumentId: 'fixture-review-a' }),
+    render({ ...session, reviewDocumentId: null }),
   ]
     .map(({ tabs, selectedTab }) => `${tabs.join(',')}|${selectedTab ?? ''}`)
     .join('\n')
 
   expect(states).toBe('|\nReview|Review\n|')
+})
+
+it('fetches and renders the review document when the status panel opens', async () => {
+  const fetcher = vi.fn<typeof fetch>(() =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({
+          id: 'fixture-review-a',
+          frontmatter: { title: 'Fixture pull request' },
+          body: '**Fixture draft body**',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    ),
+  )
+  vi.stubGlobal('fetch', fetcher)
+
+  act(() => {
+    root?.render(
+      <StatusPanelHarness
+        currentSession={{ ...session, reviewDocumentId: 'fixture-review-a' }}
+      />,
+    )
+  })
+  await act(async () => {
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+  })
+  const closedPanelRequests = fetcher.mock.calls.map(([input]) =>
+    requestUrl(input),
+  )
+
+  act(() => {
+    root?.render(
+      <StatusPanelHarness
+        currentSession={{ ...session, reviewDocumentId: 'fixture-review-a' }}
+        statusPanelOpen
+      />,
+    )
+  })
+  await waitForState(
+    () => container.querySelector('.review-document-body') !== null,
+  )
+
+  const openPanel = () => ({
+    requests: fetcher.mock.calls.map(([input]) => requestUrl(input)),
+    selectedTab: container.querySelector('[aria-selected="true"]')?.textContent,
+    title: container.querySelector('.review-document-field-value')?.textContent,
+    markdown: container.querySelector('.review-document-body strong')
+      ?.textContent,
+  })
+  const panel = () => ({ closedPanelRequests, ...openPanel() })
+  expect(panel()).toEqual({
+    closedPanelRequests: [],
+    requests: ['/api/sessions/fixture-session/review-document'],
+    selectedTab: 'Review',
+    title: 'Fixture pull request',
+    markdown: 'Fixture draft body',
+  })
+})
+
+it('refetches the review document when its active ID changes', async () => {
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          id: 'fixture-review-a',
+          frontmatter: { title: 'First fixture' },
+          body: 'First body',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          id: 'fixture-review-b',
+          frontmatter: { title: 'Second fixture' },
+          body: 'Second body',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+  vi.stubGlobal('fetch', fetcher)
+
+  act(() => {
+    root?.render(
+      <StatusPanelHarness
+        currentSession={{ ...session, reviewDocumentId: 'fixture-review-a' }}
+        statusPanelOpen
+      />,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelector('.review-document-body')?.textContent ===
+      'First body',
+  )
+
+  act(() => {
+    root?.render(
+      <StatusPanelHarness
+        currentSession={{ ...session, reviewDocumentId: 'fixture-review-b' }}
+        statusPanelOpen
+      />,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelector('.review-document-body')?.textContent ===
+      'Second body',
+  )
+
+  const snapshot = () => ({
+    requests: fetcher.mock.calls.map(([input]) => requestUrl(input)),
+    title: container.querySelector('.review-document-field-value')?.textContent,
+    body: container.querySelector('.review-document-body')?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    requests: [
+      '/api/sessions/fixture-session/review-document',
+      '/api/sessions/fixture-session/review-document',
+    ],
+    title: 'Second fixture',
+    body: 'Second body',
+  })
+})
+
+it('shows an alert when the review document request fails', async () => {
+  const fetcher = vi.fn<typeof fetch>(() =>
+    Promise.resolve(
+      new Response(JSON.stringify({ error: 'Fixture request failed' }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ),
+  )
+  vi.stubGlobal('fetch', fetcher)
+
+  act(() => {
+    root?.render(
+      <StatusPanelHarness
+        currentSession={{ ...session, reviewDocumentId: 'fixture-review-a' }}
+        statusPanelOpen
+      />,
+    )
+  })
+  await waitForState(() => container.querySelector('[role="alert"]') !== null)
+
+  const result = () => ({
+    requests: fetcher.mock.calls.map(([input]) => requestUrl(input)),
+    alert: container.querySelector('[role="alert"]')?.textContent,
+  })
+  expect(result()).toEqual({
+    requests: ['/api/sessions/fixture-session/review-document'],
+    alert: 'Could not load the review document: Fixture request failed',
+  })
 })

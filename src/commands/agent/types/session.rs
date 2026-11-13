@@ -77,8 +77,8 @@ pub struct Session {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub crit_urls: Vec<String>,
     /// IDs of Human-in-the-Loop reviews currently waiting for the user.
-    /// Active review IDs also carry their document path so watch-web can read
-    /// the document only while the matching marker is active.
+    /// New review IDs carry their document path; legacy PR-draft review IDs
+    /// may be pathless. watch-web reads documents only from path-bearing IDs.
     /// A process killed before cleanup can leave a marker. Claude Code status
     /// considers it only while a background task is pending; Codex uses it to
     /// identify a review wait that its hooks do not report as a task.

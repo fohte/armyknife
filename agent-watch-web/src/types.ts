@@ -78,7 +78,7 @@ export type Session = {
   ancestorSessionIds: string[]
   pullRequest: PullRequest | null
   critUrl?: string | null
-  reviewDocumentAvailable?: boolean
+  reviewDocumentId?: string | null
   laterUntil?: string | null
   isToday?: boolean
   decisionCount?: number

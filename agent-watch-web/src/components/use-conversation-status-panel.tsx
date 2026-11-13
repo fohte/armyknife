@@ -58,10 +58,12 @@ export function useConversationStatusPanel({
   )
   const [reviewDocumentState, setReviewDocumentState] = useState<{
     sessionId: string
+    reviewDocumentId: string
     document: ReviewDocumentResponse | null
     error: string | null
     loading: boolean
   } | null>(null)
+  const reviewDocumentId = session.reviewDocumentId
   const decisions =
     allDecisions ??
     messages.filter(
@@ -97,7 +99,7 @@ export function useConversationStatusPanel({
     ...(backgroundTasks.length === 0 ? [] : ['running']),
     ...(treeAvailable ? ['tree'] : []),
     ...(pullRequestListAvailable ? ['pull-requests'] : []),
-    ...(session.reviewDocumentAvailable === true ? ['review-document'] : []),
+    ...(reviewDocumentId == null ? [] : ['review-document']),
     ...(decisionCount === 0 ? [] : ['decisions']),
     ...(critUrl === null ? [] : ['crit']),
   ]
@@ -119,7 +121,7 @@ export function useConversationStatusPanel({
       activeTabId === 'pull-requests',
   })
   useEffect(() => {
-    if (session.reviewDocumentAvailable !== true) {
+    if (reviewDocumentId == null) {
       setReviewDocumentState(null)
       return
     }
@@ -129,6 +131,7 @@ export function useConversationStatusPanel({
     let current = true
     setReviewDocumentState({
       sessionId: session.id,
+      reviewDocumentId,
       document: null,
       error: null,
       loading: true,
@@ -141,6 +144,7 @@ export function useConversationStatusPanel({
         if (current) {
           setReviewDocumentState({
             sessionId: session.id,
+            reviewDocumentId: document.id,
             document,
             error: null,
             loading: false,
@@ -151,6 +155,7 @@ export function useConversationStatusPanel({
         if (current) {
           setReviewDocumentState({
             sessionId: session.id,
+            reviewDocumentId,
             document: null,
             error: error.message,
             loading: false,
@@ -161,12 +166,7 @@ export function useConversationStatusPanel({
     return () => {
       current = false
     }
-  }, [
-    activeTabId,
-    session.id,
-    session.reviewDocumentAvailable,
-    statusPanelOpen,
-  ])
+  }, [activeTabId, session.id, reviewDocumentId, statusPanelOpen])
   const tabs: readonly SessionStatusPanelTab[] = [
     ...(availableTabIds.includes('running')
       ? [
@@ -256,6 +256,8 @@ export function useConversationStatusPanel({
             content:
               reviewDocumentState === null ||
               reviewDocumentState.sessionId !== session.id ||
+              reviewDocumentState.reviewDocumentId !==
+                session.reviewDocumentId ||
               reviewDocumentState.loading ? (
                 <div className="session-tree-feedback" role="status">
                   Loading review document…

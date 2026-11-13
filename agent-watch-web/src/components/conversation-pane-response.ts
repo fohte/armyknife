@@ -280,6 +280,7 @@ export function isSessionActions(value: unknown): value is SessionActions {
 }
 
 export type ReviewDocumentResponse = {
+  id: string
   frontmatter: JsonValue
   body: string
 }
@@ -302,6 +303,7 @@ export function isReviewDocumentResponse(
 ): value is ReviewDocumentResponse {
   return (
     isRecord(value) &&
+    typeof value['id'] === 'string' &&
     isJsonValue(value['frontmatter']) &&
     typeof value['body'] === 'string'
   )
