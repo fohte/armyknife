@@ -530,10 +530,7 @@ function AppContent() {
     />
   )
   const main = (
-    <main
-      className="agent-watch-main"
-      inert={isMobile && mobileNavOpen ? true : undefined}
-    >
+    <main className="agent-watch-main">
       {view === 'inbox' ? (
         <InboxConversationPanes
           inboxProps={inboxProps}

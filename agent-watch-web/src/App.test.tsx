@@ -2227,10 +2227,9 @@ it.each(['Inbox', 'Board'] as const)(
 
     const snapshot = () => ({
       drawerOpen:
-        container.querySelector('[aria-label="Mobile navigation"]') !== null,
-      backgroundInert:
-        container.querySelector('.agent-watch-main')?.hasAttribute('inert') ??
-        false,
+        container.querySelector<HTMLDialogElement>(
+          '[aria-label="Mobile navigation"]',
+        )?.open ?? false,
       inboxToggle:
         container.querySelector('[aria-label="Hide Inbox"]') !== null,
       shortcutLabel: container.querySelector('.agent-watch-command-key span')
@@ -2238,7 +2237,6 @@ it.each(['Inbox', 'Board'] as const)(
     })
     expect(snapshot()).toEqual({
       drawerOpen: true,
-      backgroundInert: true,
       inboxToggle: false,
       shortcutLabel: undefined,
     })
@@ -2273,7 +2271,9 @@ it('opens the command palette from the mobile navigation and closes the drawer',
 
   const snapshot = () => ({
     paletteOpen: container.querySelector('[aria-label="Jump to"]') !== null,
-    drawerOpen: container.querySelector('.mobile-nav-overlay') !== null,
+    drawerOpen:
+      container.querySelector<HTMLDialogElement>('.mobile-nav-drawer')?.open ??
+      false,
   })
   expect(snapshot()).toEqual({ paletteOpen: true, drawerOpen: false })
 })
@@ -2284,75 +2284,38 @@ it('closes the mobile navigation after switching to Board', () => {
   clickButton('.mobile-nav-drawer .view-switch-button[aria-pressed="false"]')
 
   const snapshot = () => ({
-    drawerOpen: container.querySelector('.mobile-nav-overlay') !== null,
+    drawerOpen:
+      container.querySelector<HTMLDialogElement>('.mobile-nav-drawer')?.open ??
+      false,
     boardHeading: container.querySelector('#board-title')?.textContent,
   })
   expect(snapshot()).toEqual({ drawerOpen: false, boardHeading: 'Board' })
 })
 
-it('traps keyboard focus in the mobile navigation and restores its trigger', async () => {
+it('closes the mobile navigation with Escape', async () => {
   renderMobileApp()
-  const trigger = container.querySelector<HTMLButtonElement>(
-    '[aria-label="Open navigation"]',
-  )
-  if (trigger === null)
-    throw new Error('Mobile navigation button was not rendered')
-  await act(async () => {
-    await userEvent.click(trigger)
-  })
-  const drawer = container.querySelector<HTMLElement>('.mobile-nav-drawer')
-  if (drawer === null) {
-    throw new Error('Mobile navigation was not rendered')
-  }
-  const buttons = drawer.querySelectorAll('button')
-  const lastButton = buttons[buttons.length - 1]
-  if (lastButton === undefined) {
-    throw new Error('Mobile navigation did not contain focusable controls')
-  }
-  const focusOnOpen = drawer.contains(document.activeElement)
-  act(() => {
-    document.activeElement?.dispatchEvent(
-      new KeyboardEvent('keydown', {
-        bubbles: true,
-        cancelable: true,
-        key: 'Tab',
-        shiftKey: true,
-      }),
-    )
-  })
-  const backwardTabWraps = document.activeElement === lastButton
-  await act(async () => {
-    await userEvent.keyboard('{Escape}')
-  })
+  clickButton('[aria-label="Open navigation"]')
+  const drawer =
+    container.querySelector<HTMLDialogElement>('.mobile-nav-drawer')
+  if (drawer === null) throw new Error('Mobile navigation was not rendered')
+  const opened = drawer.open
+  await act(async () => userEvent.keyboard('{Escape}'))
 
-  const snapshot = () => ({
-    focusOnOpen,
-    backwardTabWraps,
-    drawerClosed: container.querySelector('.mobile-nav-overlay') === null,
-    triggerRestored: document.activeElement === trigger,
-  })
-  expect(snapshot()).toEqual({
-    focusOnOpen: true,
-    backwardTabWraps: true,
-    drawerClosed: true,
-    triggerRestored: true,
-  })
+  const snapshot = () => ({ opened, closed: drawer.open })
+  expect(snapshot()).toEqual({ opened: true, closed: false })
 })
 
 it('closes the mobile navigation when its backdrop is clicked', async () => {
   renderMobileApp()
   clickButton('[aria-label="Open navigation"]')
-  const backdrop = container.querySelector<HTMLButtonElement>(
-    '[aria-label="Close navigation"]',
-  )
-  if (backdrop === null) {
-    throw new Error('Mobile navigation backdrop was not rendered')
-  }
+  const drawer =
+    container.querySelector<HTMLDialogElement>('.mobile-nav-drawer')
+  if (drawer === null) throw new Error('Mobile navigation was not rendered')
   await act(async () => {
-    await userEvent.click(backdrop, { position: { x: 400, y: 200 } })
+    await userEvent.click(document.body, { position: { x: 400, y: 200 } })
   })
 
-  expect(container.querySelector('.mobile-nav-overlay') === null).toEqual(true)
+  expect(drawer.open).toEqual(false)
 })
 
 it('closes the mobile navigation after selecting a saved view', () => {
@@ -2388,7 +2351,9 @@ it('closes the mobile navigation after selecting a saved view', () => {
   })
 
   const snapshot = () => ({
-    drawerClosed: container.querySelector('.mobile-nav-overlay') === null,
+    drawerClosed:
+      container.querySelector<HTMLDialogElement>('.mobile-nav-drawer')?.open !==
+      true,
     selectedView: container
       .querySelector<HTMLButtonElement>('.mobile-saved-view-link')
       ?.getAttribute('aria-pressed'),
@@ -2418,7 +2383,9 @@ it('closes the mobile navigation after opening a session from a work type', () =
   })
 
   const snapshot = () => ({
-    drawerClosed: container.querySelector('.mobile-nav-overlay') === null,
+    drawerClosed:
+      container.querySelector<HTMLDialogElement>('.mobile-nav-drawer')?.open !==
+      true,
     screen: container
       .querySelector('.agent-watch-shell')
       ?.getAttribute('data-mobile-screen'),

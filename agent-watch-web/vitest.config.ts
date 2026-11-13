@@ -25,6 +25,7 @@ function chromiumBrowser() {
 
 const appTestFiles = [
   'src/App.test.tsx',
+  'src/components/mobile-nav-drawer.test.tsx',
   'src/components/agent-watch-nav.test.tsx',
   'src/components/command-palette.test.tsx',
   'src/components/board-view.test.tsx',

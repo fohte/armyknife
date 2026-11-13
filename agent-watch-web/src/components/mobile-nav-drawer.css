@@ -1,26 +1,22 @@
-.mobile-nav-overlay {
-  position: fixed;
-  z-index: 30;
-  inset: 0;
-}
-
-.mobile-nav-backdrop {
-  position: absolute;
-  inset: 0;
-  border: 0;
-  background: rgb(0 0 0 / 45%);
-  cursor: pointer;
-}
-
 .mobile-nav-drawer {
-  position: absolute;
-  top: 0;
+  position: fixed;
+  top: var(--mobile-viewport-top, 0px);
   bottom: 0;
   left: 0;
   width: min(320px, calc(100vw - 48px));
+  max-width: unset;
+  max-height: unset;
+  margin: 0;
+  padding: 0;
   overflow-x: hidden;
   overflow-y: auto;
+  border: 0;
   background: var(--aw-bg-nav);
+  color: var(--aw-text-primary);
   box-shadow: 8px 0 24px rgb(0 0 0 / 24%);
   overscroll-behavior: contain;
+}
+
+.mobile-nav-drawer::backdrop {
+  background: rgb(0 0 0 / 45%);
 }
