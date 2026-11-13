@@ -14,6 +14,7 @@ use crate::shared::cache;
 pub(super) struct UndeliveredNotification {
     pub task_id: String,
     pub message: String,
+    pub peer_out_message_id: Option<i64>,
 }
 
 fn root_dir() -> Result<PathBuf> {
@@ -30,8 +31,42 @@ fn message_path(root: &Path, session_id: &str, task_id: &str) -> Result<PathBuf>
     Ok(session_dir(root, session_id).join(task_id.to_string()))
 }
 
+fn peer_out_message_id_path(root: &Path, session_id: &str, task_id: &str) -> Result<PathBuf> {
+    Ok(message_path(root, session_id, task_id)?.with_extension("peer-out-message-id"))
+}
+
 pub(super) fn save(session_id: &str, task_id: &str, message: &str) -> Result<()> {
     save_in(&root_dir()?, session_id, task_id, message)
+}
+
+pub(super) fn save_with_peer_out_message_id(
+    session_id: &str,
+    task_id: &str,
+    message: &str,
+    peer_out_message_id: i64,
+) -> Result<()> {
+    save_with_peer_out_message_id_in(
+        &root_dir()?,
+        session_id,
+        task_id,
+        message,
+        peer_out_message_id,
+    )
+}
+
+fn save_with_peer_out_message_id_in(
+    root: &Path,
+    session_id: &str,
+    task_id: &str,
+    message: &str,
+    peer_out_message_id: i64,
+) -> Result<()> {
+    save_in(root, session_id, task_id, message)?;
+    let metadata_path = peer_out_message_id_path(root, session_id, task_id)?;
+    bg_storage::write_atomic(&metadata_path, |file| {
+        file.write_all(peer_out_message_id.to_string().as_bytes())?;
+        Ok(())
+    })
 }
 
 fn save_in(root: &Path, session_id: &str, task_id: &str, message: &str) -> Result<()> {
@@ -161,7 +196,14 @@ fn load_all_in(root: &Path, session_id: &str) -> Result<Vec<UndeliveredNotificat
                 path.display()
             )
         })?;
-        notifications.push((modified, UndeliveredNotification { task_id, message }));
+        notifications.push((
+            modified,
+            UndeliveredNotification {
+                peer_out_message_id: read_peer_out_message_id(root, session_id, &task_id)?,
+                task_id,
+                message,
+            },
+        ));
     }
     notifications.sort_by(|(left_modified, left), (right_modified, right)| {
         left_modified
@@ -189,6 +231,31 @@ fn remove_in(root: &Path, session_id: &str, task_id: &str) -> Result<()> {
                 path.display()
             )
         }),
+    }?;
+    let metadata_path = peer_out_message_id_path(root, session_id, task_id)?;
+    match fs::remove_file(&metadata_path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "failed to remove peer message metadata: {}",
+                metadata_path.display()
+            )
+        }),
+    }
+}
+
+fn read_peer_out_message_id(root: &Path, session_id: &str, task_id: &str) -> Result<Option<i64>> {
+    let path = peer_out_message_id_path(root, session_id, task_id)?;
+    match fs::read_to_string(&path) {
+        Ok(id) => {
+            id.trim().parse().map(Some).with_context(|| {
+                format!("failed to parse peer message metadata: {}", path.display())
+            })
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error)
+            .with_context(|| format!("failed to read peer message metadata: {}", path.display())),
     }
 }
 
@@ -265,8 +332,37 @@ mod tests {
                 vec![UndeliveredNotification {
                     task_id: TASK_ID.to_string(),
                     message: message.to_string(),
+                    peer_out_message_id: None,
                 }],
             ),
+        );
+    }
+
+    #[test]
+    fn saves_peer_out_message_id_for_successful_redelivery() {
+        let (_temp_dir, root) = root();
+        save_with_peer_out_message_id_in(&root, SESSION_ID, TASK_ID, "fixture peer message", 42)
+            .expect("peer message metadata should be saved");
+
+        assert_eq!(
+            load_all_in(&root, SESSION_ID).expect("notification should load"),
+            vec![UndeliveredNotification {
+                task_id: TASK_ID.to_string(),
+                message: "fixture peer message".to_string(),
+                peer_out_message_id: Some(42),
+            }],
+        );
+
+        remove_in(&root, SESSION_ID, TASK_ID).expect("notification should be removed");
+
+        assert_eq!(
+            (
+                load_all_in(&root, SESSION_ID).expect("notification should load"),
+                peer_out_message_id_path(&root, SESSION_ID, TASK_ID)
+                    .expect("metadata path should be valid")
+                    .exists(),
+            ),
+            (Vec::new(), false),
         );
     }
 

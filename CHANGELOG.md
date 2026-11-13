@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.1.672](https://github.com/fohte/armyknife/compare/v0.1.671...v0.1.672) (2026-11-13)
+
+
+### Features
+
+* **watch-web:** highlight Bash commands and code ([#1719](https://github.com/fohte/armyknife/issues/1719)) ([d10ff38](https://github.com/fohte/armyknife/commit/d10ff38cb03295eb74216dad932a6ec7d16a9357))
+
+## [0.1.671](https://github.com/fohte/armyknife/compare/v0.1.670...v0.1.671) (2026-11-13)
+
+
+### Bug Fixes
+
+* **watch-web:** render peer messages from records ([#1717](https://github.com/fohte/armyknife/issues/1717)) ([62ba2b7](https://github.com/fohte/armyknife/commit/62ba2b7e062b0609108ef7bb61874e4651e652b2))
+
+## [0.1.670](https://github.com/fohte/armyknife/compare/v0.1.669...v0.1.670) (2026-11-13)
+
+
+### Features
+
+* **agent:** support session title changes ([#1714](https://github.com/fohte/armyknife/issues/1714)) ([a1d3032](https://github.com/fohte/armyknife/commit/a1d30322ef022500527a5b21eb52a344d8cea9b8))
+
 ## [0.1.669](https://github.com/fohte/armyknife/compare/v0.1.668...v0.1.669) (2026-11-13)
 
 

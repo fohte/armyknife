@@ -30,7 +30,8 @@ pub(crate) use database::{
     resolve_permission_request, resolve_permission_request_with_answers, serialize_session,
 };
 pub(crate) use peer_out_messages::{
-    insert_watch_web_peer_out_message, watch_web_peer_out_messages_from,
+    insert_watch_web_peer_out_message, mark_watch_web_peer_out_message_delivered,
+    watch_web_peer_out_messages_from,
 };
 pub(crate) use queued_prompts::{
     delete_watch_web_queued_prompts, ensure_watch_web_user_marker_from,
@@ -254,13 +255,6 @@ pub(crate) fn update_session_last_message_if_unchanged_in(
         session.last_message = last_message;
         true
     })
-}
-
-/// Sets `label` on a session, resolving the default sessions directory.
-/// Thin wrapper so callers (e.g. the TUI's rename key) do not need to know
-/// about `sessions_dir()`.
-pub fn update_session_label(session_id: &str, label: Option<String>) -> Result<()> {
-    update_session_label_in(&sessions_dir()?, session_id, label)
 }
 
 /// Atomically overwrites a session's `label` field. Unlike

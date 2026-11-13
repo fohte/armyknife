@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 use rusqlite_migration::{Error as MigrationError, M, MigrationDefinitionError, Migrations};
 
-// Migrations must stay readable by older binaries: add tables or nullable columns only.
-static MIGRATION_ENTRIES: [M<'static>; 13] = [
+// Keep older binaries compatible: new columns need defaults or must be nullable.
+static MIGRATION_ENTRIES: [M<'static>; 14] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -159,6 +159,10 @@ static MIGRATION_ENTRIES: [M<'static>; 13] = [
             BEGIN
                 DELETE FROM agent_permission_denied WHERE session_id = OLD.session_id;
             END;",
+    ),
+    M::up(
+        "ALTER TABLE watch_web_peer_out_message
+         ADD COLUMN failed INTEGER NOT NULL DEFAULT 0;",
     ),
 ];
 

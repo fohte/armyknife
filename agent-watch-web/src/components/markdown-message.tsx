@@ -6,12 +6,17 @@ import {
   isValidElement,
   memo,
   type ReactNode,
+  useContext,
 } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 import { BangCommandActions } from '#components/bang-command'
 import { SessionLink } from '#components/session-link'
+import {
+  SyntaxCodeBlock,
+  type SyntaxCodeBlockLink,
+} from '#components/syntax-code-block'
 import type { SessionLinkTarget } from '#types'
 
 type MarkdownNode = {
@@ -263,73 +268,97 @@ function createMarkdownComponents(
   }
 
   const renderCode: NonNullable<Components['code']> = ({ node, ...props }) => {
+    const isCodeBlock = useContext(CodeBlockContext)
     if (node?.tagName !== 'code') return props.children
     const { className, children, ...codeProps } = props
     const text = typeof children === 'string' ? children : null
+    const language = className?.match(/(?:^|\s)language-([\w-]+)/)?.[1]
     const parts = text === null ? [] : splitSessionIds(text, sessionsById)
-    const code = (
-      <code className={className} {...codeProps}>
-        {parts.length === 0
-          ? children
-          : parts.map((part, index) =>
-              part.session === null ? (
-                part.text
-              ) : (
-                <SessionLink
-                  key={String(index)}
-                  onSelectSession={onSelectSession}
-                  session={part.session}
-                >
-                  {part.text}
-                </SessionLink>
-              ),
-            )}
-      </code>
-    )
-    if (commandContext === undefined || text === null) return code
+    const codeChildren =
+      parts.length === 0
+        ? children
+        : parts.map((part, index) =>
+            part.session === null ? (
+              part.text
+            ) : (
+              <SessionLink
+                key={String(index)}
+                onSelectSession={onSelectSession}
+                session={part.session}
+              >
+                {part.text}
+              </SessionLink>
+            ),
+          )
+    let offset = 0
+    const links = parts.flatMap((part, index): SyntaxCodeBlockLink[] => {
+      const start = offset
+      offset += part.text.length
+      if (part.session === null) return []
+      const session = part.session
+      return [
+        {
+          start,
+          end: offset,
+          render: (linkChildren) => (
+            <SessionLink
+              key={String(index)}
+              onSelectSession={onSelectSession}
+              session={session}
+            >
+              {linkChildren}
+            </SessionLink>
+          ),
+        },
+      ]
+    })
+    const code =
+      isCodeBlock && text !== null ? (
+        <SyntaxCodeBlock
+          code={text}
+          language={language ?? 'text'}
+          links={links}
+        >
+          <>{codeChildren}</>
+        </SyntaxCodeBlock>
+      ) : (
+        <code className={className} {...codeProps}>
+          {codeChildren}
+        </code>
+      )
+    if (commandContext === undefined || text === null || isCodeBlock) {
+      return code
+    }
     const command = inlineBangCommand(text)
     if (command === null) return code
     return (
-      <CodeBlockContext.Consumer>
-        {(isBlockCode) =>
-          isBlockCode ? (
-            code
-          ) : (
-            <span className="bang-command-inline">
-              {code}
-              <BangCommandActions
-                commands={[command]}
-                messageText={commandContext.messageText}
-                {...(commandContext.onCommandExecuted === undefined
-                  ? {}
-                  : { onCommandExecuted: commandContext.onCommandExecuted })}
-                sessionId={commandContext.sessionId}
-              />
-            </span>
-          )
-        }
-      </CodeBlockContext.Consumer>
+      <span className="bang-command-inline">
+        {code}
+        <BangCommandActions
+          commands={[command]}
+          messageText={commandContext.messageText}
+          {...(commandContext.onCommandExecuted === undefined
+            ? {}
+            : { onCommandExecuted: commandContext.onCommandExecuted })}
+          sessionId={commandContext.sessionId}
+        />
+      </span>
     )
   }
 
-  const renderPre: NonNullable<Components['pre']> = ({
-    children,
-    ...props
-  }) => {
-    delete props.node
+  const renderPre: NonNullable<Components['pre']> = ({ children }) => {
     const codeText = Children.toArray(children).flatMap((child) => {
       if (!isValidElement<{ children?: ReactNode }>(child)) return []
       return [textContent(child.props.children)]
     })[0]
     const commands = codeText === undefined ? [] : blockBangCommands(codeText)
-    if (commandContext === undefined || commands.length === 0) {
-      return <pre {...props}>{children}</pre>
-    }
+    const codeBlock = (
+      <CodeBlockContext.Provider value>{children}</CodeBlockContext.Provider>
+    )
+    if (commandContext === undefined || commands.length === 0) return codeBlock
     return (
       <div className="markdown-code-block">
-        <CodeBlockContext.Provider value>
-          <pre {...props}>{children}</pre>
-        </CodeBlockContext.Provider>
+        {codeBlock}
         <BangCommandActions
           commands={commands}
           messageText={commandContext.messageText}

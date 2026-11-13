@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::fs::File;
 use std::io::{self, Write};
 use std::path::Path;
 
@@ -13,6 +14,7 @@ use super::types::{
     Session, SessionStatus, TMUX_SESSION_OPTION, TMUX_SESSION_OPTION_LEGACY,
     TMUX_WINDOW_STATUS_OPTION, TMUX_WINDOW_TITLE_OPTION,
 };
+use crate::infra::git::file_lock::{lock_exclusive, open_lock_file};
 use crate::infra::tmux;
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -53,19 +55,25 @@ pub fn run(args: &WindowStatusArgs) -> Result<()> {
 /// directory -- this must never fail the caller (a manual rename confirm,
 /// or a detached title-generation write).
 pub fn sync_window_title_for_session(session: &Session) {
+    let Ok(sessions_dir) = store::sessions_dir() else {
+        return;
+    };
+    sync_window_title_for_session_in(session, &sessions_dir);
+}
+
+pub(crate) fn sync_window_title_for_session_in(session: &Session, sessions_dir: &Path) {
     let Some(pane_id) = session.tmux_info.as_ref().map(|info| info.pane_id.as_str()) else {
         return;
     };
     let Some(window_id) = tmux::get_window_id_for_pane(pane_id) else {
         return;
     };
-    let Ok(sessions_dir) = store::sessions_dir() else {
-        return;
-    };
-    let _ = sync_window_option(&window_id, &sessions_dir);
+    let _ = sync_window_option(&window_id, sessions_dir);
 }
 
 pub fn sync_window_option(window_id: &str, sessions_dir: &Path) -> Result<()> {
+    // Keep the session snapshot and tmux writes ordered across concurrent processes.
+    let _lock = lock_window_options(sessions_dir)?;
     let sessions = load_window_sessions(window_id, sessions_dir)?;
 
     let rendered_status = render_window_status(&sessions);
@@ -89,6 +97,13 @@ pub fn sync_window_option(window_id: &str, sessions_dir: &Path) -> Result<()> {
     tmux::refresh_status()?;
 
     Ok(())
+}
+
+fn lock_window_options(sessions_dir: &Path) -> Result<File> {
+    let lock_path = sessions_dir.join(".window-status.lock");
+    let lock_file = open_lock_file(&lock_path, "agent window status")?;
+    lock_exclusive(&lock_file, "agent window status")?;
+    Ok(lock_file)
 }
 
 /// Recomputes the current window option after an external background task
