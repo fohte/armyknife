@@ -1,5 +1,5 @@
 import { ResultAsync } from 'neverthrow'
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 
 import type { ComposerAttachment } from '#components/message-composer'
 import { optimizeImageAttachment } from '#lib/image-attachment'
@@ -16,7 +16,10 @@ const PREVIEW_MIME_TYPES = new Set([
 
 type SelectedAttachment = ComposerAttachment & { file: File }
 
+const attachmentsBySession = new Map<string, SelectedAttachment[]>()
+
 type ComposerMessageOptions = {
+  sessionId: string
   draft: string
   messageEnabled: boolean
   externalSending: boolean
@@ -80,13 +83,16 @@ function toError(error: unknown): Error {
 }
 
 export function useComposerMessage({
+  sessionId,
   draft,
   messageEnabled,
   externalSending,
   clearDraftIfUnchanged,
   onAction,
 }: ComposerMessageOptions) {
-  const [attachments, setAttachments] = useState<SelectedAttachment[]>([])
+  const [attachments, setAttachments] = useState<SelectedAttachment[]>(
+    () => attachmentsBySession.get(sessionId) ?? [],
+  )
   const [sendPending, setSendPending] = useState(false)
   const [isProcessingAttachments, setIsProcessingAttachments] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -98,16 +104,11 @@ export function useComposerMessage({
   const isSending = externalSending || sendPending
   const limitError = attachmentLimitError(attachments)
 
-  useEffect(
-    () => () => {
-      attachmentsRef.current.forEach((attachment) => {
-        if (attachment.previewUrl !== null) {
-          URL.revokeObjectURL(attachment.previewUrl)
-        }
-      })
-    },
-    [],
-  )
+  const updateAttachments = (nextAttachments: SelectedAttachment[]) => {
+    attachmentsRef.current = nextAttachments
+    attachmentsBySession.set(sessionId, nextAttachments)
+    setAttachments(nextAttachments)
+  }
 
   const onPasteFiles = (files: File[]) => {
     if (files.length === 0) return
@@ -139,8 +140,7 @@ export function useComposerMessage({
         })
       }
       const nextAttachments = [...attachmentsRef.current, ...added]
-      attachmentsRef.current = nextAttachments
-      setAttachments(nextAttachments)
+      updateAttachments(nextAttachments)
       setError(null)
     })
     pasteQueueRef.current = addFiles.then(
@@ -155,28 +155,31 @@ export function useComposerMessage({
   }
 
   const removeAttachment = (id: string) => {
-    const removed = attachments.find((attachment) => attachment.id === id)
+    const removed = attachmentsRef.current.find(
+      (attachment) => attachment.id === id,
+    )
     if (removed?.previewUrl !== null && removed?.previewUrl !== undefined) {
       URL.revokeObjectURL(removed.previewUrl)
     }
-    setAttachments(attachments.filter((attachment) => attachment.id !== id))
+    updateAttachments(
+      attachmentsRef.current.filter((attachment) => attachment.id !== id),
+    )
   }
 
   const removeAttachments = (ids: readonly string[]) => {
     const removedIds = new Set(ids)
-    attachmentsRef.current
+    const current = attachmentsRef.current
+    current
       .filter((attachment) => removedIds.has(attachment.id))
-      .forEach((attachment) => {
-        if (attachment.previewUrl !== null) {
-          URL.revokeObjectURL(attachment.previewUrl)
-        }
+      .forEach(({ previewUrl }) => {
+        if (previewUrl !== null) URL.revokeObjectURL(previewUrl)
       })
-    setAttachments((current) =>
+    updateAttachments(
       current.filter((attachment) => !removedIds.has(attachment.id)),
     )
   }
 
-  const sendMessage = () => {
+  const sendMessage = async () => {
     if (attachmentLimitError(attachments) !== null) return
     if (
       (draft.trim() === '' && attachments.length === 0) ||
@@ -195,13 +198,12 @@ export function useComposerMessage({
       setSendPending(false)
     }
     if (sentAttachments.length === 0) {
-      void onAction('messages', { content: sentDraft }).then((succeeded) => {
-        if (succeeded) clearDraftIfUnchanged(sentDraft)
-        finishSending()
-      })
+      const succeeded = await onAction('messages', { content: sentDraft })
+      if (succeeded) clearDraftIfUnchanged(sentDraft)
+      finishSending()
       return
     }
-    void ResultAsync.fromPromise(
+    await ResultAsync.fromPromise(
       encodeAttachments(sentAttachments),
       toError,
     ).match(
