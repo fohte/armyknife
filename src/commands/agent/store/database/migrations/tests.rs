@@ -148,6 +148,68 @@ fn adds_session_replacement_table_to_version_fifteen_database() {
 }
 
 #[test]
+fn upgrades_legacy_rewind_version_fourteen_database() {
+    let temp_dir = tempfile::tempdir().expect("temporary database directory should be created");
+    let database_path = temp_dir.path().join("sessions.db");
+    let mut connection = Connection::open(&database_path).expect("temporary database should open");
+    Migrations::from_slice(&MIGRATION_ENTRIES[..13])
+        .to_latest(&mut connection)
+        .expect("version thirteen schema should be created");
+    connection
+        .execute_batch(
+            "CREATE TABLE session_replacement (
+                 session_id TEXT PRIMARY KEY,
+                 replaced_by_session_id TEXT NOT NULL
+             );
+             INSERT INTO session_replacement VALUES ('fixture-old', 'fixture-new');
+             INSERT INTO watch_web_peer_out_message (
+                 from_session_id, to_session_id, content, sent_at
+             ) VALUES (
+                 'fixture-sender', 'fixture-target', 'Fixture message', '2026-01-01T00:00:00Z'
+             );",
+        )
+        .expect("legacy rewind schema should be created");
+    connection
+        .pragma_update(None, "user_version", 14)
+        .expect("legacy schema version should be stored");
+    drop(connection);
+
+    let connection = super::super::open_connection(temp_dir.path())
+        .expect("legacy version fourteen database should migrate to the latest schema");
+    let actual = connection
+        .query_row(
+            indoc! {"
+                SELECT
+                    (SELECT replaced_by_session_id FROM session_replacement WHERE session_id = 'fixture-old'),
+                    EXISTS(SELECT 1 FROM pragma_table_info('watch_web_peer_out_message') WHERE name = 'failed'),
+                    (SELECT failed FROM watch_web_peer_out_message WHERE from_session_id = 'fixture-sender'),
+                    EXISTS(SELECT 1 FROM pragma_table_info('agent_todo') WHERE name = 'resolution')
+            "},
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, bool>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, bool>(3)?,
+                ))
+            },
+        )
+        .expect("legacy replacement and added columns should be queryable");
+    let actual_user_version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("database migration version should be readable");
+
+    assert_eq!(
+        (actual, actual_user_version),
+        (
+            ("fixture-new".to_string(), true, 0, true),
+            current_version()
+        ),
+    );
+}
+
+#[test]
 fn adds_todo_resolution_to_master_version_fourteen_database() {
     let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
     let database_path = temp_dir.path().join("sessions.db");
@@ -172,16 +234,24 @@ fn adds_todo_resolution_to_master_version_fourteen_database() {
 
     let todos = super::super::agent_todos(temp_dir.path(), "sample-session")
         .expect("master version fourteen database should migrate and load todos");
-    let actual = todos
-        .first()
-        .map(|todo| (todo.title.clone(), todo.resolution, todo.comment.clone()));
 
     assert_eq!(
-        actual,
-        Some((
-            "Task".to_string(),
-            Some(super::super::TodoResolution::Completed),
-            Some("Already handled".to_string()),
-        )),
+        todos,
+        vec![super::super::AgentTodo {
+            session_id: "sample-session".to_string(),
+            seq: 1,
+            title: "Task".to_string(),
+            detail: None,
+            created_at: chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+                .unwrap()
+                .to_utc(),
+            completed_at: Some(
+                chrono::DateTime::parse_from_rfc3339("2026-01-02T00:00:00Z")
+                    .unwrap()
+                    .to_utc(),
+            ),
+            resolution: Some(super::super::TodoResolution::Completed),
+            comment: Some("Already handled".to_string()),
+        }],
     );
 }
