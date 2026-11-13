@@ -123,14 +123,18 @@ it('fills the viewport and scrolls long navigation inside the drawer', async () 
     await userEvent.click(trigger)
   })
 
-  const viewportHeight = window.innerHeight
+  dialog.style.setProperty('--mobile-viewport-top', '120px')
+  dialog.style.setProperty('--mobile-viewport-height', '420px')
+  const viewportHeight = 420
   const snapshot = () => ({
+    drawerTop: getComputedStyle(dialog).top,
     drawerHeight: Math.round(dialog.getBoundingClientRect().height),
     viewportHeight,
     overflowY: getComputedStyle(dialog).overflowY,
     contentOverflows: dialog.scrollHeight > dialog.clientHeight,
   })
   expect(snapshot()).toEqual({
+    drawerTop: '120px',
     drawerHeight: viewportHeight,
     viewportHeight,
     overflowY: 'auto',
