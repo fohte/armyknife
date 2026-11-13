@@ -6,6 +6,7 @@ import type {
   SessionOperation,
   SessionOperationError,
 } from '#session-operation-types'
+import type { JsonValue } from '#types'
 
 let nextMessageOperationId = 0
 
@@ -18,6 +19,19 @@ function isStringRecord(value: unknown): value is Record<string, string> {
     isRecord(value) &&
     Object.values(value).every((entry) => typeof entry === 'string')
   )
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  if (
+    value === null ||
+    typeof value === 'boolean' ||
+    typeof value === 'number' ||
+    typeof value === 'string'
+  ) {
+    return true
+  }
+  if (Array.isArray(value)) return value.every(isJsonValue)
+  return isRecord(value) && Object.values(value).every(isJsonValue)
 }
 
 function toError(error: unknown): SessionOperationError {
@@ -109,6 +123,16 @@ function requestFor(operation: SessionOperation) {
           expectedHeadSha: operation.expectedHeadSha,
         },
       }
+    case 'review_document_save':
+    case 'review_document_finish':
+      return {
+        path: `review-document/${operation.type === 'review_document_save' ? 'save' : 'finish'}`,
+        body: {
+          id: operation.id,
+          frontmatter: operation.frontmatter,
+          body: operation.body,
+        },
+      }
   }
 }
 
@@ -169,6 +193,25 @@ export function createSessionOperation(
       return title === null
         ? errOperation('Invalid title operation')
         : ok<SessionOperation, Error>({ type: 'title', sessionId, title })
+    }
+    case 'review-document/save':
+    case 'review-document/finish': {
+      const id = requiredString('id')
+      const body = requiredString('body')
+      const frontmatter = payload['frontmatter']
+      if (id === null || body === null || !isJsonValue(frontmatter)) {
+        return errOperation('Invalid review document operation')
+      }
+      return ok<SessionOperation, Error>({
+        type:
+          action === 'review-document/save'
+            ? 'review_document_save'
+            : 'review_document_finish',
+        sessionId,
+        id,
+        frontmatter,
+        body,
+      })
     }
     case 'messages':
       return typeof payload['content'] === 'string'
