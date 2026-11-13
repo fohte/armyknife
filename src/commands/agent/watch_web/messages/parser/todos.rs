@@ -61,6 +61,7 @@ impl TimePlaced for AgentTodo {
             title: self.title.clone(),
             detail: self.detail.clone(),
             completed: self.completed_at.is_some(),
+            resolution: self.resolution,
             comment: self.comment.clone(),
         }
     }

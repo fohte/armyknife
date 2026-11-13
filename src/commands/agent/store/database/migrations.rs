@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use rusqlite_migration::{Error as MigrationError, M, MigrationDefinitionError, Migrations};
 
 // Keep older binaries compatible: new columns need defaults or must be nullable.
-static MIGRATION_ENTRIES: [M<'static>; 14] = [
+static MIGRATION_ENTRIES: [M<'static>; 15] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -164,6 +164,7 @@ static MIGRATION_ENTRIES: [M<'static>; 14] = [
         "ALTER TABLE watch_web_peer_out_message
          ADD COLUMN failed INTEGER NOT NULL DEFAULT 0;",
     ),
+    M::up("ALTER TABLE agent_todo ADD COLUMN resolution TEXT;"),
 ];
 
 static MIGRATIONS: LazyLock<Migrations<'static>> =

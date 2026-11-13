@@ -4,6 +4,7 @@ import '#components/permission-card.css'
 import { Button } from '@fohte/ui/button'
 
 import { OpenInTerminalAction } from '#components/open-in-terminal-action'
+import { SyntaxCodeBlock } from '#components/syntax-code-block'
 import type { ChatItem, OpenInTerminalStatus, SessionActions } from '#types'
 
 type PendingPermissionAction = {
@@ -59,7 +60,15 @@ export function PermissionCard({
     <article className="chat-permission-card">
       <h2>Permission required</h2>
       <p className="permission-tool">{message.tool}</p>
-      <p>{message.description}</p>
+      {message.command === undefined ? (
+        <p>{message.description}</p>
+      ) : (
+        <SyntaxCodeBlock
+          className="permission-command"
+          code={message.command}
+          language="bash"
+        />
+      )}
       {hasPermissionActions ? (
         <div className="permission-actions">
           <Button

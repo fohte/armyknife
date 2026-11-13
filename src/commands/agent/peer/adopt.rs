@@ -145,6 +145,7 @@ mod tests {
             archived_at: None,
             pr_context: None,
             crit_urls: Vec::new(),
+            web_uis: Vec::new(),
             pending_human_review_ids: Default::default(),
             session_id: session_id.to_string(),
             cwd: PathBuf::from("/repo"),

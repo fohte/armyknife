@@ -167,10 +167,24 @@ fn active_tool_item(
         pending_tool.and_then(|pending| latest_matching_pending_tool_use(tool_uses, pending));
     let tool_use = pending_tool_use.or_else(|| tool_uses.last())?;
     if pending_tool_use.is_some() {
+        let command = super::super::super::permission_request_command(
+            Some(&tool_use.name),
+            tool_use.input.as_ref(),
+        );
+        let description = if command.is_some() {
+            String::new()
+        } else if tool_use.name == "Bash" {
+            super::super::super::permission_request_command_summary(tool_use.input.as_ref())
+                .map(|preview| format!("Command preview: {preview}"))
+                .unwrap_or_else(|| tool_detail(&tool_use.name, tool_use.input.as_ref()))
+        } else {
+            tool_detail(&tool_use.name, tool_use.input.as_ref())
+        };
         Some(ChatItem::Permission {
             request_id: None,
             tool: tool_use.name.clone(),
-            description: tool_detail(&tool_use.name, tool_use.input.as_ref()),
+            description,
+            command,
         })
     } else {
         Some(ChatItem::ToolInProgress {

@@ -60,6 +60,7 @@ pub(super) fn session(session_id: &str, pr_context: Option<SessionPrContext>) ->
         archived_at: None,
         pr_context,
         crit_urls: Vec::new(),
+        web_uis: Vec::new(),
         pending_human_review_ids: Default::default(),
         cwd: PathBuf::from("/workspace/example"),
         transcript_path: None,

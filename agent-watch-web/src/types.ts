@@ -78,6 +78,7 @@ export type Session = {
   ancestorSessionIds: string[]
   pullRequest: PullRequest | null
   critUrl?: string | null
+  webUis?: { name: string; url: string }[]
   reviewDocumentId?: string | null
   laterUntil?: string | null
   isToday?: boolean
@@ -179,6 +180,7 @@ export type ChatItem =
       title: string
       detail: string | null
       completed: boolean
+      resolution: 'completed' | 'rejected' | 'withdrawn' | null
       comment: string | null
     }
   | {
@@ -186,6 +188,7 @@ export type ChatItem =
       requestId?: string
       tool: string
       description: string
+      command?: string
     }
   | {
       type: 'permission_denied'
@@ -193,6 +196,7 @@ export type ChatItem =
       toolUseId?: string
       tool: string
       inputSummary: string
+      command?: string
       reason: string | null
       retryable: boolean
       resolved: boolean

@@ -189,6 +189,7 @@ mod tests {
             pr_context: None,
             session_id: "session-test".to_owned(),
             crit_urls: Vec::new(),
+            web_uis: Vec::new(),
             cwd: "/tmp/test".into(),
             transcript_path: None,
             tty: None,

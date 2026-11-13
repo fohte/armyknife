@@ -478,6 +478,7 @@ pub(super) mod test_support {
             archived_at: None,
             pr_context: None,
             crit_urls: Vec::new(),
+            web_uis: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/workspace/project"),
             transcript_path: None,

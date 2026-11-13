@@ -3,6 +3,7 @@ import '#components/permission-denied-card.css'
 import { Button } from '@fohte/ui/button'
 
 import type { PendingPermissionActionState } from '#components/permission-card'
+import { SyntaxCodeBlock } from '#components/syntax-code-block'
 import type { ChatItem } from '#types'
 
 type PermissionDeniedCardProps = {
@@ -25,7 +26,15 @@ export function PermissionDeniedCard({
     <article className="chat-permission-denied-card">
       <h2>{message.resolved ? 'Retry approved' : 'Operation denied'}</h2>
       <p className="permission-denied-tool">{message.tool}</p>
-      <pre className="permission-denied-input">{message.inputSummary}</pre>
+      {message.command === undefined ? (
+        <pre className="permission-denied-input">{message.inputSummary}</pre>
+      ) : (
+        <SyntaxCodeBlock
+          className="permission-denied-input"
+          code={message.command}
+          language="bash"
+        />
+      )}
       {message.reason === null ? null : (
         <p className="permission-denied-reason">{message.reason}</p>
       )}

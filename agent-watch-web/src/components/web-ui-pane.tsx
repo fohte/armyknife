@@ -1,32 +1,34 @@
-import '#components/crit-pane.css'
+import '#components/web-ui-pane.css'
 
 import { Button } from '@fohte/ui/button'
 import { useState } from 'react'
 
-import { critRelayUrl } from '#components/crit-relay-url'
+import { webUiRelayUrl } from '#components/web-ui-relay-url'
 
-type CritPaneProps = {
+type WebUiPaneProps = {
+  name: string
   url: string
   onClose: () => void
   defaultFullscreen?: boolean
 }
 
-export function CritPane({
+export function WebUiPane({
+  name,
   url,
   onClose,
   defaultFullscreen = false,
-}: CritPaneProps) {
+}: WebUiPaneProps) {
   const [isFullscreen, setIsFullscreen] = useState(defaultFullscreen)
-  const relayUrl = critRelayUrl(url)
+  const relayUrl = webUiRelayUrl(url)
 
   return (
     <aside
-      className={`crit-pane${isFullscreen ? ' is-fullscreen' : ''}`}
-      aria-label="crit"
-      id="crit-pane"
+      className={`web-ui-pane${isFullscreen ? ' is-fullscreen' : ''}`}
+      aria-label={name}
+      id="web-ui-pane"
     >
-      <header className="crit-pane-header">
-        <span className="crit-pane-title">crit</span>
+      <header className="web-ui-pane-header">
+        <span className="web-ui-pane-title">{name}</span>
         <a href={relayUrl} target="_blank" rel="noreferrer">
           {url}
         </a>
@@ -34,7 +36,7 @@ export function CritPane({
           type="button"
           variant="plain"
           aria-label={
-            isFullscreen ? 'Exit crit fullscreen' : 'Show crit fullscreen'
+            isFullscreen ? `Exit ${name} fullscreen` : `Show ${name} fullscreen`
           }
           aria-pressed={isFullscreen}
           onClick={() => {
@@ -46,13 +48,13 @@ export function CritPane({
         <Button
           type="button"
           variant="plain"
-          aria-label="Close crit"
+          aria-label={`Close ${name}`}
           onClick={onClose}
         >
           ×
         </Button>
       </header>
-      <iframe title="Crit review" src={relayUrl} />
+      <iframe title={`${name} web interface`} src={relayUrl} />
     </aside>
   )
 }

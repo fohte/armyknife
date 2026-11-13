@@ -402,6 +402,7 @@ mod tests {
             pr_context: None,
             session_id: session_id.to_string(),
             crit_urls: Vec::new(),
+            web_uis: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: cwd.to_path_buf(),
             transcript_path: None,
