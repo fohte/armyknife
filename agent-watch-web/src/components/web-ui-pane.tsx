@@ -1,34 +1,34 @@
-import '#components/crit-pane.css'
+import '#components/web-ui-pane.css'
 
 import { Button } from '@fohte/ui/button'
 import { useState } from 'react'
 
-import { webUiRelayUrl } from '#components/crit-relay-url'
+import { webUiRelayUrl } from '#components/web-ui-relay-url'
 
-type CritPaneProps = {
+type WebUiPaneProps = {
   name: string
   url: string
   onClose: () => void
   defaultFullscreen?: boolean
 }
 
-export function CritPane({
+export function WebUiPane({
   name,
   url,
   onClose,
   defaultFullscreen = false,
-}: CritPaneProps) {
+}: WebUiPaneProps) {
   const [isFullscreen, setIsFullscreen] = useState(defaultFullscreen)
   const relayUrl = webUiRelayUrl(url)
 
   return (
     <aside
-      className={`crit-pane${isFullscreen ? ' is-fullscreen' : ''}`}
+      className={`web-ui-pane${isFullscreen ? ' is-fullscreen' : ''}`}
       aria-label={name}
-      id="crit-pane"
+      id="web-ui-pane"
     >
-      <header className="crit-pane-header">
-        <span className="crit-pane-title">{name}</span>
+      <header className="web-ui-pane-header">
+        <span className="web-ui-pane-title">{name}</span>
         <a href={relayUrl} target="_blank" rel="noreferrer">
           {url}
         </a>

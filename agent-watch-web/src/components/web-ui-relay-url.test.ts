@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest'
 
-import { webUiRelayUrl } from '#components/crit-relay-url'
+import { webUiRelayUrl } from '#components/web-ui-relay-url'
 
 it('uses the tailnet relay origin and preserves the web UI path, query, and fragment', () => {
   expect(

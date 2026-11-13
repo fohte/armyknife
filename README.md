@@ -689,7 +689,12 @@ To refer to it in another session or task, describe its contents; this sequence 
 
 Tracked, hook-processed Claude Code sessions receive the instruction on `SessionStart` to record choices that are cheap to reverse and continue working. They should stop and ask about choices that are hard to reverse. Internal and headless invocations do not receive this instruction.
 
-`a agent web-ui add <url> --name <name>` registers a named local HTTP interface with the calling session. The URL must use `localhost` or `127.0.0.1` and include an explicit port. Registered interfaces appear in the watch-web conversation's right panel and share the same HTTP and WebSocket relay. Ports without a registered URL are rejected. Run the command from the session that owns the interface.
+`a agent web-ui add <url> --name <name>` registers a named local HTTP interface with the calling session. The URL must use `localhost` or `127.0.0.1` and include an explicit port. Registered interfaces appear in the watch-web conversation's right panel and share the same HTTP and WebSocket relay. Ports without a registered URL are rejected. Run the command from the session that owns the interface:
+
+```console
+$ a agent web-ui add http://127.0.0.1:48761/design/sample/ --name "Design editor"
+Recorded web UI 'Design editor'
+```
 
 [`crit`](https://github.com/tomasz-tomczyk/crit) review URLs passed to `a agent crit add <url>` must include an explicit port. The command records crit through the same web UI registration path, labels it `crit`, and keeps the existing notification, queue, and lifecycle-monitor behavior. When a tracked session is available, the command associates the URL with that session and sends a desktop notification. Its lifecycle monitor needs `crit` on `PATH`; without it, automatic cleanup is unavailable. If no tracked session ID is available, the command opens a review pane in the current tmux pane when `TMUX_PANE` is set; otherwise, macOS opens the URL with `open` and other platforms use `xdg-open`.
 

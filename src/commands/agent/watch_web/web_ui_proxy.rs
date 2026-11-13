@@ -39,40 +39,42 @@ const FORWARDED_RESPONSE_HEADERS: [HeaderName; 8] = [
     HeaderName::from_static("last-modified"),
     HeaderName::from_static("retry-after"),
 ];
-const FORWARDED_WEBSOCKET_HEADERS: [HeaderName; 1] = [HeaderName::from_static("origin")];
+const WEBSOCKET_PROTOCOL_HEADER: HeaderName = HeaderName::from_static("sec-websocket-protocol");
+const FORWARDED_WEBSOCKET_HEADERS: [HeaderName; 2] =
+    [HeaderName::from_static("origin"), WEBSOCKET_PROTOCOL_HEADER];
 
 #[derive(Clone)]
-struct CritProxyState<T> {
+struct WebUiProxyState<T> {
     load_recorded_urls: Arc<dyn Fn() -> anyhow::Result<Vec<String>> + Send + Sync>,
     client: T,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct UpstreamRequest {
+pub(super) struct WebUiRequest {
     method: Method,
     url: String,
     headers: HeaderMap,
     body: Bytes,
 }
 
-pub(super) struct UpstreamResponse {
+pub(super) struct WebUiResponse {
     status: StatusCode,
     headers: HeaderMap,
     body: Body,
 }
 
-pub(super) trait CritTransport: Clone + Send + Sync + 'static {
+pub(super) trait WebUiTransport: Clone + Send + Sync + 'static {
     fn send(
         &self,
-        request: UpstreamRequest,
-    ) -> impl Future<Output = anyhow::Result<UpstreamResponse>> + Send;
+        request: WebUiRequest,
+    ) -> impl Future<Output = anyhow::Result<WebUiResponse>> + Send;
 }
 
-impl CritTransport for Client {
+impl WebUiTransport for Client {
     fn send(
         &self,
-        request: UpstreamRequest,
-    ) -> impl Future<Output = anyhow::Result<UpstreamResponse>> + Send {
+        request: WebUiRequest,
+    ) -> impl Future<Output = anyhow::Result<WebUiResponse>> + Send {
         let client = self.clone();
         async move {
             let mut upstream_request = client
@@ -90,7 +92,7 @@ impl CritTransport for Client {
                     headers.append(header.clone(), value.clone());
                 }
             }
-            Ok(UpstreamResponse {
+            Ok(WebUiResponse {
                 status,
                 headers,
                 body: Body::from_stream(response.bytes_stream()),
@@ -99,7 +101,7 @@ impl CritTransport for Client {
     }
 }
 
-pub(super) fn router<T: CritTransport>(
+pub(super) fn router<T: WebUiTransport>(
     load_sessions: impl Fn() -> anyhow::Result<Vec<Session>> + Send + Sync + 'static,
     client: T,
 ) -> Router {
@@ -121,11 +123,11 @@ pub(super) fn router<T: CritTransport>(
     )
 }
 
-fn router_with_url_loader<T: CritTransport>(
+fn router_with_url_loader<T: WebUiTransport>(
     load_recorded_urls: impl Fn() -> anyhow::Result<Vec<String>> + Send + Sync + 'static,
     client: T,
 ) -> Router {
-    let state = CritProxyState {
+    let state = WebUiProxyState {
         load_recorded_urls: Arc::new(load_recorded_urls),
         client,
     };
@@ -145,8 +147,8 @@ fn recorded_web_ui_port(url: &str) -> Option<u16> {
     super::super::web_ui::local_web_ui_port(url).ok()
 }
 
-async fn recorded_ports<T: CritTransport>(
-    state: &CritProxyState<T>,
+async fn recorded_ports<T: WebUiTransport>(
+    state: &WebUiProxyState<T>,
 ) -> Result<Vec<u16>, StatusCode> {
     let load_recorded_urls = state.load_recorded_urls.clone();
     tokio::task::spawn_blocking(move || {
@@ -167,8 +169,8 @@ async fn recorded_ports<T: CritTransport>(
     })
 }
 
-async fn select_web_ui<T: CritTransport>(
-    State(state): State<CritProxyState<T>>,
+async fn select_web_ui<T: WebUiTransport>(
+    State(state): State<WebUiProxyState<T>>,
     request: Request,
 ) -> Response {
     let Some(port) = request
@@ -229,8 +231,8 @@ fn selection_target(uri: &Uri, port: u16) -> Option<String> {
     }
 }
 
-async fn proxy_request<T: CritTransport>(
-    State(state): State<CritProxyState<T>>,
+async fn proxy_request<T: WebUiTransport>(
+    State(state): State<WebUiProxyState<T>>,
     request: Request,
 ) -> Response {
     let Some(port) = request
@@ -261,13 +263,24 @@ async fn proxy_request<T: CritTransport>(
                 return StatusCode::BAD_REQUEST.into_response();
             }
         };
-        return websocket.on_upgrade(move |client_socket| async move {
-            match tokio_tungstenite::connect_async(upstream_request).await {
-                Ok((upstream, _)) => relay_websocket(client_socket, upstream).await,
-                Err(error) => {
-                    tracing::warn!(%error, port, "web UI WebSocket connection failed");
-                }
+        let (upstream, response) = match tokio_tungstenite::connect_async(upstream_request).await {
+            Ok(connection) => connection,
+            Err(error) => {
+                tracing::warn!(%error, port, "web UI WebSocket connection failed");
+                return StatusCode::BAD_GATEWAY.into_response();
             }
+        };
+        let websocket = if let Some(protocol) = response
+            .headers()
+            .get("sec-websocket-protocol")
+            .and_then(|protocol| protocol.to_str().ok())
+        {
+            websocket.protocols([protocol.to_owned()])
+        } else {
+            websocket
+        };
+        return websocket.on_upgrade(move |client_socket| async move {
+            relay_websocket(port, client_socket, upstream).await;
         });
     }
 
@@ -290,7 +303,7 @@ async fn proxy_request<T: CritTransport>(
 
     let upstream_response = match state
         .client
-        .send(UpstreamRequest {
+        .send(WebUiRequest {
             method: parts.method,
             url: upstream_url,
             headers,
@@ -347,6 +360,7 @@ fn websocket_request(
 }
 
 async fn relay_websocket(
+    port: u16,
     mut client: WebSocket,
     mut upstream: tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
@@ -363,7 +377,7 @@ async fn relay_websocket(
                         }
                     }
                     Some(Err(error)) => {
-                        tracing::debug!(%error, "web UI client WebSocket closed with an error");
+                        tracing::warn!(%error, port, "web UI client WebSocket closed with an error");
                         return;
                     }
                     None => return,
@@ -383,7 +397,7 @@ async fn relay_websocket(
                         }
                     }
                     Some(Err(error)) => {
-                        tracing::debug!(%error, "web UI upstream WebSocket closed with an error");
+                        tracing::warn!(%error, port, "web UI upstream WebSocket closed with an error");
                         return;
                     }
                     None => return,
@@ -428,14 +442,16 @@ fn to_client_message(message: UpstreamMessage) -> Option<ClientMessage> {
 mod tests {
     use std::convert::Infallible;
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use axum::Router;
     use axum::body::{Body, Bytes, to_bytes};
+    use axum::extract::State;
     use axum::extract::ws::{Message as ServerMessage, WebSocketUpgrade};
     use axum::http::header::{
         ACCEPT, CACHE_CONTROL, CONTENT_TYPE, COOKIE, HOST, LOCATION, ORIGIN, SET_COOKIE,
     };
-    use axum::http::{HeaderMap, Method, Request, StatusCode};
+    use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode};
     use axum::response::Response;
     use axum::routing::any;
     use futures_util::stream;
@@ -445,19 +461,22 @@ mod tests {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     use tower::ServiceExt;
 
-    use super::{CritTransport, UpstreamRequest, UpstreamResponse, router_with_url_loader};
+    use super::{
+        WEBSOCKET_PROTOCOL_HEADER, WebUiRequest, WebUiResponse, WebUiTransport,
+        router_with_url_loader,
+    };
 
     #[derive(Clone)]
     struct FakeTransport {
-        sent_request: Arc<Mutex<Option<UpstreamRequest>>>,
+        sent_request: Arc<Mutex<Option<WebUiRequest>>>,
         response_body: Arc<Mutex<Option<Body>>>,
     }
 
-    impl CritTransport for FakeTransport {
+    impl WebUiTransport for FakeTransport {
         fn send(
             &self,
-            request: UpstreamRequest,
-        ) -> impl std::future::Future<Output = anyhow::Result<UpstreamResponse>> + Send {
+            request: WebUiRequest,
+        ) -> impl std::future::Future<Output = anyhow::Result<WebUiResponse>> + Send {
             let sent_request = self.sent_request.clone();
             let response_body = self.response_body.clone();
             async move {
@@ -466,7 +485,7 @@ mod tests {
                 let mut headers = axum::http::HeaderMap::new();
                 headers.insert(CONTENT_TYPE, "text/event-stream".parse().unwrap());
                 headers.insert(CACHE_CONTROL, "no-cache".parse().unwrap());
-                Ok(UpstreamResponse {
+                Ok(WebUiResponse {
                     status: StatusCode::OK,
                     headers,
                     body,
@@ -475,7 +494,7 @@ mod tests {
         }
     }
 
-    fn fake_transport() -> (FakeTransport, Arc<Mutex<Option<UpstreamRequest>>>) {
+    fn fake_transport() -> (FakeTransport, Arc<Mutex<Option<WebUiRequest>>>) {
         let sent_request = Arc::new(Mutex::new(None));
         let response_body = Body::from_stream(stream::iter([
             Ok::<_, Infallible>(Bytes::from_static(
@@ -501,8 +520,24 @@ mod tests {
         )
     }
 
-    async fn websocket_echo(ws: WebSocketUpgrade) -> Response {
-        ws.on_upgrade(|mut socket| async move {
+    type ObservedWebSocketHeaders = Arc<Mutex<Option<(Option<String>, Option<String>)>>>;
+
+    async fn websocket_echo(
+        State(observed_headers): State<ObservedWebSocketHeaders>,
+        headers: HeaderMap,
+        ws: WebSocketUpgrade,
+    ) -> Response {
+        *observed_headers.lock().unwrap() = Some((
+            headers
+                .get(ORIGIN)
+                .and_then(|header| header.to_str().ok())
+                .map(str::to_owned),
+            headers
+                .get("sec-websocket-protocol")
+                .and_then(|header| header.to_str().ok())
+                .map(str::to_owned),
+        ));
+        ws.protocols(["chat"]).on_upgrade(|mut socket| async move {
             if let Some(Ok(ServerMessage::Text(message))) = socket.recv().await {
                 let _ = socket
                     .send(ServerMessage::Text(format!("reply:{message}").into()))
@@ -517,12 +552,18 @@ mod tests {
             .await
             .unwrap();
         let upstream_port = upstream_listener.local_addr().unwrap().port();
-        let upstream_server = tokio::spawn(async move {
-            axum::serve(
-                upstream_listener,
-                Router::new().route("/socket", any(websocket_echo)),
-            )
-            .await
+        let observed_headers = Arc::new(Mutex::new(None));
+        let upstream_server = tokio::spawn({
+            let observed_headers = observed_headers.clone();
+            async move {
+                axum::serve(
+                    upstream_listener,
+                    Router::new()
+                        .route("/socket", any(websocket_echo))
+                        .with_state(observed_headers),
+                )
+                .await
+            }
         });
         let relay_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
@@ -545,21 +586,94 @@ mod tests {
                 .parse()
                 .unwrap(),
         );
-        let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
-        socket
-            .send(tokio_tungstenite::tungstenite::Message::Text(
-                "from-client".into(),
-            ))
-            .await
-            .unwrap();
-        let response = socket.next().await.unwrap().unwrap();
+        request
+            .headers_mut()
+            .insert(ORIGIN, "http://relay.example.test:4318".parse().unwrap());
+        request.headers_mut().insert(
+            WEBSOCKET_PROTOCOL_HEADER.clone(),
+            "chat, superchat".parse().unwrap(),
+        );
+        let actual = tokio::time::timeout(Duration::from_secs(3), async {
+            let (mut socket, handshake) = tokio_tungstenite::connect_async(request).await.unwrap();
+            socket
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    "from-client".into(),
+                ))
+                .await
+                .unwrap();
+            let response = socket.next().await.unwrap().unwrap();
+            (
+                handshake.headers().get(&WEBSOCKET_PROTOCOL_HEADER).cloned(),
+                response,
+                observed_headers.lock().unwrap().clone(),
+            )
+        })
+        .await
+        .ok();
 
         assert_eq!(
-            response,
-            tokio_tungstenite::tungstenite::Message::Text("reply:from-client".into()),
+            actual,
+            Some((
+                Some(HeaderValue::from_static("chat")),
+                tokio_tungstenite::tungstenite::Message::Text("reply:from-client".into()),
+                Some((
+                    Some("http://relay.example.test:4318".to_owned()),
+                    Some("chat, superchat".to_owned()),
+                )),
+            )),
         );
         relay_server.abort();
         upstream_server.abort();
+    }
+
+    #[tokio::test]
+    async fn websocket_upstream_handshake_failures_return_gateway_error() {
+        let upstream_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let upstream_port = upstream_listener.local_addr().unwrap().port();
+        drop(upstream_listener);
+        let relay_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let relay_port = relay_listener.local_addr().unwrap().port();
+        let relay_server = tokio::spawn(async move {
+            axum::serve(
+                relay_listener,
+                router_with_url_loader(
+                    move || {
+                        Ok(vec![format!(
+                            "http://127.0.0.1:{upstream_port}/design/sample/"
+                        )])
+                    },
+                    fake_transport().0,
+                ),
+            )
+            .await
+        });
+        let mut request = format!("ws://127.0.0.1:{relay_port}/socket")
+            .into_client_request()
+            .unwrap();
+        request.headers_mut().insert(
+            COOKIE,
+            format!("armyknife_web_ui_port={upstream_port}")
+                .parse()
+                .unwrap(),
+        );
+        let actual_status = tokio::time::timeout(
+            Duration::from_secs(3),
+            tokio_tungstenite::connect_async(request),
+        )
+        .await
+        .ok()
+        .and_then(Result::err)
+        .and_then(|error| match error {
+            tokio_tungstenite::tungstenite::Error::Http(response) => Some(response.status()),
+            _ => None,
+        });
+
+        assert_eq!(actual_status, Some(StatusCode::BAD_GATEWAY));
+        relay_server.abort();
     }
 
     #[rstest]
@@ -787,7 +901,7 @@ mod tests {
                 response_body,
             ),
             (
-                UpstreamRequest {
+                WebUiRequest {
                     method: Method::POST,
                     url: "http://127.0.0.1:48761/api/comments?review=main".into(),
                     headers: expected_request_headers,
@@ -842,7 +956,7 @@ mod tests {
             (response_status, sent_request),
             (
                 StatusCode::OK,
-                Some(UpstreamRequest {
+                Some(WebUiRequest {
                     method: Method::POST,
                     url: "http://127.0.0.1:48761/api/attachments".into(),
                     headers: expected_request_headers,

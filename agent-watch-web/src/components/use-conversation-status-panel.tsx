@@ -5,7 +5,6 @@ import {
   type ReviewDocumentResponse,
 } from '#components/conversation-pane-response'
 import { requestJson } from '#components/conversation-requests'
-import { CritPane } from '#components/crit-pane'
 import type { Decision } from '#components/decision-card'
 import { DecisionsPanel } from '#components/decisions-panel'
 import { PullRequestListPanel } from '#components/pull-request-list-panel'
@@ -14,6 +13,7 @@ import { RunningTasksPanel } from '#components/running-tasks-panel'
 import type { SessionStatusPanelTab } from '#components/session-status-panel'
 import { SessionTreePanel } from '#components/session-tree-panel'
 import { useSessionPullRequests } from '#components/use-session-pull-requests'
+import { WebUiPane } from '#components/web-ui-pane'
 import {
   needsActionDescendantCount,
   type SessionTreeViewState,
@@ -311,7 +311,7 @@ export function useConversationStatusPanel({
       label: webUi.name,
       count: 1,
       content: (
-        <CritPane
+        <WebUiPane
           name={webUi.name}
           url={webUi.url}
           onClose={onCloseStatusPanel}

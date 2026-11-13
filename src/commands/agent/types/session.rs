@@ -76,7 +76,7 @@ pub struct Session {
     /// Crit review URLs opened by this session, ordered by most recently requested.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub crit_urls: Vec<String>,
-    /// Named local web interfaces opened by this session.
+    /// Named local web interfaces registered with this session.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub web_uis: Vec<WebUiRegistration>,
     /// IDs of Human-in-the-Loop reviews currently waiting for the user.

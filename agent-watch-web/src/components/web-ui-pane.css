@@ -1,4 +1,4 @@
-.crit-pane {
+.web-ui-pane {
   display: flex;
   min-width: 300px;
   min-height: 0;
@@ -7,7 +7,7 @@
   border-left: 1px solid var(--aw-border-row);
   background: var(--aw-bg-nav);
 }
-.crit-pane.is-fullscreen {
+.web-ui-pane.is-fullscreen {
   position: fixed;
   z-index: 100;
   inset: 0;
@@ -17,7 +17,7 @@
   min-width: 0;
 }
 
-.crit-pane-header {
+.web-ui-pane-header {
   display: flex;
   min-height: 56px;
   flex: 0 0 56px;
@@ -28,12 +28,12 @@
   background: var(--aw-bg-surface);
 }
 
-.crit-pane-title {
+.web-ui-pane-title {
   color: var(--aw-text-primary);
   font-weight: 700;
 }
 
-.crit-pane-header a {
+.web-ui-pane-header a {
   overflow: hidden;
   flex: 1;
   color: var(--aw-text-muted);
@@ -43,7 +43,7 @@
   white-space: nowrap;
 }
 
-.crit-pane-header [data-slot='button'] {
+.web-ui-pane-header [data-slot='button'] {
   min-width: 28px;
   min-height: 28px;
   padding: 0 7px;
@@ -51,11 +51,11 @@
   font-size: 16px;
 }
 
-.crit-pane-header [data-slot='button'][aria-label*='fullscreen'] {
+.web-ui-pane-header [data-slot='button'][aria-label*='fullscreen'] {
   font-size: 14px;
 }
 
-.crit-pane iframe {
+.web-ui-pane iframe {
   width: 100%;
   min-height: 0;
   flex: 1;

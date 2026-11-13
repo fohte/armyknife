@@ -4358,7 +4358,7 @@ it('opens a registered web UI when other status tabs are available', () => {
     })),
     selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
       ?.textContent,
-    webUiPane: container.querySelector('.crit-pane') !== null,
+    webUiPane: container.querySelector('.web-ui-pane') !== null,
     iframe: container.querySelector('iframe')?.getAttribute('src'),
   })
   expect(snapshot()).toEqual({
