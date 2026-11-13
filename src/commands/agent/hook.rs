@@ -1477,13 +1477,14 @@ fn determine_status(event: HookEvent, input: &HookInput) -> Option<SessionStatus
         HookEvent::SessionStart if input.source.as_deref() == Some("resume") => {
             Some(SessionStatus::Stopped)
         }
+        HookEvent::SessionStart if input.source.as_deref() == Some("compact") => None,
         HookEvent::PostModelSwitch => None,
         HookEvent::SessionStart
-        | HookEvent::PreCompact
         | HookEvent::UserPromptSubmit
         | HookEvent::PreToolUse
         | HookEvent::PostToolUse
         | HookEvent::SessionEnd => Some(SessionStatus::Running),
+        HookEvent::PreCompact => None,
     };
 
     // A subagent's hook reports its own activity, not whether the main thread
@@ -1991,12 +1992,8 @@ mod tests {
         Some("clear"),
         Some(SessionStatus::Running)
     )]
-    #[case::session_start_compact(
-        HookEvent::SessionStart,
-        None,
-        Some("compact"),
-        Some(SessionStatus::Running)
-    )]
+    #[case::session_start_compact(HookEvent::SessionStart, None, Some("compact"), None)]
+    #[case::pre_compact(HookEvent::PreCompact, None, None, None)]
     #[case::user_prompt_submit(
         HookEvent::UserPromptSubmit,
         None,
@@ -2252,6 +2249,93 @@ mod tests {
                 .first()
                 .map(|state| state.is_compacting),
             Some(false),
+        );
+    }
+
+    #[test]
+    fn idle_compaction_preserves_stopped_session_status() {
+        let temp_dir = tempfile::TempDir::new().expect("temporary directory should be created");
+        let sessions_dir = temp_dir.path();
+        save_test_session(sessions_dir, "idle-compaction-session", |session| {
+            session.status = SessionStatus::Stopped;
+        });
+
+        let mut observed_statuses = Vec::new();
+        process_hook_event_without_instruction(
+            HookEvent::PreCompact,
+            create_test_input_with_session_and_source("idle-compaction-session", None, None),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("pre-compact hook should succeed");
+        observed_statuses.push(
+            store::load_session_from(sessions_dir, "idle-compaction-session")
+                .expect("session should load")
+                .expect("session should exist")
+                .status,
+        );
+
+        process_hook_event_without_instruction(
+            HookEvent::SessionStart,
+            create_test_input_with_session_and_source(
+                "idle-compaction-session",
+                None,
+                Some("compact"),
+            ),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("compaction SessionStart hook should succeed");
+        observed_statuses.push(
+            store::load_session_from(sessions_dir, "idle-compaction-session")
+                .expect("session should load")
+                .expect("session should exist")
+                .status,
+        );
+
+        assert_eq!(
+            observed_statuses,
+            vec![SessionStatus::Stopped, SessionStatus::Stopped],
+        );
+    }
+
+    #[test]
+    fn turn_compaction_stops_after_the_turn_finishes() {
+        let temp_dir = tempfile::TempDir::new().expect("temporary directory should be created");
+        let sessions_dir = temp_dir.path();
+        save_test_session(sessions_dir, "turn-compaction-session", |session| {
+            session.status = SessionStatus::Running;
+        });
+
+        let mut observed_statuses = Vec::new();
+        for event in [
+            HookEvent::PreCompact,
+            HookEvent::SessionStart,
+            HookEvent::Stop,
+        ] {
+            let source = (event == HookEvent::SessionStart).then_some("compact");
+            process_hook_event_without_instruction(
+                event,
+                create_test_input_with_session_and_source("turn-compaction-session", None, source),
+                sessions_dir,
+                &SideEffects::none(),
+            )
+            .expect("compaction lifecycle hook should succeed");
+            observed_statuses.push(
+                store::load_session_from(sessions_dir, "turn-compaction-session")
+                    .expect("session should load")
+                    .expect("session should exist")
+                    .status,
+            );
+        }
+
+        assert_eq!(
+            observed_statuses,
+            vec![
+                SessionStatus::Running,
+                SessionStatus::Running,
+                SessionStatus::Stopped,
+            ],
         );
     }
 
