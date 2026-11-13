@@ -1,3 +1,4 @@
+import type { Result } from 'neverthrow'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -5,12 +6,42 @@ import { userEvent } from 'vitest/browser'
 
 import { MarkdownMessage } from '#components/markdown-message'
 import { PeerMessage } from '#components/peer-message'
+import type {
+  SessionOperation,
+  SessionOperationError,
+} from '#session-operations'
+import { submitSessionOperation } from '#session-operations'
 import type { Session } from '#types'
+
+const { runSessionOperationMock } = vi.hoisted(() => ({
+  runSessionOperationMock:
+    vi.fn<
+      (
+        operation: SessionOperation,
+      ) => Promise<Result<unknown, SessionOperationError>>
+    >(),
+}))
+
+vi.mock('#session-operation-context', async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import('#session-operation-context')>()
+  return {
+    ...original,
+    useSessionOperations: () => ({
+      ...original.useSessionOperations(),
+      run: runSessionOperationMock,
+    }),
+  }
+})
 
 let container: HTMLDivElement
 let root: Root | null = null
 
 beforeEach(() => {
+  runSessionOperationMock.mockReset()
+  runSessionOperationMock.mockImplementation(async (operation) => {
+    return await submitSessionOperation(operation)
+  })
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
   document.body.append(container)
@@ -428,6 +459,9 @@ it('confirms the cwd before execution and shows the returned status', async () =
     disabledWhileRunning,
     refreshCalls: onCommandExecuted.mock.calls.length,
     requests,
+    operations: runSessionOperationMock.mock.calls.map(
+      ([operation]) => operation,
+    ),
   })
   expect(getSnapshot()).toEqual({
     confirmation: {
@@ -452,6 +486,20 @@ it('confirms the cwd before execution and shows the returned status', async () =
           messageText: 'Run `! printf safe`.',
           commands: ['printf safe'],
         },
+      },
+    ],
+    operations: [
+      {
+        type: 'command_preview',
+        sessionId: 'sample-session',
+        messageText: 'Run `! printf safe`.',
+        commands: ['printf safe'],
+      },
+      {
+        type: 'command_execute',
+        sessionId: 'sample-session',
+        messageText: 'Run `! printf safe`.',
+        commands: ['printf safe'],
       },
     ],
   })
