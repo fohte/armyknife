@@ -414,13 +414,6 @@ pub(crate) fn add_agent_proposal_in(
     database::add_agent_proposal(sessions_dir, session_id, body)
 }
 
-pub(crate) fn close_unanswered_agent_proposals(
-    sessions_dir: &Path,
-    session_id: &str,
-) -> Result<bool> {
-    database::close_unanswered_agent_proposals(sessions_dir, session_id)
-}
-
 pub(crate) fn unanswered_agent_proposal_bodies(
     session_ids: &[String],
 ) -> Result<Vec<(String, String)>> {

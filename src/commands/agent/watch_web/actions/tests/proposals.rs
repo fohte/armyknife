@@ -64,6 +64,80 @@ async fn chosen_option_is_notified_before_the_answer_is_stored(action_context: A
 }
 
 #[rstest]
+#[tokio::test]
+async fn consecutive_proposals_remain_individually_answerable(action_context: ActionContext) {
+    action_context.save_session(&session("sample-session"));
+    add_proposal(&action_context, "sample-session");
+    add_proposal(&action_context, "sample-session");
+
+    let first_response = action_context
+        .router()
+        .oneshot(post(
+            "/sessions/sample-session/proposals/1/answer",
+            json!({ "choice": 0, "comment": null }),
+        ))
+        .await
+        .unwrap();
+    let first_snapshot = response_snapshot(first_response, &action_context).await;
+    let second_response = action_context
+        .router()
+        .oneshot(post(
+            "/sessions/sample-session/proposals/2/answer",
+            json!({ "choice": 1, "comment": null }),
+        ))
+        .await
+        .unwrap();
+    let second_snapshot = response_snapshot(second_response, &action_context).await;
+    let proposals = store::agent_proposals_from(
+        &action_context.temp_dir.path().join("sessions"),
+        "sample-session",
+    )
+    .unwrap();
+
+    assert_eq!(
+        (
+            first_snapshot,
+            second_snapshot,
+            proposals
+                .iter()
+                .map(|proposal| (proposal.answer.clone(), proposal.resolved_at.is_some()))
+                .collect::<Vec<_>>(),
+        ),
+        (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "message",
+                    "sessionId": "sample-session",
+                    "content": "Proposal 1 \"Pick a format\": chose A (Format A).",
+                }],
+            }),
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [
+                    {
+                        "kind": "message",
+                        "sessionId": "sample-session",
+                        "content": "Proposal 1 \"Pick a format\": chose A (Format A).",
+                    },
+                    {
+                        "kind": "message",
+                        "sessionId": "sample-session",
+                        "content": "Proposal 2 \"Pick a format\": chose B (Format B).",
+                    },
+                ],
+            }),
+            vec![
+                (Some(r#"{"choice":0,"comment":null}"#.to_string()), true),
+                (Some(r#"{"choice":1,"comment":null}"#.to_string()), true),
+            ],
+        ),
+    );
+}
+
+#[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 async fn concurrent_answers_notify_the_agent_only_once(action_context: ActionContext) {
     action_context.save_session(&session("sample-session"));
@@ -200,28 +274,31 @@ async fn proposal_answers_use_a_marker_only_for_claude(
 }
 
 #[rstest]
-#[case::ended_session(0, false, true, StatusCode::CONFLICT, "session has ended")]
-#[case::resolved_proposal(
+#[case::ended_session(0, None, true, StatusCode::CONFLICT, "session has ended", None)]
+#[case::answered_proposal(
     1,
-    true,
+    Some(r#"{"choice":0,"comment":null}"#),
     false,
     StatusCode::CONFLICT,
-    "proposal is not awaiting an answer"
+    "proposal is not awaiting an answer",
+    Some(r#"{"choice":0,"comment":null}"#)
 )]
 #[case::choice_outside_options(
     2,
-    false,
+    None,
     false,
     StatusCode::BAD_REQUEST,
-    "choice is outside the proposal options"
+    "choice is outside the proposal options",
+    None
 )]
 #[tokio::test]
 async fn unavailable_or_invalid_proposal_answers_are_rejected(
     #[case] choice: usize,
-    #[case] resolve_first: bool,
+    #[case] initial_answer: Option<&str>,
     #[case] session_ended: bool,
     #[case] expected_status: StatusCode,
     #[case] expected_error: &str,
+    #[case] expected_answer: Option<&str>,
     action_context: ActionContext,
 ) {
     let mut session = session("sample-session");
@@ -231,8 +308,9 @@ async fn unavailable_or_invalid_proposal_answers_are_rejected(
     action_context.save_session(&session);
     add_proposal(&action_context, "sample-session");
     let sessions_dir = action_context.temp_dir.path().join("sessions");
-    if resolve_first {
-        store::close_unanswered_agent_proposals(&sessions_dir, "sample-session").unwrap();
+    if let Some(answer) = initial_answer {
+        store::write_agent_proposal_answer_from(&sessions_dir, "sample-session", 1, answer)
+            .unwrap();
     }
 
     let response = action_context
@@ -256,7 +334,7 @@ async fn unavailable_or_invalid_proposal_answers_are_rejected(
                 "body": { "error": expected_error },
                 "calls": [],
             }),
-            None,
+            expected_answer.map(str::to_string),
         ),
     );
 }
@@ -339,53 +417,5 @@ async fn save_failure_after_peer_notification_reports_the_partial_send(
                 "content": "Proposal 1 \"Pick a format\": chose A (Format A).",
             }],
         }),
-    );
-}
-
-#[rstest]
-#[tokio::test]
-async fn proposal_resolved_during_delivery_keeps_the_delivered_answer(
-    action_context: ActionContext,
-) {
-    action_context.save_session(&session("sample-session"));
-    add_proposal(&action_context, "sample-session");
-    let sessions_dir = action_context.temp_dir.path().join("sessions");
-    action_context.set_after_message(move || {
-        store::close_unanswered_agent_proposals(&sessions_dir, "sample-session").unwrap();
-    });
-
-    let response = action_context
-        .router()
-        .oneshot(post(
-            "/sessions/sample-session/proposals/1/answer",
-            json!({ "choice": 0, "comment": null }),
-        ))
-        .await
-        .unwrap();
-    let proposals = store::agent_proposals_from(
-        &action_context.temp_dir.path().join("sessions"),
-        "sample-session",
-    )
-    .unwrap();
-
-    assert_eq!(
-        (
-            response_snapshot(response, &action_context).await,
-            proposals[0].answer.clone(),
-            proposals[0].resolved_at.is_some(),
-        ),
-        (
-            json!({
-                "status": StatusCode::OK.as_u16(),
-                "body": { "ok": true },
-                "calls": [{
-                    "kind": "message",
-                    "sessionId": "sample-session",
-                    "content": "Proposal 1 \"Pick a format\": chose A (Format A).",
-                }],
-            }),
-            Some(r#"{"choice":0,"comment":null}"#.to_string()),
-            true,
-        ),
     );
 }
