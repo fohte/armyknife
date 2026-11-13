@@ -50,6 +50,18 @@ export const WaitingForDecision: Story = {
   name: 'A permission request offers approval and rejection',
 }
 
+export const FileReadShowsDescription: Story = {
+  name: 'A file-read request shows its description',
+  args: {
+    message: {
+      type: 'permission',
+      requestId: 'permission-request-read-example',
+      tool: 'Read',
+      description: 'The assistant wants to inspect a sample file.',
+    },
+  },
+}
+
 export const ApprovalIsSending: Story = {
   name: 'The approval button shows that the request is being sent',
   args: {

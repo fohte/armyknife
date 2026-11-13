@@ -27,14 +27,9 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it('highlights a multiline Bash permission without overflowing its card', async () => {
-  const message: Extract<ChatItem, { type: 'permission' }> = {
-    type: 'permission',
-    requestId: 'permission-request-example',
-    tool: 'Bash',
-    description: '',
-    command,
-  }
+function renderPermissionCard(
+  message: Extract<ChatItem, { type: 'permission' }>,
+) {
   root = createRoot(container)
   act(() => {
     root?.render(
@@ -49,6 +44,17 @@ it('highlights a multiline Bash permission without overflowing its card', async 
       />,
     )
   })
+}
+
+it('highlights a multiline Bash permission without overflowing its card', async () => {
+  const message: Extract<ChatItem, { type: 'permission' }> = {
+    type: 'permission',
+    requestId: 'permission-request-example',
+    tool: 'Bash',
+    description: '',
+    command,
+  }
+  renderPermissionCard(message)
 
   const snapshot = () => {
     const card = container.querySelector('article')
@@ -79,5 +85,29 @@ it('highlights a multiline Bash permission without overflowing its card', async 
     hasColoredToken: true,
     cardOverflows: false,
     description: null,
+  })
+})
+
+it('shows the description for a non-Bash permission', () => {
+  const message: Extract<ChatItem, { type: 'permission' }> = {
+    type: 'permission',
+    requestId: 'permission-request-example',
+    tool: 'Read',
+    description: 'The assistant wants to inspect a sample file.',
+  }
+  renderPermissionCard(message)
+
+  const snapshot = () => ({
+    tool: container.querySelector('.permission-tool')?.textContent ?? null,
+    description:
+      container.querySelector('article > p:not(.permission-tool)')
+        ?.textContent ?? null,
+    commandBlock: container.querySelector('.permission-command'),
+  })
+
+  expect(snapshot()).toEqual({
+    tool: 'Read',
+    description: 'The assistant wants to inspect a sample file.',
+    commandBlock: null,
   })
 })

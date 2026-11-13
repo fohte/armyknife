@@ -51,6 +51,15 @@ export async function highlightCode(code: string, language: string) {
     themes: [import('shiki/themes/github-dark.mjs')],
     langs: [],
     engine: createJavaScriptRegexEngine(),
+  }).catch((error: unknown) => {
+    highlighterPromise = null
+    return Promise.reject(
+      error instanceof Error
+        ? error
+        : new Error('Failed to initialize the syntax highlighter.', {
+            cause: error,
+          }),
+    )
   })
   const highlighter = await highlighterPromise
 

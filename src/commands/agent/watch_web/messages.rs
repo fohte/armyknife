@@ -394,17 +394,36 @@ fn load_conversation_with_queued_prompts(
             .iter()
             .any(|message| matches!(message, ChatItem::Permission { .. }))
     {
+        let command = main_permission_data.as_ref().and_then(|data| {
+            permission_request_command(data.tool_name.as_deref(), Some(&data.tool_input))
+        });
+        let tool = main_permission_data
+            .as_ref()
+            .and_then(|data| {
+                if data.tool_name.as_deref() == Some("Bash") {
+                    data.tool_name.clone()
+                } else {
+                    permission_request_pending_tool(data)
+                }
+            })
+            .or_else(|| session.current_tool.clone())
+            .unwrap_or_else(|| "Permission required".to_string());
+        let description = main_permission_data
+            .as_ref()
+            .map(|data| {
+                permission_request_description(
+                    data.tool_name.as_deref(),
+                    Some(&data.tool_input),
+                    command.as_deref(),
+                    "Waiting for permission",
+                )
+            })
+            .unwrap_or_else(|| "Waiting for permission".to_string());
         messages.push(ChatItem::Permission {
             request_id: main_permission_request_id.clone(),
-            tool: main_permission_data
-                .as_ref()
-                .and_then(permission_request_pending_tool)
-                .or_else(|| session.current_tool.clone())
-                .unwrap_or_else(|| "Permission required".to_string()),
-            description: "Waiting for permission".to_string(),
-            command: main_permission_data.as_ref().and_then(|data| {
-                permission_request_command(data.tool_name.as_deref(), Some(&data.tool_input))
-            }),
+            tool,
+            description,
+            command,
         });
     }
 
@@ -469,15 +488,25 @@ fn load_conversation_with_queued_prompts(
         let command = permission_data.as_ref().and_then(|data| {
             permission_request_command(data.tool_name.as_deref(), Some(&data.tool_input))
         });
+        let tool_name = permission_data
+            .as_ref()
+            .and_then(|data| data.tool_name.clone())
+            .unwrap_or_else(|| "Permission required".to_string());
+        let description = permission_data
+            .as_ref()
+            .map(|data| {
+                permission_request_description(
+                    data.tool_name.as_deref(),
+                    Some(&data.tool_input),
+                    command.as_deref(),
+                    "Waiting for permission approval.",
+                )
+            })
+            .unwrap_or_else(|| "Waiting for permission approval.".to_string());
         messages.push(ChatItem::Permission {
             request_id: Some(request_id),
-            tool: format!(
-                "Subagent {agent_id}: {}",
-                permission_data
-                    .and_then(|data| data.tool_name)
-                    .unwrap_or_else(|| "Permission required".to_string())
-            ),
-            description: "Waiting for permission approval.".to_string(),
+            tool: format!("Subagent {agent_id}: {tool_name}"),
+            description,
             command,
         });
     }
@@ -493,6 +522,8 @@ fn load_conversation_with_queued_prompts(
     );
     Ok(Some(conversation))
 }
+
+const MAX_PERMISSION_COMMAND_BYTES: usize = 16 * 1024;
 
 fn permission_request_pending_tool(data: &PermissionRequestData) -> Option<String> {
     let tool_name = data.tool_name.as_deref()?;
@@ -510,10 +541,38 @@ fn permission_request_command(
     if tool_name != Some("Bash") {
         return None;
     }
-    tool_input
+    let command = tool_input
         .and_then(|input| input.get("command"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
+        .and_then(Value::as_str)?;
+    (command.len() <= MAX_PERMISSION_COMMAND_BYTES).then(|| command.to_string())
+}
+
+fn permission_request_command_summary(tool_input: Option<&Value>) -> Option<String> {
+    let command = tool_input
+        .and_then(|input| input.get("command"))
+        .and_then(Value::as_str)?;
+    let mut chars = command.chars();
+    let preview = chars.by_ref().take(200).collect::<String>();
+    Some(if chars.next().is_some() {
+        format!("{preview}…")
+    } else {
+        preview
+    })
+}
+
+fn permission_request_description(
+    tool_name: Option<&str>,
+    tool_input: Option<&Value>,
+    command: Option<&str>,
+    waiting_message: &str,
+) -> String {
+    if tool_name == Some("Bash")
+        && command.is_none()
+        && let Some(preview) = permission_request_command_summary(tool_input)
+    {
+        return format!("Command preview: {preview}");
+    }
+    waiting_message.to_string()
 }
 
 fn permission_denied_input_summary(tool_name: &str, input: &Value) -> String {
@@ -839,7 +898,7 @@ mod tests {
 
     use super::cache::TranscriptChange;
     use super::{
-        ChatItem, QuestionChoice, QuestionPrompt, RouteLoaders,
+        ChatItem, MAX_PERMISSION_COMMAND_BYTES, QuestionChoice, QuestionPrompt, RouteLoaders,
         load_conversation_with_queued_prompts, load_messages_with,
         routes_with_decisions_and_queued_prompts_and_peer_out_messages,
         routes_with_proposals_and_peer_out_messages,
@@ -966,22 +1025,36 @@ mod tests {
     }
 
     #[rstest]
-    #[case::classifier_verdict(Some("[Sensitive Operation]"), true, "[Sensitive Operation]")]
+    #[case::classifier_verdict(
+        Some("[Sensitive Operation]"),
+        true,
+        Some("[Sensitive Operation]"),
+        false
+    )]
     #[case::missing_verdict(
         Some("Auto mode could not evaluate this action and is blocking it for safety."),
         false,
-        "Auto mode could not evaluate this action and is blocking it for safety."
+        Some("Auto mode could not evaluate this action and is blocking it for safety."),
+        false
     )]
+    #[case::oversized_command(None, false, None, true)]
     #[tokio::test]
     async fn messages_route_shows_permission_denial_and_retryability(
         #[case] reason: Option<&str>,
         #[case] retryable: bool,
-        #[case] expected_reason: &str,
+        #[case] expected_reason: Option<&str>,
+        #[case] oversized_command: bool,
     ) {
-        let command = indoc::indoc! {r#"
-            printf 'first line'
-            printf 'second line'
-        "#};
+        let command = if oversized_command {
+            format!("echo {}", "x".repeat(MAX_PERMISSION_COMMAND_BYTES))
+        } else {
+            indoc::indoc! {r#"
+                printf 'first line'
+                printf 'second line'
+            "#}
+            .to_string()
+        };
+        let expected_input_summary = command.chars().take(200).collect::<String>();
         let operation = PermissionDeniedOperation {
             session_id: "fixture-session".to_string(),
             seq: 1,
@@ -1006,6 +1079,19 @@ mod tests {
             loaders,
         );
         let response = message_response(&router).await;
+        let mut expected_message = json!({
+            "type": "permission_denied",
+            "seq": 1,
+            "toolUseId": "tool-call-fixture",
+            "tool": "Bash",
+            "inputSummary": expected_input_summary,
+            "reason": expected_reason,
+            "retryable": retryable,
+            "resolved": false,
+        });
+        if !oversized_command {
+            expected_message["command"] = json!(command);
+        }
 
         assert_eq!(
             response,
@@ -1013,17 +1099,7 @@ mod tests {
                 StatusCode::OK,
                 Some("application/json".to_string()),
                 json!({
-                    "messages": [{
-                        "type": "permission_denied",
-                        "seq": 1,
-                        "toolUseId": "tool-call-fixture",
-                        "tool": "Bash",
-                        "inputSummary": command,
-                        "command": command,
-                        "reason": expected_reason,
-                        "retryable": retryable,
-                        "resolved": false,
-                    }],
+                    "messages": [expected_message],
                     "backgroundTasks": [],
                     "start": 0,
                     "total": 1,
@@ -2545,8 +2621,25 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::within_highlight_limit(false)]
+    #[case::oversized_command(true)]
     #[test]
-    fn pending_permission_cards_target_each_agent_and_omit_question_requests() {
+    fn pending_permission_cards_target_each_agent_and_omit_question_requests(
+        #[case] oversized_command: bool,
+    ) {
+        let command = if oversized_command {
+            format!("echo {}", "x".repeat(MAX_PERMISSION_COMMAND_BYTES))
+        } else {
+            "printf 'preview'\ngit status --short".to_string()
+        };
+        let expected_command = (!oversized_command).then(|| command.clone());
+        let expected_description = if oversized_command {
+            let preview = command.chars().take(200).collect::<String>();
+            format!("Command preview: {preview}…")
+        } else {
+            "Waiting for permission".to_string()
+        };
         let mut session = stored_session();
         session.pending_permission_agent_ids = BTreeSet::from([
             "agent-fixture-a".to_string(),
@@ -2575,15 +2668,26 @@ mod tests {
             |_, _| Ok(()),
             |_| Ok(Vec::new()),
         )
-        .with_permission_request_data_loader(|_, request_id| {
-            let tool_name = match request_id {
-                "permission-request-a" => "Write",
-                "permission-request-question" => "AskUserQuestion",
+        .with_permission_request_data_loader(move |_, request_id| {
+            let (tool_name, tool_input) = match request_id {
+                "permission-request-main" => ("Bash", json!({ "command": command.clone() })),
+                "permission-request-a" => ("Write", json!({})),
+                "permission-request-question" => (
+                    "AskUserQuestion",
+                    json!({
+                        "questions": [{
+                            "header": "Summary",
+                            "question": "Should the summary be brief?",
+                            "options": [{ "label": "Yes" }, { "label": "No" }],
+                            "multiSelect": true,
+                        }],
+                    }),
+                ),
                 _ => return Ok(None),
             };
             Ok(Some(PermissionRequestData {
                 tool_name: Some(tool_name.to_string()),
-                tool_input: json!({}),
+                tool_input,
                 pending: true,
             }))
         });
@@ -2603,15 +2707,25 @@ mod tests {
             vec![
                 ChatItem::Permission {
                     request_id: Some("permission-request-main".to_string()),
-                    tool: "Bash(example command)".to_string(),
-                    description: "Waiting for permission".to_string(),
-                    command: None,
+                    tool: "Bash".to_string(),
+                    description: expected_description,
+                    command: expected_command,
                 },
                 ChatItem::Permission {
                     request_id: Some("permission-request-a".to_string()),
                     tool: "Subagent agent-fixture-a: Write".to_string(),
                     description: "Waiting for permission approval.".to_string(),
                     command: None,
+                },
+                ChatItem::Question {
+                    request_id: Some("permission-request-question".to_string()),
+                    questions: vec![QuestionPrompt {
+                        header: Some("Summary".to_string()),
+                        question: "Should the summary be brief?".to_string(),
+                        choices: vec![question_choice("Yes"), question_choice("No")],
+                        multi_select: true,
+                        answer: None,
+                    }],
                 },
             ],
         );
