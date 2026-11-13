@@ -225,7 +225,7 @@ mod tests {
     #[rstest]
     #[case::completed(true)]
     #[case::pending(false)]
-    fn places_todos_at_their_creation_time(#[case] is_completed: bool) {
+    fn places_todos_by_completion_state(#[case] is_completed: bool) {
         let transcript = indoc! {r#"
             {"uuid":"fixture-before","parentUuid":null,"timestamp":"2026-01-01T00:00:00Z","type":"assistant","message":{"content":[{"type":"text","text":"before"}]}}
             {"uuid":"fixture-after","parentUuid":"fixture-before","timestamp":"2026-01-01T00:05:00Z","type":"assistant","message":{"content":[{"type":"text","text":"after"}]}}
@@ -260,24 +260,36 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(
-            messages,
+        let todo_item = ChatItem::Todo {
+            seq: 1,
+            title: "Review the sample report".to_string(),
+            detail: Some("Open the sample summary.".to_string()),
+            completed: is_completed,
+            comment: is_completed.then(|| "The sample is ready.".to_string()),
+        };
+        let expected = if is_completed {
             vec![
                 ChatItem::Assistant {
                     text: "before".to_string(),
                 },
-                ChatItem::Todo {
-                    seq: 1,
-                    title: "Review the sample report".to_string(),
-                    detail: Some("Open the sample summary.".to_string()),
-                    completed: is_completed,
-                    comment: is_completed.then(|| "The sample is ready.".to_string()),
+                todo_item,
+                ChatItem::Assistant {
+                    text: "after".to_string(),
+                },
+            ]
+        } else {
+            vec![
+                ChatItem::Assistant {
+                    text: "before".to_string(),
                 },
                 ChatItem::Assistant {
                     text: "after".to_string(),
                 },
-            ],
-        );
+                todo_item,
+            ]
+        };
+
+        assert_eq!(messages, expected);
     }
 
     #[test]
