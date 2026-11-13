@@ -1,0 +1,26 @@
+.mobile-nav-overlay {
+  position: fixed;
+  z-index: 30;
+  inset: 0;
+}
+
+.mobile-nav-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgb(0 0 0 / 45%);
+  cursor: pointer;
+}
+
+.mobile-nav-drawer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: min(320px, calc(100vw - 48px));
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: var(--aw-bg-nav);
+  box-shadow: 8px 0 24px rgb(0 0 0 / 24%);
+  overscroll-behavior: contain;
+}

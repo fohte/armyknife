@@ -1,6 +1,7 @@
 import '#components/board-view.css'
 
 import { Button } from '@fohte/ui/button'
+import { Menu, Search } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
 import type { BoardProject } from '#board-model'
@@ -15,6 +16,9 @@ type BoardViewProps = {
   onHideQuietProjectsChange: (checked: boolean) => void
   onSelectSession: (id: string) => void
   focusedProjectName?: string | null
+  isMobile?: boolean
+  onOpenNavigation?: () => void
+  onOpenPalette?: () => void
 }
 
 const GROUPS = [
@@ -221,6 +225,9 @@ export function BoardView({
   onHideQuietProjectsChange,
   onSelectSession,
   focusedProjectName = null,
+  isMobile = false,
+  onOpenNavigation,
+  onOpenPalette,
 }: BoardViewProps) {
   const projectsScrollRef = useRef<HTMLDivElement>(null)
   const [remainingProjects, setRemainingProjects] = useState(0)
@@ -270,9 +277,29 @@ export function BoardView({
     <section className="board-view" aria-labelledby="board-title">
       <header className="board-header">
         <div className="board-header-title">
+          {isMobile ? (
+            <button
+              aria-label="Open navigation"
+              className="mobile-nav-action"
+              onClick={onOpenNavigation}
+              type="button"
+            >
+              <Menu aria-hidden="true" size={19} />
+            </button>
+          ) : null}
           <h1 id="board-title">Board</h1>
           <span>Projects that need you come first</span>
         </div>
+        {isMobile ? (
+          <button
+            aria-label="Open command palette"
+            className="mobile-nav-action"
+            onClick={onOpenPalette}
+            type="button"
+          >
+            <Search aria-hidden="true" size={18} />
+          </button>
+        ) : null}
         <label className="board-quiet-toggle">
           <input
             type="checkbox"

@@ -312,6 +312,10 @@
     gap: 7px;
   }
 
+  .board-header-title .mobile-nav-action {
+    margin-left: -6px;
+  }
+
   .board-header-title span,
   .board-quiet-toggle {
     font-size: 10px;

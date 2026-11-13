@@ -1,7 +1,7 @@
 import '#components/later-today.css'
 
 import { Button } from '@fohte/ui/button'
-import { Filter, X } from 'lucide-react'
+import { Filter, Menu, Search, X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 
 import { InboxFilterBar } from '#components/inbox-filter-bar'
@@ -53,6 +53,8 @@ type InboxViewProps = {
   selectedSavedViewId?: string | null
   onSelectSavedView?: (id: string) => void
   onDeleteSavedView?: (id: string) => void
+  onOpenNavigation?: () => void
+  onOpenPalette?: () => void
 }
 
 export function InboxView({
@@ -92,6 +94,8 @@ export function InboxView({
   selectedSavedViewId = null,
   onSelectSavedView,
   onDeleteSavedView,
+  onOpenNavigation,
+  onOpenPalette,
 }: InboxViewProps) {
   const [localFilterQuery, setLocalFilterQuery] = useState('')
   const [localDialogOpen, setLocalDialogOpen] = useState(false)
@@ -186,6 +190,26 @@ export function InboxView({
           &gt;
         </span>
         <span>agent watch</span>
+        {isMobile ? (
+          <div className="mobile-nav-actions">
+            <button
+              aria-label="Open navigation"
+              className="mobile-nav-action"
+              onClick={onOpenNavigation}
+              type="button"
+            >
+              <Menu aria-hidden="true" size={19} />
+            </button>
+            <button
+              aria-label="Open command palette"
+              className="mobile-nav-action"
+              onClick={onOpenPalette}
+              type="button"
+            >
+              <Search aria-hidden="true" size={18} />
+            </button>
+          </div>
+        ) : null}
         <span className="mobile-inbox-connection">
           <span
             className={`mobile-inbox-connection-dot${connected ? '' : ' is-disconnected'}`}
