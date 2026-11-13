@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.663](https://github.com/fohte/armyknife/compare/v0.1.662...v0.1.663) (2026-11-13)
+
+
+### Features
+
+* **watch-web:** show Starred and PM in palette ([#1699](https://github.com/fohte/armyknife/issues/1699)) ([a59212e](https://github.com/fohte/armyknife/commit/a59212e9bca3a02f46b1e2e1f254f37e3d87dadb))
+
 ## [0.1.662](https://github.com/fohte/armyknife/compare/v0.1.661...v0.1.662) (2026-11-13)
 
 
