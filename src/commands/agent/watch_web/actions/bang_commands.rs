@@ -100,7 +100,7 @@ pub(super) async fn execute(
     let result = run_blocking(move || runtime.execute_command(&cwd, &command)).await?;
     let result_message = command_result_message(&request.commands, &session.cwd, &result);
     let queued_content = result_message.clone();
-    super::messages::send_queued_prompt(super::messages::QueuedPromptDelivery {
+    super::messages::send_queued_prompt_best_effort(super::messages::QueuedPromptDelivery {
         runtime: state.runtime,
         sessions_dir,
         session,

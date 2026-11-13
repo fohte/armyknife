@@ -7,7 +7,9 @@ use serde_json::json;
 use tower::ServiceExt;
 
 use super::super::CommandResult;
-use super::{ActionContext, action_context, post, response_snapshot, session};
+use super::{
+    ActionContext, action_context, normalized_queued_prompts, post, response_snapshot, session,
+};
 use crate::commands::agent::types::{Engine, Session, SessionStatus};
 
 fn save_command_session(context: &ActionContext, message: &str) -> Session {
@@ -370,6 +372,96 @@ async fn command_execution_returns_output_to_the_session(
                 ],
             }),
             engine == Engine::Claude,
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn command_execution_delivers_output_when_queue_storage_fails(action_context: ActionContext) {
+    let message = "Run `! printf safe` now.";
+    let session = save_command_session(&action_context, message);
+    let database = rusqlite::Connection::open(
+        action_context
+            .temp_dir
+            .path()
+            .join("sessions")
+            .join("sessions.db"),
+    )
+    .unwrap();
+    database
+        .execute_batch(
+            "CREATE TRIGGER fail_watch_web_queued_prompt_insert
+             BEFORE INSERT ON watch_web_queued_prompt
+             BEGIN
+                 SELECT RAISE(FAIL, 'queue unavailable');
+             END;",
+        )
+        .unwrap();
+    drop(database);
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            "/sessions/sample-session/commands/execute",
+            json!({
+                "messageText": message,
+                "commands": ["printf safe"],
+            }),
+        ))
+        .await
+        .unwrap();
+    let body = response_snapshot(response, &action_context).await;
+    let queued_prompts = normalized_queued_prompts(&action_context, "sample-session", None);
+    let cwd = action_context.temp_dir.path().display().to_string();
+    let expected_message = indoc! {r#"
+        Command exited with code 0 in {cwd}.
+
+        Command:
+        ```
+        $ printf safe
+        ```
+
+        stdout:
+        ```
+        fixture output
+        ```
+
+        stderr:
+        ```
+        (empty)
+        ```
+    "#}
+    .replace("{cwd}", &cwd);
+
+    assert_eq!(
+        (body, queued_prompts),
+        (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": {"exitCode": 0, "succeeded": true, "timedOut": false},
+                "calls": [
+                    json!({
+                        "kind": "execute-command",
+                        "cwd": session.cwd,
+                        "command": indoc! {r#"
+                            set +e
+                            __armyknife_bang_exit_code=0
+                            printf safe
+                            __armyknife_bang_command_exit_code=$?
+                            if [ "$__armyknife_bang_command_exit_code" -ne 0 ] && [ "$__armyknife_bang_exit_code" -eq 0 ]; then __armyknife_bang_exit_code=$__armyknife_bang_command_exit_code; fi
+                            exit "$__armyknife_bang_exit_code"
+                        "#}
+                        .trim_end(),
+                    }),
+                    json!({
+                        "kind": "message",
+                        "sessionId": "sample-session",
+                        "content": expected_message.trim_end(),
+                    }),
+                ],
+            }),
+            json!([]),
         ),
     );
 }
