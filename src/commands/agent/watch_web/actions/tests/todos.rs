@@ -246,3 +246,97 @@ async fn completed_todos_cannot_be_completed_again(action_context: ActionContext
         }),
     );
 }
+
+#[rstest]
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+async fn concurrent_todo_resolutions_notify_only_the_persisted_winner(
+    action_context: ActionContext,
+) {
+    action_context.save_session(&session("sample-session"));
+    let sessions_dir = action_context.temp_dir.path().join("sessions");
+    store::add_agent_todo_in(&sessions_dir, "sample-session", "Check the page", None).unwrap();
+    let router = action_context.router();
+    let (message_started, release_message) = action_context.block_next_message();
+    let first_router = router.clone();
+    let first = tokio::spawn(async move {
+        first_router
+            .oneshot(post(
+                "/sessions/sample-session/todos/1/resolve",
+                json!({ "resolution": "rejected", "comment": "No longer needed." }),
+            ))
+            .await
+            .unwrap()
+    });
+    message_started.await.unwrap();
+
+    let (second_started, second_started_receiver) = tokio::sync::oneshot::channel();
+    let mut second = tokio::spawn(async move {
+        let _ = second_started.send(());
+        router
+            .oneshot(post(
+                "/sessions/sample-session/todos/1/resolve",
+                json!({ "resolution": "completed", "comment": "Keep it." }),
+            ))
+            .await
+            .unwrap()
+    });
+    second_started_receiver.await.unwrap();
+    let second_finished_before_first =
+        tokio::time::timeout(std::time::Duration::from_secs(1), &mut second)
+            .await
+            .is_ok();
+    let calls_before_release = action_context.runtime.calls.lock().unwrap().len();
+    let _ = release_message.send(());
+
+    let first = response_snapshot(first.await.unwrap(), &action_context).await;
+    let second_response = second.await.unwrap();
+    let second = response_snapshot(second_response, &action_context).await;
+    let todos = store::agent_todos_from(&sessions_dir, "sample-session").unwrap();
+
+    assert_eq!(
+        (
+            second_finished_before_first,
+            calls_before_release,
+            first,
+            second,
+            todos
+                .iter()
+                .map(|todo| (todo.resolution, todo.comment.as_deref()))
+                .collect::<Vec<_>>(),
+        ),
+        (
+            false,
+            1,
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "message",
+                    "sessionId": "sample-session",
+                    "content": indoc! {"
+                        <armyknife-todo-rejected>The user rejected the to-do: Check the page.
+
+                        No longer needed.</armyknife-todo-rejected>
+                    "}.trim_end(),
+                }],
+            }),
+            json!({
+                "status": StatusCode::CONFLICT.as_u16(),
+                "body": { "error": "todo is not pending" },
+                "calls": [{
+                    "kind": "message",
+                    "sessionId": "sample-session",
+                    "content": indoc! {"
+                        <armyknife-todo-rejected>The user rejected the to-do: Check the page.
+
+                        No longer needed.</armyknife-todo-rejected>
+                    "}.trim_end(),
+                }],
+            }),
+            vec![(
+                Some(store::TodoResolution::Rejected),
+                Some("No longer needed."),
+            )],
+        ),
+    );
+}
