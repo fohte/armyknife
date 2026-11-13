@@ -55,6 +55,7 @@ type ConversationPaneViewProps = {
   openInTerminalStatus?: OpenInTerminalStatus
   loading: boolean
   sending?: boolean
+  interruptPending?: boolean
   error: string | null
   onClearError?: () => void
   onAction: (
@@ -101,6 +102,7 @@ export function ConversationPaneView({
   openInTerminalStatus = null,
   loading,
   sending = false,
+  interruptPending = false,
   error,
   onClearError = () => undefined,
   onAction,
@@ -251,7 +253,11 @@ export function ConversationPaneView({
     ) {
       return
     }
-    if (event.key === 'Escape' && actions?.interrupt === true) {
+    if (
+      event.key === 'Escape' &&
+      actions?.interrupt === true &&
+      !interruptPending
+    ) {
       event.preventDefault()
       interrupt()
       return
@@ -392,10 +398,10 @@ export function ConversationPaneView({
         }
         disabled={actions?.message !== true}
         isSending={isSending}
-        isInterrupting={isInterrupting}
         isProcessingAttachments={isProcessingAttachments}
         isMobile={isMobile}
         canInterrupt={actions?.interrupt === true}
+        isInterrupting={isInterrupting || interruptPending}
         attachments={attachments}
         onDraftChange={updateDraft}
         onKeyDown={onComposerKeyDown}

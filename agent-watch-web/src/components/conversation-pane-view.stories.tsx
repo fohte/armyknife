@@ -494,6 +494,13 @@ export const AMessageIsSending: Story = {
   },
 }
 
+export const InterruptRequestIsSending: Story = {
+  name: 'The interrupt control shows progress while its request is sending',
+  args: {
+    interruptPending: true,
+  },
+}
+
 export const ImagesCanBeDropped: Story = {
   name: 'The conversation highlights image drops',
   args: {

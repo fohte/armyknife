@@ -36,6 +36,7 @@ const actions: SessionActions = {
   permission: { approve: false, reject: false },
   interrupt: false,
   openInTerminal: false,
+  rewind: false,
 }
 
 function requireElement<T extends Element>(element: T | null): T {
@@ -152,6 +153,9 @@ it.each([
     ).click()
   })
   const inputDisabledDuringSave = input.disabled
+  const saveButtonTextDuringSave = requireElement(
+    container.querySelector<HTMLButtonElement>('button[type="submit"]'),
+  ).textContent
   await act(async () => {
     completeSave(saved)
     await saveResult
@@ -160,6 +164,7 @@ it.each([
   const snapshot = () => ({
     action: onAction.mock.calls,
     inputDisabledDuringSave,
+    saveButtonTextDuringSave,
     editor: (() => {
       const editor = container.querySelector<HTMLInputElement>(
         'input[aria-label="Session title"]',
@@ -172,6 +177,7 @@ it.each([
   expect(snapshot()).toEqual({
     action: [['title', { title }]],
     inputDisabledDuringSave: true,
+    saveButtonTextDuringSave: 'Saving…',
     editor:
       expectedDraft === null
         ? { visible: false, draft: null }

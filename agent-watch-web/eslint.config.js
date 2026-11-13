@@ -19,6 +19,78 @@ export default config(
     rules: { 'no-restricted-imports': 'off' },
   },
   {
+    files: ['src/**/*.{ts,tsx}'],
+    ignores: [
+      'src/session-operation-http.ts',
+      'src/api-requests.ts',
+      'src/session-feed.ts',
+      'src/**/*.test.*',
+      'src/**/*.stories.*',
+    ],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "Identifier[name='fetch']",
+          message:
+            'Use the request abstractions instead of calling fetch directly.',
+        },
+        {
+          selector: "MemberExpression[computed=true][property.value='fetch']",
+          message:
+            'Use the request abstractions instead of calling fetch directly.',
+        },
+        {
+          selector: "Identifier[name='XMLHttpRequest']",
+          message:
+            'Use the request abstractions instead of creating direct HTTP requests.',
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/api-requests.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "CallExpression[callee.name='fetch'][arguments.length!=1]",
+          message: 'The shared request abstraction only supports GET requests.',
+        },
+        {
+          selector: "NewExpression[callee.name='Request']",
+          message: 'The shared request abstraction only supports GET requests.',
+        },
+      ],
+    },
+  },
+  {
+    files: ['src/session-feed.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "CallExpression[callee.name='fetch'][arguments.length!=1]",
+          message: 'The session feed uses GET requests only.',
+        },
+        {
+          selector:
+            "CallExpression[callee.name='fetcher'][arguments.length!=1]",
+          message: 'The session feed uses GET requests only.',
+        },
+        {
+          selector:
+            "ObjectExpression > Property[key.name='method'][value.value='POST']",
+          message: 'The session feed uses GET requests only.',
+        },
+        {
+          selector: "NewExpression[callee.name='Request']",
+          message: 'The session feed uses GET requests only.',
+        },
+      ],
+    },
+  },
+  {
     files: ['**/*.stories.tsx'],
     rules: { 'fohte/require-story-name': 'error' },
   },

@@ -1,5 +1,12 @@
 import { err, ok } from 'neverthrow'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useOptimistic,
+  useRef,
+  useState,
+} from 'react'
 
 import {
   reuseEqualValue,
@@ -10,7 +17,7 @@ import {
   isSessionActions,
 } from '#components/conversation-pane-response'
 import { ConversationPaneView } from '#components/conversation-pane-view'
-import { requestAction, requestJson } from '#components/conversation-requests'
+import { requestJson } from '#components/conversation-requests'
 import type { PendingPermissionActions } from '#components/permission-card'
 import { ResizableColumns } from '#components/resizable-columns'
 import { useSessionConversationCache } from '#components/session-conversation-cache'
@@ -21,6 +28,13 @@ import {
   type SessionTreeCallbacks,
   useSessionTree,
 } from '#components/use-session-tree'
+import { useSessionOperations } from '#session-operation-context'
+import {
+  applyConversationOperation,
+  createSessionOperation,
+  isConversationOperationConfirmed,
+  type SessionOperation,
+} from '#session-operations'
 import type { SessionTreeViewState } from '#session-tree-model'
 import type {
   ConversationResponse,
@@ -66,6 +80,7 @@ type ConversationPaneProps = {
   onBack?: () => void
   onLater?: () => void
   onClose?: () => void
+  onOptimisticSessionOperation?: (operation: SessionOperation) => void
   isToday?: boolean
   onToggleToday?: (isToday: boolean) => void
 } & SessionTreeCallbacks
@@ -91,6 +106,7 @@ export function ConversationPane({
   onBack = () => undefined,
   onLater = () => undefined,
   onClose,
+  onOptimisticSessionOperation,
   isToday = false,
   onToggleToday = () => undefined,
 }: ConversationPaneProps) {
@@ -102,7 +118,42 @@ export function ConversationPane({
   const [conversation, setConversation] = useState<ConversationResponse>(
     initialCachedConversation?.conversation ?? EMPTY_CONVERSATION,
   )
+  const [optimisticConversation, dispatchConversationOperation] = useOptimistic(
+    conversation,
+    applyConversationOperation,
+  )
+  const { pendingOperations, run, confirm } = useSessionOperations()
+  const pendingOperationsRef = useRef(pendingOperations)
+  pendingOperationsRef.current = pendingOperations
+  const pendingConversationOperations = useMemo(
+    () =>
+      pendingOperations.filter(
+        ({ operation }) => operation.sessionId === session.id,
+      ),
+    [pendingOperations, session.id],
+  )
+  const nextMessageCountBefore = useRef<number | null>(null)
+  useEffect(() => {
+    nextMessageCountBefore.current = pendingConversationOperations.reduce(
+      (nextCount, pending) =>
+        pending.operation.type === 'message' &&
+        pending.operation.messageCountBefore !== undefined
+          ? Math.max(nextCount, pending.operation.messageCountBefore + 1)
+          : nextCount,
+      conversation.total,
+    )
+  }, [conversation.total, pendingConversationOperations])
+  const displayedConversation = useMemo(
+    () =>
+      pendingConversationOperations.reduce(
+        (current, { operation }) =>
+          applyConversationOperation(current, operation),
+        optimisticConversation,
+      ),
+    [optimisticConversation, pendingConversationOperations],
+  )
   const conversationRef = useRef(conversation)
+  const actionsRef = useRef<SessionActions | null>(null)
   const conversationSessionId = useRef<string | null>(
     initialCachedConversation === undefined ? null : session.id,
   )
@@ -128,8 +179,6 @@ export function ConversationPane({
     initialCachedConversation === undefined,
   )
   const [error, setError] = useState<string | null>(null)
-  const [pendingPermissionActions, setPendingPermissionActions] =
-    useState<PendingPermissionActions>({})
   const [openInTerminalStatus, setOpenInTerminalStatus] =
     useState<OpenInTerminalStatus>(null)
   const currentSessionId = useRef(session.id)
@@ -181,7 +230,7 @@ export function ConversationPane({
     }
   }, [])
 
-  const refresh = useCallback(() => {
+  const refresh = useCallback(async () => {
     const generation = requestGeneration.current + 1
     requestGeneration.current = generation
     const sessionPath = `/api/sessions/${encodeURIComponent(session.id)}`
@@ -212,92 +261,103 @@ export function ConversationPane({
       (value) => ok(value),
       (requestError) => err(requestError),
     )
-    void Promise.all([messagesRequest, actionsRequest]).then(
-      ([messagesResult, actionsResult]) => {
-        if (requestGeneration.current !== generation) return
-        let refreshedConversation: ConversationResponse | null = null
-        if (messagesResult.isOk()) {
-          const alreadyLoaded = conversationSessionId.current === session.id
-          const previous = alreadyLoaded
-            ? conversationRef.current
-            : EMPTY_CONVERSATION
-          const preserveLoadedPrefix =
-            alreadyLoaded && previous.start < messagesResult.value.start
-          const start = preserveLoadedPrefix
-            ? previous.start
-            : messagesResult.value.start
-          const messages = preserveLoadedPrefix
-            ? [
-                ...previous.messages.slice(
-                  0,
-                  messagesResult.value.start - previous.start,
-                ),
-                ...messagesResult.value.messages,
-              ]
-            : messagesResult.value.messages
-          refreshedConversation = {
-            ...messagesResult.value,
-            start,
-            messages: shareUnchangedMessages(
-              previous.messages,
-              messages,
-              previous.start,
-              start,
+    const [messagesResult, actionsResult] = await Promise.all([
+      messagesRequest,
+      actionsRequest,
+    ])
+    if (requestGeneration.current !== generation) return
+    let refreshedConversation: ConversationResponse | null = null
+    if (messagesResult.isOk()) {
+      const alreadyLoaded = conversationSessionId.current === session.id
+      const previous = alreadyLoaded
+        ? conversationRef.current
+        : EMPTY_CONVERSATION
+      const preserveLoadedPrefix =
+        alreadyLoaded && previous.start < messagesResult.value.start
+      const start = preserveLoadedPrefix
+        ? previous.start
+        : messagesResult.value.start
+      const messages = preserveLoadedPrefix
+        ? [
+            ...previous.messages.slice(
+              0,
+              messagesResult.value.start - previous.start,
             ),
-          }
-          conversationSessionId.current = session.id
-          markMessagesLoaded()
-          updateConversation(refreshedConversation)
-        }
-        if (actionsResult.isOk()) {
-          setActions((previous) =>
-            reuseEqualValue(previous, actionsResult.value),
-          )
-        }
-        const permissionUnavailable =
-          actionsResult.isOk() &&
-          (actionsResult.value.permission == null ||
-            (!actionsResult.value.permission.approve &&
-              !actionsResult.value.permission.reject))
-        setPendingPermissionActions((pending) => {
-          if (permissionUnavailable) return {}
-          if (refreshedConversation === null) return pending
-          const activeRequestIds = new Set(
-            refreshedConversation.messages.flatMap((message) =>
-              message.type === 'permission' && message.requestId !== undefined
-                ? [message.requestId]
-                : [],
-            ),
-          )
-          return Object.fromEntries(
-            Object.entries(pending).filter(([requestId]) =>
-              activeRequestIds.has(requestId),
-            ),
-          )
-        })
-        const firstError = messagesResult.isErr()
-          ? messagesResult.error
-          : actionsResult.isErr()
-            ? actionsResult.error
-            : null
-        if (messagesResult.isOk() && actionsResult.isOk()) {
-          setActionsReady(true)
-        }
-        setError(firstError?.message ?? null)
-        setLoading(false)
-      },
-    )
-  }, [markMessagesLoaded, session.id, updateConversation])
+            ...messagesResult.value.messages,
+          ]
+        : messagesResult.value.messages
+      refreshedConversation = {
+        ...messagesResult.value,
+        start,
+        messages: shareUnchangedMessages(
+          previous.messages,
+          messages,
+          previous.start,
+          start,
+        ),
+      }
+      conversationSessionId.current = session.id
+      markMessagesLoaded()
+      updateConversation(refreshedConversation)
+    }
+    if (actionsResult.isOk()) {
+      actionsRef.current = actionsResult.value
+      setActions((previous) => reuseEqualValue(previous, actionsResult.value))
+    }
+    const firstError = messagesResult.isErr()
+      ? messagesResult.error
+      : actionsResult.isErr()
+        ? actionsResult.error
+        : null
+    if (messagesResult.isOk() && actionsResult.isOk()) {
+      setActionsReady(true)
+    }
+    const confirmedConversation =
+      refreshedConversation ?? conversationRef.current
+    const confirmedActions = actionsResult.isOk()
+      ? actionsResult.value
+      : actionsRef.current
+    for (const pending of pendingOperationsRef.current) {
+      if (
+        pending.status === 'sent' &&
+        pending.operation.sessionId === session.id &&
+        isConversationOperationConfirmed(
+          confirmedConversation,
+          pending.operation,
+          confirmedActions,
+        )
+      ) {
+        confirm(pending.operation)
+      }
+    }
+    setError(firstError?.message ?? null)
+    setLoading(false)
+  }, [confirm, markMessagesLoaded, session.id, updateConversation])
+
+  const refreshForOperation = useCallback(
+    async (operation: SessionOperation) => {
+      await refresh()
+      if (
+        isConversationOperationConfirmed(
+          conversationRef.current,
+          operation,
+          actionsRef.current,
+        )
+      ) {
+        confirm(operation)
+      }
+    },
+    [confirm, refresh],
+  )
 
   useEffect(() => {
-    refresh()
+    void refresh()
     return () => {
       requestGeneration.current += 1
     }
   }, [refresh, refreshKey])
 
   useEffect(() => {
-    setPendingPermissionActions({})
     setOpenInTerminalStatus(null)
     if (conversationSessionId.current !== session.id) {
       updateConversation(EMPTY_CONVERSATION)
@@ -364,37 +424,132 @@ export function ConversationPane({
   const onOpenInTerminal = useCallback(() => {
     const requestedSessionId = session.id
     clearOpenInTerminalTimer()
-    setOpenInTerminalStatus({ state: 'sending' })
-    void requestAction(requestedSessionId, 'focus').match(
-      () => {
-        if (currentSessionId.current !== requestedSessionId) return
-        setOpenInTerminalStatus({ state: 'success' })
-        openInTerminalTimer.current = window.setTimeout(() => {
-          if (currentSessionId.current === requestedSessionId) {
-            setOpenInTerminalStatus(null)
-          }
-          openInTerminalTimer.current = null
-        }, 3_000)
-      },
-      (requestError) => {
-        if (currentSessionId.current !== requestedSessionId) return
-        setOpenInTerminalStatus({
-          state: 'error',
-          message: requestError.message,
-        })
+    void run({ type: 'focus', sessionId: requestedSessionId }).then(
+      (result) => {
+        result.match(
+          () => {
+            if (currentSessionId.current !== requestedSessionId) return
+            setOpenInTerminalStatus({ state: 'success' })
+            openInTerminalTimer.current = window.setTimeout(() => {
+              if (currentSessionId.current === requestedSessionId) {
+                setOpenInTerminalStatus(null)
+              }
+              openInTerminalTimer.current = null
+            }, 3_000)
+          },
+          (requestError) => {
+            if (currentSessionId.current !== requestedSessionId) return
+            setOpenInTerminalStatus({
+              state: 'error',
+              message: requestError.message,
+            })
+          },
+        )
       },
     )
-  }, [clearOpenInTerminalTimer, session.id])
+  }, [clearOpenInTerminalTimer, run, session.id])
 
-  const { onAction, onRewind } = useConversationPaneActions({
+  const { onRewind } = useConversationPaneActions({
     sessionId: session.id,
-    refresh,
+    refresh: () => {
+      void refresh()
+    },
     setError,
-    setPendingPermissionActions,
     onSelectSession,
   })
+  const onAction = useCallback(
+    (action: string, payload?: Record<string, unknown>) => {
+      const messageCountBefore =
+        action === 'messages'
+          ? Math.max(
+              conversationRef.current.total,
+              nextMessageCountBefore.current ?? 0,
+            )
+          : undefined
+      const operationResult = createSessionOperation(
+        session.id,
+        action,
+        action === 'messages'
+          ? {
+              ...payload,
+              _messageCountBefore: messageCountBefore,
+            }
+          : payload,
+      )
+      if (operationResult.isErr()) {
+        setError(operationResult.error.message)
+        return Promise.resolve(false)
+      }
+      const operation = operationResult.value
+      if (operation.type === 'message' && messageCountBefore !== undefined) {
+        nextMessageCountBefore.current = messageCountBefore + 1
+      }
+      const dispatchers = [dispatchConversationOperation]
+      if (onOptimisticSessionOperation !== undefined) {
+        dispatchers.push(onOptimisticSessionOperation)
+      }
+      return run(operation, {
+        optimisticDispatchers: dispatchers,
+        refresh: () => refreshForOperation(operation),
+      }).then((result) =>
+        result.match(
+          () => {
+            setError(null)
+            return true
+          },
+          (requestError) => {
+            setError(requestError.message)
+            return false
+          },
+        ),
+      )
+    },
+    [
+      dispatchConversationOperation,
+      onOptimisticSessionOperation,
+      refreshForOperation,
+      run,
+      session.id,
+    ],
+  )
 
-  const { messages, backgroundTasks } = conversation
+  const pendingPermissionActions =
+    pendingOperations.reduce<PendingPermissionActions>(
+      (pending, pendingOperation) => {
+        const { operation, status } = pendingOperation
+        if (operation.sessionId !== session.id) return pending
+        if (operation.type === 'permission') {
+          return {
+            ...pending,
+            [operation.requestId]: {
+              action: operation.action,
+              status,
+              requestId: operation.requestId,
+            },
+          }
+        }
+        if (operation.type === 'permission_retry') {
+          const requestId = `permission-denied-${String(operation.seq)}`
+          return {
+            ...pending,
+            [requestId]: { action: 'retry', status, requestId },
+          }
+        }
+        return pending
+      },
+      {},
+    )
+  const displayOpenInTerminalStatus = pendingOperations.some(
+    ({ operation }) =>
+      operation.sessionId === session.id && operation.type === 'focus',
+  )
+    ? { state: 'sending' as const }
+    : openInTerminalStatus
+  const interruptPending = pendingOperations.some(
+    ({ operation }) =>
+      operation.sessionId === session.id && operation.type === 'interrupt',
+  )
+  const { messages, backgroundTasks } = displayedConversation
   const backgroundTaskElapsedOffset =
     messagesLoadedAt === null
       ? 0
@@ -412,7 +567,7 @@ export function ConversationPane({
   } = useConversationStatusPanel({
     session,
     messages,
-    allDecisions: conversation.decisions,
+    allDecisions: displayedConversation.decisions,
     backgroundTasks: displayBackgroundTasks,
     sessionTree,
     sessionTreeError,
@@ -439,8 +594,8 @@ export function ConversationPane({
       sessions={sessions}
       messages={messages}
       start={conversation.start}
-      decisions={conversation.decisions}
-      hasUnansweredProposal={conversation.hasUnansweredProposal}
+      decisions={displayedConversation.decisions}
+      hasUnansweredProposal={displayedConversation.hasUnansweredProposal}
       loadingOlder={loadingOlder}
       onLoadOlder={loadOlder}
       onPruneOldMessages={pruneOldMessages}
@@ -449,7 +604,8 @@ export function ConversationPane({
       actions={actions}
       actionsReady={actionsReady}
       pendingPermissionActions={pendingPermissionActions}
-      openInTerminalStatus={openInTerminalStatus}
+      openInTerminalStatus={displayOpenInTerminalStatus}
+      interruptPending={interruptPending}
       loading={loading}
       error={error}
       onClearError={() => {

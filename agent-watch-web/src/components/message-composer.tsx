@@ -13,10 +13,10 @@ type MessageComposerProps = {
   placeholder: string
   disabled: boolean
   isSending: boolean
-  isInterrupting?: boolean
   isProcessingAttachments: boolean
   isMobile: boolean
   canInterrupt: boolean
+  isInterrupting?: boolean
   attachments: readonly ComposerAttachment[]
   engine?: Session['engine']
   skills?: readonly SkillSuggestion[]
@@ -51,10 +51,10 @@ export function MessageComposer({
   placeholder,
   disabled,
   isSending,
-  isInterrupting = false,
   isProcessingAttachments,
   isMobile,
   canInterrupt,
+  isInterrupting = false,
   attachments,
   engine,
   skills = [],
@@ -290,15 +290,21 @@ export function MessageComposer({
       <div className="composer-footer">
         {!isMobile ? (
           <span
-            role={isSending || isProcessingAttachments ? 'status' : undefined}
+            role={
+              isSending || isProcessingAttachments || isInterrupting
+                ? 'status'
+                : undefined
+            }
           >
             {isSending
               ? 'Sending…'
               : isProcessingAttachments
                 ? 'Preparing attachments…'
-                : canInterrupt
-                  ? '↵ Send · ⇧↵ / ⌥↵ New line · Esc Interrupt'
-                  : '↵ Send · ⇧↵ / ⌥↵ New line'}
+                : isInterrupting
+                  ? 'Interrupting…'
+                  : canInterrupt
+                    ? '↵ Send · ⇧↵ / ⌥↵ New line · Esc Interrupt'
+                    : '↵ Send · ⇧↵ / ⌥↵ New line'}
           </span>
         ) : isProcessingAttachments ? (
           <span role="status">Preparing attachments…</span>
@@ -308,7 +314,8 @@ export function MessageComposer({
             className="mobile-interrupt-button"
             type="button"
             variant="plain"
-            aria-label="Interrupt"
+            aria-label={isInterrupting ? 'Interrupting…' : 'Interrupt'}
+            aria-busy={isInterrupting}
             disabled={isInterrupting}
             onClick={onInterrupt}
           >

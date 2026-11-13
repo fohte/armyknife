@@ -1,5 +1,5 @@
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -64,6 +64,18 @@ impl LockGuard {
             inspect_lock(&Self::lock_path(document_path), is_process_alive, |_| ()),
             LockState::Active
         )
+    }
+
+    pub(crate) fn is_locked_with_exclusive_file_lock(document_path: &Path, file: &File) -> bool {
+        let lock_path = Self::lock_path(document_path);
+        if !same_file_at_path(file, &lock_path) {
+            return false;
+        }
+
+        let Ok(Some(record)) = read_record(file) else {
+            return false;
+        };
+        same_file_at_path(file, &lock_path) && record.pids.iter().any(|pid| is_process_alive(*pid))
     }
 
     /// Get the lock file path for a document.
@@ -222,6 +234,7 @@ fn open_existing_lock(path: &Path) -> io::Result<Option<File>> {
 
 fn read_record(file: &File) -> io::Result<Option<LockRecord>> {
     let mut reader = file.try_clone()?;
+    reader.seek(SeekFrom::Start(0))?;
     let mut contents = Vec::new();
     reader.read_to_end(&mut contents)?;
     Ok(LockRecord::parse(&contents))
