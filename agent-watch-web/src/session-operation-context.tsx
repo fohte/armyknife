@@ -23,8 +23,14 @@ type RunOptions = {
 }
 
 export type PendingSessionOperation = {
+  id: number
   operation: SessionOperation
   status: 'sending' | 'sent'
+}
+
+type ConfirmationTimeout = {
+  key: string
+  timeout: ReturnType<typeof setTimeout>
 }
 
 type SessionOperationContextValue = {
@@ -45,14 +51,15 @@ function useOperationRunner(): SessionOperationContextValue {
   const [pendingOperations, setPendingOperations] = useState<
     PendingSessionOperation[]
   >([])
-  const confirmationTimeouts = useRef(
-    new Map<string, ReturnType<typeof setTimeout>>(),
-  )
+  const confirmationTimeouts = useRef(new Map<number, ConfirmationTimeout>())
+  const nextPendingOperationId = useRef(0)
   const [, startOperationTransition] = useTransition()
   const clearConfirmationTimeout = useCallback((key: string) => {
-    const timeout = confirmationTimeouts.current.get(key)
-    if (timeout !== undefined) clearTimeout(timeout)
-    confirmationTimeouts.current.delete(key)
+    confirmationTimeouts.current.forEach(({ key: pendingKey, timeout }, id) => {
+      if (pendingKey !== key) return
+      clearTimeout(timeout)
+      confirmationTimeouts.current.delete(id)
+    })
   }, [])
   const confirm = useCallback(
     (operation: SessionOperation) => {
@@ -67,24 +74,21 @@ function useOperationRunner(): SessionOperationContextValue {
     [clearConfirmationTimeout],
   )
   const expireUnconfirmedOperation = useCallback(
-    (operation: SessionOperation) => {
+    (operation: SessionOperation, pendingOperationId: number) => {
       const key = sessionOperationKey(operation)
-      clearConfirmationTimeout(key)
       const timeout = setTimeout(() => {
-        confirmationTimeouts.current.delete(key)
+        confirmationTimeouts.current.delete(pendingOperationId)
         setPendingOperations((current) =>
-          current.filter(
-            (pending) => sessionOperationKey(pending.operation) !== key,
-          ),
+          current.filter((pending) => pending.id !== pendingOperationId),
         )
       }, STATE_CONFIRMATION_TIMEOUT_MS)
-      confirmationTimeouts.current.set(key, timeout)
+      confirmationTimeouts.current.set(pendingOperationId, { key, timeout })
     },
-    [clearConfirmationTimeout],
+    [],
   )
   useEffect(
     () => () => {
-      confirmationTimeouts.current.forEach((timeout) => {
+      confirmationTimeouts.current.forEach(({ timeout }) => {
         clearTimeout(timeout)
       })
       confirmationTimeouts.current.clear()
@@ -94,9 +98,11 @@ function useOperationRunner(): SessionOperationContextValue {
   const run = useCallback<SessionOperationContextValue['run']>(
     async (operation, options = {}) => {
       const key = sessionOperationKey(operation)
+      const pendingOperationId = nextPendingOperationId.current
+      nextPendingOperationId.current += 1
       setPendingOperations((current) => [
         ...current,
-        { operation, status: 'sending' },
+        { id: pendingOperationId, operation, status: 'sending' },
       ])
       startOperationTransition(() => {
         options.optimisticDispatchers?.forEach((dispatch) => {
@@ -105,6 +111,7 @@ function useOperationRunner(): SessionOperationContextValue {
       })
       const result = await submitSessionOperation(operation)
       if (result.isErr()) {
+        clearConfirmationTimeout(key)
         const failedMessageCountBefore =
           operation.type === 'message'
             ? operation.messageCountBefore
@@ -136,13 +143,13 @@ function useOperationRunner(): SessionOperationContextValue {
       }
       setPendingOperations((current) =>
         current.map((pending) =>
-          sessionOperationKey(pending.operation) === key
+          pending.id === pendingOperationId
             ? { ...pending, status: 'sent' }
             : pending,
         ),
       )
       if (requiresStateConfirmation(operation)) {
-        expireUnconfirmedOperation(operation)
+        expireUnconfirmedOperation(operation, pendingOperationId)
       }
       if (options.refresh !== undefined) {
         const clearPending = () => {
@@ -154,7 +161,7 @@ function useOperationRunner(): SessionOperationContextValue {
       }
       return result
     },
-    [confirm, expireUnconfirmedOperation],
+    [clearConfirmationTimeout, confirm, expireUnconfirmedOperation],
   )
   return { pendingOperations, run, confirm }
 }

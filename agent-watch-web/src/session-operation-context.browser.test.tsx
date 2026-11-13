@@ -170,6 +170,41 @@ function snapshot() {
   }
 }
 
+function clickStarOperation() {
+  const button = container.querySelector<HTMLButtonElement>('button')
+  if (button === null) throw new Error('Expected the operation button')
+  act(() => {
+    button.click()
+  })
+}
+
+async function completeSuccessfulPostAndRefresh() {
+  const completePost = resolvePost
+  if (completePost === null) throw new Error('Expected the POST request')
+  await act(async () => {
+    completePost(new Response(null, { status: 204 }))
+    await operationRequest
+  })
+  const afterPost = snapshot()
+
+  const finishRefresh = resolveRefresh
+  if (finishRefresh === null)
+    throw new Error('Expected the conversation refresh')
+  await act(async () => {
+    finishRefresh()
+    await Promise.resolve()
+  })
+
+  return { afterPost, afterRefresh: snapshot() }
+}
+
+async function submitSuccessfulStarOperation() {
+  clickStarOperation()
+  const beforeResponse = snapshot()
+  const { afterPost, afterRefresh } = await completeSuccessfulPostAndRefresh()
+  return { beforeResponse, afterPost, afterRefresh }
+}
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
@@ -202,29 +237,11 @@ it('shows the optimistic state until the server confirms it', async () => {
     ),
   )
   renderHarness()
-  const button = container.querySelector<HTMLButtonElement>('button')
-  if (button === null) throw new Error('Expected the operation button')
-  act(() => {
-    button.click()
-  })
-  const beforeResponse = snapshot()
-
-  const completePost = resolvePost
-  if (completePost === null) throw new Error('Expected the POST request')
-  await act(async () => {
-    completePost(new Response(null, { status: 204 }))
-    await operationRequest
-  })
-  const afterPost = snapshot()
-
-  const finishRefresh = resolveRefresh
-  if (finishRefresh === null)
-    throw new Error('Expected the conversation refresh')
-  await act(async () => {
-    finishRefresh()
-    await Promise.resolve()
-  })
-  const afterStaleRefresh = snapshot()
+  const {
+    beforeResponse,
+    afterPost,
+    afterRefresh: afterStaleRefresh,
+  } = await submitSuccessfulStarOperation()
 
   await act(async () => {
     await vi.advanceTimersByTimeAsync(9_999)
@@ -271,28 +288,7 @@ it('shows server state when a successful operation is not confirmed in time', as
     ),
   )
   renderHarness()
-  const button = container.querySelector<HTMLButtonElement>('button')
-  if (button === null) throw new Error('Expected the operation button')
-  act(() => {
-    button.click()
-  })
-  const beforeResponse = snapshot()
-
-  const completePost = resolvePost
-  if (completePost === null) throw new Error('Expected the POST request')
-  await act(async () => {
-    completePost(new Response(null, { status: 204 }))
-    await operationRequest
-  })
-  const afterPost = snapshot()
-
-  const finishRefresh = resolveRefresh
-  if (finishRefresh === null)
-    throw new Error('Expected the conversation refresh')
-  await act(async () => {
-    finishRefresh()
-    await Promise.resolve()
-  })
+  const { beforeResponse, afterPost } = await submitSuccessfulStarOperation()
 
   await act(async () => {
     await vi.advanceTimersByTimeAsync(10_000)
@@ -308,6 +304,43 @@ it('shows server state when a successful operation is not confirmed in time', as
     beforeResponse: { starred: 'true', pending: 'sending', error: '' },
     afterPost: { starred: 'true', pending: 'sent', error: '' },
     afterTimeout: { starred: 'false', pending: '', error: '' },
+  })
+})
+
+it('keeps a newer same-key operation pending when an earlier timeout expires', async () => {
+  vi.useFakeTimers()
+  vi.stubGlobal(
+    'fetch',
+    vi.fn<typeof fetch>(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolvePost = resolve
+        }),
+    ),
+  )
+  renderHarness()
+  const firstOperation = await submitSuccessfulStarOperation()
+
+  clickStarOperation()
+  const afterSecondSend = snapshot()
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(10_000)
+  })
+  const afterFirstTimeout = snapshot()
+  const { afterPost: afterSecondPost } =
+    await completeSuccessfulPostAndRefresh()
+
+  const operationSnapshots = () => ({
+    firstOperation: firstOperation.afterPost,
+    afterSecondSend,
+    afterFirstTimeout,
+    afterSecondPost,
+  })
+  expect(operationSnapshots()).toEqual({
+    firstOperation: { starred: 'true', pending: 'sent', error: '' },
+    afterSecondSend: { starred: 'true', pending: 'sent,sending', error: '' },
+    afterFirstTimeout: { starred: 'true', pending: 'sending', error: '' },
+    afterSecondPost: { starred: 'true', pending: 'sent', error: '' },
   })
 })
 
