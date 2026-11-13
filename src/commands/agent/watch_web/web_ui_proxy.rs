@@ -859,6 +859,7 @@ mod tests {
                 Request::builder()
                     .uri("/socket")
                     .header(HOST, "localhost:4318")
+                    .header(ORIGIN, "http://localhost:4318")
                     .header(COOKIE, "armyknife_web_ui_port=48761")
                     .header("upgrade", "websocket")
                     .header("connection", "Upgrade")
