@@ -1192,6 +1192,9 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 
 Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` only when recorded for that session, or by `GET /api/sessions/{id}/transcript-files/{tool_use_id}/{index}` only when the session transcript contains the matching file-send record and file index.
 
+- `POST /api/sessions/{id}/review-document/save` with `{"id":"review-id","frontmatter":{"approved":true},"body":"Updated Markdown."}` saves edits to the active review document path recorded by the server.
+- `POST /api/sessions/{id}/review-document/finish` accepts the same payload, saves the edits, then asks the review process to close its editor and run the completion handler.
+
 - `GET /api/sessions/{id}/actions`
 - `GET /api/sessions/{id}/tree` returns the ancestor-rooted session tree, excluding ended sessions.
 - `GET /api/sessions/{id}/pull-requests` returns PRs from the selected task's delegates and implementation checklist, or direct delegates when no task is selected.

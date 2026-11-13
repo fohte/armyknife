@@ -12,6 +12,8 @@ use super::{
 
 pub(super) struct ReviewContext<'a> {
     pub(super) lock_id: &'a str,
+    pub(super) done_fifo_path: &'a Path,
+    pub(super) finish_fifo_path: &'a Path,
     pub(super) window_title: &'a str,
     pub(super) command_name: &'a str,
 }
@@ -22,7 +24,6 @@ pub(super) struct ReviewContext<'a> {
 pub(super) fn launch_review<S, H>(
     tmux_pane_id: Option<&str>,
     document_path: &Path,
-    done_fifo_path: &Path,
     context: &ReviewContext<'_>,
     handler: &H,
     editor_config: &EditorConfig,
@@ -33,12 +34,10 @@ where
     H: ReviewHandler<S>,
 {
     let exe_path = std::env::current_exe()?;
-    let mut review_args =
-        handler.build_complete_args(document_path, tmux_pane_id, context.window_title);
-    review_args.push("--done-fifo".into());
-    review_args.push(done_fifo_path.as_os_str().to_os_string());
-    review_args.push("--review-lock-id".into());
-    review_args.push(context.lock_id.into());
+    let review_args = build_review_args(
+        handler.build_complete_args(document_path, tmux_pane_id, context.window_title),
+        context,
+    );
 
     let mut queue_entry = None;
     if let Some(parent_pane_id) = tmux_pane_id {
@@ -53,7 +52,7 @@ where
                     &shpool_session,
                     exe_path.as_os_str(),
                     &review_args,
-                    done_fifo_path,
+                    context.done_fifo_path,
                     &mut queue_entry,
                 )
             },
@@ -82,6 +81,21 @@ where
         editor_config,
     )?;
     Ok((None, None))
+}
+
+fn build_review_args(
+    mut args: Vec<std::ffi::OsString>,
+    context: &ReviewContext<'_>,
+) -> Vec<std::ffi::OsString> {
+    args.extend([
+        "--done-fifo".into(),
+        context.done_fifo_path.as_os_str().to_os_string(),
+        "--finish-fifo".into(),
+        context.finish_fifo_path.as_os_str().to_os_string(),
+        "--review-lock-id".into(),
+        context.lock_id.into(),
+    ]);
+    args
 }
 
 fn launch_tmux_review(
@@ -154,6 +168,35 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    #[test]
+    fn complete_arguments_include_both_review_fifo_paths() {
+        let done_fifo_path = Path::new("/tmp/example-review.md.done");
+        let finish_fifo_path = Path::new("/tmp/example-review.md.finish");
+        let context = ReviewContext {
+            lock_id: "example-lock-id",
+            done_fifo_path,
+            finish_fifo_path,
+            window_title: "Example review",
+            command_name: "example-review",
+        };
+
+        assert_eq!(
+            build_review_args(vec!["--example-option".into()], &context)
+                .iter()
+                .map(|argument| argument.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            vec![
+                "--example-option",
+                "--done-fifo",
+                "/tmp/example-review.md.done",
+                "--finish-fifo",
+                "/tmp/example-review.md.finish",
+                "--review-lock-id",
+                "example-lock-id",
+            ],
+        );
+    }
 
     #[rstest]
     #[case::agent_review_notifies_after_open(
