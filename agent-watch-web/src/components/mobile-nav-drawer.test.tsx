@@ -1,4 +1,4 @@
-import { act, useState } from 'react'
+import { act, type ReactNode, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
@@ -8,7 +8,13 @@ import { MobileNavDrawer } from '#components/mobile-nav-drawer'
 let container: HTMLDivElement
 let root: Root | null = null
 
-function ControlledMobileNav({ onClose }: { onClose: () => void }) {
+function ControlledMobileNav({
+  children,
+  onClose,
+}: {
+  children: ReactNode
+  onClose: () => void
+}) {
   const [open, setOpen] = useState(false)
 
   return (
@@ -29,16 +35,21 @@ function ControlledMobileNav({ onClose }: { onClose: () => void }) {
           setOpen(false)
         }}
       >
-        <button type="button">Navigation item</button>
+        {children}
       </MobileNavDrawer>
     </>
   )
 }
 
-function renderMobileNav(onClose: () => void) {
+function renderMobileNav(
+  onClose: () => void,
+  children: ReactNode = <button type="button">Navigation item</button>,
+) {
   root = createRoot(container)
   act(() => {
-    root?.render(<ControlledMobileNav onClose={onClose} />)
+    root?.render(
+      <ControlledMobileNav onClose={onClose}>{children}</ControlledMobileNav>,
+    )
   })
 
   const dialog =
@@ -90,5 +101,43 @@ it('opens the modal and calls onClose when Escape closes it', async () => {
     modal: true,
     closed: false,
     onCloseCalls: [[]],
+  })
+})
+
+it('fills the viewport and scrolls long navigation inside the drawer', async () => {
+  const dialog = renderMobileNav(
+    vi.fn(),
+    <div>
+      {Array.from({ length: 80 }, (_, index) => (
+        <div key={index}>Navigation item {index + 1}</div>
+      ))}
+    </div>,
+  )
+  const trigger = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Open navigation"]',
+  )
+  if (trigger === null)
+    throw new Error('Mobile navigation trigger was not rendered')
+
+  await act(async () => {
+    await userEvent.click(trigger)
+  })
+
+  dialog.style.setProperty('--mobile-viewport-top', '120px')
+  dialog.style.setProperty('--mobile-viewport-height', '420px')
+  const viewportHeight = 420
+  const snapshot = () => ({
+    drawerTop: getComputedStyle(dialog).top,
+    drawerHeight: Math.round(dialog.getBoundingClientRect().height),
+    viewportHeight,
+    overflowY: getComputedStyle(dialog).overflowY,
+    contentOverflows: dialog.scrollHeight > dialog.clientHeight,
+  })
+  expect(snapshot()).toEqual({
+    drawerTop: '120px',
+    drawerHeight: viewportHeight,
+    viewportHeight,
+    overflowY: 'auto',
+    contentOverflows: true,
   })
 })
