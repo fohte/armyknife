@@ -118,3 +118,15 @@ it('adds per-line and run-all buttons to fenced bang commands', () => {
     ].join(String.fromCharCode(10)),
   )
 })
+
+it('adds a confirmation button to an indented bang command block', () => {
+  const html = renderToStaticMarkup(
+    <MarkdownMessage sessionId="sample-session">
+      {'    ! printf safe'}
+    </MarkdownMessage>,
+  )
+
+  expect(html).toBe(
+    '<div class="markdown-message"><div class="markdown-code-block"><pre><code>! printf safe\n</code></pre><span class="bang-command-actions"><span class="bang-command-control"><button aria-label="Run command 1" class="bang-command-button" type="button">Run command 1</button></span></span></div></div>',
+  )
+})

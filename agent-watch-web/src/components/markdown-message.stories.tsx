@@ -100,3 +100,11 @@ export const FencedBangCommands: Story = {
     sessionId: 'sample-session',
   },
 }
+
+export const IndentedBangCommand: Story = {
+  name: 'The message includes an indented command',
+  args: {
+    children: '    ! printf result',
+    sessionId: 'sample-session',
+  },
+}

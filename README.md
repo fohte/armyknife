@@ -1165,6 +1165,8 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 - `GET /api/images/{name}` for saved conversation images
 - `GET /api/sessions/later-options` for server-calculated return times
 - `POST /api/sessions/{id}/messages` with `{"content":"..."}`
+- `POST /api/sessions/{id}/commands/preview` with `{"messageText":"Run ! printf safe now.","commands":["printf safe"]}` to verify the command is in the assistant transcript and return the session working directory for confirmation
+- `POST /api/sessions/{id}/commands/execute` with the same request to revalidate and run the command in the session working directory. The response includes `{"exitCode":0,"succeeded":true,"timedOut":false}`; stdout and stderr are returned to the session, capped to the last 8 KiB each, and execution stops after 30 seconds
 - `POST /api/sessions/{id}/answer` with `{"requestId":"...","answers":{"Which formats?":"Markdown, Plain text","Include examples?":"Yes"}}`, or `{"requestId":"...","skip":true}`
 - `POST /api/sessions/{id}/proposals/{seq}/answer` with `{"choice":0,"comment":"..."}`; `choice` is a zero-based option index or `null` to request another proposal, and `comment` may be `null`
 - `POST /api/sessions/{id}/permission/approve` with `{"requestId":"..."}`

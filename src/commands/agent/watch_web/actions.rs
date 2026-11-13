@@ -493,6 +493,12 @@ mod tests {
                 tokio::sync::oneshot::Receiver<()>,
             )>,
         >,
+        command_gate: Mutex<
+            Option<(
+                tokio::sync::oneshot::Sender<()>,
+                tokio::sync::oneshot::Receiver<()>,
+            )>,
+        >,
         pane_command: Mutex<Option<String>>,
         pane_has_agent_process: Mutex<bool>,
         pane_command_matches: Mutex<bool>,
@@ -510,6 +516,7 @@ mod tests {
                 message_error: Mutex::new(None),
                 after_message: Mutex::new(None),
                 message_gate: Mutex::new(None),
+                command_gate: Mutex::new(None),
                 pane_command: Mutex::new(Some("claude".to_string())),
                 pane_has_agent_process: Mutex::new(true),
                 pane_command_matches: Mutex::new(true),
@@ -548,6 +555,10 @@ mod tests {
                 "cwd": cwd,
                 "command": command,
             }));
+            if let Some((started, release)) = self.command_gate.lock().unwrap().take() {
+                let _ = started.send(());
+                let _ = release.blocking_recv();
+            }
             Ok(self
                 .command_result
                 .lock()
@@ -802,6 +813,18 @@ mod tests {
             let (started, started_receiver) = tokio::sync::oneshot::channel();
             let (release, release_receiver) = tokio::sync::oneshot::channel();
             *self.runtime.message_gate.lock().unwrap() = Some((started, release_receiver));
+            (started_receiver, release)
+        }
+
+        fn block_next_command(
+            &self,
+        ) -> (
+            tokio::sync::oneshot::Receiver<()>,
+            tokio::sync::oneshot::Sender<()>,
+        ) {
+            let (started, started_receiver) = tokio::sync::oneshot::channel();
+            let (release, release_receiver) = tokio::sync::oneshot::channel();
+            *self.runtime.command_gate.lock().unwrap() = Some((started, release_receiver));
             (started_receiver, release)
         }
     }
