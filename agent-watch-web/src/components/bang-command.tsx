@@ -5,7 +5,8 @@ import {
   type CommandStatus,
 } from '#components/bang-command-button'
 import { BangCommandDialog } from '#components/bang-command-dialog'
-import { requestActionJson } from '#session-action-requests'
+import { useSessionOperations } from '#session-operation-context'
+import { createSessionOperation } from '#session-operations'
 
 type BangCommandActionsProps = {
   commands: readonly string[]
@@ -49,6 +50,7 @@ export function BangCommandActions({
   sessionId,
   onCommandExecuted,
 }: BangCommandActionsProps) {
+  const { run } = useSessionOperations()
   const [activeKey, setActiveKey] = useState<string | null>(null)
   const [selectedCommands, setSelectedCommands] = useState<string[]>([])
   const [cwd, setCwd] = useState('')
@@ -56,28 +58,47 @@ export function BangCommandActions({
   const [statuses, setStatuses] = useState<Record<string, CommandStatus>>({})
   const [messages, setMessages] = useState<Record<string, string>>({})
   const [executing, setExecuting] = useState(false)
+  const onFailure = (key: string, error: Error) => {
+    setPreviewing(false)
+    setExecuting(false)
+    setActiveKey(null)
+    setStatuses((current) => ({ ...current, [key]: 'failed' }))
+    setMessages((current) => ({ ...current, [key]: error.message }))
+  }
 
   const openDialog = (key: string, selected: string[]) => {
     setActiveKey(key)
     setSelectedCommands(selected)
     setPreviewing(true)
     setStatuses((current) => ({ ...current, [key]: 'running' }))
-    void requestActionJson(
-      sessionId,
-      'commands/preview',
-      { messageText, commands: selected },
-      isCommandPreview,
-    ).match(
-      (preview) => {
-        setCwd(preview.cwd)
-        setPreviewing(false)
-        setStatuses((current) => ({ ...current, [key]: 'idle' }))
+    const operation = createSessionOperation(sessionId, 'commands/preview', {
+      messageText,
+      commands: selected,
+    })
+    operation.match(
+      (value) => {
+        void run(value).then((result) => {
+          result.match(
+            (response) => {
+              if (!isCommandPreview(response)) {
+                onFailure(
+                  key,
+                  new Error('The server returned an invalid response'),
+                )
+                return
+              }
+              setCwd(response.cwd)
+              setPreviewing(false)
+              setStatuses((current) => ({ ...current, [key]: 'idle' }))
+            },
+            (error) => {
+              onFailure(key, error)
+            },
+          )
+        })
       },
       (error) => {
-        setPreviewing(false)
-        setActiveKey(null)
-        setStatuses((current) => ({ ...current, [key]: 'failed' }))
-        setMessages((current) => ({ ...current, [key]: error.message }))
+        onFailure(key, error)
       },
     )
   }
@@ -87,34 +108,46 @@ export function BangCommandActions({
     const key = activeKey
     setExecuting(true)
     setStatuses((current) => ({ ...current, [key]: 'running' }))
-    void requestActionJson(
-      sessionId,
-      'commands/execute',
-      { messageText, commands: selectedCommands },
-      isCommandExecution,
-    ).match(
-      (result) => {
-        onCommandExecuted?.()
-        setExecuting(false)
-        setActiveKey(null)
-        setStatuses((current) => ({
-          ...current,
-          [key]: result.succeeded ? 'succeeded' : 'failed',
-        }))
-        setMessages((current) => ({
-          ...current,
-          [key]: result.timedOut
-            ? 'Timed out'
-            : result.succeeded
-              ? 'Completed'
-              : `Failed (exit code ${String(result.exitCode)})`,
-        }))
+    const operation = createSessionOperation(sessionId, 'commands/execute', {
+      messageText,
+      commands: selectedCommands,
+    })
+    operation.match(
+      (value) => {
+        void run(value).then((result) => {
+          result.match(
+            (response) => {
+              if (!isCommandExecution(response)) {
+                onFailure(
+                  key,
+                  new Error('The server returned an invalid response'),
+                )
+                return
+              }
+              onCommandExecuted?.()
+              setExecuting(false)
+              setActiveKey(null)
+              setStatuses((current) => ({
+                ...current,
+                [key]: response.succeeded ? 'succeeded' : 'failed',
+              }))
+              setMessages((current) => ({
+                ...current,
+                [key]: response.timedOut
+                  ? 'Timed out'
+                  : response.succeeded
+                    ? 'Completed'
+                    : `Failed (exit code ${String(response.exitCode)})`,
+              }))
+            },
+            (error) => {
+              onFailure(key, error)
+            },
+          )
+        })
       },
       (error) => {
-        setExecuting(false)
-        setActiveKey(null)
-        setStatuses((current) => ({ ...current, [key]: 'failed' }))
-        setMessages((current) => ({ ...current, [key]: error.message }))
+        onFailure(key, error)
       },
     )
   }

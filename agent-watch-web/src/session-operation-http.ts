@@ -21,6 +21,12 @@ function isStringRecord(value: unknown): value is Record<string, string> {
   )
 }
 
+function isStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) && value.every((entry) => typeof entry === 'string')
+  )
+}
+
 function toError(error: unknown): SessionOperationError {
   return error instanceof Error
     ? error
@@ -57,6 +63,22 @@ function requestFor(operation: SessionOperation) {
           ...(operation.attachments === undefined
             ? {}
             : { attachments: operation.attachments }),
+        },
+      }
+    case 'command_preview':
+      return {
+        path: 'commands/preview',
+        body: {
+          messageText: operation.messageText,
+          commands: operation.commands,
+        },
+      }
+    case 'command_execute':
+      return {
+        path: 'commands/execute',
+        body: {
+          messageText: operation.messageText,
+          commands: operation.commands,
         },
       }
     case 'answer':
@@ -198,6 +220,25 @@ export function createSessionOperation(
         id,
         frontmatter,
         body,
+      })
+    }
+    case 'commands/preview':
+    case 'commands/execute': {
+      const messageText = requiredString('messageText')
+      const commands = payload['commands']
+      if (
+        messageText === null ||
+        !isStringArray(commands) ||
+        commands.length === 0
+      ) {
+        return errOperation('Invalid command operation')
+      }
+      return ok<SessionOperation, Error>({
+        type:
+          action === 'commands/preview' ? 'command_preview' : 'command_execute',
+        sessionId,
+        messageText,
+        commands,
       })
     }
     case 'messages':
@@ -347,8 +388,15 @@ export function submitSessionOperation(operation: SessionOperation) {
   ).andThen((response) => {
     if (!response.ok)
       return errorFromResponse(response).andThen((error) => err(error))
-    if (operation.type !== 'merge')
+    if (
+      operation.type !== 'merge' &&
+      operation.type !== 'command_preview' &&
+      operation.type !== 'command_execute'
+    )
       return ok<unknown, SessionOperationError>(undefined)
-    return ResultAsync.fromPromise(response.json(), toError)
+    return ResultAsync.fromPromise<unknown, SessionOperationError>(
+      response.json(),
+      toError,
+    )
   })
 }
