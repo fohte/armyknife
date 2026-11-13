@@ -154,13 +154,18 @@ impl ClaudeParserState {
                             self.tool_uses.iter().position(|tool_use| tool_use.id == id)
                         {
                             let tool_use = self.tool_uses.remove(index);
-                            effects.push(ClaudeEffect::ToolAction {
-                                name: tool_use.name.clone(),
-                                input: tool_use.input.clone(),
-                                failed: tool_result_failed(record, block),
-                            });
-                            self.background_tasks
-                                .complete_tool_use(&tool_use, record, block, now);
+                            let failed = tool_result_failed(record, block);
+                            if tool_use.name == "SendUserFile" {
+                                effects.push(ClaudeEffect::SendUserFile { tool_use, failed });
+                            } else {
+                                effects.push(ClaudeEffect::ToolAction {
+                                    name: tool_use.name.clone(),
+                                    input: tool_use.input.clone(),
+                                    failed,
+                                });
+                                self.background_tasks
+                                    .complete_tool_use(&tool_use, record, block, now);
+                            }
                         }
                     }
                     let (text, images) = user_content(message.get("content"));

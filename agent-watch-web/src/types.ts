@@ -153,6 +153,17 @@ export type ChatItem =
       failed: boolean
       timestamp?: string
     }
+  | {
+      type: 'file_attachment'
+      files: {
+        name: string
+        source: string
+        isImage: boolean
+        available: boolean
+      }[]
+      caption: string | null
+      timestamp?: string
+    }
   | { type: 'assistant'; text: string }
   | {
       type: 'tool_summary'

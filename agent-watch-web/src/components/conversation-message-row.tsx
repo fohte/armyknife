@@ -68,6 +68,7 @@ function areConversationMessagePropsEqual(
     case 'event':
     case 'tool_summary':
     case 'tool_in_progress':
+    case 'file_attachment':
       return true
   }
 }

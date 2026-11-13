@@ -319,6 +319,7 @@ mod tests {
                 path: Some(&path),
                 engine,
                 additions: ParserAdditions {
+                    session_id: "fixture-session",
                     parent: None,
                     pending_tool: None,
                     user_marker: (engine == Engine::Claude).then_some(session_marker),
@@ -410,6 +411,7 @@ mod tests {
                 path: Some(&path),
                 engine: Engine::Claude,
                 additions: ParserAdditions {
+                    session_id: &session.session_id,
                     parent: None,
                     pending_tool: None,
                     user_marker: None,

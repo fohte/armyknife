@@ -10,6 +10,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use crate::commands::agent::error::CcError;
 use crate::commands::agent::types::Session;
 
+mod agent_files;
 mod decisions;
 mod migration;
 mod migrations;
@@ -22,6 +23,8 @@ mod todos;
 mod wake;
 mod web_state;
 
+pub(crate) use agent_files::AgentFile;
+pub(crate) use agent_files::{agent_file, agent_files, insert_agent_files};
 pub(crate) use decisions::{
     AgentDecision, AgentDecisionCounts, agent_decision_counts_by_session, agent_decisions,
     insert_agent_decision, set_agent_decision_review,

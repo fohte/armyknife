@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::commands::agent::store::{
-    AgentDecision, AgentProposal, AgentTodo, PermissionDeniedOperation, WatchWebPeerOutMessage,
-    WatchWebQueuedPrompt,
+    AgentDecision, AgentFile, AgentProposal, AgentTodo, PermissionDeniedOperation,
+    WatchWebPeerOutMessage, WatchWebQueuedPrompt,
 };
 use crate::commands::agent::types::{Engine, Session};
 
@@ -25,6 +25,7 @@ const MAX_CACHED_BACKGROUND_TASK_SESSIONS: usize = 256;
 pub(super) struct MessageCacheRecords {
     pub(super) proposals: Vec<AgentProposal>,
     pub(super) todos: Vec<AgentTodo>,
+    pub(super) agent_files: Vec<AgentFile>,
     pub(super) permission_denials: Vec<PermissionDeniedOperation>,
 }
 
@@ -44,6 +45,7 @@ pub(super) struct MessageCacheKey {
     pub(super) peer_out_messages: Vec<WatchWebPeerOutMessage>,
     pub(super) proposals: Vec<AgentProposal>,
     pub(super) todos: Vec<AgentTodo>,
+    pub(super) agent_files: Vec<AgentFile>,
     pub(super) permission_denials: Vec<PermissionDeniedOperation>,
 }
 
@@ -75,6 +77,7 @@ impl MessageCacheKey {
             peer_out_messages,
             proposals: records.proposals,
             todos: records.todos,
+            agent_files: records.agent_files,
             permission_denials: records.permission_denials,
         })
     }

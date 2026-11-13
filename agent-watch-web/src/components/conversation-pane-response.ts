@@ -106,6 +106,20 @@ function isChatItem(value: unknown): value is ChatItem {
         typeof value['failed'] === 'boolean' &&
         hasValidOptionalTimestamp(value)
       )
+    case 'file_attachment':
+      return (
+        Array.isArray(value['files']) &&
+        value['files'].every(
+          (file) =>
+            isRecord(file) &&
+            typeof file['name'] === 'string' &&
+            typeof file['source'] === 'string' &&
+            typeof file['isImage'] === 'boolean' &&
+            typeof file['available'] === 'boolean',
+        ) &&
+        (value['caption'] === null || typeof value['caption'] === 'string') &&
+        hasValidOptionalTimestamp(value)
+      )
     case 'todo':
       return (
         typeof value['seq'] === 'number' &&

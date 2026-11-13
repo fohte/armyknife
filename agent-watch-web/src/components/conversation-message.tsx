@@ -3,6 +3,7 @@ import '#components/conversation-message.css'
 import type { ReactNode } from 'react'
 
 import { DecisionCard } from '#components/decision-card'
+import { FileAttachmentCard } from '#components/file-attachment-card'
 import { MarkdownMessage } from '#components/markdown-message'
 import { formatMessageTime } from '#components/message-time'
 import { PeerMessage } from '#components/peer-message'
@@ -65,6 +66,14 @@ export function renderConversationMessage({
   sessions,
   now,
 }: ConversationMessageRowProps): ReactNode {
+  if (message.type === 'file_attachment') {
+    return (
+      <FileAttachmentCard
+        message={message}
+        {...(now === undefined ? {} : { now })}
+      />
+    )
+  }
   if (
     message.type === 'user' ||
     message.type === 'queued_user' ||

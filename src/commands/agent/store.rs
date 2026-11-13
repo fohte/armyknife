@@ -20,6 +20,7 @@ mod peer_out_messages;
 mod queued_prompts;
 
 pub(crate) use archive::{ArchiveLogContext, archive_codex_thread_before_delete_with};
+pub(crate) use database::AgentFile;
 pub(crate) use database::set_watch_web_compacting;
 pub(crate) use database::{
     AgentDecision, AgentDecisionCounts, AgentProposal, PermissionDeniedOperation,
@@ -344,14 +345,49 @@ pub fn delete_session(session_id: &str) -> Result<bool> {
 /// Used when cleanup handles archive ordering separately.
 /// Returns false when an incomplete todo keeps the row available or it was already absent.
 pub(crate) fn delete_session_without_archive(session_id: &str) -> Result<bool> {
-    database::delete_session(&sessions_dir()?, session_id)
+    let sessions_dir = sessions_dir()?;
+    let storage_root = agent_file_storage_root();
+    delete_session_from_with_storage(&sessions_dir, session_id, storage_root.as_deref())
 }
 
 /// Deletes a session from a specific directory.
 /// Allows testing with temporary directories.
 /// Returns false when an incomplete todo keeps the row available or it was already absent.
 pub(crate) fn delete_session_from(sessions_dir: &Path, session_id: &str) -> Result<bool> {
-    database::delete_session(sessions_dir, session_id)
+    let storage_root = agent_file_storage_root();
+    delete_session_from_with_storage(sessions_dir, session_id, storage_root.as_deref())
+}
+
+pub(crate) fn delete_session_from_with_storage(
+    sessions_dir: &Path,
+    session_id: &str,
+    storage_root: Option<&Path>,
+) -> Result<bool> {
+    let removed = database::delete_session(sessions_dir, session_id)?;
+    if removed {
+        match storage_root {
+            Some(storage_root) => {
+                if let Err(error) = super::file::remove_session_storage(storage_root, session_id) {
+                    tracing::warn!(%session_id, %error, "failed to remove stored session attachments");
+                }
+            }
+            None => tracing::warn!(
+                %session_id,
+                "could not resolve file attachment storage for deleted session"
+            ),
+        }
+    }
+    Ok(removed)
+}
+
+fn agent_file_storage_root() -> Option<PathBuf> {
+    match super::file::storage_root() {
+        Ok(root) => Some(root),
+        Err(error) => {
+            tracing::warn!(%error, "failed to resolve agent file storage directory");
+            None
+        }
+    }
 }
 
 /// Sorts sessions by updated_at descending with stability threshold.
@@ -494,6 +530,30 @@ pub(crate) fn agent_todos(session_id: &str) -> Result<Vec<AgentTodo>> {
     agent_todos_from(&sessions_dir()?, session_id)
 }
 
+pub(crate) fn insert_agent_files_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    files: &[AgentFile],
+) -> Result<()> {
+    database::insert_agent_files(sessions_dir, session_id, files)
+}
+
+pub(crate) fn agent_files_from(sessions_dir: &Path, session_id: &str) -> Result<Vec<AgentFile>> {
+    database::agent_files(sessions_dir, session_id)
+}
+
+pub(crate) fn agent_files(session_id: &str) -> Result<Vec<AgentFile>> {
+    agent_files_from(&sessions_dir()?, session_id)
+}
+
+pub(crate) fn agent_file_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    file_id: &str,
+) -> Result<Option<AgentFile>> {
+    database::agent_file(sessions_dir, session_id, file_id)
+}
+
 pub(crate) fn incomplete_agent_todo_titles_from(
     sessions_dir: &Path,
     session_ids: &[String],
@@ -613,14 +673,30 @@ pub fn cleanup_stale_sessions() -> Result<bool> {
     // being removed.
     let cwd_exists =
         |cwd: &Path| !matches!(fs::metadata(cwd), Err(e) if e.kind() == io::ErrorKind::NotFound);
-    cleanup_stale_sessions_by_socket(
+    let storage_root = agent_file_storage_root();
+    cleanup_stale_sessions_by_socket_with_storage(
         &sessions_dir()?,
         tmux::list_all_pane_ids_for_socket,
         cwd_exists,
+        storage_root.as_deref(),
     )
 }
 
+#[cfg(test)]
 fn cleanup_stale_sessions_by_socket<F, G>(dir: &Path, list_panes: F, cwd_exists: G) -> Result<bool>
+where
+    F: FnMut(Option<&str>) -> tmux::Result<HashSet<String>>,
+    G: Fn(&Path) -> bool,
+{
+    cleanup_stale_sessions_by_socket_with_storage(dir, list_panes, cwd_exists, None)
+}
+
+fn cleanup_stale_sessions_by_socket_with_storage<F, G>(
+    dir: &Path,
+    list_panes: F,
+    cwd_exists: G,
+    storage_root: Option<&Path>,
+) -> Result<bool>
 where
     F: FnMut(Option<&str>) -> tmux::Result<HashSet<String>>,
     G: Fn(&Path) -> bool,
@@ -637,10 +713,17 @@ where
             .borrow()
             .is_alive(info.socket_path.as_deref(), &info.pane_id)
     };
-    cleanup_stale_sessions_in(dir, is_pane_alive, cwd_exists)
+    cleanup_stale_sessions_in_with_archive_and_storage(
+        dir,
+        is_pane_alive,
+        cwd_exists,
+        crate::commands::agent::codex_steer::archive_thread,
+        storage_root,
+    )
 }
 
 /// Returns whether cleanup archived or removed at least one session record.
+#[cfg(test)]
 fn cleanup_stale_sessions_in<F, G>(dir: &Path, is_pane_alive: F, cwd_exists: G) -> Result<bool>
 where
     F: Fn(&super::types::TmuxInfo) -> Option<bool>,
@@ -654,6 +737,7 @@ where
     )
 }
 
+#[cfg(test)]
 fn cleanup_stale_sessions_in_with_archive<F, G, A>(
     dir: &Path,
     is_pane_alive: F,
@@ -665,8 +749,30 @@ where
     G: Fn(&Path) -> bool,
     A: FnMut(&str) -> anyhow::Result<()>,
 {
-    archive::cleanup_stale_sessions_in_with_archive_at(
+    cleanup_stale_sessions_in_with_archive_and_storage(
         dir,
+        is_pane_alive,
+        cwd_exists,
+        archive_codex_thread,
+        None,
+    )
+}
+
+fn cleanup_stale_sessions_in_with_archive_and_storage<F, G, A>(
+    dir: &Path,
+    is_pane_alive: F,
+    cwd_exists: G,
+    archive_codex_thread: A,
+    storage_root: Option<&Path>,
+) -> Result<bool>
+where
+    F: Fn(&super::types::TmuxInfo) -> Option<bool>,
+    G: Fn(&Path) -> bool,
+    A: FnMut(&str) -> anyhow::Result<()>,
+{
+    archive::cleanup_stale_sessions_in_with_archive_at_and_storage(
+        dir,
+        storage_root,
         is_pane_alive,
         cwd_exists,
         Utc::now(),
@@ -685,7 +791,6 @@ mod tests {
     use tempfile::TempDir;
 
     struct TempSessionDir {
-        #[expect(dead_code, reason = "kept alive to prevent cleanup until dropped")]
         temp_dir: TempDir,
         sessions_path: PathBuf,
     }
@@ -1501,6 +1606,7 @@ mod tests {
         use super::*;
         use crate::commands::agent::types::TmuxInfo;
         use rstest::rstest;
+        use sha2::{Digest, Sha256};
 
         /// Mock that treats all panes as dead
         fn mock_pane_always_dead(_info: &TmuxInfo) -> Option<bool> {
@@ -1994,6 +2100,66 @@ mod tests {
             assert_eq!(
                 (removed, path.is_stored(), lock_path.exists()),
                 (true, false, false),
+            );
+        }
+
+        #[rstest]
+        fn removes_stored_file_bytes_when_expired_session_is_collected(
+            temp_session_dir: TempSessionDir,
+        ) {
+            let session_id = "expired-session-with-file";
+            let now = Utc
+                .with_ymd_and_hms(2026, 1, 10, 0, 0, 0)
+                .single()
+                .expect("timestamp should be valid");
+            let mut session = create_test_session(session_id);
+            session.status = SessionStatus::Ended;
+            session.updated_at = now - TimeDelta::days(8);
+            save_session_to(&temp_session_dir.sessions_path, &session)
+                .expect("session should save");
+
+            let storage_root = temp_session_dir.temp_dir.path().join("attachments");
+            let session_storage = storage_root.join(crate::shared::hex::encode(&Sha256::digest(
+                session_id.as_bytes(),
+            )));
+            fs::create_dir_all(&session_storage).expect("attachment directory should be created");
+            let file_id = uuid::Uuid::new_v4().to_string();
+            fs::write(session_storage.join(&file_id), b"fixture bytes")
+                .expect("attachment should be written");
+            let file = crate::commands::agent::store::AgentFile {
+                id: file_id,
+                position: 0,
+                name: "fixture.txt".to_owned(),
+                caption: None,
+                mime_type: None,
+                size: b"fixture bytes".len() as i64,
+                created_at: now,
+            };
+            insert_agent_files_from(&temp_session_dir.sessions_path, session_id, &[file])
+                .expect("attachment record should be inserted");
+
+            let removed = archive::cleanup_stale_sessions_in_with_archive_at_and_storage(
+                &temp_session_dir.sessions_path,
+                Some(&storage_root),
+                mock_pane_always_alive,
+                mock_cwd_always_exists,
+                now,
+                |_| Ok(()),
+            )
+            .expect("cleanup should succeed");
+            let remaining_files = agent_files_from(&temp_session_dir.sessions_path, session_id)
+                .expect("file records should load");
+
+            assert_eq!(
+                (
+                    removed,
+                    session_record_in(&temp_session_dir.sessions_path, session_id)
+                        .expect("session record should resolve")
+                        .is_stored(),
+                    session_storage.exists(),
+                    remaining_files,
+                ),
+                (true, false, false, Vec::new()),
             );
         }
 

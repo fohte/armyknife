@@ -60,6 +60,7 @@ pub(in crate::commands::agent::watch_web::messages) type ParsedTranscript = (
 
 #[derive(Clone, Copy)]
 pub(in crate::commands::agent::watch_web::messages) struct ParserAdditions<'a> {
+    pub(in crate::commands::agent::watch_web::messages) session_id: &'a str,
     pub(in crate::commands::agent::watch_web::messages) parent: Option<&'a ParentSession>,
     pub(in crate::commands::agent::watch_web::messages) pending_tool:
         Option<&'a PermissionRequestData>,
@@ -103,6 +104,7 @@ fn parse_with_image_directory(
         image_directory,
         Utc::now(),
         ParserAdditions {
+            session_id: "fixture-session",
             parent,
             pending_tool,
             user_marker,
@@ -130,6 +132,7 @@ fn parse_with_decisions_and_queued_prompts(
         reader,
         now,
         ParserAdditions {
+            session_id: "fixture-session",
             parent,
             pending_tool,
             user_marker,
@@ -155,6 +158,7 @@ fn parse_with_background_tasks_and_peer_out_messages(
         reader,
         now,
         ParserAdditions {
+            session_id: "fixture-session",
             parent,
             pending_tool,
             user_marker,
@@ -182,6 +186,7 @@ fn parse_with_queued_prompts_and_proposals(
         reader,
         now,
         ParserAdditions {
+            session_id: "fixture-session",
             parent,
             pending_tool,
             user_marker,
@@ -230,6 +235,7 @@ fn parse_with_background_tasks_and_image_directory(
 #[cfg(test)]
 mod tests {
     use std::io::{self, BufRead, Cursor, Read, Seek, SeekFrom};
+    use std::path::Path;
 
     use chrono::{DateTime, TimeZone, Utc};
     use indoc::{formatdoc, indoc};
@@ -242,6 +248,71 @@ mod tests {
         parse_with_queued_prompts_and_peer_out_messages_and_proposals_and_skills,
         parse_with_queued_prompts_and_proposals,
     };
+    #[test]
+    fn renders_send_user_file_as_a_conversation_attachment() {
+        let directory = tempfile::tempdir().unwrap();
+        let image_path = directory.path().join("sample.png");
+        std::fs::write(&image_path, [137, 80, 78, 71, 13, 10, 26, 10]).unwrap();
+        let transcript = [
+            serde_json::json!({
+                "type": "assistant",
+                "uuid": "fixture-call-row",
+                "timestamp": "2030-01-01T12:00:00Z",
+                "message": {
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "fixture-tool-use",
+                        "name": "SendUserFile",
+                        "input": {
+                            "files": [image_path.to_string_lossy()],
+                            "caption": "Inspect the sample image."
+                        }
+                    }]
+                }
+            }),
+            serde_json::json!({
+                "type": "user",
+                "uuid": "fixture-result-row",
+                "parentUuid": "fixture-call-row",
+                "timestamp": "2030-01-01T12:00:01Z",
+                "message": {
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": "fixture-tool-use",
+                        "content": "File sent."
+                    }]
+                }
+            }),
+        ]
+        .into_iter()
+        .map(|record| record.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+        let messages = super::parse_with_image_directory(
+            std::io::Cursor::new(transcript),
+            None,
+            None,
+            None,
+            Some(Path::new("/fixture/unused-image-directory")),
+        )
+        .unwrap();
+
+        assert_eq!(
+            messages,
+            vec![ChatItem::FileAttachment {
+                files: vec![super::super::super::super::file_attachments::ChatFile {
+                    name: "sample.png".to_owned(),
+                    source:
+                        "/api/sessions/fixture-session/transcript-files/Zml4dHVyZS10b29sLXVzZQ/0"
+                            .to_owned(),
+                    is_image: true,
+                    available: true,
+                }],
+                caption: Some("Inspect the sample image.".to_owned()),
+                timestamp: Some("2030-01-01T12:00:01+00:00".to_owned()),
+            }]
+        );
+    }
     use crate::commands::agent::store::{
         AgentDecision, AgentTodo, PermissionRequestData, TodoResolution,
     };
@@ -277,6 +348,7 @@ mod tests {
                 Cursor::new(transcript),
                 Utc::now(),
                 ParserAdditions {
+                    session_id: "fixture-session",
                     parent: None,
                     pending_tool: None,
                     user_marker: None,
@@ -333,6 +405,7 @@ mod tests {
                 Cursor::new(transcript),
                 Utc::now(),
                 ParserAdditions {
+                    session_id: "fixture-session",
                     parent: None,
                     pending_tool: None,
                     user_marker: None,

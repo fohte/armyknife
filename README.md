@@ -641,6 +641,17 @@ $ a agent todo withdraw 1 --comment "The plan changed."
 Withdrew todo 1
 ```
 
+### `a agent file send`
+
+Run `a agent file send <path>... [--caption <text>]` from a tracked Claude Code or Codex session to show files in that session's watch-web conversation. The command copies each file at send time, so the conversation keeps the sent contents if the source later changes or disappears. PNG, JPEG, GIF, and WebP images appear inline; other files have download links. A send accepts up to 16 files, each at most 10 MiB, with a combined limit of 50 MiB.
+
+```console
+$ a agent file send ./sample-layout.png ./sample-report.pdf --caption "Review these samples"
+Sent 2 file(s) to watch-web
+```
+
+### `a agent title set`
+
 Run `a agent title set <TITLE>` from a tracked Claude Code or Codex session to set its title. The title is trimmed before it is saved; an empty or whitespace-only value restores the automatic title. The same title can be changed from `a agent watch` or the watch-web conversation header, and the most recent change wins. When the session has a tmux window, the window title is refreshed best-effort.
 
 ```console
@@ -1178,6 +1189,8 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 ### `a agent watch-web`
 
 `a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` and opens it in the default browser. Its local relay listens on `127.0.0.1:4318` and forwards requests only to ports recorded by `a agent web-ui add` or `a agent crit add`, including WebSocket connections. Pass `--no-open` to keep it from opening a browser, such as when running it as a background service. If the running executable is replaced, the server restarts with the new binary and open pages reload the embedded SPA. It serves the SPA embedded in the binary, with an Inbox grouped into Needs action, Later, In progress, and Done, plus a Board grouped by project. Sessions can be starred for TODAY from the Inbox and Nav. Later sessions return to Needs action when their timer expires or when they change. The Board puts projects that need action first and can hide quiet projects. Both views reload session metadata when the server sends an update. When a session has an active parent or child, the conversation pane adds a Tree tab that shows their hierarchy and lets users open available sessions. A session with an active review document adds a Review tab that displays its frontmatter and Markdown body. The backend provides `GET /api/sessions` for session metadata, `GET /api/events` for session-store and enrichment updates, and `GET /api/sessions/{id}/messages` for conversation items. `GET /api/sessions/{id}/review-document` returns the frontmatter and Markdown body for the active review document, or `404` when no live review lock is active. `GET /api/sessions/{id}/background-tasks/{task_id}/output` returns plain-text output for a running background Bash task, capped to the last 20 lines and 64 KiB. It reads only the output file recorded in that session's transcript. Saved conversation images are served by `GET /api/images/{name}`; the route only serves files in watch-web's image storage directory, and expired images return `404`. Session actions are available through the routes below. If the SPA has not been built, the page shows the build instructions; build it with:
+
+Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` only when recorded for that session, or by `GET /api/sessions/{id}/transcript-files/{tool_use_id}/{index}` only when the session transcript contains the matching file-send record and file index.
 
 - `POST /api/sessions/{id}/review-document/save` with `{"id":"review-id","frontmatter":{"approved":true},"body":"Updated Markdown."}` saves edits to the active review document path recorded by the server.
 - `POST /api/sessions/{id}/review-document/finish` accepts the same payload, saves the edits, then asks the review process to close its editor and run the completion handler.
