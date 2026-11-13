@@ -2252,10 +2252,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn idle_compaction_preserves_stopped_session_status() {
-        let temp_dir = tempfile::TempDir::new().expect("temporary directory should be created");
-        let sessions_dir = temp_dir.path();
+    #[rstest]
+    fn idle_compaction_preserves_stopped_session_status(
+        hook_status_sessions_dir: tempfile::TempDir,
+    ) {
+        let sessions_dir = hook_status_sessions_dir.path();
         save_test_session(sessions_dir, "idle-compaction-session", |session| {
             session.status = SessionStatus::Stopped;
         });
@@ -2299,10 +2300,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn turn_compaction_stops_after_the_turn_finishes() {
-        let temp_dir = tempfile::TempDir::new().expect("temporary directory should be created");
-        let sessions_dir = temp_dir.path();
+    #[rstest]
+    fn turn_compaction_stops_after_the_turn_finishes(hook_status_sessions_dir: tempfile::TempDir) {
+        let sessions_dir = hook_status_sessions_dir.path();
         save_test_session(sessions_dir, "turn-compaction-session", |session| {
             session.status = SessionStatus::Running;
         });
