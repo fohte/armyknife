@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.672](https://github.com/fohte/armyknife/compare/v0.1.671...v0.1.672) (2026-11-13)
+
+
+### Features
+
+* **watch-web:** highlight Bash commands and code ([#1719](https://github.com/fohte/armyknife/issues/1719)) ([d10ff38](https://github.com/fohte/armyknife/commit/d10ff38cb03295eb74216dad932a6ec7d16a9357))
+
 ## [0.1.671](https://github.com/fohte/armyknife/compare/v0.1.670...v0.1.671) (2026-11-13)
 
 
