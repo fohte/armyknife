@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[derive(Clone, Copy)]
 pub(crate) struct OutputTailOptions {
     pub(crate) max_bytes: usize,
     pub(crate) poll_interval: Duration,
@@ -136,6 +137,11 @@ mod tests {
         has_emitted_data: bool,
     }
 
+    struct InterruptedOnceReader {
+        interrupted: bool,
+        emitted_data: bool,
+    }
+
     struct RepeatingReader;
 
     struct OpenPipe;
@@ -155,6 +161,21 @@ mod tests {
         fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
             buffer[..3].copy_from_slice(b"out");
             Ok(3)
+        }
+    }
+
+    impl Read for InterruptedOnceReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if !self.interrupted {
+                self.interrupted = true;
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            if self.emitted_data {
+                return Ok(0);
+            }
+            self.emitted_data = true;
+            buffer[..9].copy_from_slice(b"recovered");
+            Ok(9)
         }
     }
 
@@ -272,6 +293,32 @@ mod tests {
             actual,
             OutputTail {
                 bytes: Vec::new(),
+                truncated: false,
+            },
+        );
+    }
+
+    #[test]
+    fn retries_interrupted_reads_when_configured() {
+        let actual = read_output_tail(
+            InterruptedOnceReader {
+                interrupted: false,
+                emitted_data: false,
+            },
+            Arc::new(AtomicBool::new(false)),
+            options(
+                32,
+                Duration::from_millis(100),
+                DrainDeadlineCheck::BeforeRead,
+                true,
+            ),
+        )
+        .expect("interrupted output read should be retried");
+
+        assert_eq!(
+            actual,
+            OutputTail {
+                bytes: b"recovered".to_vec(),
                 truncated: false,
             },
         );

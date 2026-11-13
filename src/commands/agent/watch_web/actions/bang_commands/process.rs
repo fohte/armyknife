@@ -53,35 +53,20 @@ pub(in crate::commands::agent::watch_web::actions) fn execute_command(
     }
 
     let stop_reading = Arc::new(AtomicBool::new(false));
+    let output_tail_options = OutputTailOptions {
+        max_bytes: OUTPUT_TAIL_BYTES,
+        poll_interval: PROCESS_CHECK_INTERVAL,
+        drain_timeout: OUTPUT_DRAIN_TIMEOUT,
+        drain_deadline_check: DrainDeadlineCheck::AfterRead,
+        retry_interrupted: false,
+    };
     let stdout_stop_reading = Arc::clone(&stop_reading);
     let stderr_stop_reading = Arc::clone(&stop_reading);
     let stdout_reader = thread::spawn(move || {
-        read_output_tail(
-            stdout,
-            stdout_stop_reading,
-            OutputTailOptions {
-                max_bytes: OUTPUT_TAIL_BYTES,
-                poll_interval: PROCESS_CHECK_INTERVAL,
-                drain_timeout: OUTPUT_DRAIN_TIMEOUT,
-                drain_deadline_check: DrainDeadlineCheck::AfterRead,
-                retry_interrupted: false,
-            },
-        )
-        .map(format_output_tail)
+        read_output_tail(stdout, stdout_stop_reading, output_tail_options).map(format_output_tail)
     });
     let stderr_reader = thread::spawn(move || {
-        read_output_tail(
-            stderr,
-            stderr_stop_reading,
-            OutputTailOptions {
-                max_bytes: OUTPUT_TAIL_BYTES,
-                poll_interval: PROCESS_CHECK_INTERVAL,
-                drain_timeout: OUTPUT_DRAIN_TIMEOUT,
-                drain_deadline_check: DrainDeadlineCheck::AfterRead,
-                retry_interrupted: false,
-            },
-        )
-        .map(format_output_tail)
+        read_output_tail(stderr, stderr_stop_reading, output_tail_options).map(format_output_tail)
     });
     let (status, timed_out) = wait_for_process(&mut child, COMMAND_TIMEOUT)?;
     stop_reading.store(true, Ordering::Release);
