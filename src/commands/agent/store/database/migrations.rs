@@ -1,7 +1,7 @@
 use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 use rusqlite_migration::{Error as MigrationError, M, MigrationDefinitionError, Migrations};
 
 // Keep older binaries compatible: new columns need defaults or must be nullable.
@@ -164,7 +164,8 @@ static MIGRATION_ENTRIES: [M<'static>; 15] = [
         "ALTER TABLE watch_web_peer_out_message
          ADD COLUMN failed INTEGER NOT NULL DEFAULT 0;",
     ),
-    M::up("ALTER TABLE agent_todo ADD COLUMN resolution TEXT;"),
+    // A schema version can already contain either column, so both are reconciled after migration.
+    M::up("SELECT 1;"),
 ];
 
 static MIGRATIONS: LazyLock<Migrations<'static>> =
@@ -181,6 +182,43 @@ pub(super) fn migrate_if_needed(connection: &mut Connection) -> Result<()> {
         && let Err(error) = MIGRATIONS.to_latest(connection)
     {
         accept_migration_error(connection, error)?;
+    }
+    if user_version <= current_version() {
+        reconcile_parallel_version_fourteen_columns(connection)?;
+    }
+    Ok(())
+}
+
+fn reconcile_parallel_version_fourteen_columns(connection: &Connection) -> Result<()> {
+    ensure_column(
+        connection,
+        "watch_web_peer_out_message",
+        "failed",
+        "ALTER TABLE watch_web_peer_out_message
+         ADD COLUMN failed INTEGER NOT NULL DEFAULT 0;",
+    )?;
+    ensure_column(
+        connection,
+        "agent_todo",
+        "resolution",
+        "ALTER TABLE agent_todo ADD COLUMN resolution TEXT;",
+    )?;
+    Ok(())
+}
+
+fn ensure_column(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+    add_column_sql: &str,
+) -> Result<()> {
+    let exists = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
+        params![table, column],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if !exists {
+        connection.execute_batch(add_column_sql)?;
     }
     Ok(())
 }

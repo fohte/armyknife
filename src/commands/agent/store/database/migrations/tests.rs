@@ -118,3 +118,101 @@ fn adds_permission_request_mailbox_to_version_nine_database() {
         ),
     );
 }
+
+#[rstest]
+#[case::todo_branch_schema(true, Some("rejected"), 0_i64)]
+#[case::master_schema(false, None, 1_i64)]
+fn reconciles_parallel_version_fourteen_schemas(
+    #[case] has_todo_resolution: bool,
+    #[case] expected_resolution: Option<&str>,
+    #[case] expected_failed: i64,
+) {
+    let mut connection = Connection::open_in_memory().expect("in-memory database should open");
+    Migrations::from_slice(&MIGRATION_ENTRIES[..13])
+        .to_latest(&mut connection)
+        .expect("version thirteen schema should be created");
+    if has_todo_resolution {
+        connection
+            .execute_batch("ALTER TABLE agent_todo ADD COLUMN resolution TEXT;")
+            .expect("todo branch column should be created");
+        connection
+            .pragma_update(None, "user_version", 14)
+            .expect("todo branch version should be stored");
+    } else {
+        Migrations::from_slice(&MIGRATION_ENTRIES[..14])
+            .to_latest(&mut connection)
+            .expect("master version fourteen schema should be created");
+    }
+    connection
+        .execute(
+            "INSERT INTO agent_todo (
+                session_id, seq, title, created_at, completed_at, comment
+            ) VALUES ('sample-session', 1, 'Task', 'created', 'completed', 'Reason')",
+            [],
+        )
+        .expect("todo row should be inserted");
+    if has_todo_resolution {
+        connection
+            .execute(
+                "UPDATE agent_todo SET resolution = 'rejected' WHERE session_id = 'sample-session'",
+                [],
+            )
+            .expect("todo resolution should be stored");
+    }
+    connection
+        .execute(
+            "INSERT INTO watch_web_peer_out_message (
+                from_session_id, to_session_id, content, sent_at
+            ) VALUES ('sender', 'target', 'Message', 'sent')",
+            [],
+        )
+        .expect("peer message should be inserted");
+    if expected_failed == 1 {
+        connection
+            .execute(
+                "UPDATE watch_web_peer_out_message SET failed = 1 WHERE id = 1",
+                [],
+            )
+            .expect("peer message failure state should be stored");
+    }
+
+    migrate_if_needed(&mut connection).expect("parallel version fourteen schema should migrate");
+
+    let actual = connection
+        .query_row(
+            "SELECT
+                EXISTS(SELECT 1 FROM pragma_table_info('agent_todo') WHERE name = 'resolution'),
+                EXISTS(SELECT 1 FROM pragma_table_info('watch_web_peer_out_message') WHERE name = 'failed'),
+                (SELECT resolution FROM agent_todo WHERE session_id = 'sample-session'),
+                (SELECT comment FROM agent_todo WHERE session_id = 'sample-session'),
+                (SELECT failed FROM watch_web_peer_out_message WHERE id = 1)",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, bool>(0)?,
+                    row.get::<_, bool>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            },
+        )
+        .expect("both reconciled schemas and existing rows should be queryable");
+    let user_version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("database migration version should be readable");
+
+    assert_eq!(
+        (actual, user_version),
+        (
+            (
+                true,
+                true,
+                expected_resolution.map(str::to_string),
+                "Reason".to_string(),
+                expected_failed
+            ),
+            current_version(),
+        ),
+    );
+}
