@@ -43,6 +43,8 @@ function getMarkdownLayoutSnapshot() {
   const paragraphLineCount = new Set(
     Array.from(range.getClientRects(), (rect) => Math.round(rect.top)),
   ).size
+  const hasHighlightedCode =
+    message.querySelector('.syntax-code-block code span[style]') !== null
 
   return [
     getComputedStyle(message).whiteSpace,
@@ -50,6 +52,7 @@ function getMarkdownLayoutSnapshot() {
     paragraphLineCount,
     blocks.map((block) => block.tagName),
     blockGaps,
+    hasHighlightedCode,
   ]
 }
 
@@ -96,7 +99,7 @@ function getTaggedMarkdownSnapshot() {
   }
 }
 
-it('preserves paragraph line breaks without adding blank space between blocks', () => {
+it('preserves paragraph line breaks without adding blank space between blocks', async () => {
   root = createRoot(container)
   act(() => {
     root?.render(
@@ -113,9 +116,14 @@ Second line
 | 1 | 100 ms |
 
 ~~~rust
-let attempts = 3;
+const maxPreviewItems = 7;
 ~~~`}</MarkdownMessage>,
     )
+  })
+
+  await act(async () => {
+    const { highlightCode } = await import('./syntax-highlighter')
+    await highlightCode('const maxPreviewItems = 7;', 'rust')
   })
 
   expect(getMarkdownLayoutSnapshot()).toEqual([
@@ -124,6 +132,7 @@ let attempts = 3;
     2,
     ['H2', 'P', 'UL', 'TABLE', 'PRE'],
     [12, 12, 12, 12],
+    true,
   ])
 })
 

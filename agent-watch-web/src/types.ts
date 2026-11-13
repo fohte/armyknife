@@ -185,6 +185,7 @@ export type ChatItem =
       requestId?: string
       tool: string
       description: string
+      command?: string
     }
   | {
       type: 'permission_denied'
@@ -192,6 +193,7 @@ export type ChatItem =
       toolUseId?: string
       tool: string
       inputSummary: string
+      command?: string
       reason: string | null
       retryable: boolean
       resolved: boolean

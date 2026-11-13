@@ -6,8 +6,16 @@ import type { ChatItem, SessionActions } from '#types'
 const permission: ChatItem = {
   type: 'permission',
   requestId: 'permission-request-example',
-  tool: 'Shell',
-  description: 'Run the formatter on changed files.',
+  tool: 'Bash',
+  description: '',
+  command: `set -euo pipefail
+printf '%s\\n' 'Preparing preview'
+git add ./sample-config.yml && git commit -m "$(cat <<'EOF'
+chore: refresh sample config
+
+intent(sample): keep local settings in sync
+EOF
+)"`,
 }
 
 const actions: SessionActions = {

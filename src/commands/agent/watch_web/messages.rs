@@ -402,6 +402,9 @@ fn load_conversation_with_queued_prompts(
                 .or_else(|| session.current_tool.clone())
                 .unwrap_or_else(|| "Permission required".to_string()),
             description: "Waiting for permission".to_string(),
+            command: main_permission_data.as_ref().and_then(|data| {
+                permission_request_command(data.tool_name.as_deref(), Some(&data.tool_input))
+            }),
         });
     }
 
@@ -426,6 +429,10 @@ fn load_conversation_with_queued_prompts(
                 input_summary: permission_denied_input_summary(
                     &operation.tool_name,
                     &operation.tool_input,
+                ),
+                command: permission_request_command(
+                    Some(&operation.tool_name),
+                    Some(&operation.tool_input),
                 ),
                 reason: operation.reason.clone(),
                 retryable,
@@ -459,6 +466,9 @@ fn load_conversation_with_queued_prompts(
             }
             continue;
         }
+        let command = permission_data.as_ref().and_then(|data| {
+            permission_request_command(data.tool_name.as_deref(), Some(&data.tool_input))
+        });
         messages.push(ChatItem::Permission {
             request_id: Some(request_id),
             tool: format!(
@@ -468,6 +478,7 @@ fn load_conversation_with_queued_prompts(
                     .unwrap_or_else(|| "Permission required".to_string())
             ),
             description: "Waiting for permission approval.".to_string(),
+            command,
         });
     }
 
@@ -490,6 +501,19 @@ fn permission_request_pending_tool(data: &PermissionRequestData) -> Option<Strin
         Some(detail) => format!("{tool_name}({detail})"),
         None => tool_name.to_string(),
     })
+}
+
+fn permission_request_command(
+    tool_name: Option<&str>,
+    tool_input: Option<&Value>,
+) -> Option<String> {
+    if tool_name != Some("Bash") {
+        return None;
+    }
+    tool_input
+        .and_then(|input| input.get("command"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 fn permission_denied_input_summary(tool_name: &str, input: &Value) -> String {
@@ -670,6 +694,8 @@ enum ChatItem {
         request_id: Option<String>,
         tool: String,
         description: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        command: Option<String>,
     },
     PermissionDenied {
         seq: i64,
@@ -678,6 +704,8 @@ enum ChatItem {
         tool: String,
         #[serde(rename = "inputSummary")]
         input_summary: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        command: Option<String>,
         reason: Option<String>,
         retryable: bool,
         resolved: bool,
@@ -950,12 +978,16 @@ mod tests {
         #[case] retryable: bool,
         #[case] expected_reason: &str,
     ) {
+        let command = indoc::indoc! {r#"
+            printf 'first line'
+            printf 'second line'
+        "#};
         let operation = PermissionDeniedOperation {
             session_id: "fixture-session".to_string(),
             seq: 1,
             tool_use_id: Some("tool-call-fixture".to_string()),
             tool_name: "Bash".to_string(),
-            tool_input: json!({ "command": "printf fixture" }),
+            tool_input: json!({ "command": command }),
             reason: reason.map(str::to_string),
             created_at: chrono::Utc::now(),
             resolved_at: None,
@@ -986,7 +1018,8 @@ mod tests {
                         "seq": 1,
                         "toolUseId": "tool-call-fixture",
                         "tool": "Bash",
-                        "inputSummary": "printf fixture",
+                        "inputSummary": command,
+                        "command": command,
                         "reason": expected_reason,
                         "retryable": retryable,
                         "resolved": false,
@@ -2371,6 +2404,7 @@ mod tests {
                 request_id: Some("permission-request-main".to_string()),
                 tool: "Bash(cargo test -p sample)".to_string(),
                 description: "Waiting for permission".to_string(),
+                command: None,
             }])
         );
     }
@@ -2382,6 +2416,7 @@ mod tests {
                 request_id: Some("permission-request-example".to_string()),
                 tool: "Bash".to_string(),
                 description: "Waiting for permission".to_string(),
+                command: Some("cargo test -p sample".to_string()),
             })
             .unwrap(),
             json!({
@@ -2389,6 +2424,7 @@ mod tests {
                 "requestId": "permission-request-example",
                 "tool": "Bash",
                 "description": "Waiting for permission",
+                "command": "cargo test -p sample",
             }),
         );
     }
@@ -2503,6 +2539,7 @@ mod tests {
                     request_id: Some("permission-request-subagent".to_string()),
                     tool: "Subagent fixture-agent-id: Permission required".to_string(),
                     description: "Waiting for permission approval.".to_string(),
+                    command: None,
                 },
             ])
         );
@@ -2568,11 +2605,13 @@ mod tests {
                     request_id: Some("permission-request-main".to_string()),
                     tool: "Bash(example command)".to_string(),
                     description: "Waiting for permission".to_string(),
+                    command: None,
                 },
                 ChatItem::Permission {
                     request_id: Some("permission-request-a".to_string()),
                     tool: "Subagent agent-fixture-a: Write".to_string(),
                     description: "Waiting for permission approval.".to_string(),
+                    command: None,
                 },
             ],
         );

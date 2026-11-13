@@ -228,10 +228,19 @@ fn active_tool_item(tool_uses: &[ToolUse], pending_tool: Option<&str>) -> Option
             })
         })?;
     if pending_tool.is_some_and(|pending| matches_pending_tool(tool_use, pending)) {
+        let command = super::super::super::permission_request_command(
+            Some(&tool_use.name),
+            tool_use.input.as_ref(),
+        );
         Some(ChatItem::Permission {
             request_id: None,
             tool: tool_use.name.clone(),
-            description: tool_detail(&tool_use.name, tool_use.input.as_ref()),
+            description: if command.is_some() {
+                String::new()
+            } else {
+                tool_detail(&tool_use.name, tool_use.input.as_ref())
+            },
+            command,
         })
     } else {
         Some(ChatItem::ToolInProgress {

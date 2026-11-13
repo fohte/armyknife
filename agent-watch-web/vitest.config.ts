@@ -36,6 +36,7 @@ const appTestFiles = [
   'src/components/proposal-card.test.tsx',
   'src/components/todo-card.test.tsx',
   'src/components/permission-denied-card.test.tsx',
+  'src/components/permission-card.test.tsx',
   'src/components/message-composer.test.tsx',
   'src/components/use-composer-message.test.tsx',
   'src/components/crit-pane.test.tsx',

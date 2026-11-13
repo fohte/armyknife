@@ -13,7 +13,7 @@ const operation: Extract<ChatItem, { type: 'permission_denied' }> = {
   seq: 1,
   toolUseId: 'tool-call-example',
   tool: 'Bash',
-  inputSummary: 'cargo test --workspace',
+  inputSummary: 'A shell operation was denied.',
   reason: '[Sensitive Operation]',
   retryable: true,
   resolved: false,
@@ -73,10 +73,38 @@ it('renders the denied operation and offers a one-time retry', () => {
   expect(snapshot()).toEqual({
     heading: 'Operation denied',
     tool: 'Bash',
-    input: 'cargo test --workspace',
+    input: 'A shell operation was denied.',
     reason: '[Sensitive Operation]',
     button: [{ text: 'Allow and retry', disabled: false }],
   })
+})
+
+it('highlights a denied Bash command while preserving its line breaks', async () => {
+  const command = `printf '%s\\n' 'Checking preview'
+git status --short`
+  renderCard({
+    message: {
+      ...operation,
+      inputSummary: 'A shell command was denied.',
+      command,
+    },
+  })
+
+  const snapshot = () => {
+    const code = container.querySelector('.permission-denied-input code')
+    return {
+      code: code?.textContent ?? null,
+      hasColoredToken:
+        code !== null && code.querySelector('span[style]') !== null,
+    }
+  }
+
+  await act(async () => {
+    const { highlightCode } = await import('./syntax-highlighter')
+    await highlightCode(command, 'bash')
+  })
+
+  expect(snapshot()).toEqual({ code: command, hasColoredToken: true })
 })
 
 it('sends no retry action for denials without a classifier verdict', () => {
