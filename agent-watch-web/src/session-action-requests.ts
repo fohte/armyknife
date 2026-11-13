@@ -8,7 +8,7 @@ function toError(error: unknown) {
     : new Error('Request failed', { cause: error })
 }
 
-export function requestAction(
+function postSessionAction(
   sessionId: string,
   path: string,
   payload?: Record<string, unknown>,
@@ -24,7 +24,15 @@ export function requestAction(
           }),
     }),
     toError,
-  ).andThen((response) => {
+  )
+}
+
+export function requestAction(
+  sessionId: string,
+  path: string,
+  payload?: Record<string, unknown>,
+) {
+  return postSessionAction(sessionId, path, payload).andThen((response) => {
     if (response.ok) return ok(undefined)
     return errorFromResponse(response).andThen((error) => err(error))
   })
@@ -36,12 +44,7 @@ export function requestActionJson<T>(
   payload: Record<string, unknown>,
   validate: (value: unknown) => value is T,
 ) {
-  return ResultAsync.fromPromise(
-    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    }),
-    toError,
-  ).andThen((response) => jsonFromResponse(response, validate))
+  return postSessionAction(sessionId, path, payload).andThen((response) =>
+    jsonFromResponse(response, validate),
+  )
 }
