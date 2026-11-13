@@ -603,7 +603,7 @@ export function ConversationPane({
         setError(null)
       }}
       onAction={onAction}
-      onCommandExecuted={refresh}
+      onCommandExecuted={() => void refresh()}
       onOpenInTerminal={onOpenInTerminal}
       onSelectSession={onSelectSession}
       isMobile={isMobile}
