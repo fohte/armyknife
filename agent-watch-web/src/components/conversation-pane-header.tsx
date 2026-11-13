@@ -1,7 +1,13 @@
 import '#components/conversation-pane-view.css'
 
 import { Button } from '@fohte/ui/button'
-import { ChevronLeft, PanelRightClose, PanelRightOpen } from 'lucide-react'
+import {
+  ChevronLeft,
+  PanelRightClose,
+  PanelRightOpen,
+  Pencil,
+} from 'lucide-react'
+import { type SubmitEvent, useState } from 'react'
 
 import { OpenInTerminalAction } from '#components/open-in-terminal-action'
 import { SessionHeading } from '#components/session-heading'
@@ -23,6 +29,7 @@ type ConversationPaneHeaderProps = {
   backgroundTasks: readonly BackgroundTask[]
   openInTerminalStatus: OpenInTerminalStatus
   isToday: boolean
+  titleEditing?: boolean
   onAction: (
     action: string,
     payload?: Record<string, unknown>,
@@ -45,6 +52,7 @@ export function ConversationPaneHeader({
   backgroundTasks,
   openInTerminalStatus,
   isToday,
+  titleEditing = false,
   onAction,
   onOpenInTerminal,
   onSelectSession,
@@ -54,9 +62,80 @@ export function ConversationPaneHeader({
   onLater,
   onClose,
 }: ConversationPaneHeaderProps) {
+  const [isEditingTitle, setIsEditingTitle] = useState(titleEditing)
+  const [titleDraft, setTitleDraft] = useState(session.title)
+  const [isSavingTitle, setIsSavingTitle] = useState(false)
   const parent = session.parent
   const linkedTasks =
     session.tasks ?? (session.task === null ? [] : [session.task])
+
+  const saveTitle = async (event: SubmitEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setIsSavingTitle(true)
+    const saved = await onAction('title', { title: titleDraft })
+    setIsSavingTitle(false)
+    if (saved) setIsEditingTitle(false)
+  }
+
+  const editTitle = () => {
+    setTitleDraft(session.title)
+    setIsEditingTitle(true)
+  }
+
+  const handleTitleSubmit = (event: SubmitEvent<HTMLFormElement>) => {
+    void saveTitle(event)
+  }
+
+  const titleHeading = isEditingTitle ? (
+    <form className="session-title-editor" onSubmit={handleTitleSubmit}>
+      <input
+        aria-label="Session title"
+        autoFocus
+        value={titleDraft}
+        onChange={(event) => {
+          setTitleDraft(event.currentTarget.value)
+        }}
+      />
+      <Button
+        className="cursor-pointer"
+        type="submit"
+        variant="plain"
+        disabled={isSavingTitle}
+      >
+        Save
+      </Button>
+      <Button
+        className="cursor-pointer"
+        type="button"
+        variant="plain"
+        disabled={isSavingTitle}
+        onClick={() => {
+          setTitleDraft(session.title)
+          setIsEditingTitle(false)
+        }}
+      >
+        Cancel
+      </Button>
+    </form>
+  ) : (
+    <div className="session-title-heading">
+      <SessionHeading
+        title={session.title}
+        isPaused={session.isPaused}
+        sessionId={session.id}
+      />
+      <Button
+        className="session-title-edit cursor-pointer"
+        type="button"
+        variant="plain"
+        aria-label="Edit session title"
+        title="Edit session title"
+        onClick={editTitle}
+      >
+        <Pencil aria-hidden="true" size={15} />
+      </Button>
+    </div>
+  )
 
   return (
     <header className="conversation-header">
@@ -72,11 +151,7 @@ export function ConversationPaneHeader({
             <ChevronLeft aria-hidden="true" size={30} strokeWidth={2.5} />
           </Button>
           <div className="mobile-conversation-heading">
-            <SessionHeading
-              title={session.title}
-              isPaused={session.isPaused}
-              sessionId={session.id}
-            />
+            {titleHeading}
             <div className="mobile-conversation-context">
               <SessionTaskLinks
                 task={session.task}
@@ -240,11 +315,7 @@ export function ConversationPaneHeader({
                 ) : null}
               </div>
             </div>
-            <SessionHeading
-              title={session.title}
-              isPaused={session.isPaused}
-              sessionId={session.id}
-            />
+            {titleHeading}
           </div>
         </>
       )}
