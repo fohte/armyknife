@@ -12,8 +12,8 @@ use super::{DeliveryError, RequestError, RpcRequest};
 mod history;
 use history::{
     MatchingItemSnapshot, has_completed_turn_notification, has_recorded_message,
-    has_user_message_notification, is_terminal_turn_status, latest_turn_status as latest_status,
-    matching_user_message_snapshot, turn_status,
+    has_user_message_notification, is_terminal_turn_status, latest_turn as latest_turn_record,
+    latest_turn_status as latest_status, matching_user_message_snapshot, turn_status,
 };
 
 const PRE_TURN_TURNS_LIST_REQUEST_ID: u64 = 2;
@@ -397,6 +397,17 @@ pub(super) fn latest_turn_status(
     let (thread, _) = read_turns(socket, thread_id, request_id, 1, ItemsView::NotLoaded)
         .map_err(super::request_error_to_anyhow)?;
     Ok(latest_status(&thread).map(str::to_string))
+}
+
+pub(super) fn latest_turn_details(
+    socket: &mut WebSocket<UnixStream>,
+    thread_id: &str,
+    request_id: u64,
+) -> anyhow::Result<Option<(String, String)>> {
+    let (thread, _) = read_turns(socket, thread_id, request_id, 1, ItemsView::NotLoaded)
+        .map_err(super::request_error_to_anyhow)?;
+    Ok(latest_turn_record(&thread)
+        .map(|(turn_id, status)| (turn_id.to_string(), status.to_string())))
 }
 
 fn take_request_id(next_request_id: &mut u64) -> super::Result<u64> {

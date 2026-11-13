@@ -32,12 +32,6 @@ pub(super) enum ClaudeEffect {
         tool_use: ToolUse,
         failed: bool,
     },
-    PeerNotification {
-        tool_use: ToolUse,
-        text: String,
-        failed: bool,
-        timestamp: Option<DateTime<Utc>>,
-    },
     Question {
         id: Option<String>,
         item: ChatItem,
