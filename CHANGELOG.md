@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.668](https://github.com/fohte/armyknife/compare/v0.1.667...v0.1.668) (2026-11-13)
+
+
+### Features
+
+* **watch-web:** quote selected text in replies ([#1708](https://github.com/fohte/armyknife/issues/1708)) ([21b9e26](https://github.com/fohte/armyknife/commit/21b9e2638a433cb54dec3246256922115b0efa85))
+
 ## [0.1.667](https://github.com/fohte/armyknife/compare/v0.1.666...v0.1.667) (2026-11-13)
 
 
