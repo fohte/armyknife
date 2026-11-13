@@ -59,6 +59,9 @@ async fn get_review_document(
                 return Err(StatusCode::INTERNAL_SERVER_ERROR);
             }
         };
+        if !has_review_document_marker(&session) {
+            return Ok(None);
+        }
         let queue = load_review_queue(&session);
         let Some(marker) = active_review_document(&session, queue) else {
             return Ok(None);
@@ -84,14 +87,17 @@ pub(super) fn active_review_document_id(
     session: &Session,
     queue: ReviewDocumentQueue,
 ) -> Option<String> {
-    if !session
-        .pending_human_review_ids
-        .iter()
-        .any(|review_id| review_document_marker(review_id).is_some())
-    {
+    if !has_review_document_marker(session) {
         return None;
     }
     active_review_document(session, queue).map(|marker| marker.id)
+}
+
+pub(super) fn has_review_document_marker(session: &Session) -> bool {
+    session
+        .pending_human_review_ids
+        .iter()
+        .any(|review_id| review_document_marker(review_id).is_some())
 }
 
 fn active_review_document(
