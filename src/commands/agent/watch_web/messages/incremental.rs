@@ -213,10 +213,11 @@ fn render_parser(
             ))
         }
         IncrementalTranscriptParser::Codex(parser) => {
-            let (messages, skills) = parser.render_with_decisions_and_todos(
+            let (messages, skills) = parser.render_with_decisions_todos_and_peer_out_messages(
                 input.additions.parent,
                 input.additions.decisions,
                 input.additions.todos,
+                input.additions.peer_out_messages,
             )?;
             Ok((
                 ConversationResponse {

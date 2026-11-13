@@ -136,6 +136,7 @@ export type ChatItem =
       session_title?: string
       content: UserContentPart[]
       timestamp?: string
+      failed?: boolean
     }
   | {
       type: 'subagent_report'

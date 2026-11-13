@@ -249,6 +249,7 @@ mod tests {
             "fixture-target-session",
             "Delivered before this session was deleted",
             sent_at,
+            false,
         )
         .unwrap();
 

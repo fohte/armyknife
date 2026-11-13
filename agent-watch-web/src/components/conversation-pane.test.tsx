@@ -3167,7 +3167,7 @@ it('shows peer images and supports keyboard navigation', () => {
     items: [
       {
         className: 'chat-peer-message chat-peer-message-to',
-        text: 'TOBuild verificationPlease check the fictional output.画像はもうありません',
+        text: 'TOSENTBuild verificationPlease check the fictional output.画像はもうありません',
         imageSources: [],
         unavailableImageText: '画像はもうありません',
         fileNames: [],
