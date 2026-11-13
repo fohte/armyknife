@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "claude-design": {
+      "source": "JimLiu/baoyu-design",
+      "sourceType": "github",
+      "skillPath": "skills/claude-design/SKILL.md",
+      "computedHash": "134fa196cdc4932c076b2aca48292b2d6ff9e28f824eed59560391f631ced2fd"
+    },
+    "claude-design-system": {
+      "source": "JimLiu/baoyu-design",
+      "sourceType": "github",
+      "skillPath": "skills/claude-design-system/SKILL.md",
+      "computedHash": "41a5c5091279e98e895a159375038f6fc8bbfa496847be00d81830b41670a9ab"
+    }
+  }
+}
