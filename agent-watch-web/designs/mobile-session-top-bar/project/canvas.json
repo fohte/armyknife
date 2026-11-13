@@ -1,0 +1,40 @@
+{
+  "v": 3,
+  "createdOnFiles": { "v": 1, "at": "2026-11-13T11:42:55Z" },
+  "title": "Mobile session top bar",
+  "launch": { "view": "canvas" },
+  "pages": [],
+  "boards": {
+    "Main.dc.html": { "x": 0, "y": 0, "w": 390, "h": 844, "title": "Current" },
+    "option-a-two-rows.dc.html": { "x": 470, "y": 0, "w": 390, "h": 844, "title": "A · Two rows" },
+    "option-b-overflow-menu.dc.html": { "x": 940, "y": 0, "w": 390, "h": 844, "title": "B · Overflow menu" },
+    "option-c-bottom-actions.dc.html": { "x": 1410, "y": 0, "w": 390, "h": 844, "title": "C · Actions at the bottom" },
+    "current-crowded.dc.html": { "x": 0, "y": 1200, "w": 390, "h": 844, "title": "Current, crowded" },
+    "option-a-crowded.dc.html": { "x": 470, "y": 1200, "w": 390, "h": 844, "title": "A, crowded" },
+    "option-b-crowded.dc.html": { "x": 940, "y": 1200, "w": 390, "h": 844, "title": "B, crowded, menu open" },
+    "option-c-crowded.dc.html": { "x": 1410, "y": 1200, "w": 390, "h": 844, "title": "C, crowded" }
+  },
+  "order": [
+    "Main.dc.html",
+    "option-a-two-rows.dc.html",
+    "option-b-overflow-menu.dc.html",
+    "option-c-bottom-actions.dc.html",
+    "current-crowded.dc.html",
+    "option-a-crowded.dc.html",
+    "option-b-crowded.dc.html",
+    "option-c-crowded.dc.html"
+  ],
+  "notes": {
+    "typical": { "x": 0, "y": -300, "text": "In progress · 1 task · 2 background tasks", "kind": "title1", "maxW": 1800 },
+    "crowded": { "x": 0, "y": 964, "text": "Done · starred · 3 tasks · 1 background task · long title", "kind": "title1", "maxW": 1800 }
+  },
+  "designSystems": [
+    {
+      "title": "agent watch",
+      "namespace": "agentwatch",
+      "artifact": "agent-watch-web/designs/agent-watch-design-system",
+      "version": null,
+      "copiedAt": "2026-11-13T11:42:55Z"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+# State of the local baoyu-design editor server, not part of the design.
+.artifact-server.json
+.artifact-server.log
+.sharing.json
+/history/
+/exports/
+*.tmp
+.tmp-*
+.DS_Store
