@@ -120,6 +120,7 @@ fn router_with_url_loader<T: CritTransport>(
     };
     Router::new()
         .route("/_crit/{port}", get(select_crit::<T>))
+        .route("/_crit/{port}/", get(select_crit::<T>))
         .route("/_crit/{port}/{*path}", get(select_crit::<T>))
         .fallback(any(proxy_request::<T>))
         .layer(from_fn(security::validate_request))
@@ -415,6 +416,41 @@ mod tests {
                 expected_status,
                 expected_location.map(|location| location.parse().unwrap()),
                 expected_cookie.map(|cookie| cookie.parse().unwrap()),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn trailing_slash_selection_redirects_to_root_with_port_cookie() {
+        let app = router_with_url_loader(
+            || Ok(vec!["http://localhost:48761".to_owned()]),
+            fake_transport().0,
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/_crit/48761/")
+                    .header(HOST, "localhost:4318")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (
+                response.status(),
+                response.headers().get(LOCATION).cloned(),
+                response.headers().get(SET_COOKIE).cloned(),
+            ),
+            (
+                StatusCode::SEE_OTHER,
+                Some("/".parse().unwrap()),
+                Some(
+                    "armyknife_crit_port=48761; Path=/; HttpOnly; SameSite=Lax"
+                        .parse()
+                        .unwrap()
+                ),
             ),
         );
     }
