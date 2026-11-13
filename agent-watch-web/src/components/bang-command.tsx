@@ -5,7 +5,7 @@ import {
   type CommandStatus,
 } from '#components/bang-command-button'
 import { BangCommandDialog } from '#components/bang-command-dialog'
-import { requestActionJson } from '#components/conversation-requests'
+import { requestActionJson } from '#session-action-requests'
 
 type BangCommandActionsProps = {
   commands: readonly string[]

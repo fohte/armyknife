@@ -4,7 +4,7 @@ import {
   isReviewDocumentResponse,
   type ReviewDocumentResponse,
 } from '#components/conversation-pane-response'
-import { requestAction, requestJson } from '#components/conversation-requests'
+import { requestJson } from '#components/conversation-requests'
 import type { Decision } from '#components/decision-card'
 import { DecisionsPanel } from '#components/decisions-panel'
 import { PullRequestListPanel } from '#components/pull-request-list-panel'
@@ -14,6 +14,7 @@ import type { SessionStatusPanelTab } from '#components/session-status-panel'
 import { SessionTreePanel } from '#components/session-tree-panel'
 import { useSessionPullRequests } from '#components/use-session-pull-requests'
 import { WebUiPane } from '#components/web-ui-pane'
+import { requestAction } from '#session-action-requests'
 import {
   needsActionDescendantCount,
   type SessionTreeViewState,
