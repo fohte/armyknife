@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.670](https://github.com/fohte/armyknife/compare/v0.1.669...v0.1.670) (2026-11-13)
+
+
+### Features
+
+* **agent:** support session title changes ([#1714](https://github.com/fohte/armyknife/issues/1714)) ([a1d3032](https://github.com/fohte/armyknife/commit/a1d30322ef022500527a5b21eb52a344d8cea9b8))
+
 ## [0.1.669](https://github.com/fohte/armyknife/compare/v0.1.668...v0.1.669) (2026-11-13)
 
 
