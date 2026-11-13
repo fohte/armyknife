@@ -73,15 +73,7 @@ impl Host for LiveHost {
     }
 
     fn rewind_claude_files(&self, session: &Session, message_id: &str) -> Result<()> {
-        let mut command = crate::shared::command::new("claude");
-        command.current_dir(&session.cwd).args([
-            "-p",
-            "--resume",
-            &session.session_id,
-            "--rewind-files",
-            message_id,
-        ]);
-        let output = command
+        let output = claude_file_rewind_command(session, message_id)
             .output()
             .context("failed to start Claude Code file rewind")?;
         ensure!(
@@ -131,6 +123,21 @@ impl Host for LiveHost {
         )?;
         Ok(())
     }
+}
+
+fn claude_file_rewind_command(session: &Session, message_id: &str) -> std::process::Command {
+    let mut command = crate::shared::command::new("claude");
+    command
+        .current_dir(&session.cwd)
+        .env("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "true")
+        .args([
+            "-p",
+            "--resume",
+            &session.session_id,
+            "--rewind-files",
+            message_id,
+        ]);
+    command
 }
 
 pub(super) fn can_rewind(session: &Session) -> bool {
@@ -489,6 +496,49 @@ mod tests {
                     "type": "user",
                     "message": {"content": "Earlier request."}
                 })],
+            ),
+        );
+    }
+
+    #[test]
+    fn claude_file_rewind_enables_sdk_checkpointing_without_starting_a_process() {
+        let session = test_session();
+        let command = claude_file_rewind_command(&session, "fixture-message-id");
+        let actual = (
+            command
+                .get_args()
+                .map(|argument| argument.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            command.get_current_dir().map(Path::to_path_buf),
+            command
+                .get_envs()
+                .map(|(name, value)| {
+                    (
+                        name.to_string_lossy().into_owned(),
+                        value.map(|value| value.to_string_lossy().into_owned()),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
+
+        assert_eq!(
+            actual,
+            (
+                vec![
+                    "-p",
+                    "--resume",
+                    "fixture-session",
+                    "--rewind-files",
+                    "fixture-message-id",
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+                Some(PathBuf::from("/tmp/fixture")),
+                vec![(
+                    "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING".to_string(),
+                    Some("true".to_string()),
+                )],
             ),
         );
     }
