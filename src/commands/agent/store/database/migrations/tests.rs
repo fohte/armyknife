@@ -136,18 +136,18 @@ fn adds_permission_request_mailbox_to_version_nine_database(database_fixture: Da
     );
 }
 #[rstest]
-fn adds_session_replacement_table_to_version_seventeen_database(database_fixture: DatabaseFixture) {
+fn adds_session_replacement_table_to_version_eighteen_database(database_fixture: DatabaseFixture) {
     let DatabaseFixture {
         temp_dir,
         mut connection,
     } = database_fixture;
-    Migrations::from_slice(&MIGRATION_ENTRIES[..17])
+    Migrations::from_slice(&MIGRATION_ENTRIES[..18])
         .to_latest(&mut connection)
-        .expect("version seventeen schema should be created");
+        .expect("version eighteen schema should be created");
     drop(connection);
 
     let connection = super::super::open_connection(temp_dir.path())
-        .expect("version seventeen database should migrate to the latest schema");
+        .expect("version eighteen database should migrate to the latest schema");
     let actual = connection
         .query_row(
             "SELECT EXISTS(
@@ -275,5 +275,43 @@ fn adds_todo_resolution_to_master_version_fourteen_database(database_fixture: Da
             resolution: Some(super::super::TodoResolution::Completed),
             comment: Some("Already handled".to_string()),
         }],
+    );
+}
+
+#[rstest]
+fn adds_agent_file_schema_to_version_seventeen_database(database_fixture: DatabaseFixture) {
+    let DatabaseFixture { mut connection, .. } = database_fixture;
+    Migrations::from_slice(&MIGRATION_ENTRIES[..17])
+        .to_latest(&mut connection)
+        .expect("version seventeen schema should be created");
+    let initial_version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("initial migration version should be readable");
+
+    migrate_if_needed(&mut connection).expect("version seventeen database should upgrade");
+
+    let file_schema = connection
+        .query_row(
+            "SELECT
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_file'),
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'agent_file_session_id_created_at'),
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'agent_file_delete_session')",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, bool>(0)?,
+                    row.get::<_, bool>(1)?,
+                    row.get::<_, bool>(2)?,
+                ))
+            },
+        )
+        .expect("file schema objects should be queryable");
+    let final_version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("final migration version should be readable");
+
+    assert_eq!(
+        (initial_version, file_schema, final_version),
+        (17, (true, true, true), current_version()),
     );
 }

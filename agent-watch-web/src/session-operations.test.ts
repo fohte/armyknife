@@ -292,6 +292,38 @@ const requests: {
     body: { taskId: 'task-new' },
   },
   {
+    name: 'save review document',
+    operation: {
+      type: 'review_document_save',
+      sessionId: 'test-session',
+      id: 'fixture-review',
+      frontmatter: { title: 'Fixture title' },
+      body: 'Fixture body',
+    },
+    path: 'review-document/save',
+    body: {
+      id: 'fixture-review',
+      frontmatter: { title: 'Fixture title' },
+      body: 'Fixture body',
+    },
+  },
+  {
+    name: 'finish review document',
+    operation: {
+      type: 'review_document_finish',
+      sessionId: 'test-session',
+      id: 'fixture-review',
+      frontmatter: { title: 'Fixture title' },
+      body: 'Fixture body',
+    },
+    path: 'review-document/finish',
+    body: {
+      id: 'fixture-review',
+      frontmatter: { title: 'Fixture title' },
+      body: 'Fixture body',
+    },
+  },
+  {
     name: 'merge pull request',
     operation: {
       type: 'merge',
@@ -485,6 +517,38 @@ const operationFactories: [
     'primary-task',
     { taskId: 'task-new' },
     { type: 'primary_task', sessionId: session.id, taskId: 'task-new' },
+  ],
+  [
+    'save review document',
+    'review-document/save',
+    {
+      id: 'fixture-review',
+      frontmatter: { title: 'Fixture title' },
+      body: 'Fixture body',
+    },
+    {
+      type: 'review_document_save',
+      sessionId: session.id,
+      id: 'fixture-review',
+      frontmatter: { title: 'Fixture title' },
+      body: 'Fixture body',
+    },
+  ],
+  [
+    'finish review document',
+    'review-document/finish',
+    {
+      id: 'fixture-review',
+      frontmatter: { title: 'Fixture title' },
+      body: 'Fixture body',
+    },
+    {
+      type: 'review_document_finish',
+      sessionId: session.id,
+      id: 'fixture-review',
+      frontmatter: { title: 'Fixture title' },
+      body: 'Fixture body',
+    },
   ],
 ]
 
@@ -1036,6 +1100,34 @@ it('does not wait for state confirmation when clearing a manual title', () => {
     }),
   ).toEqual(false)
 })
+
+it.each([
+  {
+    action: 'save',
+    operation: {
+      type: 'review_document_save',
+      sessionId: session.id,
+      id: 'fixture-review',
+      frontmatter: { title: 'Fixture title' },
+      body: 'Fixture body',
+    },
+  },
+  {
+    action: 'finish',
+    operation: {
+      type: 'review_document_finish',
+      sessionId: session.id,
+      id: 'fixture-review',
+      frontmatter: { title: 'Fixture title' },
+      body: 'Fixture body',
+    },
+  },
+] satisfies { action: string; operation: SessionOperation }[])(
+  'does not wait for server state after review document $action',
+  ({ operation }) => {
+    expect(requiresStateConfirmation(operation)).toEqual(false)
+  },
+)
 
 const permissionMessage: Extract<ChatItem, { type: 'permission' }> = {
   type: 'permission',

@@ -111,6 +111,7 @@ fn output_path_for_task(session: &Session, task_id: &str) -> Result<Option<PathB
             reader,
             chrono::Utc::now(),
             super::parser::claude::ParserAdditions {
+                session_id: &session.session_id,
                 parent: None,
                 pending_tool: None,
                 user_marker: None,

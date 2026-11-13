@@ -2,6 +2,7 @@ mod actions;
 mod assets;
 mod attachments;
 mod events;
+pub(super) mod file_attachments;
 mod image_attachments;
 mod interrupted;
 mod limits;
@@ -183,7 +184,8 @@ fn app(restart_signal: watch::Receiver<bool>) -> Router {
         })
         .with_permission_denied_loader(|session_id| {
             store::permission_denied_operations_from(&store::sessions_dir()?, session_id)
-        }),
+        })
+        .with_agent_file_loader(store::agent_files),
         restart_signal,
     )
 }
@@ -251,6 +253,7 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
             loaders,
         ))
         .merge(review_document::router())
+        .merge(file_attachments::routes())
         .merge(image_attachments::routes())
         .fallback(api_not_found);
 

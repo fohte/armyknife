@@ -567,7 +567,12 @@ mod tests {
             Some("After update".to_string()),
         )
         .expect("session should update");
-        store::delete_session_from(&sessions_dir, "removed-row").expect("session should delete");
+        store::delete_session_from_with_storage(
+            &sessions_dir,
+            "removed-row",
+            Some(&sessions_dir.join("attachments")),
+        )
+        .expect("session should delete");
         let changes = store::session_changes_since(&sessions_dir, initial_revision)
             .expect("session changes should load");
         let revision = changes.revision;

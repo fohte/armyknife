@@ -142,6 +142,16 @@ fn render_timed_event(
                 input,
                 failed,
             } => tools.record(name, input.as_ref(), *failed),
+            ClaudeEffect::SendUserFile { tool_use, failed } => {
+                let file_item =
+                    send_user_file_item(tool_use, *failed, additions.session_id, event.timestamp);
+                if let Some(file_item) = file_item {
+                    tools.flush_into(items);
+                    items.push(file_item);
+                } else {
+                    tools.record("SendUserFile", tool_use.input.as_ref(), *failed);
+                }
+            }
             ClaudeEffect::Question { id, item } => {
                 let index = items.len();
                 items.push(item.clone());
@@ -156,6 +166,44 @@ fn render_timed_event(
             }
         }
     }
+}
+
+fn send_user_file_item(
+    tool_use: &ToolUse,
+    failed: bool,
+    session_id: &str,
+    timestamp: Option<DateTime<Utc>>,
+) -> Option<ChatItem> {
+    if failed {
+        return None;
+    }
+    let input = tool_use.input.as_ref()?;
+    let paths = input.get("files")?.as_array()?;
+    let files = paths
+        .iter()
+        .enumerate()
+        .filter_map(|(index, value)| {
+            value.as_str().map(|path| {
+                super::super::super::super::file_attachments::transcript_chat_file(
+                    session_id,
+                    &tool_use.id,
+                    index,
+                    path,
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    if files.is_empty() {
+        return None;
+    }
+    Some(ChatItem::FileAttachment {
+        files,
+        caption: input
+            .get("caption")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        timestamp: timestamp.map(|timestamp| timestamp.to_rfc3339()),
+    })
 }
 
 fn active_tool_item(

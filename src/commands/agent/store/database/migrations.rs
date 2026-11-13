@@ -5,7 +5,26 @@ use rusqlite::Connection;
 use rusqlite_migration::{Error as MigrationError, M, MigrationDefinitionError, Migrations};
 
 // Keep older binaries compatible: new columns need defaults or must be nullable.
-static MIGRATION_ENTRIES: [M<'static>; 18] = [
+const AGENT_FILE_SCHEMA: &str = "CREATE TABLE agent_file (
+    session_id TEXT NOT NULL,
+    id TEXT NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
+    name TEXT NOT NULL,
+    caption TEXT,
+    mime_type TEXT,
+    size INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, id)
+);
+CREATE INDEX agent_file_session_id_created_at
+    ON agent_file (session_id, created_at, position);
+CREATE TRIGGER agent_file_delete_session
+    AFTER DELETE ON sessions
+    BEGIN
+        DELETE FROM agent_file WHERE session_id = OLD.session_id;
+    END;";
+
+static MIGRATION_ENTRIES: [M<'static>; 19] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -177,6 +196,7 @@ static MIGRATION_ENTRIES: [M<'static>; 18] = [
          UPDATE watch_web_queued_prompt
          SET resolved = CASE WHEN message_id IS NULL THEN 1 ELSE 0 END;",
     ),
+    M::up(AGENT_FILE_SCHEMA),
     M::up(
         "CREATE TABLE session_replacement (
             session_id TEXT PRIMARY KEY,

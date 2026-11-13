@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.680](https://github.com/fohte/armyknife/compare/v0.1.679...v0.1.680) (2026-11-13)
+
+
+### Features
+
+* **watch-web:** share files in conversations ([#1737](https://github.com/fohte/armyknife/issues/1737)) ([d3c69c1](https://github.com/fohte/armyknife/commit/d3c69c1f037fe55102b58a63d66b92fa21af9ae8))
+
+## [0.1.679](https://github.com/fohte/armyknife/compare/v0.1.678...v0.1.679) (2026-11-13)
+
+
+### Bug Fixes
+
+* **watch-web:** route review document actions ([#1735](https://github.com/fohte/armyknife/issues/1735)) ([0c00476](https://github.com/fohte/armyknife/commit/0c004769561b79e7d9bf63840f3dcd0365445830))
+
 ## [0.1.678](https://github.com/fohte/armyknife/compare/v0.1.677...v0.1.678) (2026-11-13)
 
 

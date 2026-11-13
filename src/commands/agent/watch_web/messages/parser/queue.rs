@@ -843,6 +843,7 @@ mod tests {
             Cursor::new(transcript),
             Utc::now(),
             ParserAdditions {
+                session_id: "fixture-session",
                 parent,
                 pending_tool: None,
                 user_marker: marker,
@@ -867,6 +868,7 @@ mod tests {
                 Cursor::new(transcript),
                 Utc::now(),
                 ParserAdditions {
+                    session_id: "fixture-session",
                     parent: None,
                     pending_tool: None,
                     user_marker: marker,

@@ -126,6 +126,12 @@ function getConversationMessageIdentity(message: ChatItem): string {
         : `${message.type}:${JSON.stringify([message.kind, message.timestamp])}`
     case 'assistant':
       return `${message.type}:${JSON.stringify([message.text])}`
+    case 'file_attachment':
+      return `${message.type}:${JSON.stringify([
+        message.caption ?? '',
+        message.timestamp ?? '',
+        ...message.files.flatMap((file) => [file.source, file.name]),
+      ])}`
   }
 }
 

@@ -15,6 +15,7 @@ fn fixed_time() -> DateTime<Utc> {
 
 fn empty_additions() -> ParserAdditions<'static> {
     ParserAdditions {
+        session_id: "fixture-session",
         parent: None,
         pending_tool: None,
         user_marker: None,
