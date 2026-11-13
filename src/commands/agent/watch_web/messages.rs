@@ -1436,19 +1436,19 @@ mod tests {
                     "messages": [
                         {
                             "type": "todo",
-                            "seq": 1,
-                            "title": "Check the page",
-                            "detail": "Use a phone",
-                            "completed": false,
-                            "comment": null,
-                        },
-                        {
-                            "type": "todo",
                             "seq": 2,
                             "title": "Update settings",
                             "detail": null,
                             "completed": true,
                             "comment": "Done",
+                        },
+                        {
+                            "type": "todo",
+                            "seq": 1,
+                            "title": "Check the page",
+                            "detail": "Use a phone",
+                            "completed": false,
+                            "comment": null,
                         },
                     ],
                     "backgroundTasks": [],

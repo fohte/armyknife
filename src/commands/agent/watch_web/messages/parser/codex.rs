@@ -778,6 +778,53 @@ mod tests {
         );
     }
 
+    #[rstest]
+    fn appends_pending_todos_after_the_transcript_in_creation_order(mut todo: AgentTodo) {
+        let transcript = indoc! {r#"
+            {"type":"response_item","timestamp":"2026-06-01T12:00:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"before"}]}}
+            {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"after"}}}
+        "#};
+        todo.completed_at = None;
+        todo.comment = None;
+        let mut earlier_todo = todo.clone();
+        earlier_todo.seq = 2;
+        earlier_todo.title = "Review the fictional checklist".to_string();
+        earlier_todo.created_at = DateTime::parse_from_rfc3339("2026-06-01T12:02:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        assert_eq!(
+            parse_with_skills(Cursor::new(transcript), None, &[], &[todo, earlier_todo]).unwrap(),
+            (
+                vec![
+                    ChatItem::Assistant {
+                        text: "before".to_string(),
+                    },
+                    ChatItem::User {
+                        text: "after".to_string(),
+                        timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
+                        from: None,
+                    },
+                    ChatItem::Todo {
+                        seq: 2,
+                        title: "Review the fictional checklist".to_string(),
+                        detail: None,
+                        completed: false,
+                        comment: None,
+                    },
+                    ChatItem::Todo {
+                        seq: 1,
+                        title: "Review the fictional report".to_string(),
+                        detail: None,
+                        completed: false,
+                        comment: None,
+                    },
+                ],
+                Vec::new(),
+            ),
+        );
+    }
+
     #[test]
     fn renders_marked_todo_completions_as_armyknife_events() {
         let transcript = indoc! {r#"
