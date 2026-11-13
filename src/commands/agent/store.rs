@@ -256,13 +256,6 @@ pub(crate) fn update_session_last_message_if_unchanged_in(
     })
 }
 
-/// Sets `label` on a session, resolving the default sessions directory.
-/// Thin wrapper so callers (e.g. the TUI's rename key) do not need to know
-/// about `sessions_dir()`.
-pub fn update_session_label(session_id: &str, label: Option<String>) -> Result<()> {
-    update_session_label_in(&sessions_dir()?, session_id, label)
-}
-
 /// Atomically overwrites a session's `label` field. Unlike
 /// `mark_session_read_in` there is no precondition on the current value --
 /// `label` is always overwritten with the given value.

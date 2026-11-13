@@ -269,6 +269,7 @@ export function ConversationPaneView({
         </div>
       ) : null}
       <ConversationPaneHeader
+        key={session.id}
         session={session}
         sessions={sessions}
         actions={actions}
