@@ -116,15 +116,21 @@ fn append_stderr(mut message: String, stderr: &[u8], relay_credential: &str) -> 
 }
 
 fn sanitize_fork_stderr(stderr: &[u8], relay_credential: &str) -> String {
+    static AUTHORIZATION_PATTERN: OnceLock<Option<Regex>> = OnceLock::new();
     static CREDENTIAL_PATTERN: OnceLock<Option<Regex>> = OnceLock::new();
     static BEARER_PATTERN: OnceLock<Option<Regex>> = OnceLock::new();
     static JWT_PATTERN: OnceLock<Option<Regex>> = OnceLock::new();
     static API_TOKEN_PATTERN: OnceLock<Option<Regex>> = OnceLock::new();
     static OPAQUE_TOKEN_PATTERN: OnceLock<Option<Regex>> = OnceLock::new();
 
+    let Some(authorization_pattern) = AUTHORIZATION_PATTERN
+        .get_or_init(|| Regex::new(r#"(?im)(authorization["']?\s*[:=]\s*)[^\r\n]+"#).ok())
+    else {
+        return "[stderr omitted because credential redaction is unavailable]".to_string();
+    };
     let Some(credential_pattern) = CREDENTIAL_PATTERN.get_or_init(|| {
         Regex::new(
-            r#"(?i)([\"']?(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api\s*[_-]?\s*key|authorization|token|secret)[\"']?\s*[:=]\s*[\"']?)([^\"'\s,;}\]]+)"#,
+            r#"(?i)([\"']?(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api\s*[_-]?\s*key|token|secret)[\"']?\s*[:=]\s*[\"']?)([^\"'\s,;}\]]+)"#,
         )
         .ok()
     }) else {
@@ -152,6 +158,7 @@ fn sanitize_fork_stderr(stderr: &[u8], relay_credential: &str) -> String {
     };
 
     let stderr = String::from_utf8_lossy(stderr);
+    let stderr = authorization_pattern.replace_all(&stderr, "$1[REDACTED]");
     let stderr = bearer_pattern.replace_all(&stderr, "$1[REDACTED]");
     let stderr = credential_pattern.replace_all(&stderr, "$1[REDACTED]");
     let stderr = jwt_pattern.replace_all(&stderr, "[REDACTED]");
@@ -223,6 +230,7 @@ mod tests {
             Some(1),
             indoc! {
                 r#"
+                Authorization: Basic fixture-basic-credential
                 Authorization: Bearer fixture-bearer-token
                 {"access_token":"fixture-access-token"}
                 request URL: http://localhost:43817/fixture-relay-token/backend-api/codex
@@ -239,7 +247,8 @@ mod tests {
             concat!(
                 "Codex status fork exited with code Some(1)\n",
                 "Captured child stderr (max 4096 bytes):\n",
-                "Authorization: [REDACTED] [REDACTED]\n",
+                "Authorization: [REDACTED]\n",
+                "Authorization: [REDACTED]\n",
                 "{\"access_token\":\"[REDACTED]\"}\n",
                 "request URL: http://localhost:43817/[REDACTED]/backend-api/codex\n",
                 "response: [REDACTED]\n",

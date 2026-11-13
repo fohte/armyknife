@@ -1,15 +1,18 @@
 use std::collections::VecDeque;
 use std::io;
+use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitStatus, Stdio};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use super::{INITIAL_POLL_INTERVAL, MAX_POLL_INTERVAL};
 
 const PROCESS_GROUP_TERMINATION_GRACE: Duration = Duration::from_millis(250);
+const STDERR_READER_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const STDERR_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
 
 /// Process outcome plus the bounded stderr tail, including when the process times out.
 pub struct ProcessGroupOutput {
@@ -113,17 +116,24 @@ fn run_in_process_group(
         pgid: pid,
         active: true,
     };
-    let stderr_reader = if let Some(max_stderr_bytes) = max_stderr_bytes {
+    let (stderr_reader, stderr_cancel) = if let Some(max_stderr_bytes) = max_stderr_bytes {
         let Some(stderr) = child.stderr.take() else {
             process_group.terminate();
             let _ = child.wait();
             return Err(io::Error::other("child stderr pipe was unavailable"));
         };
+        if let Err(error) = set_nonblocking(&stderr) {
+            process_group.terminate();
+            let _ = child.wait();
+            return Err(error);
+        }
+        let cancel_reader = Arc::new(AtomicBool::new(false));
+        let thread_cancel = cancel_reader.clone();
         match thread::Builder::new()
             .name("armyknife-process-stderr-reader".to_string())
-            .spawn(move || read_stderr_tail(stderr, max_stderr_bytes))
+            .spawn(move || read_stderr_tail(stderr, max_stderr_bytes, thread_cancel))
         {
-            Ok(reader) => Some(reader),
+            Ok(reader) => (Some(reader), Some(cancel_reader)),
             Err(error) => {
                 process_group.terminate();
                 let _ = child.wait();
@@ -131,7 +141,7 @@ fn run_in_process_group(
             }
         }
     } else {
-        None
+        (None, None)
     };
     let deadline = Instant::now() + timeout;
     let mut poll_interval = INITIAL_POLL_INTERVAL;
@@ -172,6 +182,9 @@ fn run_in_process_group(
         poll_interval = std::cmp::min(poll_interval * 2, MAX_POLL_INTERVAL);
     };
 
+    if let Some(cancel_reader) = stderr_cancel {
+        cancel_reader.store(true, Ordering::Relaxed);
+    }
     let stderr = stderr_reader
         .map(|reader| {
             reader
@@ -185,22 +198,57 @@ fn run_in_process_group(
     })
 }
 
-fn read_stderr_tail(mut reader: impl io::Read, max_bytes: usize) -> io::Result<Vec<u8>> {
+fn set_nonblocking(reader: &impl AsRawFd) -> io::Result<()> {
+    let descriptor = reader.as_raw_fd();
+    // SAFETY: `descriptor` is the valid stderr pipe owned by the child handle.
+    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
+    if flags == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: F_SETFL updates only the status flags of the valid stderr pipe.
+    let result = unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+    if result == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn read_stderr_tail(
+    mut reader: impl io::Read,
+    max_bytes: usize,
+    cancelled: Arc<AtomicBool>,
+) -> io::Result<Vec<u8>> {
     let mut tail = VecDeque::with_capacity(max_bytes);
     let mut chunk = [0; 4096];
+    let mut drain_deadline = None;
     loop {
-        let read = reader.read(&mut chunk)?;
-        if read == 0 {
+        if cancelled.load(Ordering::Relaxed)
+            && Instant::now()
+                >= *drain_deadline.get_or_insert_with(|| Instant::now() + STDERR_DRAIN_TIMEOUT)
+        {
             break;
         }
-        if max_bytes == 0 {
-            continue;
-        }
-        for byte in &chunk[..read] {
-            if tail.len() == max_bytes {
-                tail.pop_front();
+        match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => {
+                if max_bytes == 0 {
+                    continue;
+                }
+                for byte in &chunk[..read] {
+                    if tail.len() == max_bytes {
+                        tail.pop_front();
+                    }
+                    tail.push_back(*byte);
+                }
             }
-            tail.push_back(*byte);
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if cancelled.load(Ordering::Relaxed) {
+                    break;
+                }
+                thread::sleep(STDERR_READER_POLL_INTERVAL);
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
         }
     }
     Ok(tail.into_iter().collect())
@@ -287,6 +335,7 @@ mod tests {
     const GROUP_HELPER_ROLE_ENV: &str = "ARMYKNIFE_PROCESS_GROUP_HELPER_ROLE";
     const GROUP_HELPER_MODE_ENV: &str = "ARMYKNIFE_PROCESS_GROUP_HELPER_MODE";
     const GROUP_HELPER_PID_FILE_ENV: &str = "ARMYKNIFE_PROCESS_GROUP_HELPER_PID_FILE";
+    const GROUP_HELPER_READY_FILE_ENV: &str = "ARMYKNIFE_PROCESS_GROUP_HELPER_READY_FILE";
     const GROUP_HELPER_STDERR_ENV: &str = "ARMYKNIFE_PROCESS_GROUP_HELPER_STDERR";
 
     #[test]
@@ -305,6 +354,10 @@ mod tests {
                 std::env::var(GROUP_HELPER_STDERR_ENV)
                     .expect("stderr helper needs its fixture output")
             );
+            if let Some(ready_file) = std::env::var_os(GROUP_HELPER_READY_FILE_ENV) {
+                std::fs::write(ready_file, b"ready")
+                    .expect("stderr helper should record its readiness");
+            }
             if std::env::var(GROUP_HELPER_MODE_ENV).as_deref() == Ok("wait") {
                 loop {
                     thread::sleep(Duration::from_secs(1));
@@ -413,10 +466,30 @@ mod tests {
 
     #[test]
     fn stderr_tail_reader_keeps_only_the_configured_suffix() {
-        let actual = read_stderr_tail(&b"discard this; keep this suffix"[..], 16)
-            .expect("fixture stderr should be readable");
+        let actual = read_stderr_tail(
+            &b"discard this; keep this suffix"[..],
+            16,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .expect("fixture stderr should be readable");
 
         assert_eq!(actual, b"keep this suffix");
+    }
+
+    #[test]
+    fn stderr_tail_reader_stops_after_cancellation_without_pipe_eof() {
+        struct OpenPipe;
+
+        impl io::Read for OpenPipe {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::ErrorKind::WouldBlock.into())
+            }
+        }
+
+        let actual = read_stderr_tail(OpenPipe, 16, Arc::new(AtomicBool::new(true)))
+            .expect("cancelled stderr reader should stop without EOF");
+
+        assert_eq!(actual, Vec::<u8>::new());
     }
 
     #[test]
@@ -445,20 +518,39 @@ mod tests {
 
     #[test]
     fn process_group_runner_preserves_stderr_when_timed_out() {
+        let temp_dir = tempfile::tempdir().expect("fixture directory should be created");
+        let ready_file = temp_dir.path().join("ready");
         let mut command = Command::new(std::env::current_exe().expect("test executable exists"));
         command
             .args(["process_group_child_helper", "--ignored", "--nocapture"])
             .env(GROUP_HELPER_ROLE_ENV, "stderr")
             .env(GROUP_HELPER_MODE_ENV, "wait")
+            .env(GROUP_HELPER_READY_FILE_ENV, &ready_file)
             .env(GROUP_HELPER_STDERR_ENV, "discard this; keep this suffix");
 
-        let output =
-            run_in_process_group_with_timeout_and_stderr(command, Duration::from_millis(100), 16)
-                .expect("timed out fixture should return its process output");
+        let process_runner = thread::spawn(move || {
+            run_in_process_group_with_timeout_and_stderr(command, Duration::from_secs(5), 16)
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !ready_file.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let output = process_runner
+            .join()
+            .expect("process group runner should return")
+            .expect("timed out fixture should return its process output");
 
         assert_eq!(
-            (output.status.err().map(|error| error.kind()), output.stderr),
-            (Some(io::ErrorKind::TimedOut), b"keep this suffix".to_vec()),
+            (
+                ready_file.exists(),
+                output.status.err().map(|error| error.kind()),
+                output.stderr,
+            ),
+            (
+                true,
+                Some(io::ErrorKind::TimedOut),
+                b"keep this suffix".to_vec(),
+            ),
         );
     }
 
