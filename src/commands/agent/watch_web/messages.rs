@@ -1213,7 +1213,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn messages_route_refreshes_resolved_proposals() {
+    async fn messages_route_uses_the_answer_to_resolve_proposals() {
         let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
@@ -1239,6 +1239,8 @@ mod tests {
         );
 
         let unanswered = message_response(&router).await;
+        proposal.lock().unwrap().resolved_at = Some(created_at);
+        let previously_closed_without_an_answer = message_response(&router).await;
         {
             let mut proposal = proposal.lock().unwrap();
             proposal.answer = Some(r#"{"choice":0,"comment":"Keep option A."}"#.to_string());
@@ -1247,8 +1249,13 @@ mod tests {
         let resolved = message_response(&router).await;
 
         assert_eq!(
-            (unanswered, resolved),
+            (unanswered, previously_closed_without_an_answer, resolved),
             (
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({"messages":[{"type":"proposal","seq":1,"title":"Sample proposal","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}],"answer":null,"resolved":false}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":true,"activeQuestionIndex":null})
+                ),
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),

@@ -21,11 +21,6 @@ pub(crate) fn add_agent_proposal(sessions_dir: &Path, session_id: &str, body: &s
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let now = Utc::now().to_rfc3339();
-    transaction.execute(
-        "UPDATE agent_proposal SET resolved_at = ?1
-         WHERE session_id = ?2 AND resolved_at IS NULL",
-        params![now, session_id],
-    )?;
     let seq: i64 = transaction.query_row(
         "SELECT COALESCE(MAX(seq), 0) + 1 FROM agent_proposal WHERE session_id = ?1",
         [session_id],
@@ -39,29 +34,6 @@ pub(crate) fn add_agent_proposal(sessions_dir: &Path, session_id: &str, body: &s
     increment_revision(&transaction)?;
     transaction.commit()?;
     Ok(seq)
-}
-
-pub(crate) fn close_unanswered_agent_proposals(
-    sessions_dir: &Path,
-    session_id: &str,
-) -> Result<bool> {
-    validate_session_id(session_id)?;
-    if !sessions_dir.exists() {
-        return Ok(false);
-    }
-
-    let mut connection = open_connection(sessions_dir)?;
-    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let changed = transaction.execute(
-        "UPDATE agent_proposal SET resolved_at = ?1
-         WHERE session_id = ?2 AND resolved_at IS NULL",
-        params![Utc::now().to_rfc3339(), session_id],
-    )?;
-    if changed > 0 {
-        increment_revision(&transaction)?;
-    }
-    transaction.commit()?;
-    Ok(changed > 0)
 }
 
 pub(crate) fn unanswered_agent_proposal_bodies(
@@ -79,7 +51,7 @@ pub(crate) fn unanswered_agent_proposal_bodies(
         .join(", ");
     let query = format!(
         "SELECT session_id, body FROM agent_proposal
-         WHERE resolved_at IS NULL AND session_id IN ({placeholders})
+         WHERE answer IS NULL AND session_id IN ({placeholders})
          ORDER BY session_id, seq"
     );
     let mut statement = connection.prepare(&query)?;
@@ -142,7 +114,7 @@ pub(crate) fn write_agent_proposal_answer(
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let changed = transaction.execute(
-        "UPDATE agent_proposal SET answer = ?1, resolved_at = COALESCE(resolved_at, ?2)
+        "UPDATE agent_proposal SET answer = ?1, resolved_at = ?2
          WHERE session_id = ?3 AND seq = ?4 AND answer IS NULL",
         params![answer, Utc::now().to_rfc3339(), session_id, seq],
     )?;
@@ -160,11 +132,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        AgentProposal, add_agent_proposal, agent_proposals, close_unanswered_agent_proposals,
-        unanswered_agent_proposal_bodies, write_agent_proposal_answer,
+        AgentProposal, add_agent_proposal, agent_proposals, unanswered_agent_proposal_bodies,
     };
-    use crate::commands::agent::store::session_store_revision_from;
-
     #[fixture]
     fn sessions_dir() -> TempDir {
         tempfile::tempdir().expect("temporary sessions directory should be created")
@@ -183,7 +152,7 @@ mod tests {
     }
 
     #[rstest]
-    fn adds_proposals_in_sequence_and_resolves_the_previous_unanswered_proposal(
+    fn adds_proposals_in_sequence_without_resolving_previous_unanswered_proposals(
         sessions_dir: TempDir,
     ) {
         let first = add_agent_proposal(sessions_dir.path(), "session-a", "first body")
@@ -217,7 +186,7 @@ mod tests {
                         body: "first body".to_string(),
                         created_at: epoch,
                         answer: None,
-                        resolved_at: Some(epoch),
+                        resolved_at: None,
                     },
                     AgentProposal {
                         session_id: "session-a".to_string(),
@@ -229,63 +198,10 @@ mod tests {
                     },
                 ],
                 vec![
+                    ("session-a".to_string(), "first body".to_string()),
                     ("session-a".to_string(), "second body".to_string()),
                     ("session-b".to_string(), "other body".to_string()),
                 ],
-            ),
-        );
-    }
-
-    #[rstest]
-    fn closing_unanswered_proposals_advances_revision_only_when_rows_change(sessions_dir: TempDir) {
-        add_agent_proposal(sessions_dir.path(), "session-a", "body").expect("proposal should save");
-        let before =
-            session_store_revision_from(sessions_dir.path()).expect("revision should load");
-
-        let changed = close_unanswered_agent_proposals(sessions_dir.path(), "session-a")
-            .expect("unanswered proposal should close");
-        let after_close =
-            session_store_revision_from(sessions_dir.path()).expect("revision should load");
-        let changed_again = close_unanswered_agent_proposals(sessions_dir.path(), "session-a")
-            .expect("already resolved proposal should remain closed");
-        let after_second_close =
-            session_store_revision_from(sessions_dir.path()).expect("revision should load");
-
-        assert_eq!(
-            (changed, after_close, changed_again, after_second_close),
-            (true, before + 1, false, after_close),
-        );
-    }
-
-    #[rstest]
-    fn answer_is_saved_if_a_hook_closed_the_proposal_during_delivery(sessions_dir: TempDir) {
-        add_agent_proposal(sessions_dir.path(), "session-a", "body").expect("proposal should save");
-        close_unanswered_agent_proposals(sessions_dir.path(), "session-a")
-            .expect("proposal should close");
-        let answer = r#"{"choice":0,"comment":"use this"}"#;
-
-        let updated = write_agent_proposal_answer(sessions_dir.path(), "session-a", 1, answer)
-            .expect("answer should write");
-        let proposals = normalize_timestamps(
-            agent_proposals(sessions_dir.path(), "session-a").expect("proposal should load"),
-        );
-        let epoch = Utc
-            .timestamp_opt(0, 0)
-            .single()
-            .expect("epoch should be valid");
-
-        assert_eq!(
-            (updated, proposals),
-            (
-                true,
-                vec![AgentProposal {
-                    session_id: "session-a".to_string(),
-                    seq: 1,
-                    body: "body".to_string(),
-                    created_at: epoch,
-                    answer: Some(answer.to_string()),
-                    resolved_at: Some(epoch),
-                }],
             ),
         );
     }

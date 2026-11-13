@@ -21,6 +21,7 @@ pub(super) fn proposal_chat_item(proposal: &AgentProposal) -> Result<ProposalIte
         .map(serde_json::from_str)
         .transpose()
         .with_context(|| format!("parsing proposal {} answer", proposal.seq))?;
+    let resolved = answer.is_some();
     Ok(ProposalItem {
         seq: proposal.seq,
         created_at: proposal.created_at,
@@ -30,7 +31,7 @@ pub(super) fn proposal_chat_item(proposal: &AgentProposal) -> Result<ProposalIte
             summary: body.summary,
             options: body.options,
             answer,
-            resolved: proposal.resolved_at.is_some(),
+            resolved,
         },
     })
 }
