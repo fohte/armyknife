@@ -564,6 +564,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `decision add <TITLE> --why <WHY> --considered <ALT> [--considered <ALT>...] --easy-to-change <TEXT>` |         | Record a provisional decision for later review                                              |
 | `proposal add`                                                                                        |         | Record a structured proposal from JSON read from stdin                                      |
 | `todo add`                                                                                            |         | Record one task the user needs to do from JSON read from stdin                              |
+| `title set <TITLE>`                                                                                   |         | Set the calling session's title; an empty title restores the automatic title                |
 | `profile use <profile> / show`                                                                        |         | Select a profile and show its effective settings for every type                             |
 | `vibe on / off / status / grant <session-id>`                                                         |         | Enable, disable, check, or grant vibe mode to a descendant session                          |
 | `resume [session_id]`                                                                                 | `r`     | Resume the pane's Claude Code session (reads pane option if no argument)                    |
@@ -640,6 +641,15 @@ Run `a agent file send <path>... [--caption <text>]` from a tracked Claude Code 
 ```console
 $ a agent file send ./sample-layout.png ./sample-report.pdf --caption "Review these samples"
 Sent 2 file(s) to watch-web
+```
+
+### `a agent title set`
+
+Run `a agent title set <TITLE>` from a tracked Claude Code or Codex session to set its title. The title is trimmed before it is saved; an empty or whitespace-only value restores the automatic title. The same title can be changed from `a agent watch` or the watch-web conversation header, and the most recent change wins. When the session has a tmux window, the window title is refreshed best-effort.
+
+```console
+$ a agent title set "Investigate the session refresh flow"
+$ a agent title set ""
 ```
 
 Vibe mode is an opt-in marker recorded by armyknife. Vibe-gated actions are denied for every repository by default, even when the marker is enabled. Set `orgs.<owner>.vibe` to `true` to allow repositories for an owner; `repos.<owner>/<repo>.vibe` can override that value for one repository. The effective repository value defaults to `false`.
@@ -1186,6 +1196,7 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 - `POST /api/sessions/{id}/close` to close a session; send `{"keepWorktree":true}` to preserve its linked worktree
 - `POST /api/sessions/{id}/later` with `{"preset":"one_hour"}` (also accepts `this_evening`, `tomorrow`, `next_week`, `until_it_changes`, and `back_now`)
 - `POST /api/sessions/{id}/today` with `{"isToday":true}` or `{"isToday":false}`
+- `POST /api/sessions/{id}/title` with `{"title":"A fixture title"}`; an empty or whitespace-only title restores the automatic title
 - `POST /api/sessions/{id}/decisions/{seq}/ok` to mark a decision reviewed
 - `POST /api/sessions/{id}/decisions/{seq}/change` with `{"comment":"Revise the fixture choice."}` to request a change
 

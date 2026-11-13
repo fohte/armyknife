@@ -27,6 +27,7 @@ mod permission_denied_locks;
 mod proposal_answer_locks;
 mod proposals;
 mod runtime;
+mod title;
 mod todo_completion_locks;
 mod todos;
 
@@ -76,6 +77,7 @@ fn router_with_state(state: ActionState) -> Router {
             "/sessions/{id}/todos/{seq}/complete",
             post(todos::complete_todo),
         )
+        .route("/sessions/{id}/title", post(title::set_title))
         .route(
             "/sessions/{id}/answer",
             post(answer_question::answer_question),
@@ -455,6 +457,9 @@ mod tests {
 
     #[path = "todos.rs"]
     mod todos;
+
+    #[path = "title.rs"]
+    mod title;
 
     #[path = "merge_pull_request.rs"]
     mod merge_pull_request;
