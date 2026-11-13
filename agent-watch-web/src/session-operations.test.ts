@@ -341,6 +341,18 @@ const requests: {
     },
     response: { result: 'merged' },
   },
+  {
+    name: 'rewind conversation',
+    operation: {
+      type: 'rewind',
+      sessionId: 'test-session',
+      messageId: 'fixture-user-message',
+      mode: 'conversation',
+    },
+    path: 'rewind',
+    body: { messageId: 'fixture-user-message', mode: 'conversation' },
+    response: { sessionId: 'fixture-rewound-session' },
+  },
 ]
 
 afterEach(() => {
@@ -550,6 +562,17 @@ const operationFactories: [
       body: 'Fixture body',
     },
   ],
+  [
+    'rewind conversation',
+    'rewind',
+    { messageId: 'fixture-user-message', mode: 'conversation' },
+    {
+      type: 'rewind',
+      sessionId: session.id,
+      messageId: 'fixture-user-message',
+      mode: 'conversation',
+    },
+  ],
 ]
 
 it.each(operationFactories)(
@@ -616,7 +639,7 @@ it.each(requests)(
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(response)
     vi.stubGlobal('fetch', fetchMock)
 
-    const result = await submitSessionOperation(testCase.operation)
+    await submitSessionOperation(testCase.operation)
     const requestUrl = `/api/sessions/test-session/${testCase.path}`
     const requestInit =
       testCase.body === undefined
@@ -627,8 +650,22 @@ it.each(requests)(
             body: JSON.stringify(testCase.body),
           }
 
-    if (result.isErr()) throw result.error
     expect(fetchMock.mock.calls).toEqual([[requestUrl, requestInit]])
+  },
+)
+
+it.each(requests.filter(({ response }) => response !== undefined))(
+  '$name returns the response JSON',
+  async (testCase) => {
+    const response = Response.json(testCase.response)
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(response))
+    const result = await submitSessionOperation(testCase.operation)
+    const actual = result.match(
+      (value) => value,
+      (error) => error.message,
+    )
+
+    expect(actual).toEqual(testCase.response)
   },
 )
 
@@ -1128,6 +1165,17 @@ it.each([
     expect(requiresStateConfirmation(operation)).toEqual(false)
   },
 )
+
+it('does not wait for server state after rewind', () => {
+  expect(
+    requiresStateConfirmation({
+      type: 'rewind',
+      sessionId: session.id,
+      messageId: 'fixture-user-message',
+      mode: 'conversation',
+    }),
+  ).toEqual(false)
+})
 
 const permissionMessage: Extract<ChatItem, { type: 'permission' }> = {
   type: 'permission',

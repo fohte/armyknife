@@ -1,6 +1,6 @@
 import { err, ok, ResultAsync } from 'neverthrow'
 
-import { errorFromResponse, jsonFromResponse } from '#api-requests'
+import { errorFromResponse } from '#api-requests'
 import { isJsonValue } from '#json-value'
 import { LATER_PRESET_OPTIONS } from '#session-navigation'
 import type {
@@ -43,17 +43,6 @@ function postAction(
           }),
     }),
     toError,
-  )
-}
-
-export function requestActionJson<T>(
-  sessionId: string,
-  path: string,
-  payload: Record<string, unknown>,
-  validate: (value: unknown) => value is T,
-) {
-  return postAction(sessionId, path, payload).andThen((response) =>
-    jsonFromResponse(response, validate),
   )
 }
 
@@ -139,6 +128,11 @@ function requestFor(operation: SessionOperation) {
           repo: operation.repo,
           expectedHeadSha: operation.expectedHeadSha,
         },
+      }
+    case 'rewind':
+      return {
+        path: 'rewind',
+        body: { messageId: operation.messageId, mode: operation.mode },
       }
     case 'review_document_save':
     case 'review_document_finish':
@@ -228,6 +222,24 @@ export function createSessionOperation(
         id,
         frontmatter,
         body,
+      })
+    }
+    case 'rewind': {
+      const messageId = requiredString('messageId')
+      const mode = payload['mode']
+      if (
+        messageId === null ||
+        (mode !== 'conversation_and_code' &&
+          mode !== 'conversation' &&
+          mode !== 'code')
+      ) {
+        return errOperation('Invalid rewind operation')
+      }
+      return ok<SessionOperation, Error>({
+        type: 'rewind',
+        sessionId,
+        messageId,
+        mode,
       })
     }
     case 'messages':
@@ -363,9 +375,12 @@ export function submitSessionOperation(operation: SessionOperation) {
     (response) => {
       if (!response.ok)
         return errorFromResponse(response).andThen((error) => err(error))
-      if (operation.type !== 'merge')
+      if (operation.type !== 'merge' && operation.type !== 'rewind')
         return ok<unknown, SessionOperationError>(undefined)
-      return ResultAsync.fromPromise(response.json(), toError)
+      return ResultAsync.fromPromise<unknown, SessionOperationError>(
+        response.json(),
+        toError,
+      )
     },
   )
 }
