@@ -24,7 +24,7 @@
   min-height: 0;
 }
 
-.resizable-columns-pane > .crit-pane {
+.resizable-columns-pane > .web-ui-pane {
   min-width: 300px;
 }
 

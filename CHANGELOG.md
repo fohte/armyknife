@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.674](https://github.com/fohte/armyknife/compare/v0.1.673...v0.1.674) (2026-11-13)
+
+
+### Features
+
+* **agent/todo:** allow rejection and withdrawal ([#1724](https://github.com/fohte/armyknife/issues/1724)) ([137c05f](https://github.com/fohte/armyknife/commit/137c05ff4f23a4109763b5820d29013eed1c4c54))
+
+## [0.1.673](https://github.com/fohte/armyknife/compare/v0.1.672...v0.1.673) (2026-11-13)
+
+
+### Features
+
+* **agent:** support local web UIs in watch-web ([#1722](https://github.com/fohte/armyknife/issues/1722)) ([74a3bd2](https://github.com/fohte/armyknife/commit/74a3bd2f83b891c6ef7624788b3d1012f1fc2461))
+
 ## [0.1.672](https://github.com/fohte/armyknife/compare/v0.1.671...v0.1.672) (2026-11-13)
 
 

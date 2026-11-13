@@ -260,6 +260,7 @@ mod tests {
             pr_context: None,
             session_id: id.to_string(),
             crit_urls: Vec::new(),
+            web_uis: Vec::new(),
             pending_human_review_ids: BTreeSet::new(),
             cwd: PathBuf::from("/tmp/worktree"),
             transcript_path: None,

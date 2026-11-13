@@ -1,9 +1,25 @@
 use indoc::indoc;
-use rstest::rstest;
+use rstest::{fixture, rstest};
 use rusqlite::Connection;
 use rusqlite_migration::{Error as MigrationError, MigrationDefinitionError, Migrations};
 
 use super::*;
+
+struct DatabaseFixture {
+    temp_dir: tempfile::TempDir,
+    connection: Connection,
+}
+
+#[fixture]
+fn database_fixture() -> DatabaseFixture {
+    let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+    let connection = Connection::open(temp_dir.path().join("sessions.db"))
+        .expect("temporary database should open");
+    DatabaseFixture {
+        temp_dir,
+        connection,
+    }
+}
 
 #[rstest]
 #[case::newer_database(1, true)]
@@ -24,11 +40,12 @@ fn accepts_database_too_far_ahead_only_for_a_newer_version(
     assert_eq!(actual, expected_accepted);
 }
 
-#[test]
-fn adds_permission_request_mailbox_to_version_nine_database() {
-    let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
-    let database_path = temp_dir.path().join("sessions.db");
-    let mut connection = Connection::open(&database_path).expect("temporary database should open");
+#[rstest]
+fn adds_permission_request_mailbox_to_version_nine_database(database_fixture: DatabaseFixture) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
     Migrations::from_slice(&MIGRATION_ENTRIES[..9])
         .to_latest(&mut connection)
         .expect("master migrations should create the version nine schema");
@@ -118,34 +135,36 @@ fn adds_permission_request_mailbox_to_version_nine_database() {
         ),
     );
 }
-
-#[test]
-fn resolves_legacy_queued_prompts_without_message_ids() {
-    let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
-    let database_path = temp_dir.path().join("sessions.db");
-    let mut connection = Connection::open(&database_path).expect("temporary database should open");
-    Migrations::from_slice(&MIGRATION_ENTRIES[..15])
+#[rstest]
+fn resolves_legacy_queued_prompts_without_message_ids(database_fixture: DatabaseFixture) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
+    Migrations::from_slice(&MIGRATION_ENTRIES[..16])
         .to_latest(&mut connection)
-        .expect("version fifteen migrations should create the message id schema");
+        .expect("version sixteen migrations should create the message id schema");
     connection
         .execute(
-            "INSERT INTO watch_web_queued_prompt (
+            indoc! {"
+                INSERT INTO watch_web_queued_prompt (
                 session_id, content, sent_at, message_id
-            ) VALUES
+                ) VALUES
                 ('fixture-session', 'Legacy prompt.', '2026-01-01T00:00:00Z', NULL),
                 ('fixture-session', 'New prompt.', '2026-01-01T00:00:01Z', 'fixture-message-cyan')",
+            },
             [],
         )
         .expect("legacy and id-bearing queued prompts should be inserted");
     drop(connection);
 
     let connection = super::super::open_connection(temp_dir.path())
-        .expect("version fifteen database should migrate to the current schema");
+        .expect("version sixteen database should migrate to the current schema");
     let actual = connection
-        .prepare(
-            "SELECT message_id, resolved, attachments
-             FROM watch_web_queued_prompt ORDER BY id",
-        )
+        .prepare(indoc! {"
+                SELECT message_id, resolved, attachments
+                FROM watch_web_queued_prompt ORDER BY id
+            "})
         .expect("queued prompt migration query should prepare")
         .query_map([], |row| {
             Ok((
@@ -168,5 +187,45 @@ fn resolves_legacy_queued_prompts_without_message_ids() {
                 "[]".to_string()
             ),
         ],
+    );
+}
+
+#[rstest]
+fn adds_todo_resolution_to_master_version_fourteen_database(database_fixture: DatabaseFixture) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
+    Migrations::from_slice(&MIGRATION_ENTRIES[..14])
+        .to_latest(&mut connection)
+        .expect("master migration fourteen schema should be created");
+    connection
+        .execute(
+            indoc! {"
+                INSERT INTO agent_todo (
+                    session_id, seq, title, created_at, completed_at, comment
+                ) VALUES (
+                    'sample-session', 1, 'Task', '2026-01-01T00:00:00Z',
+                    '2026-01-02T00:00:00Z', 'Already handled'
+                )
+            "},
+            [],
+        )
+        .expect("completed todo should be inserted before migration fifteen");
+    drop(connection);
+
+    let todos = super::super::agent_todos(temp_dir.path(), "sample-session")
+        .expect("master version fourteen database should migrate and load todos");
+    let actual = todos
+        .first()
+        .map(|todo| (todo.title.clone(), todo.resolution, todo.comment.clone()));
+
+    assert_eq!(
+        actual,
+        Some((
+            "Task".to_string(),
+            Some(super::super::TodoResolution::Completed),
+            Some("Already handled".to_string()),
+        )),
     );
 }

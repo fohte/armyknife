@@ -78,6 +78,7 @@ export type Session = {
   ancestorSessionIds: string[]
   pullRequest: PullRequest | null
   critUrl?: string | null
+  webUis?: { name: string; url: string }[]
   reviewDocumentId?: string | null
   laterUntil?: string | null
   isToday?: boolean
@@ -179,6 +180,7 @@ export type ChatItem =
       title: string
       detail: string | null
       completed: boolean
+      resolution: 'completed' | 'rejected' | 'withdrawn' | null
       comment: string | null
     }
   | {
