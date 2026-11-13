@@ -160,6 +160,15 @@ fn resolves_legacy_queued_prompts_without_message_ids(database_fixture: Database
 
     let connection = super::super::open_connection(temp_dir.path())
         .expect("version sixteen database should migrate to the current schema");
+    connection
+        .execute(
+            indoc! {"
+                INSERT INTO watch_web_queued_prompt (session_id, content, sent_at)
+                VALUES ('fixture-session', 'Old writer prompt.', '2026-01-01T00:00:02Z')
+            "},
+            [],
+        )
+        .expect("old writer should be able to insert into the migrated schema");
     let actual = connection
         .prepare(indoc! {"
                 SELECT message_id, resolved, attachments
@@ -186,6 +195,7 @@ fn resolves_legacy_queued_prompts_without_message_ids(database_fixture: Database
                 0,
                 "[]".to_string()
             ),
+            (None, 1, "[]".to_string()),
         ],
     );
 }

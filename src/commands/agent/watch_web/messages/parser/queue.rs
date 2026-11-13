@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
@@ -108,6 +108,8 @@ pub(super) struct Queue {
     pending: VecDeque<PendingPrompt>,
     removed: VecDeque<Option<String>>,
     queued_prompts: Vec<WatchWebQueuedPrompt>,
+    queued_prompt_ids_by_message_id: HashMap<String, usize>,
+    delivered_prompt_ids: HashSet<i64>,
     resolved_queued_prompt_ids: Vec<i64>,
 }
 
@@ -121,6 +123,16 @@ impl Queue {
     pub(super) fn new(queued_prompts: &[WatchWebQueuedPrompt]) -> Self {
         Self {
             queued_prompts: queued_prompts.to_vec(),
+            queued_prompt_ids_by_message_id: queued_prompts
+                .iter()
+                .enumerate()
+                .filter_map(|(index, prompt)| {
+                    prompt
+                        .message_id
+                        .as_ref()
+                        .map(|message_id| (message_id.clone(), index))
+                })
+                .collect(),
             ..Self::default()
         }
     }
@@ -166,16 +178,12 @@ impl Queue {
                     self.removed.clear();
                     // Popped prompts have no delivery record, so stop showing them as pending.
                     if let Some(popped_at) = event.timestamp {
-                        let mut cancelled_ids = Vec::new();
-                        self.queued_prompts.retain(|queued| {
+                        for queued in &mut self.queued_prompts {
                             if !queued.resolved && queued.sent_at <= popped_at {
-                                cancelled_ids.push(queued.id);
-                                false
-                            } else {
-                                true
+                                queued.resolved = true;
+                                self.resolved_queued_prompt_ids.push(queued.id);
                             }
-                        });
-                        self.resolved_queued_prompt_ids.extend(cancelled_ids);
+                        }
                     }
                 }
             },
@@ -218,12 +226,13 @@ impl Queue {
         let Some(message_id) = super::super::queued_prompt::id_from_content(&body) else {
             return;
         };
-        let matching_index = self
-            .queued_prompts
-            .iter()
-            .position(|queued| queued.message_id.as_deref() == Some(message_id));
-        if let Some(index) = matching_index {
-            let queued = self.queued_prompts.remove(index);
+        if let Some(index) = self
+            .queued_prompt_ids_by_message_id
+            .get(message_id)
+            .copied()
+        {
+            let queued = &self.queued_prompts[index];
+            self.delivered_prompt_ids.insert(queued.id);
             if !queued.resolved {
                 self.resolved_queued_prompt_ids.push(queued.id);
             }
@@ -254,20 +263,22 @@ impl Queue {
         user_marker: Option<&str>,
         image_directory: Option<&Path>,
     ) -> Vec<ChatItem> {
+        let Queue {
+            pending,
+            queued_prompts,
+            queued_prompt_ids_by_message_id,
+            delivered_prompt_ids,
+            ..
+        } = self;
         let mut items = Vec::new();
-        let prompts = self
-            .pending
+        let prompts = pending
             .into_iter()
             .filter_map(|prompt| prompt.content.map(|content| (content, prompt.timestamp)))
             .collect::<Vec<_>>();
         for (prompt, timestamp) in prompts {
             let message_id = super::super::queued_prompt::id_from_content(&prompt);
-            let is_saved_prompt = self.queued_prompts.iter().any(|queued| {
-                queued
-                    .message_id
-                    .as_deref()
-                    .is_some_and(|queued_id| message_id == Some(queued_id))
-            });
+            let is_saved_prompt =
+                message_id.is_some_and(|id| queued_prompt_ids_by_message_id.contains_key(id));
             let prompt = normalized_prompt(&prompt, user_marker);
             if is_saved_prompt {
                 continue;
@@ -308,10 +319,9 @@ impl Queue {
                 });
             }
         }
-        for queued in self
-            .queued_prompts
+        for queued in queued_prompts
             .into_iter()
-            .filter(|queued| !queued.resolved)
+            .filter(|queued| !queued.resolved && !delivered_prompt_ids.contains(&queued.id))
         {
             items.push(ChatItem::QueuedUser {
                 content: super::super::queued_prompt::user_content(&queued),

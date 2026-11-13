@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use axum::http::StatusCode;
@@ -11,6 +12,15 @@ use super::{
 use crate::commands::agent::store;
 use crate::commands::agent::types::Engine;
 use crate::commands::agent::watch_web::attachments;
+
+fn normalize_message_ids(ids: Vec<String>, labels: &mut HashMap<String, String>) -> Vec<String> {
+    ids.into_iter()
+        .map(|id| {
+            let label = format!("<message-id-{}>", labels.len() + 1);
+            labels.entry(id).or_insert(label).clone()
+        })
+        .collect()
+}
 
 #[rstest]
 #[tokio::test]
@@ -190,16 +200,18 @@ async fn duplicate_messages_keep_their_ids_and_structured_attachments(
         })
         .collect::<Vec<_>>();
 
+    let mut id_labels = HashMap::new();
+    let normalized_ids = (
+        normalize_message_ids(sent_ids, &mut id_labels),
+        normalize_message_ids(persisted_ids, &mut id_labels),
+    );
     assert_eq!(
+        (normalized_ids, statuses, prompt_records),
         (
-            sent_ids == persisted_ids,
-            sent_ids.len() == 2 && sent_ids[0] != sent_ids[1],
-            statuses,
-            prompt_records,
-        ),
-        (
-            true,
-            true,
+            (
+                vec!["<message-id-1>".to_owned(), "<message-id-2>".to_owned()],
+                vec!["<message-id-1>".to_owned(), "<message-id-2>".to_owned()],
+            ),
             vec![
                 json!(StatusCode::OK.as_u16()),
                 json!(StatusCode::OK.as_u16()),
@@ -364,12 +376,36 @@ async fn send_message_accepts_legacy_image_payloads_during_page_restarts(
         .replace(&path_string, "<attachment-path>")
         .into();
     let filename = path.file_name().unwrap().to_string_lossy();
+    let prompts = store::watch_web_queued_prompts_from(
+        &action_context.temp_dir.path().join("sessions"),
+        "sample-session",
+    )
+    .unwrap();
+    let prompt = prompts.first().unwrap();
+    let attachments = prompt
+        .attachments
+        .iter()
+        .map(|attachment| match attachment {
+            store::WatchWebQueuedAttachment::Image { source } => json!({
+                "type": "image",
+                "source": source.replace(filename.as_ref(), "<image-file>"),
+            }),
+            store::WatchWebQueuedAttachment::File { name } => json!({
+                "type": "file",
+                "name": name,
+            }),
+        })
+        .collect::<Vec<_>>();
     let snapshot = || {
         json!({
             "response": response,
             "pathIsAbsolute": path.is_absolute(),
             "filename": filename.split_once("~image~").unwrap().1,
             "bytes": std::fs::read(&path).unwrap(),
+            "queuedPrompt": {
+                "content": prompt.content,
+                "attachments": attachments,
+            },
         })
     };
 
@@ -388,6 +424,13 @@ async fn send_message_accepts_legacy_image_payloads_during_page_restarts(
             "pathIsAbsolute": true,
             "filename": "legacy-image.gif",
             "bytes": [71, 73, 70, 56, 57, 97],
+            "queuedPrompt": {
+                "content": "",
+                "attachments": [{
+                    "type": "image",
+                    "source": "/api/images/<image-file>",
+                }],
+            },
         }),
     );
 }

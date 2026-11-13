@@ -36,9 +36,16 @@ pub(crate) fn insert_watch_web_queued_prompt(
     let connection = open_connection(sessions_dir)?;
     let attachments = serde_json::to_string(attachments)?;
     connection.execute(
-        "INSERT INTO watch_web_queued_prompt (session_id, message_id, content, attachments, sent_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![session_id, message_id, content, attachments, sent_at.to_rfc3339()],
+        "INSERT INTO watch_web_queued_prompt (
+            session_id, message_id, content, attachments, sent_at, resolved
+         ) VALUES (?1, ?2, ?3, ?4, ?5, 0)",
+        params![
+            session_id,
+            message_id,
+            content,
+            attachments,
+            sent_at.to_rfc3339()
+        ],
     )?;
     Ok(connection.last_insert_rowid())
 }

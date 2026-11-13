@@ -41,6 +41,14 @@ pub(crate) fn delete_watch_web_queued_prompts_from(
     database::delete_watch_web_queued_prompts(sessions_dir, session_id, ids)
 }
 
+pub(crate) fn mark_watch_web_queued_prompts_resolved_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    ids: &[i64],
+) -> Result<()> {
+    database::mark_watch_web_queued_prompts_resolved(sessions_dir, session_id, ids)
+}
+
 pub(crate) fn watch_web_queued_prompts_from(
     sessions_dir: &Path,
     session_id: &str,
@@ -49,5 +57,5 @@ pub(crate) fn watch_web_queued_prompts_from(
 }
 
 pub(crate) fn mark_watch_web_queued_prompts_resolved(session_id: &str, ids: &[i64]) -> Result<()> {
-    database::mark_watch_web_queued_prompts_resolved(&super::sessions_dir()?, session_id, ids)
+    mark_watch_web_queued_prompts_resolved_from(&super::sessions_dir()?, session_id, ids)
 }

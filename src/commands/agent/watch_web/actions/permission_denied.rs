@@ -1,16 +1,12 @@
 use axum::Json;
 use axum::extract::{Path as RoutePath, State};
-use chrono::Utc;
 use serde_json::json;
 
 use super::super::super::{
     store,
     types::{Engine, SessionStatus},
 };
-use super::{
-    ActionState, ApiError, Success, load_session, messages::watch_web_message_content,
-    resolve_sessions_dir, run_blocking,
-};
+use super::{ActionState, ApiError, Success, load_session, resolve_sessions_dir, run_blocking};
 
 pub(super) async fn retry_permission_denied(
     State(state): State<ActionState>,
@@ -70,49 +66,17 @@ pub(super) async fn retry_permission_denied(
         move || store::ensure_watch_web_user_marker_from(&sessions_dir, &session_id)
     })
     .await?;
-    let message_id = uuid::Uuid::new_v4().to_string();
-    let sent_at = Utc::now();
-    let queued_prompt_id = run_blocking({
-        let sessions_dir = sessions_dir.clone();
-        let session_id = session_id.clone();
-        let message_id = message_id.clone();
-        let queue_content = queue_content.clone();
-        move || {
-            store::insert_watch_web_queued_prompt_from(
-                &sessions_dir,
-                &session_id,
-                &message_id,
-                &queue_content,
-                &[],
-                sent_at,
-            )
-        }
+    super::messages::send_queued_prompt(super::messages::QueuedPromptDelivery {
+        runtime: state.runtime,
+        sessions_dir: sessions_dir.clone(),
+        session,
+        marker: Some(marker),
+        queued_content: queue_content.clone(),
+        message_content: queue_content,
+        queued_attachments: Vec::new(),
+        attachment_paths: Vec::new(),
     })
     .await?;
-    let content = watch_web_message_content(&session, Some(&marker), &queue_content);
-    let content = super::super::messages::queued_prompt::add_id_marker(&content, &message_id);
-    let runtime = state.runtime;
-    let send_session = session.clone();
-    if let Err(error) = run_blocking(move || runtime.send_message(&send_session, &content)).await {
-        let cleanup_sessions_dir = sessions_dir.clone();
-        let cleanup_session_id = session_id.clone();
-        if let Err(cleanup_error) = run_blocking(move || {
-            store::delete_watch_web_queued_prompts_from(
-                &cleanup_sessions_dir,
-                &cleanup_session_id,
-                &[queued_prompt_id],
-            )
-        })
-        .await
-        {
-            tracing::warn!(
-                session_id = %session_id,
-                error = %cleanup_error.message,
-                "failed to remove unsent permission-denied retry message"
-            );
-        }
-        return Err(error);
-    }
 
     let saved = run_blocking({
         let sessions_dir = sessions_dir.clone();

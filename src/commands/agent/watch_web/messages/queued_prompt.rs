@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use crate::commands::agent::store::{WatchWebQueuedAttachment, WatchWebQueuedPrompt};
 
 use super::{ChatItem, UserContentPart};
@@ -79,6 +81,15 @@ pub(super) fn resolve_transcript_messages(
     messages: &mut [ChatItem],
     queued_prompts: &[WatchWebQueuedPrompt],
 ) -> Vec<i64> {
+    let prompts_by_message_id = queued_prompts
+        .iter()
+        .filter_map(|prompt| {
+            prompt
+                .message_id
+                .as_deref()
+                .map(|message_id| (message_id, prompt))
+        })
+        .collect::<HashMap<_, _>>();
     let mut resolved = Vec::new();
     for message in messages {
         let message_id = match message {
@@ -94,10 +105,7 @@ pub(super) fn resolve_transcript_messages(
         let Some(message_id) = message_id else {
             continue;
         };
-        let Some(prompt) = queued_prompts
-            .iter()
-            .find(|prompt| prompt.message_id.as_deref() == Some(message_id.as_str()))
-        else {
+        let Some(prompt) = prompts_by_message_id.get(message_id.as_str()).copied() else {
             continue;
         };
         let (timestamp, from) = match message {
@@ -135,6 +143,7 @@ pub(super) fn append_unresolved_prompts(
     queued_prompts: &[WatchWebQueuedPrompt],
     resolved_prompt_ids: &[i64],
 ) {
+    let resolved_prompt_ids = resolved_prompt_ids.iter().copied().collect::<HashSet<_>>();
     messages.extend(
         queued_prompts
             .iter()

@@ -37,7 +37,7 @@ pub(crate) use peer_out_messages::{
 pub(crate) use queued_prompts::{
     delete_watch_web_queued_prompts_from, ensure_watch_web_user_marker_from,
     insert_watch_web_queued_prompt_from, mark_watch_web_queued_prompts_resolved,
-    watch_web_queued_prompts_from,
+    mark_watch_web_queued_prompts_resolved_from, watch_web_queued_prompts_from,
 };
 
 /// Threshold in seconds for sort stability.
