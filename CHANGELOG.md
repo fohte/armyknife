@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.678](https://github.com/fohte/armyknife/compare/v0.1.677...v0.1.678) (2026-11-13)
+
+
+### Bug Fixes
+
+* **watch-web:** show action feedback immediately ([#1732](https://github.com/fohte/armyknife/issues/1732)) ([0f059e0](https://github.com/fohte/armyknife/commit/0f059e00500b1fc2c9a1ceab4db2c2eb628bf40f))
+
 ## [0.1.677](https://github.com/fohte/armyknife/compare/v0.1.676...v0.1.677) (2026-11-13)
 
 
