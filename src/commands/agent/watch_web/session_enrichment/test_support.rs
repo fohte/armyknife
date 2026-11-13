@@ -72,6 +72,7 @@ pub(super) fn session(session_id: &str, pr_context: Option<SessionPrContext>) ->
         updated_at: timestamp,
         last_message: None,
         current_tool: None,
+        current_tool_name: None,
         label: None,
         work_type: None,
         vibe_enabled: false,

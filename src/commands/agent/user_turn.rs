@@ -141,10 +141,7 @@ fn waiting_input_user_turn(session: &Session) -> Option<UserTurnKind> {
 }
 
 pub(crate) fn is_ask_user_question(session: &Session) -> bool {
-    session
-        .current_tool
-        .as_deref()
-        .is_some_and(|tool| tool == "AskUserQuestion" || tool.starts_with("AskUserQuestion("))
+    session.current_tool_name.as_deref() == Some("AskUserQuestion")
 }
 
 fn compare_turns(left: &UserTurn<'_>, right: &UserTurn<'_>) -> Ordering {
@@ -190,6 +187,7 @@ mod tests {
             updated_at,
             last_message: None,
             current_tool: None,
+            current_tool_name: None,
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
@@ -284,7 +282,8 @@ mod tests {
                     .insert("agent".to_string());
             }
             UserTurnKind::Ask => {
-                session.current_tool = Some("AskUserQuestion".to_string());
+                session.current_tool = Some("AskUserQuestion(fixture details)".to_string());
+                session.current_tool_name = Some("AskUserQuestion".to_string());
                 session.status = SessionStatus::Running;
             }
             _ => unreachable!("test case only covers automatic markers"),

@@ -307,10 +307,7 @@ fn load_conversation_with_queued_prompts(
         == Some("AskUserQuestion")
         || (main_permission_data.is_none() && is_ask_user_question(&session));
     let pending_tool = if main_permission_pending && !main_permission_is_question {
-        main_permission_data
-            .as_ref()
-            .and_then(permission_request_pending_tool)
-            .or_else(|| session.current_tool.clone())
+        main_permission_data.as_ref()
     } else {
         None
     };
@@ -354,7 +351,7 @@ fn load_conversation_with_queued_prompts(
         engine: session.engine,
         additions: parser::claude::ParserAdditions {
             parent: parent.as_ref(),
-            pending_tool: pending_tool.as_deref(),
+            pending_tool,
             user_marker: user_marker.as_deref(),
             decisions: &decisions,
             queued_prompts: &queued_prompts,
@@ -455,14 +452,31 @@ fn load_conversation_with_queued_prompts(
             }
             continue;
         }
+        let mut matched_tool = false;
+        if session.engine == Engine::Claude
+            && let Some(data) = permission_data.as_ref()
+            && data.tool_name.is_some()
+            && let Some(path) = session
+                .transcript_path
+                .as_deref()
+                .and_then(|path| subagent_reports::transcript_path_for_agent(path, agent_id))
+            && let Some(reader) = open_seekable_transcript(&path)?
+        {
+            matched_tool = parser::claude::matching_pending_tool_use_exists(reader, data)?;
+        }
+        let tool = if matched_tool {
+            permission_data
+                .as_ref()
+                .and_then(permission_request_pending_tool)
+        } else {
+            permission_data
+                .as_ref()
+                .and_then(|data| data.tool_name.clone())
+        }
+        .unwrap_or_else(|| "Permission required".to_string());
         messages.push(ChatItem::Permission {
             request_id: Some(request_id),
-            tool: format!(
-                "Subagent {agent_id}: {}",
-                permission_data
-                    .and_then(|data| data.tool_name)
-                    .unwrap_or_else(|| "Permission required".to_string())
-            ),
+            tool: format!("Subagent {agent_id}: {tool}"),
             description: "Waiting for permission approval.".to_string(),
         });
     }
@@ -481,7 +495,7 @@ fn load_conversation_with_queued_prompts(
 
 fn permission_request_pending_tool(data: &PermissionRequestData) -> Option<String> {
     let tool_name = data.tool_name.as_deref()?;
-    let detail = permission_request_tool_detail(&data.tool_input);
+    let detail = tool_input_detail(&data.tool_input);
     Some(match detail {
         Some(detail) => format!("{tool_name}({detail})"),
         None => tool_name.to_string(),
@@ -501,7 +515,7 @@ fn permission_denied_input_summary(tool_name: &str, input: &Value) -> String {
     detail.chars().take(200).collect()
 }
 
-fn permission_request_tool_detail(tool_input: &Value) -> Option<&str> {
+fn tool_input_detail(tool_input: &Value) -> Option<&str> {
     ["command", "file_path", "pattern"]
         .into_iter()
         .find_map(|key| tool_input.get(key).and_then(Value::as_str))
@@ -2486,6 +2500,7 @@ mod tests {
             ),
         ]);
         session.current_tool = Some("AskUserQuestion".to_string());
+        session.current_tool_name = Some("AskUserQuestion".to_string());
         session.last_message = Some("Should the summary be brief?".to_string());
         session.transcript_path = Some(transcript_path);
 
@@ -2587,6 +2602,63 @@ mod tests {
                     description: "Waiting for permission approval.".to_string(),
                 },
             ],
+        );
+    }
+
+    #[test]
+    fn subagent_permission_matches_an_unresolved_tool_use_from_its_transcript() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("fixture-session.jsonl");
+        std::fs::write(&transcript_path, "").unwrap();
+        let subagent_directory = directory.path().join("fixture-session").join("subagents");
+        std::fs::create_dir_all(&subagent_directory).unwrap();
+        let subagent_transcript = indoc::indoc! {r#"
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"first-call","name":"Bash","input":{"command":"run fixture"}}]}}
+            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"first-call","content":"done"}]}}
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"pending-call","name":"Bash","input":{"command":"run fixture"}}]}}
+        "#};
+        std::fs::write(
+            subagent_directory.join("agent-fixture-agent.jsonl"),
+            subagent_transcript,
+        )
+        .unwrap();
+
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path);
+        session.pending_permission_agent_ids = BTreeSet::from(["fixture-agent".to_string()]);
+        session.pending_permission_request_ids = BTreeMap::from([(
+            "fixture-agent".to_string(),
+            "permission-request-subagent".to_string(),
+        )]);
+        let loaders = RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
+        .with_permission_request_data_loader(|_, _| {
+            Ok(Some(PermissionRequestData {
+                tool_name: Some("Bash".to_string()),
+                tool_input: json!({"command": "run fixture"}),
+                pending: true,
+            }))
+        });
+
+        assert_eq!(
+            load_conversation_with_queued_prompts(
+                "fixture-session",
+                |id| Ok((id == "fixture-session").then(|| session.clone())),
+                |_| Ok(None),
+                &loaders,
+            )
+            .unwrap()
+            .map(|conversation| conversation.messages),
+            Some(vec![ChatItem::Permission {
+                request_id: Some("permission-request-subagent".to_string()),
+                tool: "Subagent fixture-agent: Bash(run fixture)".to_string(),
+                description: "Waiting for permission approval.".to_string(),
+            }]),
         );
     }
 
@@ -2964,6 +3036,7 @@ mod tests {
         let (_directory, transcript_path) = pending_question_transcript();
         let mut session = stored_session();
         session.current_tool = Some("AskUserQuestion".to_string());
+        session.current_tool_name = Some("AskUserQuestion".to_string());
         session.transcript_path = Some(transcript_path);
         let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |id| Ok((id == "fixture-session").then(|| session.clone())),

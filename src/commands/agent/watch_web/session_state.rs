@@ -334,6 +334,7 @@ mod tests {
             updated_at: Utc.timestamp_opt(1_000, 0).unwrap(),
             last_message: None,
             current_tool: None,
+            current_tool_name: None,
             label: None,
             work_type: None,
             vibe_enabled: false,

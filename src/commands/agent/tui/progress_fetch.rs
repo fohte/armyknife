@@ -993,6 +993,7 @@ mod tests {
             updated_at,
             last_message: None,
             current_tool: None,
+            current_tool_name: None,
             label: None,
             work_type: None,
             vibe_enabled: false,

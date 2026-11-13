@@ -279,6 +279,7 @@ mod tests {
             updated_at: Utc::now(),
             last_message: None,
             current_tool: None,
+            current_tool_name: None,
             label: Some("my-label".to_string()),
             ancestor_session_ids,
             pending_bg_task_ids: Default::default(),

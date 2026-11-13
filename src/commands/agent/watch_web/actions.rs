@@ -852,6 +852,7 @@ mod tests {
             updated_at: Utc::now(),
             last_message: None,
             current_tool: None,
+            current_tool_name: None,
             label: None,
             work_type: None,
             work_type_pinned: false,
@@ -1602,6 +1603,7 @@ mod tests {
         let mut session = session("sample-session");
         session.engine = Engine::Codex;
         session.current_tool = Some("AskUserQuestion".to_string());
+        session.current_tool_name = Some("AskUserQuestion".to_string());
         session
             .pending_permission_agent_ids
             .insert("main".to_string());
@@ -2083,6 +2085,7 @@ mod tests {
         let mut session = session("sample-session");
         session.status = SessionStatus::Ended;
         session.current_tool = Some("AskUserQuestion".to_string());
+        session.current_tool_name = Some("AskUserQuestion".to_string());
         session
             .pending_permission_agent_ids
             .insert("main".to_string());

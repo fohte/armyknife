@@ -131,6 +131,7 @@ mod tests {
             updated_at: timestamp,
             last_message: None,
             current_tool: None,
+            current_tool_name: None,
             label: None,
             work_type: None,
             work_type_pinned: false,

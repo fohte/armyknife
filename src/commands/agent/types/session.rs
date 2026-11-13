@@ -100,9 +100,12 @@ pub struct Session {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub last_message: Option<String>,
-    /// Currently executing tool name (e.g., "Bash", "Read", "Edit")
+    /// Display text for the currently executing tool.
     #[serde(default)]
     pub current_tool: Option<String>,
+    /// Structured name of the currently executing tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_tool_name: Option<String>,
     /// Short title for session identification (set via env var or auto-generated)
     #[serde(default)]
     pub label: Option<String>,

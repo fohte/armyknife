@@ -111,10 +111,7 @@ pub(super) fn category_for(
 ) -> SessionCategory {
     if (turn.is_some()
         && !(session.status == SessionStatus::Stopped && turn == Some(UserTurnKind::AgentStatus)))
-        || session
-            .current_tool
-            .as_deref()
-            .is_some_and(|tool| tool.starts_with("ExitPlanMode"))
+        || session.current_tool_name.as_deref() == Some("ExitPlanMode")
     {
         SessionCategory::NeedsAction
     } else if session.status == SessionStatus::Stopped {
@@ -157,11 +154,7 @@ pub(super) fn kind_for_with_todo(
     has_unanswered_todo: bool,
     has_running_background_task: bool,
 ) -> Option<SessionKind> {
-    if session
-        .current_tool
-        .as_deref()
-        .is_some_and(|tool| tool.starts_with("ExitPlanMode"))
-    {
+    if session.current_tool_name.as_deref() == Some("ExitPlanMode") {
         return Some(SessionKind::Plan);
     }
 
@@ -244,6 +237,7 @@ mod tests {
             updated_at: Utc.timestamp_opt(1_000, 0).unwrap(),
             last_message: None,
             current_tool: None,
+            current_tool_name: None,
             label: None,
             work_type: None,
             vibe_enabled: false,
@@ -324,7 +318,8 @@ mod tests {
     #[test]
     fn maps_exit_plan_mode_to_plan_kind() {
         let mut session = session(SessionStatus::WaitingInput);
-        session.current_tool = Some("ExitPlanMode".to_string());
+        session.current_tool = Some("ExitPlanMode(fixture details)".to_string());
+        session.current_tool_name = Some("ExitPlanMode".to_string());
 
         assert_eq!(
             kind_for(&session, Some(UserTurnKind::Ask), true, false),
@@ -368,7 +363,8 @@ mod tests {
     #[test]
     fn exit_plan_mode_needs_action() {
         let mut session = session(SessionStatus::WaitingInput);
-        session.current_tool = Some("ExitPlanMode".to_string());
+        session.current_tool = Some("ExitPlanMode(fixture details)".to_string());
+        session.current_tool_name = Some("ExitPlanMode".to_string());
 
         assert_eq!(
             category_for(&session, None, false, None),
