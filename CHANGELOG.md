@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.662](https://github.com/fohte/armyknife/compare/v0.1.661...v0.1.662) (2026-11-13)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** keep pending todos visible ([#1697](https://github.com/fohte/armyknife/issues/1697)) ([7fe0e97](https://github.com/fohte/armyknife/commit/7fe0e97692e28b2e2617a900af81960e1282e4eb))
+
 ## [0.1.661](https://github.com/fohte/armyknife/compare/v0.1.660...v0.1.661) (2026-11-13)
 
 
