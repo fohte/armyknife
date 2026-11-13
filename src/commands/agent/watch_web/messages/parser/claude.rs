@@ -1015,7 +1015,8 @@ mod tests {
         ChatItem::Permission {
             request_id: None,
             tool: "Bash".to_string(),
-            description: "Bash: a agent decision add 'Decision 1'".to_string(),
+            description: String::new(),
+            command: Some("a agent decision add 'Decision 1'".to_string()),
         }
     )]
     #[case::compound_bash_permission_requested(
@@ -1024,7 +1025,8 @@ mod tests {
         ChatItem::Permission {
             request_id: None,
             tool: "Bash".to_string(),
-            description: "Bash: cd ./fixture && a agent decision add 'Decision 1'".to_string(),
+            description: String::new(),
+            command: Some("cd ./fixture && a agent decision add 'Decision 1'".to_string()),
         }
     )]
     #[case::still_running(
@@ -1859,7 +1861,8 @@ mod tests {
                 ChatItem::Permission {
                     request_id: None,
                     tool: "Bash".to_string(),
-                    description: "Bash: echo awaiting approval".to_string(),
+                    description: String::new(),
+                    command: Some("echo awaiting approval".to_string()),
                 },
             ]
         );

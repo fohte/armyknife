@@ -26,7 +26,7 @@ Second line
 | 1 | 100 ms |
 
 ~~~rust
-let attempts = 3;
+const maxPreviewItems = 7;
 ~~~`,
     'chat-user-message',
   )
@@ -41,11 +41,21 @@ let attempts = 3;
     '<li>Stop after three attempts</li>',
     '</ul>',
     '<table><thead><tr><th>Attempt</th><th>Delay</th></tr></thead><tbody><tr><td>1</td><td>100 ms</td></tr></tbody></table>',
-    '<pre><code class="language-rust">let attempts = 3;',
+    '<pre class="syntax-code-block" data-language="rust"><code class="language-rust">const maxPreviewItems = 7;',
     '</code></pre></div>',
   ].join(String.fromCharCode(10))
 
   expect(html).toBe(expected)
+})
+
+it('keeps untagged fenced code in a preformatted block', () => {
+  const html = renderMessage(`~~~
+set VALUE=preview
+~~~`)
+
+  expect(html).toBe(
+    '<div class="markdown-message"><pre class="syntax-code-block" data-language="text"><code class="language-text">set VALUE=preview\n</code></pre></div>',
+  )
 })
 
 it('keeps raw HTML as text and blocks unsafe link protocols', () => {

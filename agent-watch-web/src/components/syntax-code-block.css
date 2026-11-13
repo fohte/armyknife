@@ -1,0 +1,33 @@
+.syntax-code-block {
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+  margin: 0;
+  overflow: auto;
+  padding: 0.65rem 0.75rem;
+  border-radius: 0.45rem;
+  background: var(--aw-bg-palette-muted, #18181b);
+  color: var(--aw-text-primary, #e4e4e7);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.syntax-code-block code {
+  font: inherit;
+  white-space: inherit;
+}
+
+.permission-command {
+  max-height: 12rem;
+  margin: 0 16px 12px;
+}
+
+.permission-denied-input {
+  max-height: 8rem;
+}
+
+.markdown-message > * + .syntax-code-block {
+  margin-top: 0.75rem;
+}
