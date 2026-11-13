@@ -400,6 +400,48 @@ it('omits the work type list when no display labels are configured', () => {
   expect(container.querySelectorAll('.work-type-nav')).toHaveLength(0)
 })
 
+it('shows configured work-type sessions in the empty command palette', () => {
+  setPlatform('MacIntel')
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session(
+        'session-pm',
+        'Coordinate a project',
+        'needs_action',
+        8,
+        'sample project',
+        null,
+        [],
+        'project-management',
+      ),
+    ],
+    workTypeNavLabels: { 'project-management': 'PM' },
+  })
+  act(() => {
+    dispatchKey(window, 'k', { metaKey: true })
+  })
+
+  const groups = Array.from(
+    container.querySelectorAll('.command-palette-group'),
+  )
+  const workTypeGroup = groups.find(
+    (group) => group.querySelector('h2')?.textContent === 'PM',
+  )
+  const snapshot = () => ({
+    headings: groups.map((group) => group.querySelector('h2')?.textContent),
+    sessionTitle: workTypeGroup?.querySelector(
+      '.command-palette-item-heading strong',
+    )?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    headings: ['PM', 'COMMANDS'],
+    sessionTitle: 'Coordinate a project',
+  })
+})
+
 it('opens a configured Later session from Nav while Later is collapsed', () => {
   renderApp()
   publishSessions({

@@ -1,5 +1,6 @@
 import { Result } from 'neverthrow'
 
+import { buildWorkTypeNavGroups } from '#board-model'
 import type { Session } from '#types'
 
 export type PaletteScope =
@@ -216,30 +217,56 @@ export function buildCommandPaletteGroups(
   input: string,
   selectedScope: PaletteScope,
   recentSessionIds: readonly string[],
+  workTypeNavLabels: Readonly<Record<string, string>> = {},
 ): PaletteGroup[] {
   const { scope, query } = resolveScope(input, selectedScope)
-  const needsAction = sessions.filter(
-    (session) => session.category === 'needs_action',
-  )
-  const recentSessions = recentSessionIds.flatMap((id) => {
-    const session = sessions.find((candidate) => candidate.id === id)
-    return session === undefined
-      ? []
-      : [{ type: 'session' as const, id, session }]
-  })
   const tasks = taskItems(sessions)
   const projects = projectItems(sessions)
   const commands = baseCommands()
 
   if (query.length === 0 && scope === 'all') {
+    const displayedSessionIds = new Set<string>()
+    const sessionItem = (session: Session): PaletteSessionItem => {
+      displayedSessionIds.add(session.id)
+      return { type: 'session', id: session.id, session }
+    }
+    const starred = sessions
+      .filter((session) => session.isToday === true)
+      .map(sessionItem)
+    const sessionsById = new Map(
+      sessions.map((session) => [session.id, session] as const),
+    )
+    const workTypeGroups = buildWorkTypeNavGroups(sessions, workTypeNavLabels)
+      .map((group) => ({
+        heading: group.label,
+        items: group.projects.flatMap(({ sessionId }) => {
+          const session = sessionsById.get(sessionId)
+          return session === undefined || displayedSessionIds.has(sessionId)
+            ? []
+            : [sessionItem(session)]
+        }),
+      }))
+      .filter((group) => group.items.length > 0)
+    const needsAction = sessions
+      .filter(
+        (session) =>
+          session.category === 'needs_action' &&
+          !displayedSessionIds.has(session.id),
+      )
+      .slice(0, 3)
+      .map(sessionItem)
+    const recentSessions = recentSessionIds.flatMap((id) => {
+      const session = sessionsById.get(id)
+      return session === undefined || displayedSessionIds.has(id)
+        ? []
+        : [sessionItem(session)]
+    })
     const groups = [
+      { heading: 'STARRED', items: starred },
+      ...workTypeGroups,
       {
         heading: 'NEEDS ACTION',
-        items: needsAction.slice(0, 3).map((session) => ({
-          type: 'session' as const,
-          id: session.id,
-          session,
-        })),
+        items: needsAction,
       },
       { heading: 'RECENT', items: recentSessions },
       { heading: 'COMMANDS', items: commands },

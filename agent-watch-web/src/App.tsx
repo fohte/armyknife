@@ -654,6 +654,7 @@ function AppContent() {
           }}
           recentSessionIds={recentSessionIds}
           sessions={sessionsWithElapsedTime}
+          workTypeNavLabels={workTypeNavLabels}
         />
       ) : null}
     </div>
