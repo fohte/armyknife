@@ -1117,17 +1117,31 @@ mod tests {
         };
         let file_available = Arc::new(AtomicBool::new(false));
         let loader_file_available = Arc::clone(&file_available);
-        let file = AgentFile {
-            id: "file-fixture-id".to_string(),
-            position: 0,
-            name: "fixture.png".to_string(),
-            caption: Some("Compare this image.".to_string()),
-            mime_type: Some("image/png".to_string()),
-            size: 3,
-            created_at: chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:04Z")
+        let file_created_at = || {
+            chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:04Z")
                 .unwrap()
-                .with_timezone(&chrono::Utc),
+                .with_timezone(&chrono::Utc)
         };
+        let files = vec![
+            AgentFile {
+                id: "file-fixture-id".to_string(),
+                position: 0,
+                name: "fixture.png".to_string(),
+                caption: Some("Compare these files.".to_string()),
+                mime_type: Some("image/png".to_string()),
+                size: 3,
+                created_at: file_created_at(),
+            },
+            AgentFile {
+                id: "file-fixture-report-id".to_string(),
+                position: 1,
+                name: "fixture-report.pdf".to_string(),
+                caption: Some("Compare these files.".to_string()),
+                mime_type: None,
+                size: 7,
+                created_at: file_created_at(),
+            },
+        ];
         let decision = AgentDecision {
             session_id: "fixture-session".to_string(),
             seq: 1,
@@ -1158,7 +1172,7 @@ mod tests {
         )
         .with_agent_file_loader(move |_| {
             Ok(if loader_file_available.load(Ordering::Relaxed) {
-                vec![file.clone()]
+                files.clone()
             } else {
                 Vec::new()
             })
@@ -1210,8 +1224,13 @@ mod tests {
                         "source": "/api/sessions/fixture-session/files/file-fixture-id",
                         "isImage": true,
                         "available": true,
+                    }, {
+                        "name": "fixture-report.pdf",
+                        "source": "/api/sessions/fixture-session/files/file-fixture-report-id",
+                        "isImage": false,
+                        "available": true,
                     }],
-                    "caption": "Compare this image.",
+                    "caption": "Compare these files.",
                     "timestamp": "2026-01-01T00:00:04+00:00",
                 },
                 decision_item.clone(),
@@ -1233,8 +1252,13 @@ mod tests {
                         "source": "/api/sessions/fixture-session/files/file-fixture-id",
                         "isImage": true,
                         "available": true,
+                    }, {
+                        "name": "fixture-report.pdf",
+                        "source": "/api/sessions/fixture-session/files/file-fixture-report-id",
+                        "isImage": false,
+                        "available": true,
                     }],
-                    "caption": "Compare this image.",
+                    "caption": "Compare these files.",
                     "timestamp": "2026-01-01T00:00:04+00:00",
                 },
                 decision_item.clone(),
