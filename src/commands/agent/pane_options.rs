@@ -93,6 +93,7 @@ mod tests {
             updated_at: Utc::now(),
             last_message: None,
             current_tool: None,
+            current_tool_name: None,
             label: None,
             work_type: work_type.map(str::to_string),
             work_type_pinned: false,
