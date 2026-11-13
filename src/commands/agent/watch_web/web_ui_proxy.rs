@@ -250,7 +250,7 @@ async fn proxy_request<T: WebUiTransport>(
     }
 
     let uri = request.uri().clone();
-    if is_websocket_upgrade(request.headers()) {
+    if security::is_websocket_upgrade(request.headers()) {
         let (mut parts, _) = request.into_parts();
         let websocket = match WebSocketUpgrade::from_request_parts(&mut parts, &()).await {
             Ok(websocket) => websocket,
@@ -330,13 +330,6 @@ fn cookie_port(cookies: &str) -> Option<u16> {
             .then(|| value.parse::<u16>().ok())
             .flatten()
     })
-}
-
-fn is_websocket_upgrade(headers: &HeaderMap) -> bool {
-    headers
-        .get("upgrade")
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.eq_ignore_ascii_case("websocket"))
 }
 
 fn websocket_request(
@@ -586,9 +579,10 @@ mod tests {
                 .parse()
                 .unwrap(),
         );
+        let relay_origin = format!("http://127.0.0.1:{relay_port}");
         request
             .headers_mut()
-            .insert(ORIGIN, "http://relay.example.test:4318".parse().unwrap());
+            .insert(ORIGIN, relay_origin.parse().unwrap());
         request.headers_mut().insert(
             WEBSOCKET_PROTOCOL_HEADER.clone(),
             "chat, superchat".parse().unwrap(),
@@ -616,14 +610,38 @@ mod tests {
             Some((
                 Some(HeaderValue::from_static("chat")),
                 tokio_tungstenite::tungstenite::Message::Text("reply:from-client".into()),
-                Some((
-                    Some("http://relay.example.test:4318".to_owned()),
-                    Some("chat, superchat".to_owned()),
-                )),
+                Some((Some(relay_origin), Some("chat, superchat".to_owned()),)),
             )),
         );
         relay_server.abort();
         upstream_server.abort();
+    }
+
+    #[rstest]
+    #[case::missing_origin(None)]
+    #[case::different_localhost_port(Some("http://localhost:4319"))]
+    #[tokio::test]
+    async fn websocket_upgrades_reject_origins_that_do_not_match_host(
+        #[case] origin: Option<&str>,
+    ) {
+        let app = router_with_url_loader(
+            || Ok(vec!["http://127.0.0.1:48761/design/sample/".to_owned()]),
+            fake_transport().0,
+        );
+        let mut request = Request::builder()
+            .uri("/socket")
+            .header(HOST, "localhost:4318")
+            .header(COOKIE, "armyknife_web_ui_port=48761")
+            .header("upgrade", "websocket");
+        if let Some(origin) = origin {
+            request = request.header(ORIGIN, origin);
+        }
+        let response = app
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
@@ -654,6 +672,10 @@ mod tests {
         let mut request = format!("ws://127.0.0.1:{relay_port}/socket")
             .into_client_request()
             .unwrap();
+        request.headers_mut().insert(
+            ORIGIN,
+            format!("http://127.0.0.1:{relay_port}").parse().unwrap(),
+        );
         request.headers_mut().insert(
             COOKIE,
             format!("armyknife_web_ui_port={upstream_port}")
