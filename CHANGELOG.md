@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.673](https://github.com/fohte/armyknife/compare/v0.1.672...v0.1.673) (2026-11-13)
+
+
+### Features
+
+* **agent:** support local web UIs in watch-web ([#1722](https://github.com/fohte/armyknife/issues/1722)) ([74a3bd2](https://github.com/fohte/armyknife/commit/74a3bd2f83b891c6ef7624788b3d1012f1fc2461))
+
 ## [0.1.672](https://github.com/fohte/armyknife/compare/v0.1.671...v0.1.672) (2026-11-13)
 
 
