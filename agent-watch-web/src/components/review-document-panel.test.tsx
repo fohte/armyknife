@@ -16,12 +16,17 @@ const actionSnapshots: {
   body: string
 }[] = []
 
-function ReviewDocumentHarness() {
+function ReviewDocumentHarness({
+  status = 'idle',
+}: {
+  status?: 'idle' | 'saving' | 'saved' | 'error' | 'finishing'
+}) {
   const [frontmatter, setFrontmatter] = useState<JsonValue>({
     title: 'Fixture title',
     enabled: false,
     attempts: 3,
     labels: ['first', 'second'],
+    retry: { limit: 2, notify: false },
   })
   const [body, setBody] = useState('## Summary\n\nFixture body.')
   const [mobileView, setMobileView] = useState<'edit' | 'preview'>('edit')
@@ -30,6 +35,7 @@ function ReviewDocumentHarness() {
     <ReviewDocumentPanel
       frontmatter={frontmatter}
       body={body}
+      status={status}
       mobileView={mobileView}
       onFrontmatterChange={setFrontmatter}
       onBodyChange={setBody}
@@ -71,6 +77,8 @@ it('edits typed fields and the mobile Markdown editor before saving or finishing
     await page.getByRole('checkbox', { name: 'enabled' }).click()
     await page.getByRole('textbox', { name: 'attempts' }).fill('4')
     await page.getByRole('textbox', { name: 'Item 1' }).fill('first edited')
+    await page.getByRole('textbox', { name: 'limit' }).fill('5')
+    await page.getByRole('checkbox', { name: 'notify' }).click()
     await markdownEditor.fill(markdownBody)
   })
   const editorContent = container.querySelector('.cm-content')
@@ -134,6 +142,7 @@ it('edits typed fields and the mobile Markdown editor before saving or finishing
           enabled: true,
           attempts: 4,
           labels: ['first edited', 'second'],
+          retry: { limit: 5, notify: true },
         },
         body: markdownBody,
       },
@@ -144,6 +153,7 @@ it('edits typed fields and the mobile Markdown editor before saving or finishing
           enabled: true,
           attempts: 4,
           labels: ['first edited', 'second'],
+          retry: { limit: 5, notify: true },
         },
         body: markdownBody,
       },
@@ -158,5 +168,38 @@ it('edits typed fields and the mobile Markdown editor before saving or finishing
       canScroll: true,
       movedToEnd: true,
     },
+  })
+})
+
+it('disables frontmatter and Markdown editing while a request is in progress', async () => {
+  root = createRoot(container)
+  act(() => root?.render(<ReviewDocumentHarness status="saving" />))
+  await act(async () => {
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+  })
+
+  const stateSnapshot = () => ({
+    frontmatterInputs: Array.from(
+      container.querySelectorAll<HTMLInputElement>(
+        '.review-document-frontmatter input',
+      ),
+      (input) => input.disabled,
+    ),
+    markdownEditable: container
+      .querySelector('.review-document-editor .cm-content')
+      ?.getAttribute('contenteditable'),
+    saveDisabled: container.querySelector<HTMLButtonElement>(
+      '.review-document-actions button',
+    )?.disabled,
+    finishDisabled: container.querySelector<HTMLButtonElement>(
+      '.review-document-finish',
+    )?.disabled,
+  })
+
+  expect(stateSnapshot()).toEqual({
+    frontmatterInputs: [true, true, true, true, true, true, true],
+    markdownEditable: 'false',
+    saveDisabled: true,
+    finishDisabled: true,
   })
 })

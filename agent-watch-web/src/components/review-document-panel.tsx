@@ -3,7 +3,7 @@ import '#components/review-document-panel.css'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { markdown } from '@codemirror/lang-markdown'
 import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language'
-import { EditorState } from '@codemirror/state'
+import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { useEffect, useRef, useState } from 'react'
 
@@ -54,22 +54,25 @@ function updateAtPath(
 function NumberField({
   name,
   value,
+  disabled,
   onChange,
 }: {
   name: string
   value: number
+  disabled: boolean
   onChange: (value: JsonValue) => void
 }) {
   const [inputValue, setInputValue] = useState(String(value))
 
   useEffect(() => {
     setInputValue(String(value))
-  }, [value])
+  }, [disabled, value])
 
   return (
     <input
       aria-label={name}
       className="review-document-input review-document-number-input"
+      disabled={disabled}
       inputMode="decimal"
       type="text"
       value={inputValue}
@@ -93,11 +96,13 @@ function FieldEditor({
   name,
   value,
   path,
+  disabled,
   onChange,
 }: {
   name: string
   value: JsonValue
   path: readonly JsonPathPart[]
+  disabled: boolean
   onChange: (path: readonly JsonPathPart[], value: JsonValue) => void
 }) {
   if (isJsonObject(value)) {
@@ -110,6 +115,7 @@ function FieldEditor({
               key={key}
               name={key}
               path={[...path, key]}
+              disabled={disabled}
               value={nestedValue}
               onChange={onChange}
             />
@@ -131,6 +137,7 @@ function FieldEditor({
                   <FieldEditor
                     name={`Item ${String(index + 1)}`}
                     path={[...path, index]}
+                    disabled={disabled}
                     value={item}
                     onChange={onChange}
                   />
@@ -152,6 +159,7 @@ function FieldEditor({
             aria-label={name}
             checked={value}
             className="review-document-checkbox"
+            disabled={disabled}
             type="checkbox"
             onChange={(event) => {
               onChange(path, event.currentTarget.checked)
@@ -171,6 +179,7 @@ function FieldEditor({
           <NumberField
             name={name}
             value={value}
+            disabled={disabled}
             onChange={(nextValue) => {
               onChange(path, nextValue)
             }}
@@ -179,6 +188,7 @@ function FieldEditor({
           <input
             aria-label={name}
             className="review-document-input"
+            disabled={disabled}
             type="text"
             value={inputValue}
             onChange={(event) => {
@@ -193,14 +203,20 @@ function FieldEditor({
 
 function MarkdownEditor({
   value,
+  disabled,
   onChange,
 }: {
   value: string
+  disabled: boolean
   onChange: (value: string) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<EditorView | null>(null)
+  const editableCompartment = useRef(new Compartment())
+  const disabledRef = useRef(disabled)
   const onChangeRef = useRef(onChange)
+
+  disabledRef.current = disabled
 
   useEffect(() => {
     onChangeRef.current = onChange
@@ -214,6 +230,9 @@ function MarkdownEditor({
         doc: value,
         extensions: [
           markdown(),
+          editableCompartment.current.of(
+            EditorView.editable.of(!disabledRef.current),
+          ),
           history(),
           keymap.of([...defaultKeymap, ...historyKeymap]),
           syntaxHighlighting(defaultHighlightStyle),
@@ -237,6 +256,14 @@ function MarkdownEditor({
       editorRef.current = null
     }
   }, [])
+
+  useEffect(() => {
+    editorRef.current?.dispatch({
+      effects: editableCompartment.current.reconfigure(
+        EditorView.editable.of(!disabled),
+      ),
+    })
+  }, [disabled])
 
   useEffect(() => {
     const editor = editorRef.current
@@ -288,6 +315,7 @@ export function ReviewDocumentPanel({
                 name={name}
                 path={[name]}
                 value={value}
+                disabled={busy}
                 onChange={updateFrontmatter}
               />
             ))}
@@ -297,6 +325,7 @@ export function ReviewDocumentPanel({
             name="Frontmatter"
             path={[]}
             value={frontmatter}
+            disabled={busy}
             onChange={(path, value) => {
               if (path.length === 0) onFrontmatterChange(value)
             }}
@@ -333,7 +362,11 @@ export function ReviewDocumentPanel({
         </div>
         <div className="review-document-body-columns">
           <div className="review-document-edit-column">
-            <MarkdownEditor value={body} onChange={onBodyChange} />
+            <MarkdownEditor
+              value={body}
+              disabled={busy}
+              onChange={onBodyChange}
+            />
           </div>
           <div className="review-document-preview-column">
             <MarkdownMessage className="review-document-body">

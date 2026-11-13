@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { type Dispatch, type SetStateAction, useEffect, useState } from 'react'
 
 import {
   isReviewDocumentResponse,
@@ -38,6 +38,65 @@ type UseConversationStatusPanelOptions = {
   onCloseStatusPanel: () => void
 }
 
+type ReviewDocumentState = {
+  sessionId: string
+  reviewDocumentId: string
+  document: ReviewDocumentResponse | null
+  error: string | null
+  loading: boolean
+  saveStatus: 'idle' | 'saving' | 'saved' | 'error' | 'finishing'
+  saveError: string | null
+  mobileView: 'edit' | 'preview'
+}
+
+function requestReviewDocumentAction(
+  sessionId: string,
+  document: ReviewDocumentResponse,
+  action: 'save' | 'finish',
+  setState: Dispatch<SetStateAction<ReviewDocumentState | null>>,
+) {
+  const matchesDocument = (
+    current: ReviewDocumentState | null,
+  ): current is ReviewDocumentState =>
+    current !== null &&
+    current.sessionId === sessionId &&
+    current.reviewDocumentId === document.id
+  setState((current) => {
+    if (current === null || !matchesDocument(current)) return current
+    return {
+      ...current,
+      saveStatus: action === 'save' ? 'saving' : 'finishing',
+      saveError: null,
+    }
+  })
+
+  void requestAction(sessionId, `review-document/${action}`, {
+    id: document.id,
+    frontmatter: document.frontmatter,
+    body: document.body,
+  }).match(
+    () => {
+      setState((current) => {
+        if (!matchesDocument(current)) return current
+        return action === 'save'
+          ? { ...current, saveStatus: 'saved', saveError: null }
+          : null
+      })
+    },
+    (error) => {
+      setState((current) =>
+        matchesDocument(current)
+          ? {
+              ...current,
+              saveStatus: 'error',
+              saveError: error.message,
+            }
+          : current,
+      )
+    },
+  )
+}
+
 export function useConversationStatusPanel({
   session,
   messages,
@@ -56,16 +115,8 @@ export function useConversationStatusPanel({
   const [selectedDecisionSeq, setSelectedDecisionSeq] = useState<number | null>(
     null,
   )
-  const [reviewDocumentState, setReviewDocumentState] = useState<{
-    sessionId: string
-    reviewDocumentId: string
-    document: ReviewDocumentResponse | null
-    error: string | null
-    loading: boolean
-    saveStatus: 'idle' | 'saving' | 'saved' | 'error' | 'finishing'
-    saveError: string | null
-    mobileView: 'edit' | 'preview'
-  } | null>(null)
+  const [reviewDocumentState, setReviewDocumentState] =
+    useState<ReviewDocumentState | null>(null)
   const reviewDocumentId = session.reviewDocumentId
   const decisions =
     allDecisions ??
@@ -317,73 +368,23 @@ export function useConversationStatusPanel({
                   }}
                   onSave={() => {
                     const document = reviewDocumentState.document
-                    if (document === null) return
-                    setReviewDocumentState((current) =>
-                      current === null
-                        ? current
-                        : {
-                            ...current,
-                            saveStatus: 'saving',
-                            saveError: null,
-                          },
-                    )
-                    void requestAction(session.id, 'review-document/save', {
-                      id: document.id,
-                      frontmatter: document.frontmatter,
-                      body: document.body,
-                    }).match(
-                      () => {
-                        setReviewDocumentState((current) =>
-                          current === null
-                            ? current
-                            : { ...current, saveStatus: 'saved' },
-                        )
-                      },
-                      (error) => {
-                        setReviewDocumentState((current) =>
-                          current === null
-                            ? current
-                            : {
-                                ...current,
-                                saveStatus: 'error',
-                                saveError: error.message,
-                              },
-                        )
-                      },
-                    )
+                    if (document !== null)
+                      requestReviewDocumentAction(
+                        session.id,
+                        document,
+                        'save',
+                        setReviewDocumentState,
+                      )
                   }}
                   onFinish={() => {
                     const document = reviewDocumentState.document
-                    if (document === null) return
-                    setReviewDocumentState((current) =>
-                      current === null
-                        ? current
-                        : {
-                            ...current,
-                            saveStatus: 'finishing',
-                            saveError: null,
-                          },
-                    )
-                    void requestAction(session.id, 'review-document/finish', {
-                      id: document.id,
-                      frontmatter: document.frontmatter,
-                      body: document.body,
-                    }).match(
-                      () => {
-                        setReviewDocumentState(null)
-                      },
-                      (error) => {
-                        setReviewDocumentState((current) =>
-                          current === null
-                            ? current
-                            : {
-                                ...current,
-                                saveStatus: 'error',
-                                saveError: error.message,
-                              },
-                        )
-                      },
-                    )
+                    if (document !== null)
+                      requestReviewDocumentAction(
+                        session.id,
+                        document,
+                        'finish',
+                        setReviewDocumentState,
+                      )
                   }}
                 />
               ),

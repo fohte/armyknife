@@ -214,33 +214,6 @@
   padding-left: 10px;
 }
 
-.review-document-string {
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
-.review-document-number,
-.review-document-null {
-  color: var(--aw-text-secondary);
-  font-family: var(--font-mono);
-}
-
-.review-document-boolean {
-  display: inline-grid;
-  width: 18px;
-  height: 18px;
-  place-items: center;
-  border: 1px solid var(--aw-border-control);
-  border-radius: 4px;
-  color: var(--aw-text-secondary);
-  font-size: 11px;
-  line-height: 1;
-}
-
-.review-document-boolean[data-checked='true'] {
-  color: var(--aw-color-working);
-}
-
 .review-document-array {
   display: flex;
   flex-direction: column;
