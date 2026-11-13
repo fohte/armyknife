@@ -1,5 +1,5 @@
 import { ResultAsync } from 'neverthrow'
-import { useRef, useState } from 'react'
+import { useCallback, useRef, useState, useSyncExternalStore } from 'react'
 
 import type { ComposerAttachment } from '#components/message-composer'
 import { optimizeImageAttachment } from '#lib/image-attachment'
@@ -16,7 +16,74 @@ const PREVIEW_MIME_TYPES = new Set([
 
 type SelectedAttachment = ComposerAttachment & { file: File }
 
-const attachmentsBySession = new Map<string, SelectedAttachment[]>()
+type SessionAttachmentState = {
+  attachments: SelectedAttachment[]
+  pendingFileCount: number
+  generation: number
+}
+
+const EMPTY_SESSION_ATTACHMENT_STATE: SessionAttachmentState = {
+  attachments: [],
+  pendingFileCount: 0,
+  generation: 0,
+}
+const sessionAttachmentStates = new Map<string, SessionAttachmentState>()
+const sessionAttachmentListeners = new Map<string, Set<() => void>>()
+
+function getSessionAttachmentState(sessionId: string) {
+  return (
+    sessionAttachmentStates.get(sessionId) ?? EMPTY_SESSION_ATTACHMENT_STATE
+  )
+}
+
+function notifySessionAttachmentListeners(sessionId: string) {
+  sessionAttachmentListeners.get(sessionId)?.forEach((listener) => {
+    listener()
+  })
+}
+
+function updateSessionAttachmentState(
+  sessionId: string,
+  update: (current: SessionAttachmentState) => SessionAttachmentState,
+) {
+  const next = update(getSessionAttachmentState(sessionId))
+  if (
+    next.attachments.length === 0 &&
+    next.pendingFileCount === 0 &&
+    next.generation === 0
+  ) {
+    sessionAttachmentStates.delete(sessionId)
+  } else {
+    sessionAttachmentStates.set(sessionId, next)
+  }
+  notifySessionAttachmentListeners(sessionId)
+}
+
+function subscribeToSessionAttachments(
+  sessionId: string,
+  listener: () => void,
+) {
+  const listeners = sessionAttachmentListeners.get(sessionId) ?? new Set()
+  listeners.add(listener)
+  sessionAttachmentListeners.set(sessionId, listeners)
+  return () => {
+    listeners.delete(listener)
+    if (listeners.size === 0) sessionAttachmentListeners.delete(sessionId)
+  }
+}
+
+export function clearSessionAttachments(sessionId: string) {
+  const current = getSessionAttachmentState(sessionId)
+  current.attachments.forEach(({ previewUrl }) => {
+    if (previewUrl !== null) URL.revokeObjectURL(previewUrl)
+  })
+  updateSessionAttachmentState(sessionId, (state) => ({
+    ...state,
+    attachments: [],
+    pendingFileCount: 0,
+    generation: state.generation + 1,
+  }))
+}
 
 type ComposerMessageOptions = {
   sessionId: string
@@ -90,36 +157,49 @@ export function useComposerMessage({
   clearDraftIfUnchanged,
   onAction,
 }: ComposerMessageOptions) {
-  const [attachments, setAttachments] = useState<SelectedAttachment[]>(
-    () => attachmentsBySession.get(sessionId) ?? [],
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      subscribeToSessionAttachments(sessionId, listener),
+    [sessionId],
   )
+  const getSnapshot = useCallback(
+    () => getSessionAttachmentState(sessionId),
+    [sessionId],
+  )
+  const sessionAttachmentState = useSyncExternalStore(
+    subscribe,
+    getSnapshot,
+    getSnapshot,
+  )
+  const { attachments } = sessionAttachmentState
   const [sendPending, setSendPending] = useState(false)
-  const [isProcessingAttachments, setIsProcessingAttachments] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const sendingRef = useRef(false)
-  const attachmentsRef = useRef(attachments)
-  const pendingFileCountRef = useRef(0)
   const pasteQueueRef = useRef(Promise.resolve())
-  attachmentsRef.current = attachments
   const isSending = externalSending || sendPending
   const limitError = attachmentLimitError(attachments)
 
   const updateAttachments = (nextAttachments: SelectedAttachment[]) => {
-    attachmentsRef.current = nextAttachments
-    attachmentsBySession.set(sessionId, nextAttachments)
-    setAttachments(nextAttachments)
+    updateSessionAttachmentState(sessionId, (state) => ({
+      ...state,
+      attachments: nextAttachments,
+    }))
   }
 
   const onPasteFiles = (files: File[]) => {
     if (files.length === 0) return
+    const currentState = getSessionAttachmentState(sessionId)
     const availableOptimizationSlots = Math.max(
       0,
       MAX_ATTACHMENTS_PER_MESSAGE -
-        attachmentsRef.current.length -
-        pendingFileCountRef.current,
+        currentState.attachments.length -
+        currentState.pendingFileCount,
     )
-    pendingFileCountRef.current += files.length
-    setIsProcessingAttachments(true)
+    const generation = currentState.generation
+    updateSessionAttachmentState(sessionId, (state) => ({
+      ...state,
+      pendingFileCount: state.pendingFileCount + files.length,
+    }))
 
     const addFiles = pasteQueueRef.current.then(async () => {
       const added: SelectedAttachment[] = []
@@ -139,8 +219,17 @@ export function useComposerMessage({
             : null,
         })
       }
-      const nextAttachments = [...attachmentsRef.current, ...added]
-      updateAttachments(nextAttachments)
+      const current = getSessionAttachmentState(sessionId)
+      if (current.generation !== generation) {
+        added.forEach(({ previewUrl }) => {
+          if (previewUrl !== null) URL.revokeObjectURL(previewUrl)
+        })
+        return
+      }
+      updateSessionAttachmentState(sessionId, (state) => ({
+        ...state,
+        attachments: [...state.attachments, ...added],
+      }))
       setError(null)
     })
     pasteQueueRef.current = addFiles.then(
@@ -148,27 +237,33 @@ export function useComposerMessage({
       () => undefined,
     )
     const finishPaste = () => {
-      pendingFileCountRef.current -= files.length
-      setIsProcessingAttachments(pendingFileCountRef.current > 0)
+      updateSessionAttachmentState(sessionId, (state) =>
+        state.generation === generation
+          ? {
+              ...state,
+              pendingFileCount: Math.max(
+                0,
+                state.pendingFileCount - files.length,
+              ),
+            }
+          : state,
+      )
     }
     void addFiles.then(finishPaste, finishPaste)
   }
 
   const removeAttachment = (id: string) => {
-    const removed = attachmentsRef.current.find(
-      (attachment) => attachment.id === id,
-    )
+    const current = getSessionAttachmentState(sessionId).attachments
+    const removed = current.find((attachment) => attachment.id === id)
     if (removed?.previewUrl !== null && removed?.previewUrl !== undefined) {
       URL.revokeObjectURL(removed.previewUrl)
     }
-    updateAttachments(
-      attachmentsRef.current.filter((attachment) => attachment.id !== id),
-    )
+    updateAttachments(current.filter((attachment) => attachment.id !== id))
   }
 
   const removeAttachments = (ids: readonly string[]) => {
     const removedIds = new Set(ids)
-    const current = attachmentsRef.current
+    const current = getSessionAttachmentState(sessionId).attachments
     current
       .filter((attachment) => removedIds.has(attachment.id))
       .forEach(({ previewUrl }) => {
@@ -185,7 +280,7 @@ export function useComposerMessage({
       (draft.trim() === '' && attachments.length === 0) ||
       !messageEnabled ||
       isSending ||
-      pendingFileCountRef.current > 0 ||
+      getSessionAttachmentState(sessionId).pendingFileCount > 0 ||
       sendingRef.current
     )
       return
@@ -230,7 +325,7 @@ export function useComposerMessage({
     attachments,
     error: limitError ?? error,
     isSending,
-    isProcessingAttachments,
+    isProcessingAttachments: sessionAttachmentState.pendingFileCount > 0,
     onPasteFiles,
     removeAttachment,
     sendMessage,

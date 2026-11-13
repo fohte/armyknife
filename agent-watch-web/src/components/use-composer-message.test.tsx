@@ -4,8 +4,12 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { useComposerMessage } from '#components/use-composer-message'
 
+const { optimizeImageAttachmentMock } = vi.hoisted(() => ({
+  optimizeImageAttachmentMock: vi.fn<(file: File) => Promise<File>>(),
+}))
+
 vi.mock('#lib/image-attachment', () => ({
-  optimizeImageAttachment: (file: File) => Promise.resolve(file),
+  optimizeImageAttachment: optimizeImageAttachmentMock,
 }))
 
 let container: HTMLDivElement
@@ -39,10 +43,20 @@ function ComposerMessageHarness({
   return null
 }
 
-function renderSession(sessionId: string) {
+function renderSession(
+  sessionId: string,
+  onAction?: (
+    action: string,
+    payload?: Record<string, unknown>,
+  ) => Promise<boolean>,
+) {
   act(() => {
     root?.render(
-      <ComposerMessageHarness key={sessionId} sessionId={sessionId} />,
+      <ComposerMessageHarness
+        key={sessionId}
+        sessionId={sessionId}
+        {...(onAction === undefined ? {} : { onAction })}
+      />,
     )
   })
 }
@@ -71,6 +85,10 @@ beforeEach(() => {
   document.body.append(container)
   root = createRoot(container)
   composerMessage = null
+  optimizeImageAttachmentMock.mockReset()
+  optimizeImageAttachmentMock.mockImplementation((file) =>
+    Promise.resolve(file),
+  )
   revokedUrls = []
   let previewId = 0
   vi.spyOn(URL, 'createObjectURL').mockImplementation(
@@ -137,6 +155,85 @@ it('keeps each session attachments separate', async () => {
     secondSessionAttachmentsBeforePaste: [],
     secondSessionAttachmentNames: ['second.png'],
     restoredFirstSessionAttachmentNames: ['first.png'],
+  })
+})
+
+it('restores an attachment when optimization finishes after returning to its session', async () => {
+  const firstSession = crypto.randomUUID()
+  const secondSession = crypto.randomUUID()
+  const onAction = vi
+    .fn<
+      (action: string, payload?: Record<string, unknown>) => Promise<boolean>
+    >()
+    .mockResolvedValue(true)
+  const file = new File(['image data'], 'pending.png', { type: 'image/png' })
+  let finishOptimization: ((file: File) => void) | undefined
+  optimizeImageAttachmentMock.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finishOptimization = resolve
+      }),
+  )
+  renderSession(firstSession)
+  act(() => {
+    result().onPasteFiles([file])
+  })
+  await vi.waitFor(() => {
+    if (optimizeImageAttachmentMock.mock.calls.length !== 1) {
+      throw new Error('Image optimization has not started')
+    }
+  })
+
+  renderSession(secondSession)
+  renderSession(firstSession, onAction)
+  const processingAfterReturn = result().isProcessingAttachments
+  const attachmentNamesBeforeOptimization = result().attachments.map(
+    ({ name }) => name,
+  )
+
+  const complete = finishOptimization
+  if (complete === undefined) throw new Error('Expected optimization to start')
+  await act(async () => {
+    complete(file)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+  const restoredAttachmentNames = result().attachments.map(({ name }) => name)
+  const attachmentPreviewUrl = result().attachments[0]?.previewUrl
+
+  await act(async () => {
+    await result().sendMessage()
+  })
+
+  const snapshot = () => ({
+    processingAfterReturn,
+    attachmentNamesBeforeOptimization,
+    restoredAttachmentNames,
+    actionCalls: onAction.mock.calls,
+    revokedUrls,
+    attachmentPreviewUrl,
+  })
+  expect(snapshot()).toEqual({
+    processingAfterReturn: true,
+    attachmentNamesBeforeOptimization: [],
+    restoredAttachmentNames: ['pending.png'],
+    actionCalls: [
+      [
+        'messages',
+        {
+          content: '',
+          attachments: [
+            {
+              name: 'pending.png',
+              mimeType: 'image/png',
+              size: 10,
+              data: 'aW1hZ2UgZGF0YQ==',
+            },
+          ],
+        },
+      ],
+    ],
+    revokedUrls: [attachmentPreviewUrl],
+    attachmentPreviewUrl: 'blob:preview-1',
   })
 })
 

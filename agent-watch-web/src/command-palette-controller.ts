@@ -8,6 +8,7 @@ import {
 } from '#command-palette-model'
 import { getCommandPaletteShortcut } from '#command-palette-shortcut'
 import { useSessionConversationCache } from '#components/session-conversation-cache'
+import { clearSessionAttachments } from '#components/use-composer-message'
 import {
   closeDoneSessions as closeDoneSessionsRequest,
   openSessionInTerminal,
@@ -111,9 +112,14 @@ export function useCommandPaletteController({
             lastFailure = failure.failure
             setError(failure.failure)
             setCloseRetrySessionId(failure.unmergedSessionId)
-          } else if (closeQueue.current.length === 0 && lastFailure === null) {
-            setError(null)
-            setCloseRetrySessionId(null)
+          } else {
+            batch.sessions.forEach(({ id }) => {
+              clearSessionAttachments(id)
+            })
+            if (closeQueue.current.length === 0 && lastFailure === null) {
+              setError(null)
+              setCloseRetrySessionId(null)
+            }
           }
           batch.resolve()
         }
