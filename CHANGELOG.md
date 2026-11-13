@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.659](https://github.com/fohte/armyknife/compare/v0.1.658...v0.1.659) (2026-11-13)
+
+
+### Features
+
+* **agent-watch-web:** support mobile navigation ([#1691](https://github.com/fohte/armyknife/issues/1691)) ([3f04f59](https://github.com/fohte/armyknife/commit/3f04f59cd43ec7462b443b6b785f72ea0813eb22))
+
 ## [0.1.658](https://github.com/fohte/armyknife/compare/v0.1.657...v0.1.658) (2026-11-12)
 
 
