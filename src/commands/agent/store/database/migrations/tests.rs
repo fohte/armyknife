@@ -118,3 +118,42 @@ fn adds_permission_request_mailbox_to_version_nine_database() {
         ),
     );
 }
+
+#[test]
+fn adds_todo_resolution_to_master_version_fourteen_database() {
+    let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+    let database_path = temp_dir.path().join("sessions.db");
+    let mut connection = Connection::open(&database_path).expect("temporary database should open");
+    Migrations::from_slice(&MIGRATION_ENTRIES[..14])
+        .to_latest(&mut connection)
+        .expect("master migration fourteen schema should be created");
+    connection
+        .execute(
+            indoc! {"
+                INSERT INTO agent_todo (
+                    session_id, seq, title, created_at, completed_at, comment
+                ) VALUES (
+                    'sample-session', 1, 'Task', '2026-01-01T00:00:00Z',
+                    '2026-01-02T00:00:00Z', 'Already handled'
+                )
+            "},
+            [],
+        )
+        .expect("completed todo should be inserted before migration fifteen");
+    drop(connection);
+
+    let todos = super::super::agent_todos(temp_dir.path(), "sample-session")
+        .expect("master version fourteen database should migrate and load todos");
+    let actual = todos
+        .first()
+        .map(|todo| (todo.title.clone(), todo.resolution, todo.comment.clone()));
+
+    assert_eq!(
+        actual,
+        Some((
+            "Task".to_string(),
+            Some(super::super::TodoResolution::Completed),
+            Some("Already handled".to_string()),
+        )),
+    );
+}

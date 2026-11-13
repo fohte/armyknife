@@ -468,7 +468,7 @@ mod tests {
     use serde_json::json;
 
     use super::{CodexParserState, parse, parse_with_skills};
-    use crate::commands::agent::store::AgentTodo;
+    use crate::commands::agent::store::{AgentTodo, TodoResolution};
     use crate::commands::agent::watch_web::messages::{
         ChatItem, EventKind, ParentSession, PeerDirection, SkillSuggestion, UserContentPart,
     };
@@ -488,6 +488,7 @@ mod tests {
                     .unwrap()
                     .with_timezone(&Utc),
             ),
+            resolution: Some(TodoResolution::Completed),
             comment: Some("The sample is ready.".to_string()),
         }
     }
@@ -669,6 +670,7 @@ mod tests {
                             title: "Review the fictional report".to_string(),
                             detail: None,
                             completed: true,
+                            resolution: Some(TodoResolution::Completed),
                             comment: Some("The sample is ready.".to_string()),
                         },
                         ChatItem::User {
@@ -783,6 +785,7 @@ mod tests {
                         title: "Review the fictional report".to_string(),
                         detail: None,
                         completed: true,
+                        resolution: Some(TodoResolution::Completed),
                         comment: Some("The sample is ready.".to_string()),
                     },
                     ChatItem::User {
@@ -803,6 +806,7 @@ mod tests {
             {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"after"}}}
         "#};
         todo.completed_at = None;
+        todo.resolution = None;
         todo.comment = None;
         let mut earlier_todo = todo.clone();
         earlier_todo.seq = 2;
@@ -828,6 +832,7 @@ mod tests {
                         title: "Review the fictional checklist".to_string(),
                         detail: None,
                         completed: false,
+                        resolution: None,
                         comment: None,
                     },
                     ChatItem::Todo {
@@ -835,6 +840,7 @@ mod tests {
                         title: "Review the fictional report".to_string(),
                         detail: None,
                         completed: false,
+                        resolution: None,
                         comment: None,
                     },
                 ],
@@ -854,6 +860,23 @@ mod tests {
             vec![ChatItem::Event {
                 kind: EventKind::Armyknife,
                 text: "Fixture action text.".to_string(),
+                failed: false,
+                timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
+            }],
+        );
+    }
+
+    #[test]
+    fn renders_marked_todo_rejections_as_armyknife_events() {
+        let transcript = indoc! {r#"
+            {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<armyknife-todo-rejected>Fixture rejection text.</armyknife-todo-rejected>"}}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None).unwrap(),
+            vec![ChatItem::Event {
+                kind: EventKind::Armyknife,
+                text: "Fixture rejection text.".to_string(),
                 failed: false,
                 timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
             }],
