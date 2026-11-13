@@ -59,9 +59,41 @@ it('shows the send time in the peer card header', () => {
     dateTime: container.querySelector('time')?.getAttribute('dateTime') ?? null,
   })
   expect(getActual()).toEqual({
-    label: `TOFixture peer (ended)${localTime}`,
+    label: `TOSENTFixture peer (ended)${localTime}`,
     time: localTime,
     dateTime: timestamp,
+  })
+})
+
+it('shows a failed result with its destination and message body', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <PeerMessage
+        message={{
+          type: 'peer',
+          direction: 'to',
+          session_id: 'fixture-target-session',
+          content: [{ type: 'text', text: 'A fictional request body.' }],
+          failed: true,
+        }}
+        onSelectSession={() => undefined}
+        sessions={[]}
+      />,
+    )
+  })
+
+  const getActual = () => ({
+    className: container.querySelector('article')?.className,
+    failed: container.querySelector('article')?.getAttribute('data-failed'),
+    label: container.querySelector('.chat-peer-label')?.textContent,
+    body: container.querySelector('.chat-peer-content')?.textContent,
+  })
+  expect(getActual()).toEqual({
+    className: 'chat-peer-message chat-peer-message-to',
+    failed: 'true',
+    label: 'TOFAILEDfixture-target-session (ended)',
+    body: 'A fictional request body.',
   })
 })
 
@@ -96,7 +128,7 @@ it.each([
     sessionId: 'fixture-untracked-session',
     sessionTitle: undefined,
     direction: 'to',
-    label: 'TOfixture-untracked-session (ended)',
+    label: 'TOSENTfixture-untracked-session (ended)',
   },
   {
     sessionId: 'fixture-parent-session',

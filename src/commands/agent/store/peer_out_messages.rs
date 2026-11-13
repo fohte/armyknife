@@ -11,6 +11,7 @@ pub(crate) fn insert_watch_web_peer_out_message_from(
     to_session_id: &str,
     content: &str,
     sent_at: DateTime<Utc>,
+    failed: bool,
 ) -> Result<()> {
     database::insert_watch_web_peer_out_message(
         sessions_dir,
@@ -18,6 +19,7 @@ pub(crate) fn insert_watch_web_peer_out_message_from(
         to_session_id,
         content,
         sent_at,
+        failed,
     )
     .map(|_| ())
 }
@@ -34,6 +36,7 @@ pub(crate) fn insert_watch_web_peer_out_message(
     to_session_id: &str,
     content: &str,
     sent_at: DateTime<Utc>,
+    failed: bool,
 ) -> Result<()> {
     insert_watch_web_peer_out_message_from(
         &super::sessions_dir()?,
@@ -41,5 +44,6 @@ pub(crate) fn insert_watch_web_peer_out_message(
         to_session_id,
         content,
         sent_at,
+        failed,
     )
 }
