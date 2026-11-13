@@ -51,7 +51,7 @@ pub(crate) fn unanswered_agent_proposal_bodies(
         .join(", ");
     let query = format!(
         "SELECT session_id, body FROM agent_proposal
-         WHERE answer IS NULL AND session_id IN ({placeholders})
+         WHERE resolved_at IS NULL AND session_id IN ({placeholders})
          ORDER BY session_id, seq"
     );
     let mut statement = connection.prepare(&query)?;
@@ -114,7 +114,7 @@ pub(crate) fn write_agent_proposal_answer(
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let changed = transaction.execute(
-        "UPDATE agent_proposal SET answer = ?1, resolved_at = ?2
+        "UPDATE agent_proposal SET answer = ?1, resolved_at = COALESCE(resolved_at, ?2)
          WHERE session_id = ?3 AND seq = ?4 AND answer IS NULL",
         params![answer, Utc::now().to_rfc3339(), session_id, seq],
     )?;
@@ -129,7 +129,6 @@ pub(crate) fn write_agent_proposal_answer(
 mod tests {
     use chrono::{TimeZone, Utc};
     use rstest::{fixture, rstest};
-    use rusqlite::{Connection, params};
     use tempfile::TempDir;
 
     use super::{
@@ -204,30 +203,6 @@ mod tests {
                     ("session-b".to_string(), "other body".to_string()),
                 ],
             ),
-        );
-    }
-
-    #[rstest]
-    fn unanswered_bodies_include_proposals_closed_without_an_answer(sessions_dir: TempDir) {
-        add_agent_proposal(sessions_dir.path(), "session-a", "legacy proposal")
-            .expect("proposal should save");
-        let connection = Connection::open(sessions_dir.path().join("sessions.db"))
-            .expect("session database should open");
-        connection
-            .execute(
-                "UPDATE agent_proposal SET resolved_at = ?1
-                 WHERE session_id = ?2 AND seq = ?3",
-                params!["2026-01-01T00:00:00Z", "session-a", 1],
-            )
-            .expect("legacy resolution timestamp should save");
-
-        let actual =
-            unanswered_agent_proposal_bodies(sessions_dir.path(), &["session-a".to_string()])
-                .expect("unanswered proposal bodies should load");
-
-        assert_eq!(
-            actual,
-            vec![("session-a".to_string(), "legacy proposal".to_string())],
         );
     }
 

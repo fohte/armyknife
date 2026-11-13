@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use rusqlite_migration::{Error as MigrationError, M, MigrationDefinitionError, Migrations};
 
 // Migrations must stay readable by older binaries: add tables or nullable columns only.
-static MIGRATION_ENTRIES: [M<'static>; 13] = [
+static MIGRATION_ENTRIES: [M<'static>; 12] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -138,10 +138,6 @@ static MIGRATION_ENTRIES: [M<'static>; 13] = [
             BEGIN
                 DELETE FROM agent_todo WHERE session_id = OLD.session_id;
             END;",
-    ),
-    M::up(
-        "CREATE INDEX agent_proposal_unanswered_session_id
-            ON agent_proposal (session_id) WHERE answer IS NULL;",
     ),
 ];
 

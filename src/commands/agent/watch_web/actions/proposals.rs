@@ -46,7 +46,7 @@ pub(super) async fn answer_proposal(
         .iter()
         .find(|proposal| proposal.seq == seq)
         .ok_or_else(|| ApiError::conflict("proposal is not awaiting an answer"))?;
-    if proposal.answer.is_some() {
+    if proposal.resolved_at.is_some() {
         return Err(ApiError::conflict("proposal is not awaiting an answer"));
     }
     let body: ProposalBody = serde_json::from_str(&proposal.body)
