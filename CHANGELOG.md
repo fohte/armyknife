@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.661](https://github.com/fohte/armyknife/compare/v0.1.660...v0.1.661) (2026-11-13)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** accept root crit relay paths ([#1695](https://github.com/fohte/armyknife/issues/1695)) ([d56e185](https://github.com/fohte/armyknife/commit/d56e18574f2c9eb5f971c5a71840825e5cc5830c))
+
 ## [0.1.660](https://github.com/fohte/armyknife/compare/v0.1.659...v0.1.660) (2026-11-13)
 
 
