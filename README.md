@@ -863,6 +863,13 @@ Add the following to your Claude Code settings (`~/.claude/settings.json`):
         ]
       }
     ],
+    "PermissionDenied": [
+      {
+        "hooks": [
+          { "type": "command", "command": "a agent hook permission-denied" }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [{ "type": "command", "command": "a agent hook stop" }]
@@ -882,7 +889,7 @@ Add the following to your Claude Code settings (`~/.claude/settings.json`):
 }
 ```
 
-These hooks record session state changes, enabling `a agent list` to display active sessions with their current status (running, waiting for input, stopped, or failed). `StopFailure` marks API-error interruptions as `Failed`; when no permission request remains, the next user prompt returns the session to `Running`. An unclassified `Stop` remains `Running` while the hook asks the agent to set its status.
+These hooks record session state changes, enabling `a agent list` to display active sessions with their current status (running, waiting for input, stopped, or failed). `PermissionDenied` records a blocked Claude Code operation in the watch-web conversation without changing the session status; a classifier verdict can be approved for one retry from its card. Denials without a classifier verdict are shown without a retry action. `StopFailure` marks API-error interruptions as `Failed`; when no permission request remains, the next user prompt returns the session to `Running`. An unclassified `Stop` remains `Running` while the hook asks the agent to set its status.
 
 The `SessionStart` and `UserPromptSubmit` hooks store the agent session ID in the tmux pane user option `@armyknife-last-agent-session-id`, so that `a agent resume` can relaunch the session inside that pane. Reading this option falls back to the pre-rename key `@armyknife-last-claude-code-session-id` when the current key is unset, since a pane only gets its option rewritten on those two hook events, and a pane holding a still-running session would otherwise lose its binding right after the rename.
 
@@ -1162,6 +1169,7 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 - `POST /api/sessions/{id}/proposals/{seq}/answer` with `{"choice":0,"comment":"..."}`; `choice` is a zero-based option index or `null` to request another proposal, and `comment` may be `null`
 - `POST /api/sessions/{id}/permission/approve` with `{"requestId":"..."}`
 - `POST /api/sessions/{id}/permission/reject` with `{"requestId":"..."}`
+- `POST /api/sessions/{id}/permission-denials/{seq}/retry` sends a one-time approval message for a classifier denial; denials without a classifier verdict cannot be retried
 - `POST /api/sessions/{id}/interrupt`
 - `POST /api/sessions/{id}/focus`
 - `POST /api/sessions/{id}/read`

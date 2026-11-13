@@ -638,6 +638,22 @@ mod tests {
             self.router_with_loaders_and_proposal_answer_locks(empty_message_loaders())
         }
 
+        fn router_with_permission_denied_retry_locks(
+            &self,
+        ) -> (Router, PermissionDeniedRetryLocks) {
+            let permission_denied_retry_locks = PermissionDeniedRetryLocks::default();
+            let router = router_with_state(ActionState {
+                sessions_dir: Some(self.temp_dir.path().join("sessions")),
+                attachment_dir: Some(self.temp_dir.path().join("attachments")),
+                runtime: self.runtime.clone(),
+                proposal_answer_locks: ProposalAnswerLocks::default(),
+                permission_denied_retry_locks: permission_denied_retry_locks.clone(),
+                todo_completion_locks: TodoCompletionLocks::default(),
+                message_loaders: empty_message_loaders(),
+            });
+            (router, permission_denied_retry_locks)
+        }
+
         fn router_with_loaders_and_proposal_answer_locks(
             &self,
             message_loaders: super::super::messages::RouteLoaders,

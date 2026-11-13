@@ -762,7 +762,7 @@ fn process_hook_event_impl_with_settings(
                 uuid::Uuid::new_v4().to_string(),
             );
         }
-        HookEvent::Notification | HookEvent::PermissionDenied => {}
+        HookEvent::Notification => {}
         _ => {
             session
                 .pending_permission_agent_ids
@@ -2262,11 +2262,8 @@ mod tests {
             (
                 ProcessResult::SessionSaved,
                 SessionStatus::WaitingInput,
-                BTreeSet::from([MAIN_THREAD_AGENT_KEY.to_string()]),
-                std::collections::BTreeMap::from([(
-                    MAIN_THREAD_AGENT_KEY.to_string(),
-                    "pending-request-fixture".to_string(),
-                )]),
+                BTreeSet::new(),
+                std::collections::BTreeMap::new(),
                 vec![(
                     1,
                     Some("tool-call-fixture".to_string()),

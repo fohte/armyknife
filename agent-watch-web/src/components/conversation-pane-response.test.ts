@@ -62,3 +62,37 @@ it('rejects todo cards with invalid completion state', () => {
     ),
   ).toBe(false)
 })
+
+it('accepts a permission denial card from the conversation API', () => {
+  expect(
+    isConversationResponse(
+      response({
+        type: 'permission_denied',
+        seq: 1,
+        toolUseId: 'tool-call-example',
+        tool: 'Bash',
+        inputSummary: 'printf example',
+        reason: '[Sensitive Operation]',
+        retryable: true,
+        resolved: false,
+      }),
+    ),
+  ).toBe(true)
+})
+
+it('rejects permission denial cards with an invalid retry state', () => {
+  expect(
+    isConversationResponse(
+      response({
+        type: 'permission_denied',
+        seq: 1,
+        toolUseId: 'tool-call-example',
+        tool: 'Bash',
+        inputSummary: 'printf example',
+        reason: null,
+        retryable: 'yes',
+        resolved: false,
+      }),
+    ),
+  ).toBe(false)
+})

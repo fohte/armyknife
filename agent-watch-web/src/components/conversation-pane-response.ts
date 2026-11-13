@@ -179,6 +179,19 @@ function isChatItem(value: unknown): value is ChatItem {
         typeof value['tool'] === 'string' &&
         typeof value['description'] === 'string'
       )
+    case 'permission_denied':
+      return (
+        typeof value['seq'] === 'number' &&
+        Number.isInteger(value['seq']) &&
+        value['seq'] > 0 &&
+        (value['toolUseId'] === undefined ||
+          typeof value['toolUseId'] === 'string') &&
+        typeof value['tool'] === 'string' &&
+        typeof value['inputSummary'] === 'string' &&
+        (value['reason'] === null || typeof value['reason'] === 'string') &&
+        typeof value['retryable'] === 'boolean' &&
+        typeof value['resolved'] === 'boolean'
+      )
     case 'decision':
       return (
         typeof value['seq'] === 'number' &&
