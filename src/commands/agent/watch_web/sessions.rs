@@ -359,19 +359,10 @@ async fn list_sessions<S: SessionSource>(
     let sessions_for_review_documents = response_sessions.clone();
     let review_document_source = source.clone();
     let review_document_ids = tokio::task::spawn_blocking(move || {
-        sessions_for_review_documents
-            .into_iter()
-            .filter_map(|session| {
-                if !super::review_document::has_review_document_marker(&session) {
-                    return None;
-                }
-                let review_document_id = super::review_document::active_review_document_id(
-                    &session,
-                    review_document_source.review_document_queue(&session),
-                );
-                Some((session.session_id, review_document_id))
-            })
-            .collect::<HashMap<_, _>>()
+        super::review_document::active_review_document_ids(
+            &sessions_for_review_documents,
+            |session| review_document_source.review_document_queue(session),
+        )
     })
     .await
     .map_err(|error| {
@@ -1444,10 +1435,6 @@ mod tests {
         source
             .work_type_nav_labels
             .insert("release-guide".to_string(), "Guides".to_string());
-        let review_document_queue_calls = source.review_document_queue_calls.clone();
-        let review_document_queue_thread_id = source.review_document_queue_thread_id.clone();
-        let request_thread_id = std::thread::current().id();
-
         let mut expected = expected_response(
             "needs_action",
             None,
@@ -1470,6 +1457,27 @@ mod tests {
         );
         expected["sessions"][0]["reviewDocumentId"] = serde_json::json!("fixture-review");
 
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_route_resolves_review_document_queue_off_the_request_thread(
+        mut source: TestSessionSource,
+    ) {
+        let review_document_dir = tempfile::TempDir::new().unwrap();
+        let review_document_path = review_document_dir.path().join("fixture-document.md");
+        std::fs::write(&review_document_path, "fixture").unwrap();
+        let _review_lock =
+            crate::shared::human_in_the_loop::LockGuard::acquire(&review_document_path).unwrap();
+        source.sessions[0].pending_human_review_ids.insert(format!(
+            "fixture-review\0v2\0{}\0{}\0",
+            42,
+            review_document_path.display()
+        ));
+        let review_document_queue_calls = source.review_document_queue_calls.clone();
+        let review_document_queue_thread_id = source.review_document_queue_thread_id.clone();
+        let request_thread_id = std::thread::current().id();
         let response = sessions_response(source).await;
         let queue_was_resolved_off_request_thread = review_document_queue_thread_id
             .lock()
@@ -1479,11 +1487,11 @@ mod tests {
 
         assert_eq!(
             (
-                response,
+                response.0,
                 review_document_queue_calls.load(Ordering::Relaxed),
                 queue_was_resolved_off_request_thread,
             ),
-            ((StatusCode::OK, expected), 1, true),
+            (StatusCode::OK, 1, true),
         );
     }
 

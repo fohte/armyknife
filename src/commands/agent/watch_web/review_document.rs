@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::Json;
@@ -100,6 +101,22 @@ pub(super) fn has_review_document_marker(session: &Session) -> bool {
         .any(|review_id| review_document_marker(review_id).is_some())
 }
 
+pub(super) fn active_review_document_ids(
+    sessions: &[Session],
+    load_review_queue: impl Fn(&Session) -> ReviewDocumentQueue,
+) -> HashMap<String, Option<String>> {
+    sessions
+        .iter()
+        .filter_map(|session| {
+            if !has_review_document_marker(session) {
+                return None;
+            }
+            let review_document_id = active_review_document_id(session, load_review_queue(session));
+            Some((session.session_id.clone(), review_document_id))
+        })
+        .collect()
+}
+
 fn active_review_document(
     session: &Session,
     queue: ReviewDocumentQueue,
@@ -148,7 +165,9 @@ fn load_review_document(marker: &ReviewDocumentMarker) -> anyhow::Result<ReviewD
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
@@ -402,5 +421,36 @@ mod tests {
             .expect("request should complete");
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn skips_the_review_queue_when_the_session_has_no_document_marker() {
+        let mut session = session_with_review(Path::new("/fixture/document.md"));
+        session.pending_human_review_ids.clear();
+        let queue_loader_calls = Arc::new(AtomicUsize::new(0));
+        let queue_loader_calls_for_request = queue_loader_calls.clone();
+        let app = router_with_loaders(
+            move |_| Ok(Some(session.clone())),
+            move |_| {
+                queue_loader_calls_for_request.fetch_add(1, Ordering::Relaxed);
+                ReviewDocumentQueue::Unmanaged
+            },
+        );
+        let response = app
+            .oneshot(
+                Request::get("/sessions/fixture-session/review-document")
+                    .body(Body::empty())
+                    .expect("request should be valid"),
+            )
+            .await
+            .expect("request should complete");
+
+        assert_eq!(
+            (
+                response.status(),
+                queue_loader_calls.load(Ordering::Relaxed),
+            ),
+            (StatusCode::NOT_FOUND, 0),
+        );
     }
 }
