@@ -178,6 +178,7 @@ export type ChatItem =
       title: string
       detail: string | null
       completed: boolean
+      resolution: 'completed' | 'rejected' | 'withdrawn' | null
       comment: string | null
     }
   | {

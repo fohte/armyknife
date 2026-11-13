@@ -475,7 +475,7 @@ fn marked_user_message(text: &str, marker: Option<&str>) -> Option<MessageKind> 
 pub(super) fn is_watch_web_action_tag(tag: &str) -> bool {
     matches!(
         tag,
-        "armyknife-todo-completed" | "armyknife-decision-change"
+        "armyknife-todo-completed" | "armyknife-todo-rejected" | "armyknife-decision-change"
     )
 }
 

@@ -20,7 +20,7 @@ use serde_json::Value;
 use crate::commands::agent::proposal::{ProposalAnswer, ProposalOption};
 use crate::commands::agent::store::{
     AgentDecision, AgentProposal, AgentTodo, PermissionDeniedOperation, PermissionRequestData,
-    WatchWebPeerOutMessage, WatchWebQueuedPrompt,
+    TodoResolution, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
 };
 use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 use crate::commands::agent::user_turn::is_ask_user_question;
@@ -663,6 +663,7 @@ enum ChatItem {
         title: String,
         detail: Option<String>,
         completed: bool,
+        resolution: Option<TodoResolution>,
         comment: Option<String>,
     },
     Permission {
@@ -818,7 +819,7 @@ mod tests {
     };
     use crate::commands::agent::store::{
         AgentDecision, AgentProposal, AgentTodo, PermissionDeniedOperation, PermissionRequestData,
-        WatchWebPeerOutMessage, WatchWebQueuedPrompt,
+        TodoResolution, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
     };
     use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 
@@ -1527,6 +1528,7 @@ mod tests {
                 detail: Some("Use a phone".to_string()),
                 created_at: epoch,
                 completed_at: None,
+                resolution: None,
                 comment: None,
             },
             AgentTodo {
@@ -1536,6 +1538,7 @@ mod tests {
                 detail: None,
                 created_at: epoch,
                 completed_at: Some(epoch),
+                resolution: Some(TodoResolution::Completed),
                 comment: Some("Done".to_string()),
             },
         ];
@@ -1566,6 +1569,7 @@ mod tests {
                             "title": "Update settings",
                             "detail": null,
                             "completed": true,
+                            "resolution": "completed",
                             "comment": "Done",
                         },
                         {
@@ -1574,6 +1578,7 @@ mod tests {
                             "title": "Check the page",
                             "detail": "Use a phone",
                             "completed": false,
+                            "resolution": null,
                             "comment": null,
                         },
                     ],

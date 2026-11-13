@@ -564,6 +564,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `decision add <TITLE> --why <WHY> --considered <ALT> [--considered <ALT>...] --easy-to-change <TEXT>` |         | Record a provisional decision for later review                                              |
 | `proposal add`                                                                                        |         | Record a structured proposal from JSON read from stdin                                      |
 | `todo add`                                                                                            |         | Record one task the user needs to do from JSON read from stdin                              |
+| `todo withdraw <seq> [--comment <reason>]`                                                            |         | Withdraw a pending task from the calling session                                            |
 | `title set <TITLE>`                                                                                   |         | Set the calling session's title; an empty title restores the automatic title                |
 | `profile use <profile> / show`                                                                        |         | Select a profile and show its effective settings for every type                             |
 | `vibe on / off / status / grant <session-id>`                                                         |         | Enable, disable, check, or grant vibe mode to a descendant session                          |
@@ -622,7 +623,7 @@ JSON
 Recorded proposal 1
 ```
 
-Run `a agent todo add` from a tracked Claude Code or Codex session and pipe a JSON object to stdin. The required field is `title`; `detail` is optional. The todo stays in the watch-web conversation after completion and is shown as done. Use a proposal when the user should choose from options. The command prints `Recorded todo <seq>` after saving the todo.
+Run `a agent todo add` from a tracked Claude Code or Codex session and pipe a JSON object to stdin. The required field is `title`; `detail` is optional. A todo stays in the watch-web conversation after it is completed, rejected, or withdrawn, with its final state and optional comment. Use a proposal when the user should choose from options. The command prints `Recorded todo <seq>` after saving the todo. The user can complete or reject a todo in watch-web; an agent can withdraw a pending todo from its own session with `a agent todo withdraw <seq> [--comment <reason>]`. Withdrawal does not send a message to the session.
 
 ```console
 $ cat <<'JSON' | a agent todo add
@@ -632,6 +633,11 @@ $ cat <<'JSON' | a agent todo add
 }
 JSON
 Recorded todo 1
+```
+
+```console
+$ a agent todo withdraw 1 --comment "The plan changed."
+Withdrew todo 1
 ```
 
 Run `a agent title set <TITLE>` from a tracked Claude Code or Codex session to set its title. The title is trimmed before it is saved; an empty or whitespace-only value restores the automatic title. The same title can be changed from `a agent watch` or the watch-web conversation header, and the most recent change wins. When the session has a tmux window, the window title is refreshed best-effort.
@@ -1175,6 +1181,7 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 - `POST /api/sessions/{id}/messages` with `{"content":"..."}`
 - `POST /api/sessions/{id}/answer` with `{"requestId":"...","answers":{"Which formats?":"Markdown, Plain text","Include examples?":"Yes"}}`, or `{"requestId":"...","skip":true}`
 - `POST /api/sessions/{id}/proposals/{seq}/answer` with `{"choice":0,"comment":"..."}`; `choice` is a zero-based option index or `null` to request another proposal, and `comment` may be `null`
+- `POST /api/sessions/{id}/todos/{seq}/resolve` with `{"resolution":"completed","comment":"..."}` or `{"resolution":"rejected","comment":"..."}`; the comment may be `null`, and a live session receives the selected outcome as a user action before it is saved
 - `POST /api/sessions/{id}/permission/approve` with `{"requestId":"..."}`
 - `POST /api/sessions/{id}/permission/reject` with `{"requestId":"..."}`
 - `POST /api/sessions/{id}/permission-denials/{seq}/retry` sends a one-time approval message for a classifier denial; denials without a classifier verdict cannot be retried

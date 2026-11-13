@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use rusqlite::{TransactionBehavior, params, params_from_iter};
+use serde::{Deserialize, Serialize};
 
 use super::{increment_revision, open_connection, validate_session_id};
 
@@ -14,7 +15,38 @@ pub(crate) struct AgentTodo {
     pub(crate) detail: Option<String>,
     pub(crate) created_at: DateTime<Utc>,
     pub(crate) completed_at: Option<DateTime<Utc>>,
+    pub(crate) resolution: Option<TodoResolution>,
     pub(crate) comment: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum TodoResolution {
+    Completed,
+    Rejected,
+    Withdrawn,
+}
+
+impl TodoResolution {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Rejected => "rejected",
+            Self::Withdrawn => "withdrawn",
+        }
+    }
+
+    fn parse(value: Option<String>, completed_at: Option<&str>) -> Result<Option<Self>> {
+        let resolution = match value.as_deref() {
+            Some("completed") => Some(Self::Completed),
+            Some("rejected") => Some(Self::Rejected),
+            Some("withdrawn") => Some(Self::Withdrawn),
+            Some(value) => anyhow::bail!("unknown todo resolution: {value}"),
+            None if completed_at.is_some() => Some(Self::Completed),
+            None => None,
+        };
+        Ok(resolution)
+    }
 }
 
 pub(crate) fn add_agent_todo(
@@ -56,7 +88,7 @@ pub(crate) fn agent_todos(sessions_dir: &Path, session_id: &str) -> Result<Vec<A
 
     let connection = open_connection(sessions_dir)?;
     let mut statement = connection.prepare(
-        "SELECT session_id, seq, title, detail, created_at, completed_at, comment
+        "SELECT session_id, seq, title, detail, created_at, completed_at, resolution, comment
          FROM agent_todo WHERE session_id = ?1 ORDER BY seq",
     )?;
     let rows = statement.query_map([session_id], |row| {
@@ -68,10 +100,12 @@ pub(crate) fn agent_todos(sessions_dir: &Path, session_id: &str) -> Result<Vec<A
             row.get::<_, String>(4)?,
             row.get::<_, Option<String>>(5)?,
             row.get::<_, Option<String>>(6)?,
+            row.get::<_, Option<String>>(7)?,
         ))
     })?;
     rows.map(|row| {
-        let (session_id, seq, title, detail, created_at, completed_at, comment) = row?;
+        let (session_id, seq, title, detail, created_at, completed_at, resolution, comment) = row?;
+        let resolution = TodoResolution::parse(resolution, completed_at.as_deref())?;
         Ok(AgentTodo {
             session_id,
             seq,
@@ -87,6 +121,7 @@ pub(crate) fn agent_todos(sessions_dir: &Path, session_id: &str) -> Result<Vec<A
                         .map(|parsed| parsed.with_timezone(&Utc))
                 })
                 .transpose()?,
+            resolution,
             comment,
         })
     })
@@ -118,19 +153,26 @@ pub(crate) fn incomplete_agent_todo_titles(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-pub(crate) fn complete_agent_todo(
+pub(crate) fn resolve_agent_todo(
     sessions_dir: &Path,
     session_id: &str,
     seq: i64,
+    resolution: TodoResolution,
     comment: Option<&str>,
 ) -> Result<bool> {
     validate_session_id(session_id)?;
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let changed = transaction.execute(
-        "UPDATE agent_todo SET completed_at = ?1, comment = ?2
-         WHERE session_id = ?3 AND seq = ?4 AND completed_at IS NULL",
-        params![Utc::now().to_rfc3339(), comment, session_id, seq],
+        "UPDATE agent_todo SET completed_at = ?1, resolution = ?2, comment = ?3
+         WHERE session_id = ?4 AND seq = ?5 AND completed_at IS NULL",
+        params![
+            Utc::now().to_rfc3339(),
+            resolution.as_str(),
+            comment,
+            session_id,
+            seq
+        ],
     )?;
     if changed > 0 {
         increment_revision(&transaction)?;
@@ -148,8 +190,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        AgentTodo, add_agent_todo, agent_todos, complete_agent_todo, incomplete_agent_todo_titles,
-        open_connection,
+        AgentTodo, TodoResolution, add_agent_todo, agent_todos, incomplete_agent_todo_titles,
+        open_connection, resolve_agent_todo,
     };
     use crate::commands::agent::store::session_store_revision_from;
 
@@ -190,8 +232,14 @@ mod tests {
             .expect("todo should save");
         add_agent_todo(sessions_dir.path(), "session-b", "Other", None)
             .expect("other session todo should save");
-        let changed = complete_agent_todo(sessions_dir.path(), "session-a", first, Some("Done"))
-            .expect("todo should complete");
+        let changed = resolve_agent_todo(
+            sessions_dir.path(),
+            "session-a",
+            first,
+            TodoResolution::Completed,
+            Some("Done"),
+        )
+        .expect("todo should complete");
         let todos = normalize_timestamps(
             agent_todos(sessions_dir.path(), "session-a").expect("todos should load"),
         );
@@ -218,6 +266,7 @@ mod tests {
                         detail: None,
                         created_at: epoch,
                         completed_at: Some(epoch),
+                        resolution: Some(TodoResolution::Completed),
                         comment: Some("Done".to_string()),
                     },
                     AgentTodo {
@@ -227,6 +276,7 @@ mod tests {
                         detail: Some("Details".to_string()),
                         created_at: epoch,
                         completed_at: None,
+                        resolution: None,
                         comment: None,
                     },
                 ],
@@ -245,12 +295,24 @@ mod tests {
             .expect("todo should save");
         let before =
             session_store_revision_from(sessions_dir.path()).expect("revision should load");
-        let first = complete_agent_todo(sessions_dir.path(), "session-a", seq, None)
-            .expect("todo should complete");
+        let first = resolve_agent_todo(
+            sessions_dir.path(),
+            "session-a",
+            seq,
+            TodoResolution::Completed,
+            None,
+        )
+        .expect("todo should complete");
         let after_first =
             session_store_revision_from(sessions_dir.path()).expect("revision should load");
-        let second = complete_agent_todo(sessions_dir.path(), "session-a", seq, Some("Again"))
-            .expect("repeat completion should be handled");
+        let second = resolve_agent_todo(
+            sessions_dir.path(),
+            "session-a",
+            seq,
+            TodoResolution::Completed,
+            Some("Again"),
+        )
+        .expect("repeat completion should be handled");
         let after_second =
             session_store_revision_from(sessions_dir.path()).expect("revision should load");
 
@@ -263,6 +325,35 @@ mod tests {
             ),
             (true, 1, false, 0)
         );
+    }
+
+    #[rstest]
+    fn reads_pre_resolution_completed_rows_as_completed(sessions_dir: TempDir) {
+        create_session(sessions_dir.path(), "session-a");
+        let seq = add_agent_todo(sessions_dir.path(), "session-a", "Task", None)
+            .expect("todo should save");
+        resolve_agent_todo(
+            sessions_dir.path(),
+            "session-a",
+            seq,
+            TodoResolution::Completed,
+            Some("Done"),
+        )
+        .expect("todo should complete");
+        open_connection(sessions_dir.path())
+            .expect("database should open")
+            .execute(
+                "UPDATE agent_todo SET resolution = NULL WHERE session_id = ?1 AND seq = ?2",
+                rusqlite::params!["session-a", seq],
+            )
+            .expect("legacy row should be represented");
+
+        let todos = agent_todos(sessions_dir.path(), "session-a").expect("todos should load");
+        let todo = todos
+            .first()
+            .map(|todo| (todo.resolution, todo.comment.as_deref()));
+
+        assert_eq!(todo, Some((Some(TodoResolution::Completed), Some("Done"))),);
     }
 
     #[rstest]
@@ -292,10 +383,23 @@ mod tests {
         create_session(sessions_dir.path(), "session-a");
         let first_seq = add_agent_todo(sessions_dir.path(), "session-a", "First", None).unwrap();
         let second_seq = add_agent_todo(sessions_dir.path(), "session-a", "Second", None).unwrap();
-        complete_agent_todo(sessions_dir.path(), "session-a", first_seq, Some("Done")).unwrap();
+        resolve_agent_todo(
+            sessions_dir.path(),
+            "session-a",
+            first_seq,
+            TodoResolution::Completed,
+            Some("Done"),
+        )
+        .unwrap();
         if complete_second_todo {
-            complete_agent_todo(sessions_dir.path(), "session-a", second_seq, Some("Done"))
-                .unwrap();
+            resolve_agent_todo(
+                sessions_dir.path(),
+                "session-a",
+                second_seq,
+                TodoResolution::Completed,
+                Some("Done"),
+            )
+            .unwrap();
         }
 
         let removed = super::super::delete_session(sessions_dir.path(), "session-a").unwrap();
@@ -320,6 +424,7 @@ mod tests {
                     detail: None,
                     created_at: epoch,
                     completed_at: Some(epoch),
+                    resolution: Some(TodoResolution::Completed),
                     comment: Some("Done".to_string()),
                 },
                 AgentTodo {
@@ -329,6 +434,7 @@ mod tests {
                     detail: None,
                     created_at: epoch,
                     completed_at: None,
+                    resolution: None,
                     comment: None,
                 },
             ]

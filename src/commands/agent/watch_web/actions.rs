@@ -28,14 +28,14 @@ mod proposal_answer_locks;
 mod proposals;
 mod runtime;
 mod title;
-mod todo_completion_locks;
+mod todo_resolution_locks;
 mod todos;
 
 pub(super) use api_error::ApiError;
 use permission_denied_locks::PermissionDeniedRetryLocks;
 use proposal_answer_locks::ProposalAnswerLocks;
 use runtime::LiveActionRuntime;
-use todo_completion_locks::TodoCompletionLocks;
+use todo_resolution_locks::TodoResolutionLocks;
 
 pub(super) fn router(message_loaders: RouteLoaders) -> Router {
     router_with_state(ActionState {
@@ -44,7 +44,7 @@ pub(super) fn router(message_loaders: RouteLoaders) -> Router {
         runtime: Arc::new(LiveActionRuntime),
         proposal_answer_locks: ProposalAnswerLocks::default(),
         permission_denied_retry_locks: PermissionDeniedRetryLocks::default(),
-        todo_completion_locks: TodoCompletionLocks::default(),
+        todo_resolution_locks: TodoResolutionLocks::default(),
         message_loaders,
     })
 }
@@ -74,8 +74,8 @@ fn router_with_state(state: ActionState) -> Router {
             post(permission_denied::retry_permission_denied),
         )
         .route(
-            "/sessions/{id}/todos/{seq}/complete",
-            post(todos::complete_todo),
+            "/sessions/{id}/todos/{seq}/resolve",
+            post(todos::resolve_todo),
         )
         .route("/sessions/{id}/title", post(title::set_title))
         .route(
@@ -108,7 +108,7 @@ struct ActionState {
     // Delivery precedes persistence, so repeated answers for one proposal must serialize.
     proposal_answer_locks: ProposalAnswerLocks,
     permission_denied_retry_locks: PermissionDeniedRetryLocks,
-    todo_completion_locks: TodoCompletionLocks,
+    todo_resolution_locks: TodoResolutionLocks,
 }
 
 trait ActionRuntime: Send + Sync {
@@ -653,7 +653,7 @@ mod tests {
                 runtime: self.runtime.clone(),
                 proposal_answer_locks: ProposalAnswerLocks::default(),
                 permission_denied_retry_locks: permission_denied_retry_locks.clone(),
-                todo_completion_locks: TodoCompletionLocks::default(),
+                todo_resolution_locks: TodoResolutionLocks::default(),
                 message_loaders: empty_message_loaders(),
             });
             (router, permission_denied_retry_locks)
@@ -670,7 +670,7 @@ mod tests {
                 runtime: self.runtime.clone(),
                 proposal_answer_locks: proposal_answer_locks.clone(),
                 permission_denied_retry_locks: PermissionDeniedRetryLocks::default(),
-                todo_completion_locks: TodoCompletionLocks::default(),
+                todo_resolution_locks: TodoResolutionLocks::default(),
                 message_loaders,
             });
             (router, proposal_answer_locks)

@@ -7,16 +7,24 @@ use super::{ActionState, ApiError, Success, load_session, resolve_sessions_dir, 
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct CompleteRequest {
+pub(super) struct ResolveRequest {
+    resolution: UserTodoResolution,
     comment: Option<String>,
 }
 
-pub(super) async fn complete_todo(
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum UserTodoResolution {
+    Completed,
+    Rejected,
+}
+
+pub(super) async fn resolve_todo(
     State(state): State<ActionState>,
     RoutePath((id, seq)): RoutePath<(String, i64)>,
-    Json(request): Json<CompleteRequest>,
+    Json(request): Json<ResolveRequest>,
 ) -> Result<Json<Success>, ApiError> {
-    let todo_lock = state.todo_completion_locks.get_or_create(&id, seq).await;
+    let todo_lock = state.todo_resolution_locks.get_or_create(&id, seq).await;
     let _todo_guard = todo_lock.lock().await;
     let session = load_session(state.clone(), id.clone()).await?;
     let configured_sessions_dir = state.sessions_dir.clone();
@@ -33,16 +41,20 @@ pub(super) async fn complete_todo(
     let todo = todos
         .iter()
         .find(|todo| todo.seq == seq)
-        .ok_or_else(|| ApiError::conflict("todo is not awaiting completion"))?;
+        .ok_or_else(|| ApiError::conflict("todo is not pending"))?;
     if todo.completed_at.is_some() {
-        return Err(ApiError::conflict("todo is not awaiting completion"));
+        return Err(ApiError::conflict("todo is not pending"));
     }
+    let resolution = match request.resolution {
+        UserTodoResolution::Completed => store::TodoResolution::Completed,
+        UserTodoResolution::Rejected => store::TodoResolution::Rejected,
+    };
     let comment = request
         .comment
         .map(|comment| comment.trim().to_string())
         .filter(|comment| !comment.is_empty());
     if session.status != SessionStatus::Ended {
-        let content = todo_completion_message(&todo.title, comment.as_deref());
+        let content = todo_resolution_message(request.resolution, &todo.title, comment.as_deref());
         let marker = if session.engine == super::super::super::types::Engine::Claude {
             let session_id = session.session_id.clone();
             let sessions_dir = sessions_dir.clone();
@@ -64,38 +76,52 @@ pub(super) async fn complete_todo(
 
     let session_id = session.session_id;
     let configured_sessions_dir = state.sessions_dir;
-    let completed = run_blocking(move || match configured_sessions_dir {
-        Some(sessions_dir) => store::complete_agent_todo_from(
+    let resolved = run_blocking(move || match configured_sessions_dir {
+        Some(sessions_dir) => store::resolve_agent_todo_from(
             &sessions_dir,
             &session_id,
             seq,
+            resolution,
             comment.as_deref(),
         ),
-        None => store::complete_agent_todo(&session_id, seq, comment.as_deref()),
+        None => store::resolve_agent_todo(&session_id, seq, resolution, comment.as_deref()),
     })
     .await
     .map_err(|error| {
-        tracing::error!(error = %error.message, "failed to save sent watch-web todo completion");
+        tracing::error!(error = %error.message, "failed to save sent watch-web todo resolution");
         ApiError::operation(
-            "todo completion was sent but could not be saved; check the conversation before retrying",
+            "todo resolution was sent but could not be saved; check the conversation before retrying",
         )
     })?;
-    if !completed {
+    if !resolved {
         return Err(ApiError::conflict(
-            "todo completion was sent but the todo is no longer available",
+            "todo resolution was sent but the todo is no longer available",
         ));
     }
     Ok(Json(Success::new()))
 }
 
-fn todo_completion_message(title: &str, comment: Option<&str>) -> String {
-    let mut content =
-        format!("<armyknife-todo-completed>The user marked the to-do as done: {title}.");
+fn todo_resolution_message(
+    resolution: UserTodoResolution,
+    title: &str,
+    comment: Option<&str>,
+) -> String {
+    let (tag, summary) = match resolution {
+        UserTodoResolution::Completed => (
+            "armyknife-todo-completed",
+            format!("The user marked the to-do as done: {title}."),
+        ),
+        UserTodoResolution::Rejected => (
+            "armyknife-todo-rejected",
+            format!("The user rejected the to-do: {title}."),
+        ),
+    };
+    let mut content = format!("<{tag}>{summary}");
     if let Some(comment) = comment {
         content.push('\n');
         content.push('\n');
         content.push_str(comment);
     }
-    content.push_str("</armyknife-todo-completed>");
+    content.push_str(&format!("</{tag}>"));
     content
 }
