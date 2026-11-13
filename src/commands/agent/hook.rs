@@ -432,13 +432,11 @@ fn process_hook_event_impl_with_settings(
     // Claude's SessionEnd confirms termination; Codex's hook does not because
     // the app-server also fires it during daemon shutdown.
     //
-    // Paused sessions are preserved: when `a agent sweep` SIGTERMs a stopped
-    // Claude Code process, its shutdown fires SessionEnd, which would
-    // otherwise clobber the Paused marker and break `a agent resume`. Sessions
-    // still `Stopped` with `sweep_signaled` set get the same treatment:
-    // sweep requests shutdown without confirming Paused until a later sweep
-    // sees the pid disappear (see `sweep/mod.rs`), so this SessionEnd IS
-    // that confirmation, arriving before sweep's next pass gets to it.
+    // Paused sessions are preserved: sweep and watch-web rewind SIGTERM a
+    // stopped agent, whose shutdown fires SessionEnd and would otherwise
+    // overwrite the pause state. Sessions still `Stopped` with
+    // `sweep_signaled` set get the same treatment; the hook confirms that the
+    // requested shutdown completed before the next sweep pass.
     if event == HookEvent::SessionEnd {
         // When the session record is gone the pane_id is unrecoverable
         // (hook input only carries session_id), so we silently drop the

@@ -28,11 +28,11 @@ pub(super) struct SavedPaneSession {
 
 /// Session metadata restored by pane position from the state file.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct RestoredPaneSession {
-    pub(super) session_id: String,
-    pub(super) ancestor_session_ids: Vec<String>,
-    pub(super) engine: Option<Engine>,
-    pub(super) launched_with_vibe: bool,
+pub(in crate::commands::agent) struct RestoredPaneSession {
+    pub(in crate::commands::agent) session_id: String,
+    pub(in crate::commands::agent) ancestor_session_ids: Vec<String>,
+    pub(in crate::commands::agent) engine: Option<Engine>,
+    pub(in crate::commands::agent) launched_with_vibe: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]

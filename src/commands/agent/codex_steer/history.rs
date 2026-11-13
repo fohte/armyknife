@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -97,6 +98,92 @@ impl Client {
             &mut thread::sleep,
             HISTORY_TIMEOUTS,
         )
+    }
+}
+
+pub(super) fn fork_thread(thread_id: &str, before_turn_id: &str) -> Result<(String, PathBuf)> {
+    ensure!(!thread_id.is_empty(), "Codex thread ID is empty");
+    ensure!(!before_turn_id.is_empty(), "Codex turn ID is empty");
+    let mut client = Client::connect()?;
+    fork_thread_with(thread_id, before_turn_id, |method, params, timeout| {
+        client.request_with_timeout(method, params, timeout)
+    })
+}
+
+fn fork_thread_with<Rpc>(
+    thread_id: &str,
+    before_turn_id: &str,
+    mut rpc: Rpc,
+) -> Result<(String, PathBuf)>
+where
+    Rpc: FnMut(&'static str, Value, Duration) -> Result<Value>,
+{
+    ensure!(!thread_id.is_empty(), "Codex thread ID is empty");
+    ensure!(!before_turn_id.is_empty(), "Codex turn ID is empty");
+    let response = rpc(
+        "thread/fork",
+        json!({
+            "threadId": thread_id,
+            "beforeTurnId": before_turn_id,
+        }),
+        HISTORY_FETCH_TIMEOUT,
+    )?;
+    let thread = response
+        .get("thread")
+        .context("Codex app-server thread/fork response has no thread")?;
+    let forked_id = thread
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .context("Codex app-server thread/fork response has no thread ID")?
+        .to_owned();
+    let transcript_path = thread
+        .get("path")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .context("Codex app-server thread/fork response has no transcript path")?;
+    ensure!(
+        forked_id != thread_id,
+        "Codex app-server returned the original thread"
+    );
+    Ok((forked_id, transcript_path))
+}
+
+#[cfg(test)]
+mod fork_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn forks_before_the_selected_turn() {
+        let mut requests = Vec::new();
+        let response = fork_thread_with("fixture-thread", "fixture-turn", |method, params, _| {
+            requests.push(json!({"method": method, "params": params}));
+            Ok(json!({
+                "thread": {
+                    "id": "fixture-fork",
+                    "path": "/fixture/fork.jsonl"
+                }
+            }))
+        });
+
+        assert_eq!(
+            (response.unwrap(), requests),
+            (
+                (
+                    "fixture-fork".to_string(),
+                    PathBuf::from("/fixture/fork.jsonl")
+                ),
+                vec![json!({
+                    "method": "thread/fork",
+                    "params": {
+                        "threadId": "fixture-thread",
+                        "beforeTurnId": "fixture-turn"
+                    }
+                })]
+            ),
+        );
     }
 }
 

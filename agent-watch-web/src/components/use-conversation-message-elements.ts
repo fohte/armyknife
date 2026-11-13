@@ -8,6 +8,7 @@ import type {
 import type {
   ChatItem,
   OpenInTerminalStatus,
+  RewindMode,
   Session,
   SessionActions,
   SessionLinkTarget,
@@ -33,6 +34,11 @@ type UseConversationMessageElementsOptions = {
   onOpenInTerminal: () => void
   openInTerminalStatus: OpenInTerminalStatus
   onSelectSession: (id: string) => void
+  onRewind?: (
+    messageId: string,
+    mode: RewindMode,
+    draft: string,
+  ) => Promise<boolean>
   pendingActions: PendingPermissionActions
   sessions: readonly SessionLinkTarget[]
   now: Date
@@ -145,6 +151,7 @@ export function useConversationMessageElements({
   onOpenInTerminal,
   openInTerminalStatus,
   onSelectSession,
+  onRewind,
   pendingActions,
   sessions,
   now,
@@ -204,6 +211,7 @@ export function useConversationMessageElements({
         onAction,
         onOpenInTerminal,
         onSelectSession,
+        ...(onRewind === undefined ? {} : { onRewind }),
         pendingAction: messagePendingAction,
         openInTerminalStatus,
         sessionEngine,
@@ -230,6 +238,7 @@ export function useConversationMessageElements({
     onOpenInTerminal,
     onSelectDecision,
     onSelectSession,
+    onRewind,
     openInTerminalStatus,
     pendingActions,
     proposalPending,

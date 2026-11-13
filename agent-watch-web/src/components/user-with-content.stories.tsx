@@ -55,6 +55,20 @@ export const TextOnlyMessageIsDisplayed: Story = {
   },
 }
 
+export const RewindMenuShowsEngineOptions: Story = {
+  name: 'The Claude user message shows all rewind options',
+  args: {
+    message: {
+      type: 'user',
+      text: 'Please rerun the example check.',
+      rewindId: 'fixture-user-message',
+    },
+    canRewind: true,
+    sessionEngine: 'claude',
+    rewindMenuOpen: true,
+  },
+}
+
 export const QueuedPromptUsesUserMessageStyling: Story = {
   name: 'A queued prompt uses the You message styling',
   args: {

@@ -10,8 +10,8 @@ use super::super::parser::classifier;
 use super::super::parser::jsonl::JsonlLineBuffer;
 use super::super::parser::todos::TodoTimeline;
 use super::super::parser::{
-    CodexToolSummaryRecord, ToolSummary, append_text, codex_edited_file_paths,
-    codex_tool_summary_record, operation_target, record_timestamp,
+    CodexToolSummaryRecord, ToolSummary, append_text, append_user_text_with_rewind_id,
+    codex_edited_file_paths, codex_tool_summary_record, operation_target, record_timestamp,
 };
 use super::decision_position::{DecisionTimeline, insert_time_placed_decisions};
 use super::time_placed::TimePlacedTimeline;
@@ -43,6 +43,7 @@ pub(in crate::commands::agent::watch_web::messages) struct CodexParserState {
     pending_tool_calls: Vec<PendingTool>,
     skills: Vec<SkillSuggestion>,
     lines: JsonlLineBuffer,
+    current_turn_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -60,6 +61,7 @@ enum CodexEffect {
     UserMessage {
         text: CodexText,
         timestamp: Option<DateTime<Utc>>,
+        rewind_id: Option<String>,
     },
     ArmyknifeEvent {
         text: CodexText,
@@ -207,6 +209,13 @@ impl CodexParserState {
         let timestamp = record_timestamp(&record);
         let mut effects = Vec::new();
         let record_type = record.get("type").and_then(Value::as_str);
+        if record_type == Some("turn_context") {
+            self.current_turn_id = record
+                .pointer("/payload/turn_id")
+                .or_else(|| record.get("turn_id"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+        }
         let payload = match record_type {
             Some("response_item") | Some("event_msg") => record.get("payload"),
             _ => None,
@@ -312,6 +321,7 @@ impl CodexParserState {
                                 effects.push(CodexEffect::UserMessage {
                                     text: CodexText::new(text)?,
                                     timestamp,
+                                    rewind_id: self.current_turn_id.clone(),
                                 });
                             }
                         }
@@ -379,9 +389,19 @@ impl CodexParserState {
                         tools.flush_into(&mut items);
                         append_text(&mut items, text.decode()?, false, None, *timestamp);
                     }
-                    CodexEffect::UserMessage { text, timestamp } => {
+                    CodexEffect::UserMessage {
+                        text,
+                        timestamp,
+                        rewind_id,
+                    } => {
                         tools.flush_into(&mut items);
-                        append_text(&mut items, text.decode()?, true, parent, *timestamp);
+                        append_user_text_with_rewind_id(
+                            &mut items,
+                            text.decode()?,
+                            parent,
+                            *timestamp,
+                            rewind_id.clone(),
+                        );
                     }
                     CodexEffect::ArmyknifeEvent { text, timestamp } => {
                         tools.flush_into(&mut items);
@@ -655,6 +675,24 @@ mod tests {
     }
 
     #[test]
+    fn user_message_carries_its_turn_id_for_rewind() {
+        let transcript = indoc! {r#"
+            {"type":"turn_context","payload":{"turn_id":"fixture-turn-id"}}
+            {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"Selected request."}}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None).unwrap(),
+            vec![ChatItem::User {
+                rewind_id: Some("fixture-turn-id".to_string()),
+                text: "Selected request.".to_string(),
+                timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
+                from: None,
+            }],
+        );
+    }
+
+    #[test]
     fn codex_parser_state_renders_updated_decisions_without_new_transcript_bytes() {
         let transcript = indoc! {r#"
             {"type":"response_item","timestamp":"2026-11-12T10:00:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Before the decision."}]}}
@@ -743,6 +781,7 @@ mod tests {
                             text: "Before the todo.".to_string(),
                         },
                         ChatItem::User {
+                            rewind_id: None,
                             text: "After the todo.".to_string(),
                             timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
                             from: None,
@@ -764,6 +803,7 @@ mod tests {
                             comment: Some("The sample is ready.".to_string()),
                         },
                         ChatItem::User {
+                            rewind_id: None,
                             text: "After the todo.".to_string(),
                             timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
                             from: None,
@@ -879,6 +919,7 @@ mod tests {
                         comment: Some("The sample is ready.".to_string()),
                     },
                     ChatItem::User {
+                        rewind_id: None,
                         text: "after".to_string(),
                         timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
                         from: None,
@@ -913,6 +954,7 @@ mod tests {
                         text: "before".to_string(),
                     },
                     ChatItem::User {
+                        rewind_id: None,
                         text: "after".to_string(),
                         timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
                         from: None,
@@ -997,6 +1039,7 @@ mod tests {
             parse(Cursor::new(transcript), Some(&parent)).unwrap(),
             vec![
                 ChatItem::User {
+                    rewind_id: None,
                     text: "Summarize these settings.".to_string(),
                     timestamp: None,
                     from: None,
@@ -1033,6 +1076,7 @@ mod tests {
             parse(Cursor::new(transcript), None).unwrap(),
             vec![
                 ChatItem::User {
+                    rewind_id: None,
                     text: "Human request.".to_string(),
                     from: None,
                     timestamp: Some("2026-11-11T10:00:00+00:00".to_string()),

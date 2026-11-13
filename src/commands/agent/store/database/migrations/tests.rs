@@ -136,6 +136,36 @@ fn adds_permission_request_mailbox_to_version_nine_database(database_fixture: Da
     );
 }
 #[rstest]
+fn adds_session_replacement_table_to_version_eighteen_database(database_fixture: DatabaseFixture) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
+    Migrations::from_slice(&MIGRATION_ENTRIES[..18])
+        .to_latest(&mut connection)
+        .expect("version eighteen schema should be created");
+    drop(connection);
+
+    let connection = super::super::open_connection(temp_dir.path())
+        .expect("version eighteen database should migrate to the latest schema");
+    let actual = connection
+        .query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'session_replacement'
+             )",
+            [],
+            |row| row.get::<_, bool>(0),
+        )
+        .expect("replacement table should be queryable");
+    let actual_user_version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("database migration version should be readable");
+
+    assert_eq!((actual, actual_user_version), (true, current_version()));
+}
+
+#[rstest]
 fn resolves_legacy_queued_prompts_without_message_ids(database_fixture: DatabaseFixture) {
     let DatabaseFixture {
         temp_dir,
@@ -226,17 +256,25 @@ fn adds_todo_resolution_to_master_version_fourteen_database(database_fixture: Da
 
     let todos = super::super::agent_todos(temp_dir.path(), "sample-session")
         .expect("master version fourteen database should migrate and load todos");
-    let actual = todos
-        .first()
-        .map(|todo| (todo.title.clone(), todo.resolution, todo.comment.clone()));
 
     assert_eq!(
-        actual,
-        Some((
-            "Task".to_string(),
-            Some(super::super::TodoResolution::Completed),
-            Some("Already handled".to_string()),
-        )),
+        todos,
+        vec![super::super::AgentTodo {
+            session_id: "sample-session".to_string(),
+            seq: 1,
+            title: "Task".to_string(),
+            detail: None,
+            created_at: chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+                .unwrap()
+                .to_utc(),
+            completed_at: Some(
+                chrono::DateTime::parse_from_rfc3339("2026-01-02T00:00:00Z")
+                    .unwrap()
+                    .to_utc(),
+            ),
+            resolution: Some(super::super::TodoResolution::Completed),
+            comment: Some("Already handled".to_string()),
+        }],
     );
 }
 

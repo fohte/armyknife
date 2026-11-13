@@ -33,6 +33,7 @@ const actions: SessionActions = {
   permission: { approve: true, reject: true },
   interrupt: true,
   openInTerminal: true,
+  rewind: false,
 }
 
 const callbacks = {
@@ -481,6 +482,7 @@ export const CodexOnlyOpensInTerminal: Story = {
       answerQuestion: false,
       interrupt: true,
       openInTerminal: true,
+      rewind: false,
     },
   },
 }

@@ -22,6 +22,7 @@ pub(super) enum ClaudeEffect {
         images: Vec<UserContentPart>,
         use_user_marker: bool,
         simplify_slash_command: bool,
+        rewind_id: Option<String>,
     },
     ToolAction {
         name: String,

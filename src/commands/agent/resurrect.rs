@@ -25,6 +25,8 @@ use state_file::{
     state_file_path, write_state_file,
 };
 
+pub(in crate::commands::agent) use state_file::RestoredPaneSession as PaneResumeSession;
+
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum ResurrectCommands {
     /// Save all pane session IDs (called from tmux-resurrect post-save hook)
@@ -230,10 +232,21 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
 
     let mut commands = Vec::new();
     let mut queued_count = 0;
-    for (pane_position, pane_session) in &pane_sessions {
+    for (pane_position, saved_pane_session) in &pane_sessions {
         let Some((pane_id, pane_pid)) = panes_by_position.get(pane_position) else {
             tracing::warn!(event = "agent.resurrect.restore.pane_skipped", pane_position = %pane_position);
             continue;
+        };
+        let pane_session = match resolve_replaced_pane_session(&sessions_dir, saved_pane_session) {
+            Ok(pane_session) => pane_session,
+            Err(error) => {
+                tracing::warn!(
+                    event = "agent.resurrect.restore.replacement_resolution_failed",
+                    session_id = %saved_pane_session.session_id,
+                    %error,
+                );
+                continue;
+            }
         };
 
         // Must run before `commands` is sent below: only then can no
@@ -256,7 +269,7 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
             pane::process::pane_has_live_agent_process(*pane_pid, engine, snapshot.as_ref());
         commands.extend(restore_commands_for_pane(
             pane_id,
-            pane_session,
+            &pane_session,
             engine,
             pane_has_agent,
         ));
@@ -285,6 +298,26 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn resolve_replaced_pane_session(
+    sessions_dir: &Path,
+    pane_session: &RestoredPaneSession,
+) -> Result<RestoredPaneSession> {
+    let current_session_id =
+        store::resolve_current_session_id_from(sessions_dir, &pane_session.session_id)?;
+    if current_session_id == pane_session.session_id {
+        return Ok(pane_session.clone());
+    }
+
+    let mut current_pane_session = pane_session.clone();
+    current_pane_session.session_id = current_session_id.clone();
+    if let Some(session) = store::load_session_from(sessions_dir, &current_session_id)? {
+        current_pane_session.ancestor_session_ids = session.ancestor_session_ids;
+        current_pane_session.engine = Some(session.engine);
+        current_pane_session.launched_with_vibe = session.launched_with_vibe;
+    }
+    Ok(current_pane_session)
 }
 
 /// Builds the tmux commands to restore one pane: a `set-option` for the
@@ -334,7 +367,7 @@ fn restore_commands_for_pane(
 /// `ARMYKNIFE_ANCESTOR_SESSION_IDS` on the `claude` process it execs.
 /// The saved launch metadata is used because the store record may have been
 /// removed before restore runs.
-fn resume_command_for(
+pub(super) fn resume_command_for(
     pane_session: &RestoredPaneSession,
     engine: Engine,
     pane_has_agent: bool,
@@ -367,6 +400,8 @@ fn resume_command_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent::store;
+    use crate::commands::agent::types::{Engine, Session, SessionStatus};
     use rstest::rstest;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -385,6 +420,45 @@ mod tests {
             engine: None,
             launched_with_vibe,
         }
+    }
+
+    #[test]
+    fn resurrect_resolves_a_replaced_session_to_its_current_successor() {
+        let directory = TempDir::new().unwrap();
+        let mut previous: Session = serde_json::from_value(serde_json::json!({
+            "session_id": "fixture-previous",
+            "cwd": "/fixture/worktree",
+            "transcript_path": null,
+            "tmux_info": null,
+            "status": "ended",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": null,
+        }))
+        .unwrap();
+        previous.ancestor_session_ids = vec!["fixture-root".to_string()];
+        let mut replacement = previous.clone();
+        replacement.session_id = "fixture-current".to_string();
+        replacement.status = SessionStatus::Stopped;
+        replacement.engine = Engine::Codex;
+        replacement.launched_with_vibe = true;
+        store::save_rewind_sessions(directory.path(), &previous, &replacement).unwrap();
+
+        let actual = resolve_replaced_pane_session(
+            directory.path(),
+            &restored_pane_session("fixture-previous", &["stale-root"], false),
+        )
+        .unwrap();
+
+        assert_eq!(
+            actual,
+            RestoredPaneSession {
+                session_id: "fixture-current".to_string(),
+                ancestor_session_ids: vec!["fixture-root".to_string()],
+                engine: Some(Engine::Codex),
+                launched_with_vibe: true,
+            },
+        );
     }
 
     mod load_ancestor_session_ids_tests {

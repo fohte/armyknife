@@ -428,6 +428,7 @@ mod tests {
     fn refreshes_external_image_status_but_keeps_inline_images_available() {
         let mut conversation = ConversationResponse {
             messages: vec![ChatItem::UserWithContent {
+                rewind_id: None,
                 content: vec![
                     UserContentPart::Image {
                         source: "/api/images/fixture-image.png".to_string(),
@@ -451,6 +452,7 @@ mod tests {
             conversation,
             ConversationResponse {
                 messages: vec![ChatItem::UserWithContent {
+                    rewind_id: None,
                     content: vec![
                         UserContentPart::Image {
                             source: "/api/images/fixture-image.png".to_string(),

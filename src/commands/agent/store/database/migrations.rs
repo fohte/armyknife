@@ -24,7 +24,7 @@ CREATE TRIGGER agent_file_delete_session
         DELETE FROM agent_file WHERE session_id = OLD.session_id;
     END;";
 
-static MIGRATION_ENTRIES: [M<'static>; 18] = [
+static MIGRATION_ENTRIES: [M<'static>; 19] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -197,6 +197,12 @@ static MIGRATION_ENTRIES: [M<'static>; 18] = [
          SET resolved = CASE WHEN message_id IS NULL THEN 1 ELSE 0 END;",
     ),
     M::up(AGENT_FILE_SCHEMA),
+    M::up(
+        "CREATE TABLE session_replacement (
+            session_id TEXT PRIMARY KEY,
+            replaced_by_session_id TEXT NOT NULL
+        );",
+    ),
 ];
 
 static MIGRATIONS: LazyLock<Migrations<'static>> =

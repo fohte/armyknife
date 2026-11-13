@@ -301,6 +301,7 @@ impl Queue {
                         text,
                         from,
                         timestamp,
+                        ..
                     } => ChatItem::QueuedUser {
                         content: vec![UserContentPart::Text { text }],
                         from,
@@ -310,6 +311,7 @@ impl Queue {
                         content,
                         from,
                         timestamp,
+                        ..
                     } => ChatItem::QueuedUser {
                         content,
                         from,
@@ -473,6 +475,7 @@ mod tests {
             parse_transcript(transcript, None, None),
             vec![
                 ChatItem::User {
+                    rewind_id: None,
                     text: "Repeated prompt.".to_string(),
                     timestamp: None,
                     from: None,
@@ -494,6 +497,7 @@ mod tests {
             parse_transcript(transcript, None, None),
             vec![
                 ChatItem::User {
+                    rewind_id: None,
                     text: "Earlier delivered message.".to_string(),
                     timestamp: None,
                     from: None,
@@ -553,10 +557,10 @@ mod tests {
     }
 
     #[test]
-    fn confirms_a_marker_bearing_user_row_and_removes_its_saved_prompt() {
+    fn resolves_a_delivered_prompt_and_preserves_its_rewind_id() {
         let marker = "⟦armyknife-user:fixture-marker-cobalt⟧";
         let transcript = indoc! {r#"
-            {"type":"user","origin":{"kind":"peer","from":"unknown"},"timestamp":"2026-01-01T00:00:01Z","message":{"content":"⟦armyknife-user:fixture-marker-cobalt⟧\nThis message was typed by the human user in armyknife watch-web.\nEngine-formatted delivery.\n<!-- armyknife-queued-prompt-id:fixture-message-7 -->"}}
+            {"uuid":"fixture-user-message","parentUuid":null,"type":"user","origin":{"kind":"peer","from":"unknown"},"timestamp":"2026-01-01T00:00:01Z","message":{"content":"⟦armyknife-user:fixture-marker-cobalt⟧\nThis message was typed by the human user in armyknife watch-web.\nEngine-formatted delivery.\n<!-- armyknife-queued-prompt-id:fixture-message-7 -->"}}
         "#};
 
         assert_eq!(
@@ -567,8 +571,51 @@ mod tests {
             ),
             (
                 vec![ChatItem::User {
+                    rewind_id: Some("fixture-user-message".to_string()),
                     text: "Delivered request.".to_string(),
                     timestamp: Some("2026-01-01T00:00:01+00:00".to_string()),
+                    from: None,
+                }],
+                Vec::<BackgroundTask>::new(),
+                vec![7],
+            ),
+        );
+    }
+
+    #[test]
+    fn resolves_a_delivered_prompt_with_attachments_and_preserves_its_rewind_id() {
+        let marker = "⟦armyknife-user:fixture-marker-cobalt⟧";
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-user-message","parentUuid":null,"type":"user","origin":{"kind":"peer","from":"unknown"},"timestamp":"2026-01-01T00:00:01Z","message":{"content":"⟦armyknife-user:fixture-marker-cobalt⟧\nThis message was typed by the human user in armyknife watch-web.\nEngine-formatted delivery.\n<!-- armyknife-queued-prompt-id:fixture-message-7 -->"}}
+        "#};
+        let mut prompt = saved_prompt(7, "Delivered request.");
+        prompt.attachments = vec![
+            crate::commands::agent::store::WatchWebQueuedAttachment::Image {
+                source: "/api/images/fixture-image.png".to_owned(),
+            },
+            crate::commands::agent::store::WatchWebQueuedAttachment::File {
+                name: "fixture-notes.txt".to_owned(),
+            },
+        ];
+
+        assert_eq!(
+            parse_with_saved_prompts(transcript, &[prompt], Some(marker)),
+            (
+                vec![ChatItem::UserWithContent {
+                    rewind_id: Some("fixture-user-message".to_owned()),
+                    content: vec![
+                        UserContentPart::Text {
+                            text: "Delivered request.".to_owned(),
+                        },
+                        UserContentPart::Image {
+                            source: "/api/images/fixture-image.png".to_owned(),
+                            available: false,
+                        },
+                        UserContentPart::File {
+                            name: "fixture-notes.txt".to_owned(),
+                        },
+                    ],
+                    timestamp: Some("2026-01-01T00:00:01+00:00".to_owned()),
                     from: None,
                 }],
                 Vec::<BackgroundTask>::new(),
@@ -640,6 +687,7 @@ mod tests {
             ),
             (
                 vec![ChatItem::User {
+                    rewind_id: None,
                     text: "Delivered request.".to_string(),
                     timestamp: Some("2026-01-01T00:00:01+00:00".to_string()),
                     from: None,
@@ -723,6 +771,7 @@ mod tests {
             ),
             (
                 vec![ChatItem::User {
+                    rewind_id: None,
                     text: "Repeated request.".to_string(),
                     timestamp: Some("2025-12-31T23:59:59+00:00".to_string()),
                     from: None,
@@ -752,6 +801,7 @@ mod tests {
             (
                 vec![
                     ChatItem::User {
+                        rewind_id: None,
                         text: "Delivered request.".to_string(),
                         timestamp: None,
                         from: None,

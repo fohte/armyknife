@@ -96,6 +96,7 @@ const meta = {
             answerQuestion: false,
             interrupt: false,
             openInTerminal: true,
+            rewind: false,
           }),
         ),
         http.get('/api/sessions/:sessionId/pull-requests', () =>

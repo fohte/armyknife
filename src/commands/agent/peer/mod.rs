@@ -256,6 +256,7 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
+    use crate::commands::agent::store;
     use crate::commands::agent::types::{SessionStatus, TmuxInfo};
 
     fn session(session_id: &str, cwd: &str, ancestor_session_ids: Vec<String>) -> Session {
@@ -550,6 +551,29 @@ mod tests {
                 .map_err(|error| error.to_string()),
             Err("Neither ARMYKNIFE_SESSION_ID nor CODEX_SESSION_ID is set (not running inside an armyknife-tracked session)".to_string()),
         );
+    }
+
+    #[test]
+    fn rewound_child_resolves_the_new_session_as_its_parent() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut previous = session("previous", "/repo", vec!["root".to_string()]);
+        previous.status = SessionStatus::Ended;
+        let mut forked = session("forked", "/repo", previous.ancestor_session_ids.clone());
+        forked.status = SessionStatus::Stopped;
+        let child = session(
+            "child",
+            "/repo",
+            vec!["root".to_string(), "previous".to_string()],
+        );
+        store::save_session_to(directory.path(), &child).unwrap();
+        store::save_rewind_sessions(directory.path(), &previous, &forked).unwrap();
+
+        let sessions = store::list_all_sessions_from(directory.path()).unwrap();
+        let actual = resolve_parent_in_sessions(&sessions, "child")
+            .map(|parent| parent.session_id.clone())
+            .map_err(|error| error.to_string());
+
+        assert_eq!(actual, Ok("forked".to_string()));
     }
 
     #[test]

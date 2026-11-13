@@ -27,6 +27,7 @@ const actions: SessionActions = {
   permission: { approve: false, reject: false },
   interrupt: false,
   openInTerminal: true,
+  rewind: false,
 }
 
 const meta = {

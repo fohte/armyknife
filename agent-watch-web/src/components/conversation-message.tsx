@@ -22,6 +22,7 @@ import { UserWithContent } from '#components/user-with-content'
 import type {
   ChatItem,
   OpenInTerminalStatus,
+  RewindMode,
   Session,
   SessionActions,
   SessionLinkTarget,
@@ -44,6 +45,11 @@ export type ConversationMessageRowProps = {
   ) => Promise<boolean>
   onOpenInTerminal: () => void
   onSelectSession: (id: string) => void
+  onRewind?: (
+    messageId: string,
+    mode: RewindMode,
+    draft: string,
+  ) => Promise<boolean>
   sessionEngine: Session['engine']
   sessions: readonly SessionLinkTarget[]
   now?: Date
@@ -62,6 +68,7 @@ export function renderConversationMessage({
   onAction,
   onOpenInTerminal,
   onSelectSession,
+  onRewind = () => Promise.resolve(false),
   sessionEngine,
   sessions,
   now,
@@ -84,6 +91,9 @@ export function renderConversationMessage({
         message={message}
         onSelectSession={onSelectSession}
         sessions={sessions}
+        canRewind={actions?.rewind === true}
+        sessionEngine={sessionEngine}
+        onRewind={onRewind}
         {...(now === undefined ? {} : { now })}
       />
     )

@@ -1,5 +1,5 @@
 import type { LaterPreset } from '#session-navigation'
-import type { JsonValue } from '#types'
+import type { JsonValue, RewindMode } from '#types'
 
 type PermissionAction = 'approve' | 'reject' | 'retry'
 
@@ -67,6 +67,12 @@ export type SessionOperation =
       owner: string
       repo: string
       expectedHeadSha: string
+    }
+  | {
+      type: 'rewind'
+      sessionId: string
+      messageId: string
+      mode: RewindMode
     }
   | {
       type: 'review_document_save' | 'review_document_finish'

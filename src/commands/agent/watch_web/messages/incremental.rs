@@ -340,11 +340,13 @@ mod tests {
         let subsequent_parse = parse(&resolved_prompts);
         let expected_messages = vec![
             ChatItem::User {
+                rewind_id: None,
                 text: "Old message.".to_owned(),
                 from: None,
                 timestamp: None,
             },
             ChatItem::UserWithContent {
+                rewind_id: None,
                 content: vec![
                     UserContentPart::Text {
                         text: "Repeat this request.".to_owned(),
@@ -357,6 +359,7 @@ mod tests {
                 timestamp: None,
             },
             ChatItem::UserWithContent {
+                rewind_id: None,
                 content: vec![
                     UserContentPart::Text {
                         text: "Repeat this request.".to_owned(),

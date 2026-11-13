@@ -8,10 +8,7 @@ use super::super::super::ChatItem;
 use super::super::decision_position::{DecisionTimeline, insert_time_placed_decisions};
 use super::super::time_placed::TimePlacedTimeline;
 use super::super::todos::TodoTimeline;
-use super::super::{
-    ToolSummary, append_classification_with_image_directory, append_text_with_image_directory,
-    classifier, tool_target,
-};
+use super::super::{ToolSummary, append_text_with_image_directory, classifier, tool_target};
 use super::events::{ClaudeEffect, TimedClaudeEvent};
 use super::proposals::ProposalTimeline;
 use super::questions::apply_question_answers;
@@ -118,6 +115,7 @@ fn render_timed_event(
                 images,
                 use_user_marker,
                 simplify_slash_command,
+                rewind_id,
             } => {
                 let marker = use_user_marker.then_some(additions.user_marker).flatten();
                 let classification = classifier::classify_inbound(record, text, marker);
@@ -129,13 +127,14 @@ fn render_timed_event(
                     }
                     classification => classification,
                 };
-                append_classification_with_image_directory(
+                super::super::append_classification_with_rewind_id(
                     items,
                     classification,
                     images.clone(),
                     image_directory,
                     additions.parent,
                     event.timestamp,
+                    rewind_id.clone(),
                 );
             }
             ClaudeEffect::ToolAction {
