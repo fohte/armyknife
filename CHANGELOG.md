@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.666](https://github.com/fohte/armyknife/compare/v0.1.665...v0.1.666) (2026-11-13)
+
+
+### Bug Fixes
+
+* **agent:** preserve status during compaction ([#1705](https://github.com/fohte/armyknife/issues/1705)) ([458531c](https://github.com/fohte/armyknife/commit/458531c46092c9371f63c9a65b2c543a1599a4d2))
+
 ## [0.1.665](https://github.com/fohte/armyknife/compare/v0.1.664...v0.1.665) (2026-11-13)
 
 
