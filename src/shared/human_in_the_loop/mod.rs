@@ -18,6 +18,7 @@ mod pending_review;
 mod queue_entry;
 mod session_watch;
 mod tmux;
+use editor::{ReviewEditorOutcome, run_editor_for_review};
 pub(crate) use pending_review::{
     ReviewDocumentMarker, review_document_marker, review_document_path,
 };
@@ -126,16 +127,17 @@ where
     start_review_with_marker::<S, _, _>(
         &document_path,
         <H as ReviewHandler<S>>::PENDING_REVIEW_MARKER,
-        |document_path, done_fifo_path, lock_id| {
+        |document_path, done_fifo_path, finish_fifo_path, lock_id| {
             let context = launch::ReviewContext {
                 lock_id,
+                done_fifo_path,
+                finish_fifo_path,
                 window_title,
                 command_name: <H as ReviewHandler<S>>::NOTIFICATION_COMMAND_NAME,
             };
             let (session, entry) = launch::launch_review::<S, H>(
                 tmux_pane_id.as_deref(),
                 document_path,
-                done_fifo_path,
                 &context,
                 handler,
                 editor_config,
@@ -170,7 +172,7 @@ where
     start_review_with_marker(
         document_path,
         None,
-        |document_path, done_fifo_path, lock_id| {
+        |document_path, done_fifo_path, _finish_fifo_path, lock_id| {
             launch_review(document_path, done_fifo_path, lock_id).map(ReviewLaunch::without_queue)
         },
         is_session_alive,
@@ -200,7 +202,7 @@ fn start_review_with_marker<S, L, P>(
 ) -> Result<Option<Document<S>>>
 where
     S: DocumentSchema,
-    L: FnOnce(&Path, &Path, &str) -> Result<ReviewLaunch>,
+    L: FnOnce(&Path, &Path, &Path, &str) -> Result<ReviewLaunch>,
     P: FnMut(&str) -> Result<bool>,
 {
     let lock_path = LockGuard::lock_path(document_path);
@@ -231,7 +233,16 @@ where
     // signal cannot race with the read call.
     let done_fifo_reader = open_fifo_reader(&done_fifo_path)?;
 
-    let review = launch_review(document_path, &done_fifo_path, lock_guard.lock_id())?;
+    let finish_fifo_path = create_fifo_at_path(&finish_request_fifo_path(document_path))?;
+    let mut finish_fifo_cleanup = FifoCleanupGuard::new(&finish_fifo_path);
+    let finish_fifo_reader = open_fifo_reader(&finish_fifo_path)?;
+
+    let review = launch_review(
+        document_path,
+        &done_fifo_path,
+        &finish_fifo_path,
+        lock_guard.lock_id(),
+    )?;
 
     {
         let _pending_review = pending_review::PendingReviewGuard::for_current_session(
@@ -246,6 +257,10 @@ where
             wait_for_fifo_signal(done_fifo_reader, &done_fifo_path)?;
         }
     }
+
+    drop(finish_fifo_reader);
+    finish_fifo_cleanup.disarm();
+    let _ = std::fs::remove_file(&finish_fifo_path);
 
     // Clean up the FIFO (disarm guard since we're cleaning up explicitly)
     done_fifo_cleanup.disarm();
@@ -297,12 +312,12 @@ fn write_edit_diff<W: Write>(
     write_unified_diff(writer, pre, post, DIFF_CONTEXT_LINES, use_color)
 }
 
-/// Complete a review session after the user closes the editor.
+/// Complete a review after the editor exits or the parent requests completion.
 ///
 /// This function:
 /// 1. Holds the caller-provided cleanup guard for lock file and tmux restoration
 /// 2. Launches the configured editor for the user to edit the document
-/// 3. After the editor exits, parses the document and calls the handler's callback
+/// 3. After editing ends, parses the document and calls the handler's callback
 ///
 /// If `window_title` is provided and the editor is nvim, it will be displayed in the title bar.
 ///
@@ -317,18 +332,44 @@ pub fn complete_review<S, H>(
     window_title: Option<&str>,
     handler: &H,
     editor_config: &EditorConfig,
+    finish_fifo_path: Option<&Path>,
     cleanup_guard: CleanupGuard,
 ) -> Result<()>
 where
     S: DocumentSchema,
     H: ReviewHandler<S>,
 {
+    complete_review_with_editor(
+        document_path,
+        handler,
+        cleanup_guard,
+        || match finish_fifo_path {
+            Some(finish_fifo_path) => run_editor_for_review(
+                &editor_config.editor_command,
+                document_path,
+                window_title,
+                finish_fifo_path,
+            ),
+            None => run_editor(&editor_config.editor_command, document_path, window_title)
+                .map(ReviewEditorOutcome::Exited)
+                .map_err(Into::into),
+        },
+    )
+}
+
+fn complete_review_with_editor<S, H>(
+    document_path: &Path,
+    handler: &H,
+    cleanup_guard: CleanupGuard,
+    run_editor: impl FnOnce() -> Result<ReviewEditorOutcome>,
+) -> Result<()>
+where
+    S: DocumentSchema,
+    H: ReviewHandler<S>,
+{
     let _cleanup_guard = cleanup_guard;
-
-    // Launch editor
-    let status = run_editor(&editor_config.editor_command, document_path, window_title)?;
-
-    if !status.success() {
+    let editor_outcome = run_editor()?;
+    if matches!(editor_outcome, ReviewEditorOutcome::Exited(status) if !status.success()) {
         eprintln!("Editor exited with non-zero status");
         return Ok(());
     }
@@ -343,15 +384,26 @@ where
 /// Example: suffix `.done` for `/tmp/foo.md` yields `/tmp/foo.md.done`.
 #[cfg(unix)]
 fn create_fifo_with_suffix(document_path: &Path, suffix: &str) -> Result<PathBuf> {
+    create_fifo_at_path(&path_with_suffix(document_path, suffix))
+}
+
+pub(crate) fn finish_request_fifo_path(document_path: &Path) -> PathBuf {
+    path_with_suffix(document_path, ".finish")
+}
+
+fn path_with_suffix(document_path: &Path, suffix: &str) -> PathBuf {
+    let mut path = document_path.as_os_str().to_os_string();
+    path.push(suffix);
+    path.into()
+}
+
+#[cfg(unix)]
+fn create_fifo_at_path(fifo_path: &Path) -> Result<PathBuf> {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
 
-    let mut p = document_path.as_os_str().to_os_string();
-    p.push(suffix);
-    let fifo_path = PathBuf::from(p);
-
     // Remove stale FIFO if it exists
-    let _ = std::fs::remove_file(&fifo_path);
+    let _ = std::fs::remove_file(fifo_path);
 
     let c_path = CString::new(fifo_path.as_os_str().as_bytes()).map_err(|e| {
         std::io::Error::new(
@@ -368,7 +420,7 @@ fn create_fifo_with_suffix(document_path: &Path, suffix: &str) -> Result<PathBuf
         return Err(std::io::Error::last_os_error().into());
     }
 
-    Ok(fifo_path)
+    Ok(fifo_path.to_path_buf())
 }
 
 /// Open a FIFO for reading in non-blocking mode.
@@ -657,6 +709,60 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+    struct FinishTestSchema {
+        approved: bool,
+    }
+
+    impl DocumentSchema for FinishTestSchema {
+        fn is_approved(&self) -> bool {
+            self.approved
+        }
+    }
+
+    struct FinishTestHandler {
+        completed_documents: std::sync::Arc<std::sync::Mutex<Vec<(PathBuf, bool, String)>>>,
+    }
+
+    impl ReviewHandler<FinishTestSchema> for FinishTestHandler {
+        fn build_complete_args(
+            &self,
+            _document_path: &Path,
+            _tmux_target: Option<&str>,
+            _window_title: &str,
+        ) -> Vec<OsString> {
+            Vec::new()
+        }
+
+        fn on_review_complete(&self, document: &Document<FinishTestSchema>) -> Result<()> {
+            self.completed_documents
+                .lock()
+                .expect("completed document observations should be writable")
+                .push((
+                    document.path.clone(),
+                    document.frontmatter.approved,
+                    std::fs::read_to_string(&document.path)?,
+                ));
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeReviewEditor {
+        termination_count: usize,
+    }
+
+    impl editor::ReviewEditorChild for FakeReviewEditor {
+        fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
+            Ok(None)
+        }
+
+        fn terminate_and_wait(&mut self) -> std::io::Result<()> {
+            self.termination_count += 1;
+            Ok(())
+        }
+    }
+
     struct ReviewDocumentFixture {
         _temp_dir: TempDir,
         path: PathBuf,
@@ -691,6 +797,63 @@ mod tests {
             fifo_path,
             reader,
         }
+    }
+
+    #[rstest]
+    fn finish_request_terminates_the_editor_and_calls_handler_with_saved_document(
+        review_document: ReviewDocumentFixture,
+    ) {
+        let document_path = review_document.path;
+        let saved_document = indoc! {"
+            ---
+            approved: true
+            ---
+            Saved from the review panel.
+        "};
+        std::fs::write(&document_path, "Original draft.").expect("write document");
+        let lock = LockGuard::acquire(&document_path).expect("acquire review lock");
+        let cleanup_guard = CleanupGuard::new(&document_path, lock.lock_id(), None)
+            .expect("register review process");
+        let finish_fifo_path = finish_request_fifo_path(&document_path);
+        create_fifo_at_path(&finish_fifo_path).expect("create finish FIFO");
+        let mut finish_fifo_reader = open_fifo_reader(&finish_fifo_path).expect("open FIFO");
+        let mut editor_process = FakeReviewEditor::default();
+        let completed_documents = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let handler = FinishTestHandler {
+            completed_documents: completed_documents.clone(),
+        };
+
+        let result = complete_review_with_editor::<FinishTestSchema, _>(
+            &document_path,
+            &handler,
+            cleanup_guard,
+            || {
+                std::fs::write(&document_path, saved_document)?;
+                signal_fifo(&finish_fifo_path);
+                editor::wait_for_editor_or_finish_request(
+                    &mut editor_process,
+                    &mut finish_fifo_reader,
+                )
+            },
+        )
+        .map_err(|error| error.to_string());
+        let completed_documents = completed_documents
+            .lock()
+            .expect("completed document observations should be readable")
+            .clone();
+
+        assert_eq!(
+            (
+                result,
+                editor_process.termination_count,
+                completed_documents
+            ),
+            (
+                Ok(()),
+                1,
+                vec![(document_path, true, saved_document.to_string())],
+            ),
+        );
     }
 
     #[rstest]
@@ -1040,33 +1203,41 @@ mod tests {
     }
 
     #[rstest]
-    fn start_review_cleans_lock_and_done_fifo_when_review_session_disappears(
+    fn start_review_cleans_lock_and_review_fifos_when_review_session_disappears(
         review_document: ReviewDocumentFixture,
     ) {
         let document_path = review_document.path;
         let mut done_fifo_path = None;
+        let mut finish_fifo_path = None;
 
-        let result = start_review_with_launcher::<ReviewTestSchema, _, _>(
+        let result = start_review_with_marker::<ReviewTestSchema, _, _>(
             &document_path,
-            |_, fifo_path, _lock_id| {
-                done_fifo_path = Some(fifo_path.to_path_buf());
-                Ok(Some("review-session".to_string()))
+            None,
+            |_, done_path, finish_path, _lock_id| {
+                done_fifo_path = Some(done_path.to_path_buf());
+                finish_fifo_path = Some(finish_path.to_path_buf());
+                Ok(ReviewLaunch::without_queue(Some(
+                    "review-session".to_string(),
+                )))
             },
             |_| Ok(false),
         )
         .map(|document| document.is_some())
         .map_err(|error| error.to_string());
         let done_fifo_path = done_fifo_path.expect("launcher receives done FIFO path");
+        let finish_fifo_path = finish_fifo_path.expect("launcher receives finish FIFO path");
 
         assert_eq!(
             (
                 result,
                 LockGuard::is_locked(&document_path),
                 done_fifo_path.exists(),
+                finish_fifo_path.exists(),
                 exit_code::REVIEW_SESSION_CLOSED,
             ),
             (
                 Err("Review editor session ended before the review completed".into()),
+                false,
                 false,
                 false,
                 4,

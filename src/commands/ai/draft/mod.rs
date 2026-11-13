@@ -31,6 +31,10 @@ pub struct DraftArgs {
     #[arg(long, hide = true)]
     pub done_fifo: Option<PathBuf>,
 
+    /// Internal: FIFO path for watch-web to request review completion
+    #[arg(long, hide = true)]
+    pub finish_fifo: Option<PathBuf>,
+
     /// Internal: identifier of the lock created by the review launcher
     #[arg(long, hide = true)]
     pub review_lock_id: Option<String>,
@@ -147,6 +151,7 @@ fn run_complete(args: &DraftArgs) -> anyhow::Result<()> {
         args.title.as_deref(),
         &DraftHandler,
         &config.editor,
+        args.finish_fifo.as_deref(),
         cleanup_guard,
     )?;
 

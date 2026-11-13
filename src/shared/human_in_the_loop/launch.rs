@@ -12,6 +12,8 @@ use super::{
 
 pub(super) struct ReviewContext<'a> {
     pub(super) lock_id: &'a str,
+    pub(super) done_fifo_path: &'a Path,
+    pub(super) finish_fifo_path: &'a Path,
     pub(super) window_title: &'a str,
     pub(super) command_name: &'a str,
 }
@@ -22,7 +24,6 @@ pub(super) struct ReviewContext<'a> {
 pub(super) fn launch_review<S, H>(
     tmux_pane_id: Option<&str>,
     document_path: &Path,
-    done_fifo_path: &Path,
     context: &ReviewContext<'_>,
     handler: &H,
     editor_config: &EditorConfig,
@@ -36,7 +37,9 @@ where
     let mut review_args =
         handler.build_complete_args(document_path, tmux_pane_id, context.window_title);
     review_args.push("--done-fifo".into());
-    review_args.push(done_fifo_path.as_os_str().to_os_string());
+    review_args.push(context.done_fifo_path.as_os_str().to_os_string());
+    review_args.push("--finish-fifo".into());
+    review_args.push(context.finish_fifo_path.as_os_str().to_os_string());
     review_args.push("--review-lock-id".into());
     review_args.push(context.lock_id.into());
 
@@ -53,7 +56,7 @@ where
                     &shpool_session,
                     exe_path.as_os_str(),
                     &review_args,
-                    done_fifo_path,
+                    context.done_fifo_path,
                     &mut queue_entry,
                 )
             },

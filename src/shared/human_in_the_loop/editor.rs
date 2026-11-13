@@ -2,7 +2,7 @@ use std::ffi::{OsStr, OsString};
 use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::ExitStatus;
+use std::process::{Child, Command, ExitStatus};
 
 use indoc::formatdoc;
 
@@ -47,6 +47,68 @@ pub fn run_editor(
     file_path: &Path,
     window_title: Option<&str>,
 ) -> std::io::Result<ExitStatus> {
+    editor_command_with_args(editor_command, file_path, window_title).status()
+}
+
+pub(super) enum ReviewEditorOutcome {
+    Exited(ExitStatus),
+    FinishRequested,
+}
+
+pub(super) trait ReviewEditorChild {
+    fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>>;
+    fn terminate_and_wait(&mut self) -> std::io::Result<()>;
+}
+
+impl ReviewEditorChild for Child {
+    fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
+        Child::try_wait(self)
+    }
+
+    fn terminate_and_wait(&mut self) -> std::io::Result<()> {
+        match self.kill() {
+            Ok(()) => {
+                self.wait()?;
+                Ok(())
+            }
+            Err(_) if self.try_wait()?.is_some() => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+pub(super) fn run_editor_for_review(
+    editor_command: &str,
+    file_path: &Path,
+    window_title: Option<&str>,
+    finish_fifo_path: &Path,
+) -> super::Result<ReviewEditorOutcome> {
+    let mut finish_fifo_reader = super::open_fifo_reader(finish_fifo_path)?;
+    let mut child = editor_command_with_args(editor_command, file_path, window_title).spawn()?;
+    wait_for_editor_or_finish_request(&mut child, &mut finish_fifo_reader)
+}
+
+pub(super) fn wait_for_editor_or_finish_request(
+    child: &mut impl ReviewEditorChild,
+    finish_fifo_reader: &mut std::fs::File,
+) -> super::Result<ReviewEditorOutcome> {
+    loop {
+        if super::try_read_fifo_signal(finish_fifo_reader)? {
+            child.terminate_and_wait()?;
+            return Ok(ReviewEditorOutcome::FinishRequested);
+        }
+        if let Some(status) = child.try_wait()? {
+            return Ok(ReviewEditorOutcome::Exited(status));
+        }
+        std::thread::sleep(super::FIFO_POLL_INTERVAL);
+    }
+}
+
+fn editor_command_with_args(
+    editor_command: &str,
+    file_path: &Path,
+    window_title: Option<&str>,
+) -> Command {
     let mut cmd = command::new(editor_command);
 
     // Apply nvim-specific titlestring option
@@ -57,7 +119,8 @@ pub fn run_editor(
         cmd.args(["-c", &format!("let &titlestring = '{escaped_title}'")]);
     }
 
-    cmd.arg(file_path).status()
+    cmd.arg(file_path);
+    cmd
 }
 
 /// Launch a terminal emulator to run the specified command.
