@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.665](https://github.com/fohte/armyknife/compare/v0.1.664...v0.1.665) (2026-11-13)
+
+
+### Features
+
+* **agent-watch-web:** display review documents ([#1703](https://github.com/fohte/armyknife/issues/1703)) ([48b41ae](https://github.com/fohte/armyknife/commit/48b41ae6bcd9ccdd5889184880e11b8e346ea176))
+
 ## [0.1.664](https://github.com/fohte/armyknife/compare/v0.1.663...v0.1.664) (2026-11-13)
 
 
