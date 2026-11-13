@@ -24,6 +24,7 @@ pub(super) async fn rewind(
     RoutePath(id): RoutePath<String>,
     Json(request): Json<RewindRequest>,
 ) -> Result<Json<RewindResponse>, ApiError> {
+    let _session_action_guard = super::messages::lock_session_action(&id).await;
     let session = load_session(state.clone(), id).await?;
     if !super::super::rewind::can_rewind(&session) {
         return Err(ApiError::conflict("session is not waiting for input"));

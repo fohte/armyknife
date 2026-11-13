@@ -152,6 +152,7 @@ pub(super) fn rewind_session(
     host: &dyn Host,
 ) -> Result<Session> {
     ensure!(!message_id.trim().is_empty(), "message ID is required");
+    let _session_wake_lock = store::lock_session_for_wake(sessions_dir, &session.session_id)?;
     let session = store::load_session_from(sessions_dir, &session.session_id)?
         .context("session no longer exists")?;
     ensure!(can_rewind(&session), "session is not waiting for input");
@@ -183,41 +184,13 @@ pub(super) fn rewind_session(
         return Err(error);
     }
 
-    let (session_id, transcript_path) = match session.engine {
-        Engine::Claude => {
-            let operation = (|| {
-                let (fork_id, transcript_path) = create_claude_fork(
-                    &session,
-                    message_id,
-                    matches!(
-                        mode,
-                        RewindMode::ConversationAndCode | RewindMode::Conversation
-                    ),
-                )?;
-                if matches!(mode, RewindMode::ConversationAndCode | RewindMode::Code)
-                    && let Err(error) = host.rewind_claude_files(&session, message_id)
-                {
-                    fs::remove_file(&transcript_path)
-                        .context("failed to remove the incomplete Claude Code fork transcript")?;
-                    return Err(error);
-                }
-                Ok((fork_id, transcript_path))
-            })();
-            match operation {
-                Ok(fork) => fork,
-                Err(error) => {
-                    pause_session_after_rewind_failure(sessions_dir, &session.session_id, &error)?;
-                    return Err(error);
-                }
-            }
+    let (session_id, transcript_path) = match fork_engine_history(&session, message_id, mode, host)
+    {
+        Ok(fork) => fork,
+        Err(error) => {
+            pause_session_after_rewind_failure(sessions_dir, &session.session_id, &error)?;
+            return Err(error);
         }
-        Engine::Codex => match host.fork_codex_thread(&session, message_id) {
-            Ok(fork) => (fork.thread_id, fork.transcript_path),
-            Err(error) => {
-                pause_session_after_rewind_failure(sessions_dir, &session.session_id, &error)?;
-                return Err(error);
-            }
-        },
     };
 
     let latest_session = match store::load_session_from(sessions_dir, &session.session_id) {
@@ -232,32 +205,8 @@ pub(super) fn rewind_session(
             return Err(error);
         }
     };
-    let now = Utc::now();
-    let mut stopped_session = latest_session.clone();
-    stopped_session.status = SessionStatus::Paused;
-    stopped_session.updated_at = now;
-    stopped_session.read_at = None;
-    stopped_session.sweep_signaled = false;
-
-    let mut forked_session = latest_session;
-    forked_session.session_id = session_id;
-    forked_session.transcript_path = Some(transcript_path);
-    forked_session.status = SessionStatus::Stopped;
-    forked_session.created_at = now;
-    forked_session.updated_at = now;
-    forked_session.read_at = None;
-    forked_session.agent_status = None;
-    forked_session.agent_status_clear_pending = false;
-    forked_session.current_tool = None;
-    forked_session.pending_bg_task_ids.clear();
-    forked_session.pending_agent_task_ids.clear();
-    forked_session.pending_permission_agent_ids.clear();
-    forked_session.pending_permission_request_ids.clear();
-    forked_session.pending_human_review_ids.clear();
-    forked_session
-        .ancestor_session_ids
-        .push(session.session_id.clone());
-    forked_session.sweep_signaled = false;
+    let (stopped_session, forked_session) =
+        sessions_after_rewind(latest_session, session_id, transcript_path);
 
     if let Err(error) = store::save_rewind_sessions(sessions_dir, &stopped_session, &forked_session)
     {
@@ -279,6 +228,73 @@ pub(super) fn rewind_session(
         return Err(error);
     }
     Ok(forked_session)
+}
+
+fn fork_engine_history(
+    session: &Session,
+    message_id: &str,
+    mode: RewindMode,
+    host: &dyn Host,
+) -> Result<(String, PathBuf)> {
+    match session.engine {
+        Engine::Claude => {
+            let (fork_id, transcript_path) = create_claude_fork(
+                session,
+                message_id,
+                matches!(
+                    mode,
+                    RewindMode::ConversationAndCode | RewindMode::Conversation
+                ),
+            )?;
+            if matches!(mode, RewindMode::ConversationAndCode | RewindMode::Code)
+                && let Err(error) = host.rewind_claude_files(session, message_id)
+            {
+                fs::remove_file(&transcript_path)
+                    .context("failed to remove the incomplete Claude Code fork transcript")?;
+                return Err(error);
+            }
+            Ok((fork_id, transcript_path))
+        }
+        Engine::Codex => {
+            let fork = host.fork_codex_thread(session, message_id)?;
+            Ok((fork.thread_id, fork.transcript_path))
+        }
+    }
+}
+
+fn sessions_after_rewind(
+    latest_session: Session,
+    fork_session_id: String,
+    transcript_path: PathBuf,
+) -> (Session, Session) {
+    let now = Utc::now();
+    let mut stopped_session = latest_session.clone();
+    stopped_session.status = SessionStatus::Paused;
+    stopped_session.updated_at = now;
+    stopped_session.read_at = None;
+    stopped_session.sweep_signaled = false;
+
+    let mut forked_session = latest_session;
+    forked_session.session_id = fork_session_id;
+    forked_session.transcript_path = Some(transcript_path);
+    forked_session.status = SessionStatus::Stopped;
+    forked_session.created_at = now;
+    forked_session.updated_at = now;
+    forked_session.read_at = None;
+    forked_session.agent_status = None;
+    forked_session.agent_status_clear_pending = false;
+    forked_session.current_tool = None;
+    forked_session.pending_bg_task_ids.clear();
+    forked_session.pending_agent_task_ids.clear();
+    forked_session.pending_permission_agent_ids.clear();
+    forked_session.pending_permission_request_ids.clear();
+    forked_session.pending_human_review_ids.clear();
+    forked_session
+        .ancestor_session_ids
+        .push(stopped_session.session_id.clone());
+    forked_session.sweep_signaled = false;
+
+    (stopped_session, forked_session)
 }
 
 fn mark_rewind_started(sessions_dir: &Path, session_id: &str) -> Result<Session> {
@@ -422,12 +438,21 @@ mod tests {
 
     struct FakeHost {
         calls: Mutex<Vec<Value>>,
+        codex_fork: Mutex<Option<ForkedCodexThread>>,
     }
 
     impl FakeHost {
         fn new() -> Self {
             Self {
                 calls: Mutex::new(Vec::new()),
+                codex_fork: Mutex::new(None),
+            }
+        }
+
+        fn with_codex_fork(fork: ForkedCodexThread) -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                codex_fork: Mutex::new(Some(fork)),
             }
         }
     }
@@ -451,10 +476,17 @@ mod tests {
 
         fn fork_codex_thread(
             &self,
-            _session: &Session,
-            _before_turn_id: &str,
+            session: &Session,
+            before_turn_id: &str,
         ) -> Result<ForkedCodexThread> {
-            bail!("unexpected Codex fork")
+            self.calls.lock().unwrap().push(serde_json::json!({
+                "forkCodex": [session.session_id, before_turn_id],
+            }));
+            self.codex_fork
+                .lock()
+                .unwrap()
+                .clone()
+                .context("unexpected Codex fork")
         }
 
         fn respawn_pane(&self, session: &Session, new_session: &Session) -> Result<()> {
@@ -544,6 +576,61 @@ mod tests {
     }
 
     #[test]
+    fn codex_rewinds_before_the_selected_turn_and_respawns_the_fork() {
+        let directory = TempDir::new().unwrap();
+        let mut session = test_session();
+        session.engine = Engine::Codex;
+        store::save_session_to(directory.path(), &session).unwrap();
+        let transcript_path = directory.path().join("codex-fork.jsonl");
+        let host = FakeHost::with_codex_fork(ForkedCodexThread {
+            thread_id: "fixture-fork".to_string(),
+            transcript_path: transcript_path.clone(),
+        });
+
+        let forked = rewind_session(
+            directory.path(),
+            &session,
+            "fixture-turn",
+            RewindMode::Conversation,
+            &host,
+        )
+        .unwrap();
+        let previous = store::load_session_from(directory.path(), &session.session_id)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            (
+                forked.session_id,
+                forked.transcript_path,
+                forked.status,
+                forked.ancestor_session_ids,
+                previous.status,
+                previous.sweep_signaled,
+                host.calls.lock().unwrap().clone(),
+            ),
+            (
+                "fixture-fork".to_string(),
+                Some(transcript_path.clone()),
+                SessionStatus::Stopped,
+                vec![
+                    "fixture-ancestor".to_string(),
+                    "fixture-session".to_string()
+                ],
+                SessionStatus::Paused,
+                false,
+                vec![
+                    serde_json::json!({"stop": "fixture-session"}),
+                    serde_json::json!({"forkCodex": ["fixture-session", "fixture-turn"]}),
+                    serde_json::json!({
+                        "respawn": ["fixture-session", "fixture-fork"]
+                    }),
+                ],
+            ),
+        );
+    }
+
+    #[test]
     fn code_only_rewinds_files_and_keeps_the_full_conversation() {
         let directory = TempDir::new().unwrap();
         let source = directory.path().join("original.jsonl");
@@ -567,17 +654,14 @@ mod tests {
         )
         .unwrap();
 
-        let fork_records = fs::read_to_string(forked.transcript_path.as_ref().unwrap())
+        let mut fork_records = fs::read_to_string(forked.transcript_path.as_ref().unwrap())
             .unwrap()
             .lines()
-            .map(|line| {
-                let mut record: Value = serde_json::from_str(line).unwrap();
-                record["sessionId"] = Value::String("fixture-fork".to_string());
-                record
-            })
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
             .collect::<Vec<_>>();
         let mut calls = host.calls.lock().unwrap().clone();
-        calls[2]["respawn"][1] = Value::String("fixture-fork".to_string());
+        normalize_fork_session_id(&mut fork_records, &forked.session_id);
+        normalize_fork_session_id(&mut calls, &forked.session_id);
 
         let previous = store::load_session_from(directory.path(), &session.session_id)
             .unwrap()
@@ -607,19 +691,19 @@ mod tests {
                 vec![
                     serde_json::json!({
                         "uuid": "fixture-before",
-                        "sessionId": "fixture-fork",
+                        "sessionId": "<fork-session>",
                         "type": "user",
                         "message": {"content": "Earlier request."}
                     }),
                     serde_json::json!({
                         "uuid": "fixture-selected",
-                        "sessionId": "fixture-fork",
+                        "sessionId": "<fork-session>",
                         "type": "user",
                         "message": {"content": "Selected request."}
                     }),
                     serde_json::json!({
                         "uuid": "fixture-after",
-                        "sessionId": "fixture-fork",
+                        "sessionId": "<fork-session>",
                         "type": "assistant",
                         "message": {"content": [{"type": "text", "text": "Later response."}]}
                     }),
@@ -627,7 +711,7 @@ mod tests {
                 vec![
                     serde_json::json!({"stop": "fixture-session"}),
                     serde_json::json!({"rewindFiles": ["fixture-session", "fixture-selected"]}),
-                    serde_json::json!({"respawn": ["fixture-session", "fixture-fork"]}),
+                    serde_json::json!({"respawn": ["fixture-session", "<fork-session>"]}),
                 ],
             ),
         );
@@ -656,27 +740,20 @@ mod tests {
         let forked =
             rewind_session(directory.path(), &session, "fixture-selected", mode, &host).unwrap();
 
-        let fork_records = fs::read_to_string(forked.transcript_path.as_ref().unwrap())
+        let mut fork_records = fs::read_to_string(forked.transcript_path.as_ref().unwrap())
             .unwrap()
             .lines()
-            .map(|line| {
-                let mut record: Value = serde_json::from_str(line).unwrap();
-                record["sessionId"] = Value::String("fixture-fork".to_string());
-                record
-            })
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
             .collect::<Vec<_>>();
         let mut calls = host.calls.lock().unwrap().clone();
-        if rewind_files {
-            calls[2]["respawn"][1] = Value::String("fixture-fork".to_string());
-        } else {
-            calls[1]["respawn"][1] = Value::String("fixture-fork".to_string());
-        }
+        normalize_fork_session_id(&mut fork_records, &forked.session_id);
+        normalize_fork_session_id(&mut calls, &forked.session_id);
         let mut expected_calls = vec![serde_json::json!({"stop": "fixture-session"})];
         if rewind_files {
             expected_calls
                 .push(serde_json::json!({"rewindFiles": ["fixture-session", "fixture-selected"]}));
         }
-        expected_calls.push(serde_json::json!({"respawn": ["fixture-session", "fixture-fork"]}));
+        expected_calls.push(serde_json::json!({"respawn": ["fixture-session", "<fork-session>"]}));
 
         assert_eq!(
             (
@@ -692,7 +769,7 @@ mod tests {
                 original.to_string(),
                 vec![serde_json::json!({
                     "uuid": "fixture-before",
-                    "sessionId": "fixture-fork",
+                    "sessionId": "<fork-session>",
                     "type": "user",
                     "message": {"content": "Earlier request."}
                 })],
@@ -785,6 +862,31 @@ mod tests {
                 SessionStatus::Running,
             ),
         );
+    }
+
+    fn normalize_fork_session_id(values: &mut [Value], fork_session_id: &str) {
+        for value in values {
+            normalize_fork_session_id_value(value, fork_session_id);
+        }
+    }
+
+    fn normalize_fork_session_id_value(value: &mut Value, fork_session_id: &str) {
+        match value {
+            Value::String(value) if value == fork_session_id => {
+                *value = "<fork-session>".to_string();
+            }
+            Value::Array(values) => {
+                for value in values {
+                    normalize_fork_session_id_value(value, fork_session_id);
+                }
+            }
+            Value::Object(values) => {
+                for value in values.values_mut() {
+                    normalize_fork_session_id_value(value, fork_session_id);
+                }
+            }
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+        }
     }
 
     fn test_session() -> Session {

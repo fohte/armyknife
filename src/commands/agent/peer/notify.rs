@@ -393,16 +393,29 @@ pub fn notify(
 ) -> Result<Delivery> {
     ensure_not_self_notify(session_id, from)?;
 
-    let session =
+    let initial_session =
         store::load_session(session_id)?.ok_or_else(|| session_not_found_error(session_id))?;
+    if initial_session.sweep_signaled {
+        anyhow::bail!("Session '{session_id}' is being stopped; refusing to notify");
+    }
+    let woke_session = initial_session.status == SessionStatus::Paused;
+    if woke_session {
+        wake::wake(session_id)?;
+    }
 
+    let sessions_dir = store::sessions_dir()?;
+    let _session_wake_lock = store::lock_session_for_wake(&sessions_dir, session_id)?;
+    let session = store::load_session_from(&sessions_dir, session_id)?
+        .ok_or_else(|| session_not_found_error(session_id))?;
+
+    ensure_fresh_session(session_id, &initial_session, woke_session, &session)?;
     notify_session(
         session_id,
         message,
         from,
         from_engine_hint,
         &session,
-        wake::wake,
+        |_| Ok(None),
         |session, content| match session.engine {
             Engine::Claude => {
                 send_to_claude(&session.session_id, content)?;
@@ -421,6 +434,24 @@ pub fn notify(
     )
 }
 
+fn ensure_fresh_session(
+    session_id: &str,
+    initial_session: &Session,
+    woke_session: bool,
+    session: &Session,
+) -> Result<()> {
+    if session.sweep_signaled {
+        anyhow::bail!("Session '{session_id}' is being stopped; refusing to notify");
+    }
+    if session.status == SessionStatus::Paused
+        && (!woke_session || session.updated_at != initial_session.updated_at)
+    {
+        anyhow::bail!("Session '{session_id}' changed while waiting to notify; refusing to notify");
+    }
+
+    Ok(())
+}
+
 fn notify_session(
     session_id: &str,
     message: &str,
@@ -430,6 +461,9 @@ fn notify_session(
     wake_session: impl FnOnce(&str) -> Result<Option<String>>,
     deliver: impl FnOnce(&Session, &str) -> Result<Delivery>,
 ) -> Result<Delivery> {
+    if session.sweep_signaled {
+        anyhow::bail!("Session '{session_id}' is being stopped; refusing to notify");
+    }
     match notify_readiness(session.status) {
         NotifyReadiness::Refused => {
             return Err(CcError::SessionEnded(session_id.to_string()).into());
@@ -1116,20 +1150,30 @@ mod tests {
     #[rstest]
     #[case::paused(
         SessionStatus::Paused,
+        false,
         Ok(Delivery::Sent),
         vec!["wake:target-session", "deliver:target-session:hello"],
     )]
     #[case::ended(
         SessionStatus::Ended,
+        false,
         Err("Session 'target-session' has ended; refusing to notify (the user ended it intentionally)"),
+        vec![],
+    )]
+    #[case::being_stopped(
+        SessionStatus::Running,
+        true,
+        Err("Session 'target-session' is being stopped; refusing to notify"),
         vec![],
     )]
     fn notify_session_wakes_paused_sessions_before_delivery_and_refuses_ended_sessions(
         #[case] status: SessionStatus,
+        #[case] sweep_signaled: bool,
         #[case] expected_result: Result<Delivery, &str>,
         #[case] expected_calls: Vec<&str>,
     ) {
-        let session = suggestion_session("target-session", status, Engine::Claude);
+        let mut session = suggestion_session("target-session", status, Engine::Claude);
+        session.sweep_signaled = sweep_signaled;
         let calls = RefCell::new(Vec::new());
 
         let actual = notify_session(
@@ -1150,6 +1194,61 @@ mod tests {
             },
         )
         .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (actual, calls.into_inner()),
+            (
+                expected_result.map_err(str::to_string),
+                expected_calls.into_iter().map(str::to_string).collect(),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::same_paused_session(
+        false,
+        Ok(Delivery::Sent),
+        vec!["wake:target-session", "deliver:target-session:hello"],
+    )]
+    #[case::rewound_paused_session(
+        true,
+        Err("Session 'target-session' changed while waiting to notify; refusing to notify"),
+        vec![],
+    )]
+    fn notify_fresh_session_revalidates_a_paused_wake_target(
+        #[case] updated_after_wake: bool,
+        #[case] expected_result: Result<Delivery, &str>,
+        #[case] expected_calls: Vec<&str>,
+    ) {
+        let initial_session =
+            suggestion_session("target-session", SessionStatus::Paused, Engine::Claude);
+        let mut session = initial_session.clone();
+        if updated_after_wake {
+            session.updated_at += chrono::Duration::seconds(1);
+        }
+        let calls = RefCell::new(Vec::new());
+
+        let actual = ensure_fresh_session(&session.session_id, &initial_session, true, &session)
+            .and_then(|()| {
+                notify_session(
+                    &session.session_id,
+                    "hello",
+                    None,
+                    None,
+                    &session,
+                    |session_id| {
+                        calls.borrow_mut().push(format!("wake:{session_id}"));
+                        Ok(None)
+                    },
+                    |session, content| {
+                        calls
+                            .borrow_mut()
+                            .push(format!("deliver:{}:{content}", session.session_id));
+                        Ok(Delivery::Sent)
+                    },
+                )
+            })
+            .map_err(|error| error.to_string());
 
         assert_eq!(
             (actual, calls.into_inner()),

@@ -5,6 +5,7 @@ use rstest::rstest;
 use serde_json::json;
 use tower::ServiceExt;
 
+use super::super::messages::lock_session_action;
 use super::{
     ActionContext, action_context, normalized_queued_prompts, post, response_snapshot, session,
 };
@@ -47,6 +48,66 @@ async fn send_message_forwards_nonempty_content_unchanged(action_context: Action
                 "sentAt": "<sent-at>",
             }]),
         ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn send_message_rejects_a_session_marked_for_shutdown(action_context: ActionContext) {
+    let mut session = session("sample-session");
+    session.sweep_signaled = true;
+    action_context.save_session(&session);
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            "/sessions/sample-session/messages",
+            json!({ "content": "continue the investigation" }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response_snapshot(response, &action_context).await,
+        json!({
+            "status": StatusCode::CONFLICT.as_u16(),
+            "body": { "error": "session is being stopped" },
+            "calls": [],
+        }),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn send_message_rechecks_the_session_after_waiting_for_a_rewind_action(
+    action_context: ActionContext,
+) {
+    action_context.save_session(&session("sample-session"));
+    let action_guard = lock_session_action("sample-session").await;
+    let router = action_context.router();
+    let request = tokio::spawn(async move {
+        router
+            .oneshot(post(
+                "/sessions/sample-session/messages",
+                json!({ "content": "continue the investigation" }),
+            ))
+            .await
+            .unwrap()
+    });
+    tokio::task::yield_now().await;
+
+    let mut session = action_context.load_session("sample-session");
+    session.sweep_signaled = true;
+    action_context.save_session(&session);
+    drop(action_guard);
+
+    assert_eq!(
+        response_snapshot(request.await.unwrap(), &action_context).await,
+        json!({
+            "status": StatusCode::CONFLICT.as_u16(),
+            "body": { "error": "session is being stopped" },
+            "calls": [],
+        }),
     );
 }
 

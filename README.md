@@ -1165,6 +1165,7 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 - `GET /api/images/{name}` for saved conversation images
 - `GET /api/sessions/later-options` for server-calculated return times
 - `POST /api/sessions/{id}/messages` with `{"content":"..."}`
+- `POST /api/sessions/{id}/rewind` rewinds a session waiting for input. Send `{"messageId":"fixture-user-message-id","mode":"conversation_and_code"}`; `mode` accepts `conversation_and_code`, `conversation`, or `code` for Claude Code and only `conversation` for Codex. Returns `{"sessionId":"fixture-fork-session-id"}`.
 - `POST /api/sessions/{id}/answer` with `{"requestId":"...","answers":{"Which formats?":"Markdown, Plain text","Include examples?":"Yes"}}`, or `{"requestId":"...","skip":true}`
 - `POST /api/sessions/{id}/proposals/{seq}/answer` with `{"choice":0,"comment":"..."}`; `choice` is a zero-based option index or `null` to request another proposal, and `comment` may be `null`
 - `POST /api/sessions/{id}/permission/approve` with `{"requestId":"..."}`

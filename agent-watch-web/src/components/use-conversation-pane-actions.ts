@@ -97,7 +97,10 @@ export function useConversationPaneActions({
         isRewindResponse,
       ).match(
         (response) => {
-          writeComposerDraftForSession(response.sessionId, draft)
+          if (!writeComposerDraftForSession(response.sessionId, draft)) {
+            setError('Could not keep the selected message as a draft.')
+            return false
+          }
           setError(null)
           refresh()
           onSelectSession(response.sessionId)

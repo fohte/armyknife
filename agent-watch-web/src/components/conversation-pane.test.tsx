@@ -5016,7 +5016,7 @@ it('keeps the message draft when sending fails', async () => {
   })
 })
 
-it('opens the forked session with the selected message in its draft', async () => {
+it('opens the forked session with the selected message when storage rejects its draft', async () => {
   const originalSession = { ...session, engine: 'claude' as const }
   const forkedSession = { ...originalSession, id: 'fixture-fork-session' }
   const selectedSessions = vi.fn()
@@ -5025,6 +5025,13 @@ it('opens the forked session with the selected message in its draft', async () =
     text: 'Revisit this request.',
     rewindId: 'fixture-user-message',
   }
+  const originalSetItem = Storage.prototype.setItem.bind(window.localStorage)
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation((key, value) => {
+    if (key === `agent-watch-web:composer-draft:${forkedSession.id}`) {
+      throw new Error('storage unavailable')
+    }
+    originalSetItem(key, value)
+  })
   const fetcher = vi.fn<typeof fetch>((input) => {
     const url = requestUrl(input)
     if (url.endsWith('/messages?limit=100')) {
@@ -5114,7 +5121,7 @@ it('opens the forked session with the selected message in its draft', async () =
         },
       },
     ],
-    draft: 'Revisit this request.',
+    draft: null,
     composer: 'Revisit this request.',
   })
 })
@@ -8098,6 +8105,61 @@ it('skips committing an unchanged memoized conversation row', () => {
   })
 
   expect(renderMessage).toHaveBeenCalledTimes(1)
+})
+
+it('rerenders a user message when rewind becomes available', () => {
+  const message: ChatItem = {
+    type: 'user',
+    text: 'Revisit this request.',
+    rewindId: 'fixture-user-message',
+  }
+  const sessions: Session[] = []
+  const onAction = () => Promise.resolve(true)
+  const onOpenInTerminal = () => undefined
+  const onSelectDecision = () => undefined
+  const onSelectSession = () => undefined
+  const onRewind = () => Promise.resolve(true)
+  const renderMessage = vi.mocked(renderConversationMessage)
+  renderMessage.mockClear()
+  const rowProps = {
+    actions,
+    actionsReady: true,
+    isMobile: false,
+    selected: false,
+    decisionPosition: undefined,
+    message,
+    pendingAction: null,
+    openInTerminalStatus: null,
+    sessionEngine: 'claude' as const,
+    sessions,
+    onAction,
+    onOpenInTerminal,
+    onSelectDecision,
+    onSelectSession,
+    onRewind,
+  }
+  root = createRoot(container)
+  act(() => {
+    root?.render(<ConversationMessageRow {...rowProps} />)
+  })
+  act(() => {
+    root?.render(
+      <ConversationMessageRow
+        {...rowProps}
+        actions={{ ...actions, rewind: true }}
+      />,
+    )
+  })
+
+  const snapshot = () => ({
+    renderCount: renderMessage.mock.calls.length,
+    rewindLabel:
+      container.querySelector('.chat-rewind-menu summary')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    renderCount: 2,
+    rewindLabel: 'Rewind',
+  })
 })
 
 it('refreshes a memoized message time when the local day changes', () => {

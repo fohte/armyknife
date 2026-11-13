@@ -1,8 +1,11 @@
+use std::sync::LazyLock;
+
 use anyhow::Result;
 use axum::Json;
 use axum::extract::{Path as RoutePath, State};
 use chrono::Utc;
 use serde::Deserialize;
+use tokio::sync::OwnedMutexGuard;
 
 use super::super::super::{
     peer::notify,
@@ -10,9 +13,21 @@ use super::super::super::{
     types::{Engine, Session, SessionStatus},
 };
 use super::super::attachments;
+use super::keyed_mutex_registry::KeyedMutexRegistry;
 use super::{ActionState, ApiError, Success, load_session, resolve_sessions_dir, run_blocking};
 
 pub(super) const MAX_MESSAGE_BODY_BYTES: usize = 72 * 1024 * 1024;
+
+static SESSION_ACTION_LOCKS: LazyLock<KeyedMutexRegistry<String>> =
+    LazyLock::new(KeyedMutexRegistry::default);
+
+pub(super) async fn lock_session_action(session_id: &str) -> OwnedMutexGuard<()> {
+    SESSION_ACTION_LOCKS
+        .get_or_create(session_id.to_owned())
+        .await
+        .lock_owned()
+        .await
+}
 
 pub(super) fn send_live_message(session: &Session, content: &str) -> Result<()> {
     send_via_peer_notify(&session.session_id, content, |session_id, content| {
@@ -34,7 +49,11 @@ pub(super) async fn send_message(
     RoutePath(id): RoutePath<String>,
     Json(request): Json<MessageRequest>,
 ) -> Result<Json<Success>, ApiError> {
+    let _session_action_guard = lock_session_action(&id).await;
     let session = load_session(state.clone(), id).await?;
+    if session.sweep_signaled {
+        return Err(ApiError::conflict("session is being stopped"));
+    }
     if session.status == SessionStatus::Ended {
         return Err(ApiError::conflict("session has ended"));
     }

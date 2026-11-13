@@ -21,6 +21,12 @@ function areConversationMessagePropsEqual(
     case 'user':
     case 'queued_user':
     case 'user_with_content':
+      return (
+        previous.actions?.rewind === next.actions?.rewind &&
+        previous.onSelectSession === next.onSelectSession &&
+        previous.onRewind === next.onRewind &&
+        previous.sessions === next.sessions
+      )
     case 'peer':
     case 'subagent_report':
     case 'assistant':

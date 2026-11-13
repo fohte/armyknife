@@ -1,7 +1,14 @@
 import { Result } from 'neverthrow'
 import { useRef, useState } from 'react'
 
+const fallbackDrafts = new Map<string, string>()
+
 function readComposerDraft(key: string) {
+  const fallbackDraft = fallbackDrafts.get(key)
+  if (fallbackDraft !== undefined) {
+    return { draft: fallbackDraft, storageAvailable: false }
+  }
+
   return Result.fromThrowable(
     () => window.localStorage.getItem(key),
     (error: unknown) => error,
@@ -12,7 +19,7 @@ function readComposerDraft(key: string) {
 }
 
 function writeComposerDraft(key: string, draft: string) {
-  return Result.fromThrowable(
+  const storageAvailable = Result.fromThrowable(
     () => {
       if (draft === '') {
         window.localStorage.removeItem(key)
@@ -25,13 +32,18 @@ function writeComposerDraft(key: string, draft: string) {
     () => true,
     () => false,
   )
+  if (storageAvailable) {
+    fallbackDrafts.delete(key)
+  } else {
+    fallbackDrafts.set(key, draft)
+  }
+  return storageAvailable
 }
 
 export function writeComposerDraftForSession(sessionId: string, draft: string) {
-  return writeComposerDraft(
-    `agent-watch-web:composer-draft:${sessionId}`,
-    draft,
-  )
+  const key = `agent-watch-web:composer-draft:${sessionId}`
+  const storageAvailable = writeComposerDraft(key, draft)
+  return storageAvailable || fallbackDrafts.get(key) === draft
 }
 
 export function useComposerDraft(sessionId: string) {
