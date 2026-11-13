@@ -30,6 +30,11 @@ export const TodoIsCompleted: Story = {
   args: { resolution: 'completed', defaultComment: 'The sample is ready.' },
 }
 
+export const TodoIsCompletedWithoutAComment: Story = {
+  name: 'A completed to-do without a comment shows only its title',
+  args: { resolution: 'completed', defaultComment: '' },
+}
+
 export const TodoIsRejected: Story = {
   name: 'A rejected to-do shows its reason and title distinctly',
   args: { resolution: 'rejected', defaultComment: 'This is no longer needed.' },

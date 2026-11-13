@@ -77,6 +77,7 @@ fn withdraw_todo(
     comment: Option<&str>,
 ) -> Result<()> {
     let comment = comment.map(str::trim).filter(|comment| !comment.is_empty());
+    let _todo_lock = store::lock_agent_todo_resolution(sessions_dir, session_id)?;
     ensure!(
         store::resolve_agent_todo_from(
             sessions_dir,

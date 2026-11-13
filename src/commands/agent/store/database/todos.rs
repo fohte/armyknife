@@ -1,9 +1,11 @@
+use std::fs::{self, File, OpenOptions};
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use rusqlite::{TransactionBehavior, params, params_from_iter};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::{increment_revision, open_connection, validate_session_id};
 
@@ -47,6 +49,38 @@ impl TodoResolution {
         };
         Ok(resolution)
     }
+}
+
+pub(crate) fn lock_agent_todo_resolution(sessions_dir: &Path, session_id: &str) -> Result<File> {
+    let lock_file = open_agent_todo_resolution_lock_file(sessions_dir, session_id)?;
+    lock_file
+        .lock()
+        .context("locking todo resolutions for session")?;
+    Ok(lock_file)
+}
+
+fn open_agent_todo_resolution_lock_file(sessions_dir: &Path, session_id: &str) -> Result<File> {
+    validate_session_id(session_id)?;
+    let lock_dir = sessions_dir.join("todo-resolution-locks");
+    fs::create_dir_all(&lock_dir).with_context(|| {
+        format!(
+            "creating todo resolution lock directory {}",
+            lock_dir.display()
+        )
+    })?;
+    let session_hash = Sha256::digest(session_id.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join("");
+    // Stable lock files avoid a deletion race between waiting clients.
+    let lock_path = lock_dir.join(format!("{session_hash}.lock"));
+    OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("opening todo resolution lock {}", lock_path.display()))
 }
 
 pub(crate) fn add_agent_todo(
@@ -184,6 +218,8 @@ pub(crate) fn resolve_agent_todo(
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
 
     use chrono::{TimeZone, Utc};
     use rstest::{fixture, rstest};
@@ -191,7 +227,7 @@ mod tests {
 
     use super::{
         AgentTodo, TodoResolution, add_agent_todo, agent_todos, incomplete_agent_todo_titles,
-        open_connection, resolve_agent_todo,
+        lock_agent_todo_resolution, open_connection, resolve_agent_todo,
     };
     use crate::commands::agent::store::session_store_revision_from;
 
@@ -208,6 +244,58 @@ mod tests {
                 [session_id],
             )
             .expect("session row should be stored");
+    }
+
+    #[rstest]
+    fn competing_resolutions_persist_only_the_winner(sessions_dir: TempDir) {
+        create_session(sessions_dir.path(), "session-a");
+        let seq = add_agent_todo(sessions_dir.path(), "session-a", "Task", None)
+            .expect("todo should be stored");
+        let start = Arc::new(Barrier::new(2));
+        let thread_start = Arc::clone(&start);
+        let thread_sessions_dir = sessions_dir.path().to_path_buf();
+        let rejection = thread::spawn(move || {
+            thread_start.wait();
+            let _todo_lock = lock_agent_todo_resolution(&thread_sessions_dir, "session-a")?;
+            resolve_agent_todo(
+                &thread_sessions_dir,
+                "session-a",
+                seq,
+                TodoResolution::Rejected,
+                Some("No longer needed"),
+            )
+        });
+
+        start.wait();
+        let _todo_lock = lock_agent_todo_resolution(sessions_dir.path(), "session-a")
+            .expect("withdrawal should acquire the session lock");
+        let withdrawn = resolve_agent_todo(
+            sessions_dir.path(),
+            "session-a",
+            seq,
+            TodoResolution::Withdrawn,
+            Some("Plan changed"),
+        )
+        .expect("withdrawal should save");
+        drop(_todo_lock);
+        let rejected = rejection
+            .join()
+            .expect("rejection thread should finish")
+            .expect("rejection attempt should finish");
+        let stored_resolution = agent_todos(sessions_dir.path(), "session-a")
+            .expect("todo should load")
+            .first()
+            .and_then(|todo| todo.resolution);
+        let expected_resolution = if withdrawn {
+            Some(TodoResolution::Withdrawn)
+        } else {
+            Some(TodoResolution::Rejected)
+        };
+
+        assert_eq!(
+            (withdrawn, rejected, stored_resolution),
+            (withdrawn, !withdrawn, expected_resolution),
+        );
     }
 
     fn normalize_timestamps(mut todos: Vec<AgentTodo>) -> Vec<AgentTodo> {

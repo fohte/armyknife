@@ -509,6 +509,13 @@ pub(crate) fn resolve_agent_todo_from(
     database::resolve_agent_todo(sessions_dir, session_id, seq, resolution, comment)
 }
 
+pub(crate) fn lock_agent_todo_resolution(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<std::fs::File> {
+    database::lock_agent_todo_resolution(sessions_dir, session_id)
+}
+
 pub(crate) fn resolve_agent_todo(
     session_id: &str,
     seq: i64,

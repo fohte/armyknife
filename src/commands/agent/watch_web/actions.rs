@@ -29,7 +29,6 @@ mod proposal_answer_locks;
 mod proposals;
 mod runtime;
 mod title;
-mod todo_resolution_locks;
 mod todos;
 
 pub(super) use api_error::ApiError;
@@ -37,7 +36,6 @@ use interrupt_locks::InterruptLocks;
 use permission_denied_locks::PermissionDeniedRetryLocks;
 use proposal_answer_locks::ProposalAnswerLocks;
 use runtime::LiveActionRuntime;
-use todo_resolution_locks::TodoResolutionLocks;
 
 pub(super) fn router(message_loaders: RouteLoaders) -> Router {
     router_with_state(ActionState {
@@ -46,7 +44,6 @@ pub(super) fn router(message_loaders: RouteLoaders) -> Router {
         runtime: Arc::new(LiveActionRuntime),
         proposal_answer_locks: ProposalAnswerLocks::default(),
         permission_denied_retry_locks: PermissionDeniedRetryLocks::default(),
-        todo_resolution_locks: TodoResolutionLocks::default(),
         interrupt_locks: InterruptLocks::default(),
         message_loaders,
     })
@@ -111,7 +108,6 @@ struct ActionState {
     // Delivery precedes persistence, so repeated answers for one proposal must serialize.
     proposal_answer_locks: ProposalAnswerLocks,
     permission_denied_retry_locks: PermissionDeniedRetryLocks,
-    todo_resolution_locks: TodoResolutionLocks,
     interrupt_locks: InterruptLocks,
 }
 
@@ -689,7 +685,6 @@ mod tests {
                 runtime: self.runtime.clone(),
                 proposal_answer_locks: ProposalAnswerLocks::default(),
                 permission_denied_retry_locks: permission_denied_retry_locks.clone(),
-                todo_resolution_locks: TodoResolutionLocks::default(),
                 interrupt_locks: InterruptLocks::default(),
                 message_loaders: empty_message_loaders(),
             });
@@ -707,7 +702,6 @@ mod tests {
                 runtime: self.runtime.clone(),
                 proposal_answer_locks: proposal_answer_locks.clone(),
                 permission_denied_retry_locks: PermissionDeniedRetryLocks::default(),
-                todo_resolution_locks: TodoResolutionLocks::default(),
                 interrupt_locks: InterruptLocks::default(),
                 message_loaders,
             });

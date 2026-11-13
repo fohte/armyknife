@@ -24,12 +24,15 @@ pub(super) async fn resolve_todo(
     RoutePath((id, seq)): RoutePath<(String, i64)>,
     Json(request): Json<ResolveRequest>,
 ) -> Result<Json<Success>, ApiError> {
-    let todo_lock = state.todo_resolution_locks.get_or_create(&id, seq).await;
-    let _todo_guard = todo_lock.lock().await;
     let session = load_session(state.clone(), id.clone()).await?;
     let configured_sessions_dir = state.sessions_dir.clone();
     let sessions_dir =
         resolve_sessions_dir(configured_sessions_dir.clone()).map_err(ApiError::internal)?;
+    let session_id = session.session_id.clone();
+    let locked_sessions_dir = sessions_dir.clone();
+    let _todo_guard =
+        run_blocking(move || store::lock_agent_todo_resolution(&locked_sessions_dir, &session_id))
+            .await?;
     let todos = run_blocking({
         let session_id = session.session_id.clone();
         move || match configured_sessions_dir {
