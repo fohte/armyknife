@@ -157,3 +157,90 @@ fn adds_todo_resolution_to_master_version_fourteen_database() {
         )),
     );
 }
+
+#[test]
+fn repairs_version_fifteen_file_attachment_database() {
+    let mut connection = Connection::open_in_memory().expect("in-memory database should open");
+    connection
+        .execute_batch(indoc! {
+            "
+            CREATE TABLE sessions (
+                session_id TEXT PRIMARY KEY,
+                data TEXT NOT NULL,
+                rev INTEGER NOT NULL
+            );
+            INSERT INTO sessions (session_id, data, rev)
+                VALUES ('sample-session', '{}', 0);
+            CREATE TABLE agent_todo (
+                session_id TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                completed_at TEXT,
+                comment TEXT,
+                PRIMARY KEY (session_id, seq)
+            );
+            INSERT INTO agent_todo (session_id, seq, title, created_at)
+                VALUES ('sample-session', 1, 'Task', '2026-01-01T00:00:00Z');
+            CREATE TABLE agent_file (
+                session_id TEXT NOT NULL,
+                id TEXT NOT NULL,
+                position INTEGER NOT NULL DEFAULT 0,
+                name TEXT NOT NULL,
+                caption TEXT,
+                mime_type TEXT,
+                size INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (session_id, id)
+            );
+            INSERT INTO agent_file (
+                session_id, id, position, name, size, created_at
+            ) VALUES (
+                'sample-session', 'fixture-file-id', 0, 'fixture.pdf', 7,
+                '2026-01-01T00:00:00Z'
+            );
+            PRAGMA user_version = 15;
+            "
+        })
+        .expect("version fifteen file-attachment schema should be created");
+
+    migrate_if_needed(&mut connection)
+        .expect("ambiguous version fifteen schema should be repaired");
+
+    let resolution_column_exists: bool = connection
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM pragma_table_info('agent_todo') WHERE name = 'resolution'
+            )",
+            [],
+            |row| row.get(0),
+        )
+        .expect("todo resolution column should be queryable");
+    let todo = connection
+        .query_row(
+            "SELECT title, resolution FROM agent_todo WHERE session_id = 'sample-session'",
+            [],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+        )
+        .expect("existing todo should remain queryable");
+    let retained_file_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM agent_file WHERE id = 'fixture-file-id'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("existing attachment should remain queryable");
+    let user_version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("database migration version should be readable");
+
+    assert_eq!(
+        (
+            resolution_column_exists,
+            todo,
+            retained_file_count,
+            user_version,
+        ),
+        (true, ("Task".to_string(), None), 1, current_version(),),
+    );
+}

@@ -197,10 +197,28 @@ pub(super) fn current_version() -> i64 {
 pub(super) fn migrate_if_needed(connection: &mut Connection) -> Result<()> {
     let user_version: i64 =
         connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if user_version > current_version() {
+        return Ok(());
+    }
     if user_version < current_version()
         && let Err(error) = MIGRATIONS.to_latest(connection)
     {
         accept_migration_error(connection, error)?;
+    }
+    ensure_todo_resolution_column(connection)
+}
+
+fn ensure_todo_resolution_column(connection: &Connection) -> Result<()> {
+    // Version 15 can describe either schema, so the version alone cannot prove this column exists.
+    let has_resolution: bool = connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM pragma_table_info('agent_todo') WHERE name = 'resolution'
+        )",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_resolution {
+        connection.execute("ALTER TABLE agent_todo ADD COLUMN resolution TEXT", [])?;
     }
     Ok(())
 }
