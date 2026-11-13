@@ -8,6 +8,7 @@ import { BoardView } from '#components/board-view'
 import { CommandPalette } from '#components/command-palette'
 import { InboxConversationPanes } from '#components/inbox-conversation-panes'
 import { LaterMenu } from '#components/later-menu'
+import { MobileNavDrawer } from '#components/mobile-nav-drawer'
 import { ResizableColumns } from '#components/resizable-columns'
 import { SessionConversationCacheProvider } from '#components/session-conversation-cache'
 import {
@@ -82,6 +83,7 @@ function AppContent() {
   )
   const [inboxFilterQuery, setInboxFilterQuery] = useState('')
   const [statusPanelOpen, setStatusPanelOpen] = useState(false)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [manualInboxCollapsed, setManualInboxCollapsed] = useState<
     boolean | null
   >(null)
@@ -429,6 +431,30 @@ function AppContent() {
       sessionsLoaded: loaded,
       navigate,
     })
+  const closeMobileNav = useCallback(() => {
+    setMobileNavOpen(false)
+  }, [])
+  useEffect(() => {
+    if (!isMobile || showMobileConversation) closeMobileNav()
+  }, [closeMobileNav, isMobile, showMobileConversation])
+  const openMobilePalette = useCallback(() => {
+    closeMobileNav()
+    setCommandPaletteOpen(true)
+  }, [closeMobileNav])
+  const openSessionFromNavigation = useCallback(
+    (id: string) => {
+      closeMobileNav()
+      openSessionInInbox(id)
+    },
+    [closeMobileNav, openSessionInInbox],
+  )
+  const selectSavedViewFromNavigation = useCallback(
+    (id: string) => {
+      closeMobileNav()
+      selectInboxSavedView(id)
+    },
+    [closeMobileNav, selectInboxSavedView],
+  )
   const inboxProps = {
     error: error ?? savedViews.storageError,
     connectionError: error,
@@ -472,13 +498,18 @@ function AppContent() {
       void closeDoneSessions(doneSessions)
     },
     closeRetrySessionId,
+    onOpenNavigation: () => {
+      setMobileNavOpen(true)
+    },
+    onOpenPalette: openMobilePalette,
     onCloseKeepWorktree: (sessionId: string) => {
       closeDoneSession(sessionId, true)
     },
   }
-  const navigation = !isMobile ? (
+  const navigation = (
     <AgentWatchNav
       activeView={view}
+      isMobile={isMobile}
       paletteShortcut={getCommandPaletteShortcut(navigator.platform)}
       needsActionCount={needsActionCount}
       savedViews={savedViews.savedViewsForNav}
@@ -487,18 +518,17 @@ function AppContent() {
       workTypeNavGroups={workTypeNavGroups}
       onViewChange={(nextView) => {
         navigate((current) => ({ ...current, view: nextView }))
+        closeMobileNav()
       }}
-      onSelectSavedView={selectInboxSavedView}
+      onSelectSavedView={selectSavedViewFromNavigation}
       onDeleteSavedView={savedViews.deleteView}
-      onSelectToday={openSessionInInbox}
-      onSelectSession={openSessionInInbox}
-      onOpenPalette={() => {
-        setCommandPaletteOpen(true)
-      }}
+      onSelectToday={openSessionFromNavigation}
+      onSelectSession={openSessionFromNavigation}
+      onOpenPalette={openMobilePalette}
       inboxCollapsed={inboxCollapsed}
       onToggleInbox={toggleInbox}
     />
-  ) : null
+  )
   const main = (
     <main className="agent-watch-main">
       {view === 'inbox' ? (
@@ -533,6 +563,11 @@ function AppContent() {
           onSelectSession={openSessionInInbox}
           projects={projects}
           focusedProjectName={focusedProjectName}
+          isMobile={isMobile}
+          onOpenNavigation={() => {
+            setMobileNavOpen(true)
+          }}
+          onOpenPalette={openMobilePalette}
         />
       )}
     </main>
@@ -556,6 +591,11 @@ function AppContent() {
           label="Resize navigation and content"
         />
       )}
+      {isMobile && !showMobileConversation ? (
+        <MobileNavDrawer onClose={closeMobileNav} open={mobileNavOpen}>
+          {navigation}
+        </MobileNavDrawer>
+      ) : null}
       {laterSession !== undefined ? (
         <LaterMenu
           sessionTitle={laterSession.title}

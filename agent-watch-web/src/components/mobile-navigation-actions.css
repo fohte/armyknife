@@ -1,0 +1,24 @@
+.mobile-nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 10px;
+}
+
+.mobile-nav-action {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  place-items: center;
+  border: 0;
+  border-radius: var(--aw-radius);
+  background: transparent;
+  color: var(--aw-text-secondary);
+  cursor: pointer;
+}
+
+.mobile-nav-action:active {
+  background: var(--aw-bg-pressed);
+  color: var(--aw-text-primary);
+}

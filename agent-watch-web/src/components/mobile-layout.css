@@ -14,8 +14,15 @@ html[data-mobile-layout='true'] {
   overflow: hidden;
 }
 
-.agent-watch-shell[data-layout='mobile'] .agent-watch-nav {
+.agent-watch-shell[data-layout='mobile'] > .agent-watch-nav {
   display: none;
+}
+
+.agent-watch-shell[data-layout='mobile'] .mobile-nav-drawer .agent-watch-nav {
+  display: block;
+  height: 100%;
+  min-height: 100%;
+  padding: max(8px, env(safe-area-inset-top)) 8px 16px;
 }
 
 .agent-watch-shell[data-layout='mobile'] .agent-watch-main {
@@ -76,13 +83,17 @@ html[data-mobile-layout='true'] {
 
 .mobile-inbox-connection {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 6px;
   margin-left: auto;
+  overflow: hidden;
   color: var(--aw-text-muted);
   font-family: var(--font-sans);
   font-size: 12px;
   font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mobile-inbox-connection-dot {

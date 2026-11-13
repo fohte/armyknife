@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { InboxFilterBar } from '#components/inbox-filter-bar'
 import { InboxFilterDialog } from '#components/inbox-filter-dialog'
+import { MobileNavigationActions } from '#components/mobile-navigation-actions'
 import { SessionRow } from '#components/session-row'
 import { filterInboxSessions, parseInboxFilterQuery } from '#inbox-filter'
 import { renderInboxSessionSection } from '#inbox-session-section'
@@ -53,6 +54,8 @@ type InboxViewProps = {
   selectedSavedViewId?: string | null
   onSelectSavedView?: (id: string) => void
   onDeleteSavedView?: (id: string) => void
+  onOpenNavigation?: () => void
+  onOpenPalette?: () => void
 }
 
 export function InboxView({
@@ -92,6 +95,8 @@ export function InboxView({
   selectedSavedViewId = null,
   onSelectSavedView,
   onDeleteSavedView,
+  onOpenNavigation = () => undefined,
+  onOpenPalette = () => undefined,
 }: InboxViewProps) {
   const [localFilterQuery, setLocalFilterQuery] = useState('')
   const [localDialogOpen, setLocalDialogOpen] = useState(false)
@@ -186,6 +191,12 @@ export function InboxView({
           &gt;
         </span>
         <span>agent watch</span>
+        {isMobile ? (
+          <MobileNavigationActions
+            onOpenNavigation={onOpenNavigation}
+            onOpenPalette={onOpenPalette}
+          />
+        ) : null}
         <span className="mobile-inbox-connection">
           <span
             className={`mobile-inbox-connection-dot${connected ? '' : ' is-disconnected'}`}

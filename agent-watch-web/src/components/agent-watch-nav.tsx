@@ -31,6 +31,7 @@ type AgentWatchNavProps = {
   onSelectToday: (id: string) => void
   onSelectSession: (id: string) => void
   onOpenPalette: () => void
+  isMobile?: boolean
   inboxCollapsed?: boolean
   onToggleInbox?: () => void
 }
@@ -49,6 +50,7 @@ export function AgentWatchNav({
   onSelectToday,
   onSelectSession,
   onOpenPalette,
+  isMobile = false,
   inboxCollapsed = false,
   onToggleInbox = () => undefined,
 }: AgentWatchNavProps) {
@@ -60,30 +62,36 @@ export function AgentWatchNav({
         </span>
         <span className="brand-name">agent watch</span>
         <button
-          aria-label={`Jump to with ${paletteShortcut.ariaLabel}`}
+          aria-label={
+            isMobile
+              ? 'Open command palette'
+              : `Jump to with ${paletteShortcut.ariaLabel}`
+          }
           className="agent-watch-command agent-watch-command-key"
           onClick={onOpenPalette}
           type="button"
         >
           <Search aria-hidden="true" size={13} />
-          <span>{paletteShortcut.label}</span>
+          {!isMobile ? <span>{paletteShortcut.label}</span> : null}
         </button>
-        <button
-          aria-label={inboxCollapsed ? 'Show Inbox' : 'Hide Inbox'}
-          aria-pressed={inboxCollapsed}
-          className={`agent-watch-inbox-toggle${inboxCollapsed ? ' is-active' : ''}`}
-          onClick={() => {
-            onToggleInbox()
-          }}
-          title={inboxCollapsed ? 'Show Inbox' : 'Hide Inbox'}
-          type="button"
-        >
-          {inboxCollapsed ? (
-            <PanelLeftOpen aria-hidden="true" size={15} />
-          ) : (
-            <PanelLeftClose aria-hidden="true" size={15} />
-          )}
-        </button>
+        {!isMobile ? (
+          <button
+            aria-label={inboxCollapsed ? 'Show Inbox' : 'Hide Inbox'}
+            aria-pressed={inboxCollapsed}
+            className={`agent-watch-inbox-toggle${inboxCollapsed ? ' is-active' : ''}`}
+            onClick={() => {
+              onToggleInbox()
+            }}
+            title={inboxCollapsed ? 'Show Inbox' : 'Hide Inbox'}
+            type="button"
+          >
+            {inboxCollapsed ? (
+              <PanelLeftOpen aria-hidden="true" size={15} />
+            ) : (
+              <PanelLeftClose aria-hidden="true" size={15} />
+            )}
+          </button>
+        ) : null}
       </div>
       <div className="view-switch" role="group" aria-label="Views">
         <Button

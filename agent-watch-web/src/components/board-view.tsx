@@ -4,6 +4,7 @@ import { Button } from '@fohte/ui/button'
 import { useEffect, useRef, useState } from 'react'
 
 import type { BoardProject } from '#board-model'
+import { MobileNavigationActions } from '#components/mobile-navigation-actions'
 import { SessionPausedBadge } from '#components/session-paused-badge'
 import { formatLinkedTaskCount } from '#session-task-count'
 
@@ -15,6 +16,9 @@ type BoardViewProps = {
   onHideQuietProjectsChange: (checked: boolean) => void
   onSelectSession: (id: string) => void
   focusedProjectName?: string | null
+  isMobile?: boolean
+  onOpenNavigation?: () => void
+  onOpenPalette?: () => void
 }
 
 const GROUPS = [
@@ -221,6 +225,9 @@ export function BoardView({
   onHideQuietProjectsChange,
   onSelectSession,
   focusedProjectName = null,
+  isMobile = false,
+  onOpenNavigation = () => undefined,
+  onOpenPalette = () => undefined,
 }: BoardViewProps) {
   const projectsScrollRef = useRef<HTMLDivElement>(null)
   const [remainingProjects, setRemainingProjects] = useState(0)
@@ -270,6 +277,12 @@ export function BoardView({
     <section className="board-view" aria-labelledby="board-title">
       <header className="board-header">
         <div className="board-header-title">
+          {isMobile ? (
+            <MobileNavigationActions
+              onOpenNavigation={onOpenNavigation}
+              onOpenPalette={onOpenPalette}
+            />
+          ) : null}
           <h1 id="board-title">Board</h1>
           <span>Projects that need you come first</span>
         </div>
