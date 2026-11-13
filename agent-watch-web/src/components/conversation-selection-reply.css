@@ -1,0 +1,16 @@
+.conversation-selection-reply {
+  position: fixed;
+  z-index: 30;
+  padding: 3px;
+  border: 1px solid var(--aw-border);
+  border-radius: var(--aw-radius);
+  background: var(--aw-bg-popover);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 18%);
+}
+
+.conversation-selection-reply [data-slot='button'] {
+  min-height: 30px;
+  padding: 0 10px;
+  color: var(--aw-text-primary);
+  font-size: 12px;
+}

@@ -9,6 +9,7 @@ import type { Session, SkillSuggestion } from '#types'
 
 type MessageComposerProps = {
   draft: string
+  focusDraft?: string | null
   placeholder: string
   disabled: boolean
   isSending: boolean
@@ -45,6 +46,7 @@ function formatFileSize(bytes: number) {
 
 export function MessageComposer({
   draft,
+  focusDraft = null,
   placeholder,
   disabled,
   isSending,
@@ -113,8 +115,11 @@ export function MessageComposer({
       pendingCursorPosition.current = null
       textarea.focus()
       textarea.setSelectionRange(cursor, cursor)
+    } else if (focusDraft === draft) {
+      textarea.focus()
+      textarea.setSelectionRange(draft.length, draft.length)
     }
-  }, [draft])
+  }, [draft, focusDraft])
 
   const handleSubmit = (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault()

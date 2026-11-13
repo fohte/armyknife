@@ -2,7 +2,6 @@ import '#components/conversation-pane.css'
 import '#components/conversation-pane-view.css'
 
 import { Button } from '@fohte/ui/button'
-import { ChevronLeft, PanelRightClose, PanelRightOpen } from 'lucide-react'
 import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
@@ -11,22 +10,21 @@ import {
   useRef,
 } from 'react'
 
+import { ConversationPaneHeader } from '#components/conversation-pane-header'
+import { ConversationSelectionReply } from '#components/conversation-selection-reply'
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
 import { MessageComposer } from '#components/message-composer'
-import { OpenInTerminalAction } from '#components/open-in-terminal-action'
 import type {
   PendingPermissionActions,
   PermissionRequestIdentity,
 } from '#components/permission-card'
-import { SessionHeading } from '#components/session-heading'
 import { SessionLinkElapsedSecondsContext } from '#components/session-link-elapsed-seconds'
-import { SessionTaskLinks } from '#components/session-task-links'
-import { StarredSessionToggle } from '#components/starred-session-toggle'
 import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
 import { useConversationFileDrop } from '#components/use-conversation-file-drop'
 import { useConversationMessageElements } from '#components/use-conversation-message-elements'
 import { useConversationScroll } from '#components/use-conversation-scroll'
+import { useConversationSelectionReply } from '#components/use-conversation-selection-reply'
 import { useSessionLinkTargets } from '#session-link-targets'
 import type {
   BackgroundTask,
@@ -125,6 +123,12 @@ export function ConversationPaneView({
   const { draft, updateDraft, clearDraftIfUnchanged, storageAvailable } =
     useComposerDraft(session.id)
   const {
+    focusDraft,
+    position: selectionReplyPosition,
+    dismiss: dismissSelectionReply,
+    reply: replyToSelection,
+  } = useConversationSelectionReply({ draft, isMobile, updateDraft })
+  const {
     attachments,
     error: attachmentError,
     isSending,
@@ -200,10 +204,6 @@ export function ConversationPaneView({
     sessions: sessionLinkTargets,
     now,
   })
-  const parent = session.parent
-  const linkedTasks =
-    session.tasks ?? (session.task === null ? [] : [session.task])
-
   const handlePasteFiles = (files: File[]) => {
     onPasteFiles(files)
     onClearError()
@@ -268,206 +268,33 @@ export function ConversationPaneView({
           Drop files to attach
         </div>
       ) : null}
-      <header className="conversation-header">
-        {isMobile ? (
-          <>
-            <Button
-              className="mobile-conversation-back cursor-pointer"
-              type="button"
-              variant="plain"
-              aria-label="Back to Inbox"
-              onClick={onBack}
-            >
-              <ChevronLeft aria-hidden="true" size={30} strokeWidth={2.5} />
-            </Button>
-            <div className="mobile-conversation-heading">
-              <SessionHeading
-                title={session.title}
-                isPaused={session.isPaused}
-                sessionId={session.id}
-              />
-              <div className="mobile-conversation-context">
-                <SessionTaskLinks
-                  task={session.task}
-                  tasks={linkedTasks}
-                  sessions={sessions}
-                  onMakePrimary={(taskId) =>
-                    onAction('primary-task', { taskId })
-                  }
-                />
-                {session.task ? <span aria-hidden="true">·</span> : null}
-                <span>{session.repo.split('/').at(-1)}</span>
-              </div>
-            </div>
-            <Button
-              className="mobile-conversation-status-toggle"
-              type="button"
-              variant="plain"
-              aria-label={
-                statusPanelOpen
-                  ? 'Close session status panel'
-                  : 'Open session status panel'
-              }
-              aria-expanded={statusPanelOpen}
-              aria-controls="session-status-panel"
-              title={
-                statusPanelOpen
-                  ? 'Close session status panel'
-                  : 'Open session status panel'
-              }
-              onClick={() => {
-                onToggleStatusPanel()
-              }}
-            >
-              {statusPanelOpen ? (
-                <PanelRightClose aria-hidden="true" size={18} />
-              ) : (
-                <PanelRightOpen aria-hidden="true" size={18} />
-              )}
-              {backgroundTasks.length > 0 ? (
-                <span className="conversation-status-panel-count">
-                  {backgroundTasks.length}
-                </span>
-              ) : null}
-            </Button>
-            <Button
-              className="mobile-conversation-later cursor-pointer"
-              type="button"
-              variant="plain"
-              onClick={onLater}
-            >
-              Later
-            </Button>
-            {session.category === 'done' && onClose !== undefined ? (
-              <Button
-                className="mobile-conversation-close cursor-pointer"
-                type="button"
-                variant="plain"
-                onClick={onClose}
-              >
-                Close
-              </Button>
-            ) : null}
-            <StarredSessionToggle
-              className="mobile-conversation-today cursor-pointer"
-              size="mobile"
-              isStarred={isToday}
-              onToggleToday={onToggleToday}
-            />
-          </>
-        ) : (
-          <>
-            <div className="conversation-header-copy">
-              <div className="conversation-context-line">
-                <SessionTaskLinks
-                  task={session.task}
-                  tasks={linkedTasks}
-                  sessions={sessions}
-                  onMakePrimary={(taskId) =>
-                    onAction('primary-task', { taskId })
-                  }
-                />
-                <a
-                  className="conversation-repo"
-                  href={`https://github.com/${session.repo}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {session.repo}
-                </a>
-                {parent != null ? (
-                  <a
-                    className="conversation-parent"
-                    href={`#${encodeURIComponent(parent.id)}`}
-                    onClick={(event) => {
-                      event.preventDefault()
-                      onSelectSession(parent.id)
-                    }}
-                  >
-                    ↑ Parent: {parent.title ?? 'session'}
-                  </a>
-                ) : null}
-                <div className="conversation-header-actions">
-                  <Button
-                    className="conversation-status-panel-toggle"
-                    type="button"
-                    variant="plain"
-                    aria-label={
-                      statusPanelOpen
-                        ? 'Close session status panel'
-                        : 'Open session status panel'
-                    }
-                    aria-expanded={statusPanelOpen}
-                    aria-controls="session-status-panel"
-                    title={
-                      statusPanelOpen
-                        ? 'Close session status panel'
-                        : 'Open session status panel'
-                    }
-                    onClick={() => {
-                      onToggleStatusPanel()
-                    }}
-                  >
-                    {statusPanelOpen ? (
-                      <PanelRightClose aria-hidden="true" size={15} />
-                    ) : (
-                      <PanelRightOpen aria-hidden="true" size={15} />
-                    )}
-                    {backgroundTasks.length > 0 ? (
-                      <span className="conversation-status-panel-count">
-                        {backgroundTasks.length}
-                      </span>
-                    ) : null}
-                  </Button>
-                  <StarredSessionToggle
-                    className="conversation-today-toggle"
-                    size="desktop"
-                    isStarred={isToday}
-                    onToggleToday={onToggleToday}
-                  />
-                  {session.pullRequest ? (
-                    <a
-                      className="conversation-pr-link"
-                      href={`https://github.com/${session.repo}/pull/${String(session.pullRequest.number)}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      #{session.pullRequest.number} PR
-                    </a>
-                  ) : null}
-                  {session.category === 'done' && onClose !== undefined ? (
-                    <Button
-                      className="conversation-close cursor-pointer"
-                      type="button"
-                      variant="plain"
-                      onClick={onClose}
-                    >
-                      Close
-                    </Button>
-                  ) : null}
-                  {actions?.openInTerminal === true ? (
-                    <OpenInTerminalAction
-                      status={openInTerminalStatus}
-                      onClick={openInTerminal}
-                    />
-                  ) : null}
-                </div>
-              </div>
-              <SessionHeading
-                title={session.title}
-                isPaused={session.isPaused}
-                sessionId={session.id}
-              />
-            </div>
-          </>
-        )}
-      </header>
+      <ConversationPaneHeader
+        session={session}
+        sessions={sessions}
+        actions={actions}
+        isMobile={isMobile}
+        statusPanelOpen={statusPanelOpen}
+        backgroundTasks={backgroundTasks}
+        openInTerminalStatus={openInTerminalStatus}
+        isToday={isToday}
+        onAction={onAction}
+        onOpenInTerminal={openInTerminal}
+        onSelectSession={selectLinkedSession}
+        onToggleStatusPanel={onToggleStatusPanel}
+        {...(onToggleToday === undefined ? {} : { onToggleToday })}
+        {...(onBack === undefined ? {} : { onBack })}
+        {...(onLater === undefined ? {} : { onLater })}
+        {...(onClose === undefined ? {} : { onClose })}
+      />
 
       <div
         ref={conversationScrollRef}
         className="conversation-scroll"
         aria-live="polite"
-        onScroll={onScroll}
+        onScroll={() => {
+          dismissSelectionReply()
+          onScroll()
+        }}
       >
         {start > 0 ? (
           <Button
@@ -526,6 +353,7 @@ export function ConversationPaneView({
       ) : null}
       <MessageComposer
         draft={draft}
+        focusDraft={focusDraft}
         engine={session.engine}
         skills={skills}
         placeholder={
@@ -551,6 +379,10 @@ export function ConversationPaneView({
         onInterrupt={() => {
           void onAction('interrupt')
         }}
+      />
+      <ConversationSelectionReply
+        position={selectionReplyPosition}
+        onReply={replyToSelection}
       />
       {isMobile && statusPanelOpen && mobileStatusPanel !== null ? (
         <div className="mobile-session-status-overlay">{mobileStatusPanel}</div>
