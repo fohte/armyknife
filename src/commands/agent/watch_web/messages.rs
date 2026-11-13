@@ -280,11 +280,7 @@ fn load_conversation_with_queued_prompts(
     } else {
         Vec::new()
     };
-    let peer_out_messages = if session.engine == Engine::Claude {
-        (loaders.peer_out_messages)(session_id)?
-    } else {
-        Vec::new()
-    };
+    let peer_out_messages = (loaders.peer_out_messages)(session_id)?;
     let proposals = (loaders.proposals)(session_id)?;
     let proposal_items = proposals
         .iter()
@@ -394,14 +390,36 @@ fn load_conversation_with_queued_prompts(
             .iter()
             .any(|message| matches!(message, ChatItem::Permission { .. }))
     {
+        let command = main_permission_data.as_ref().and_then(|data| {
+            permission_request_command(data.tool_name.as_deref(), Some(&data.tool_input))
+        });
+        let tool = main_permission_data
+            .as_ref()
+            .and_then(|data| {
+                if data.tool_name.as_deref() == Some("Bash") {
+                    data.tool_name.clone()
+                } else {
+                    permission_request_pending_tool(data)
+                }
+            })
+            .or_else(|| session.current_tool.clone())
+            .unwrap_or_else(|| "Permission required".to_string());
+        let description = main_permission_data
+            .as_ref()
+            .map(|data| {
+                permission_request_description(
+                    data.tool_name.as_deref(),
+                    Some(&data.tool_input),
+                    command.as_deref(),
+                    "Waiting for permission",
+                )
+            })
+            .unwrap_or_else(|| "Waiting for permission".to_string());
         messages.push(ChatItem::Permission {
             request_id: main_permission_request_id.clone(),
-            tool: main_permission_data
-                .as_ref()
-                .and_then(permission_request_pending_tool)
-                .or_else(|| session.current_tool.clone())
-                .unwrap_or_else(|| "Permission required".to_string()),
-            description: "Waiting for permission".to_string(),
+            tool,
+            description,
+            command,
         });
     }
 
@@ -426,6 +444,10 @@ fn load_conversation_with_queued_prompts(
                 input_summary: permission_denied_input_summary(
                     &operation.tool_name,
                     &operation.tool_input,
+                ),
+                command: permission_request_command(
+                    Some(&operation.tool_name),
+                    Some(&operation.tool_input),
                 ),
                 reason: operation.reason.clone(),
                 retryable,
@@ -459,15 +481,29 @@ fn load_conversation_with_queued_prompts(
             }
             continue;
         }
+        let command = permission_data.as_ref().and_then(|data| {
+            permission_request_command(data.tool_name.as_deref(), Some(&data.tool_input))
+        });
+        let tool_name = permission_data
+            .as_ref()
+            .and_then(|data| data.tool_name.clone())
+            .unwrap_or_else(|| "Permission required".to_string());
+        let description = permission_data
+            .as_ref()
+            .map(|data| {
+                permission_request_description(
+                    data.tool_name.as_deref(),
+                    Some(&data.tool_input),
+                    command.as_deref(),
+                    "Waiting for permission approval.",
+                )
+            })
+            .unwrap_or_else(|| "Waiting for permission approval.".to_string());
         messages.push(ChatItem::Permission {
             request_id: Some(request_id),
-            tool: format!(
-                "Subagent {agent_id}: {}",
-                permission_data
-                    .and_then(|data| data.tool_name)
-                    .unwrap_or_else(|| "Permission required".to_string())
-            ),
-            description: "Waiting for permission approval.".to_string(),
+            tool: format!("Subagent {agent_id}: {tool_name}"),
+            description,
+            command,
         });
     }
 
@@ -483,6 +519,8 @@ fn load_conversation_with_queued_prompts(
     Ok(Some(conversation))
 }
 
+const MAX_PERMISSION_COMMAND_BYTES: usize = 16 * 1024;
+
 fn permission_request_pending_tool(data: &PermissionRequestData) -> Option<String> {
     let tool_name = data.tool_name.as_deref()?;
     let detail = permission_request_tool_detail(&data.tool_input);
@@ -490,6 +528,47 @@ fn permission_request_pending_tool(data: &PermissionRequestData) -> Option<Strin
         Some(detail) => format!("{tool_name}({detail})"),
         None => tool_name.to_string(),
     })
+}
+
+fn permission_request_command(
+    tool_name: Option<&str>,
+    tool_input: Option<&Value>,
+) -> Option<String> {
+    if tool_name != Some("Bash") {
+        return None;
+    }
+    let command = tool_input
+        .and_then(|input| input.get("command"))
+        .and_then(Value::as_str)?;
+    (command.len() <= MAX_PERMISSION_COMMAND_BYTES).then(|| command.to_string())
+}
+
+fn permission_request_command_summary(tool_input: Option<&Value>) -> Option<String> {
+    let command = tool_input
+        .and_then(|input| input.get("command"))
+        .and_then(Value::as_str)?;
+    let mut chars = command.chars();
+    let preview = chars.by_ref().take(200).collect::<String>();
+    Some(if chars.next().is_some() {
+        format!("{preview}…")
+    } else {
+        preview
+    })
+}
+
+fn permission_request_description(
+    tool_name: Option<&str>,
+    tool_input: Option<&Value>,
+    command: Option<&str>,
+    waiting_message: &str,
+) -> String {
+    if tool_name == Some("Bash")
+        && command.is_none()
+        && let Some(preview) = permission_request_command_summary(tool_input)
+    {
+        return format!("Command preview: {preview}");
+    }
+    waiting_message.to_string()
 }
 
 fn permission_denied_input_summary(tool_name: &str, input: &Value) -> String {
@@ -618,6 +697,8 @@ enum ChatItem {
         content: Vec<UserContentPart>,
         #[serde(skip_serializing_if = "Option::is_none")]
         timestamp: Option<String>,
+        #[serde(skip_serializing_if = "is_false")]
+        failed: bool,
     },
     SubagentReport {
         agent_id: String,
@@ -670,6 +751,8 @@ enum ChatItem {
         request_id: Option<String>,
         tool: String,
         description: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        command: Option<String>,
     },
     PermissionDenied {
         seq: i64,
@@ -678,6 +761,8 @@ enum ChatItem {
         tool: String,
         #[serde(rename = "inputSummary")]
         input_summary: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        command: Option<String>,
         reason: Option<String>,
         retryable: bool,
         resolved: bool,
@@ -693,6 +778,10 @@ enum ChatItem {
         #[serde(rename = "createdAt")]
         created_at: String,
     },
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 impl From<AgentDecision> for ChatItem {
@@ -811,7 +900,7 @@ mod tests {
 
     use super::cache::TranscriptChange;
     use super::{
-        ChatItem, QuestionChoice, QuestionPrompt, RouteLoaders,
+        ChatItem, MAX_PERMISSION_COMMAND_BYTES, QuestionChoice, QuestionPrompt, RouteLoaders,
         load_conversation_with_queued_prompts, load_messages_with,
         routes_with_decisions_and_queued_prompts_and_peer_out_messages,
         routes_with_proposals_and_peer_out_messages,
@@ -938,24 +1027,42 @@ mod tests {
     }
 
     #[rstest]
-    #[case::classifier_verdict(Some("[Sensitive Operation]"), true, "[Sensitive Operation]")]
+    #[case::classifier_verdict(
+        Some("[Sensitive Operation]"),
+        true,
+        Some("[Sensitive Operation]"),
+        false
+    )]
     #[case::missing_verdict(
         Some("Auto mode could not evaluate this action and is blocking it for safety."),
         false,
-        "Auto mode could not evaluate this action and is blocking it for safety."
+        Some("Auto mode could not evaluate this action and is blocking it for safety."),
+        false
     )]
+    #[case::oversized_command(None, false, None, true)]
     #[tokio::test]
     async fn messages_route_shows_permission_denial_and_retryability(
         #[case] reason: Option<&str>,
         #[case] retryable: bool,
-        #[case] expected_reason: &str,
+        #[case] expected_reason: Option<&str>,
+        #[case] oversized_command: bool,
     ) {
+        let command = if oversized_command {
+            format!("echo {}", "x".repeat(MAX_PERMISSION_COMMAND_BYTES))
+        } else {
+            indoc::indoc! {r#"
+                printf 'first line'
+                printf 'second line'
+            "#}
+            .to_string()
+        };
+        let expected_input_summary = command.chars().take(200).collect::<String>();
         let operation = PermissionDeniedOperation {
             session_id: "fixture-session".to_string(),
             seq: 1,
             tool_use_id: Some("tool-call-fixture".to_string()),
             tool_name: "Bash".to_string(),
-            tool_input: json!({ "command": "printf fixture" }),
+            tool_input: json!({ "command": command }),
             reason: reason.map(str::to_string),
             created_at: chrono::Utc::now(),
             resolved_at: None,
@@ -974,6 +1081,19 @@ mod tests {
             loaders,
         );
         let response = message_response(&router).await;
+        let mut expected_message = json!({
+            "type": "permission_denied",
+            "seq": 1,
+            "toolUseId": "tool-call-fixture",
+            "tool": "Bash",
+            "inputSummary": expected_input_summary,
+            "reason": expected_reason,
+            "retryable": retryable,
+            "resolved": false,
+        });
+        if !oversized_command {
+            expected_message["command"] = json!(command);
+        }
 
         assert_eq!(
             response,
@@ -981,16 +1101,7 @@ mod tests {
                 StatusCode::OK,
                 Some("application/json".to_string()),
                 json!({
-                    "messages": [{
-                        "type": "permission_denied",
-                        "seq": 1,
-                        "toolUseId": "tool-call-fixture",
-                        "tool": "Bash",
-                        "inputSummary": "printf fixture",
-                        "reason": expected_reason,
-                        "retryable": retryable,
-                        "resolved": false,
-                    }],
+                    "messages": [expected_message],
                     "backgroundTasks": [],
                     "start": 0,
                     "total": 1,
@@ -2104,7 +2215,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claude_message_route_places_decisions_by_time_for_combined_add_and_peer_commands() {
+    async fn claude_message_route_keeps_combined_tools_and_places_database_peer_messages() {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("transcript.jsonl");
         let transcript = indoc::indoc! {r#"
@@ -2142,6 +2253,7 @@ mod tests {
                     to_session_id: "fixture-target-id".to_string(),
                     content: "Expanded fixture body.".to_string(),
                     sent_at,
+                    failed: false,
                 }])
             },
             |_, _| Ok(()),
@@ -2188,10 +2300,19 @@ mod tests {
                             }],
                             "timestamp": "2026-06-01T12:00:03+00:00",
                         },
+                        {
+                            "type": "tool_summary",
+                            "summary": "Bash ×1",
+                            "operations": [{
+                                "tool": "Bash",
+                                "target": "a agent decision add 'Choose the fixture path' && a agent peer notify -m \"Requested fixture body.\" fixture-target-id",
+                                "failed": false,
+                            }],
+                        },
                     ],
                     "backgroundTasks": [],
                     "start": 0,
-                    "total": 2,
+                    "total": 3,
                     "decisions": [{
                         "type": "decision",
                         "seq": 5,
@@ -2371,6 +2492,7 @@ mod tests {
                 request_id: Some("permission-request-main".to_string()),
                 tool: "Bash(cargo test -p sample)".to_string(),
                 description: "Waiting for permission".to_string(),
+                command: None,
             }])
         );
     }
@@ -2382,6 +2504,7 @@ mod tests {
                 request_id: Some("permission-request-example".to_string()),
                 tool: "Bash".to_string(),
                 description: "Waiting for permission".to_string(),
+                command: Some("cargo test -p sample".to_string()),
             })
             .unwrap(),
             json!({
@@ -2389,6 +2512,7 @@ mod tests {
                 "requestId": "permission-request-example",
                 "tool": "Bash",
                 "description": "Waiting for permission",
+                "command": "cargo test -p sample",
             }),
         );
     }
@@ -2503,13 +2627,31 @@ mod tests {
                     request_id: Some("permission-request-subagent".to_string()),
                     tool: "Subagent fixture-agent-id: Permission required".to_string(),
                     description: "Waiting for permission approval.".to_string(),
+                    command: None,
                 },
             ])
         );
     }
 
+    #[rstest]
+    #[case::within_highlight_limit(false)]
+    #[case::oversized_command(true)]
     #[test]
-    fn pending_permission_cards_target_each_agent_and_omit_question_requests() {
+    fn pending_permission_cards_target_each_agent_and_omit_question_requests(
+        #[case] oversized_command: bool,
+    ) {
+        let command = if oversized_command {
+            format!("echo {}", "x".repeat(MAX_PERMISSION_COMMAND_BYTES))
+        } else {
+            "printf 'preview'\ngit status --short".to_string()
+        };
+        let expected_command = (!oversized_command).then(|| command.clone());
+        let expected_description = if oversized_command {
+            let preview = command.chars().take(200).collect::<String>();
+            format!("Command preview: {preview}…")
+        } else {
+            "Waiting for permission".to_string()
+        };
         let mut session = stored_session();
         session.pending_permission_agent_ids = BTreeSet::from([
             "agent-fixture-a".to_string(),
@@ -2538,15 +2680,26 @@ mod tests {
             |_, _| Ok(()),
             |_| Ok(Vec::new()),
         )
-        .with_permission_request_data_loader(|_, request_id| {
-            let tool_name = match request_id {
-                "permission-request-a" => "Write",
-                "permission-request-question" => "AskUserQuestion",
+        .with_permission_request_data_loader(move |_, request_id| {
+            let (tool_name, tool_input) = match request_id {
+                "permission-request-main" => ("Bash", json!({ "command": command.clone() })),
+                "permission-request-a" => ("Write", json!({})),
+                "permission-request-question" => (
+                    "AskUserQuestion",
+                    json!({
+                        "questions": [{
+                            "header": "Summary",
+                            "question": "Should the summary be brief?",
+                            "options": [{ "label": "Yes" }, { "label": "No" }],
+                            "multiSelect": true,
+                        }],
+                    }),
+                ),
                 _ => return Ok(None),
             };
             Ok(Some(PermissionRequestData {
                 tool_name: Some(tool_name.to_string()),
-                tool_input: json!({}),
+                tool_input,
                 pending: true,
             }))
         });
@@ -2566,13 +2719,25 @@ mod tests {
             vec![
                 ChatItem::Permission {
                     request_id: Some("permission-request-main".to_string()),
-                    tool: "Bash(example command)".to_string(),
-                    description: "Waiting for permission".to_string(),
+                    tool: "Bash".to_string(),
+                    description: expected_description,
+                    command: expected_command,
                 },
                 ChatItem::Permission {
                     request_id: Some("permission-request-a".to_string()),
                     tool: "Subagent agent-fixture-a: Write".to_string(),
                     description: "Waiting for permission approval.".to_string(),
+                    command: None,
+                },
+                ChatItem::Question {
+                    request_id: Some("permission-request-question".to_string()),
+                    questions: vec![QuestionPrompt {
+                        header: Some("Summary".to_string()),
+                        question: "Should the summary be brief?".to_string(),
+                        choices: vec![question_choice("Yes"), question_choice("No")],
+                        multi_select: true,
+                        answer: None,
+                    }],
                 },
             ],
         );
@@ -2777,34 +2942,21 @@ mod tests {
     }
 
     #[rstest]
-    #[case::recorded_body(
-        "2026-06-01T12:00:01Z",
-        "Expanded fictional request body.",
-        "2026-06-01T12:00:01+00:00"
-    )]
-    #[case::outside_delivery_window(
-        "2026-06-01T11:59:59Z",
-        "$(cat /fixture/message.txt)",
-        "2026-06-01T12:00:02+00:00"
-    )]
+    #[case::delivered(false)]
+    #[case::delivery_failed(true)]
     #[tokio::test]
-    async fn peer_out_route_uses_recorded_content_only_when_delivery_time_matches(
-        #[case] sent_at: &str,
-        #[case] expected_content: &str,
-        #[case] expected_timestamp: &str,
-    ) {
+    async fn peer_out_route_renders_the_database_delivery_result(#[case] failed: bool) {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("transcript.jsonl");
-        let transcript = concat!(
-            r#"{"type":"assistant","timestamp":"2026-06-01T12:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-peer-notify-call","name":"Bash","input":{"command":"a agent peer notify -m \"$(cat /fixture/message.txt)\" fixture-target-id"}}]}}"#,
-            "\n",
-            r#"{"type":"user","timestamp":"2026-06-01T12:00:02Z","sourceToolAssistantUUID":"fixture-assistant-call","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-peer-notify-call","content":"delivered"}]}}"#,
-        );
+        let transcript = indoc::indoc! {r#"
+            {"type":"assistant","timestamp":"2026-06-01T12:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-peer-notify-call","name":"Bash","input":{"command":"cargo check --example sample && a agent peer notify -m 'Synthetic request.' fixture-target-id"}}]}}
+            {"type":"user","timestamp":"2026-06-01T12:00:02Z","sourceToolAssistantUUID":"fixture-assistant-call","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-peer-notify-call","content":"0 failed"}]}}
+        "#};
         std::fs::write(&transcript_path, transcript).unwrap();
 
         let mut session = stored_session();
         session.transcript_path = Some(transcript_path);
-        let sent_at = chrono::DateTime::parse_from_rfc3339(sent_at)
+        let sent_at = chrono::DateTime::parse_from_rfc3339("2026-06-01T12:00:01Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
         let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
@@ -2820,6 +2972,7 @@ mod tests {
                         to_session_id: "fixture-target-id".to_string(),
                         content: "Expanded fictional request body.".to_string(),
                         sent_at,
+                        failed,
                     }]
                 } else {
                     Vec::new()
@@ -2838,6 +2991,17 @@ mod tests {
             .unwrap();
 
         let (status, content_type, body) = response_snapshot(response).await;
+        let mut expected_message = json!({
+            "type": "peer",
+            "direction": "to",
+            "session_id": "fixture-target-id",
+            "content": [{"type": "text", "text": "Expanded fictional request body."}],
+            "timestamp": "2026-06-01T12:00:01+00:00",
+        });
+        if failed {
+            expected_message["failed"] = json!(true);
+        }
+
         assert_eq!(
             (
                 status,
@@ -2848,16 +3012,98 @@ mod tests {
                 StatusCode::OK,
                 Some("application/json".to_string()),
                 json!({
-                    "messages": [{
-                        "type": "peer",
-                        "direction": "to",
-                        "session_id": "fixture-target-id",
-                        "content": [{"type": "text", "text": expected_content}],
-                        "timestamp": expected_timestamp,
-                    }],
+                    "messages": [
+                        expected_message,
+                        {
+                            "type": "tool_summary",
+                            "summary": "Bash ×1",
+                            "operations": [{
+                                "tool": "Bash",
+                                "target": "cargo check --example sample && a agent peer notify -m 'Synthetic request.' fixture-target-id",
+                                "failed": false,
+                            }],
+                        },
+                    ],
                     "backgroundTasks": [],
                     "start": 0,
-                    "total": 1,
+                    "total": 2,
+                    "decisions": [],
+                    "hasUnansweredProposal": false,
+                    "activeQuestionIndex": null,
+                }),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn codex_message_route_places_database_peer_out_by_send_time() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        let transcript = indoc::indoc! {r#"
+            {"timestamp":"2026-06-01T12:00:00Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Before delivery."}]}}
+            {"timestamp":"2026-06-01T12:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"After delivery."}]}}
+        "#};
+        std::fs::write(&transcript_path, transcript).unwrap();
+
+        let mut session = stored_session();
+        session.engine = Engine::Codex;
+        session.transcript_path = Some(transcript_path);
+        let sent_at = chrono::DateTime::parse_from_rfc3339("2026-06-01T12:00:01Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            move |_| {
+                Ok(vec![WatchWebPeerOutMessage {
+                    id: 1,
+                    from_session_id: "fixture-session".to_string(),
+                    to_session_id: "fixture-target-id".to_string(),
+                    content: "The fictional request was not delivered.".to_string(),
+                    sent_at,
+                    failed: true,
+                }])
+            },
+            |_, _| Ok(()),
+        );
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (status, content_type, body) = response_snapshot(response).await;
+
+        assert_eq!(
+            (
+                status,
+                content_type,
+                serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            ),
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                json!({
+                    "messages": [
+                        {"type": "assistant", "text": "Before delivery."},
+                        {
+                            "type": "peer",
+                            "direction": "to",
+                            "session_id": "fixture-target-id",
+                            "content": [{"type": "text", "text": "The fictional request was not delivered."}],
+                            "timestamp": "2026-06-01T12:00:01+00:00",
+                            "failed": true,
+                        },
+                        {"type": "assistant", "text": "After delivery."},
+                    ],
+                    "backgroundTasks": [],
+                    "start": 0,
+                    "total": 3,
                     "decisions": [],
                     "hasUnansweredProposal": false,
                     "activeQuestionIndex": null,

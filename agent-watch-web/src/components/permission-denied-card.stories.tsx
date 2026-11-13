@@ -8,7 +8,9 @@ const deniedOperation: ChatItem = {
   seq: 1,
   toolUseId: 'tool-call-example',
   tool: 'Bash',
-  inputSummary: 'cargo test --workspace',
+  inputSummary: 'A shell command was denied.',
+  command: `printf '%s\\n' 'Checking preview'
+git status --short`,
   reason: '[Sensitive Operation]',
   retryable: true,
   resolved: false,

@@ -436,7 +436,12 @@ export const IPhoneReviewHeaderOffersStatusPanel: Story = {
       ...session,
       category: 'needs_action',
       kind: 'Review',
-      critUrl: 'http://127.0.0.1:5000/review/sample',
+      webUis: [
+        {
+          name: 'Design editor',
+          url: 'http://127.0.0.1:5000/design/sample/',
+        },
+      ],
     },
     messages: [
       {

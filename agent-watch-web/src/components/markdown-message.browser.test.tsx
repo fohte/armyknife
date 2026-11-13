@@ -43,6 +43,8 @@ function getMarkdownLayoutSnapshot() {
   const paragraphLineCount = new Set(
     Array.from(range.getClientRects(), (rect) => Math.round(rect.top)),
   ).size
+  const hasHighlightedCode =
+    message.querySelector('.syntax-code-block code span[style]') !== null
 
   return [
     getComputedStyle(message).whiteSpace,
@@ -50,6 +52,7 @@ function getMarkdownLayoutSnapshot() {
     paragraphLineCount,
     blocks.map((block) => block.tagName),
     blockGaps,
+    hasHighlightedCode,
   ]
 }
 
@@ -96,7 +99,7 @@ function getTaggedMarkdownSnapshot() {
   }
 }
 
-it('preserves paragraph line breaks without adding blank space between blocks', () => {
+it('preserves paragraph line breaks without adding blank space between blocks', async () => {
   root = createRoot(container)
   act(() => {
     root?.render(
@@ -113,9 +116,14 @@ Second line
 | 1 | 100 ms |
 
 ~~~rust
-let attempts = 3;
+const maxPreviewItems = 7;
 ~~~`}</MarkdownMessage>,
     )
+  })
+
+  await act(async () => {
+    const { highlightCode } = await import('./syntax-highlighter')
+    await highlightCode('const maxPreviewItems = 7;', 'rust')
   })
 
   expect(getMarkdownLayoutSnapshot()).toEqual([
@@ -124,6 +132,7 @@ let attempts = 3;
     2,
     ['H2', 'P', 'UL', 'TABLE', 'PRE'],
     [12, 12, 12, 12],
+    true,
   ])
 })
 
@@ -229,6 +238,9 @@ it('shows distinct markers for nested unordered and ordered lists', () => {
 it('links known session IDs in messages and code while leaving unknown IDs plain', async () => {
   const linkedId = '11111111-1111-4111-8111-111111111111'
   const unknownId = '22222222-2222-4222-8222-222222222222'
+  const fencedCode = `let sessionId = "${linkedId}";
+let unknownId = "${unknownId}";
+`
   const linkedSession: Session = {
     id: linkedId,
     category: 'in_progress',
@@ -257,22 +269,32 @@ it('links known session IDs in messages and code while leaving unknown IDs plain
 
 Use \`${linkedId}\` to open it.
 
-~~~text
-${linkedId}
-${unknownId}
-~~~`}
+~~~rust
+${fencedCode}~~~`}
       </MarkdownMessage>,
     )
   })
 
-  const links = Array.from(container.querySelectorAll('a'))
-  const firstLink = links[0]
-  if (firstLink === undefined) throw new Error('Expected a session link')
-  await userEvent.click(firstLink)
+  await act(async () => {
+    const { highlightCode } = await import('./syntax-highlighter')
+    await highlightCode(fencedCode, 'rust')
+  })
+
+  const paragraphLink = container.querySelector('p a')
+  const codeLink = container.querySelector('.syntax-code-block a')
+  if (paragraphLink === null || codeLink === null) {
+    throw new Error(
+      'Expected session links to render in prose and highlighted code',
+    )
+  }
+  await userEvent.click(paragraphLink)
+  await userEvent.click(codeLink)
 
   const getActual = () => ({
     text: container.textContent,
-    links: links.map((link) => ({
+    highlightedCode:
+      container.querySelector('.syntax-code-block code span[style]') !== null,
+    links: Array.from(container.querySelectorAll('a'), (link) => ({
       text: link.textContent,
       title: link.title,
       underlineStyle: getComputedStyle(link).textDecorationStyle,
@@ -283,7 +305,8 @@ ${unknownId}
     selectedIds: onSelectSession.mock.calls.map(([id]) => id),
   })
   const expected = {
-    text: `The session ${linkedId} is active, while ${unknownId} is unknown.\nUse ${linkedId} to open it.\n${linkedId}\n${unknownId}\n`,
+    text: `The session ${linkedId} is active, while ${unknownId} is unknown.\nUse ${linkedId} to open it.\nlet sessionId = "${linkedId}";\nlet unknownId = "${unknownId}";\n`,
+    highlightedCode: true,
     links: [
       {
         text: linkedId,
@@ -310,7 +333,7 @@ ${unknownId}
         insidePre: true,
       },
     ],
-    selectedIds: [linkedId],
+    selectedIds: [linkedId, linkedId],
   }
   expect(getActual()).toEqual(expected)
 })

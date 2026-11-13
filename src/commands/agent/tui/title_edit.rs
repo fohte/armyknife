@@ -5,7 +5,7 @@
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use crate::commands::agent::{store, window_status};
+use crate::commands::agent::session_title;
 
 use super::app::{App, AppMode};
 use super::event::KeyEvent;
@@ -54,32 +54,12 @@ impl App {
             _ => return Ok(()),
         };
 
-        let trimmed = self.edit_title_query.trim();
-        let label = if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        };
-
-        store::update_session_label(&session_id, label.clone())?;
+        let label = session_title::set_session_title(&session_id, &self.edit_title_query)?;
 
         self.set_session_label(&session_id, label);
-        self.sync_tmux_window_title(&session_id);
         self.mode = AppMode::Normal;
 
         Ok(())
-    }
-
-    /// Best-effort push of the tmux window title option after a label
-    /// change. Silently does nothing without a live tmux pane (session ran
-    /// outside tmux, or its pane has since died) or if the sessions
-    /// directory cannot be resolved -- this step is not allowed to fail the
-    /// confirm.
-    fn sync_tmux_window_title(&self, session_id: &str) {
-        let Some(session) = self.sessions.iter().find(|s| s.session_id == session_id) else {
-            return;
-        };
-        window_status::sync_window_title_for_session(session);
     }
 }
 
@@ -128,6 +108,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::commands::agent::store;
     use crate::commands::agent::types::{Engine, Session, SessionStatus};
 
     fn create_test_session(id: &str) -> Session {
@@ -141,6 +122,7 @@ mod tests {
             launched_with_vibe: false,
             child_launch: Default::default(),
             crit_urls: Vec::new(),
+            web_uis: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/tmp/test"),
             transcript_path: None,

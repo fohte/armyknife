@@ -23,7 +23,7 @@ use crate::commands::agent::tq_session_tasks::SessionTask as LinkedSessionTask;
 use crate::commands::agent::tui::progress_fetch::{
     PullRequestListCache, PullRequestListResponse, fetch_pull_request_list,
 };
-use crate::commands::agent::types::{Engine, Session, SessionStatus};
+use crate::commands::agent::types::{Engine, Session, SessionStatus, WebUiRegistration};
 use crate::commands::agent::user_turn::{UserTurnKind, user_turns};
 use crate::infra::github::{PrInfo, PrState};
 use crate::shared::config::{self, AgentConfig};
@@ -112,6 +112,8 @@ struct SessionView {
     ancestor_session_ids: Vec<String>,
     pull_request: Option<PullRequestView>,
     crit_url: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    web_uis: Vec<WebUiRegistration>,
     later_until: Option<DateTime<Utc>>,
     is_today: bool,
     is_compacting: bool,
@@ -470,6 +472,22 @@ async fn list_sessions<S: SessionSource>(
                     now,
                 )
             };
+            let crit_url =
+                if turn_kinds.get(session.session_id.as_str()) == Some(&UserTurnKind::Crit) {
+                    session.crit_urls.last().cloned()
+                } else {
+                    None
+                };
+            let web_uis = session
+                .web_uis
+                .iter()
+                .filter(|web_ui| web_ui.name != "crit" && crit_url.as_ref() != Some(&web_ui.url))
+                .cloned()
+                .chain(crit_url.as_ref().map(|url| WebUiRegistration {
+                    name: "crit".to_owned(),
+                    url: url.clone(),
+                }))
+                .collect();
             SessionView {
                 id: session.session_id.clone(),
                 engine: session.engine,
@@ -532,13 +550,8 @@ async fn list_sessions<S: SessionSource>(
                 has_session_tree: tree_related_session_ids.contains(&session.session_id),
                 ancestor_session_ids: session.ancestor_session_ids.clone(),
                 pull_request,
-                crit_url: if turn_kinds.get(session.session_id.as_str())
-                    == Some(&UserTurnKind::Crit)
-                {
-                    session.crit_urls.last().cloned()
-                } else {
-                    None
-                },
+                crit_url,
+                web_uis,
                 later_until: state.and_then(|state| state.later_until),
                 is_today: state.is_some_and(|state| state.is_today),
                 is_compacting: state.is_some_and(|state| state.is_compacting),
@@ -671,6 +684,7 @@ mod tests {
             archived_at: None,
             pr_context: None,
             crit_urls: Vec::new(),
+            web_uis: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/workspace/project"),
             transcript_path: None,
@@ -1421,6 +1435,10 @@ mod tests {
         source.web_states[0].is_today = false;
         source.sessions[0].status = SessionStatus::WaitingInput;
         source.sessions[0].crit_urls = vec!["http://127.0.0.1:6000".to_string()];
+        source.sessions[0].web_uis = vec![WebUiRegistration {
+            name: "Editor".to_owned(),
+            url: "http://127.0.0.1:6001/design/sample/".to_owned(),
+        }];
         let review_document_dir = tempfile::TempDir::new().unwrap();
         let review_document_path = review_document_dir.path().join("fixture-draft.md");
         std::fs::write(&review_document_path, "fixture").unwrap();
@@ -1455,6 +1473,16 @@ mod tests {
                 can_open_in_terminal: true,
             },
         );
+        expected["sessions"][0]["webUis"] = serde_json::json!([
+            {
+                "name": "Editor",
+                "url": "http://127.0.0.1:6001/design/sample/"
+            },
+            {
+                "name": "crit",
+                "url": "http://127.0.0.1:6000"
+            }
+        ]);
         expected["sessions"][0]["reviewDocumentId"] = serde_json::json!("fixture-review");
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));

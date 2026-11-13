@@ -25,6 +25,7 @@ const DEFAULT_THREAD_STARTED_TIMEOUT: Duration = Duration::from_secs(600);
 mod archive;
 mod delivery;
 mod history;
+mod interrupt;
 mod launch_lock;
 mod rpc;
 pub(crate) mod status_inference;
@@ -36,6 +37,7 @@ use rpc::{
 };
 
 pub(crate) use archive::archive_thread;
+pub(crate) use interrupt::interrupt_turn;
 pub use launch_lock::{acquire_launch_lock, acquire_launch_lock_with_timeout};
 
 pub type Result<T> = std::result::Result<T, DeliveryError>;

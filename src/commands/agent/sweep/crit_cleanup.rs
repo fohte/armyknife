@@ -23,6 +23,7 @@ fn clear_stale_links_with_port_probe(
             session
                 .crit_urls
                 .iter()
+                .chain(session.web_uis.iter().map(|web_ui| &web_ui.url))
                 .any(|url| local_crit_address(url).is_some())
         })
         .collect::<Vec<_>>();
@@ -31,7 +32,12 @@ fn clear_stale_links_with_port_probe(
     }
     let live_ports = candidates
         .iter()
-        .flat_map(|session| session.crit_urls.iter())
+        .flat_map(|session| {
+            session
+                .crit_urls
+                .iter()
+                .chain(session.web_uis.iter().map(|web_ui| &web_ui.url))
+        })
         .filter_map(|url| local_crit_address(url))
         .collect::<HashSet<_>>()
         .into_iter()
@@ -43,6 +49,7 @@ fn clear_stale_links_with_port_probe(
         let stale_count = listed_session
             .crit_urls
             .iter()
+            .chain(listed_session.web_uis.iter().map(|web_ui| &web_ui.url))
             .filter(|url| is_stale_local_crit_url(url, &live_ports))
             .count();
         if stale_count == 0 {
@@ -65,7 +72,12 @@ fn clear_stale_links_with_port_probe(
             session
                 .crit_urls
                 .retain(|url| !is_stale_local_crit_url(url, &live_ports));
-            removed = previous_len - session.crit_urls.len();
+            let previous_web_ui_len = session.web_uis.len();
+            session
+                .web_uis
+                .retain(|web_ui| !is_stale_local_crit_url(&web_ui.url, &live_ports));
+            removed = previous_len - session.crit_urls.len() + previous_web_ui_len
+                - session.web_uis.len();
             removed > 0
         })?;
         cleared += removed;
@@ -111,7 +123,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::super::super::store;
-    use super::super::super::types::{Session, SessionStatus};
+    use super::super::super::types::{Session, SessionStatus, WebUiRegistration};
     use super::*;
 
     fn session(crit_urls: &[&str]) -> Session {
@@ -121,6 +133,7 @@ mod tests {
             pr_context: None,
             session_id: "fixture-session".to_string(),
             crit_urls: crit_urls.iter().map(|url| (*url).to_string()).collect(),
+            web_uis: Vec::new(),
             pending_human_review_ids: BTreeSet::new(),
             cwd: PathBuf::from("/tmp/fixture-worktree"),
             transcript_path: None,
@@ -218,6 +231,38 @@ mod tests {
                 load_session(dir.path(), &before.session_id).crit_urls,
             ),
             (0, before.crit_urls),
+        );
+    }
+
+    #[test]
+    fn clears_stale_web_ui_links_and_preserves_live_ones() {
+        let mut before = session(&[]);
+        before.web_uis = vec![
+            WebUiRegistration {
+                name: "Editor".to_owned(),
+                url: "http://localhost:42501/design/sample/".to_owned(),
+            },
+            WebUiRegistration {
+                name: "Preview".to_owned(),
+                url: "http://127.0.0.1:42502/preview/".to_owned(),
+            },
+        ];
+        let dir = sessions_dir(&before);
+
+        let actual = clear_stale_links_with_port_probe(dir.path(), false, |endpoint| {
+            endpoint.port() == 42502
+        })
+        .expect("web UI cleanup pass should succeed");
+
+        assert_eq!(
+            (actual, load_session(dir.path(), &before.session_id).web_uis,),
+            (
+                1,
+                vec![WebUiRegistration {
+                    name: "Preview".to_owned(),
+                    url: "http://127.0.0.1:42502/preview/".to_owned(),
+                }],
+            ),
         );
     }
 

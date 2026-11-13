@@ -2889,6 +2889,48 @@ it('interrupts the session on Escape', () => {
   expect(actual).toBe(expected)
 })
 
+it('sends one interrupt while its request is pending', async () => {
+  let finishInterrupt: (succeeded: boolean) => void = () => undefined
+  const pendingInterrupt = new Promise<boolean>((resolve) => {
+    finishInterrupt = resolve
+  })
+  const onAction = vi.fn(() => pendingInterrupt)
+  renderView(onAction, session, undefined, [], actions, true)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  dispatchKeyInAct(textarea, 'Escape')
+  dispatchKeyInAct(textarea, 'Escape')
+  const button = requireElement(
+    container.querySelector<HTMLButtonElement>('.mobile-interrupt-button'),
+  )
+  act(() => {
+    button.click()
+  })
+  const during = {
+    actions: onAction.mock.calls,
+    interruptDisabled: button.disabled,
+  }
+
+  await act(async () => {
+    finishInterrupt(true)
+    await pendingInterrupt
+  })
+
+  const snapshot = () => ({
+    during,
+    after: {
+      actions: onAction.mock.calls,
+      interruptDisabled: button.disabled,
+    },
+  })
+  const expected = {
+    during: { actions: [['interrupt']], interruptDisabled: true },
+    after: { actions: [['interrupt']], interruptDisabled: false },
+  }
+  expect(snapshot()).toEqual(expected)
+})
+
 it('does not use question shortcuts while typing', () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction)
@@ -3167,7 +3209,7 @@ it('shows peer images and supports keyboard navigation', () => {
     items: [
       {
         className: 'chat-peer-message chat-peer-message-to',
-        text: 'TOBuild verificationPlease check the fictional output.画像はもうありません',
+        text: 'TOSENTBuild verificationPlease check the fictional output.画像はもうありません',
         imageSources: [],
         unavailableImageText: '画像はもうありません',
         fileNames: [],
@@ -4299,7 +4341,7 @@ it('shows the unreviewed count instead of the total on the Decisions tab', () =>
   })
 })
 
-it('prefers crit when other status tabs are available', () => {
+it('opens a registered web UI when other status tabs are available', () => {
   const decision: ChatItem = {
     type: 'decision',
     seq: 1,
@@ -4323,7 +4365,12 @@ it('prefers crit when other status tabs are available', () => {
         ...session,
         category: 'needs_action',
         kind: 'Review',
-        critUrl: 'http://127.0.0.1:5000/review/sample',
+        webUis: [
+          {
+            name: 'Design editor',
+            url: 'http://127.0.0.1:5000/design/sample/',
+          },
+        ],
         decisionCount: 1,
         unreviewedDecisionCount: 1,
       },
@@ -4353,16 +4400,18 @@ it('prefers crit when other status tabs are available', () => {
     })),
     selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
       ?.textContent,
-    critPane: container.querySelector('.crit-pane') !== null,
+    webUiPane: container.querySelector('.web-ui-pane') !== null,
+    iframe: container.querySelector('iframe')?.getAttribute('src'),
   })
   expect(snapshot()).toEqual({
     tabs: [
       { label: 'Running1', selected: 'false' },
       { label: 'Decisions1', selected: 'false' },
-      { label: 'crit', selected: 'true' },
+      { label: 'Design editor', selected: 'true' },
     ],
-    selectedTab: 'crit',
-    critPane: true,
+    selectedTab: 'Design editor',
+    webUiPane: true,
+    iframe: `${window.location.protocol}//localhost:4318/_web-ui/5000/design/sample/`,
   })
 })
 

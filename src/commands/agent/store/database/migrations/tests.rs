@@ -46,6 +46,16 @@ fn adds_permission_request_mailbox_to_version_nine_database() {
             [],
         )
         .expect("version nine decision row should be inserted");
+    connection
+        .execute(
+            "INSERT INTO watch_web_peer_out_message (
+                from_session_id, to_session_id, content, sent_at
+            ) VALUES (
+                'fixture-sender', 'fixture-target', 'A fictional peer message.', '2026-01-01T00:00:00Z'
+            )",
+            [],
+        )
+        .expect("version nine peer message should be inserted");
     drop(connection);
 
     let connection = super::super::open_connection(temp_dir.path())
@@ -62,6 +72,8 @@ fn adds_permission_request_mailbox_to_version_nine_database() {
                 EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'permission_request_decision_session_agent'),
                 EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'permission_request_decision_delete_session'),
                 EXISTS(SELECT 1 FROM pragma_table_info('permission_request_decision') WHERE name = 'answers' AND [notnull] = 0),
+                EXISTS(SELECT 1 FROM pragma_table_info('watch_web_peer_out_message') WHERE name = 'failed' AND [notnull] = 1),
+                (SELECT failed FROM watch_web_peer_out_message WHERE from_session_id = 'fixture-sender'),
                 (SELECT title || ':' || why FROM agent_decision LIMIT 1)
                 "
             },
@@ -76,6 +88,8 @@ fn adds_permission_request_mailbox_to_version_nine_database() {
                     row.get(5)?,
                     row.get(6)?,
                     row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
                 ))
             },
         )
@@ -96,6 +110,8 @@ fn adds_permission_request_mailbox_to_version_nine_database() {
                 true,
                 true,
                 true,
+                true,
+                Some(0_i64),
                 Some("sample choice:sample reason".to_string())
             ),
             current_version(),
