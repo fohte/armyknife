@@ -1,0 +1,23 @@
+<!-- @dsCard group="Conversation" height=250 width=390 subtitle="static rendition" -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Composer</title>
+</head>
+<body>
+<div class="aw-stack">
+  <span class="aw-note">idle</span>
+  <form class="aw-composer">
+    <textarea rows="1" aria-label="Message" placeholder="Message session"></textarea>
+    <button class="aw-composer__send" type="submit" aria-label="Send message"><svg class="aw-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg></button>
+  </form>
+  <span class="aw-note">working, can interrupt</span>
+  <form class="aw-composer" data-interrupt="true">
+    <textarea rows="1" aria-label="Message" placeholder="Message PR 512"></textarea>
+    <button class="aw-composer__interrupt" type="button" aria-label="Interrupt"><svg class="aw-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg></button>
+    <button class="aw-composer__send" type="submit" aria-label="Send message"><svg class="aw-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg></button>
+  </form>
+</div>
+</body>
+</html>

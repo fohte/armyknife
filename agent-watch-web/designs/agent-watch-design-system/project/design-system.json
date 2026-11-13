@@ -1,0 +1,19 @@
+{
+  "v": 3,
+  "layout": "files",
+  "createdOnFiles": { "v": 1, "at": "2026-11-13T11:33:28Z" },
+  "title": "agent watch",
+  "namespace": "AgentWatch",
+  "libraries": [],
+  "sections": {},
+  "groups": [],
+  "assetGroups": {},
+  "blobs": {},
+  "docs": { "readme": "project/README.md", "sections": [] },
+  "lastChange": {
+    "by": "fohte",
+    "at": "2026-11-13T11:33:28Z",
+    "via": "GitHub · fohte/armyknife@b91f248",
+    "note": "First sync from agent-watch-web: tokens, type, five static component renditions, cover."
+  }
+}

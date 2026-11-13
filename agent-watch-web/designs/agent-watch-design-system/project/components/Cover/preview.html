@@ -1,0 +1,94 @@
+<!-- @dsCard height=288 -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>agent watch</title>
+<style>
+  html, body { margin:0; height:100%; }
+  body { background:var(--aw-bg-app); color:var(--aw-text-primary); font-family:var(--font-sans); overflow:hidden; }
+  .cover { position:relative; height:288px; overflow:hidden; }
+  .art { position:absolute; top:0; left:480px; width:480px; height:288px; overflow:hidden; }
+  .art svg { display:block; width:496px; height:288px; }
+  .warn { fill:var(--aw-color-warning); }
+  .work { fill:var(--aw-color-working); }
+  .brand { fill:var(--aw-color-brand); }
+  .deep { fill:var(--aw-bg-active); }
+  .cut { fill:var(--aw-bg-app); }
+  .blk, .dot { rx:var(--aw-radius); }
+  .words { position:absolute; left:var(--space-24); bottom:var(--space-24); max-width:440px; }
+  .name { margin:0; font-family:var(--font-mono); font-size:104px; line-height:.95; font-weight:700; color:var(--aw-text-primary); }
+  .tag { margin:var(--space-8) 0 0; font-size:14px; line-height:20px; color:var(--aw-text-muted); }
+</style>
+</head>
+<body>
+<div class="cover">
+<div class="art" aria-hidden="true">
+<svg viewBox="0 0 496 288" width="496" height="288">
+<!--
+  blocks      aw-color-warning 144×216 (waiting on you, the largest) · aw-color-working 96×144 · aw-color-brand 48×48 (the > mark, kept small) · aw-bg-active 224×264 bleeding off the right edge — ≈37% of 960×288
+  arrangement flush columns hung from the top edge like the board's project columns, space-16 gutters
+  pattern     dot grid, from "Status dots are 7px squares": 48 StatusDot-sized squares at a space-24 pitch cut into aw-bg-active, a few in aw-color-warning and aw-color-working like an inbox at a glance
+  scales      sides in space-24 multiples; gutters space-16; pitch space-24; corners aw-radius (square); dots 7px
+-->
+<rect class="warn blk" x="0" y="0" width="144" height="216"/>
+<rect class="work blk" x="160" y="0" width="96" height="144"/>
+<rect class="brand blk" x="160" y="160" width="48" height="48"/>
+<rect class="deep blk" x="272" y="0" width="224" height="264"/>
+<rect class="warn dot" x="296" y="120" width="7" height="7"/>
+<rect class="cut dot" x="320" y="120" width="7" height="7"/>
+<rect class="cut dot" x="344" y="120" width="7" height="7"/>
+<rect class="work dot" x="368" y="120" width="7" height="7"/>
+<rect class="cut dot" x="392" y="120" width="7" height="7"/>
+<rect class="cut dot" x="416" y="120" width="7" height="7"/>
+<rect class="cut dot" x="440" y="120" width="7" height="7"/>
+<rect class="cut dot" x="464" y="120" width="7" height="7"/>
+<rect class="cut dot" x="296" y="144" width="7" height="7"/>
+<rect class="cut dot" x="320" y="144" width="7" height="7"/>
+<rect class="cut dot" x="344" y="144" width="7" height="7"/>
+<rect class="cut dot" x="368" y="144" width="7" height="7"/>
+<rect class="cut dot" x="392" y="144" width="7" height="7"/>
+<rect class="cut dot" x="416" y="144" width="7" height="7"/>
+<rect class="warn dot" x="440" y="144" width="7" height="7"/>
+<rect class="cut dot" x="464" y="144" width="7" height="7"/>
+<rect class="cut dot" x="296" y="168" width="7" height="7"/>
+<rect class="cut dot" x="320" y="168" width="7" height="7"/>
+<rect class="warn dot" x="344" y="168" width="7" height="7"/>
+<rect class="cut dot" x="368" y="168" width="7" height="7"/>
+<rect class="cut dot" x="392" y="168" width="7" height="7"/>
+<rect class="cut dot" x="416" y="168" width="7" height="7"/>
+<rect class="cut dot" x="440" y="168" width="7" height="7"/>
+<rect class="cut dot" x="464" y="168" width="7" height="7"/>
+<rect class="work dot" x="296" y="192" width="7" height="7"/>
+<rect class="cut dot" x="320" y="192" width="7" height="7"/>
+<rect class="cut dot" x="344" y="192" width="7" height="7"/>
+<rect class="cut dot" x="368" y="192" width="7" height="7"/>
+<rect class="cut dot" x="392" y="192" width="7" height="7"/>
+<rect class="work dot" x="416" y="192" width="7" height="7"/>
+<rect class="cut dot" x="440" y="192" width="7" height="7"/>
+<rect class="cut dot" x="464" y="192" width="7" height="7"/>
+<rect class="cut dot" x="296" y="216" width="7" height="7"/>
+<rect class="warn dot" x="320" y="216" width="7" height="7"/>
+<rect class="cut dot" x="344" y="216" width="7" height="7"/>
+<rect class="cut dot" x="368" y="216" width="7" height="7"/>
+<rect class="cut dot" x="392" y="216" width="7" height="7"/>
+<rect class="cut dot" x="416" y="216" width="7" height="7"/>
+<rect class="cut dot" x="440" y="216" width="7" height="7"/>
+<rect class="work dot" x="464" y="216" width="7" height="7"/>
+<rect class="cut dot" x="296" y="240" width="7" height="7"/>
+<rect class="cut dot" x="320" y="240" width="7" height="7"/>
+<rect class="cut dot" x="344" y="240" width="7" height="7"/>
+<rect class="cut dot" x="368" y="240" width="7" height="7"/>
+<rect class="warn dot" x="392" y="240" width="7" height="7"/>
+<rect class="cut dot" x="416" y="240" width="7" height="7"/>
+<rect class="cut dot" x="440" y="240" width="7" height="7"/>
+<rect class="cut dot" x="464" y="240" width="7" height="7"/>
+</svg>
+</div>
+<div class="words">
+<h1 class="name">agent<br>watch</h1>
+<p class="tag">Watch coding-agent sessions; answer the ones waiting on you.</p>
+</div>
+</div>
+</body>
+</html>

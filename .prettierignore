@@ -16,3 +16,7 @@ pnpm-lock.yaml
 # not auto-synced with the msw devDependency version — regenerate with
 # `npx msw init <spa-pkg>/public --save` after bumping msw.
 mockServiceWorker.js
+
+# The baoyu-design editors save these files with their own formatting, so
+# prettier would rewrite every save made in the editor.
+agent-watch-web/designs/
