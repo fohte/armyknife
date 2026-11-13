@@ -22,7 +22,7 @@ type RunOptions = {
   refresh?: (result: unknown) => Promise<void>
 }
 
-export type PendingSessionOperation = {
+type PendingSessionOperation = {
   id: number
   operation: SessionOperation
   status: 'sending' | 'sent'
