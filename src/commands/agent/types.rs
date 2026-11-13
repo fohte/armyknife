@@ -217,13 +217,18 @@ pub struct HookInput {
     #[serde(default)]
     pub notification_type: Option<String>,
 
-    // Pre-tool-use / Post-tool-use / PermissionRequest event fields
+    // Tool event fields
     #[serde(default)]
     pub tool_name: Option<String>,
     #[serde(default)]
     pub tool_input: Option<ToolInput>,
     #[serde(default)]
     pub tool_response: Option<serde_json::Value>,
+
+    #[serde(default)]
+    pub tool_use_id: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
 
     /// Identifies which agent fired this hook event. Present only when the
     /// event fires inside a subagent (per
@@ -383,6 +388,7 @@ pub enum HookEvent {
     PreToolUse,
     PostToolUse,
     PermissionRequest,
+    PermissionDenied,
     Notification,
     Stop,
     StopFailure,
@@ -399,6 +405,7 @@ impl HookEvent {
             "pre-tool-use" => Ok(Self::PreToolUse),
             "post-tool-use" => Ok(Self::PostToolUse),
             "permission-request" => Ok(Self::PermissionRequest),
+            "permission-denied" => Ok(Self::PermissionDenied),
             "notification" => Ok(Self::Notification),
             "stop" => Ok(Self::Stop),
             "stop-failure" => Ok(Self::StopFailure),

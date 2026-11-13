@@ -23,10 +23,10 @@ pub(crate) use archive::{ArchiveLogContext, archive_codex_thread_before_delete_w
 pub(crate) use database::AgentTodo;
 pub(crate) use database::set_watch_web_compacting;
 pub(crate) use database::{
-    AgentDecision, AgentDecisionCounts, AgentProposal, PermissionRequestData,
-    PermissionRequestDecision, PermissionRequestResolution, PermissionRequestWait,
-    PermissionRequestWaiter, SessionLock, SessionStoreChanges, WakeLock, WatchWebPeerOutMessage,
-    WatchWebQueuedPrompt, WatchWebSessionState, permission_request_data,
+    AgentDecision, AgentDecisionCounts, AgentProposal, PermissionDeniedOperation,
+    PermissionRequestData, PermissionRequestDecision, PermissionRequestResolution,
+    PermissionRequestWait, PermissionRequestWaiter, SessionLock, SessionStoreChanges, WakeLock,
+    WatchWebPeerOutMessage, WatchWebQueuedPrompt, WatchWebSessionState, permission_request_data,
     resolve_permission_request, resolve_permission_request_with_answers, serialize_session,
 };
 pub(crate) use peer_out_messages::{
@@ -404,6 +404,39 @@ pub(crate) fn session_store_revision() -> Result<i64> {
 
 pub(crate) fn session_store_revision_from(sessions_dir: &Path) -> Result<i64> {
     database::session_store_revision(sessions_dir)
+}
+
+pub(crate) fn add_permission_denied_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    tool_use_id: Option<&str>,
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+    reason: Option<&str>,
+) -> Result<i64> {
+    database::add_permission_denied(
+        sessions_dir,
+        session_id,
+        tool_use_id,
+        tool_name,
+        tool_input,
+        reason,
+    )
+}
+
+pub(crate) fn permission_denied_operations_from(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<Vec<PermissionDeniedOperation>> {
+    database::permission_denied_operations(sessions_dir, session_id)
+}
+
+pub(crate) fn resolve_permission_denied_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+) -> Result<bool> {
+    database::resolve_permission_denied(sessions_dir, session_id, seq)
 }
 
 pub(crate) fn add_agent_proposal_in(

@@ -22,6 +22,8 @@ mod decisions;
 mod keyed_mutex_registry;
 mod merge_pull_request;
 mod messages;
+mod permission_denied;
+mod permission_denied_locks;
 mod proposal_answer_locks;
 mod proposals;
 mod runtime;
@@ -29,6 +31,7 @@ mod todo_completion_locks;
 mod todos;
 
 pub(super) use api_error::ApiError;
+use permission_denied_locks::PermissionDeniedRetryLocks;
 use proposal_answer_locks::ProposalAnswerLocks;
 use runtime::LiveActionRuntime;
 use todo_completion_locks::TodoCompletionLocks;
@@ -39,6 +42,7 @@ pub(super) fn router(message_loaders: RouteLoaders) -> Router {
         attachment_dir: None,
         runtime: Arc::new(LiveActionRuntime),
         proposal_answer_locks: ProposalAnswerLocks::default(),
+        permission_denied_retry_locks: PermissionDeniedRetryLocks::default(),
         todo_completion_locks: TodoCompletionLocks::default(),
         message_loaders,
     })
@@ -63,6 +67,10 @@ fn router_with_state(state: ActionState) -> Router {
         .route(
             "/sessions/{id}/proposals/{seq}/answer",
             post(proposals::answer_proposal),
+        )
+        .route(
+            "/sessions/{id}/permission-denials/{seq}/retry",
+            post(permission_denied::retry_permission_denied),
         )
         .route(
             "/sessions/{id}/todos/{seq}/complete",
@@ -97,6 +105,7 @@ struct ActionState {
     message_loaders: RouteLoaders,
     // Delivery precedes persistence, so repeated answers for one proposal must serialize.
     proposal_answer_locks: ProposalAnswerLocks,
+    permission_denied_retry_locks: PermissionDeniedRetryLocks,
     todo_completion_locks: TodoCompletionLocks,
 }
 
@@ -441,6 +450,9 @@ mod tests {
     #[path = "proposals.rs"]
     mod proposals;
 
+    #[path = "permission_denied.rs"]
+    mod permission_denied;
+
     #[path = "todos.rs"]
     mod todos;
 
@@ -626,6 +638,22 @@ mod tests {
             self.router_with_loaders_and_proposal_answer_locks(empty_message_loaders())
         }
 
+        fn router_with_permission_denied_retry_locks(
+            &self,
+        ) -> (Router, PermissionDeniedRetryLocks) {
+            let permission_denied_retry_locks = PermissionDeniedRetryLocks::default();
+            let router = router_with_state(ActionState {
+                sessions_dir: Some(self.temp_dir.path().join("sessions")),
+                attachment_dir: Some(self.temp_dir.path().join("attachments")),
+                runtime: self.runtime.clone(),
+                proposal_answer_locks: ProposalAnswerLocks::default(),
+                permission_denied_retry_locks: permission_denied_retry_locks.clone(),
+                todo_completion_locks: TodoCompletionLocks::default(),
+                message_loaders: empty_message_loaders(),
+            });
+            (router, permission_denied_retry_locks)
+        }
+
         fn router_with_loaders_and_proposal_answer_locks(
             &self,
             message_loaders: super::super::messages::RouteLoaders,
@@ -636,6 +664,7 @@ mod tests {
                 attachment_dir: Some(self.temp_dir.path().join("attachments")),
                 runtime: self.runtime.clone(),
                 proposal_answer_locks: proposal_answer_locks.clone(),
+                permission_denied_retry_locks: PermissionDeniedRetryLocks::default(),
                 todo_completion_locks: TodoCompletionLocks::default(),
                 message_loaders,
             });

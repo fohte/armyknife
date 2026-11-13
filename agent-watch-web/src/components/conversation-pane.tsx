@@ -399,7 +399,10 @@ export function ConversationPane({
           ? 'approve'
           : action === 'permission/reject'
             ? 'reject'
-            : null
+            : action.startsWith('permission-denials/') &&
+                action.endsWith('/retry')
+              ? 'retry'
+              : null
       if (permissionAction !== null && permissionIdentity !== undefined) {
         setPendingPermissionActions((pending) => ({
           ...pending,

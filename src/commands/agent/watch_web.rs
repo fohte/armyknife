@@ -179,6 +179,9 @@ fn app(restart_signal: watch::Receiver<bool>) -> Router {
         .with_todo_loader(store::agent_todos)
         .with_permission_request_data_loader(|session_id, request_id| {
             store::permission_request_data(&store::sessions_dir()?, session_id, request_id)
+        })
+        .with_permission_denied_loader(|session_id| {
+            store::permission_denied_operations_from(&store::sessions_dir()?, session_id)
         }),
         restart_signal,
     )

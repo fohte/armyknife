@@ -19,8 +19,8 @@ use serde_json::Value;
 
 use crate::commands::agent::proposal::{ProposalAnswer, ProposalOption};
 use crate::commands::agent::store::{
-    AgentDecision, AgentProposal, AgentTodo, PermissionRequestData, WatchWebPeerOutMessage,
-    WatchWebQueuedPrompt,
+    AgentDecision, AgentProposal, AgentTodo, PermissionDeniedOperation, PermissionRequestData,
+    WatchWebPeerOutMessage, WatchWebQueuedPrompt,
 };
 use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 use crate::commands::agent::user_turn::is_ask_user_question;
@@ -72,6 +72,8 @@ type ProposalLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentProposal>> + Send + Sy
 type TodoLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentTodo>> + Send + Sync>;
 type PermissionRequestDataLoader =
     Arc<dyn Fn(&str, &str) -> Result<Option<PermissionRequestData>> + Send + Sync>;
+type PermissionDeniedLoader =
+    Arc<dyn Fn(&str) -> Result<Vec<PermissionDeniedOperation>> + Send + Sync>;
 
 #[derive(Clone)]
 pub(super) struct RouteLoaders {
@@ -82,6 +84,7 @@ pub(super) struct RouteLoaders {
     proposals: ProposalLoader,
     todos: TodoLoader,
     permission_request_data: PermissionRequestDataLoader,
+    permission_denials: PermissionDeniedLoader,
     message_cache: MessageCache,
     running_background_task_cache: RunningBackgroundTaskCache,
 }
@@ -105,6 +108,7 @@ impl RouteLoaders {
             proposals: Arc::new(load_proposals),
             todos: Arc::new(|_| Ok(Vec::new())),
             permission_request_data: Arc::new(|_, _| Ok(None)),
+            permission_denials: Arc::new(|_| Ok(Vec::new())),
             message_cache: MessageCache::default(),
             running_background_task_cache: RunningBackgroundTaskCache::default(),
         }
@@ -126,6 +130,17 @@ impl RouteLoaders {
         + 'static,
     ) -> Self {
         self.permission_request_data = Arc::new(load_permission_request_data);
+        self
+    }
+
+    pub(super) fn with_permission_denied_loader(
+        mut self,
+        load_permission_denials: impl Fn(&str) -> Result<Vec<PermissionDeniedOperation>>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.permission_denials = Arc::new(load_permission_denials);
         self
     }
 
@@ -276,6 +291,7 @@ fn load_conversation_with_queued_prompts(
         .map(proposal_chat_item)
         .collect::<Result<Vec<_>>>()?;
     let todos = (loaders.todos)(session_id)?;
+    let permission_denials = (loaders.permission_denials)(session_id)?;
     let parent = parent_session(&session, &mut load_session)?;
     let main_permission_pending = session
         .pending_permission_agent_ids
@@ -312,6 +328,7 @@ fn load_conversation_with_queued_prompts(
         MessageCacheRecords {
             proposals: proposals.clone(),
             todos: todos.clone(),
+            permission_denials: permission_denials.clone(),
         },
     )?;
     if let Some(mut cached) = loaders.message_cache.get(session_id, &cache_key)? {
@@ -397,6 +414,26 @@ fn load_conversation_with_queued_prompts(
         }
     }
 
+    for operation in permission_denials {
+        if !messages.iter().any(|message| {
+            matches!(message, ChatItem::PermissionDenied { seq, .. } if *seq == operation.seq)
+        }) {
+            let retryable = operation.has_classifier_verdict();
+            messages.push(ChatItem::PermissionDenied {
+                seq: operation.seq,
+                tool_use_id: operation.tool_use_id,
+                tool: operation.tool_name.clone(),
+                input_summary: permission_denied_input_summary(
+                    &operation.tool_name,
+                    &operation.tool_input,
+                ),
+                reason: operation.reason.clone(),
+                retryable,
+                resolved: operation.resolved_at.is_some(),
+            });
+        }
+    }
+
     for agent_id in session
         .pending_permission_agent_ids
         .iter()
@@ -453,6 +490,19 @@ fn permission_request_pending_tool(data: &PermissionRequestData) -> Option<Strin
         Some(detail) => format!("{tool_name}({detail})"),
         None => tool_name.to_string(),
     })
+}
+
+fn permission_denied_input_summary(tool_name: &str, input: &Value) -> String {
+    let detail = match tool_name {
+        "Bash" => input.get("command"),
+        "Read" | "Write" | "Edit" | "NotebookEdit" => input.get("file_path"),
+        "Grep" | "Glob" => input.get("pattern"),
+        _ => None,
+    }
+    .and_then(Value::as_str)
+    .map(str::to_string)
+    .unwrap_or_else(|| serde_json::to_string(input).unwrap_or_else(|_| "{}".to_string()));
+    detail.chars().take(200).collect()
 }
 
 fn permission_request_tool_detail(tool_input: &Value) -> Option<&str> {
@@ -621,6 +671,17 @@ enum ChatItem {
         tool: String,
         description: String,
     },
+    PermissionDenied {
+        seq: i64,
+        #[serde(rename = "toolUseId", skip_serializing_if = "Option::is_none")]
+        tool_use_id: Option<String>,
+        tool: String,
+        #[serde(rename = "inputSummary")]
+        input_summary: String,
+        reason: Option<String>,
+        retryable: bool,
+        resolved: bool,
+    },
     Decision {
         seq: i64,
         title: String,
@@ -756,8 +817,8 @@ mod tests {
         routes_with_proposals_and_peer_out_messages,
     };
     use crate::commands::agent::store::{
-        AgentDecision, AgentProposal, AgentTodo, PermissionRequestData, WatchWebPeerOutMessage,
-        WatchWebQueuedPrompt,
+        AgentDecision, AgentProposal, AgentTodo, PermissionDeniedOperation, PermissionRequestData,
+        WatchWebPeerOutMessage, WatchWebQueuedPrompt,
     };
     use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 
@@ -872,6 +933,71 @@ mod tests {
                     Some("application/json".to_string()),
                     json!({"messages":[{"type":"assistant","text":"Other response."}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
                 ),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::classifier_verdict(Some("[Sensitive Operation]"), true, "[Sensitive Operation]")]
+    #[case::missing_verdict(
+        Some("Auto mode could not evaluate this action and is blocking it for safety."),
+        false,
+        "Auto mode could not evaluate this action and is blocking it for safety."
+    )]
+    #[tokio::test]
+    async fn messages_route_shows_permission_denial_and_retryability(
+        #[case] reason: Option<&str>,
+        #[case] retryable: bool,
+        #[case] expected_reason: &str,
+    ) {
+        let operation = PermissionDeniedOperation {
+            session_id: "fixture-session".to_string(),
+            seq: 1,
+            tool_use_id: Some("tool-call-fixture".to_string()),
+            tool_name: "Bash".to_string(),
+            tool_input: json!({ "command": "printf fixture" }),
+            reason: reason.map(str::to_string),
+            created_at: chrono::Utc::now(),
+            resolved_at: None,
+        };
+        let loaders = RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
+        .with_permission_denied_loader(move |_| Ok(vec![operation.clone()]));
+        let router = routes_with_proposals_and_peer_out_messages(
+            |id| Ok((id == "fixture-session").then(stored_session)),
+            |_| Ok(None),
+            loaders,
+        );
+        let response = message_response(&router).await;
+
+        assert_eq!(
+            response,
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                json!({
+                    "messages": [{
+                        "type": "permission_denied",
+                        "seq": 1,
+                        "toolUseId": "tool-call-fixture",
+                        "tool": "Bash",
+                        "inputSummary": "printf fixture",
+                        "reason": expected_reason,
+                        "retryable": retryable,
+                        "resolved": false,
+                    }],
+                    "backgroundTasks": [],
+                    "start": 0,
+                    "total": 1,
+                    "decisions": [],
+                    "hasUnansweredProposal": false,
+                    "activeQuestionIndex": null,
+                }),
             ),
         );
     }

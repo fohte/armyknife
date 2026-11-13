@@ -883,7 +883,8 @@ fn process_hook_event_impl_with_settings(
     if !keep_paused && !keep_failed_after_idle_prompt {
         if let Some(status) = status {
             session.status = status;
-        } else if was_waiting_for_input
+        } else if event != HookEvent::PermissionDenied
+            && was_waiting_for_input
             && had_pending_permission_requests
             && !session.has_pending_permission_requests()
         {
@@ -971,6 +972,22 @@ fn process_hook_event_impl_with_settings(
     }
     session_lock.save(&session)?;
     drop(session_lock);
+
+    if event == HookEvent::PermissionDenied && input.engine == Engine::Claude {
+        let tool_input = input
+            .tool_input
+            .as_ref()
+            .map(|tool_input| tool_input.raw.clone())
+            .unwrap_or_else(|| serde_json::json!({}));
+        store::add_permission_denied_from(
+            sessions_dir,
+            &session.session_id,
+            input.tool_use_id.as_deref(),
+            input.tool_name.as_deref().unwrap_or("Unknown tool"),
+            &tool_input,
+            input.reason.as_deref(),
+        )?;
+    }
 
     if session.engine == Engine::Claude && input.agent_id.is_none() {
         let compacting = match event {
@@ -1484,6 +1501,7 @@ fn determine_status(event: HookEvent, input: &HookInput) -> Option<SessionStatus
         | HookEvent::PreToolUse
         | HookEvent::PostToolUse
         | HookEvent::SessionEnd => Some(SessionStatus::Running),
+        HookEvent::PermissionDenied => None,
         HookEvent::PreCompact => None,
     };
 
@@ -2009,6 +2027,7 @@ mod tests {
         None,
         Some(SessionStatus::WaitingInput)
     )]
+    #[case::permission_denied(HookEvent::PermissionDenied, None, None, None)]
     #[case::stop(HookEvent::Stop, None, None, Some(SessionStatus::Stopped))]
     #[case::stop_failure(HookEvent::StopFailure, None, None, Some(SessionStatus::Failed))]
     #[case::notification_unknown(HookEvent::Notification, Some("info"), None, None)]
@@ -2175,6 +2194,7 @@ mod tests {
     #[case::pre_tool_use("pre-tool-use", HookEvent::PreToolUse)]
     #[case::post_tool_use("post-tool-use", HookEvent::PostToolUse)]
     #[case::permission_request("permission-request", HookEvent::PermissionRequest)]
+    #[case::permission_denied("permission-denied", HookEvent::PermissionDenied)]
     #[case::notification("notification", HookEvent::Notification)]
     #[case::stop("stop", HookEvent::Stop)]
     #[case::stop_failure("stop-failure", HookEvent::StopFailure)]
@@ -2182,6 +2202,78 @@ mod tests {
     #[case::session_end("session-end", HookEvent::SessionEnd)]
     fn test_hook_event_parsing(#[case] event: &str, #[case] expected: HookEvent) {
         assert_eq!(HookEvent::from_str(event).expect("valid event"), expected);
+    }
+
+    #[test]
+    fn permission_denied_records_operation_without_changing_session_status() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+        save_test_session(sessions_dir, "denied-session", |session| {
+            session.status = SessionStatus::WaitingInput;
+            session
+                .pending_permission_agent_ids
+                .insert(MAIN_THREAD_AGENT_KEY.to_string());
+            session.pending_permission_request_ids.insert(
+                MAIN_THREAD_AGENT_KEY.to_string(),
+                "pending-request-fixture".to_string(),
+            );
+        });
+        let input = serde_json::from_value(serde_json::json!({
+            "session_id": "denied-session",
+            "cwd": "/tmp/test",
+            "tool_name": "Bash",
+            "tool_input": { "command": "printf fixture" },
+            "tool_use_id": "tool-call-fixture",
+            "reason": "[Sensitive Operation]",
+        }))
+        .expect("PermissionDenied input should deserialize");
+
+        let result = process_hook_event_impl(
+            HookEvent::PermissionDenied,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("PermissionDenied hook should succeed");
+        let session = store::load_session_from(sessions_dir, "denied-session")
+            .expect("session should load")
+            .expect("session should exist");
+        let denied = store::permission_denied_operations_from(sessions_dir, "denied-session")
+            .expect("denied operation should load");
+
+        assert_eq!(
+            (
+                result,
+                session.status,
+                session.pending_permission_agent_ids,
+                session.pending_permission_request_ids,
+                denied
+                    .into_iter()
+                    .map(|operation| (
+                        operation.seq,
+                        operation.tool_use_id,
+                        operation.tool_name,
+                        operation.tool_input,
+                        operation.reason,
+                        operation.resolved_at.is_some(),
+                    ))
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                ProcessResult::SessionSaved,
+                SessionStatus::WaitingInput,
+                BTreeSet::new(),
+                std::collections::BTreeMap::new(),
+                vec![(
+                    1,
+                    Some("tool-call-fixture".to_string()),
+                    "Bash".to_string(),
+                    serde_json::json!({ "command": "printf fixture" }),
+                    Some("[Sensitive Operation]".to_string()),
+                    false,
+                )],
+            ),
+        );
     }
 
     #[rstest]
