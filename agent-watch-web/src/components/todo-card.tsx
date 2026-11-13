@@ -6,51 +6,67 @@ import { useEffect, useId, useState } from 'react'
 type TodoCardProps = {
   title: string
   detail: string | null
-  completed: boolean
+  resolution: 'completed' | 'rejected' | 'withdrawn' | null
   defaultComment?: string
-  onComplete: (comment: string | null) => Promise<boolean>
+  onResolve: (
+    resolution: 'completed' | 'rejected',
+    comment: string | null,
+  ) => Promise<boolean>
 }
 
 export function TodoCard({
   title,
   detail,
-  completed,
+  resolution,
   defaultComment = '',
-  onComplete,
+  onResolve,
 }: TodoCardProps) {
   const commentId = useId()
   const [comment, setComment] = useState(defaultComment)
-  const [completedLocally, setCompletedLocally] = useState(false)
+  const [resolutionLocally, setResolutionLocally] = useState<
+    'completed' | 'rejected' | null
+  >(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const isCompleted = completed || completedLocally
+  const currentResolution = resolution ?? resolutionLocally
+  const isResolved = currentResolution !== null
 
   useEffect(() => {
-    if (completed) setComment(defaultComment)
-  }, [completed, defaultComment])
+    if (resolution !== null) setComment(defaultComment)
+  }, [resolution, defaultComment])
 
-  const completeTodo = () => {
-    if (isCompleted || isSubmitting) return
+  const resolveTodo = (nextResolution: 'completed' | 'rejected') => {
+    if (isResolved || isSubmitting) return
     const normalizedComment = comment.trim()
     setIsSubmitting(true)
-    void onComplete(normalizedComment === '' ? null : normalizedComment)
+    void onResolve(
+      nextResolution,
+      normalizedComment === '' ? null : normalizedComment,
+    )
       .then((succeeded) => {
-        if (succeeded) setCompletedLocally(true)
+        if (succeeded) setResolutionLocally(nextResolution)
       })
       .finally(() => {
         setIsSubmitting(false)
       })
   }
 
-  if (isCompleted) {
-    const completionComment = completed ? defaultComment : comment.trim()
+  if (isResolved) {
+    const completionComment =
+      resolution !== null ? defaultComment : comment.trim()
+    const labels = {
+      completed: ['done', 'Completed user task'],
+      rejected: ['rejected', 'Rejected user task'],
+      withdrawn: ['withdrawn', 'Withdrawn user task'],
+    } as const
+    const [status, ariaLabel] = labels[currentResolution]
 
     return (
       <article
         className="chat-todo-card"
-        aria-label="Completed user task"
-        data-completed="true"
+        aria-label={ariaLabel}
+        data-resolution={currentResolution}
       >
-        <h2>To-do · done</h2>
+        <h2>To-do · {status}</h2>
         <h3>{title}</h3>
         {completionComment !== '' ? (
           <p className="chat-todo-completed-comment">{completionComment}</p>
@@ -64,6 +80,7 @@ export function TodoCard({
       className="chat-todo-card"
       aria-label="User task"
       aria-busy={isSubmitting}
+      data-resolution="pending"
     >
       <h2>To-do · pending</h2>
       <h3>{title}</h3>
@@ -87,9 +104,22 @@ export function TodoCard({
           variant="plain"
           className="aw-button aw-button--primary"
           disabled={isSubmitting}
-          onClick={completeTodo}
+          onClick={() => {
+            resolveTodo('completed')
+          }}
         >
           Mark done
+        </Button>
+        <Button
+          type="button"
+          variant="plain"
+          className="aw-button chat-todo-reject"
+          disabled={isSubmitting}
+          onClick={() => {
+            resolveTodo('rejected')
+          }}
+        >
+          Reject
         </Button>
       </footer>
     </article>

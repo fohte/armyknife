@@ -3496,18 +3496,20 @@ it('posts a proposal answer to its sequence route and refreshes the conversation
   })
 })
 
-it('posts a todo completion to its sequence route with the comment', async () => {
+it('posts a todo rejection to its resolution route with the comment', async () => {
   const todo: ChatItem = {
     type: 'todo',
     seq: 4,
     title: 'Check the page on a phone',
     detail: 'Confirm the action remains visible.',
     completed: false,
+    resolution: null,
     comment: null,
   }
-  const completedTodo: ChatItem = {
+  const rejectedTodo: ChatItem = {
     ...todo,
     completed: true,
+    resolution: 'rejected',
     comment: 'The page is readable.',
   }
   const requests: Array<{
@@ -3529,7 +3531,7 @@ it('posts a todo completion to its sequence route with the comment', async () =>
       method === 'POST'
         ? new Response(null, { status: 204 })
         : url.split('?')[0]?.endsWith('/messages') === true
-          ? jsonResponse(messagesResponse([completed ? completedTodo : todo]))
+          ? jsonResponse(messagesResponse([completed ? rejectedTodo : todo]))
           : jsonResponse(actions),
     )
   })
@@ -3559,9 +3561,9 @@ it('posts a todo completion to its sequence route with the comment', async () =>
   )
   act(() => {
     requireElement(
-      container.querySelector<HTMLButtonElement>(
-        '.chat-todo-footer .aw-button--primary',
-      ),
+      container
+        .querySelectorAll<HTMLButtonElement>('.chat-todo-footer button')
+        .item(1),
     ).click()
   })
   expect(
@@ -3575,9 +3577,9 @@ it('posts a todo completion to its sequence route with the comment', async () =>
 
   expect(requests.filter((request) => request.method === 'POST')).toEqual([
     {
-      url: '/api/sessions/sample-session/todos/4/complete',
+      url: '/api/sessions/sample-session/todos/4/resolve',
       method: 'POST',
-      body: '{"comment":"The page is readable."}',
+      body: '{"resolution":"rejected","comment":"The page is readable."}',
     },
   ])
 })
@@ -8146,6 +8148,7 @@ it('keeps a todo comment when a preceding conversation row arrives', () => {
     title: 'Review the deployment plan',
     detail: null,
     completed: false,
+    resolution: null,
     comment: null,
   }
   renderConversationMessages([todo], 0)
