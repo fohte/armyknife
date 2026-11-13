@@ -6,8 +6,16 @@ import type { ChatItem, SessionActions } from '#types'
 const permission: ChatItem = {
   type: 'permission',
   requestId: 'permission-request-example',
-  tool: 'Shell',
-  description: 'Run the formatter on changed files.',
+  tool: 'Bash',
+  description: '',
+  command: `set -euo pipefail
+printf '%s\\n' 'Preparing preview'
+git add ./sample-config.yml && git commit -m "$(cat <<'EOF'
+chore: refresh sample config
+
+intent(sample): keep local settings in sync
+EOF
+)"`,
 }
 
 const actions: SessionActions = {
@@ -40,6 +48,18 @@ type Story = StoryObj<typeof meta>
 
 export const WaitingForDecision: Story = {
   name: 'A permission request offers approval and rejection',
+}
+
+export const FileReadShowsDescription: Story = {
+  name: 'A file-read request shows its description',
+  args: {
+    message: {
+      type: 'permission',
+      requestId: 'permission-request-read-example',
+      tool: 'Read',
+      description: 'The assistant wants to inspect a sample file.',
+    },
+  },
 }
 
 export const ApprovalIsSending: Story = {

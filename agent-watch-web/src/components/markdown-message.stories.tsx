@@ -25,7 +25,7 @@ Use \`retry()\` with the [request guide](https://example.com/guide).
 | 2 | 200 ms |
 
 ~~~rust
-let attempts = 3;
+const maxPreviewItems = 7;
 ~~~`,
   },
   decorators: [
