@@ -2,7 +2,7 @@
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
   padding: 16px;
   color: var(--aw-text-body);
   font-size: 12px;
@@ -20,6 +20,130 @@
   color: var(--aw-text-primary);
   font-size: 12px;
   font-weight: 600;
+}
+
+.review-document-body-heading,
+.review-document-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.review-document-body-heading {
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.review-document-body-heading h2 {
+  margin: 0;
+  color: var(--aw-text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.review-document-body-columns {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.review-document-edit-column,
+.review-document-preview-column {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--aw-border-row);
+  border-radius: 8px;
+  background: var(--aw-bg-surface);
+}
+
+.review-document-editor .cm-editor {
+  height: min(56vh, 560px);
+  min-height: 240px;
+  max-height: 560px;
+  color: var(--aw-text-body);
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.review-document-editor .cm-scroller {
+  height: 100%;
+  overflow: auto;
+}
+
+.review-document-editor .cm-content {
+  padding: 12px;
+  caret-color: var(--aw-text-primary);
+}
+
+.review-document-editor .cm-line {
+  overflow-wrap: anywhere;
+}
+
+.review-document-editor .cm-focused {
+  outline: 2px solid var(--aw-border-control);
+  outline-offset: -2px;
+}
+
+.review-document-preview-column {
+  max-height: 56vh;
+  overflow: auto;
+  padding: 12px;
+}
+
+.review-document-view-toggle {
+  display: flex;
+  gap: 4px;
+}
+
+.review-document-view-toggle button,
+.review-document-actions button {
+  min-height: 36px;
+  border: 1px solid var(--aw-border-control);
+  border-radius: 6px;
+  padding: 0 10px;
+  color: var(--aw-text-body);
+  background: var(--aw-bg-surface);
+  font: inherit;
+}
+
+.review-document-view-toggle button[aria-pressed='true'] {
+  border-color: var(--aw-color-working);
+  color: var(--aw-text-primary);
+}
+
+.review-document-actions {
+  flex-wrap: wrap;
+  padding-top: 12px;
+  border-top: 1px solid var(--aw-border-row);
+}
+
+.review-document-actions button {
+  margin-left: auto;
+}
+
+.review-document-actions button + button {
+  margin-left: 0;
+}
+
+.review-document-actions button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.review-document-actions .review-document-finish {
+  border-color: var(--aw-color-working);
+  color: var(--aw-text-primary);
+}
+
+.review-document-status {
+  color: var(--aw-text-secondary);
+}
+
+.review-document-error {
+  flex-basis: 100%;
+  color: var(--aw-color-error);
 }
 
 .review-document-fields {
@@ -50,6 +174,29 @@
   margin: 0;
 }
 
+.review-document-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--aw-border-control);
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: var(--aw-text-body);
+  background: var(--aw-bg-surface);
+  font: inherit;
+}
+
+.review-document-checkbox {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--aw-color-working);
+}
+
+.review-document-field-value {
+  display: flex;
+  align-items: center;
+}
+
 .review-document-field-group {
   grid-template-columns: 1fr;
   gap: 6px;
@@ -67,33 +214,6 @@
   padding-left: 10px;
 }
 
-.review-document-string {
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
-.review-document-number,
-.review-document-null {
-  color: var(--aw-text-secondary);
-  font-family: var(--font-mono);
-}
-
-.review-document-boolean {
-  display: inline-grid;
-  width: 18px;
-  height: 18px;
-  place-items: center;
-  border: 1px solid var(--aw-border-control);
-  border-radius: 4px;
-  color: var(--aw-text-secondary);
-  font-size: 11px;
-  line-height: 1;
-}
-
-.review-document-boolean[data-checked='true'] {
-  color: var(--aw-color-working);
-}
-
 .review-document-array {
   display: flex;
   flex-direction: column;
@@ -104,4 +224,36 @@
 
 .review-document-body {
   min-width: 0;
+}
+
+@media (max-width: 700px) {
+  .review-document-editor .cm-editor {
+    font-size: 16px;
+  }
+
+  .review-document-input {
+    font-size: 16px;
+  }
+
+  .review-document-body-columns {
+    display: block;
+  }
+
+  .review-document-panel[data-mobile-view='edit']
+    .review-document-preview-column {
+    display: none;
+  }
+
+  .review-document-panel[data-mobile-view='preview']
+    .review-document-edit-column {
+    display: none;
+  }
+
+  .review-document-actions button {
+    margin-left: 0;
+  }
+
+  .review-document-actions .review-document-status {
+    flex-basis: 100%;
+  }
 }

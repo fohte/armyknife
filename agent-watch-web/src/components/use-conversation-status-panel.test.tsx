@@ -1,6 +1,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { page } from 'vitest/browser'
 
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
@@ -155,7 +156,9 @@ it('fetches and renders the review document when the status panel opens', async 
   const openPanel = () => ({
     requests: fetcher.mock.calls.map(([input]) => requestUrl(input)),
     selectedTab: container.querySelector('[aria-selected="true"]')?.textContent,
-    title: container.querySelector('.review-document-field-value')?.textContent,
+    title: container.querySelector<HTMLInputElement>(
+      '.review-document-frontmatter input[type="text"]',
+    )?.value,
     markdown: container.querySelector('.review-document-body strong')
       ?.textContent,
   })
@@ -166,6 +169,217 @@ it('fetches and renders the review document when the status panel opens', async 
     selectedTab: 'Review',
     title: 'Fixture pull request',
     markdown: 'Fixture draft body',
+  })
+})
+
+it('saves the edited document and sends the same edits before finishing review', async () => {
+  const requests: { url: string; method: string; body: unknown }[] = []
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    const method = init?.method ?? 'GET'
+    const body =
+      typeof init?.body === 'string' ? (JSON.parse(init.body) as unknown) : null
+    requests.push({ url, method, body })
+    return Promise.resolve(
+      new Response(
+        JSON.stringify(
+          method === 'GET'
+            ? {
+                id: 'fixture-review-a',
+                frontmatter: { title: 'Fixture title', enabled: false },
+                body: 'Fixture body.',
+              }
+            : { success: true },
+        ),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  act(() => {
+    root?.render(
+      <StatusPanelHarness
+        currentSession={{ ...session, reviewDocumentId: 'fixture-review-a' }}
+        statusPanelOpen
+      />,
+    )
+  })
+  await waitForState(
+    () => container.querySelector('.review-document-body') !== null,
+  )
+
+  await act(async () => {
+    await page.getByRole('textbox', { name: 'title' }).fill('Edited title')
+    await page.getByRole('checkbox', { name: 'enabled' }).click()
+    await page
+      .getByRole('textbox', { name: 'Markdown body' })
+      .fill('Edited body.')
+    await page.getByRole('button', { name: 'Save' }).click()
+  })
+  await waitForState(
+    () =>
+      requests.length === 2 &&
+      container.querySelector('.review-document-status')?.textContent ===
+        'Saved',
+  )
+  await act(async () => {
+    await page.getByRole('button', { name: 'Finish review' }).click()
+  })
+  await waitForState(() => requests.length === 3)
+
+  expect(requests).toEqual([
+    {
+      url: '/api/sessions/fixture-session/review-document',
+      method: 'GET',
+      body: null,
+    },
+    {
+      url: '/api/sessions/fixture-session/review-document/save',
+      method: 'POST',
+      body: {
+        id: 'fixture-review-a',
+        frontmatter: { title: 'Edited title', enabled: true },
+        body: 'Edited body.',
+      },
+    },
+    {
+      url: '/api/sessions/fixture-session/review-document/finish',
+      method: 'POST',
+      body: {
+        id: 'fixture-review-a',
+        frontmatter: { title: 'Edited title', enabled: true },
+        body: 'Edited body.',
+      },
+    },
+  ])
+})
+
+it('keeps edits after a save error and retries the same document', async () => {
+  const requests: { url: string; method: string; body: unknown }[] = []
+  let saveAttempts = 0
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    const method = init?.method ?? 'GET'
+    const body =
+      typeof init?.body === 'string' ? (JSON.parse(init.body) as unknown) : null
+    requests.push({ url, method, body })
+    if (method === 'GET') {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            id: 'fixture-review-a',
+            frontmatter: { title: 'Fixture title' },
+            body: 'Fixture body.',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+    }
+    saveAttempts += 1
+    return Promise.resolve(
+      saveAttempts === 1
+        ? new Response(
+            JSON.stringify({ error: 'The review document changed.' }),
+            { status: 409, headers: { 'Content-Type': 'application/json' } },
+          )
+        : new Response(JSON.stringify({ success: true }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+    )
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  act(() => {
+    root?.render(
+      <StatusPanelHarness
+        currentSession={{ ...session, reviewDocumentId: 'fixture-review-a' }}
+        statusPanelOpen
+      />,
+    )
+  })
+  await waitForState(
+    () => container.querySelector('.review-document-body') !== null,
+  )
+  await act(async () => {
+    await page.getByRole('textbox', { name: 'title' }).fill('Edited title')
+    await page
+      .getByRole('textbox', { name: 'Markdown body' })
+      .fill('Edited body.')
+    await page.getByRole('button', { name: 'Save' }).click()
+  })
+  await waitForState(() => container.querySelector('[role="alert"]') !== null)
+
+  const afterFailure = {
+    alert: container.querySelector('[role="alert"]')?.textContent,
+    title: container.querySelector<HTMLInputElement>(
+      '.review-document-frontmatter input',
+    )?.value,
+    body: container.querySelector('.review-document-editor .cm-content')
+      ?.textContent,
+  }
+  await act(async () => {
+    await page.getByRole('button', { name: 'Save' }).click()
+  })
+  await waitForState(
+    () =>
+      requests.length === 3 &&
+      container.querySelector('.review-document-status')?.textContent ===
+        'Saved',
+  )
+
+  const retrySnapshot = () => ({
+    afterFailure,
+    afterRetry: {
+      alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+      title: container.querySelector<HTMLInputElement>(
+        '.review-document-frontmatter input',
+      )?.value,
+      body: container.querySelector('.review-document-editor .cm-content')
+        ?.textContent,
+      status: container.querySelector('.review-document-status')?.textContent,
+    },
+    requests,
+  })
+
+  expect(retrySnapshot()).toEqual({
+    afterFailure: {
+      alert: 'The review document changed.',
+      title: 'Edited title',
+      body: 'Edited body.',
+    },
+    afterRetry: {
+      alert: null,
+      title: 'Edited title',
+      body: 'Edited body.',
+      status: 'Saved',
+    },
+    requests: [
+      {
+        url: '/api/sessions/fixture-session/review-document',
+        method: 'GET',
+        body: null,
+      },
+      {
+        url: '/api/sessions/fixture-session/review-document/save',
+        method: 'POST',
+        body: {
+          id: 'fixture-review-a',
+          frontmatter: { title: 'Edited title' },
+          body: 'Edited body.',
+        },
+      },
+      {
+        url: '/api/sessions/fixture-session/review-document/save',
+        method: 'POST',
+        body: {
+          id: 'fixture-review-a',
+          frontmatter: { title: 'Edited title' },
+          body: 'Edited body.',
+        },
+      },
+    ],
   })
 })
 
@@ -224,7 +438,9 @@ it('refetches the review document when its active ID changes', async () => {
 
   const snapshot = () => ({
     requests: fetcher.mock.calls.map(([input]) => requestUrl(input)),
-    title: container.querySelector('.review-document-field-value')?.textContent,
+    title: container.querySelector<HTMLInputElement>(
+      '.review-document-frontmatter input[type="text"]',
+    )?.value,
     body: container.querySelector('.review-document-body')?.textContent,
   })
   expect(snapshot()).toEqual({

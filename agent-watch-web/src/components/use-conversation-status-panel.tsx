@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react'
+import { type Dispatch, type SetStateAction, useEffect, useState } from 'react'
 
 import {
   isReviewDocumentResponse,
   type ReviewDocumentResponse,
 } from '#components/conversation-pane-response'
-import { requestJson } from '#components/conversation-requests'
+import { requestAction, requestJson } from '#components/conversation-requests'
 import type { Decision } from '#components/decision-card'
 import { DecisionsPanel } from '#components/decisions-panel'
 import { PullRequestListPanel } from '#components/pull-request-list-panel'
@@ -38,6 +38,65 @@ type UseConversationStatusPanelOptions = {
   onCloseStatusPanel: () => void
 }
 
+type ReviewDocumentState = {
+  sessionId: string
+  reviewDocumentId: string
+  document: ReviewDocumentResponse | null
+  error: string | null
+  loading: boolean
+  saveStatus: 'idle' | 'saving' | 'saved' | 'error' | 'finishing'
+  saveError: string | null
+  mobileView: 'edit' | 'preview'
+}
+
+function requestReviewDocumentAction(
+  sessionId: string,
+  document: ReviewDocumentResponse,
+  action: 'save' | 'finish',
+  setState: Dispatch<SetStateAction<ReviewDocumentState | null>>,
+) {
+  const matchesDocument = (
+    current: ReviewDocumentState | null,
+  ): current is ReviewDocumentState =>
+    current !== null &&
+    current.sessionId === sessionId &&
+    current.reviewDocumentId === document.id
+  setState((current) => {
+    if (current === null || !matchesDocument(current)) return current
+    return {
+      ...current,
+      saveStatus: action === 'save' ? 'saving' : 'finishing',
+      saveError: null,
+    }
+  })
+
+  void requestAction(sessionId, `review-document/${action}`, {
+    id: document.id,
+    frontmatter: document.frontmatter,
+    body: document.body,
+  }).match(
+    () => {
+      setState((current) => {
+        if (!matchesDocument(current)) return current
+        return action === 'save'
+          ? { ...current, saveStatus: 'saved', saveError: null }
+          : null
+      })
+    },
+    (error) => {
+      setState((current) =>
+        matchesDocument(current)
+          ? {
+              ...current,
+              saveStatus: 'error',
+              saveError: error.message,
+            }
+          : current,
+      )
+    },
+  )
+}
+
 export function useConversationStatusPanel({
   session,
   messages,
@@ -56,13 +115,8 @@ export function useConversationStatusPanel({
   const [selectedDecisionSeq, setSelectedDecisionSeq] = useState<number | null>(
     null,
   )
-  const [reviewDocumentState, setReviewDocumentState] = useState<{
-    sessionId: string
-    reviewDocumentId: string
-    document: ReviewDocumentResponse | null
-    error: string | null
-    loading: boolean
-  } | null>(null)
+  const [reviewDocumentState, setReviewDocumentState] =
+    useState<ReviewDocumentState | null>(null)
   const reviewDocumentId = session.reviewDocumentId
   const decisions =
     allDecisions ??
@@ -141,6 +195,9 @@ export function useConversationStatusPanel({
       document: null,
       error: null,
       loading: true,
+      saveStatus: 'idle',
+      saveError: null,
+      mobileView: 'edit',
     })
     void requestJson(
       `/api/sessions/${encodeURIComponent(session.id)}/review-document`,
@@ -154,6 +211,9 @@ export function useConversationStatusPanel({
             document,
             error: null,
             loading: false,
+            saveStatus: 'idle',
+            saveError: null,
+            mobileView: 'edit',
           })
         }
       },
@@ -165,6 +225,9 @@ export function useConversationStatusPanel({
             document: null,
             error: error.message,
             loading: false,
+            saveStatus: 'idle',
+            saveError: null,
+            mobileView: 'edit',
           })
         }
       },
@@ -277,6 +340,58 @@ export function useConversationStatusPanel({
                 <ReviewDocumentPanel
                   frontmatter={reviewDocumentState.document.frontmatter}
                   body={reviewDocumentState.document.body}
+                  status={reviewDocumentState.saveStatus}
+                  error={reviewDocumentState.saveError}
+                  mobileView={reviewDocumentState.mobileView}
+                  onFrontmatterChange={(frontmatter) => {
+                    setReviewDocumentState((current) =>
+                      current?.document === null || current === null
+                        ? current
+                        : {
+                            ...current,
+                            document: { ...current.document, frontmatter },
+                            saveStatus: 'idle',
+                            saveError: null,
+                          },
+                    )
+                  }}
+                  onBodyChange={(body) => {
+                    setReviewDocumentState((current) =>
+                      current?.document === null || current === null
+                        ? current
+                        : {
+                            ...current,
+                            document: { ...current.document, body },
+                            saveStatus: 'idle',
+                            saveError: null,
+                          },
+                    )
+                  }}
+                  onMobileViewChange={(mobileView) => {
+                    setReviewDocumentState((current) =>
+                      current === null ? current : { ...current, mobileView },
+                    )
+                  }}
+                  onSave={() => {
+                    const document = reviewDocumentState.document
+                    if (document !== null)
+                      requestReviewDocumentAction(
+                        session.id,
+                        document,
+                        'save',
+                        setReviewDocumentState,
+                      )
+                  }}
+                  onFinish={() => {
+                    const document = reviewDocumentState.document
+                    if (document !== null)
+                      requestReviewDocumentAction(
+                        session.id,
+                        document,
+                        'finish',
+                        setReviewDocumentState,
+                      )
+                  }}
                 />
               ),
           },
