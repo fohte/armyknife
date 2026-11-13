@@ -128,6 +128,42 @@ pub(crate) fn save_session(sessions_dir: &Path, session: &Session) -> Result<()>
     Ok(())
 }
 
+pub(crate) fn save_rewind_sessions(
+    sessions_dir: &Path,
+    previous: &Session,
+    forked: &Session,
+) -> Result<()> {
+    ensure!(
+        previous.session_id != forked.session_id,
+        "rewound session ID must differ from the original"
+    );
+    let mut connection = open_connection(sessions_dir)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let previous_revision = write_session(&transaction, previous)?;
+    write_session(&transaction, forked)?;
+    transaction.execute(
+        "INSERT INTO watch_web_session_state (session_id, is_today, primary_task_id, watch_web_user_marker)
+         SELECT ?2, is_today, primary_task_id, watch_web_user_marker
+         FROM watch_web_session_state WHERE session_id = ?1
+         ON CONFLICT(session_id) DO UPDATE SET
+             is_today = excluded.is_today,
+             primary_task_id = excluded.primary_task_id,
+             watch_web_user_marker = excluded.watch_web_user_marker",
+        params![previous.session_id, forked.session_id],
+    )?;
+    let forked_revision = increment_revision(&transaction)?;
+    transaction.execute(
+        "UPDATE sessions SET rev = ?1 WHERE session_id = ?2",
+        params![forked_revision, forked.session_id],
+    )?;
+    ensure!(
+        previous_revision < forked_revision,
+        "rewind session revisions are not increasing"
+    );
+    transaction.commit()?;
+    Ok(())
+}
+
 pub(crate) fn lock_session_for_update(
     sessions_dir: &Path,
     session_id: &str,
@@ -560,6 +596,83 @@ mod tests {
         assert_eq!(
             (preserved, state_table_exists, queued_prompt_table_exists),
             (("preserved-data".to_string(), 7, 7), true, true),
+        );
+    }
+
+    #[test]
+    fn save_rewind_sessions_copies_task_and_user_marker_state() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut previous: Session = serde_json::from_value(serde_json::json!({
+            "session_id": "fixture-session",
+            "cwd": "/fixture/worktree",
+            "transcript_path": null,
+            "tmux_info": null,
+            "status": "paused",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": null,
+        }))
+        .unwrap();
+        previous.ancestor_session_ids = vec!["fixture-parent".to_string()];
+        let mut forked = previous.clone();
+        forked.session_id = "fixture-fork".to_string();
+        forked.status = crate::commands::agent::types::SessionStatus::Stopped;
+        forked
+            .ancestor_session_ids
+            .push(previous.session_id.clone());
+
+        let connection = open_connection(temp_dir.path()).unwrap();
+        connection
+            .execute(
+                "INSERT INTO watch_web_session_state
+                    (session_id, is_today, primary_task_id, watch_web_user_marker)
+                 VALUES (?1, 1, ?2, ?3)",
+                params![previous.session_id, "fixture-task", "fixture-marker"],
+            )
+            .unwrap();
+        drop(connection);
+
+        save_rewind_sessions(temp_dir.path(), &previous, &forked).unwrap();
+
+        let previous_after = load_session(temp_dir.path(), &previous.session_id)
+            .unwrap()
+            .unwrap();
+        let forked_after = load_session(temp_dir.path(), &forked.session_id)
+            .unwrap()
+            .unwrap();
+        let connection = open_connection(temp_dir.path()).unwrap();
+        let copied_state = connection
+            .query_row(
+                "SELECT is_today, primary_task_id, watch_web_user_marker
+                 FROM watch_web_session_state WHERE session_id = ?1",
+                [&forked.session_id],
+                |row| {
+                    Ok((
+                        row.get::<_, bool>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            (
+                previous_after.status,
+                forked_after.session_id,
+                forked_after.ancestor_session_ids,
+                copied_state,
+            ),
+            (
+                crate::commands::agent::types::SessionStatus::Paused,
+                "fixture-fork".to_string(),
+                vec!["fixture-parent".to_string(), "fixture-session".to_string()],
+                (
+                    true,
+                    Some("fixture-task".to_string()),
+                    Some("fixture-marker".to_string())
+                ),
+            ),
         );
     }
 

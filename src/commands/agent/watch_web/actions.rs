@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::path::Path;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -26,6 +27,7 @@ mod permission_denied;
 mod permission_denied_locks;
 mod proposal_answer_locks;
 mod proposals;
+mod rewind;
 mod runtime;
 mod todo_completion_locks;
 mod todos;
@@ -56,6 +58,7 @@ fn router_with_state(state: ActionState) -> Router {
             post(messages::send_message)
                 .layer(DefaultBodyLimit::max(messages::MAX_MESSAGE_BODY_BYTES)),
         )
+        .route("/sessions/{id}/rewind", post(rewind::rewind))
         .route(
             "/sessions/{id}/decisions/{seq}/ok",
             post(decisions::mark_ok),
@@ -111,6 +114,13 @@ struct ActionState {
 
 trait ActionRuntime: Send + Sync {
     fn send_message(&self, session: &Session, content: &str) -> Result<()>;
+    fn rewind_session(
+        &self,
+        sessions_dir: &Path,
+        session: &Session,
+        message_id: &str,
+        mode: super::rewind::RewindMode,
+    ) -> Result<String>;
     fn pane_current_command(&self, tmux_info: &TmuxInfo) -> Option<String>;
     fn send_keys_if_agent_is_running(
         &self,
@@ -143,6 +153,7 @@ struct ActionCapabilities {
     permission: Option<PermissionCapabilities>,
     interrupt: bool,
     open_in_terminal: bool,
+    rewind: bool,
 }
 
 #[derive(Serialize)]
@@ -172,6 +183,7 @@ async fn actions(
         }),
         interrupt: has_live_session && has_tmux,
         open_in_terminal: has_tmux,
+        rewind: super::rewind::can_rewind(&session),
     }))
 }
 
@@ -514,6 +526,22 @@ mod tests {
                 return Err(anyhow::anyhow!(message));
             }
             Ok(())
+        }
+
+        fn rewind_session(
+            &self,
+            _sessions_dir: &Path,
+            session: &Session,
+            message_id: &str,
+            mode: super::super::rewind::RewindMode,
+        ) -> Result<String> {
+            self.calls.lock().unwrap().push(json!({
+                "kind": "rewind",
+                "sessionId": session.session_id,
+                "messageId": message_id,
+                "mode": format!("{mode:?}"),
+            }));
+            Ok("fixture-fork-session".to_string())
         }
 
         fn pane_current_command(&self, tmux_info: &TmuxInfo) -> Option<String> {
@@ -919,6 +947,96 @@ mod tests {
             "Which formats?": "Markdown, Plain text",
             "Include examples?": "Yes",
         })
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn rewind_dispatches_the_selected_user_message(action_context: ActionContext) {
+        action_context.save_session(&session("sample-session"));
+
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/rewind",
+                json!({
+                    "messageId": "fixture-user-message",
+                    "mode": "conversation"
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "sessionId": "fixture-fork-session" },
+                "calls": [{
+                    "kind": "rewind",
+                    "sessionId": "sample-session",
+                    "messageId": "fixture-user-message",
+                    "mode": "Conversation",
+                }],
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn rewind_rejects_a_session_that_is_not_waiting_for_input(action_context: ActionContext) {
+        let mut session = session("sample-session");
+        session.status = SessionStatus::Running;
+        action_context.save_session(&session);
+
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/rewind",
+                json!({
+                    "messageId": "fixture-user-message",
+                    "mode": "conversation"
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::CONFLICT.as_u16(),
+                "body": { "error": "session is not waiting for input" },
+                "calls": [],
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn codex_rewind_rejects_code_modes(action_context: ActionContext) {
+        let mut session = session("sample-session");
+        session.engine = Engine::Codex;
+        action_context.save_session(&session);
+
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/rewind",
+                json!({
+                    "messageId": "fixture-turn-id",
+                    "mode": "code"
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::CONFLICT.as_u16(),
+                "body": { "error": "Codex only supports conversation rewind" },
+                "calls": [],
+            }),
+        );
     }
 
     #[rstest]
@@ -1409,6 +1527,7 @@ mod tests {
                     "permission": { "approve": true, "reject": true },
                     "interrupt": false,
                     "openInTerminal": false,
+                    "rewind": false,
                 },
                 "calls": [],
             }),
@@ -1593,6 +1712,7 @@ mod tests {
                         "answerQuestion": false,
                         "interrupt": true,
                         "openInTerminal": true,
+                        "rewind": true,
                     },
                     "calls": [],
                 }),
@@ -1953,6 +2073,7 @@ mod tests {
                         "answerQuestion": false,
                         "interrupt": false,
                         "openInTerminal": true,
+                        "rewind": false,
                     },
                     "calls": [],
                 }),

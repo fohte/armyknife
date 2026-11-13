@@ -121,6 +121,10 @@ impl ClaudeParserState {
                             images,
                             use_user_marker: true,
                             simplify_slash_command: false,
+                            rewind_id: record
+                                .get("uuid")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned),
                         });
                     }
                 }
@@ -191,6 +195,10 @@ impl ClaudeParserState {
                             images,
                             use_user_marker: true,
                             simplify_slash_command: true,
+                            rewind_id: record
+                                .get("uuid")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned),
                         });
                     }
                 }
@@ -203,6 +211,7 @@ impl ClaudeParserState {
                     images: Vec::new(),
                     use_user_marker: false,
                     simplify_slash_command: false,
+                    rewind_id: None,
                 });
             }
             Some("assistant") => {

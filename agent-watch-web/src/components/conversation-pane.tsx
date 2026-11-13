@@ -11,13 +11,11 @@ import {
 } from '#components/conversation-pane-response'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { requestAction, requestJson } from '#components/conversation-requests'
-import type {
-  PendingPermissionActions,
-  PermissionRequestIdentity,
-} from '#components/permission-card'
+import type { PendingPermissionActions } from '#components/permission-card'
 import { ResizableColumns } from '#components/resizable-columns'
 import { useSessionConversationCache } from '#components/session-conversation-cache'
 import { SessionStatusPanel } from '#components/session-status-panel'
+import { useConversationPaneActions } from '#components/use-conversation-pane-actions'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import {
   type SessionTreeCallbacks,
@@ -388,64 +386,13 @@ export function ConversationPane({
     )
   }, [clearOpenInTerminalTimer, session.id])
 
-  const onAction = useCallback(
-    (
-      action: string,
-      payload?: Record<string, unknown>,
-      permissionIdentity?: PermissionRequestIdentity,
-    ) => {
-      const permissionAction =
-        action === 'permission/approve'
-          ? 'approve'
-          : action === 'permission/reject'
-            ? 'reject'
-            : action.startsWith('permission-denials/') &&
-                action.endsWith('/retry')
-              ? 'retry'
-              : null
-      if (permissionAction !== null && permissionIdentity !== undefined) {
-        setPendingPermissionActions((pending) => ({
-          ...pending,
-          [permissionIdentity.requestId]: {
-            action: permissionAction,
-            status: 'sending',
-            ...permissionIdentity,
-          },
-        }))
-      }
-      return requestAction(session.id, action, payload).match(
-        () => {
-          if (permissionAction !== null && permissionIdentity !== undefined) {
-            setPendingPermissionActions((pending) => ({
-              ...pending,
-              [permissionIdentity.requestId]: {
-                action: permissionAction,
-                status: 'sent',
-                ...permissionIdentity,
-              },
-            }))
-          }
-          setError(null)
-          refresh()
-          return true
-        },
-        (requestError) => {
-          if (permissionAction !== null && permissionIdentity !== undefined) {
-            setPendingPermissionActions((pending) =>
-              Object.fromEntries(
-                Object.entries(pending).filter(
-                  ([requestId]) => requestId !== permissionIdentity.requestId,
-                ),
-              ),
-            )
-          }
-          setError(requestError.message)
-          return false
-        },
-      )
-    },
-    [refresh, session.id],
-  )
+  const { onAction, onRewind } = useConversationPaneActions({
+    sessionId: session.id,
+    refresh,
+    setError,
+    setPendingPermissionActions,
+    onSelectSession,
+  })
 
   const { messages, backgroundTasks } = conversation
   const backgroundTaskElapsedOffset =
@@ -509,6 +456,7 @@ export function ConversationPane({
         setError(null)
       }}
       onAction={onAction}
+      onRewind={onRewind}
       onOpenInTerminal={onOpenInTerminal}
       onSelectSession={onSelectSession}
       isMobile={isMobile}

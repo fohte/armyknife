@@ -30,6 +30,7 @@ import type {
   BackgroundTask,
   ChatItem,
   OpenInTerminalStatus,
+  RewindMode,
   Session,
   SessionActions,
   SkillSuggestion,
@@ -59,6 +60,11 @@ type ConversationPaneViewProps = {
     action: string,
     payload?: Record<string, unknown>,
     permissionIdentity?: PermissionRequestIdentity,
+  ) => Promise<boolean>
+  onRewind?: (
+    messageId: string,
+    mode: RewindMode,
+    draft: string,
   ) => Promise<boolean>
   onOpenInTerminal?: () => void
   onSelectSession: (id: string) => void
@@ -97,6 +103,7 @@ export function ConversationPaneView({
   error,
   onClearError = () => undefined,
   onAction,
+  onRewind,
   onOpenInTerminal,
   onSelectSession,
   isMobile = false,
@@ -177,6 +184,11 @@ export function ConversationPaneView({
       onOpenInTerminal()
     }
   }, [onAction, onOpenInTerminal])
+  const rewindMessage = useCallback(
+    (messageId: string, mode: RewindMode, draftText: string) =>
+      onRewind?.(messageId, mode, draftText) ?? Promise.resolve(false),
+    [onRewind],
+  )
   const {
     activeTool,
     conversationMessageCount,
@@ -200,6 +212,7 @@ export function ConversationPaneView({
     onOpenInTerminal: openInTerminal,
     openInTerminalStatus,
     onSelectSession: selectLinkedSession,
+    onRewind: rewindMessage,
     pendingActions: pendingPermissionActions,
     sessions: sessionLinkTargets,
     now,

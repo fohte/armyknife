@@ -25,6 +25,8 @@ use state_file::{
     state_file_path, write_state_file,
 };
 
+pub(in crate::commands::agent) use state_file::RestoredPaneSession as PaneResumeSession;
+
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum ResurrectCommands {
     /// Save all pane session IDs (called from tmux-resurrect post-save hook)
@@ -334,7 +336,7 @@ fn restore_commands_for_pane(
 /// `ARMYKNIFE_ANCESTOR_SESSION_IDS` on the `claude` process it execs.
 /// The saved launch metadata is used because the store record may have been
 /// removed before restore runs.
-fn resume_command_for(
+pub(super) fn resume_command_for(
     pane_session: &RestoredPaneSession,
     engine: Engine,
     pane_has_agent: bool,

@@ -16,6 +16,7 @@ const actions: SessionActions = {
   permission: { approve: true, reject: true },
   interrupt: false,
   openInTerminal: true,
+  rewind: false,
 }
 
 const callbacks = {

@@ -215,6 +215,13 @@ pub fn send_message(thread_id: &str, content: &str) -> Result<()> {
     client.start_turn(thread_id, content, None)
 }
 
+pub(crate) fn fork_thread(
+    thread_id: &str,
+    before_turn_id: &str,
+) -> anyhow::Result<(String, PathBuf)> {
+    history::fork_thread(thread_id, before_turn_id)
+}
+
 fn control_socket_path() -> anyhow::Result<PathBuf> {
     let codex_home = std::env::var_os("CODEX_HOME")
         .filter(|value| !value.is_empty())

@@ -591,6 +591,8 @@ fn compressed_path(path: &Path) -> PathBuf {
 enum ChatItem {
     User {
         text: String,
+        #[serde(rename = "rewindId", skip_serializing_if = "Option::is_none")]
+        rewind_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         timestamp: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -605,6 +607,8 @@ enum ChatItem {
     },
     UserWithContent {
         content: Vec<UserContentPart>,
+        #[serde(rename = "rewindId", skip_serializing_if = "Option::is_none")]
+        rewind_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         timestamp: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -3136,7 +3140,11 @@ mod tests {
             normalized_first,
             json!({
                 "messages": [
-                    {"type": "user", "text": "Watch the fixture build."},
+                    {
+                        "type": "user",
+                        "text": "Watch the fixture build.",
+                        "rewindId": "fixture-prompt-row",
+                    },
                     {
                         "type": "tool_summary",
                         "summary": "Bash ×1",

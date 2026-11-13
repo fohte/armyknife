@@ -130,6 +130,14 @@ pub(crate) fn save_session_to(sessions_dir: &Path, session: &Session) -> Result<
     database::save_session(sessions_dir, session)
 }
 
+pub(crate) fn save_rewind_sessions(
+    sessions_dir: &Path,
+    previous: &Session,
+    forked: &Session,
+) -> Result<()> {
+    database::save_rewind_sessions(sessions_dir, previous, forked)
+}
+
 pub(crate) fn watch_web_user_marker(session_id: &str) -> Result<Option<String>> {
     database::watch_web_user_marker(&sessions_dir()?, session_id)
 }

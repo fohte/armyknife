@@ -7,9 +7,51 @@
 }
 
 .chat-from {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
   color: var(--aw-text-secondary);
   font-size: 12px;
   text-align: right;
+}
+
+.chat-rewind-menu {
+  position: relative;
+}
+
+.chat-rewind-menu summary {
+  cursor: pointer;
+  color: var(--aw-text-muted);
+}
+
+.chat-rewind-menu-options {
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 4px);
+  right: 0;
+  display: grid;
+  min-width: 180px;
+  padding: 4px;
+  border: 1px solid var(--aw-border);
+  border-radius: var(--aw-radius);
+  background: var(--aw-bg-popover);
+  box-shadow: var(--aw-shadow-popover);
+}
+
+.chat-rewind-menu-options button {
+  padding: 8px 10px;
+  border: 0;
+  border-radius: calc(var(--aw-radius) / 2);
+  background: transparent;
+  color: var(--aw-text-body);
+  cursor: pointer;
+  text-align: left;
+}
+
+.chat-rewind-menu-options button:hover,
+.chat-rewind-menu-options button:focus-visible {
+  background: var(--aw-bg-subtle);
 }
 
 .chat-user-message {

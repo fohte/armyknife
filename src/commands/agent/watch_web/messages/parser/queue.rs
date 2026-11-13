@@ -291,6 +291,7 @@ impl Queue {
                         text,
                         from,
                         timestamp,
+                        ..
                     } => ChatItem::QueuedUser {
                         content: vec![UserContentPart::Text { text }],
                         from,
@@ -300,6 +301,7 @@ impl Queue {
                         content,
                         from,
                         timestamp,
+                        ..
                     } => ChatItem::QueuedUser {
                         content,
                         from,
@@ -452,6 +454,7 @@ mod tests {
             parse_transcript(transcript, None, None),
             vec![
                 ChatItem::User {
+                    rewind_id: None,
                     text: "Repeated prompt.".to_string(),
                     timestamp: None,
                     from: None,
@@ -473,6 +476,7 @@ mod tests {
             parse_transcript(transcript, None, None),
             vec![
                 ChatItem::User {
+                    rewind_id: None,
                     text: "Earlier delivered message.".to_string(),
                     timestamp: None,
                     from: None,
@@ -513,6 +517,7 @@ mod tests {
             ),
             (
                 vec![ChatItem::User {
+                    rewind_id: None,
                     text: "Delivered request.".to_string(),
                     timestamp: Some("2026-01-01T00:00:01+00:00".to_string()),
                     from: None,
@@ -585,6 +590,7 @@ mod tests {
             ),
             (
                 vec![ChatItem::User {
+                    rewind_id: None,
                     text: "Delivered request.".to_string(),
                     timestamp: Some("2026-01-01T00:00:01+00:00".to_string()),
                     from: None,
@@ -669,6 +675,7 @@ mod tests {
             (
                 vec![
                     ChatItem::User {
+                        rewind_id: None,
                         text: "Repeated request.".to_string(),
                         timestamp: Some("2025-12-31T23:59:59+00:00".to_string()),
                         from: None,
@@ -700,6 +707,7 @@ mod tests {
             (
                 vec![
                     ChatItem::User {
+                        rewind_id: None,
                         text: "Delivered request.".to_string(),
                         timestamp: None,
                         from: None,

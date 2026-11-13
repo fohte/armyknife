@@ -26,6 +26,7 @@ function areConversationMessagePropsEqual(
     case 'assistant':
       return (
         previous.onSelectSession === next.onSelectSession &&
+        previous.onRewind === next.onRewind &&
         previous.sessions === next.sessions
       )
     case 'question':

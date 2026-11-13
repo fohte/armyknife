@@ -27,6 +27,13 @@ function writeComposerDraft(key: string, draft: string) {
   )
 }
 
+export function writeComposerDraftForSession(sessionId: string, draft: string) {
+  return writeComposerDraft(
+    `agent-watch-web:composer-draft:${sessionId}`,
+    draft,
+  )
+}
+
 export function useComposerDraft(sessionId: string) {
   const storageKey = `agent-watch-web:composer-draft:${sessionId}`
   const [initialDraft] = useState(() => readComposerDraft(storageKey))

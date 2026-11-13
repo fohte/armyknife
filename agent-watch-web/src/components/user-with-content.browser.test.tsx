@@ -1,10 +1,10 @@
-import { act } from 'react'
+import { act, type ComponentProps } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { formatMessageTime } from '#components/message-time'
 import { UserWithContent } from '#components/user-with-content'
-import type { ChatItem } from '#types'
+import type { ChatItem, RewindMode } from '#types'
 
 const imageSource = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='
 const now = new Date(2026, 5, 2, 0, 3)
@@ -17,10 +17,11 @@ function render(
     ChatItem,
     { type: 'user' | 'queued_user' | 'user_with_content' }
   >,
+  props: Partial<ComponentProps<typeof UserWithContent>> = {},
 ) {
   root ??= createRoot(container)
   act(() => {
-    root?.render(<UserWithContent message={message} now={now} />)
+    root?.render(<UserWithContent message={message} now={now} {...props} />)
   })
 }
 
@@ -210,4 +211,72 @@ it('renders a text-only user message', () => {
       source: null,
     },
   ])
+})
+
+it('offers Claude rewind modes and passes the selected message text', async () => {
+  const rewindCalls: Array<[string, RewindMode, string]> = []
+  const onRewind = vi.fn((...args: [string, RewindMode, string]) => {
+    rewindCalls.push(args)
+    return Promise.resolve(true)
+  })
+  render(
+    {
+      type: 'user',
+      text: 'Review this request again.',
+      rewindId: 'fixture-user-message',
+    },
+    {
+      canRewind: true,
+      sessionEngine: 'claude',
+      rewindMenuOpen: true,
+      onRewind,
+    },
+  )
+
+  const options = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('.chat-rewind-menu button'),
+    (button) => button.textContent,
+  )
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.chat-rewind-menu button')
+      ?.click()
+  })
+  await act(async () => {
+    await Promise.resolve()
+  })
+
+  const rewindInteraction = () => ({ options, calls: rewindCalls })
+  expect(rewindInteraction()).toEqual({
+    options: ['Conversation and code', 'Conversation only', 'Code only'],
+    calls: [
+      [
+        'fixture-user-message',
+        'conversation_and_code',
+        'Review this request again.',
+      ],
+    ],
+  })
+})
+
+it('offers only conversation rewind for Codex messages', () => {
+  render(
+    {
+      type: 'user',
+      text: 'Review this request again.',
+      rewindId: 'fixture-user-message',
+    },
+    {
+      canRewind: true,
+      sessionEngine: 'codex',
+      rewindMenuOpen: true,
+    },
+  )
+
+  expect(
+    Array.from(
+      container.querySelectorAll<HTMLButtonElement>('.chat-rewind-menu button'),
+      (button) => button.textContent,
+    ),
+  ).toEqual(['Conversation only'])
 })

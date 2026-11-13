@@ -9,6 +9,7 @@ mod limits;
 mod messages;
 mod restart;
 mod review_document;
+mod rewind;
 mod security;
 mod session_enrichment;
 mod session_state;
