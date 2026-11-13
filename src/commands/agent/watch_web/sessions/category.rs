@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 
 use crate::commands::agent::store;
-use crate::commands::agent::types::{Session, SessionStatus};
+use crate::commands::agent::types::{AgentStatus, Session, SessionStatus};
 use crate::commands::agent::user_turn::{UserTurnKind, user_turns};
 use crate::shared::config::{AgentConfig, AgentStatusState, AgentStatusWebKind};
 
@@ -182,6 +182,13 @@ pub(super) fn kind_for_with_todo(
     }
 
     let Some(turn) = turn else {
+        if matches!(
+            session.status,
+            SessionStatus::Stopped | SessionStatus::Paused | SessionStatus::Ended
+        ) && let Some(status) = session.agent_status.as_ref()
+        {
+            return Some(kind_for_agent_status(status, agent_config));
+        }
         return (session.status == SessionStatus::Stopped && !has_running_background_task)
             .then_some(SessionKind::Stopped);
     };
@@ -191,21 +198,23 @@ pub(super) fn kind_for_with_todo(
         UserTurnKind::Allow => Some(SessionKind::Approve),
         UserTurnKind::Crit | UserTurnKind::Body => Some(SessionKind::Review),
         UserTurnKind::Failed => Some(SessionKind::Error),
-        UserTurnKind::AgentStatus => {
-            let status = session.agent_status.as_ref()?;
-            Some(
-                match agent_config
-                    .statuses
-                    .get(&status.kind)
-                    .map_or(AgentStatusWebKind::Stopped, |config| config.watch_web_kind)
-                {
-                    AgentStatusWebKind::Question => SessionKind::Question,
-                    AgentStatusWebKind::Review => SessionKind::Review,
-                    AgentStatusWebKind::Stopped => SessionKind::Stopped,
-                },
-            )
-        }
+        UserTurnKind::AgentStatus => session
+            .agent_status
+            .as_ref()
+            .map(|status| kind_for_agent_status(status, agent_config)),
         UserTurnKind::Merge => Some(SessionKind::Review),
+    }
+}
+
+fn kind_for_agent_status(status: &AgentStatus, agent_config: &AgentConfig) -> SessionKind {
+    match agent_config
+        .statuses
+        .get(&status.kind)
+        .map_or(AgentStatusWebKind::Stopped, |config| config.watch_web_kind)
+    {
+        AgentStatusWebKind::Question => SessionKind::Question,
+        AgentStatusWebKind::Review => SessionKind::Review,
+        AgentStatusWebKind::Stopped => SessionKind::Stopped,
     }
 }
 
@@ -443,6 +452,7 @@ mod tests {
     #[case::configured_user(
         "fixture_user_status",
         AgentStatusState::User,
+        AgentStatusWebKind::Stopped,
         Some(UserTurnKind::AgentStatus),
         false,
         SessionCategory::NeedsAction,
@@ -451,6 +461,7 @@ mod tests {
     #[case::configured_user_with_background_task(
         "fixture_user_status",
         AgentStatusState::User,
+        AgentStatusWebKind::Stopped,
         Some(UserTurnKind::AgentStatus),
         true,
         SessionCategory::NeedsAction,
@@ -459,22 +470,34 @@ mod tests {
     #[case::configured_waiting(
         "fixture_waiting_status",
         AgentStatusState::Waiting,
+        AgentStatusWebKind::Question,
         None,
         false,
         SessionCategory::InProgress,
-        Some(SessionKind::Stopped)
+        Some(SessionKind::Question)
     )]
     #[case::configured_done(
         "fixture_done_status",
         AgentStatusState::Done,
+        AgentStatusWebKind::Review,
         None,
         false,
         SessionCategory::Done,
-        Some(SessionKind::Stopped)
+        Some(SessionKind::Review)
+    )]
+    #[case::configured_done_with_background_task(
+        "fixture_done_status",
+        AgentStatusState::Done,
+        AgentStatusWebKind::Review,
+        None,
+        true,
+        SessionCategory::InProgress,
+        Some(SessionKind::Review)
     )]
     fn stopped_agent_statuses_follow_configured_state(
         #[case] status_kind: &str,
         #[case] state: AgentStatusState,
+        #[case] watch_web_kind: AgentStatusWebKind,
         #[case] expected_turn: Option<UserTurnKind>,
         #[case] has_running_background_task: bool,
         #[case] expected_category: SessionCategory,
@@ -490,7 +513,7 @@ mod tests {
             status_kind.to_string(),
             AgentStatusConfig {
                 state,
-                watch_web_kind: AgentStatusWebKind::Stopped,
+                watch_web_kind,
             },
         );
         let turn = user_turns([&session], &agent_config)
