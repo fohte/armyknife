@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::commands::agent::store;
 use crate::shared::env_var::EnvVars;
@@ -10,7 +11,11 @@ pub(super) struct PendingReviewGuard {
 }
 
 impl PendingReviewGuard {
-    pub(super) fn for_current_session(marker: Option<&str>) -> Option<Self> {
+    pub(super) fn for_current_session(
+        marker: Option<&str>,
+        review_path: &Path,
+        queue_key: Option<&str>,
+    ) -> Option<Self> {
         let session_id = EnvVars::load().own_session_id()?;
         let sessions_dir = match store::sessions_dir() {
             Ok(path) => path,
@@ -23,7 +28,13 @@ impl PendingReviewGuard {
             }
         };
 
-        match Self::for_session(&sessions_dir, &session_id, marker) {
+        match Self::for_session_with_path(
+            &sessions_dir,
+            &session_id,
+            marker,
+            review_path,
+            queue_key,
+        ) {
             Ok(guard) => Some(guard),
             Err(error) => {
                 tracing::warn!(
@@ -35,15 +46,54 @@ impl PendingReviewGuard {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn for_session(
         sessions_dir: &Path,
         session_id: &str,
         marker: Option<&str>,
     ) -> anyhow::Result<Self> {
+        Self::for_session_inner(sessions_dir, session_id, marker, None)
+    }
+
+    pub(super) fn for_session_with_path(
+        sessions_dir: &Path,
+        session_id: &str,
+        marker: Option<&str>,
+        review_path: &Path,
+        queue_key: Option<&str>,
+    ) -> anyhow::Result<Self> {
+        Self::for_session_inner(
+            sessions_dir,
+            session_id,
+            marker,
+            Some((review_path, queue_key)),
+        )
+    }
+
+    fn for_session_inner(
+        sessions_dir: &Path,
+        session_id: &str,
+        marker: Option<&str>,
+        review: Option<(&Path, Option<&str>)>,
+    ) -> anyhow::Result<Self> {
         let id = uuid::Uuid::new_v4().to_string();
-        let review_id = match marker {
+        let marker_id = match marker {
             Some(marker) => format!("{marker}{id}"),
             None => id,
+        };
+        let review_id = match review {
+            Some((path, queue_key)) => {
+                let started_at = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos();
+                format!(
+                    "{marker_id}\0v2\0{started_at}\0{}\0{}",
+                    path.to_string_lossy(),
+                    queue_key.unwrap_or_default()
+                )
+            }
+            None => marker_id,
         };
         store::update_session_in(sessions_dir, session_id, |session| {
             session.pending_human_review_ids.insert(review_id.clone());
@@ -56,6 +106,44 @@ impl PendingReviewGuard {
             review_id,
         })
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReviewDocumentMarker {
+    pub(crate) id: String,
+    pub(crate) path: PathBuf,
+    pub(crate) queue_key: Option<String>,
+    pub(crate) started_at: u128,
+}
+
+/// Returns the document metadata stored with an active review marker.
+pub(crate) fn review_document_marker(review_id: &str) -> Option<ReviewDocumentMarker> {
+    let (id, metadata) = review_id.split_once('\0')?;
+    let mut fields = metadata.split('\0');
+    let first = fields.next()?;
+    let (started_at, path, queue_key) = if first == "v2" {
+        let started_at = fields.next().and_then(|value| value.parse::<u128>().ok());
+        match (started_at, fields.next()) {
+            (Some(started_at), Some(path)) => (started_at, path, fields.next()),
+            _ => (0, first, None),
+        }
+    } else {
+        (0, first, None)
+    };
+    if path.is_empty() {
+        return None;
+    }
+    Some(ReviewDocumentMarker {
+        id: id.to_string(),
+        path: PathBuf::from(path),
+        queue_key: queue_key.filter(|key| !key.is_empty()).map(str::to_string),
+        started_at,
+    })
+}
+
+/// Returns the document path stored with an active review marker.
+pub(crate) fn review_document_path(review_id: &str) -> Option<PathBuf> {
+    review_document_marker(review_id).map(|marker| marker.path)
 }
 
 impl Drop for PendingReviewGuard {
@@ -85,7 +173,7 @@ mod tests {
     use crate::commands::agent::store;
     use crate::commands::agent::types::{Engine, Session, SessionStatus};
 
-    use super::PendingReviewGuard;
+    use super::{PendingReviewGuard, review_document_marker};
 
     fn session(session_id: &str) -> Session {
         Session {
@@ -174,6 +262,60 @@ mod tests {
             ),
             (
                 BTreeSet::from([format!("{marker}<generated>")]),
+                BTreeSet::new()
+            )
+        );
+    }
+
+    #[test]
+    fn review_document_metadata_is_stored_and_removed_with_its_marker() {
+        let temp_dir = TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path().join("sessions");
+        let draft_path = temp_dir.path().join("fixture-draft.md");
+        store::save_session_to(&sessions_dir, &session("session-a"))
+            .expect("session should be saved");
+
+        let guard = PendingReviewGuard::for_session_with_path(
+            &sessions_dir,
+            "session-a",
+            None,
+            &draft_path,
+            Some("fixture-review-session"),
+        )
+        .expect("review document marker should be added");
+        let stored_markers = store::load_session_from(&sessions_dir, "session-a")
+            .expect("session should load")
+            .expect("session should exist")
+            .pending_human_review_ids;
+        let stored_marker = stored_markers
+            .iter()
+            .find_map(|review_id| review_document_marker(review_id));
+
+        drop(guard);
+        let remaining_markers = store::load_session_from(&sessions_dir, "session-a")
+            .expect("session should load")
+            .expect("session should exist")
+            .pending_human_review_ids;
+
+        assert_eq!(
+            (
+                stored_marker.map(|marker| {
+                    (
+                        marker.id.is_empty(),
+                        marker.path,
+                        marker.queue_key,
+                        marker.started_at > 0,
+                    )
+                }),
+                remaining_markers,
+            ),
+            (
+                Some((
+                    false,
+                    draft_path,
+                    Some("fixture-review-session".to_string()),
+                    true,
+                )),
                 BTreeSet::new()
             )
         );

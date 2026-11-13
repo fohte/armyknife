@@ -6,9 +6,16 @@ mod live;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
-pub(crate) use live::LiveQueueRuntime;
+pub(crate) use live::{LiveQueueRuntime, review_document_queue};
 
 pub(crate) const CRIT_KEY: &str = "crit";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ReviewDocumentQueue {
+    Unmanaged,
+    Managed(Option<String>),
+    Unavailable,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Review {

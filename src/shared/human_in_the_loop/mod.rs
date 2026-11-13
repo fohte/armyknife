@@ -18,6 +18,9 @@ mod pending_review;
 mod queue_entry;
 mod session_watch;
 mod tmux;
+pub(crate) use pending_review::{
+    ReviewDocumentMarker, review_document_marker, review_document_path,
+};
 
 pub use approval::{ApprovalManager, TEST_APPROVAL_DIR_OVERRIDE};
 pub use document::{Document, DocumentSchema};
@@ -139,7 +142,10 @@ where
                 notifications_enabled,
             )?;
             queue_entry = entry;
-            Ok(session)
+            Ok(ReviewLaunch {
+                session,
+                queue_key: queue_entry.as_ref().map(|entry| entry.key().to_string()),
+            })
         },
         |session| {
             session_watch.is_running(std::time::Instant::now(), || {
@@ -161,7 +167,29 @@ where
     L: FnOnce(&Path, &Path, &str) -> Result<Option<String>>,
     P: FnMut(&str) -> Result<bool>,
 {
-    start_review_with_marker(document_path, None, launch_review, is_session_alive)
+    start_review_with_marker(
+        document_path,
+        None,
+        |document_path, done_fifo_path, lock_id| {
+            launch_review(document_path, done_fifo_path, lock_id).map(ReviewLaunch::without_queue)
+        },
+        is_session_alive,
+    )
+}
+
+struct ReviewLaunch {
+    session: Option<String>,
+    queue_key: Option<String>,
+}
+
+impl ReviewLaunch {
+    #[cfg(test)]
+    fn without_queue(session: Option<String>) -> Self {
+        Self {
+            session,
+            queue_key: None,
+        }
+    }
 }
 
 fn start_review_with_marker<S, L, P>(
@@ -172,7 +200,7 @@ fn start_review_with_marker<S, L, P>(
 ) -> Result<Option<Document<S>>>
 where
     S: DocumentSchema,
-    L: FnOnce(&Path, &Path, &str) -> Result<Option<String>>,
+    L: FnOnce(&Path, &Path, &str) -> Result<ReviewLaunch>,
     P: FnMut(&str) -> Result<bool>,
 {
     let lock_path = LockGuard::lock_path(document_path);
@@ -203,12 +231,15 @@ where
     // signal cannot race with the read call.
     let done_fifo_reader = open_fifo_reader(&done_fifo_path)?;
 
-    let review_session = launch_review(document_path, &done_fifo_path, lock_guard.lock_id())?;
+    let review = launch_review(document_path, &done_fifo_path, lock_guard.lock_id())?;
 
     {
-        let _pending_review =
-            pending_review::PendingReviewGuard::for_current_session(pending_review_marker);
-        if let Some(session) = review_session.as_deref() {
+        let _pending_review = pending_review::PendingReviewGuard::for_current_session(
+            pending_review_marker,
+            document_path,
+            review.queue_key.as_deref(),
+        );
+        if let Some(session) = review.session.as_deref() {
             wait_for_fifo_signal_or_session_exit(done_fifo_reader, session, is_session_alive)?;
         } else {
             // GUI terminal launches have no tmux pane to monitor.

@@ -8,6 +8,7 @@ mod interrupted;
 mod limits;
 mod messages;
 mod restart;
+mod review_document;
 mod security;
 mod session_enrichment;
 mod session_state;
@@ -245,6 +246,7 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
             load_user_marker,
             loaders,
         ))
+        .merge(review_document::router())
         .merge(image_attachments::routes())
         .fallback(api_not_found);
 

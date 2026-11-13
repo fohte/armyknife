@@ -15,6 +15,7 @@ use super::EnrichmentUpdates;
 use super::interrupted::interrupted_session_ids;
 use super::session_enrichment::{SessionEnrichmentCache, SessionTaskMetadata};
 use crate::commands::agent::proposal::ProposalBody;
+use crate::commands::agent::review_queue::{ReviewDocumentQueue, review_document_queue};
 use crate::commands::agent::session_title::title_display_name;
 use crate::commands::agent::store;
 #[cfg(test)]
@@ -116,6 +117,8 @@ struct SessionView {
     is_compacting: bool,
     decision_count: i64,
     unreviewed_decision_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    review_document_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -185,6 +188,10 @@ trait SessionSource: Clone + Send + Sync + 'static {
         async { Ok(HashSet::new()) }
     }
 
+    fn review_document_queue(&self, _session: &Session) -> ReviewDocumentQueue {
+        ReviewDocumentQueue::Unmanaged
+    }
+
     fn now(&self) -> DateTime<Utc>;
 }
 
@@ -221,6 +228,10 @@ impl SessionSource for LiveSessionSource {
             loaders.running_background_task_session_ids(&sessions)
         })
         .await?)
+    }
+
+    fn review_document_queue(&self, session: &Session) -> ReviewDocumentQueue {
+        review_document_queue(session)
     }
 
     fn now(&self) -> DateTime<Utc> {
@@ -345,6 +356,19 @@ async fn list_sessions<S: SessionSource>(
         .into_iter()
         .map(|turn| (turn.session.session_id.as_str(), turn.kind))
         .collect::<HashMap<_, _>>();
+    let sessions_for_review_documents = response_sessions.clone();
+    let review_document_source = source.clone();
+    let review_document_ids = tokio::task::spawn_blocking(move || {
+        super::review_document::active_review_document_ids(
+            &sessions_for_review_documents,
+            |session| review_document_source.review_document_queue(session),
+        )
+    })
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "failed to resolve review document state");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     let now = source.now();
     let state_by_id = snapshot
         .web_states
@@ -526,6 +550,10 @@ async fn list_sessions<S: SessionSource>(
                     .decision_counts
                     .get(&session.session_id)
                     .map_or(0, |counts| counts.unreviewed),
+                review_document_id: review_document_ids
+                    .get(&session.session_id)
+                    .cloned()
+                    .unwrap_or_default(),
             }
         })
         .collect::<Vec<_>>();
@@ -698,6 +726,8 @@ mod tests {
         work_type_nav_labels: HashMap<String, String>,
         agent_statuses: HashMap<String, AgentStatusConfig>,
         message_loaders: super::super::messages::RouteLoaders,
+        review_document_queue_calls: Arc<AtomicUsize>,
+        review_document_queue_thread_id: Arc<Mutex<Option<std::thread::ThreadId>>>,
         now: DateTime<Utc>,
     }
 
@@ -775,6 +805,17 @@ mod tests {
             })
             .await
             .map_err(Into::into)
+        }
+
+        fn review_document_queue(&self, _session: &Session) -> ReviewDocumentQueue {
+            self.review_document_queue_calls
+                .fetch_add(1, Ordering::Relaxed);
+            *self
+                .review_document_queue_thread_id
+                .lock()
+                .expect("review document queue thread lock should not be poisoned") =
+                Some(std::thread::current().id());
+            ReviewDocumentQueue::Unmanaged
         }
 
         fn now(&self) -> DateTime<Utc> {
@@ -976,6 +1017,8 @@ mod tests {
                 |_, _| Ok(()),
                 |_| Ok(Vec::new()),
             ),
+            review_document_queue_calls: Arc::default(),
+            review_document_queue_thread_id: Arc::default(),
             now: Utc.timestamp_opt(1_100, 0).unwrap(),
         }
     }
@@ -1378,36 +1421,94 @@ mod tests {
         source.web_states[0].is_today = false;
         source.sessions[0].status = SessionStatus::WaitingInput;
         source.sessions[0].crit_urls = vec!["http://127.0.0.1:6000".to_string()];
+        let review_document_dir = tempfile::TempDir::new().unwrap();
+        let review_document_path = review_document_dir.path().join("fixture-draft.md");
+        std::fs::write(&review_document_path, "fixture").unwrap();
+        let _review_lock =
+            crate::shared::human_in_the_loop::LockGuard::acquire(&review_document_path).unwrap();
+        source.sessions[0].pending_human_review_ids.insert(format!(
+            "fixture-review\0v2\0{}\0{}\0",
+            42,
+            review_document_path.display()
+        ));
         source.sessions[0].work_type = Some("release-guide".to_string());
         source
             .work_type_nav_labels
             .insert("release-guide".to_string(), "Guides".to_string());
+        let mut expected = expected_response(
+            "needs_action",
+            None,
+            false,
+            ExpectedSessionDetails {
+                kind: Some("Review"),
+                category_when_not_later: "needs_action",
+                is_paused: false,
+                unread: false,
+                crit_url: Some("http://127.0.0.1:6000"),
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: Some("release-guide"),
+                work_type_nav_labels: serde_json::json!({"release-guide": "Guides"}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["reviewDocumentId"] = serde_json::json!("fixture-review");
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_route_resolves_review_document_queue_off_the_request_thread(
+        mut source: TestSessionSource,
+    ) {
+        let review_document_dir = tempfile::TempDir::new().unwrap();
+        let review_document_path = review_document_dir.path().join("fixture-document.md");
+        std::fs::write(&review_document_path, "fixture").unwrap();
+        let _review_lock =
+            crate::shared::human_in_the_loop::LockGuard::acquire(&review_document_path).unwrap();
+        source.sessions[0].pending_human_review_ids.insert(format!(
+            "fixture-review\0v2\0{}\0{}\0",
+            42,
+            review_document_path.display()
+        ));
+        let review_document_queue_calls = source.review_document_queue_calls.clone();
+        let review_document_queue_thread_id = source.review_document_queue_thread_id.clone();
+        let request_thread_id = std::thread::current().id();
+        let response = sessions_response(source).await;
+        let queue_was_resolved_off_request_thread = review_document_queue_thread_id
+            .lock()
+            .expect("review document queue thread lock should not be poisoned")
+            .as_ref()
+            .is_some_and(|thread_id| *thread_id != request_thread_id);
 
         assert_eq!(
-            sessions_response(source).await,
             (
-                StatusCode::OK,
-                expected_response(
-                    "needs_action",
-                    None,
-                    false,
-                    ExpectedSessionDetails {
-                        kind: Some("Review"),
-                        category_when_not_later: "needs_action",
-                        is_paused: false,
-                        unread: false,
-                        crit_url: Some("http://127.0.0.1:6000"),
-                    },
-                    ExpectedSessionResponse {
-                        engine: "claude",
-                        work_type: Some("release-guide"),
-                        work_type_nav_labels: serde_json::json!({"release-guide": "Guides"}),
-                        updated_at: "1970-01-01T00:16:40Z",
-                        elapsed_seconds: 100,
-                        can_open_in_terminal: true,
-                    },
-                ),
+                response.0,
+                review_document_queue_calls.load(Ordering::Relaxed),
+                queue_was_resolved_off_request_thread,
             ),
+            (StatusCode::OK, 1, true),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_route_skips_review_document_queue_without_a_marker(
+        source: TestSessionSource,
+    ) {
+        let review_document_queue_calls = source.review_document_queue_calls.clone();
+        let response = sessions_response(source).await;
+
+        assert_eq!(
+            (
+                response.0,
+                review_document_queue_calls.load(Ordering::Relaxed)
+            ),
+            (StatusCode::OK, 0),
         );
     }
 
