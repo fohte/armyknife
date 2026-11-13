@@ -167,3 +167,12 @@ export const BranchSearchShowsSessionActions: Story = {
     initialActionItemId: 'session-review',
   },
 }
+
+export const TerminalOpenRequestIsSending: Story = {
+  name: 'The terminal action shows progress while its request is sending',
+  args: {
+    initialQuery: 'feature/notification-rollout',
+    initialActionItemId: 'session-review',
+    pendingFocusSessionId: 'session-review',
+  },
+}

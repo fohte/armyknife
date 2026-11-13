@@ -2798,7 +2798,7 @@ it('shows desktop newline shortcuts with the applicable interrupt hint', () => {
   })
 })
 
-it('keeps Enter for newlines and exposes mobile conversation actions', () => {
+it('keeps Enter for newlines and exposes mobile conversation actions', async () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction, session, undefined, [question], actions, true)
   const textarea = requireElement(
@@ -2829,13 +2829,21 @@ it('keeps Enter for newlines and exposes mobile conversation actions', () => {
     interruptLabel: container
       .querySelector('.mobile-interrupt-button')
       ?.getAttribute('aria-label'),
+    interruptBusy: container
+      .querySelector('.mobile-interrupt-button')
+      ?.getAttribute('aria-busy'),
   })
-  expect(snapshot()).toEqual({
+  const duringInterrupt = snapshot()
+  await act(async () => {
+    await Promise.resolve()
+  })
+  expect(duringInterrupt).toEqual({
     actions: [['interrupt']],
     defaultPrevented: [false, false],
     keyboardHint: undefined,
     choiceShortcutBadges: 0,
-    interruptLabel: 'Interrupt',
+    interruptLabel: 'Interrupting…',
+    interruptBusy: 'true',
   })
 })
 
@@ -3483,7 +3491,7 @@ it('posts a proposal answer to its sequence route and refreshes the conversation
       method: 'POST',
       body: '{"choice":1,"comment":null}',
     },
-    placeholder: 'Choose an option above, or message the session',
+    placeholder: 'Message session',
     status: 'Proposal · chose B',
   })
 })

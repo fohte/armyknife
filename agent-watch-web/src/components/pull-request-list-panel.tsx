@@ -3,7 +3,9 @@ import '#components/pull-request-list-panel.css'
 import { useState } from 'react'
 
 import { CompletedItemsToggle } from '#components/completed-items-toggle'
-import { requestActionJson } from '#components/conversation-requests'
+import { PullRequestMergeConfirmation } from '#components/pull-request-merge-confirmation'
+import { useSessionOperations } from '#session-operation-context'
+import type { SessionOperation } from '#session-operations'
 import type { SessionPullRequest } from '#types'
 
 type PullRequestListPanelProps = {
@@ -80,29 +82,47 @@ export function PullRequestListPanel({
         (pullRequest) => pullRequest.number === confirmingPullRequestNumber,
       ) ?? null,
   )
-  const [merging, setMerging] = useState(false)
+  const { pendingOperations, run } = useSessionOperations()
+  const mergeOperation: SessionOperation | null =
+    pendingMerge === null ||
+    pendingMerge.owner === null ||
+    pendingMerge.repo === null ||
+    pendingMerge.headSha === null
+      ? null
+      : {
+          type: 'merge',
+          sessionId,
+          number: pendingMerge.number,
+          owner: pendingMerge.owner,
+          repo: pendingMerge.repo,
+          expectedHeadSha: pendingMerge.headSha,
+        }
+  const merging =
+    mergeOperation !== null &&
+    pendingOperations.some(
+      ({ operation }) =>
+        operation.type === 'merge' &&
+        operation.sessionId === sessionId &&
+        operation.number === mergeOperation.number,
+    )
   const [feedback, setFeedback] = useState<{
     kind: 'success' | 'error'
     message: string
   } | null>(null)
 
   const confirmMerge = async () => {
-    if (pendingMerge === null || merging || pendingMerge.headSha === null)
-      return
-    if (pendingMerge.owner === null || pendingMerge.repo === null) return
-    setMerging(true)
+    if (pendingMerge === null || mergeOperation === null || merging) return
     setFeedback(null)
-    await requestActionJson(
-      sessionId,
-      `pull-requests/${String(pendingMerge.number)}/merge`,
-      {
-        owner: pendingMerge.owner,
-        repo: pendingMerge.repo,
-        expectedHeadSha: pendingMerge.headSha,
-      },
-      isMergeResponse,
-    ).match(
+    const result = await run(mergeOperation)
+    result.match(
       (response) => {
+        if (!isMergeResponse(response)) {
+          setFeedback({
+            kind: 'error',
+            message: 'The server returned an invalid merge response.',
+          })
+          return
+        }
         const message =
           response.result === 'merged'
             ? `PR #${String(pendingMerge.number)} merged.`
@@ -117,7 +137,6 @@ export function PullRequestListPanel({
       },
     )
     setPendingMerge(null)
-    setMerging(false)
   }
   if (error !== null && pullRequests.length === 0) {
     return (
@@ -217,39 +236,15 @@ export function PullRequestListPanel({
         />
       )}
       {pendingMerge === null ? null : (
-        <div className="pull-request-list-confirm-backdrop">
-          <section
-            className="pull-request-list-confirm"
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="pull-request-merge-title"
-          >
-            <h3 id="pull-request-merge-title">Merge this pull request?</h3>
-            <p>
-              Merge PR #{String(pendingMerge.number)} using the confirmed head
-              commit?
-            </p>
-            <code>{pendingMerge.headSha}</code>
-            <div className="pull-request-list-confirm-actions">
-              <button
-                type="button"
-                disabled={merging}
-                onClick={() => {
-                  setPendingMerge(null)
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={merging}
-                onClick={() => void confirmMerge()}
-              >
-                {merging ? 'Merging…' : 'Confirm merge'}
-              </button>
-            </div>
-          </section>
-        </div>
+        <PullRequestMergeConfirmation
+          number={pendingMerge.number}
+          headSha={pendingMerge.headSha ?? ''}
+          merging={merging}
+          onCancel={() => {
+            setPendingMerge(null)
+          }}
+          onConfirm={() => void confirmMerge()}
+        />
       )}
     </div>
   )
