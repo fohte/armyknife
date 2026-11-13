@@ -639,7 +639,7 @@ it.each(requests)(
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(response)
     vi.stubGlobal('fetch', fetchMock)
 
-    await submitSessionOperation(testCase.operation)
+    const result = await submitSessionOperation(testCase.operation)
     const requestUrl = `/api/sessions/test-session/${testCase.path}`
     const requestInit =
       testCase.body === undefined
@@ -650,6 +650,7 @@ it.each(requests)(
             body: JSON.stringify(testCase.body),
           }
 
+    if (result.isErr()) throw result.error
     expect(fetchMock.mock.calls).toEqual([[requestUrl, requestInit]])
   },
 )
