@@ -49,11 +49,13 @@ function renderHeader(
     action: string,
     payload?: Record<string, unknown>,
   ) => Promise<boolean>,
+  currentSession = session,
 ) {
   act(() => {
     root?.render(
       <ConversationPaneHeader
-        session={session}
+        key={currentSession.id}
+        session={currentSession}
         sessions={[]}
         actions={actions}
         isMobile={isMobile}
@@ -174,5 +176,45 @@ it.each([
       expectedDraft === null
         ? { visible: false, draft: null }
         : { visible: true, draft: expectedDraft },
+  })
+})
+
+it('starts a fresh editor when the selected session changes', () => {
+  const onAction = vi.fn(() => Promise.resolve(false))
+  renderHeader(false, onAction)
+
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="Edit session title"]',
+      ),
+    ).click()
+  })
+  const input = requireElement(
+    container.querySelector<HTMLInputElement>(
+      'input[aria-label="Session title"]',
+    ),
+  )
+  act(() => {
+    setInputValue(input, 'Uncommitted fixture title')
+  })
+
+  renderHeader(false, onAction, {
+    ...session,
+    id: 'next-fixture-session',
+    title: 'Another fixture title',
+  })
+
+  const snapshot = () => ({
+    action: onAction.mock.calls,
+    editButtonVisible:
+      container.querySelector('[aria-label="Edit session title"]') !== null,
+    editorVisible:
+      container.querySelector('input[aria-label="Session title"]') !== null,
+  })
+  expect(snapshot()).toEqual({
+    action: [],
+    editButtonVisible: true,
+    editorVisible: false,
   })
 })
