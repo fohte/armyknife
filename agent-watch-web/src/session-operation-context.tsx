@@ -3,6 +3,8 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
+  useRef,
   useState,
   useTransition,
 } from 'react'
@@ -34,6 +36,8 @@ type SessionOperationContextValue = {
   confirm: (operation: SessionOperation) => void
 }
 
+const STATE_CONFIRMATION_TIMEOUT_MS = 10_000
+
 const SessionOperationContext =
   createContext<SessionOperationContextValue | null>(null)
 
@@ -41,15 +45,52 @@ function useOperationRunner(): SessionOperationContextValue {
   const [pendingOperations, setPendingOperations] = useState<
     PendingSessionOperation[]
   >([])
+  const confirmationTimeouts = useRef(
+    new Map<string, ReturnType<typeof setTimeout>>(),
+  )
   const [, startOperationTransition] = useTransition()
-  const confirm = useCallback((operation: SessionOperation) => {
-    const key = sessionOperationKey(operation)
-    setPendingOperations((current) =>
-      current.filter(
-        (pending) => sessionOperationKey(pending.operation) !== key,
-      ),
-    )
+  const clearConfirmationTimeout = useCallback((key: string) => {
+    const timeout = confirmationTimeouts.current.get(key)
+    if (timeout !== undefined) clearTimeout(timeout)
+    confirmationTimeouts.current.delete(key)
   }, [])
+  const confirm = useCallback(
+    (operation: SessionOperation) => {
+      const key = sessionOperationKey(operation)
+      clearConfirmationTimeout(key)
+      setPendingOperations((current) =>
+        current.filter(
+          (pending) => sessionOperationKey(pending.operation) !== key,
+        ),
+      )
+    },
+    [clearConfirmationTimeout],
+  )
+  const expireUnconfirmedOperation = useCallback(
+    (operation: SessionOperation) => {
+      const key = sessionOperationKey(operation)
+      clearConfirmationTimeout(key)
+      const timeout = setTimeout(() => {
+        confirmationTimeouts.current.delete(key)
+        setPendingOperations((current) =>
+          current.filter(
+            (pending) => sessionOperationKey(pending.operation) !== key,
+          ),
+        )
+      }, STATE_CONFIRMATION_TIMEOUT_MS)
+      confirmationTimeouts.current.set(key, timeout)
+    },
+    [clearConfirmationTimeout],
+  )
+  useEffect(
+    () => () => {
+      confirmationTimeouts.current.forEach((timeout) => {
+        clearTimeout(timeout)
+      })
+      confirmationTimeouts.current.clear()
+    },
+    [],
+  )
   const run = useCallback<SessionOperationContextValue['run']>(
     async (operation, options = {}) => {
       const key = sessionOperationKey(operation)
@@ -100,6 +141,9 @@ function useOperationRunner(): SessionOperationContextValue {
             : pending,
         ),
       )
+      if (requiresStateConfirmation(operation)) {
+        expireUnconfirmedOperation(operation)
+      }
       if (options.refresh !== undefined) {
         const clearPending = () => {
           if (!requiresStateConfirmation(operation)) confirm(operation)
@@ -110,7 +154,7 @@ function useOperationRunner(): SessionOperationContextValue {
       }
       return result
     },
-    [confirm],
+    [confirm, expireUnconfirmedOperation],
   )
   return { pendingOperations, run, confirm }
 }

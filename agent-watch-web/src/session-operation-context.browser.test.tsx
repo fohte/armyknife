@@ -186,10 +186,12 @@ afterEach(() => {
   if (root !== null) act(() => root?.unmount())
   root = null
   container.remove()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
 it('shows the optimistic state until the server confirms it', async () => {
+  vi.useFakeTimers()
   vi.stubGlobal(
     'fetch',
     vi.fn<typeof fetch>(
@@ -224,11 +226,16 @@ it('shows the optimistic state until the server confirms it', async () => {
   })
   const afterStaleRefresh = snapshot()
 
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(9_999)
+  })
+  const beforeConfirmationTimeout = snapshot()
+
   const confirm = confirmServerState
   if (confirm === null) throw new Error('Expected a confirmation callback')
   act(confirm)
   await act(async () => {
-    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(1)
   })
   const afterConfirmation = snapshot()
 
@@ -236,13 +243,71 @@ it('shows the optimistic state until the server confirms it', async () => {
     beforeResponse,
     afterPost,
     afterStaleRefresh,
+    beforeConfirmationTimeout,
     afterConfirmation,
   })
   expect(completeSnapshot()).toEqual({
     beforeResponse: { starred: 'true', pending: 'sending', error: '' },
     afterPost: { starred: 'true', pending: 'sent', error: '' },
     afterStaleRefresh: { starred: 'true', pending: 'sent', error: '' },
+    beforeConfirmationTimeout: {
+      starred: 'true',
+      pending: 'sent',
+      error: '',
+    },
     afterConfirmation: { starred: 'true', pending: '', error: '' },
+  })
+})
+
+it('shows server state when a successful operation is not confirmed in time', async () => {
+  vi.useFakeTimers()
+  vi.stubGlobal(
+    'fetch',
+    vi.fn<typeof fetch>(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolvePost = resolve
+        }),
+    ),
+  )
+  renderHarness()
+  const button = container.querySelector<HTMLButtonElement>('button')
+  if (button === null) throw new Error('Expected the operation button')
+  act(() => {
+    button.click()
+  })
+  const beforeResponse = snapshot()
+
+  const completePost = resolvePost
+  if (completePost === null) throw new Error('Expected the POST request')
+  await act(async () => {
+    completePost(new Response(null, { status: 204 }))
+    await operationRequest
+  })
+  const afterPost = snapshot()
+
+  const finishRefresh = resolveRefresh
+  if (finishRefresh === null)
+    throw new Error('Expected the conversation refresh')
+  await act(async () => {
+    finishRefresh()
+    await Promise.resolve()
+  })
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(10_000)
+  })
+  const afterTimeout = snapshot()
+
+  const operationSnapshots = () => ({
+    beforeResponse,
+    afterPost,
+    afterTimeout,
+  })
+  expect(operationSnapshots()).toEqual({
+    beforeResponse: { starred: 'true', pending: 'sending', error: '' },
+    afterPost: { starred: 'true', pending: 'sent', error: '' },
+    afterTimeout: { starred: 'false', pending: '', error: '' },
   })
 })
 
