@@ -1,5 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "treatConfigHintsAsErrors": true,
-  "ignoreDependencies": ["@commitlint/cli"]
+  "ignoreDependencies": ["@commitlint/cli"],
+  "ignoreFiles": ["designs/**"]
 }
