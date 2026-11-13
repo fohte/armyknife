@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 use rusqlite_migration::{Error as MigrationError, M, MigrationDefinitionError, Migrations};
 
-// Migrations must stay readable by older binaries: add tables or nullable columns only.
+// Keep older binaries compatible: new columns need defaults or must be nullable.
 static MIGRATION_ENTRIES: [M<'static>; 14] = [
     M::up(
         "CREATE TABLE sessions (

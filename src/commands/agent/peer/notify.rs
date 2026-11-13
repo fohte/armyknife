@@ -90,7 +90,6 @@ pub(crate) fn notify_with_retry(session_id: &str, message: &str) -> Result<()> {
         |_, _| {},
         |from, to, message, failed| {
             store::insert_watch_web_peer_out_message(from, to, message, chrono::Utc::now(), failed)
-                .map(|_| ())
         },
     )?;
     Ok(())
@@ -100,9 +99,9 @@ fn run_with(
     args: &NotifyArgs,
     resolve_parent: impl FnOnce() -> Result<Session>,
     deliver: impl FnOnce(&str, &str, Option<&str>, Option<Engine>) -> Result<Delivery>,
-    save: impl FnOnce(&str, &str) -> Result<()>,
+    save: impl FnOnce(&str, &str, Option<i64>) -> Result<()>,
     alert_user: impl FnOnce(&str, &str),
-    record_delivery: impl FnOnce(&str, &str, &str, bool) -> Result<()>,
+    record_delivery: impl FnOnce(&str, &str, &str, bool) -> Result<i64>,
 ) -> Result<Option<String>> {
     let session_id =
         resolve_target_session_id(args, || resolve_parent().map(|session| session.session_id))?;
@@ -110,7 +109,7 @@ fn run_with(
         Some((id, engine_hint)) => (Some(id), engine_hint),
         None => (None, None),
     };
-    let error = match deliver(
+    let (error, peer_out_message_id) = match deliver(
         &session_id,
         &args.message,
         from.as_deref(),
@@ -130,20 +129,24 @@ fn run_with(
             return Ok(Some(delivery_output(&session_id, &delivery)));
         }
         Err(error) => {
-            if let Some(from) = from.as_deref()
-                && let Err(record_error) = record_delivery(from, &session_id, &args.message, true)
-            {
-                tracing::warn!(
-                    event = "agent.peer.notify.record_failed",
-                    from_session = %from,
-                    to_session = %session_id,
-                    error = %record_error,
-                );
-            }
+            let peer_out_message_id = from.as_deref().and_then(|from| {
+                match record_delivery(from, &session_id, &args.message, true) {
+                    Ok(id) => Some(id),
+                    Err(record_error) => {
+                        tracing::warn!(
+                            event = "agent.peer.notify.record_failed",
+                            from_session = %from,
+                            to_session = %session_id,
+                            error = %record_error,
+                        );
+                        None
+                    }
+                }
+            });
             if is_permanent_failure(&error) {
                 return Err(error);
             }
-            error
+            (error, peer_out_message_id)
         }
     };
 
@@ -153,7 +156,7 @@ fn run_with(
         from.as_deref(),
         sender_engine(from.as_deref(), from_engine_hint),
     );
-    if let Err(save_error) = save(&session_id, &content) {
+    if let Err(save_error) = save(&session_id, &content, peer_out_message_id) {
         let failure = format!(
             "Failed to deliver to session {session_id}: {error:#}. Saving the message for a retry also failed: {save_error:#}"
         );
@@ -725,8 +728,8 @@ mod tests {
                     &args,
                     || anyhow::bail!("the target is explicit"),
                     |_, _, _, _| Ok(Delivery::Sent),
-                    |target, content| {
-                        saved.push((target.to_string(), content.to_string()));
+                    |target, content, peer_out_message_id| {
+                        saved.push((target.to_string(), content.to_string(), peer_out_message_id));
                         Ok(())
                     },
                     |target, failure| alerts.push((target.to_string(), failure.to_string())),
@@ -825,7 +828,7 @@ mod tests {
                         ));
                         Ok(Delivery::Sent)
                     },
-                    |_, _| Ok(()),
+                    |_, _, _| Ok(()),
                     |_, _| {},
                     |from, to, message, failed| {
                         store::insert_watch_web_peer_out_message(from, to, message, sent_at, failed)
@@ -872,7 +875,7 @@ mod tests {
 
     type DeliveryFailureOutcome = (
         std::result::Result<Option<String>, String>,
-        Vec<(String, String)>,
+        Vec<(String, String, Option<i64>)>,
         Vec<(String, String)>,
         Vec<(String, String, String, bool)>,
     );
@@ -904,8 +907,8 @@ mod tests {
                     &args,
                     || anyhow::bail!("the target is explicit"),
                     |_, _, _, _| delivery,
-                    |target, content| {
-                        saved.push((target.to_string(), content.to_string()));
+                    |target, content, peer_out_message_id| {
+                        saved.push((target.to_string(), content.to_string(), peer_out_message_id));
                         save_result
                     },
                     |target, failure| alerts.push((target.to_string(), failure.to_string())),
@@ -916,7 +919,7 @@ mod tests {
                             message.to_string(),
                             failed,
                         ));
-                        Ok(())
+                        Ok(42)
                     },
                 )
             },
@@ -941,7 +944,11 @@ mod tests {
                     "Failed to deliver to session fixture-target: fixture failure. Saved the message; `a agent sweep` retries it for 24 hours."
                         .to_string()
                 )),
-                vec![("fixture-target".to_string(), ENVELOPED_HELLO.to_string())],
+                vec![(
+                    "fixture-target".to_string(),
+                    ENVELOPED_HELLO.to_string(),
+                    Some(42),
+                )],
                 Vec::new(),
                 vec![("fixture-sender".to_string(), "fixture-target".to_string(), "hello".to_string(), true)],
             ),
@@ -960,7 +967,11 @@ mod tests {
             actual,
             (
                 Err(failure.clone()),
-                vec![("fixture-target".to_string(), ENVELOPED_HELLO.to_string())],
+                vec![(
+                    "fixture-target".to_string(),
+                    ENVELOPED_HELLO.to_string(),
+                    Some(42),
+                )],
                 vec![("fixture-target".to_string(), failure)],
                 vec![(
                     "fixture-sender".to_string(),

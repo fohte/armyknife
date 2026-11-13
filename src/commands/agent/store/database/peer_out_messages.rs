@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
 use rusqlite::params;
 
@@ -40,6 +40,24 @@ pub(crate) fn insert_watch_web_peer_out_message(
         ],
     )?;
     Ok(connection.last_insert_rowid())
+}
+
+pub(crate) fn mark_watch_web_peer_out_message_delivered(
+    sessions_dir: &Path,
+    id: i64,
+    sent_at: DateTime<Utc>,
+) -> Result<()> {
+    let connection = open_connection(sessions_dir)?;
+    let updated_rows = connection.execute(
+        "UPDATE watch_web_peer_out_message
+         SET sent_at = ?1, failed = 0
+         WHERE id = ?2",
+        params![sent_at.to_rfc3339(), id],
+    )?;
+    if updated_rows == 0 {
+        bail!("peer message {id} does not exist");
+    }
+    Ok(())
 }
 
 pub(crate) fn watch_web_peer_out_messages(
@@ -90,7 +108,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        WatchWebPeerOutMessage, insert_watch_web_peer_out_message, watch_web_peer_out_messages,
+        WatchWebPeerOutMessage, insert_watch_web_peer_out_message,
+        mark_watch_web_peer_out_message_delivered, watch_web_peer_out_messages,
     };
 
     #[fixture]
@@ -177,6 +196,35 @@ mod tests {
                 content: "Delivery failed for the fictional request.".to_string(),
                 sent_at,
                 failed: true,
+            }],
+        );
+    }
+
+    #[rstest]
+    fn marks_a_failed_delivery_as_sent_after_redelivery(sessions_dir: TempDir) {
+        let failed_at = chrono::Utc.with_ymd_and_hms(2026, 6, 1, 12, 29, 0).unwrap();
+        let sent_at = chrono::Utc.with_ymd_and_hms(2026, 6, 1, 12, 30, 0).unwrap();
+        let id = insert_watch_web_peer_out_message(
+            sessions_dir.path(),
+            "fixture-sender",
+            "fixture-recipient",
+            "A fictional peer message.",
+            failed_at,
+            true,
+        )
+        .unwrap();
+
+        mark_watch_web_peer_out_message_delivered(sessions_dir.path(), id, sent_at).unwrap();
+
+        assert_eq!(
+            watch_web_peer_out_messages(sessions_dir.path(), "fixture-sender").unwrap(),
+            vec![WatchWebPeerOutMessage {
+                id,
+                from_session_id: "fixture-sender".to_string(),
+                to_session_id: "fixture-recipient".to_string(),
+                content: "A fictional peer message.".to_string(),
+                sent_at,
+                failed: false,
             }],
         );
     }
