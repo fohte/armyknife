@@ -1,30 +1,30 @@
 import { expect, it } from 'vitest'
 
-import { critRelayUrl } from '#components/crit-relay-url'
+import { webUiRelayUrl } from '#components/crit-relay-url'
 
-it('uses the tailnet relay origin and preserves the crit path, query, and fragment', () => {
+it('uses the tailnet relay origin and preserves the web UI path, query, and fragment', () => {
   expect(
-    critRelayUrl('http://localhost:48761/review/sample?view=wide#notes', {
+    webUiRelayUrl('http://localhost:48761/review/sample?view=wide#notes', {
       protocol: 'https:',
       hostname: 'device.example.ts.net',
     }),
   ).toBe(
-    'https://device.example.ts.net:8443/_crit/48761/review/sample?view=wide#notes',
+    'https://device.example.ts.net:8443/_web-ui/48761/review/sample?view=wide#notes',
   )
 })
 
 it('uses the localhost relay origin when watch-web is open locally', () => {
   expect(
-    critRelayUrl('http://127.0.0.1:48761/review/sample', {
+    webUiRelayUrl('http://127.0.0.1:48761/review/sample', {
       protocol: 'http:',
       hostname: 'localhost',
     }),
-  ).toBe('http://localhost:4318/_crit/48761/review/sample')
+  ).toBe('http://localhost:4318/_web-ui/48761/review/sample')
 })
 
-it('keeps URLs that do not target a local crit daemon outside the relay', () => {
+it('keeps URLs that do not target a local web UI outside the relay', () => {
   expect(
-    critRelayUrl('http://review.example.invalid:48761/review/sample', {
+    webUiRelayUrl('http://review.example.invalid:48761/review/sample', {
       protocol: 'https:',
       hostname: 'device.example.ts.net',
     }),

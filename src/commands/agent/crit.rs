@@ -2,7 +2,7 @@
 
 mod monitor;
 pub(super) mod toggle;
-mod url;
+pub(super) mod url;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
@@ -20,7 +20,7 @@ use crate::shared::caller_pane;
 use crate::shared::env_var::EnvVars;
 use crate::shared::log::short_run_id;
 
-use self::url::{add_url, parse_port};
+use self::url::parse_port;
 
 const CRIT_TITLE: &str = "■ crit - Review requested";
 
@@ -165,15 +165,7 @@ fn add(args: &AddArgs) -> Result<()> {
 }
 
 fn record_session_url(session_id: &str, url: &str) -> Result<Session> {
-    let sessions_dir = store::sessions_dir()?;
-    let lock = store::lock_session_for_update(&sessions_dir, session_id)?;
-    let Some(mut session) = lock.load()? else {
-        bail!("Agent session not found: {session_id}");
-    };
-    add_url(&mut session.crit_urls, url);
-    lock.save(&session)?;
-    drop(lock);
-    Ok(session)
+    super::web_ui::record_url(session_id, "crit", url, true)
 }
 
 fn continue_add(

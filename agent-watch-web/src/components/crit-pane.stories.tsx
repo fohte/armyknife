@@ -5,6 +5,7 @@ import { CritPane } from '#components/crit-pane'
 const meta = {
   component: CritPane,
   args: {
+    name: 'crit',
     url: 'http://127.0.0.1:5000/review/sample',
     onClose: () => undefined,
   },

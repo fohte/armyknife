@@ -76,6 +76,9 @@ pub struct Session {
     /// Crit review URLs opened by this session, ordered by most recently requested.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub crit_urls: Vec<String>,
+    /// Named local web interfaces opened by this session.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub web_uis: Vec<WebUiRegistration>,
     /// IDs of Human-in-the-Loop reviews currently waiting for the user.
     /// New review IDs carry their document path; legacy PR-draft review IDs
     /// may be pathless. watch-web reads documents only from path-bearing IDs.
@@ -204,6 +207,13 @@ pub struct Session {
     pub effort: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebUiRegistration {
+    pub name: String,
+    pub url: String,
+}
+
 impl Session {
     pub(crate) fn restore_from_archive(&mut self) -> bool {
         self.archived_at.take().is_some()
@@ -257,6 +267,7 @@ mod tests {
                     session.pr_context,
                     session.model,
                     session.effort,
+                    session.web_uis,
                 ),
             ),
             (
@@ -270,8 +281,35 @@ mod tests {
                     false,
                     BTreeSet::new(),
                 ),
-                (None, false, false, None, None, None),
+                (None, false, false, None, None, None, Vec::new()),
             )
+        );
+    }
+
+    #[test]
+    fn deserializes_named_web_ui_registrations() {
+        let session: Session = serde_json::from_value(serde_json::json!({
+            "session_id": "fixture-session",
+            "cwd": "/tmp/fixture-worktree",
+            "transcript_path": null,
+            "tmux_info": null,
+            "status": "stopped",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": null,
+            "web_uis": [{
+                "name": "Design editor",
+                "url": "http://127.0.0.1:4721/design/sample/"
+            }]
+        }))
+        .expect("fixture session should deserialize");
+
+        assert_eq!(
+            session.web_uis,
+            vec![WebUiRegistration {
+                name: "Design editor".to_owned(),
+                url: "http://127.0.0.1:4721/design/sample/".to_owned(),
+            }],
         );
     }
 

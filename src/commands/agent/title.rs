@@ -75,6 +75,7 @@ mod tests {
             archived_at: None,
             pr_context: None,
             crit_urls: Vec::new(),
+            web_uis: Vec::new(),
             pending_human_review_ids: BTreeSet::new(),
             cwd: PathBuf::from("/fixture/project"),
             transcript_path: None,

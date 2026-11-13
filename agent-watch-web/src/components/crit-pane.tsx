@@ -3,30 +3,32 @@ import '#components/crit-pane.css'
 import { Button } from '@fohte/ui/button'
 import { useState } from 'react'
 
-import { critRelayUrl } from '#components/crit-relay-url'
+import { webUiRelayUrl } from '#components/crit-relay-url'
 
 type CritPaneProps = {
+  name: string
   url: string
   onClose: () => void
   defaultFullscreen?: boolean
 }
 
 export function CritPane({
+  name,
   url,
   onClose,
   defaultFullscreen = false,
 }: CritPaneProps) {
   const [isFullscreen, setIsFullscreen] = useState(defaultFullscreen)
-  const relayUrl = critRelayUrl(url)
+  const relayUrl = webUiRelayUrl(url)
 
   return (
     <aside
       className={`crit-pane${isFullscreen ? ' is-fullscreen' : ''}`}
-      aria-label="crit"
+      aria-label={name}
       id="crit-pane"
     >
       <header className="crit-pane-header">
-        <span className="crit-pane-title">crit</span>
+        <span className="crit-pane-title">{name}</span>
         <a href={relayUrl} target="_blank" rel="noreferrer">
           {url}
         </a>
@@ -34,7 +36,7 @@ export function CritPane({
           type="button"
           variant="plain"
           aria-label={
-            isFullscreen ? 'Exit crit fullscreen' : 'Show crit fullscreen'
+            isFullscreen ? `Exit ${name} fullscreen` : `Show ${name} fullscreen`
           }
           aria-pressed={isFullscreen}
           onClick={() => {
@@ -46,13 +48,13 @@ export function CritPane({
         <Button
           type="button"
           variant="plain"
-          aria-label="Close crit"
+          aria-label={`Close ${name}`}
           onClick={onClose}
         >
           ×
         </Button>
       </header>
-      <iframe title="Crit review" src={relayUrl} />
+      <iframe title={`${name} web interface`} src={relayUrl} />
     </aside>
   )
 }

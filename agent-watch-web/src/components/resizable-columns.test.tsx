@@ -236,6 +236,7 @@ it('keeps the status panel visible on narrow desktop viewports', () => {
                 count: 1,
                 content: (
                   <CritPane
+                    name="crit"
                     url="http://127.0.0.1:5000/review/sample"
                     onClose={() => undefined}
                   />

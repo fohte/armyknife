@@ -79,13 +79,19 @@ export function useConversationStatusPanel({
     decisions.find((decision) => decision.seq === selectedDecisionSeq) ??
     decisions.find((decision) => decision.review === null) ??
     decisions[0]
-  const critUrl =
+  const legacyCritUrl =
     session.kind === 'Review' &&
     session.category === 'needs_action' &&
     session.critUrl != null &&
     session.critUrl !== ''
       ? session.critUrl
       : null
+  const webUis =
+    session.webUis ??
+    (legacyCritUrl === null ? [] : [{ name: 'crit', url: legacyCritUrl }])
+  const webUiTabIds = webUis.map((webUi) =>
+    webUi.name === 'crit' ? 'crit' : `web-ui-${encodeURIComponent(webUi.url)}`,
+  )
   const treeCount =
     sessionTree === null
       ? 0
@@ -101,10 +107,10 @@ export function useConversationStatusPanel({
     ...(pullRequestListAvailable ? ['pull-requests'] : []),
     ...(reviewDocumentId == null ? [] : ['review-document']),
     ...(decisionCount === 0 ? [] : ['decisions']),
-    ...(critUrl === null ? [] : ['crit']),
+    ...webUiTabIds,
   ]
   const defaultPanelTabId =
-    ['crit', 'review-document', 'running'].find((id) =>
+    [...[...webUiTabIds].reverse(), 'review-document', 'running'].find((id) =>
       availableTabIds.includes(id),
     ) ??
     availableTabIds[0] ??
@@ -300,19 +306,18 @@ export function useConversationStatusPanel({
           },
         ]
       : []),
-    ...(availableTabIds.includes('crit')
-      ? [
-          {
-            id: 'crit',
-            label: 'crit',
-            count: 1,
-            content:
-              critUrl === null ? null : (
-                <CritPane url={critUrl} onClose={onCloseStatusPanel} />
-              ),
-          },
-        ]
-      : []),
+    ...webUis.map((webUi, index) => ({
+      id: webUiTabIds[index] ?? `web-ui-${String(index)}`,
+      label: webUi.name,
+      count: 1,
+      content: (
+        <CritPane
+          name={webUi.name}
+          url={webUi.url}
+          onClose={onCloseStatusPanel}
+        />
+      ),
+    })),
   ]
   useEffect(() => {
     if (activePanelTabId !== activeTabId) setActivePanelTabId(activeTabId)

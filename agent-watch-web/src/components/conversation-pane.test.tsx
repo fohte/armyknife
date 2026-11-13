@@ -4299,7 +4299,7 @@ it('shows the unreviewed count instead of the total on the Decisions tab', () =>
   })
 })
 
-it('prefers crit when other status tabs are available', () => {
+it('opens a registered web UI when other status tabs are available', () => {
   const decision: ChatItem = {
     type: 'decision',
     seq: 1,
@@ -4323,7 +4323,12 @@ it('prefers crit when other status tabs are available', () => {
         ...session,
         category: 'needs_action',
         kind: 'Review',
-        critUrl: 'http://127.0.0.1:5000/review/sample',
+        webUis: [
+          {
+            name: 'Design editor',
+            url: 'http://127.0.0.1:5000/design/sample/',
+          },
+        ],
         decisionCount: 1,
         unreviewedDecisionCount: 1,
       },
@@ -4353,16 +4358,18 @@ it('prefers crit when other status tabs are available', () => {
     })),
     selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
       ?.textContent,
-    critPane: container.querySelector('.crit-pane') !== null,
+    webUiPane: container.querySelector('.crit-pane') !== null,
+    iframe: container.querySelector('iframe')?.getAttribute('src'),
   })
   expect(snapshot()).toEqual({
     tabs: [
       { label: 'Running1', selected: 'false' },
       { label: 'Decisions1', selected: 'false' },
-      { label: 'crit', selected: 'true' },
+      { label: 'Design editor', selected: 'true' },
     ],
-    selectedTab: 'crit',
-    critPane: true,
+    selectedTab: 'Design editor',
+    webUiPane: true,
+    iframe: `${window.location.protocol}//localhost:4318/_web-ui/5000/design/sample/`,
   })
 })
 

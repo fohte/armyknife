@@ -34,6 +34,7 @@ it('toggles the review between its column and fullscreen layouts', () => {
   act(() => {
     root?.render(
       <CritPane
+        name="Editor"
         url="http://127.0.0.1:5000/review/sample"
         onClose={() => undefined}
       />,
@@ -43,7 +44,7 @@ it('toggles the review between its column and fullscreen layouts', () => {
   act(() => {
     container
       .querySelector<HTMLButtonElement>(
-        'button[aria-label="Show crit fullscreen"]',
+        'button[aria-label="Show Editor fullscreen"]',
       )
       ?.click()
   })
@@ -51,7 +52,7 @@ it('toggles the review between its column and fullscreen layouts', () => {
     className: container.querySelector('aside')?.className,
     exitLabel: container
       .querySelector<HTMLButtonElement>(
-        'button[aria-label="Exit crit fullscreen"]',
+        'button[aria-label="Exit Editor fullscreen"]',
       )
       ?.getAttribute('aria-pressed'),
   }
@@ -59,7 +60,7 @@ it('toggles the review between its column and fullscreen layouts', () => {
   act(() => {
     container
       .querySelector<HTMLButtonElement>(
-        'button[aria-label="Exit crit fullscreen"]',
+        'button[aria-label="Exit Editor fullscreen"]',
       )
       ?.click()
   })
@@ -69,7 +70,7 @@ it('toggles the review between its column and fullscreen layouts', () => {
     restoredClassName: container.querySelector('aside')?.className,
     restoredLabel: container
       .querySelector<HTMLButtonElement>(
-        'button[aria-label="Show crit fullscreen"]',
+        'button[aria-label="Show Editor fullscreen"]',
       )
       ?.getAttribute('aria-pressed'),
   })
@@ -89,6 +90,7 @@ it('opens the iframe and external link through the crit relay', () => {
   act(() => {
     root?.render(
       <CritPane
+        name="crit"
         url="http://127.0.0.1:48761/review/sample"
         onClose={() => undefined}
       />,
@@ -96,7 +98,7 @@ it('opens the iframe and external link through the crit relay', () => {
   })
 
   expect(relayTargets()).toEqual({
-    iframe: `${window.location.protocol}//localhost:4318/_crit/48761/review/sample`,
-    link: `${window.location.protocol}//localhost:4318/_crit/48761/review/sample`,
+    iframe: `${window.location.protocol}//localhost:4318/_web-ui/48761/review/sample`,
+    link: `${window.location.protocol}//localhost:4318/_web-ui/48761/review/sample`,
   })
 })
