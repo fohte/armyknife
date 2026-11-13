@@ -5,7 +5,26 @@ use rusqlite::Connection;
 use rusqlite_migration::{Error as MigrationError, M, MigrationDefinitionError, Migrations};
 
 // Keep older binaries compatible: new columns need defaults or must be nullable.
-static MIGRATION_ENTRIES: [M<'static>; 16] = [
+const AGENT_FILE_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS agent_file (
+    session_id TEXT NOT NULL,
+    id TEXT NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
+    name TEXT NOT NULL,
+    caption TEXT,
+    mime_type TEXT,
+    size INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, id)
+);
+CREATE INDEX IF NOT EXISTS agent_file_session_id_created_at
+    ON agent_file (session_id, created_at, position);
+CREATE TRIGGER IF NOT EXISTS agent_file_delete_session
+    AFTER DELETE ON sessions
+    BEGIN
+        DELETE FROM agent_file WHERE session_id = OLD.session_id;
+    END;";
+
+static MIGRATION_ENTRIES: [M<'static>; 18] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -166,25 +185,18 @@ static MIGRATION_ENTRIES: [M<'static>; 16] = [
     ),
     M::up("ALTER TABLE agent_todo ADD COLUMN resolution TEXT;"),
     M::up(
-        "CREATE TABLE IF NOT EXISTS agent_file (
-            session_id TEXT NOT NULL,
-            id TEXT NOT NULL,
-            position INTEGER NOT NULL DEFAULT 0,
-            name TEXT NOT NULL,
-            caption TEXT,
-            mime_type TEXT,
-            size INTEGER NOT NULL,
-            created_at TEXT NOT NULL,
-            PRIMARY KEY (session_id, id)
-        );
-        CREATE INDEX IF NOT EXISTS agent_file_session_id_created_at
-            ON agent_file (session_id, created_at, position);
-        CREATE TRIGGER IF NOT EXISTS agent_file_delete_session
-            AFTER DELETE ON sessions
-            BEGIN
-                DELETE FROM agent_file WHERE session_id = OLD.session_id;
-            END;",
+        "ALTER TABLE watch_web_queued_prompt
+         ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]';
+         ALTER TABLE watch_web_queued_prompt
+         ADD COLUMN message_id TEXT;",
     ),
+    M::up(
+        "ALTER TABLE watch_web_queued_prompt
+         ADD COLUMN resolved INTEGER NOT NULL DEFAULT 1;
+         UPDATE watch_web_queued_prompt
+         SET resolved = CASE WHEN message_id IS NULL THEN 1 ELSE 0 END;",
+    ),
+    M::up(AGENT_FILE_SCHEMA),
 ];
 
 static MIGRATIONS: LazyLock<Migrations<'static>> =
@@ -200,12 +212,42 @@ pub(super) fn migrate_if_needed(connection: &mut Connection) -> Result<()> {
     if user_version > current_version() {
         return Ok(());
     }
+    if user_version >= 16 {
+        // Version 16 alone cannot prove that queued-prompt columns exist before migration 17.
+        ensure_queued_prompt_columns(connection)?;
+    }
     if user_version < current_version()
         && let Err(error) = MIGRATIONS.to_latest(connection)
     {
         accept_migration_error(connection, error)?;
     }
     ensure_todo_resolution_column(connection)
+}
+
+fn ensure_queued_prompt_columns(connection: &Connection) -> Result<()> {
+    for (column, statement) in [
+        (
+            "attachments",
+            "ALTER TABLE watch_web_queued_prompt
+             ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'",
+        ),
+        (
+            "message_id",
+            "ALTER TABLE watch_web_queued_prompt ADD COLUMN message_id TEXT",
+        ),
+    ] {
+        let exists: bool = connection.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM pragma_table_info('watch_web_queued_prompt') WHERE name = ?1
+            )",
+            [column],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            connection.execute(statement, [])?;
+        }
+    }
+    Ok(())
 }
 
 fn ensure_todo_resolution_column(connection: &Connection) -> Result<()> {

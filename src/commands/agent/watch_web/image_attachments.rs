@@ -19,21 +19,7 @@ pub(super) const MAX_IMAGE_BYTES: usize = MAX_AGENT_FILE_BYTES as usize;
 pub(super) const MAX_IMAGES_PER_MESSAGE: usize = 16;
 const MAX_SAVED_IMAGE_BYTES: usize = 50 * 1024 * 1024;
 const ATTACHMENT_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
-const EMPTY_MESSAGE_HEADERS: [&str; 2] = [
-    "Please inspect the attached image(s):\n",
-    "Please inspect the attached file(s):\n",
-];
-const ATTACHMENT_SECTION_SEPARATORS: [&str; 2] = [
-    concat!("\n", "\n", "Attached image(s):", "\n"),
-    concat!("\n", "\n", "Attached file(s):", "\n"),
-];
 type DirectoryLoader = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
-
-#[derive(Debug, PartialEq, Eq)]
-pub(super) enum Reference {
-    Image { source: String, available: bool },
-    File { name: String },
-}
 
 pub(super) fn storage_directory() -> anyhow::Result<PathBuf> {
     let directory = crate::shared::dirs::state_dir()
@@ -58,53 +44,6 @@ pub(super) fn image_is_available(source: &str) -> bool {
         return false;
     };
     image_file_is_safe(&directory, filename)
-}
-
-pub(super) fn extract_references(
-    content: &str,
-    directory: &Path,
-) -> Option<(String, Vec<Reference>)> {
-    let section = ATTACHMENT_SECTION_SEPARATORS
-        .iter()
-        .filter_map(|separator| {
-            content
-                .rfind(separator)
-                .map(|offset| (offset, &content[offset + separator.len()..]))
-        })
-        .max_by_key(|(offset, _)| *offset);
-    let (visible_text, listed_paths) = if let Some((offset, listed_paths)) = section {
-        (content[..offset].trim_end().to_owned(), listed_paths)
-    } else {
-        let (_, listed_paths) = EMPTY_MESSAGE_HEADERS
-            .iter()
-            .find_map(|header| content.strip_prefix(header).map(|paths| (*header, paths)))?;
-        (String::new(), listed_paths)
-    };
-    let listed_paths = listed_paths.lines().collect::<Vec<_>>();
-    if listed_paths.is_empty() || listed_paths.iter().any(|line| !line.starts_with("- ")) {
-        return None;
-    }
-
-    let references = listed_paths
-        .into_iter()
-        .filter_map(|line| {
-            let path = Path::new(line.strip_prefix("- ")?);
-            let filename = path.file_name()?.to_str()?;
-            if path.parent()? != directory {
-                return None;
-            }
-            if is_valid_image_filename(filename) {
-                return Some(Reference::Image {
-                    source: format!("/api/images/{filename}"),
-                    available: image_file_is_safe(directory, filename),
-                });
-            }
-            Some(Reference::File {
-                name: original_filename(filename)?.to_owned(),
-            })
-        })
-        .collect();
-    Some((visible_text, references))
 }
 
 pub(super) fn routes() -> Router {
@@ -265,17 +204,6 @@ fn is_valid_image_filename(filename: &str) -> bool {
         && image_mime_type(original_name).is_some()
 }
 
-fn original_filename(filename: &str) -> Option<&str> {
-    if let Some((prefix, kind_and_name)) = filename.split_once('~')
-        && is_uuid(prefix)
-        && let Some(name) = kind_and_name.strip_prefix("file~")
-    {
-        return is_valid_sanitized_name(name).then_some(name);
-    }
-    let (prefix, name) = filename.split_once('_')?;
-    (is_uuid(prefix) && is_valid_sanitized_name(name)).then_some(name)
-}
-
 fn is_valid_sanitized_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 180
@@ -328,11 +256,7 @@ mod tests {
     use rstest::{fixture, rstest};
     use tower::ServiceExt;
 
-    use super::{
-        ATTACHMENT_RETENTION, Reference, extract_references, is_known_expired, routes_with,
-    };
-
-    const PNG_SIGNATURE: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    use super::{ATTACHMENT_RETENTION, is_known_expired, routes_with};
 
     #[fixture]
     fn attachment_directory() -> (tempfile::TempDir, std::path::PathBuf) {
@@ -359,191 +283,6 @@ mod tests {
         #[case] expected: bool,
     ) {
         assert_eq!(is_known_expired(modified, now), expected);
-    }
-
-    #[test]
-    fn extracts_only_image_paths_from_the_watch_web_storage_directory() {
-        let directory = tempfile::tempdir().unwrap();
-        let directory_path = directory.path().canonicalize().unwrap();
-        let image_name = "00000000-0000-4000-8000-000000000001.png";
-        let image_path = directory_path.join(image_name);
-        fs::write(&image_path, PNG_SIGNATURE).unwrap();
-        let missing_name = "00000000-0000-4000-8000-000000000002.webp";
-        let expired_name = "00000000-0000-4000-8000-000000000004.gif";
-        let expired_path = directory_path.join(expired_name);
-        fs::write(&expired_path, b"expired fixture image").unwrap();
-        fs::File::open(&expired_path)
-            .unwrap()
-            .set_modified(SystemTime::UNIX_EPOCH)
-            .unwrap();
-        let external_path = directory_path
-            .parent()
-            .unwrap()
-            .join("00000000-0000-4000-8000-000000000003.png");
-        let content = format!(
-            indoc::indoc! {"
-                Inspect these images.
-
-                Attached image(s):
-                - {}
-                - {}
-                - {}
-                - {}
-            "},
-            image_path.display(),
-            directory_path.join(missing_name).display(),
-            expired_path.display(),
-            external_path.display(),
-        );
-
-        assert_eq!(
-            extract_references(&content, &directory_path),
-            Some((
-                "Inspect these images.".to_string(),
-                vec![
-                    Reference::Image {
-                        source: format!("/api/images/{image_name}"),
-                        available: true,
-                    },
-                    Reference::Image {
-                        source: format!("/api/images/{missing_name}"),
-                        available: false,
-                    },
-                    Reference::Image {
-                        source: format!("/api/images/{expired_name}"),
-                        available: false,
-                    },
-                ],
-            )),
-        );
-    }
-
-    #[rstest]
-    #[case::legacy_image_section(
-        "Attached image(s):",
-        "Inspect the attachment.",
-        "00000000-0000-4000-8000-000000000001.png",
-        Reference::Image {
-            source: "/api/images/00000000-0000-4000-8000-000000000001.png".to_string(),
-            available: true,
-        },
-        "Inspect the attachment.",
-    )]
-    #[case::legacy_empty_image_header(
-        "Please inspect the attached image(s):",
-        "",
-        "00000000-0000-4000-8000-000000000002.png",
-        Reference::Image {
-            source: "/api/images/00000000-0000-4000-8000-000000000002.png".to_string(),
-            available: true,
-        },
-        "",
-    )]
-    #[case::new_file_section(
-        "Attached file(s):",
-        "Inspect the attachment.",
-        "00000000-0000-4000-8000-000000000003~file~design-mock.html",
-        Reference::File {
-            name: "design-mock.html".to_string(),
-        },
-        "Inspect the attachment.",
-    )]
-    #[case::new_empty_file_header(
-        "Please inspect the attached file(s):",
-        "",
-        "00000000-0000-4000-8000-000000000004~file~design-mock.html",
-        Reference::File {
-            name: "design-mock.html".to_string(),
-        },
-        "",
-    )]
-    #[case::image_named_file_is_not_rendered_as_a_preview(
-        "Attached file(s):",
-        "Inspect the attachment.",
-        "00000000-0000-4000-8000-000000000005~file~design-mock.png",
-        Reference::File {
-            name: "design-mock.png".to_string(),
-        },
-        "Inspect the attachment.",
-    )]
-    fn extracts_legacy_and_generic_attachment_headings(
-        attachment_directory: (tempfile::TempDir, std::path::PathBuf),
-        #[case] header: &str,
-        #[case] visible_text: &str,
-        #[case] filename: &str,
-        #[case] expected_reference: Reference,
-        #[case] expected_text: &str,
-    ) {
-        let (_directory, directory_path) = attachment_directory;
-        let image_path = directory_path.join(filename);
-        let bytes = if matches!(&expected_reference, Reference::Image { .. }) {
-            PNG_SIGNATURE
-        } else {
-            b"attachment bytes"
-        };
-        fs::write(&image_path, bytes).unwrap();
-        let content = if visible_text.is_empty() {
-            indoc::formatdoc! {"
-                {header}
-                - {}
-            ", image_path.display()}
-        } else {
-            indoc::formatdoc! {"
-                {visible_text}
-
-                {header}
-                - {}
-            ", image_path.display()}
-        };
-
-        assert_eq!(
-            extract_references(&content, &directory_path),
-            Some((expected_text.to_string(), vec![expected_reference])),
-        );
-    }
-
-    #[rstest]
-    fn extracts_images_and_files_from_a_generic_attachment_section(
-        attachment_directory: (tempfile::TempDir, std::path::PathBuf),
-    ) {
-        let (_directory, directory_path) = attachment_directory;
-        let image_name = "00000000-0000-4000-8000-000000000005~image~screenshot.jpeg";
-        let file_name = "00000000-0000-4000-8000-000000000006~file~design-mock.html";
-        let png_name = "00000000-0000-4000-8000-000000000007~file~design-mock.png";
-        fs::write(directory_path.join(image_name), b"\xff\xd8\xfffixture").unwrap();
-        fs::write(directory_path.join(file_name), b"<main>Mock</main>").unwrap();
-        fs::write(directory_path.join(png_name), b"<main>Mock</main>").unwrap();
-        let content = indoc::formatdoc! {"
-            Inspect the attachments.
-
-            Attached file(s):
-            - {}
-            - {}
-            - {}
-        ",
-            directory_path.join(image_name).display(),
-            directory_path.join(file_name).display(),
-            directory_path.join(png_name).display(),
-        };
-
-        assert_eq!(
-            extract_references(&content, &directory_path),
-            Some((
-                "Inspect the attachments.".to_string(),
-                vec![
-                    Reference::Image {
-                        source: format!("/api/images/{image_name}"),
-                        available: true,
-                    },
-                    Reference::File {
-                        name: "design-mock.html".to_string(),
-                    },
-                    Reference::File {
-                        name: "design-mock.png".to_string(),
-                    },
-                ],
-            )),
-        );
     }
 
     #[rstest]

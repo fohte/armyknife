@@ -1,9 +1,32 @@
 use indoc::indoc;
-use rstest::rstest;
+use rstest::{fixture, rstest};
 use rusqlite::Connection;
 use rusqlite_migration::{Error as MigrationError, MigrationDefinitionError, Migrations};
 
 use super::*;
+
+#[derive(Clone, Copy, Debug)]
+enum LegacySchema {
+    FileAttachmentsAtVersionFifteen,
+    FileAttachmentsAtVersionSixteen,
+    QueuedPromptColumnsAtVersionSixteen,
+}
+
+struct DatabaseFixture {
+    temp_dir: tempfile::TempDir,
+    connection: Connection,
+}
+
+#[fixture]
+fn database_fixture() -> DatabaseFixture {
+    let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+    let connection = Connection::open(temp_dir.path().join("sessions.db"))
+        .expect("temporary database should open");
+    DatabaseFixture {
+        temp_dir,
+        connection,
+    }
+}
 
 #[rstest]
 #[case::newer_database(1, true)]
@@ -24,11 +47,12 @@ fn accepts_database_too_far_ahead_only_for_a_newer_version(
     assert_eq!(actual, expected_accepted);
 }
 
-#[test]
-fn adds_permission_request_mailbox_to_version_nine_database() {
-    let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
-    let database_path = temp_dir.path().join("sessions.db");
-    let mut connection = Connection::open(&database_path).expect("temporary database should open");
+#[rstest]
+fn adds_permission_request_mailbox_to_version_nine_database(database_fixture: DatabaseFixture) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
     Migrations::from_slice(&MIGRATION_ENTRIES[..9])
         .to_latest(&mut connection)
         .expect("master migrations should create the version nine schema");
@@ -118,12 +142,77 @@ fn adds_permission_request_mailbox_to_version_nine_database() {
         ),
     );
 }
+#[rstest]
+fn resolves_legacy_queued_prompts_without_message_ids(database_fixture: DatabaseFixture) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
+    Migrations::from_slice(&MIGRATION_ENTRIES[..16])
+        .to_latest(&mut connection)
+        .expect("version sixteen migrations should create the message id schema");
+    connection
+        .execute(
+            indoc! {"
+                INSERT INTO watch_web_queued_prompt (
+                session_id, content, sent_at, message_id
+                ) VALUES
+                ('fixture-session', 'Legacy prompt.', '2026-01-01T00:00:00Z', NULL),
+                ('fixture-session', 'New prompt.', '2026-01-01T00:00:01Z', 'fixture-message-cyan')",
+            },
+            [],
+        )
+        .expect("legacy and id-bearing queued prompts should be inserted");
+    drop(connection);
 
-#[test]
-fn adds_todo_resolution_to_master_version_fourteen_database() {
-    let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
-    let database_path = temp_dir.path().join("sessions.db");
-    let mut connection = Connection::open(&database_path).expect("temporary database should open");
+    let connection = super::super::open_connection(temp_dir.path())
+        .expect("version sixteen database should migrate to the current schema");
+    connection
+        .execute(
+            indoc! {"
+                INSERT INTO watch_web_queued_prompt (session_id, content, sent_at)
+                VALUES ('fixture-session', 'Old writer prompt.', '2026-01-01T00:00:02Z')
+            "},
+            [],
+        )
+        .expect("old writer should be able to insert into the migrated schema");
+    let actual = connection
+        .prepare(indoc! {"
+                SELECT message_id, resolved, attachments
+                FROM watch_web_queued_prompt ORDER BY id
+            "})
+        .expect("queued prompt migration query should prepare")
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .expect("queued prompts should be queryable")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("queued prompts should deserialize");
+
+    assert_eq!(
+        actual,
+        vec![
+            (None, 1, "[]".to_string()),
+            (
+                Some("fixture-message-cyan".to_string()),
+                0,
+                "[]".to_string()
+            ),
+            (None, 1, "[]".to_string()),
+        ],
+    );
+}
+
+#[rstest]
+fn adds_todo_resolution_to_master_version_fourteen_database(database_fixture: DatabaseFixture) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
     Migrations::from_slice(&MIGRATION_ENTRIES[..14])
         .to_latest(&mut connection)
         .expect("master migration fourteen schema should be created");
@@ -158,89 +247,160 @@ fn adds_todo_resolution_to_master_version_fourteen_database() {
     );
 }
 
-#[test]
-fn repairs_version_fifteen_file_attachment_database() {
+#[fixture]
+fn version_fourteen_database() -> Connection {
     let mut connection = Connection::open_in_memory().expect("in-memory database should open");
+    Migrations::from_slice(&MIGRATION_ENTRIES[..14])
+        .to_latest(&mut connection)
+        .expect("version fourteen schema should be created");
     connection
-        .execute_batch(indoc! {
-            "
-            CREATE TABLE sessions (
-                session_id TEXT PRIMARY KEY,
-                data TEXT NOT NULL,
-                rev INTEGER NOT NULL
-            );
-            INSERT INTO sessions (session_id, data, rev)
-                VALUES ('sample-session', '{}', 0);
-            CREATE TABLE agent_todo (
-                session_id TEXT NOT NULL,
-                seq INTEGER NOT NULL,
-                title TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                completed_at TEXT,
-                comment TEXT,
-                PRIMARY KEY (session_id, seq)
-            );
-            INSERT INTO agent_todo (session_id, seq, title, created_at)
-                VALUES ('sample-session', 1, 'Task', '2026-01-01T00:00:00Z');
-            CREATE TABLE agent_file (
-                session_id TEXT NOT NULL,
-                id TEXT NOT NULL,
-                position INTEGER NOT NULL DEFAULT 0,
-                name TEXT NOT NULL,
-                caption TEXT,
-                mime_type TEXT,
-                size INTEGER NOT NULL,
-                created_at TEXT NOT NULL,
-                PRIMARY KEY (session_id, id)
-            );
-            INSERT INTO agent_file (
+        .execute(
+            "INSERT INTO agent_todo (session_id, seq, title, created_at)
+             VALUES ('sample-session', 1, 'Task', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("existing todo should be inserted");
+    connection
+        .execute(
+            "INSERT INTO watch_web_queued_prompt (id, session_id, content, sent_at)
+             VALUES (1, 'sample-session', 'Queued content', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("existing queued prompt should be inserted");
+    connection
+}
+
+fn insert_legacy_file(connection: &Connection) {
+    connection
+        .execute(
+            "INSERT INTO agent_file (
                 session_id, id, position, name, size, created_at
             ) VALUES (
                 'sample-session', 'fixture-file-id', 0, 'fixture.pdf', 7,
                 '2026-01-01T00:00:00Z'
-            );
-            PRAGMA user_version = 15;
-            "
-        })
-        .expect("version fifteen file-attachment schema should be created");
-
-    migrate_if_needed(&mut connection)
-        .expect("ambiguous version fifteen schema should be repaired");
-
-    let resolution_column_exists: bool = connection
-        .query_row(
-            "SELECT EXISTS(
-                SELECT 1 FROM pragma_table_info('agent_todo') WHERE name = 'resolution'
             )",
             [],
-            |row| row.get(0),
         )
-        .expect("todo resolution column should be queryable");
-    let todo = connection
+        .expect("existing attachment should be inserted");
+}
+
+fn set_legacy_schema(connection: &Connection, history: LegacySchema) {
+    match history {
+        LegacySchema::FileAttachmentsAtVersionFifteen => {
+            connection
+                .execute_batch(AGENT_FILE_SCHEMA)
+                .expect("version fifteen file table should be created");
+            insert_legacy_file(connection);
+            connection
+                .pragma_update(None, "user_version", 15)
+                .expect("version fifteen should be recorded");
+        }
+        LegacySchema::FileAttachmentsAtVersionSixteen => {
+            connection
+                .execute_batch("ALTER TABLE agent_todo ADD COLUMN resolution TEXT;")
+                .expect("todo resolution column should be created");
+            connection
+                .execute_batch(AGENT_FILE_SCHEMA)
+                .expect("version sixteen file table should be created");
+            insert_legacy_file(connection);
+            connection
+                .pragma_update(None, "user_version", 16)
+                .expect("version sixteen should be recorded");
+        }
+        LegacySchema::QueuedPromptColumnsAtVersionSixteen => {
+            connection
+                .execute_batch(indoc! {
+                    "
+                    ALTER TABLE agent_todo ADD COLUMN resolution TEXT;
+                    ALTER TABLE watch_web_queued_prompt
+                        ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]';
+                    ALTER TABLE watch_web_queued_prompt ADD COLUMN message_id TEXT;
+                    "
+                })
+                .expect("version sixteen queued prompt columns should be created");
+            connection
+                .pragma_update(None, "user_version", 16)
+                .expect("version sixteen should be recorded");
+        }
+    }
+}
+
+#[rstest]
+#[case::file_attachments_at_version_fifteen(LegacySchema::FileAttachmentsAtVersionFifteen, 1)]
+#[case::file_attachments_at_version_sixteen(LegacySchema::FileAttachmentsAtVersionSixteen, 1)]
+#[case::queued_prompt_columns_at_version_sixteen(
+    LegacySchema::QueuedPromptColumnsAtVersionSixteen,
+    0
+)]
+fn repairs_conflicting_migration_histories(
+    #[case] history: LegacySchema,
+    #[case] expected_file_count: i64,
+    mut version_fourteen_database: Connection,
+) {
+    set_legacy_schema(&version_fourteen_database, history);
+    migrate_if_needed(&mut version_fourteen_database)
+        .expect("legacy schema should migrate to the current version");
+
+    let actual = version_fourteen_database
         .query_row(
-            "SELECT title, resolution FROM agent_todo WHERE session_id = 'sample-session'",
+            indoc! {
+                "
+                SELECT
+                    EXISTS(SELECT 1 FROM pragma_table_info('agent_todo') WHERE name = 'resolution'),
+                    EXISTS(SELECT 1 FROM pragma_table_info('watch_web_queued_prompt') WHERE name = 'attachments'),
+                    EXISTS(SELECT 1 FROM pragma_table_info('watch_web_queued_prompt') WHERE name = 'message_id'),
+                    EXISTS(SELECT 1 FROM pragma_table_info('watch_web_queued_prompt') WHERE name = 'resolved'),
+                    EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'agent_file_session_id_created_at'),
+                    EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'agent_file_delete_session'),
+                    (SELECT title FROM agent_todo WHERE session_id = 'sample-session'),
+                    (SELECT resolution FROM agent_todo WHERE session_id = 'sample-session'),
+                    (SELECT attachments FROM watch_web_queued_prompt WHERE id = 1),
+                    (SELECT message_id FROM watch_web_queued_prompt WHERE id = 1),
+                    (SELECT resolved FROM watch_web_queued_prompt WHERE id = 1),
+                    (SELECT COUNT(*) FROM agent_file WHERE id = 'fixture-file-id')
+                "
+            },
             [],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, bool>(0)?,
+                    row.get::<_, bool>(1)?,
+                    row.get::<_, bool>(2)?,
+                    row.get::<_, bool>(3)?,
+                    row.get::<_, bool>(4)?,
+                    row.get::<_, bool>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, i64>(10)?,
+                    row.get::<_, i64>(11)?,
+                ))
+            },
         )
-        .expect("existing todo should remain queryable");
-    let retained_file_count: i64 = connection
-        .query_row(
-            "SELECT COUNT(*) FROM agent_file WHERE id = 'fixture-file-id'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("existing attachment should remain queryable");
-    let user_version: i64 = connection
+        .expect("repaired schemas and existing records should remain queryable");
+    let user_version: i64 = version_fourteen_database
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .expect("database migration version should be readable");
 
     assert_eq!(
+        (actual, user_version),
         (
-            resolution_column_exists,
-            todo,
-            retained_file_count,
-            user_version,
+            (
+                true,
+                true,
+                true,
+                true,
+                true,
+                true,
+                "Task".to_string(),
+                None,
+                "[]".to_string(),
+                None,
+                1,
+                expected_file_count,
+            ),
+            current_version(),
         ),
-        (true, ("Task".to_string(), None), 1, current_version(),),
     );
 }
