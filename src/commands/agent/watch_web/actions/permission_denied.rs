@@ -70,10 +70,49 @@ pub(super) async fn retry_permission_denied(
         move || store::ensure_watch_web_user_marker_from(&sessions_dir, &session_id)
     })
     .await?;
+    let message_id = uuid::Uuid::new_v4().to_string();
+    let sent_at = Utc::now();
+    let queued_prompt_id = run_blocking({
+        let sessions_dir = sessions_dir.clone();
+        let session_id = session_id.clone();
+        let message_id = message_id.clone();
+        let queue_content = queue_content.clone();
+        move || {
+            store::insert_watch_web_queued_prompt_from(
+                &sessions_dir,
+                &session_id,
+                &message_id,
+                &queue_content,
+                &[],
+                sent_at,
+            )
+        }
+    })
+    .await?;
     let content = watch_web_message_content(&session, Some(&marker), &queue_content);
+    let content = super::super::messages::queued_prompt::add_id_marker(&content, &message_id);
     let runtime = state.runtime;
     let send_session = session.clone();
-    run_blocking(move || runtime.send_message(&send_session, &content)).await?;
+    if let Err(error) = run_blocking(move || runtime.send_message(&send_session, &content)).await {
+        let cleanup_sessions_dir = sessions_dir.clone();
+        let cleanup_session_id = session_id.clone();
+        if let Err(cleanup_error) = run_blocking(move || {
+            store::delete_watch_web_queued_prompts_from(
+                &cleanup_sessions_dir,
+                &cleanup_session_id,
+                &[queued_prompt_id],
+            )
+        })
+        .await
+        {
+            tracing::warn!(
+                session_id = %session_id,
+                error = %cleanup_error.message,
+                "failed to remove unsent permission-denied retry message"
+            );
+        }
+        return Err(error);
+    }
 
     let saved = run_blocking({
         let sessions_dir = sessions_dir.clone();
@@ -91,18 +130,6 @@ pub(super) async fn retry_permission_denied(
         return Err(ApiError::conflict(
             "retry instruction was sent but the denied operation is no longer available",
         ));
-    }
-    if let Err(error) = store::insert_watch_web_queued_prompt_from(
-        &sessions_dir,
-        &session_id,
-        &queue_content,
-        Utc::now(),
-    ) {
-        tracing::warn!(
-            session_id = %session_id,
-            %error,
-            "failed to save sent permission-denied retry message"
-        );
     }
     Ok(Json(Success::new()))
 }

@@ -164,11 +164,11 @@ impl Queue {
                 QueueOperation::PopAll => {
                     self.pending.clear();
                     self.removed.clear();
-                    // Popped prompts have no delivery row, so discard their saved watch-web entries here.
+                    // Popped prompts have no delivery record, so stop showing them as pending.
                     if let Some(popped_at) = event.timestamp {
                         let mut cancelled_ids = Vec::new();
                         self.queued_prompts.retain(|queued| {
-                            if queued.sent_at <= popped_at {
+                            if !queued.resolved && queued.sent_at <= popped_at {
                                 cancelled_ids.push(queued.id);
                                 false
                             } else {
@@ -215,14 +215,18 @@ impl Queue {
             None if is_queued_command => prompt_text.to_owned(),
             None => return,
         };
-        let received_at = event.timestamp;
-        let matching_index = self.queued_prompts.iter().position(|queued| {
-            queued.content == body
-                && received_at.is_none_or(|received_at| queued.sent_at <= received_at)
-        });
+        let Some(message_id) = super::super::queued_prompt::id_from_content(&body) else {
+            return;
+        };
+        let matching_index = self
+            .queued_prompts
+            .iter()
+            .position(|queued| queued.message_id.as_deref() == Some(message_id));
         if let Some(index) = matching_index {
             let queued = self.queued_prompts.remove(index);
-            self.resolved_queued_prompt_ids.push(queued.id);
+            if !queued.resolved {
+                self.resolved_queued_prompt_ids.push(queued.id);
+            }
         }
     }
 
@@ -251,28 +255,23 @@ impl Queue {
         image_directory: Option<&Path>,
     ) -> Vec<ChatItem> {
         let mut items = Vec::new();
-        let pending_content = self
-            .pending
-            .iter()
-            .filter_map(|prompt| prompt.content.as_deref())
-            .map(|prompt| normalized_prompt(prompt, user_marker))
-            .collect::<Vec<_>>();
-        let mut prompts = self
+        let prompts = self
             .pending
             .into_iter()
             .filter_map(|prompt| prompt.content.map(|content| (content, prompt.timestamp)))
             .collect::<Vec<_>>();
-        prompts.extend(
-            self.queued_prompts
-                .into_iter()
-                .filter(|queued| {
-                    !pending_content
-                        .iter()
-                        .any(|pending| pending == &queued.content)
-                })
-                .map(|queued| (queued.content, Some(queued.sent_at))),
-        );
         for (prompt, timestamp) in prompts {
+            let message_id = super::super::queued_prompt::id_from_content(&prompt);
+            let is_saved_prompt = self.queued_prompts.iter().any(|queued| {
+                queued
+                    .message_id
+                    .as_deref()
+                    .is_some_and(|queued_id| message_id == Some(queued_id))
+            });
+            let prompt = normalized_prompt(&prompt, user_marker);
+            if is_saved_prompt {
+                continue;
+            }
             let start = items.len();
             append_text_with_user_marker_and_image_directory(
                 &mut items,
@@ -309,12 +308,24 @@ impl Queue {
                 });
             }
         }
+        for queued in self
+            .queued_prompts
+            .into_iter()
+            .filter(|queued| !queued.resolved)
+        {
+            items.push(ChatItem::QueuedUser {
+                content: super::super::queued_prompt::user_content(&queued),
+                from: None,
+                timestamp: Some(queued.sent_at.to_rfc3339()),
+            });
+        }
         items
     }
 }
 
 fn normalized_prompt(prompt: &str, user_marker: Option<&str>) -> String {
-    marked_user_body(prompt, user_marker).unwrap_or_else(|| prompt.to_owned())
+    let prompt = marked_user_body(prompt, user_marker).unwrap_or_else(|| prompt.to_owned());
+    super::super::queued_prompt::strip_id_marker(&prompt)
 }
 
 fn user_prompt(record: &Value) -> Option<String> {
@@ -499,10 +510,43 @@ mod tests {
     }
 
     #[test]
+    fn displays_attachments_from_the_saved_prompt_record() {
+        let mut prompt = saved_prompt(7, "Review this file.");
+        prompt.attachments = vec![
+            crate::commands::agent::store::WatchWebQueuedAttachment::Image {
+                source: "/api/images/fixture-image.png".to_owned(),
+            },
+            crate::commands::agent::store::WatchWebQueuedAttachment::File {
+                name: "fixture-notes.txt".to_owned(),
+            },
+        ];
+
+        assert_eq!(
+            parse_with_saved_prompts("", &[prompt], None).0,
+            vec![ChatItem::QueuedUser {
+                content: vec![
+                    UserContentPart::Text {
+                        text: "Review this file.".to_owned(),
+                    },
+                    UserContentPart::Image {
+                        source: "/api/images/fixture-image.png".to_owned(),
+                        available: false,
+                    },
+                    UserContentPart::File {
+                        name: "fixture-notes.txt".to_owned(),
+                    },
+                ],
+                from: None,
+                timestamp: Some("2026-01-01T00:00:00+00:00".to_owned()),
+            }],
+        );
+    }
+
+    #[test]
     fn confirms_a_marker_bearing_user_row_and_removes_its_saved_prompt() {
         let marker = "⟦armyknife-user:fixture-marker-cobalt⟧";
         let transcript = indoc! {r#"
-            {"type":"user","origin":{"kind":"peer","from":"unknown"},"timestamp":"2026-01-01T00:00:01Z","message":{"content":"⟦armyknife-user:fixture-marker-cobalt⟧\nThis message was typed by the human user in armyknife watch-web.\nDelivered request."}}
+            {"type":"user","origin":{"kind":"peer","from":"unknown"},"timestamp":"2026-01-01T00:00:01Z","message":{"content":"⟦armyknife-user:fixture-marker-cobalt⟧\nThis message was typed by the human user in armyknife watch-web.\nEngine-formatted delivery.\n<!-- armyknife-queued-prompt-id:fixture-message-7 -->"}}
         "#};
 
         assert_eq!(
@@ -540,6 +584,7 @@ mod tests {
                     {marker}
                     This message was typed by the human user in armyknife watch-web.
                     Delivered request.
+                    <!-- armyknife-queued-prompt-id:fixture-message-7 -->
                 "},
             },
         });
@@ -572,9 +617,9 @@ mod tests {
     }
 
     #[test]
-    fn confirms_a_queued_command_attachment_without_a_marker() {
+    fn confirms_a_queued_command_attachment_by_its_id() {
         let transcript = indoc! {r#"
-            {"timestamp":"2026-01-01T00:00:01Z","attachment":{"type":"queued_command","prompt":"Delivered request."}}
+            {"timestamp":"2026-01-01T00:00:01Z","attachment":{"type":"queued_command","prompt":"⟦armyknife-user:fixture-marker-cobalt⟧\nThis message was typed by the human user in armyknife watch-web.\nDelivered request.\n\n<!-- armyknife-queued-prompt-id:fixture-message-7 -->"}}
         "#};
 
         assert_eq!(
@@ -596,9 +641,9 @@ mod tests {
     }
 
     #[test]
-    fn deduplicates_a_saved_prompt_against_a_contentful_transcript_enqueue() {
+    fn uses_the_saved_prompt_for_a_contentful_enqueue_with_the_same_id() {
         let transcript = indoc! {r#"
-            {"type":"queue-operation","operation":"enqueue","timestamp":"2026-01-01T00:00:00Z","content":"Repeated request."}
+            {"type":"queue-operation","operation":"enqueue","timestamp":"2026-01-01T00:00:00Z","content":"Engine-formatted request.\n<!-- armyknife-queued-prompt-id:fixture-message-7 -->"}
         "#};
 
         assert_eq!(
@@ -654,10 +699,10 @@ mod tests {
     }
 
     #[test]
-    fn keeps_a_saved_prompt_when_a_matching_user_row_predates_the_send() {
+    fn resolves_a_prompt_by_id_without_comparing_send_time() {
         let marker = "⟦armyknife-user:fixture-marker-cobalt⟧";
         let transcript = indoc! {r#"
-            {"type":"user","origin":{"kind":"peer","from":"unknown"},"timestamp":"2025-12-31T23:59:59Z","message":{"content":"⟦armyknife-user:fixture-marker-cobalt⟧\nThis message was typed by the human user in armyknife watch-web.\nRepeated request."}}
+            {"type":"user","origin":{"kind":"peer","from":"unknown"},"timestamp":"2025-12-31T23:59:59Z","message":{"content":"⟦armyknife-user:fixture-marker-cobalt⟧\nThis message was typed by the human user in armyknife watch-web.\nEngine-formatted request.\n<!-- armyknife-queued-prompt-id:fixture-message-7 -->"}}
         "#};
 
         assert_eq!(
@@ -667,16 +712,13 @@ mod tests {
                 Some(marker),
             ),
             (
-                vec![
-                    ChatItem::User {
-                        text: "Repeated request.".to_string(),
-                        timestamp: Some("2025-12-31T23:59:59+00:00".to_string()),
-                        from: None,
-                    },
-                    queued_user_at("Repeated request.", "2026-01-01T00:00:00+00:00",),
-                ],
+                vec![ChatItem::User {
+                    text: "Repeated request.".to_string(),
+                    timestamp: Some("2025-12-31T23:59:59+00:00".to_string()),
+                    from: None,
+                }],
                 Vec::<BackgroundTask>::new(),
-                Vec::new(),
+                vec![7],
             ),
         );
     }
@@ -760,27 +802,37 @@ mod tests {
         prompts: &[WatchWebQueuedPrompt],
         marker: Option<&str>,
     ) -> (Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>) {
-        super::super::claude::parse_with_queued_prompts_and_peer_out_messages_and_proposals(
-            Cursor::new(transcript),
-            Utc::now(),
-            ParserAdditions {
-                parent: None,
-                pending_tool: None,
-                user_marker: marker,
-                decisions: &[],
-                queued_prompts: prompts,
-                peer_out_messages: &[],
-                proposals: &[],
-                todos: &[],
-            },
-        )
-        .unwrap()
+        let (mut messages, background_tasks, mut resolved_ids) =
+            super::super::claude::parse_with_queued_prompts_and_peer_out_messages_and_proposals(
+                Cursor::new(transcript),
+                Utc::now(),
+                ParserAdditions {
+                    parent: None,
+                    pending_tool: None,
+                    user_marker: marker,
+                    decisions: &[],
+                    queued_prompts: prompts,
+                    peer_out_messages: &[],
+                    proposals: &[],
+                    todos: &[],
+                },
+            )
+            .unwrap();
+        resolved_ids.extend(
+            super::super::super::queued_prompt::resolve_transcript_messages(&mut messages, prompts),
+        );
+        resolved_ids.sort_unstable();
+        resolved_ids.dedup();
+        (messages, background_tasks, resolved_ids)
     }
 
     fn saved_prompt(id: i64, content: &str) -> WatchWebQueuedPrompt {
         WatchWebQueuedPrompt {
             id,
+            message_id: Some(format!("fixture-message-{id}")),
             content: content.to_string(),
+            attachments: vec![],
+            resolved: false,
             sent_at: DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),

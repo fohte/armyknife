@@ -118,3 +118,55 @@ fn adds_permission_request_mailbox_to_version_nine_database() {
         ),
     );
 }
+
+#[test]
+fn resolves_legacy_queued_prompts_without_message_ids() {
+    let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+    let database_path = temp_dir.path().join("sessions.db");
+    let mut connection = Connection::open(&database_path).expect("temporary database should open");
+    Migrations::from_slice(&MIGRATION_ENTRIES[..15])
+        .to_latest(&mut connection)
+        .expect("version fifteen migrations should create the message id schema");
+    connection
+        .execute(
+            "INSERT INTO watch_web_queued_prompt (
+                session_id, content, sent_at, message_id
+            ) VALUES
+                ('fixture-session', 'Legacy prompt.', '2026-01-01T00:00:00Z', NULL),
+                ('fixture-session', 'New prompt.', '2026-01-01T00:00:01Z', 'fixture-message-cyan')",
+            [],
+        )
+        .expect("legacy and id-bearing queued prompts should be inserted");
+    drop(connection);
+
+    let connection = super::super::open_connection(temp_dir.path())
+        .expect("version fifteen database should migrate to the current schema");
+    let actual = connection
+        .prepare(
+            "SELECT message_id, resolved, attachments
+             FROM watch_web_queued_prompt ORDER BY id",
+        )
+        .expect("queued prompt migration query should prepare")
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .expect("queued prompts should be queryable")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("queued prompts should deserialize");
+
+    assert_eq!(
+        actual,
+        vec![
+            (None, 1, "[]".to_string()),
+            (
+                Some("fixture-message-cyan".to_string()),
+                0,
+                "[]".to_string()
+            ),
+        ],
+    );
+}

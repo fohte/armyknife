@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use rusqlite_migration::{Error as MigrationError, M, MigrationDefinitionError, Migrations};
 
 // Keep older binaries compatible: new columns need defaults or must be nullable.
-static MIGRATION_ENTRIES: [M<'static>; 14] = [
+static MIGRATION_ENTRIES: [M<'static>; 16] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -163,6 +163,19 @@ static MIGRATION_ENTRIES: [M<'static>; 14] = [
     M::up(
         "ALTER TABLE watch_web_peer_out_message
          ADD COLUMN failed INTEGER NOT NULL DEFAULT 0;",
+    ),
+    M::up(
+        "ALTER TABLE watch_web_queued_prompt
+         ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]';
+         ALTER TABLE watch_web_queued_prompt
+         ADD COLUMN message_id TEXT;",
+    ),
+    M::up(
+        "ALTER TABLE watch_web_queued_prompt
+         ADD COLUMN resolved INTEGER NOT NULL DEFAULT 0;
+         UPDATE watch_web_queued_prompt
+         SET resolved = 1
+         WHERE message_id IS NULL;",
     ),
 ];
 

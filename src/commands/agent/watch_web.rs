@@ -173,7 +173,7 @@ fn app(restart_signal: watch::Receiver<bool>) -> Router {
             |session_id| {
                 store::watch_web_peer_out_messages_from(&store::sessions_dir()?, session_id)
             },
-            store::delete_watch_web_queued_prompts,
+            store::mark_watch_web_queued_prompts_resolved,
             store::agent_proposals,
         )
         .with_todo_loader(store::agent_todos)

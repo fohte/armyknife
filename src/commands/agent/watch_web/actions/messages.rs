@@ -47,12 +47,9 @@ pub(super) async fn send_message(
 
     let attachments = attachments::validate(request.attachments, request.images)
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
-    let sessions_dir = if session.engine == Engine::Claude {
-        Some(resolve_sessions_dir(state.sessions_dir.clone()).map_err(ApiError::internal)?)
-    } else {
-        None
-    };
-    let marker = if let Some(sessions_dir) = sessions_dir.as_ref() {
+    let sessions_dir =
+        resolve_sessions_dir(state.sessions_dir.clone()).map_err(ApiError::internal)?;
+    let marker = if session.engine == Engine::Claude {
         let session_id = session.session_id.clone();
         let sessions_dir = sessions_dir.clone();
         Some(
@@ -64,35 +61,87 @@ pub(super) async fn send_message(
     } else {
         None
     };
-    let attachment_paths =
+    let saved_attachments =
         run_blocking(move || attachments::save(attachments, state.attachment_dir)).await?;
-    let content = attachments::append_paths_to_message(request.content, &attachment_paths);
-    let queued_content = content.clone();
-    let content = watch_web_message_content(&session, marker.as_deref(), &content);
-    let cleanup_paths = attachment_paths;
-    let runtime = state.runtime;
-    run_blocking(move || {
-        let sent_at = Utc::now();
-        let result = runtime.send_message(&session, &content);
-        if result.is_err() {
-            attachments::remove(&cleanup_paths);
-        } else if let Some(sessions_dir) = sessions_dir.as_ref()
-            && let Err(error) = store::insert_watch_web_queued_prompt_from(
-                sessions_dir,
-                &session.session_id,
-                &queued_content,
+    let attachment_paths = saved_attachments
+        .iter()
+        .map(|attachment| attachment.path.clone())
+        .collect::<Vec<_>>();
+    let content = attachments::append_paths_to_message(request.content.clone(), &attachment_paths);
+    let queued_attachments = saved_attachments
+        .iter()
+        .map(|attachment| match &attachment.image_source {
+            Some(source) => store::WatchWebQueuedAttachment::Image {
+                source: source.clone(),
+            },
+            None => store::WatchWebQueuedAttachment::File {
+                name: attachment.name.clone(),
+            },
+        })
+        .collect::<Vec<_>>();
+    let message_id = uuid::Uuid::new_v4().to_string();
+    let sent_at = Utc::now();
+    let queued_prompt_id = run_blocking({
+        let sessions_dir = sessions_dir.clone();
+        let session_id = session.session_id.clone();
+        let message_id = message_id.clone();
+        let content = request.content;
+        move || {
+            store::insert_watch_web_queued_prompt_from(
+                &sessions_dir,
+                &session_id,
+                &message_id,
+                &content,
+                &queued_attachments,
                 sent_at,
             )
-        {
+        }
+    })
+    .await;
+    let queued_prompt_id = match queued_prompt_id {
+        Ok(id) => id,
+        Err(error) => {
+            let cleanup_paths = attachment_paths;
+            if let Err(cleanup_error) = run_blocking(move || {
+                attachments::remove(&cleanup_paths);
+                Ok(())
+            })
+            .await
+            {
+                tracing::warn!(
+                    error = %cleanup_error.message,
+                    "failed to remove unsent watch-web attachments"
+                );
+            }
+            return Err(error);
+        }
+    };
+    let content = watch_web_message_content(&session, marker.as_deref(), &content);
+    let content = super::super::messages::queued_prompt::add_id_marker(&content, &message_id);
+    let cleanup_paths = attachment_paths;
+    let runtime = state.runtime;
+    let send_session = session.clone();
+    let send_result = run_blocking(move || runtime.send_message(&send_session, &content)).await;
+    if let Err(error) = send_result {
+        let cleanup_session_id = session.session_id.clone();
+        let cleanup_result = run_blocking(move || {
+            attachments::remove(&cleanup_paths);
+            store::delete_watch_web_queued_prompts_from(
+                &sessions_dir,
+                &cleanup_session_id,
+                &[queued_prompt_id],
+            )
+        })
+        .await;
+        if let Err(cleanup_error) = cleanup_result {
             tracing::warn!(
-                    session_id = %session.session_id,
-                %error,
-                "failed to save sent watch-web queued prompt"
+                session_id = %session.session_id,
+                error = %cleanup_error.message,
+                "failed to remove unsent watch-web queued prompt"
             );
         }
-        result
-    })
-    .await?;
+        return Err(error);
+    }
     Ok(Json(Success::new()))
 }
 

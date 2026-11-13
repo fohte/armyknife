@@ -197,8 +197,14 @@ fn render_parser(
 ) -> Result<(ConversationResponse, Vec<i64>)> {
     match parser {
         IncrementalTranscriptParser::Claude(parser) => {
-            let (mut messages, background_tasks, resolved_ids, skills) =
+            let (mut messages, background_tasks, mut resolved_ids, skills) =
                 parser.render_with(chrono::Utc::now(), input.additions)?;
+            resolved_ids.extend(super::queued_prompt::resolve_transcript_messages(
+                &mut messages,
+                input.additions.queued_prompts,
+            ));
+            resolved_ids.sort_unstable();
+            resolved_ids.dedup();
             if let Some(path) = input.path {
                 subagent_reports::add_descriptions(path, &mut messages);
             }
@@ -213,19 +219,28 @@ fn render_parser(
             ))
         }
         IncrementalTranscriptParser::Codex(parser) => {
-            let (messages, skills) = parser.render_with_decisions_todos_and_peer_out_messages(
+            let (mut messages, skills) = parser.render_with_decisions_todos_and_peer_out_messages(
                 input.additions.parent,
                 input.additions.decisions,
                 input.additions.todos,
                 input.additions.peer_out_messages,
             )?;
+            let resolved_ids = super::queued_prompt::resolve_transcript_messages(
+                &mut messages,
+                input.additions.queued_prompts,
+            );
+            super::queued_prompt::append_unresolved_prompts(
+                &mut messages,
+                input.additions.queued_prompts,
+                &resolved_ids,
+            );
             Ok((
                 ConversationResponse {
                     messages,
                     skills,
                     ..ConversationResponse::default()
                 },
-                Vec::new(),
+                resolved_ids,
             ))
         }
     }
@@ -233,13 +248,137 @@ fn render_parser(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_session_transcript_incrementally;
+    use super::{parse_session_transcript, parse_session_transcript_incrementally};
+    use crate::commands::agent::store::{WatchWebQueuedAttachment, WatchWebQueuedPrompt};
     use crate::commands::agent::types::{Engine, Session};
     use crate::commands::agent::watch_web::messages::cache::{
         MessageCache, RunningBackgroundTaskCache,
     };
     use crate::commands::agent::watch_web::messages::parser::claude::ParserAdditions;
-    use crate::commands::agent::watch_web::messages::{ConversationResponse, TranscriptInput};
+    use crate::commands::agent::watch_web::messages::{
+        ChatItem, ConversationResponse, TranscriptInput, UserContentPart,
+    };
+    use chrono::{DateTime, Utc};
+
+    #[rstest::rstest]
+    #[case::claude(Engine::Claude)]
+    #[case::codex(Engine::Codex)]
+    fn resolves_duplicate_watch_web_messages_by_id_for_each_engine(#[case] engine: Engine) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("fixture.jsonl");
+        let session_marker = "⟦armyknife-user:fixture-marker-cobalt⟧";
+        let prompt_contents = [
+            ("fixture-message-cyan", "First attached file."),
+            ("fixture-message-amber", "Second attached file."),
+        ];
+        let transcript = match engine {
+            Engine::Claude => {
+                let mut records = vec![format!(
+                    r#"{{"type":"user","origin":{{"kind":"peer","from":"unknown"}},"message":{{"content":"{session_marker}\nThis message was typed by the human user in armyknife watch-web.\nOld message."}}}}"#
+                )];
+                records.extend(prompt_contents.iter().map(|(message_id, _)| {
+                    format!(
+                        r#"{{"type":"user","origin":{{"kind":"human"}},"message":{{"content":"{session_marker}\nThis message was typed by the human user in armyknife watch-web.\nEngine-formatted request.\n<!-- armyknife-queued-prompt-id:{message_id} -->"}}}}"#
+                    )
+                }));
+                records.join("\n")
+            }
+            Engine::Codex => {
+                let mut records = vec![
+                    r#"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"Old message."}}}"#.to_owned(),
+                ];
+                records.extend(prompt_contents.iter().map(|(message_id, _)| {
+                    format!(
+                        r#"{{"type":"event_msg","payload":{{"type":"item_completed","item":{{"type":"UserMessage","content":"Engine-formatted request.\n<!-- armyknife-queued-prompt-id:{message_id} -->"}}}}}}"#
+                    )
+                }));
+                records.join("\n")
+            }
+        };
+        std::fs::write(&path, transcript).unwrap();
+        let sent_at = DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let queued_prompts = prompt_contents
+            .iter()
+            .enumerate()
+            .map(|(index, (message_id, filename))| WatchWebQueuedPrompt {
+                id: index as i64 + 1,
+                message_id: Some((*message_id).to_owned()),
+                content: "Repeat this request.".to_owned(),
+                attachments: vec![WatchWebQueuedAttachment::File {
+                    name: (*filename).to_owned(),
+                }],
+                resolved: false,
+                sent_at,
+            })
+            .collect::<Vec<_>>();
+        let parse = |prompts: &[WatchWebQueuedPrompt]| {
+            parse_session_transcript(TranscriptInput {
+                path: Some(&path),
+                engine,
+                additions: ParserAdditions {
+                    parent: None,
+                    pending_tool: None,
+                    user_marker: (engine == Engine::Claude).then_some(session_marker),
+                    decisions: &[],
+                    queued_prompts: prompts,
+                    peer_out_messages: &[],
+                    proposals: &[],
+                    todos: &[],
+                },
+            })
+            .unwrap()
+        };
+        let first_parse = parse(&queued_prompts);
+        let mut resolved_prompts = queued_prompts.clone();
+        for prompt in &mut resolved_prompts {
+            prompt.resolved = true;
+        }
+        let subsequent_parse = parse(&resolved_prompts);
+        let expected_messages = vec![
+            ChatItem::User {
+                text: "Old message.".to_owned(),
+                from: None,
+                timestamp: None,
+            },
+            ChatItem::UserWithContent {
+                content: vec![
+                    UserContentPart::Text {
+                        text: "Repeat this request.".to_owned(),
+                    },
+                    UserContentPart::File {
+                        name: "First attached file.".to_owned(),
+                    },
+                ],
+                from: None,
+                timestamp: None,
+            },
+            ChatItem::UserWithContent {
+                content: vec![
+                    UserContentPart::Text {
+                        text: "Repeat this request.".to_owned(),
+                    },
+                    UserContentPart::File {
+                        name: "Second attached file.".to_owned(),
+                    },
+                ],
+                from: None,
+                timestamp: None,
+            },
+        ];
+
+        assert_eq!(
+            (
+                (first_parse.0.messages, first_parse.1),
+                (subsequent_parse.0.messages, subsequent_parse.1),
+            ),
+            (
+                (expected_messages.clone(), vec![1, 2]),
+                (expected_messages, Vec::new()),
+            ),
+        );
+    }
 
     #[test]
     fn missing_transcript_after_fingerprinting_renders_an_empty_conversation() {

@@ -31,6 +31,7 @@ mod incremental;
 mod parser;
 mod proposals;
 mod questions;
+pub(in crate::commands::agent::watch_web) mod queued_prompt;
 mod range;
 mod subagent_reports;
 
@@ -67,7 +68,7 @@ type MessagesRouteState = (SessionLoader, UserMarkerLoader, RouteLoaders);
 type DecisionLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentDecision>> + Send + Sync>;
 type QueuedPromptLoader = Arc<dyn Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync>;
 type PeerOutMessageLoader = Arc<dyn Fn(&str) -> Result<Vec<WatchWebPeerOutMessage>> + Send + Sync>;
-type QueuedPromptDeleter = Arc<dyn Fn(&str, &[i64]) -> Result<()> + Send + Sync>;
+type QueuedPromptUpdater = Arc<dyn Fn(&str, &[i64]) -> Result<()> + Send + Sync>;
 type ProposalLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentProposal>> + Send + Sync>;
 type TodoLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentTodo>> + Send + Sync>;
 type PermissionRequestDataLoader =
@@ -80,7 +81,7 @@ pub(super) struct RouteLoaders {
     decisions: DecisionLoader,
     queued_prompts: QueuedPromptLoader,
     peer_out_messages: PeerOutMessageLoader,
-    delete_queued_prompts: QueuedPromptDeleter,
+    mark_queued_prompts_resolved: QueuedPromptUpdater,
     proposals: ProposalLoader,
     todos: TodoLoader,
     permission_request_data: PermissionRequestDataLoader,
@@ -97,14 +98,14 @@ impl RouteLoaders {
         + Send
         + Sync
         + 'static,
-        delete_queued_prompts: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
+        mark_queued_prompts_resolved: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
         load_proposals: impl Fn(&str) -> Result<Vec<AgentProposal>> + Send + Sync + 'static,
     ) -> Self {
         Self {
             decisions: Arc::new(load_decisions),
             queued_prompts: Arc::new(load_queued_prompts),
             peer_out_messages: Arc::new(load_peer_out_messages),
-            delete_queued_prompts: Arc::new(delete_queued_prompts),
+            mark_queued_prompts_resolved: Arc::new(mark_queued_prompts_resolved),
             proposals: Arc::new(load_proposals),
             todos: Arc::new(|_| Ok(Vec::new())),
             permission_request_data: Arc::new(|_, _| Ok(None)),
@@ -162,7 +163,7 @@ fn routes_with_decisions_and_queued_prompts_and_peer_out_messages(
     load_decisions: impl Fn(&str) -> Result<Vec<AgentDecision>> + Send + Sync + 'static,
     load_queued_prompts: impl Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync + 'static,
     load_peer_out_messages: impl Fn(&str) -> Result<Vec<WatchWebPeerOutMessage>> + Send + Sync + 'static,
-    delete_queued_prompts: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
+    mark_queued_prompts_resolved: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
 ) -> Router {
     routes_with_proposals_and_peer_out_messages(
         load_session,
@@ -171,7 +172,7 @@ fn routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             load_decisions,
             load_queued_prompts,
             load_peer_out_messages,
-            delete_queued_prompts,
+            mark_queued_prompts_resolved,
             |_| Ok(Vec::new()),
         ),
     )
@@ -275,11 +276,7 @@ fn load_conversation_with_queued_prompts(
         None
     };
     let decisions = (loaders.decisions)(session_id)?;
-    let queued_prompts = if session.engine == Engine::Claude {
-        (loaders.queued_prompts)(session_id)?
-    } else {
-        Vec::new()
-    };
+    let queued_prompts = (loaders.queued_prompts)(session_id)?;
     let peer_out_messages = (loaders.peer_out_messages)(session_id)?;
     let proposals = (loaders.proposals)(session_id)?;
     let proposal_items = proposals
@@ -342,7 +339,7 @@ fn load_conversation_with_queued_prompts(
             main_permission_data.as_ref(),
         );
         resolve_peer_session_titles(&mut cached.conversation.messages, &mut load_session)?;
-        cache::delete_resolved_queued_prompts(
+        cache::mark_resolved_queued_prompts(
             loaders,
             session_id,
             &cached.resolved_queued_prompt_ids,
@@ -369,6 +366,7 @@ fn load_conversation_with_queued_prompts(
         cache_key.transcript_fingerprint.clone(),
         &loaders.message_cache,
     )?;
+    cache::refresh_image_availability(&mut conversation);
     resolve_peer_session_titles(&mut conversation.messages, &mut load_session)?;
 
     attach_question_request_if_present(
@@ -509,7 +507,7 @@ fn load_conversation_with_queued_prompts(
 
     conversation.update_metadata();
 
-    cache::delete_resolved_queued_prompts(loaders, session_id, &resolved_queued_prompt_ids);
+    cache::mark_resolved_queued_prompts(loaders, session_id, &resolved_queued_prompt_ids);
     loaders.message_cache.insert(
         session_id,
         cache_key,
@@ -2388,7 +2386,10 @@ mod tests {
     fn saved_prompt(id: i64, content: &str) -> WatchWebQueuedPrompt {
         WatchWebQueuedPrompt {
             id,
+            message_id: Some(format!("fixture-message-{id}")),
             content: content.to_string(),
+            attachments: vec![],
+            resolved: false,
             sent_at: chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
                 .unwrap()
                 .with_timezone(&chrono::Utc),
@@ -3231,19 +3232,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claude_message_route_deletes_prompts_after_marked_delivery() {
+    async fn claude_message_route_marks_prompts_resolved_after_id_delivery() {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("transcript.jsonl");
         std::fs::write(
             &transcript_path,
-            r#"{"type":"user","origin":{"kind":"peer","from":"unknown"},"timestamp":"2026-01-01T00:00:01Z","message":{"content":"⟦armyknife-user:fixture-marker-cobalt⟧\nThis message was typed by the human user in armyknife watch-web.\nDelivered fixture request."}}"#,
+            r#"{"type":"user","origin":{"kind":"peer","from":"unknown"},"timestamp":"2026-01-01T00:00:01Z","message":{"content":"⟦armyknife-user:fixture-marker-cobalt⟧\nThis message was typed by the human user in armyknife watch-web.\nEngine-formatted delivery.\n<!-- armyknife-queued-prompt-id:fixture-message-7 -->"}}"#,
         )
         .unwrap();
         let mut session = stored_session();
         session.transcript_path = Some(transcript_path);
         let queued = saved_prompt(7, "Delivered fixture request.");
-        let deleted_ids = Arc::new(Mutex::new(Vec::new()));
-        let delete_log = Arc::clone(&deleted_ids);
+        let marked_ids = Arc::new(Mutex::new(Vec::new()));
+        let mark_log = Arc::clone(&marked_ids);
         let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(Some("⟦armyknife-user:fixture-marker-cobalt⟧".to_string())),
@@ -3251,7 +3252,7 @@ mod tests {
             move |_| Ok(vec![queued.clone()]),
             |_| Ok(Vec::new()),
             move |_, ids| {
-                delete_log.lock().unwrap().extend_from_slice(ids);
+                mark_log.lock().unwrap().extend_from_slice(ids);
                 Ok(())
             },
         );
@@ -3268,7 +3269,7 @@ mod tests {
         assert_eq!(
             (
                 response_snapshot(response).await,
-                deleted_ids.lock().unwrap().clone(),
+                marked_ids.lock().unwrap().clone(),
             ),
             (
                 (
@@ -3282,16 +3283,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn codex_message_route_does_not_load_saved_claude_prompts() {
+    async fn codex_message_route_loads_and_resolves_saved_prompts_by_id() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        std::fs::write(
+            &transcript_path,
+            r#"{"type":"event_msg","timestamp":"2026-01-01T00:00:01Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"Engine-formatted Codex delivery.\n<!-- armyknife-queued-prompt-id:fixture-message-8 -->"}}}"#,
+        )
+        .unwrap();
         let mut session = stored_session();
         session.engine = Engine::Codex;
+        session.transcript_path = Some(transcript_path);
+        let queued = saved_prompt(8, "Codex delivered request.");
+        let marked_ids = Arc::new(Mutex::new(Vec::new()));
+        let mark_log = Arc::clone(&marked_ids);
         let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
             |_| Ok(Vec::new()),
-            |_| Err(anyhow::anyhow!("Codex must not load Claude prompts")),
+            move |_| Ok(vec![queued.clone()]),
             |_| Ok(Vec::new()),
-            |_, _| Err(anyhow::anyhow!("Codex must not delete Claude prompts")),
+            move |_, ids| {
+                mark_log.lock().unwrap().extend_from_slice(ids);
+                Ok(())
+            },
         );
         let response = router
             .oneshot(
@@ -3304,11 +3319,17 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            response_snapshot(response).await,
             (
-                StatusCode::OK,
-                Some("application/json".to_string()),
-                r#"{"messages":[],"backgroundTasks":[],"start":0,"total":0,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
+                response_snapshot(response).await,
+                marked_ids.lock().unwrap().clone(),
+            ),
+            (
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    r#"{"messages":[{"type":"user","text":"Codex delivered request.","timestamp":"2026-01-01T00:00:01+00:00"}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
+                ),
+                vec![8],
             ),
         );
     }
