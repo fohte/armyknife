@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.675](https://github.com/fohte/armyknife/compare/v0.1.674...v0.1.675) (2026-11-13)
+
+
+### Bug Fixes
+
+* **watch-web:** match pending permissions to calls ([#1725](https://github.com/fohte/armyknife/issues/1725)) ([a5e12bf](https://github.com/fohte/armyknife/commit/a5e12bfcaa39bf00b8c69ae633c25017aa4fb7cf))
+
 ## [0.1.674](https://github.com/fohte/armyknife/compare/v0.1.673...v0.1.674) (2026-11-13)
 
 

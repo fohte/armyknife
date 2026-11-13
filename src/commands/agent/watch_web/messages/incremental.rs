@@ -219,11 +219,12 @@ fn render_parser(
             ))
         }
         IncrementalTranscriptParser::Codex(parser) => {
-            let (mut messages, skills) = parser.render_with_decisions_todos_and_peer_out_messages(
+            let (mut messages, skills) = parser.render_with_permission_request(
                 input.additions.parent,
                 input.additions.decisions,
                 input.additions.todos,
                 input.additions.peer_out_messages,
+                input.additions.pending_tool,
             )?;
             let resolved_ids = super::queued_prompt::resolve_transcript_messages(
                 &mut messages,

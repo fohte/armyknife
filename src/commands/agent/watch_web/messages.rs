@@ -304,10 +304,7 @@ fn load_conversation_with_queued_prompts(
         == Some("AskUserQuestion")
         || (main_permission_data.is_none() && is_ask_user_question(&session));
     let pending_tool = if main_permission_pending && !main_permission_is_question {
-        main_permission_data
-            .as_ref()
-            .and_then(permission_request_pending_tool)
-            .or_else(|| session.current_tool.clone())
+        main_permission_data.as_ref()
     } else {
         None
     };
@@ -351,7 +348,7 @@ fn load_conversation_with_queued_prompts(
         engine: session.engine,
         additions: parser::claude::ParserAdditions {
             parent: parent.as_ref(),
-            pending_tool: pending_tool.as_deref(),
+            pending_tool,
             user_marker: user_marker.as_deref(),
             decisions: &decisions,
             queued_prompts: &queued_prompts,
@@ -479,13 +476,28 @@ fn load_conversation_with_queued_prompts(
             }
             continue;
         }
+        let mut matched_tool = false;
+        if session.engine == Engine::Claude
+            && let Some(data) = permission_data.as_ref()
+            && data.tool_name.is_some()
+            && let Some(parent_transcript_path) = session.transcript_path.as_deref()
+        {
+            matched_tool =
+                matching_subagent_permission_tool_use(parent_transcript_path, agent_id, data);
+        }
+        let tool = if matched_tool {
+            permission_data
+                .as_ref()
+                .and_then(permission_request_pending_tool)
+        } else {
+            permission_data
+                .as_ref()
+                .and_then(|data| data.tool_name.clone())
+        }
+        .unwrap_or_else(|| "Permission required".to_string());
         let command = permission_data.as_ref().and_then(|data| {
             permission_request_command(data.tool_name.as_deref(), Some(&data.tool_input))
         });
-        let tool_name = permission_data
-            .as_ref()
-            .and_then(|data| data.tool_name.clone())
-            .unwrap_or_else(|| "Permission required".to_string());
         let description = permission_data
             .as_ref()
             .map(|data| {
@@ -499,7 +511,7 @@ fn load_conversation_with_queued_prompts(
             .unwrap_or_else(|| "Waiting for permission approval.".to_string());
         messages.push(ChatItem::Permission {
             request_id: Some(request_id),
-            tool: format!("Subagent {agent_id}: {tool_name}"),
+            tool: format!("Subagent {agent_id}: {tool}"),
             description,
             command,
         });
@@ -521,11 +533,45 @@ const MAX_PERMISSION_COMMAND_BYTES: usize = 16 * 1024;
 
 fn permission_request_pending_tool(data: &PermissionRequestData) -> Option<String> {
     let tool_name = data.tool_name.as_deref()?;
-    let detail = permission_request_tool_detail(&data.tool_input);
+    let detail = tool_input_detail(&data.tool_input);
     Some(match detail {
         Some(detail) => format!("{tool_name}({detail})"),
         None => tool_name.to_string(),
     })
+}
+
+fn matching_subagent_permission_tool_use(
+    parent_transcript_path: &Path,
+    agent_id: &str,
+    permission: &PermissionRequestData,
+) -> bool {
+    let Some(path) = subagent_reports::transcript_path_for_agent(parent_transcript_path, agent_id)
+    else {
+        return false;
+    };
+    let reader = match open_seekable_transcript(&path) {
+        Ok(Some(reader)) => reader,
+        Ok(None) => return false,
+        Err(error) => {
+            tracing::warn!(
+                path = %path.display(),
+                %error,
+                "failed to open subagent permission transcript"
+            );
+            return false;
+        }
+    };
+    match parser::claude::matching_pending_tool_use_exists(reader, permission) {
+        Ok(matched) => matched,
+        Err(error) => {
+            tracing::warn!(
+                path = %path.display(),
+                %error,
+                "failed to match subagent permission transcript"
+            );
+            false
+        }
+    }
 }
 
 fn permission_request_command(
@@ -582,7 +628,7 @@ fn permission_denied_input_summary(tool_name: &str, input: &Value) -> String {
     detail.chars().take(200).collect()
 }
 
-fn permission_request_tool_detail(tool_input: &Value) -> Option<&str> {
+fn tool_input_detail(tool_input: &Value) -> Option<&str> {
     ["command", "file_path", "pattern"]
         .into_iter()
         .find_map(|key| tool_input.get(key).and_then(Value::as_str))
@@ -2604,6 +2650,7 @@ mod tests {
             ),
         ]);
         session.current_tool = Some("AskUserQuestion".to_string());
+        session.current_tool_name = Some("AskUserQuestion".to_string());
         session.last_message = Some("Should the summary be brief?".to_string());
         session.transcript_path = Some(transcript_path);
 
@@ -2746,6 +2793,86 @@ mod tests {
                     }],
                 },
             ],
+        );
+    }
+
+    #[rstest]
+    #[case::plain(false, false, "Subagent fixture-agent: Bash(run fixture)")]
+    #[case::compressed(true, false, "Subagent fixture-agent: Bash(run fixture)")]
+    #[case::malformed_compressed(true, true, "Subagent fixture-agent: Bash")]
+    fn subagent_permission_matches_an_unresolved_tool_use_from_its_transcript(
+        #[case] compressed: bool,
+        #[case] malformed: bool,
+        #[case] expected_tool: &str,
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_suffix = if compressed { ".jsonl.zst" } else { ".jsonl" };
+        let transcript_path = directory
+            .path()
+            .join(format!("fixture-session{transcript_suffix}"));
+        let parent_transcript = if compressed {
+            zstd::stream::encode_all(&b""[..], 0).unwrap()
+        } else {
+            Vec::new()
+        };
+        std::fs::write(&transcript_path, parent_transcript).unwrap();
+        let subagent_directory = directory.path().join("fixture-session").join("subagents");
+        std::fs::create_dir_all(&subagent_directory).unwrap();
+        let subagent_transcript = indoc::indoc! {r#"
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"first-call","name":"Bash","input":{"command":"run fixture"}}]}}
+            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"first-call","content":"done"}]}}
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"pending-call","name":"Bash","input":{"command":"run fixture"}}]}}
+        "#};
+        let subagent_transcript = if malformed {
+            b"invalid compressed transcript".to_vec()
+        } else if compressed {
+            zstd::stream::encode_all(subagent_transcript.as_bytes(), 0).unwrap()
+        } else {
+            subagent_transcript.as_bytes().to_vec()
+        };
+        std::fs::write(
+            subagent_directory.join(format!("agent-fixture-agent{transcript_suffix}")),
+            subagent_transcript,
+        )
+        .unwrap();
+
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path);
+        session.pending_permission_agent_ids = BTreeSet::from(["fixture-agent".to_string()]);
+        session.pending_permission_request_ids = BTreeMap::from([(
+            "fixture-agent".to_string(),
+            "permission-request-subagent".to_string(),
+        )]);
+        let loaders = RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
+        .with_permission_request_data_loader(|_, _| {
+            Ok(Some(PermissionRequestData {
+                tool_name: Some("Bash".to_string()),
+                tool_input: json!({"command": "run fixture"}),
+                pending: true,
+            }))
+        });
+
+        assert_eq!(
+            load_conversation_with_queued_prompts(
+                "fixture-session",
+                |id| Ok((id == "fixture-session").then(|| session.clone())),
+                |_| Ok(None),
+                &loaders,
+            )
+            .unwrap()
+            .map(|conversation| conversation.messages),
+            Some(vec![ChatItem::Permission {
+                request_id: Some("permission-request-subagent".to_string()),
+                tool: expected_tool.to_string(),
+                description: "Waiting for permission approval.".to_string(),
+                command: Some("run fixture".to_string()),
+            }]),
         );
     }
 
@@ -3123,6 +3250,7 @@ mod tests {
         let (_directory, transcript_path) = pending_question_transcript();
         let mut session = stored_session();
         session.current_tool = Some("AskUserQuestion".to_string());
+        session.current_tool_name = Some("AskUserQuestion".to_string());
         session.transcript_path = Some(transcript_path);
         let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |id| Ok((id == "fixture-session").then(|| session.clone())),
