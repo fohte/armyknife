@@ -1,12 +1,12 @@
 import { err, ok, ResultAsync } from 'neverthrow'
 
 import { errorFromResponse } from '#api-requests'
+import { isJsonValue } from '#json-value'
 import { LATER_PRESET_OPTIONS } from '#session-navigation'
 import type {
   SessionOperation,
   SessionOperationError,
 } from '#session-operation-types'
-import type { JsonValue } from '#types'
 
 let nextMessageOperationId = 0
 
@@ -19,19 +19,6 @@ function isStringRecord(value: unknown): value is Record<string, string> {
     isRecord(value) &&
     Object.values(value).every((entry) => typeof entry === 'string')
   )
-}
-
-function isJsonValue(value: unknown): value is JsonValue {
-  if (
-    value === null ||
-    typeof value === 'boolean' ||
-    typeof value === 'number' ||
-    typeof value === 'string'
-  ) {
-    return true
-  }
-  if (Array.isArray(value)) return value.every(isJsonValue)
-  return isRecord(value) && Object.values(value).every(isJsonValue)
 }
 
 function toError(error: unknown): SessionOperationError {
