@@ -115,7 +115,7 @@ export function useConversationSelectionReply({
         : draft.endsWith('\n')
           ? '\n'
           : '\n\n'
-    const nextDraft = `${draft}${separator}${quotedText}\n`
+    const nextDraft = `${draft}${separator}${quotedText}\n\n`
     setFocusDraft(nextDraft)
     updateDraft(nextDraft)
     setSelectionReply(null)

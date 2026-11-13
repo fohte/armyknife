@@ -96,12 +96,12 @@ it.each([
   {
     name: 'existing draft',
     initialDraft: 'Existing note',
-    expectedDraft: 'Existing note\n\n> First line\n> Second line\n',
+    expectedDraft: 'Existing note\n\n> First line\n> Second line\n\n',
   },
   {
     name: 'empty draft',
     initialDraft: '',
-    expectedDraft: '> First line\n> Second line\n',
+    expectedDraft: '> First line\n> Second line\n\n',
   },
 ])(
   'quotes each selected line into an $name',
