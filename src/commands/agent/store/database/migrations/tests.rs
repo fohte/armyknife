@@ -2,6 +2,9 @@ use indoc::indoc;
 use rstest::{fixture, rstest};
 use rusqlite::Connection;
 use rusqlite_migration::{Error as MigrationError, MigrationDefinitionError, Migrations};
+use std::sync::{Arc, Barrier};
+use std::thread;
+use std::time::Duration;
 
 use super::*;
 
@@ -45,6 +48,132 @@ fn accepts_database_too_far_ahead_only_for_a_newer_version(
     let actual = accept_migration_error(&connection, error).is_ok();
 
     assert_eq!(actual, expected_accepted);
+}
+
+#[rstest]
+fn preserves_future_schema_without_current_tables() {
+    let mut connection = Connection::open_in_memory().expect("in-memory database should open");
+    connection
+        .execute_batch("CREATE TABLE future_state (value TEXT NOT NULL);")
+        .expect("future schema should be created");
+    connection
+        .execute("INSERT INTO future_state (value) VALUES ('preserved')", [])
+        .expect("future schema data should be inserted");
+    connection
+        .pragma_update(None, "user_version", current_version() + 1)
+        .expect("future migration version should be stored");
+
+    migrate_if_needed(&mut connection).expect("newer database versions should be left untouched");
+
+    let table_names = connection
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        .expect("future table query should prepare")
+        .query_map([], |row| row.get::<_, String>(0))
+        .expect("future table names should be queried")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("future table names should be collected");
+    let column_names = connection
+        .prepare("SELECT name FROM pragma_table_info('future_state') ORDER BY cid")
+        .expect("future column query should prepare")
+        .query_map([], |row| row.get::<_, String>(0))
+        .expect("future column names should be queried")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("future column names should be collected");
+    let value: String = connection
+        .query_row("SELECT value FROM future_state", [], |row| row.get(0))
+        .expect("future schema data should remain queryable");
+    let user_version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("future migration version should be readable");
+
+    assert_eq!(
+        (table_names, column_names, value, user_version),
+        (
+            vec!["future_state".to_string()],
+            vec!["value".to_string()],
+            "preserved".to_string(),
+            current_version() + 1,
+        ),
+    );
+}
+
+#[rstest]
+#[case::queued_prompt_columns(
+    "CREATE TABLE watch_web_queued_prompt (
+        id INTEGER PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        content TEXT NOT NULL,
+        sent_at TEXT NOT NULL
+    );",
+    "watch_web_queued_prompt",
+    vec!["id", "session_id", "content", "sent_at", "attachments", "message_id"],
+    ensure_queued_prompt_columns
+)]
+#[case::todo_resolution_column(
+    "CREATE TABLE agent_todo (
+        session_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (session_id, seq)
+    );",
+    "agent_todo",
+    vec!["session_id", "seq", "title", "created_at", "resolution"],
+    ensure_todo_resolution_column
+)]
+fn concurrent_column_repairs_are_idempotent(
+    #[case] schema: &str,
+    #[case] table: &str,
+    #[case] expected_columns: Vec<&str>,
+    #[case] repair: fn(&mut Connection) -> anyhow::Result<()>,
+    database_fixture: DatabaseFixture,
+) {
+    let DatabaseFixture {
+        temp_dir,
+        connection,
+    } = database_fixture;
+    connection
+        .execute_batch(schema)
+        .expect("legacy schema should be created");
+    drop(connection);
+
+    let barrier = Arc::new(Barrier::new(2));
+    let workers = (0..2)
+        .map(|_| {
+            let database_path = temp_dir.path().join("sessions.db");
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                let mut connection = Connection::open(database_path)
+                    .expect("worker database connection should open");
+                connection
+                    .busy_timeout(Duration::from_secs(5))
+                    .expect("worker should wait for concurrent schema changes");
+                barrier.wait();
+                repair(&mut connection).expect("concurrent schema repairs should succeed");
+            })
+        })
+        .collect::<Vec<_>>();
+    for worker in workers {
+        worker.join().expect("migration worker should not panic");
+    }
+
+    let connection = Connection::open(temp_dir.path().join("sessions.db"))
+        .expect("migrated database should open");
+    let actual = connection
+        .prepare("SELECT name FROM pragma_table_info(?1) ORDER BY cid")
+        .expect("repaired schema query should prepare")
+        .query_map([table], |row| row.get::<_, String>(0))
+        .expect("repaired schema columns should be queried")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("repaired schema columns should be collected");
+
+    assert_eq!(
+        actual,
+        expected_columns
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+    );
 }
 
 #[rstest]

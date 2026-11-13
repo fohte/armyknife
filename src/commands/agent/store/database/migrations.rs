@@ -1,7 +1,7 @@
 use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
-use rusqlite::Connection;
+use rusqlite::{Connection, TransactionBehavior};
 use rusqlite_migration::{Error as MigrationError, M, MigrationDefinitionError, Migrations};
 
 // Keep older binaries compatible: new columns need defaults or must be nullable.
@@ -224,8 +224,8 @@ pub(super) fn migrate_if_needed(connection: &mut Connection) -> Result<()> {
     ensure_todo_resolution_column(connection)
 }
 
-fn ensure_queued_prompt_columns(connection: &Connection) -> Result<()> {
-    for (column, statement) in [
+fn ensure_queued_prompt_columns(connection: &mut Connection) -> Result<()> {
+    let statements = [
         (
             "attachments",
             "ALTER TABLE watch_web_queued_prompt
@@ -235,34 +235,52 @@ fn ensure_queued_prompt_columns(connection: &Connection) -> Result<()> {
             "message_id",
             "ALTER TABLE watch_web_queued_prompt ADD COLUMN message_id TEXT",
         ),
-    ] {
-        let exists: bool = connection.query_row(
-            "SELECT EXISTS(
-                SELECT 1 FROM pragma_table_info('watch_web_queued_prompt') WHERE name = ?1
-            )",
-            [column],
-            |row| row.get(0),
-        )?;
-        if !exists {
-            connection.execute(statement, [])?;
+    ];
+    let mut needs_repair = false;
+    for (column, _) in statements {
+        if !has_column(connection, "watch_web_queued_prompt", column)? {
+            needs_repair = true;
+            break;
         }
     }
+    if !needs_repair {
+        return Ok(());
+    }
+
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    for (column, statement) in statements {
+        if !has_column(&transaction, "watch_web_queued_prompt", column)? {
+            transaction.execute(statement, [])?;
+        }
+    }
+    transaction.commit()?;
     Ok(())
 }
 
-fn ensure_todo_resolution_column(connection: &Connection) -> Result<()> {
-    // Version 15 can describe either schema, so the version alone cannot prove this column exists.
-    let has_resolution: bool = connection.query_row(
-        "SELECT EXISTS(
-            SELECT 1 FROM pragma_table_info('agent_todo') WHERE name = 'resolution'
-        )",
-        [],
-        |row| row.get(0),
-    )?;
-    if !has_resolution {
-        connection.execute("ALTER TABLE agent_todo ADD COLUMN resolution TEXT", [])?;
+fn ensure_todo_resolution_column(connection: &mut Connection) -> Result<()> {
+    if has_column(connection, "agent_todo", "resolution")? {
+        return Ok(());
     }
+
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    // Version 15 can describe either schema, so the version alone cannot prove this column exists.
+    if !has_column(&transaction, "agent_todo", "resolution")? {
+        transaction.execute("ALTER TABLE agent_todo ADD COLUMN resolution TEXT", [])?;
+    }
+    transaction.commit()?;
     Ok(())
+}
+
+fn has_column(connection: &Connection, table: &str, column: &str) -> Result<bool> {
+    connection
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2
+            )",
+            (table, column),
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
 }
 
 fn accept_migration_error(connection: &Connection, error: MigrationError) -> Result<()> {
