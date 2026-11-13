@@ -7,10 +7,13 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   useCallback,
+  useEffect,
   useMemo,
   useRef,
+  useState,
 } from 'react'
 
+import { ConversationSelectionReply } from '#components/conversation-selection-reply'
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
 import { MessageComposer } from '#components/message-composer'
 import { OpenInTerminalAction } from '#components/open-in-terminal-action'
@@ -124,6 +127,11 @@ export function ConversationPaneView({
   )
   const { draft, updateDraft, clearDraftIfUnchanged, storageAvailable } =
     useComposerDraft(session.id)
+  const [focusDraft, setFocusDraft] = useState<string | null>(null)
+  const [selectionReply, setSelectionReply] = useState<{
+    text: string
+    position: { left: number; top: number }
+  } | null>(null)
   const {
     attachments,
     error: attachmentError,
@@ -165,6 +173,84 @@ export function ConversationPaneView({
   const selectLinkedSession = useCallback((id: string) => {
     onSelectSessionRef.current(id)
   }, [])
+  const updateSelectionReply = useCallback(() => {
+    const selection = window.getSelection()
+    if (selection === null || selection.isCollapsed) {
+      setSelectionReply(null)
+      return
+    }
+
+    const text = selection.toString()
+    const range = selection.getRangeAt(0)
+    const startNode =
+      range.startContainer instanceof Element
+        ? range.startContainer
+        : range.startContainer.parentElement
+    const endNode =
+      range.endContainer instanceof Element
+        ? range.endContainer
+        : range.endContainer.parentElement
+    const message = startNode?.closest('.chat-assistant-message')
+    if (
+      text.trim() === '' ||
+      message === null ||
+      message === undefined ||
+      message !== endNode?.closest('.chat-assistant-message')
+    ) {
+      setSelectionReply(null)
+      return
+    }
+
+    const rect = range.getBoundingClientRect()
+    const menuWidth = 88
+    const menuHeight = 42
+    const edge = 8
+    const left = Math.min(
+      Math.max(edge, rect.left + rect.width / 2 - menuWidth / 2),
+      window.innerWidth - menuWidth - edge,
+    )
+    const below = rect.bottom + edge
+    const above = rect.top - menuHeight - edge
+    const top = isMobile
+      ? below + menuHeight <= window.innerHeight - edge
+        ? below
+        : above
+      : above >= edge
+        ? above
+        : below
+    setSelectionReply({ text, position: { left, top } })
+  }, [isMobile])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSelectionReply(null)
+    }
+    document.addEventListener('selectionchange', updateSelectionReply)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('selectionchange', updateSelectionReply)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [updateSelectionReply])
+
+  const replyToSelection = () => {
+    if (selectionReply === null) return
+    const quotedText = selectionReply.text
+      .replace(/\r\n?/g, '\n')
+      .split('\n')
+      .map((line) => `> ${line}`)
+      .join('\n')
+    const separator =
+      draft === '' || draft.endsWith('\n\n')
+        ? ''
+        : draft.endsWith('\n')
+          ? '\n'
+          : '\n\n'
+    const nextDraft = `${draft}${separator}${quotedText}\n`
+    setFocusDraft(nextDraft)
+    updateDraft(nextDraft)
+    setSelectionReply(null)
+  }
   const openInTerminal = useCallback(() => {
     if (onOpenInTerminal === undefined) {
       void onAction('focus')
@@ -466,7 +552,10 @@ export function ConversationPaneView({
         ref={conversationScrollRef}
         className="conversation-scroll"
         aria-live="polite"
-        onScroll={onScroll}
+        onScroll={() => {
+          setSelectionReply(null)
+          onScroll()
+        }}
       >
         {start > 0 ? (
           <Button
@@ -525,6 +614,7 @@ export function ConversationPaneView({
       ) : null}
       <MessageComposer
         draft={draft}
+        focusDraft={focusDraft}
         engine={session.engine}
         skills={skills}
         placeholder={
@@ -548,6 +638,10 @@ export function ConversationPaneView({
         onInterrupt={() => {
           void onAction('interrupt')
         }}
+      />
+      <ConversationSelectionReply
+        position={selectionReply?.position ?? null}
+        onReply={replyToSelection}
       />
       {isMobile && statusPanelOpen && mobileStatusPanel !== null ? (
         <div className="mobile-session-status-overlay">{mobileStatusPanel}</div>
