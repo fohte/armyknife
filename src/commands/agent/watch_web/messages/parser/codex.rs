@@ -15,7 +15,9 @@ use super::super::parser::{
 };
 use super::decision_position::{DecisionTimeline, insert_time_placed_decisions};
 use super::time_placed::TimePlacedTimeline;
-use crate::commands::agent::store::{AgentDecision, AgentTodo, WatchWebPeerOutMessage};
+use crate::commands::agent::store::{
+    AgentDecision, AgentTodo, PermissionRequestData, WatchWebPeerOutMessage,
+};
 use crate::commands::agent::watch_web::messages::EventKind;
 
 #[cfg(test)]
@@ -142,6 +144,7 @@ impl CodexParserState {
         self.render_with_decisions_todos_and_peer_out_messages(parent, decisions, todos, &[])
     }
 
+    #[cfg(test)]
     pub(in crate::commands::agent::watch_web::messages) fn render_with_decisions_todos_and_peer_out_messages(
         &self,
         parent: Option<&ParentSession>,
@@ -149,8 +152,25 @@ impl CodexParserState {
         todos: &[AgentTodo],
         peer_out_messages: &[WatchWebPeerOutMessage],
     ) -> io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
+        self.render_with_permission_request(parent, decisions, todos, peer_out_messages, None)
+    }
+
+    pub(in crate::commands::agent::watch_web::messages) fn render_with_permission_request(
+        &self,
+        parent: Option<&ParentSession>,
+        decisions: &[AgentDecision],
+        todos: &[AgentTodo],
+        peer_out_messages: &[WatchWebPeerOutMessage],
+        pending_permission: Option<&PermissionRequestData>,
+    ) -> io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
         if self.lines.pending().is_empty() {
-            return self.render_events(parent, decisions, todos, peer_out_messages);
+            return self.render_events(
+                parent,
+                decisions,
+                todos,
+                peer_out_messages,
+                pending_permission,
+            );
         }
         let mut parser = self.clone();
         let mut lines = std::mem::take(&mut parser.lines);
@@ -166,7 +186,13 @@ impl CodexParserState {
         if let Some(error) = parser_error {
             return Err(error);
         }
-        parser.render_events(parent, decisions, todos, peer_out_messages)
+        parser.render_events(
+            parent,
+            decisions,
+            todos,
+            peer_out_messages,
+            pending_permission,
+        )
     }
 
     fn process_line(&mut self, line: &[u8]) -> io::Result<()> {
@@ -341,6 +367,7 @@ impl CodexParserState {
         decisions: &[AgentDecision],
         todos: &[AgentTodo],
         peer_out_messages: &[WatchWebPeerOutMessage],
+        pending_permission: Option<&PermissionRequestData>,
     ) -> io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
         let mut items = Vec::new();
         let mut tools = ToolSummary::default();
@@ -394,12 +421,46 @@ impl CodexParserState {
                 }
             }
         }
-        let active_tool = self
-            .pending_tool_calls
-            .last()
-            .map(|pending| ChatItem::ToolInProgress {
-                tool: pending.name.clone(),
-                target: operation_target(&pending.name, pending.input.as_ref()),
+        let pending_tool_call = pending_permission.and_then(|permission| {
+            permission.tool_name.as_deref().and_then(|name| {
+                self.pending_tool_calls.iter().rev().find(|pending| {
+                    pending.name == name && pending.input.as_ref() == Some(&permission.tool_input)
+                })
+            })
+        });
+        let active_tool = pending_tool_call
+            .map(|pending| {
+                let command = super::super::permission_request_command(
+                    Some(&pending.name),
+                    pending.input.as_ref(),
+                );
+                let waiting_message = operation_target(&pending.name, pending.input.as_ref())
+                    .map(|target| format!("{}: {target}", pending.name))
+                    .unwrap_or_else(|| pending.name.clone());
+                let description = if command.is_some() {
+                    String::new()
+                } else {
+                    super::super::permission_request_description(
+                        Some(&pending.name),
+                        pending.input.as_ref(),
+                        command.as_deref(),
+                        &waiting_message,
+                    )
+                };
+                ChatItem::Permission {
+                    request_id: None,
+                    tool: pending.name.clone(),
+                    description,
+                    command,
+                }
+            })
+            .or_else(|| {
+                self.pending_tool_calls
+                    .last()
+                    .map(|pending| ChatItem::ToolInProgress {
+                        tool: pending.name.clone(),
+                        target: operation_target(&pending.name, pending.input.as_ref()),
+                    })
             });
         tools.flush_into(&mut items);
         peer_out_timeline.append_remaining(&mut items);
@@ -488,10 +549,39 @@ mod tests {
     use serde_json::json;
 
     use super::{CodexParserState, parse, parse_with_skills};
-    use crate::commands::agent::store::{AgentTodo, TodoResolution};
+    use crate::commands::agent::store::{AgentTodo, PermissionRequestData, TodoResolution};
     use crate::commands::agent::watch_web::messages::{
         ChatItem, EventKind, ParentSession, PeerDirection, SkillSuggestion, UserContentPart,
     };
+
+    #[test]
+    fn permission_request_matches_codex_call_name_and_json_input() {
+        let transcript = concat!(
+            r#"{"type":"response_item","payload":{"type":"function_call","call_id":"call-one","name":"Bash","arguments":"{\"command\":\"run fixture\"}"}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"function_call","call_id":"call-two","name":"Bash","arguments":"{\"command\":\"different fixture\"}"}}"#,
+        );
+        let mut parser = CodexParserState::new();
+        parser.append(Cursor::new(transcript)).unwrap();
+        let permission = PermissionRequestData {
+            tool_name: Some("Bash".to_string()),
+            tool_input: json!({"command": "run fixture"}),
+            pending: true,
+        };
+
+        assert_eq!(
+            parser
+                .render_with_permission_request(None, &[], &[], &[], Some(&permission))
+                .unwrap()
+                .0,
+            vec![ChatItem::Permission {
+                request_id: None,
+                tool: "Bash".to_string(),
+                description: String::new(),
+                command: Some("run fixture".to_string()),
+            }],
+        );
+    }
 
     #[fixture]
     fn todo() -> AgentTodo {

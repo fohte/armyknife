@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use rusqlite_migration::{Error as MigrationError, M, MigrationDefinitionError, Migrations};
 
 // Keep older binaries compatible: new columns need defaults or must be nullable.
-static MIGRATION_ENTRIES: [M<'static>; 16] = [
+static MIGRATION_ENTRIES: [M<'static>; 18] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -166,7 +166,19 @@ static MIGRATION_ENTRIES: [M<'static>; 16] = [
     ),
     M::up("ALTER TABLE agent_todo ADD COLUMN resolution TEXT;"),
     M::up(
-        "CREATE TABLE IF NOT EXISTS session_replacement (
+        "ALTER TABLE watch_web_queued_prompt
+         ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]';
+         ALTER TABLE watch_web_queued_prompt
+         ADD COLUMN message_id TEXT;",
+    ),
+    M::up(
+        "ALTER TABLE watch_web_queued_prompt
+         ADD COLUMN resolved INTEGER NOT NULL DEFAULT 1;
+         UPDATE watch_web_queued_prompt
+         SET resolved = CASE WHEN message_id IS NULL THEN 1 ELSE 0 END;",
+    ),
+    M::up(
+        "CREATE TABLE session_replacement (
             session_id TEXT PRIMARY KEY,
             replaced_by_session_id TEXT NOT NULL
         );",
@@ -183,43 +195,12 @@ pub(super) fn current_version() -> i64 {
 pub(super) fn migrate_if_needed(connection: &mut Connection) -> Result<()> {
     let user_version: i64 =
         connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if is_legacy_rewind_version_fourteen(connection, user_version)? {
-        connection.execute(
-            "ALTER TABLE watch_web_peer_out_message
-             ADD COLUMN failed INTEGER NOT NULL DEFAULT 0",
-            [],
-        )?;
-    }
     if user_version < current_version()
         && let Err(error) = MIGRATIONS.to_latest(connection)
     {
         accept_migration_error(connection, error)?;
     }
     Ok(())
-}
-
-fn is_legacy_rewind_version_fourteen(connection: &Connection, user_version: i64) -> Result<bool> {
-    if user_version != 14 {
-        return Ok(false);
-    }
-    let has_replacement_table: bool = connection.query_row(
-        "SELECT EXISTS(
-             SELECT 1 FROM sqlite_master
-             WHERE type = 'table' AND name = 'session_replacement'
-         )",
-        [],
-        |row| row.get(0),
-    )?;
-    let has_failed_column: bool = connection.query_row(
-        "SELECT EXISTS(
-             SELECT 1 FROM pragma_table_info('watch_web_peer_out_message')
-             WHERE name = 'failed'
-         )",
-        [],
-        |row| row.get(0),
-    )?;
-
-    Ok(has_replacement_table && !has_failed_column)
 }
 
 fn accept_migration_error(connection: &Connection, error: MigrationError) -> Result<()> {

@@ -37,6 +37,7 @@ pub(super) struct MessageCacheKey {
     pub(super) pending_permission_agent_ids: BTreeSet<String>,
     pub(super) pending_permission_request_ids: BTreeMap<String, String>,
     pub(super) current_tool: Option<String>,
+    pub(super) current_tool_name: Option<String>,
     pub(super) user_marker: Option<String>,
     pub(super) decisions: Vec<AgentDecision>,
     pub(super) queued_prompts: Vec<WatchWebQueuedPrompt>,
@@ -67,6 +68,7 @@ impl MessageCacheKey {
             pending_permission_agent_ids: session.pending_permission_agent_ids.clone(),
             pending_permission_request_ids: session.pending_permission_request_ids.clone(),
             current_tool: session.current_tool.clone(),
+            current_tool_name: session.current_tool_name.clone(),
             user_marker,
             decisions,
             queued_prompts,
@@ -122,18 +124,14 @@ impl RunningBackgroundTaskCache {
     }
 }
 
-pub(super) fn delete_resolved_queued_prompts(
-    loaders: &RouteLoaders,
-    session_id: &str,
-    ids: &[i64],
-) {
+pub(super) fn mark_resolved_queued_prompts(loaders: &RouteLoaders, session_id: &str, ids: &[i64]) {
     if !ids.is_empty()
-        && let Err(error) = (loaders.delete_queued_prompts)(session_id, ids)
+        && let Err(error) = (loaders.mark_queued_prompts_resolved)(session_id, ids)
     {
         tracing::warn!(
             session_id,
             %error,
-            "failed to remove resolved watch-web queued prompts"
+            "failed to mark resolved watch-web queued prompts"
         );
     }
 }
@@ -373,6 +371,42 @@ mod tests {
             MAIN_THREAD_AGENT_KEY.to_string(),
             "permission-request-next".to_string(),
         );
+        let next_key = MessageCacheKey::new(
+            &session,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            MessageCacheRecords::default(),
+        )
+        .unwrap();
+
+        assert!(first_key != next_key);
+    }
+
+    #[test]
+    fn message_cache_key_changes_when_the_structured_tool_name_changes() {
+        let mut session: Session = serde_json::from_value(json!({
+            "session_id": "fixture-session",
+            "cwd": "/fixture/project",
+            "status": "waiting_input",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "current_tool": "FixtureTool(details)",
+        }))
+        .unwrap();
+        let first_key = MessageCacheKey::new(
+            &session,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            MessageCacheRecords::default(),
+        )
+        .unwrap();
+        session.current_tool_name = Some("FixtureTool".to_string());
         let next_key = MessageCacheKey::new(
             &session,
             None,

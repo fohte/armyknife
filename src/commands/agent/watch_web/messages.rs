@@ -31,6 +31,7 @@ mod incremental;
 mod parser;
 mod proposals;
 mod questions;
+pub(in crate::commands::agent::watch_web) mod queued_prompt;
 mod range;
 mod subagent_reports;
 
@@ -67,7 +68,7 @@ type MessagesRouteState = (SessionLoader, UserMarkerLoader, RouteLoaders);
 type DecisionLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentDecision>> + Send + Sync>;
 type QueuedPromptLoader = Arc<dyn Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync>;
 type PeerOutMessageLoader = Arc<dyn Fn(&str) -> Result<Vec<WatchWebPeerOutMessage>> + Send + Sync>;
-type QueuedPromptDeleter = Arc<dyn Fn(&str, &[i64]) -> Result<()> + Send + Sync>;
+type QueuedPromptUpdater = Arc<dyn Fn(&str, &[i64]) -> Result<()> + Send + Sync>;
 type ProposalLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentProposal>> + Send + Sync>;
 type TodoLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentTodo>> + Send + Sync>;
 type PermissionRequestDataLoader =
@@ -80,7 +81,7 @@ pub(super) struct RouteLoaders {
     decisions: DecisionLoader,
     queued_prompts: QueuedPromptLoader,
     peer_out_messages: PeerOutMessageLoader,
-    delete_queued_prompts: QueuedPromptDeleter,
+    mark_queued_prompts_resolved: QueuedPromptUpdater,
     proposals: ProposalLoader,
     todos: TodoLoader,
     permission_request_data: PermissionRequestDataLoader,
@@ -97,14 +98,14 @@ impl RouteLoaders {
         + Send
         + Sync
         + 'static,
-        delete_queued_prompts: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
+        mark_queued_prompts_resolved: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
         load_proposals: impl Fn(&str) -> Result<Vec<AgentProposal>> + Send + Sync + 'static,
     ) -> Self {
         Self {
             decisions: Arc::new(load_decisions),
             queued_prompts: Arc::new(load_queued_prompts),
             peer_out_messages: Arc::new(load_peer_out_messages),
-            delete_queued_prompts: Arc::new(delete_queued_prompts),
+            mark_queued_prompts_resolved: Arc::new(mark_queued_prompts_resolved),
             proposals: Arc::new(load_proposals),
             todos: Arc::new(|_| Ok(Vec::new())),
             permission_request_data: Arc::new(|_, _| Ok(None)),
@@ -162,7 +163,7 @@ fn routes_with_decisions_and_queued_prompts_and_peer_out_messages(
     load_decisions: impl Fn(&str) -> Result<Vec<AgentDecision>> + Send + Sync + 'static,
     load_queued_prompts: impl Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync + 'static,
     load_peer_out_messages: impl Fn(&str) -> Result<Vec<WatchWebPeerOutMessage>> + Send + Sync + 'static,
-    delete_queued_prompts: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
+    mark_queued_prompts_resolved: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
 ) -> Router {
     routes_with_proposals_and_peer_out_messages(
         load_session,
@@ -171,7 +172,7 @@ fn routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             load_decisions,
             load_queued_prompts,
             load_peer_out_messages,
-            delete_queued_prompts,
+            mark_queued_prompts_resolved,
             |_| Ok(Vec::new()),
         ),
     )
@@ -275,11 +276,7 @@ fn load_conversation_with_queued_prompts(
         None
     };
     let decisions = (loaders.decisions)(session_id)?;
-    let queued_prompts = if session.engine == Engine::Claude {
-        (loaders.queued_prompts)(session_id)?
-    } else {
-        Vec::new()
-    };
+    let queued_prompts = (loaders.queued_prompts)(session_id)?;
     let peer_out_messages = (loaders.peer_out_messages)(session_id)?;
     let proposals = (loaders.proposals)(session_id)?;
     let proposal_items = proposals
@@ -307,10 +304,7 @@ fn load_conversation_with_queued_prompts(
         == Some("AskUserQuestion")
         || (main_permission_data.is_none() && is_ask_user_question(&session));
     let pending_tool = if main_permission_pending && !main_permission_is_question {
-        main_permission_data
-            .as_ref()
-            .and_then(permission_request_pending_tool)
-            .or_else(|| session.current_tool.clone())
+        main_permission_data.as_ref()
     } else {
         None
     };
@@ -342,7 +336,7 @@ fn load_conversation_with_queued_prompts(
             main_permission_data.as_ref(),
         );
         resolve_peer_session_titles(&mut cached.conversation.messages, &mut load_session)?;
-        cache::delete_resolved_queued_prompts(
+        cache::mark_resolved_queued_prompts(
             loaders,
             session_id,
             &cached.resolved_queued_prompt_ids,
@@ -354,7 +348,7 @@ fn load_conversation_with_queued_prompts(
         engine: session.engine,
         additions: parser::claude::ParserAdditions {
             parent: parent.as_ref(),
-            pending_tool: pending_tool.as_deref(),
+            pending_tool,
             user_marker: user_marker.as_deref(),
             decisions: &decisions,
             queued_prompts: &queued_prompts,
@@ -369,6 +363,7 @@ fn load_conversation_with_queued_prompts(
         cache_key.transcript_fingerprint.clone(),
         &loaders.message_cache,
     )?;
+    cache::refresh_image_availability(&mut conversation);
     resolve_peer_session_titles(&mut conversation.messages, &mut load_session)?;
 
     attach_question_request_if_present(
@@ -481,13 +476,28 @@ fn load_conversation_with_queued_prompts(
             }
             continue;
         }
+        let mut matched_tool = false;
+        if session.engine == Engine::Claude
+            && let Some(data) = permission_data.as_ref()
+            && data.tool_name.is_some()
+            && let Some(parent_transcript_path) = session.transcript_path.as_deref()
+        {
+            matched_tool =
+                matching_subagent_permission_tool_use(parent_transcript_path, agent_id, data);
+        }
+        let tool = if matched_tool {
+            permission_data
+                .as_ref()
+                .and_then(permission_request_pending_tool)
+        } else {
+            permission_data
+                .as_ref()
+                .and_then(|data| data.tool_name.clone())
+        }
+        .unwrap_or_else(|| "Permission required".to_string());
         let command = permission_data.as_ref().and_then(|data| {
             permission_request_command(data.tool_name.as_deref(), Some(&data.tool_input))
         });
-        let tool_name = permission_data
-            .as_ref()
-            .and_then(|data| data.tool_name.clone())
-            .unwrap_or_else(|| "Permission required".to_string());
         let description = permission_data
             .as_ref()
             .map(|data| {
@@ -501,7 +511,7 @@ fn load_conversation_with_queued_prompts(
             .unwrap_or_else(|| "Waiting for permission approval.".to_string());
         messages.push(ChatItem::Permission {
             request_id: Some(request_id),
-            tool: format!("Subagent {agent_id}: {tool_name}"),
+            tool: format!("Subagent {agent_id}: {tool}"),
             description,
             command,
         });
@@ -509,7 +519,7 @@ fn load_conversation_with_queued_prompts(
 
     conversation.update_metadata();
 
-    cache::delete_resolved_queued_prompts(loaders, session_id, &resolved_queued_prompt_ids);
+    cache::mark_resolved_queued_prompts(loaders, session_id, &resolved_queued_prompt_ids);
     loaders.message_cache.insert(
         session_id,
         cache_key,
@@ -523,11 +533,45 @@ const MAX_PERMISSION_COMMAND_BYTES: usize = 16 * 1024;
 
 fn permission_request_pending_tool(data: &PermissionRequestData) -> Option<String> {
     let tool_name = data.tool_name.as_deref()?;
-    let detail = permission_request_tool_detail(&data.tool_input);
+    let detail = tool_input_detail(&data.tool_input);
     Some(match detail {
         Some(detail) => format!("{tool_name}({detail})"),
         None => tool_name.to_string(),
     })
+}
+
+fn matching_subagent_permission_tool_use(
+    parent_transcript_path: &Path,
+    agent_id: &str,
+    permission: &PermissionRequestData,
+) -> bool {
+    let Some(path) = subagent_reports::transcript_path_for_agent(parent_transcript_path, agent_id)
+    else {
+        return false;
+    };
+    let reader = match open_seekable_transcript(&path) {
+        Ok(Some(reader)) => reader,
+        Ok(None) => return false,
+        Err(error) => {
+            tracing::warn!(
+                path = %path.display(),
+                %error,
+                "failed to open subagent permission transcript"
+            );
+            return false;
+        }
+    };
+    match parser::claude::matching_pending_tool_use_exists(reader, permission) {
+        Ok(matched) => matched,
+        Err(error) => {
+            tracing::warn!(
+                path = %path.display(),
+                %error,
+                "failed to match subagent permission transcript"
+            );
+            false
+        }
+    }
 }
 
 fn permission_request_command(
@@ -584,7 +628,7 @@ fn permission_denied_input_summary(tool_name: &str, input: &Value) -> String {
     detail.chars().take(200).collect()
 }
 
-fn permission_request_tool_detail(tool_input: &Value) -> Option<&str> {
+fn tool_input_detail(tool_input: &Value) -> Option<&str> {
     ["command", "file_path", "pattern"]
         .into_iter()
         .find_map(|key| tool_input.get(key).and_then(Value::as_str))
@@ -2397,7 +2441,10 @@ mod tests {
     fn saved_prompt(id: i64, content: &str) -> WatchWebQueuedPrompt {
         WatchWebQueuedPrompt {
             id,
+            message_id: Some(format!("fixture-message-{id}")),
             content: content.to_string(),
+            attachments: vec![],
+            resolved: false,
             sent_at: chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
                 .unwrap()
                 .with_timezone(&chrono::Utc),
@@ -2607,6 +2654,7 @@ mod tests {
             ),
         ]);
         session.current_tool = Some("AskUserQuestion".to_string());
+        session.current_tool_name = Some("AskUserQuestion".to_string());
         session.last_message = Some("Should the summary be brief?".to_string());
         session.transcript_path = Some(transcript_path);
 
@@ -2749,6 +2797,86 @@ mod tests {
                     }],
                 },
             ],
+        );
+    }
+
+    #[rstest]
+    #[case::plain(false, false, "Subagent fixture-agent: Bash(run fixture)")]
+    #[case::compressed(true, false, "Subagent fixture-agent: Bash(run fixture)")]
+    #[case::malformed_compressed(true, true, "Subagent fixture-agent: Bash")]
+    fn subagent_permission_matches_an_unresolved_tool_use_from_its_transcript(
+        #[case] compressed: bool,
+        #[case] malformed: bool,
+        #[case] expected_tool: &str,
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_suffix = if compressed { ".jsonl.zst" } else { ".jsonl" };
+        let transcript_path = directory
+            .path()
+            .join(format!("fixture-session{transcript_suffix}"));
+        let parent_transcript = if compressed {
+            zstd::stream::encode_all(&b""[..], 0).unwrap()
+        } else {
+            Vec::new()
+        };
+        std::fs::write(&transcript_path, parent_transcript).unwrap();
+        let subagent_directory = directory.path().join("fixture-session").join("subagents");
+        std::fs::create_dir_all(&subagent_directory).unwrap();
+        let subagent_transcript = indoc::indoc! {r#"
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"first-call","name":"Bash","input":{"command":"run fixture"}}]}}
+            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"first-call","content":"done"}]}}
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"pending-call","name":"Bash","input":{"command":"run fixture"}}]}}
+        "#};
+        let subagent_transcript = if malformed {
+            b"invalid compressed transcript".to_vec()
+        } else if compressed {
+            zstd::stream::encode_all(subagent_transcript.as_bytes(), 0).unwrap()
+        } else {
+            subagent_transcript.as_bytes().to_vec()
+        };
+        std::fs::write(
+            subagent_directory.join(format!("agent-fixture-agent{transcript_suffix}")),
+            subagent_transcript,
+        )
+        .unwrap();
+
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path);
+        session.pending_permission_agent_ids = BTreeSet::from(["fixture-agent".to_string()]);
+        session.pending_permission_request_ids = BTreeMap::from([(
+            "fixture-agent".to_string(),
+            "permission-request-subagent".to_string(),
+        )]);
+        let loaders = RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
+        .with_permission_request_data_loader(|_, _| {
+            Ok(Some(PermissionRequestData {
+                tool_name: Some("Bash".to_string()),
+                tool_input: json!({"command": "run fixture"}),
+                pending: true,
+            }))
+        });
+
+        assert_eq!(
+            load_conversation_with_queued_prompts(
+                "fixture-session",
+                |id| Ok((id == "fixture-session").then(|| session.clone())),
+                |_| Ok(None),
+                &loaders,
+            )
+            .unwrap()
+            .map(|conversation| conversation.messages),
+            Some(vec![ChatItem::Permission {
+                request_id: Some("permission-request-subagent".to_string()),
+                tool: expected_tool.to_string(),
+                description: "Waiting for permission approval.".to_string(),
+                command: Some("run fixture".to_string()),
+            }]),
         );
     }
 
@@ -3126,6 +3254,7 @@ mod tests {
         let (_directory, transcript_path) = pending_question_transcript();
         let mut session = stored_session();
         session.current_tool = Some("AskUserQuestion".to_string());
+        session.current_tool_name = Some("AskUserQuestion".to_string());
         session.transcript_path = Some(transcript_path);
         let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |id| Ok((id == "fixture-session").then(|| session.clone())),
@@ -3240,19 +3369,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claude_message_route_deletes_prompts_after_marked_delivery() {
+    async fn claude_message_route_marks_prompts_resolved_after_id_delivery() {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("transcript.jsonl");
         std::fs::write(
             &transcript_path,
-            r#"{"type":"user","origin":{"kind":"peer","from":"unknown"},"timestamp":"2026-01-01T00:00:01Z","message":{"content":"⟦armyknife-user:fixture-marker-cobalt⟧\nThis message was typed by the human user in armyknife watch-web.\nDelivered fixture request."}}"#,
+            r#"{"type":"user","origin":{"kind":"peer","from":"unknown"},"timestamp":"2026-01-01T00:00:01Z","message":{"content":"⟦armyknife-user:fixture-marker-cobalt⟧\nThis message was typed by the human user in armyknife watch-web.\nEngine-formatted delivery.\n<!-- armyknife-queued-prompt-id:fixture-message-7 -->"}}"#,
         )
         .unwrap();
         let mut session = stored_session();
         session.transcript_path = Some(transcript_path);
         let queued = saved_prompt(7, "Delivered fixture request.");
-        let deleted_ids = Arc::new(Mutex::new(Vec::new()));
-        let delete_log = Arc::clone(&deleted_ids);
+        let marked_ids = Arc::new(Mutex::new(Vec::new()));
+        let mark_log = Arc::clone(&marked_ids);
         let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(Some("⟦armyknife-user:fixture-marker-cobalt⟧".to_string())),
@@ -3260,7 +3389,7 @@ mod tests {
             move |_| Ok(vec![queued.clone()]),
             |_| Ok(Vec::new()),
             move |_, ids| {
-                delete_log.lock().unwrap().extend_from_slice(ids);
+                mark_log.lock().unwrap().extend_from_slice(ids);
                 Ok(())
             },
         );
@@ -3277,7 +3406,7 @@ mod tests {
         assert_eq!(
             (
                 response_snapshot(response).await,
-                deleted_ids.lock().unwrap().clone(),
+                marked_ids.lock().unwrap().clone(),
             ),
             (
                 (
@@ -3291,16 +3420,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn codex_message_route_does_not_load_saved_claude_prompts() {
+    async fn codex_message_route_loads_and_resolves_saved_prompts_by_id() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        std::fs::write(
+            &transcript_path,
+            r#"{"type":"event_msg","timestamp":"2026-01-01T00:00:01Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"Engine-formatted Codex delivery.\n<!-- armyknife-queued-prompt-id:fixture-message-8 -->"}}}"#,
+        )
+        .unwrap();
         let mut session = stored_session();
         session.engine = Engine::Codex;
+        session.transcript_path = Some(transcript_path);
+        let queued = saved_prompt(8, "Codex delivered request.");
+        let marked_ids = Arc::new(Mutex::new(Vec::new()));
+        let mark_log = Arc::clone(&marked_ids);
         let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
             |_| Ok(Vec::new()),
-            |_| Err(anyhow::anyhow!("Codex must not load Claude prompts")),
+            move |_| Ok(vec![queued.clone()]),
             |_| Ok(Vec::new()),
-            |_, _| Err(anyhow::anyhow!("Codex must not delete Claude prompts")),
+            move |_, ids| {
+                mark_log.lock().unwrap().extend_from_slice(ids);
+                Ok(())
+            },
         );
         let response = router
             .oneshot(
@@ -3313,11 +3456,17 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            response_snapshot(response).await,
             (
-                StatusCode::OK,
-                Some("application/json".to_string()),
-                r#"{"messages":[],"backgroundTasks":[],"start":0,"total":0,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
+                response_snapshot(response).await,
+                marked_ids.lock().unwrap().clone(),
+            ),
+            (
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    r#"{"messages":[{"type":"user","text":"Codex delivered request.","timestamp":"2026-01-01T00:00:01+00:00"}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
+                ),
+                vec![8],
             ),
         );
     }

@@ -46,9 +46,10 @@ pub(crate) use proposals::{
     add_agent_proposal, agent_proposals, unanswered_agent_proposal_bodies,
     write_agent_proposal_answer,
 };
-pub(crate) use queued_prompts::WatchWebQueuedPrompt;
+pub(crate) use queued_prompts::{WatchWebQueuedAttachment, WatchWebQueuedPrompt};
 pub(crate) use queued_prompts::{
-    delete_watch_web_queued_prompts, insert_watch_web_queued_prompt, watch_web_queued_prompts,
+    delete_watch_web_queued_prompts, insert_watch_web_queued_prompt,
+    mark_watch_web_queued_prompts_resolved, watch_web_queued_prompts,
 };
 pub(crate) use replacements::{
     all_unreplaced_sessions, resolve_current_session_id, save_rewind_sessions,

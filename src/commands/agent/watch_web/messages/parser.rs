@@ -496,25 +496,10 @@ fn user_item_with_image_directory(
 }
 
 fn user_content_parts_with_image_directory(
-    mut text: String,
-    mut images: Vec<UserContentPart>,
-    image_directory: Option<&Path>,
+    text: String,
+    images: Vec<UserContentPart>,
+    _image_directory: Option<&Path>,
 ) -> (String, Option<Vec<UserContentPart>>) {
-    if let Some(directory) = image_directory
-        && let Some((visible_text, references)) =
-            super::super::image_attachments::extract_references(&text, directory)
-    {
-        text = visible_text;
-        images.extend(references.into_iter().map(|reference| match reference {
-            super::super::image_attachments::Reference::Image { source, available } => {
-                UserContentPart::Image { source, available }
-            }
-            super::super::image_attachments::Reference::File { name } => {
-                UserContentPart::File { name }
-            }
-        }));
-    }
-
     if images.is_empty() {
         return (text, None);
     }
@@ -565,30 +550,11 @@ fn image_placeholder(text: &str) -> Option<(usize, usize)> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use indoc::formatdoc;
-    use rstest::{fixture, rstest};
+    use rstest::rstest;
     use serde_json::json;
 
-    use super::{
-        ChatItem, ToolSummary, UserContentPart, append_text_with_image_directory,
-        append_text_with_user_marker_and_image_directory, operation_target,
-    };
-
-    #[fixture]
-    fn saved_image_directory() -> (tempfile::TempDir, PathBuf) {
-        let directory = tempfile::tempdir().unwrap();
-        std::fs::write(
-            directory
-                .path()
-                .join("00000000-0000-4000-8000-000000000001.png"),
-            [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
-        )
-        .unwrap();
-        let image_directory = directory.path().canonicalize().unwrap();
-        (directory, image_directory)
-    }
+    use super::{ChatItem, ToolSummary, append_text_with_image_directory, operation_target};
     #[rstest]
     #[case::singular(1, "Read ×1")]
     #[case::plural(2, "Read ×2")]
@@ -674,115 +640,27 @@ mod tests {
             }]
         );
     }
-    #[rstest]
-    #[case::transcript_user(false)]
-    #[case::queued_user(true)]
-    fn extracts_saved_images_from_unmarked_user_paths(
-        saved_image_directory: (tempfile::TempDir, PathBuf),
-        #[case] is_queued: bool,
-    ) {
-        let (_directory, image_directory) = saved_image_directory;
-        let image_path = image_directory.join("00000000-0000-4000-8000-000000000001.png");
-        let text = formatdoc! {"
-            Inspect this image.
-
-            Attached image(s):
-            - {}
-        ", image_path.display()};
-        let mut items = Vec::new();
-
-        if is_queued {
-            append_text_with_user_marker_and_image_directory(
-                &mut items,
-                text,
-                None,
-                None,
-                Vec::new(),
-                Some(&image_directory),
-                None,
-            );
-        } else {
-            append_text_with_image_directory(
-                &mut items,
-                text,
-                true,
-                None,
-                Some(&image_directory),
-                None,
-            );
-        }
-
-        assert_eq!(
-            items,
-            vec![ChatItem::UserWithContent {
-                rewind_id: None,
-                content: vec![
-                    UserContentPart::Text {
-                        text: "Inspect this image.".to_string(),
-                    },
-                    UserContentPart::Image {
-                        source: "/api/images/00000000-0000-4000-8000-000000000001.png".to_string(),
-                        available: true,
-                    },
-                ],
-                timestamp: None,
-                from: None,
-            }]
-        );
-    }
-
-    #[rstest]
-    fn extracts_images_and_file_names_from_generic_user_paths(
-        saved_image_directory: (tempfile::TempDir, PathBuf),
-    ) {
-        let (_directory, image_directory) = saved_image_directory;
-        let image_name = "00000000-0000-4000-8000-000000000005~image~screenshot.png";
-        let file_name = "00000000-0000-4000-8000-000000000006~file~design-mock.html";
-        std::fs::write(
-            image_directory.join(image_name),
-            [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
-        )
-        .unwrap();
-        std::fs::write(image_directory.join(file_name), b"<main>Mock</main>").unwrap();
-        let text = formatdoc! {"
+    #[test]
+    fn leaves_attachment_path_text_in_unmarked_transcript_messages() {
+        let text = indoc::indoc! {"
             Inspect the attachments.
 
             Attached file(s):
-            - {}
-            - {}
-        ",
-            image_directory.join(image_name).display(),
-            image_directory.join(file_name).display(),
-        };
+            - /fixture/upload/image.png
+            - /fixture/upload/notes.txt
+        "}
+        .to_string();
         let mut items = Vec::new();
 
-        append_text_with_image_directory(
-            &mut items,
-            text,
-            true,
-            None,
-            Some(&image_directory),
-            None,
-        );
+        append_text_with_image_directory(&mut items, text.clone(), true, None, None, None);
 
         assert_eq!(
             items,
-            vec![ChatItem::UserWithContent {
+            vec![ChatItem::User {
                 rewind_id: None,
-                content: vec![
-                    UserContentPart::Text {
-                        text: "Inspect the attachments.".to_string(),
-                    },
-                    UserContentPart::Image {
-                        source: format!("/api/images/{image_name}"),
-                        available: true,
-                    },
-                    UserContentPart::File {
-                        name: "design-mock.html".to_string(),
-                    },
-                ],
-                timestamp: None,
+                text,
                 from: None,
+                timestamp: None,
             }]
         );
     }

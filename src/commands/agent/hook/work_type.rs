@@ -199,6 +199,7 @@ mod tests {
             updated_at: now,
             last_message: None,
             current_tool: None,
+            current_tool_name: None,
             label: None,
             work_type: work_type.map(str::to_owned),
             work_type_pinned: false,

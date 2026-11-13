@@ -25,8 +25,9 @@ pub(crate) use database::{
     AgentDecision, AgentDecisionCounts, AgentProposal, PermissionDeniedOperation,
     PermissionRequestData, PermissionRequestDecision, PermissionRequestResolution,
     PermissionRequestWait, PermissionRequestWaiter, SessionLock, SessionStoreChanges, WakeLock,
-    WatchWebPeerOutMessage, WatchWebQueuedPrompt, WatchWebSessionState, permission_request_data,
-    resolve_permission_request, resolve_permission_request_with_answers, serialize_session,
+    WatchWebPeerOutMessage, WatchWebQueuedAttachment, WatchWebQueuedPrompt, WatchWebSessionState,
+    permission_request_data, resolve_permission_request, resolve_permission_request_with_answers,
+    serialize_session,
 };
 pub(crate) use database::{AgentTodo, TodoResolution};
 pub(crate) use peer_out_messages::{
@@ -34,8 +35,9 @@ pub(crate) use peer_out_messages::{
     watch_web_peer_out_messages_from,
 };
 pub(crate) use queued_prompts::{
-    delete_watch_web_queued_prompts, ensure_watch_web_user_marker_from,
-    insert_watch_web_queued_prompt_from, watch_web_queued_prompts_from,
+    delete_watch_web_queued_prompts_from, ensure_watch_web_user_marker_from,
+    insert_watch_web_queued_prompt_from, mark_watch_web_queued_prompts_resolved,
+    mark_watch_web_queued_prompts_resolved_from, watch_web_queued_prompts_from,
 };
 
 /// Threshold in seconds for sort stability.
@@ -767,6 +769,7 @@ mod tests {
             updated_at: Utc::now(),
             last_message: None,
             current_tool: None,
+            current_tool_name: None,
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: std::collections::BTreeSet::new(),
@@ -2660,6 +2663,7 @@ mod tests {
                 updated_at,
                 last_message: None,
                 current_tool: None,
+                current_tool_name: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
                 pending_bg_task_ids: std::collections::BTreeSet::new(),

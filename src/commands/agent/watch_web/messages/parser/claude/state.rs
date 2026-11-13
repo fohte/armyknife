@@ -3,6 +3,8 @@ use std::collections::{BTreeMap, HashSet};
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 
+use crate::commands::agent::store::PermissionRequestData;
+
 use super::super::super::SkillSuggestion;
 use super::super::queue::QueueReplayEvent;
 use super::super::record_timestamp;
@@ -271,6 +273,13 @@ pub(super) struct ToolUse {
     pub(super) name: String,
     pub(super) input: Option<Value>,
     pub(super) started_at: Option<DateTime<Utc>>,
+}
+
+impl ToolUse {
+    pub(super) fn matches_permission_request(&self, permission: &PermissionRequestData) -> bool {
+        permission.tool_name.as_deref() == Some(self.name.as_str())
+            && self.input.as_ref() == Some(&permission.tool_input)
+    }
 }
 
 fn classifier_record(record: &Value) -> Value {

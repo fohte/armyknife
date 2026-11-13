@@ -84,6 +84,57 @@ async fn retry_sends_one_time_user_message_and_completes_the_card(action_context
 }
 
 #[rstest]
+#[tokio::test]
+async fn retry_removes_queued_prompt_when_message_delivery_fails(action_context: ActionContext) {
+    action_context.save_session(&session("sample-session"));
+    add_denied_operation(&action_context, "[Sensitive Operation]");
+    action_context.set_message_error("message transport failed");
+    let expected_operation = serde_json::to_string(&json!({
+        "tool_name": "Bash",
+        "tool_input": { "command": "printf fixture" },
+        "tool_use_id": "tool-call-fixture",
+    }))
+    .unwrap();
+    let expected_message = indoc::formatdoc! {"
+        I approve retrying this exact blocked operation once.
+        Please perform this tool call one time only:
+        {expected_operation}
+        This approval applies only to the operation shown above.
+    "};
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            "/sessions/sample-session/permission-denials/1/retry",
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    let snapshot = response_snapshot(response, &action_context).await;
+    let queued_prompts = store::watch_web_queued_prompts_from(
+        &action_context.temp_dir.path().join("sessions"),
+        "sample-session",
+    )
+    .unwrap();
+
+    assert_eq!(
+        (snapshot, queued_prompts),
+        (
+            json!({
+                "status": StatusCode::BAD_GATEWAY.as_u16(),
+                "body": { "error": "message transport failed" },
+                "calls": [{
+                    "kind": "message",
+                    "sessionId": "sample-session",
+                    "content": expected_message,
+                }],
+            }),
+            Vec::<store::WatchWebQueuedPrompt>::new(),
+        ),
+    );
+}
+
+#[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
 async fn concurrent_retries_send_the_operation_only_once(action_context: ActionContext) {
     action_context.save_session(&session("sample-session"));

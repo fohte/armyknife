@@ -88,6 +88,7 @@ mod tests {
             updated_at: chrono::Utc::now(),
             last_message: None,
             current_tool: None,
+            current_tool_name: None,
             label: Some(label.to_string()),
             work_type: None,
             work_type_pinned: false,

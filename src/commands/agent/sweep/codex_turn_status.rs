@@ -131,6 +131,7 @@ where
             current.status = next_status;
             if !is_failed {
                 current.current_tool = None;
+                current.current_tool_name = None;
                 current.agent_status_clear_pending = current.agent_status.is_some();
                 current.sweep_signaled = false;
                 if next_status == SessionStatus::Stopped {
@@ -225,6 +226,7 @@ mod tests {
             updated_at,
             last_message: Some("previous response".to_string()),
             current_tool: None,
+            current_tool_name: None,
             label: None,
             work_type: None,
             vibe_enabled: false,
@@ -272,6 +274,7 @@ mod tests {
                 .insert("fixture-agent-id".to_string());
         }
         session.current_tool = Some("fixture-tool".to_string());
+        session.current_tool_name = Some("fixture-tool".to_string());
         session.read_at = Some(Utc::now());
         session.tmux_info = Some(TmuxInfo {
             session_name: "fixture-session".to_string(),
@@ -309,6 +312,7 @@ mod tests {
         };
         let expected_current_tool =
             (expected_status == SessionStatus::Failed).then(|| "fixture-tool".to_string());
+        let expected_current_tool_name = expected_current_tool.clone();
         let expected_read_at = (expected_status != SessionStatus::Stopped)
             .then_some(session.read_at)
             .flatten();
@@ -317,6 +321,7 @@ mod tests {
             (
                 reloaded.status,
                 reloaded.current_tool,
+                reloaded.current_tool_name,
                 reloaded.read_at,
                 reloaded.last_message,
             ),
@@ -336,6 +341,7 @@ mod tests {
                 (
                     expected_status,
                     expected_current_tool,
+                    expected_current_tool_name,
                     expected_read_at,
                     Some("previous response".to_string()),
                 ),

@@ -875,6 +875,7 @@ mod tests {
             updated_at: Utc::now(),
             last_message: None,
             current_tool: None,
+            current_tool_name: None,
             label: None,
             work_type: None,
             work_type_pinned: false,
@@ -903,7 +904,16 @@ mod tests {
             let Some(content) = call.get("content").and_then(Value::as_str) else {
                 continue;
             };
+            let content =
+                if let Some(marker_start) = content.rfind("<!-- armyknife-queued-prompt-id:") {
+                    content[..marker_start]
+                        .strip_suffix('\n')
+                        .unwrap_or(&content[..marker_start])
+                } else {
+                    content
+                };
             let Some((marker, _)) = content.split_once('\n') else {
+                call["content"] = Value::String(content.to_owned());
                 continue;
             };
             if marker.starts_with("⟦armyknife-user:")
@@ -912,6 +922,8 @@ mod tests {
                     crate::commands::agent::watch_web_user_marker::strip_message(marker, content)
             {
                 call["content"] = Value::String(body.to_owned());
+            } else {
+                call["content"] = Value::String(content.to_owned());
             }
         }
         json!({
@@ -1716,6 +1728,7 @@ mod tests {
         let mut session = session("sample-session");
         session.engine = Engine::Codex;
         session.current_tool = Some("AskUserQuestion".to_string());
+        session.current_tool_name = Some("AskUserQuestion".to_string());
         session
             .pending_permission_agent_ids
             .insert("main".to_string());
@@ -1781,13 +1794,14 @@ mod tests {
     }
 
     #[rstest]
-    #[case::running(SessionStatus::Running, true)]
-    #[case::waiting_input(SessionStatus::WaitingInput, false)]
-    #[case::stopped(SessionStatus::Stopped, false)]
+    #[case::running(SessionStatus::Running, true, false)]
+    #[case::waiting_input(SessionStatus::WaitingInput, false, true)]
+    #[case::stopped(SessionStatus::Stopped, false, false)]
     #[tokio::test]
     async fn interrupt_capability_is_available_only_while_running(
         #[case] status: SessionStatus,
         #[case] enabled: bool,
+        #[case] rewind_available: bool,
         action_context: ActionContext,
     ) {
         let mut session = session("sample-session");
@@ -1814,6 +1828,7 @@ mod tests {
                     "answerQuestion": false,
                     "interrupt": enabled,
                     "openInTerminal": true,
+                    "rewind": rewind_available,
                 },
                 "calls": [],
             }),
@@ -2198,6 +2213,7 @@ mod tests {
         let mut session = session("sample-session");
         session.status = SessionStatus::Ended;
         session.current_tool = Some("AskUserQuestion".to_string());
+        session.current_tool_name = Some("AskUserQuestion".to_string());
         session
             .pending_permission_agent_ids
             .insert("main".to_string());

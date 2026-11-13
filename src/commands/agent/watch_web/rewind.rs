@@ -904,6 +904,7 @@ mod tests {
             updated_at: Utc::now(),
             last_message: None,
             current_tool: None,
+            current_tool_name: None,
             label: Some("Fixture session".to_string()),
             work_type: None,
             vibe_enabled: false,
