@@ -1,4 +1,5 @@
 import type { LaterPreset } from '#session-navigation'
+import type { JsonValue } from '#types'
 
 type PermissionAction = 'approve' | 'reject' | 'retry'
 
@@ -66,6 +67,13 @@ export type SessionOperation =
       owner: string
       repo: string
       expectedHeadSha: string
+    }
+  | {
+      type: 'review_document_save' | 'review_document_finish'
+      sessionId: string
+      id: string
+      frontmatter: JsonValue
+      body: string
     }
 
 export type SessionOperationError = Error & { code?: string | null }
