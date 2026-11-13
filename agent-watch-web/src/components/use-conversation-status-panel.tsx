@@ -4,7 +4,7 @@ import {
   isReviewDocumentResponse,
   type ReviewDocumentResponse,
 } from '#components/conversation-pane-response'
-import { requestJson } from '#components/conversation-requests'
+import { requestAction, requestJson } from '#components/conversation-requests'
 import { CritPane } from '#components/crit-pane'
 import type { Decision } from '#components/decision-card'
 import { DecisionsPanel } from '#components/decisions-panel'
@@ -62,6 +62,9 @@ export function useConversationStatusPanel({
     document: ReviewDocumentResponse | null
     error: string | null
     loading: boolean
+    saveStatus: 'idle' | 'saving' | 'saved' | 'error' | 'finishing'
+    saveError: string | null
+    mobileView: 'edit' | 'preview'
   } | null>(null)
   const reviewDocumentId = session.reviewDocumentId
   const decisions =
@@ -135,6 +138,9 @@ export function useConversationStatusPanel({
       document: null,
       error: null,
       loading: true,
+      saveStatus: 'idle',
+      saveError: null,
+      mobileView: 'edit',
     })
     void requestJson(
       `/api/sessions/${encodeURIComponent(session.id)}/review-document`,
@@ -148,6 +154,9 @@ export function useConversationStatusPanel({
             document,
             error: null,
             loading: false,
+            saveStatus: 'idle',
+            saveError: null,
+            mobileView: 'edit',
           })
         }
       },
@@ -159,6 +168,9 @@ export function useConversationStatusPanel({
             document: null,
             error: error.message,
             loading: false,
+            saveStatus: 'idle',
+            saveError: null,
+            mobileView: 'edit',
           })
         }
       },
@@ -271,6 +283,108 @@ export function useConversationStatusPanel({
                 <ReviewDocumentPanel
                   frontmatter={reviewDocumentState.document.frontmatter}
                   body={reviewDocumentState.document.body}
+                  status={reviewDocumentState.saveStatus}
+                  error={reviewDocumentState.saveError}
+                  mobileView={reviewDocumentState.mobileView}
+                  onFrontmatterChange={(frontmatter) => {
+                    setReviewDocumentState((current) =>
+                      current?.document === null || current === null
+                        ? current
+                        : {
+                            ...current,
+                            document: { ...current.document, frontmatter },
+                            saveStatus: 'idle',
+                            saveError: null,
+                          },
+                    )
+                  }}
+                  onBodyChange={(body) => {
+                    setReviewDocumentState((current) =>
+                      current?.document === null || current === null
+                        ? current
+                        : {
+                            ...current,
+                            document: { ...current.document, body },
+                            saveStatus: 'idle',
+                            saveError: null,
+                          },
+                    )
+                  }}
+                  onMobileViewChange={(mobileView) => {
+                    setReviewDocumentState((current) =>
+                      current === null ? current : { ...current, mobileView },
+                    )
+                  }}
+                  onSave={() => {
+                    const document = reviewDocumentState.document
+                    if (document === null) return
+                    setReviewDocumentState((current) =>
+                      current === null
+                        ? current
+                        : {
+                            ...current,
+                            saveStatus: 'saving',
+                            saveError: null,
+                          },
+                    )
+                    void requestAction(session.id, 'review-document/save', {
+                      id: document.id,
+                      frontmatter: document.frontmatter,
+                      body: document.body,
+                    }).match(
+                      () => {
+                        setReviewDocumentState((current) =>
+                          current === null
+                            ? current
+                            : { ...current, saveStatus: 'saved' },
+                        )
+                      },
+                      (error) => {
+                        setReviewDocumentState((current) =>
+                          current === null
+                            ? current
+                            : {
+                                ...current,
+                                saveStatus: 'error',
+                                saveError: error.message,
+                              },
+                        )
+                      },
+                    )
+                  }}
+                  onFinish={() => {
+                    const document = reviewDocumentState.document
+                    if (document === null) return
+                    setReviewDocumentState((current) =>
+                      current === null
+                        ? current
+                        : {
+                            ...current,
+                            saveStatus: 'finishing',
+                            saveError: null,
+                          },
+                    )
+                    void requestAction(session.id, 'review-document/finish', {
+                      id: document.id,
+                      frontmatter: document.frontmatter,
+                      body: document.body,
+                    }).match(
+                      () => {
+                        setReviewDocumentState(null)
+                      },
+                      (error) => {
+                        setReviewDocumentState((current) =>
+                          current === null
+                            ? current
+                            : {
+                                ...current,
+                                saveStatus: 'error',
+                                saveError: error.message,
+                              },
+                        )
+                      },
+                    )
+                  }}
                 />
               ),
           },

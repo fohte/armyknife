@@ -620,7 +620,7 @@ impl Drop for FifoSignalGuard {
 ///
 /// Uses `O_WRONLY | O_NONBLOCK` so the open returns ENXIO immediately
 /// if no reader has the FIFO open, instead of blocking forever.
-fn signal_fifo(fifo_path: &Path) {
+pub(crate) fn signal_fifo(fifo_path: &Path) {
     #[cfg(unix)]
     {
         use std::io::Write;
@@ -628,7 +628,7 @@ fn signal_fifo(fifo_path: &Path) {
 
         let file = std::fs::OpenOptions::new()
             .write(true)
-            .custom_flags(libc::O_NONBLOCK)
+            .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW)
             .open(fifo_path);
 
         if let Ok(mut f) = file {

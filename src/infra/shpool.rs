@@ -31,6 +31,21 @@ pub(crate) fn session_is_alive(name: &str) -> Result<bool> {
         .any(|session| session.name == name && session.is_alive()))
 }
 
+pub(crate) fn kill_session(name: &str) -> Result<()> {
+    let output = ExternalTool::Shpool
+        .command()
+        .args(["kill", name])
+        .output()
+        .context("failed to run shpool kill")?;
+    ensure!(
+        output.status.success(),
+        "shpool kill exited with {}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    Ok(())
+}
+
 fn list_sessions() -> Result<Vec<Session>> {
     let output = ExternalTool::Shpool
         .command()

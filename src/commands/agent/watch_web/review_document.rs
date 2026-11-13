@@ -3,10 +3,10 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::Router;
-use axum::extract::{Path as RoutePath, State};
+use axum::extract::{DefaultBodyLimit, Path as RoutePath, State};
 use axum::http::StatusCode;
-use axum::routing::get;
-use serde::Serialize;
+use axum::routing::{get, post};
+use serde::{Deserialize, Serialize};
 
 use crate::commands::agent::review_queue::{ReviewDocumentQueue, review_document_queue};
 use crate::commands::agent::store;
@@ -15,6 +15,7 @@ use crate::shared::human_in_the_loop::{LockGuard, ReviewDocumentMarker, review_d
 
 type SessionLoader = Arc<dyn Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync>;
 type ReviewQueueLoader = Arc<dyn Fn(&Session) -> ReviewDocumentQueue + Send + Sync>;
+type ReviewSessionKiller = Arc<dyn Fn(&str) -> anyhow::Result<()> + Send + Sync>;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,8 +25,25 @@ struct ReviewDocumentResponse {
     body: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewDocumentEditRequest {
+    id: String,
+    frontmatter: serde_json::Value,
+    body: String,
+}
+
+#[derive(Serialize)]
+struct ReviewDocumentSaved {
+    success: bool,
+}
+
 pub(super) fn router() -> Router {
-    router_with_loaders(store::load_session, review_document_queue)
+    router_with_dependencies(
+        store::load_session,
+        review_document_queue,
+        crate::infra::shpool::kill_session,
+    )
 }
 
 #[cfg(test)]
@@ -35,20 +53,43 @@ fn router_with_session_loader(
     router_with_loaders(load_session, |_| ReviewDocumentQueue::Unmanaged)
 }
 
+#[cfg(test)]
 fn router_with_loaders(
     load_session: impl Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync + 'static,
     load_review_queue: impl Fn(&Session) -> ReviewDocumentQueue + Send + Sync + 'static,
 ) -> Router {
+    router_with_dependencies(load_session, load_review_queue, |_| Ok(()))
+}
+
+fn router_with_dependencies(
+    load_session: impl Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync + 'static,
+    load_review_queue: impl Fn(&Session) -> ReviewDocumentQueue + Send + Sync + 'static,
+    kill_review_session: impl Fn(&str) -> anyhow::Result<()> + Send + Sync + 'static,
+) -> Router {
     Router::new()
         .route("/sessions/{id}/review-document", get(get_review_document))
+        .route(
+            "/sessions/{id}/review-document/save",
+            post(save_review_document),
+        )
+        .route(
+            "/sessions/{id}/review-document/finish",
+            post(finish_review_document),
+        )
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
         .with_state((
             Arc::new(load_session) as SessionLoader,
             Arc::new(load_review_queue) as ReviewQueueLoader,
+            Arc::new(kill_review_session) as ReviewSessionKiller,
         ))
 }
 
 async fn get_review_document(
-    State((load_session, load_review_queue)): State<(SessionLoader, ReviewQueueLoader)>,
+    State((load_session, load_review_queue, _)): State<(
+        SessionLoader,
+        ReviewQueueLoader,
+        ReviewSessionKiller,
+    )>,
     RoutePath(session_id): RoutePath<String>,
 ) -> Result<Json<ReviewDocumentResponse>, StatusCode> {
     let response = tokio::task::spawn_blocking(move || {
@@ -82,6 +123,153 @@ async fn get_review_document(
     })??;
 
     response.map(Json).ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn save_review_document(
+    State((load_session, load_review_queue, _)): State<(
+        SessionLoader,
+        ReviewQueueLoader,
+        ReviewSessionKiller,
+    )>,
+    RoutePath(session_id): RoutePath<String>,
+    axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
+) -> Result<axum::Json<ReviewDocumentSaved>, StatusCode> {
+    save_document_for_session(load_session, load_review_queue, session_id, request, false).await?;
+    Ok(axum::Json(ReviewDocumentSaved { success: true }))
+}
+
+async fn finish_review_document(
+    State((load_session, load_review_queue, kill_review_session)): State<(
+        SessionLoader,
+        ReviewQueueLoader,
+        ReviewSessionKiller,
+    )>,
+    RoutePath(session_id): RoutePath<String>,
+    axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
+) -> Result<axum::Json<ReviewDocumentSaved>, StatusCode> {
+    let (fifo_path, queue_key) =
+        save_document_for_session(load_session, load_review_queue, session_id, request, true)
+            .await?;
+    crate::shared::human_in_the_loop::signal_fifo(&fifo_path);
+    if let Some(queue_key) = queue_key {
+        tokio::task::spawn_blocking(move || kill_review_session(&queue_key))
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, "review editor shutdown task failed");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?
+            .map_err(|error| {
+                tracing::warn!(%error, "failed to close review editor session");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+    }
+    Ok(axum::Json(ReviewDocumentSaved { success: true }))
+}
+
+async fn save_document_for_session(
+    load_session: SessionLoader,
+    load_review_queue: ReviewQueueLoader,
+    session_id: String,
+    request: ReviewDocumentEditRequest,
+    finishing: bool,
+) -> Result<(std::path::PathBuf, Option<String>), StatusCode> {
+    tokio::task::spawn_blocking(move || {
+        let session = load_session(&session_id)
+            .map_err(|error| {
+                tracing::warn!(%error, "failed to load session for review document edit");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?
+            .ok_or(StatusCode::NOT_FOUND)?;
+        let queue = load_review_queue(&session);
+        let marker = active_review_document(&session, queue).ok_or(StatusCode::NOT_FOUND)?;
+        if marker.id != request.id {
+            return Err(StatusCode::CONFLICT);
+        }
+        if !LockGuard::is_locked(&marker.path) {
+            return Err(StatusCode::CONFLICT);
+        }
+        let fifo_path = done_fifo_path(&marker.path);
+        if finishing && !is_fifo(&fifo_path) {
+            return Err(StatusCode::CONFLICT);
+        }
+        let content = render_review_document(&marker.path, request.frontmatter, &request.body)?;
+        overwrite_review_document(&marker.path, content.as_bytes())?;
+        Ok((fifo_path, marker.queue_key))
+    })
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "review document edit task failed");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?
+}
+
+fn overwrite_review_document(path: &std::path::Path, content: &[u8]) -> Result<(), StatusCode> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        tracing::warn!(%error, "failed to inspect active review document before saving");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(StatusCode::CONFLICT);
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .write(true)
+        .truncate(true)
+        .custom_flags(libc::O_NOFOLLOW);
+    let mut file = options.open(path).map_err(|error| {
+        tracing::warn!(%error, "failed to open active review document for saving");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    file.write_all(content).map_err(|error| {
+        tracing::warn!(%error, "failed to write active review document");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })
+}
+
+fn render_review_document(
+    path: &std::path::Path,
+    frontmatter: serde_json::Value,
+    body: &str,
+) -> Result<String, StatusCode> {
+    let current = std::fs::read_to_string(path).map_err(|error| {
+        tracing::warn!(%error, "failed to read active review document before saving");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let mut content = String::new();
+    if crate::shared::yaml_frontmatter::split_frontmatter(&current).is_some() {
+        let yaml = serde_yaml::to_string(&frontmatter).map_err(|error| {
+            tracing::warn!(%error, "failed to serialize review document frontmatter");
+            StatusCode::BAD_REQUEST
+        })?;
+        content.push_str("---\n");
+        content.push_str(yaml.trim_start_matches("---\n").trim_end());
+        content.push('\n');
+        content.push_str("---");
+        content.push('\n');
+    }
+    content.push_str(body);
+    Ok(content)
+}
+
+fn done_fifo_path(document_path: &std::path::Path) -> std::path::PathBuf {
+    let mut path = document_path.as_os_str().to_os_string();
+    path.push(".done");
+    path.into()
+}
+
+#[cfg(unix)]
+fn is_fifo(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::FileTypeExt;
+
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_fifo())
+}
+
+#[cfg(not(unix))]
+fn is_fifo(_path: &std::path::Path) -> bool {
+    false
 }
 
 pub(super) fn active_review_document_id(
@@ -180,7 +368,7 @@ mod tests {
     use crate::commands::agent::types::{Engine, Session, SessionStatus};
     use crate::shared::human_in_the_loop::LockGuard;
 
-    use super::{router_with_loaders, router_with_session_loader};
+    use super::{router_with_dependencies, router_with_loaders, router_with_session_loader};
 
     fn review_marker(
         id: &str,
@@ -451,6 +639,200 @@ mod tests {
                 queue_loader_calls.load(Ordering::Relaxed),
             ),
             (StatusCode::NOT_FOUND, 0),
+        );
+    }
+
+    #[tokio::test]
+    async fn saves_only_the_active_review_document_even_when_the_request_contains_a_path() {
+        let temp_dir = TempDir::new().expect("fixture directory should be created");
+        let document_path = temp_dir.path().join("fixture-document.md");
+        let outside_path = temp_dir.path().join("outside-document.md");
+        std::fs::write(
+            &document_path,
+            indoc! {"
+                ---
+                approved: false
+                ---
+                Old body."},
+        )
+        .expect("fixture document should be written");
+        std::fs::write(&outside_path, "Keep this content.")
+            .expect("outside document should be written");
+        let session = session_with_review(&document_path);
+        let _review_lock =
+            LockGuard::acquire(&document_path).expect("fixture review lock should be acquired");
+        let app = router_with_session_loader(move |_| Ok(Some(session.clone())));
+        let response = app
+            .oneshot(
+                Request::post("/sessions/fixture-session/review-document/save")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "id": "fixture-review",
+                            "path": outside_path,
+                            "frontmatter": { "approved": true },
+                            "body": "New body.",
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should be valid"),
+            )
+            .await
+            .expect("request should complete");
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be read");
+
+        assert_eq!(
+            (
+                status,
+                serde_json::from_slice::<serde_json::Value>(&body)
+                    .expect("response should be JSON"),
+                std::fs::read_to_string(&document_path).expect("saved document should be readable"),
+                std::fs::read_to_string(&outside_path)
+                    .expect("outside document should be readable"),
+            ),
+            (
+                StatusCode::OK,
+                serde_json::json!({ "success": true }),
+                indoc! {"
+                    ---
+                    approved: true
+                    ---
+                    New body."}
+                .to_string(),
+                "Keep this content.".to_string(),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_a_stale_review_id_without_overwriting_the_document() {
+        let temp_dir = TempDir::new().expect("fixture directory should be created");
+        let document_path = temp_dir.path().join("fixture-document.md");
+        std::fs::write(&document_path, "Original body.")
+            .expect("fixture document should be written");
+        let session = session_with_review(&document_path);
+        let _review_lock =
+            LockGuard::acquire(&document_path).expect("fixture review lock should be acquired");
+        let app = router_with_session_loader(move |_| Ok(Some(session.clone())));
+        let response = app
+            .oneshot(
+                Request::post("/sessions/fixture-session/review-document/save")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "id": "another-review",
+                            "frontmatter": null,
+                            "body": "Must not be saved.",
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should be valid"),
+            )
+            .await
+            .expect("request should complete");
+
+        assert_eq!(
+            (
+                response.status(),
+                std::fs::read_to_string(&document_path)
+                    .expect("fixture document should be readable"),
+            ),
+            (StatusCode::CONFLICT, "Original body.".to_string()),
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn finish_saves_then_signals_and_kills_the_active_editor_session() {
+        use std::io::Read;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let temp_dir = TempDir::new().expect("fixture directory should be created");
+        let document_path = temp_dir.path().join("fixture-document.md");
+        let fifo_path = super::done_fifo_path(&document_path);
+        std::fs::write(&document_path, "Old body.").expect("fixture document should be written");
+        let fifo_name = std::ffi::CString::new(fifo_path.as_os_str().as_encoded_bytes())
+            .expect("fixture FIFO path should not contain NUL");
+        // SAFETY: The path is NUL-terminated and points inside this test's temporary directory.
+        let fifo_result = unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) };
+        assert_eq!(fifo_result, 0, "fixture FIFO should be created");
+        let mut fifo_reader = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&fifo_path)
+            .expect("fixture FIFO reader should be opened");
+        let mut session = session_with_review(&document_path);
+        session.pending_human_review_ids = BTreeSet::from([review_marker(
+            "fixture-review",
+            &document_path,
+            1,
+            Some("fixture-editor-session"),
+        )]);
+        let _review_lock =
+            LockGuard::acquire(&document_path).expect("fixture review lock should be acquired");
+        let killed_sessions = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let killed_sessions_for_request = killed_sessions.clone();
+        let app = router_with_dependencies(
+            move |_| Ok(Some(session.clone())),
+            |_| ReviewDocumentQueue::Managed(Some("fixture-editor-session".to_string())),
+            move |session| {
+                killed_sessions_for_request
+                    .lock()
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))?
+                    .push(session.to_string());
+                Ok(())
+            },
+        );
+        let response = app
+            .oneshot(
+                Request::post("/sessions/fixture-session/review-document/finish")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "id": "fixture-review",
+                            "frontmatter": null,
+                            "body": "Saved before review closes.",
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should be valid"),
+            )
+            .await
+            .expect("request should complete");
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be read");
+        let mut signal = [0_u8; 1];
+        let bytes_read = fifo_reader
+            .read(&mut signal)
+            .expect("finish should write to the FIFO");
+        let killed_sessions = killed_sessions
+            .lock()
+            .expect("session kill calls should be readable")
+            .clone();
+
+        assert_eq!(
+            (
+                status,
+                serde_json::from_slice::<serde_json::Value>(&body)
+                    .expect("response should be JSON"),
+                std::fs::read_to_string(&document_path).expect("saved document should be readable"),
+                bytes_read,
+                signal,
+                killed_sessions,
+            ),
+            (
+                StatusCode::OK,
+                serde_json::json!({ "success": true }),
+                "Saved before review closes.".to_string(),
+                1,
+                *b"0",
+                vec!["fixture-editor-session".to_string()],
+            ),
         );
     }
 }
