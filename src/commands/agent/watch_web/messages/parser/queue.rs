@@ -582,6 +582,48 @@ mod tests {
         );
     }
 
+    #[test]
+    fn resolves_a_delivered_prompt_with_attachments_and_preserves_its_rewind_id() {
+        let marker = "⟦armyknife-user:fixture-marker-cobalt⟧";
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-user-message","parentUuid":null,"type":"user","origin":{"kind":"peer","from":"unknown"},"timestamp":"2026-01-01T00:00:01Z","message":{"content":"⟦armyknife-user:fixture-marker-cobalt⟧\nThis message was typed by the human user in armyknife watch-web.\nEngine-formatted delivery.\n<!-- armyknife-queued-prompt-id:fixture-message-7 -->"}}
+        "#};
+        let mut prompt = saved_prompt(7, "Delivered request.");
+        prompt.attachments = vec![
+            crate::commands::agent::store::WatchWebQueuedAttachment::Image {
+                source: "/api/images/fixture-image.png".to_owned(),
+            },
+            crate::commands::agent::store::WatchWebQueuedAttachment::File {
+                name: "fixture-notes.txt".to_owned(),
+            },
+        ];
+
+        assert_eq!(
+            parse_with_saved_prompts(transcript, &[prompt], Some(marker)),
+            (
+                vec![ChatItem::UserWithContent {
+                    rewind_id: Some("fixture-user-message".to_owned()),
+                    content: vec![
+                        UserContentPart::Text {
+                            text: "Delivered request.".to_owned(),
+                        },
+                        UserContentPart::Image {
+                            source: "/api/images/fixture-image.png".to_owned(),
+                            available: false,
+                        },
+                        UserContentPart::File {
+                            name: "fixture-notes.txt".to_owned(),
+                        },
+                    ],
+                    timestamp: Some("2026-01-01T00:00:01+00:00".to_owned()),
+                    from: None,
+                }],
+                Vec::<BackgroundTask>::new(),
+                vec![7],
+            ),
+        );
+    }
+
     #[rstest]
     #[case::source_tool_assistant_uuid(
         serde_json::json!({"sourceToolAssistantUUID":"fixture-tool-row"})

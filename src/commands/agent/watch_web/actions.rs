@@ -1794,14 +1794,13 @@ mod tests {
     }
 
     #[rstest]
-    #[case::running(SessionStatus::Running, true, false)]
-    #[case::waiting_input(SessionStatus::WaitingInput, false, true)]
-    #[case::stopped(SessionStatus::Stopped, false, false)]
+    #[case::running(SessionStatus::Running, true)]
+    #[case::waiting_input(SessionStatus::WaitingInput, false)]
+    #[case::stopped(SessionStatus::Stopped, false)]
     #[tokio::test]
     async fn interrupt_capability_is_available_only_while_running(
         #[case] status: SessionStatus,
         #[case] enabled: bool,
-        #[case] rewind_available: bool,
         action_context: ActionContext,
     ) {
         let mut session = session("sample-session");
@@ -1828,6 +1827,52 @@ mod tests {
                     "answerQuestion": false,
                     "interrupt": enabled,
                     "openInTerminal": true,
+                    "rewind": status == SessionStatus::WaitingInput,
+                },
+                "calls": [],
+            }),
+        );
+    }
+
+    #[rstest]
+    #[case::running_with_pane(SessionStatus::Running, true, false)]
+    #[case::waiting_input_with_pane(SessionStatus::WaitingInput, true, true)]
+    #[case::stopped_with_pane(SessionStatus::Stopped, true, false)]
+    #[case::waiting_input_without_pane(SessionStatus::WaitingInput, false, false)]
+    #[tokio::test]
+    async fn rewind_capability_requires_a_waiting_session_with_a_pane(
+        #[case] status: SessionStatus,
+        #[case] has_pane: bool,
+        #[case] rewind_available: bool,
+        action_context: ActionContext,
+    ) {
+        let mut session = session("sample-session");
+        session.status = status;
+        if !has_pane {
+            session.tmux_info = None;
+        }
+        action_context.save_session(&session);
+
+        let response = action_context
+            .router()
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/sample-session/actions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": {
+                    "message": true,
+                    "answerQuestion": false,
+                    "interrupt": status == SessionStatus::Running,
+                    "openInTerminal": has_pane,
                     "rewind": rewind_available,
                 },
                 "calls": [],

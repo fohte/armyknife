@@ -1,6 +1,6 @@
 import { err, ok, ResultAsync } from 'neverthrow'
 
-import { errorFromResponse } from '#api-requests'
+import { errorFromResponse, jsonFromResponse } from '#api-requests'
 import { LATER_PRESET_OPTIONS } from '#session-navigation'
 import type {
   SessionOperation,
@@ -42,24 +42,6 @@ function postAction(
           }),
     }),
     toError,
-  )
-}
-
-function jsonFromResponse<T>(
-  response: Response,
-  validate: (value: unknown) => value is T,
-) {
-  if (!response.ok) {
-    return errorFromResponse(response).andThen((error) =>
-      err<T, SessionOperationError>(error),
-    )
-  }
-  return ResultAsync.fromPromise(response.json(), toError).andThen((body) =>
-    validate(body)
-      ? ok<T, SessionOperationError>(body)
-      : err<T, SessionOperationError>(
-          new Error('The server returned an invalid response'),
-        ),
   )
 }
 
@@ -360,26 +342,13 @@ function errOperation(message: string) {
 
 export function submitSessionOperation(operation: SessionOperation) {
   const request = requestFor(operation)
-  const hasBody = request.body !== undefined
-  return ResultAsync.fromPromise(
-    fetch(
-      `/api/sessions/${encodeURIComponent(operation.sessionId)}/${request.path}`,
-      {
-        method: 'POST',
-        ...(hasBody
-          ? {
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(request.body),
-            }
-          : {}),
-      },
-    ),
-    toError,
-  ).andThen((response) => {
-    if (!response.ok)
-      return errorFromResponse(response).andThen((error) => err(error))
-    if (operation.type !== 'merge')
-      return ok<unknown, SessionOperationError>(undefined)
-    return ResultAsync.fromPromise(response.json(), toError)
-  })
+  return postAction(operation.sessionId, request.path, request.body).andThen(
+    (response) => {
+      if (!response.ok)
+        return errorFromResponse(response).andThen((error) => err(error))
+      if (operation.type !== 'merge')
+        return ok<unknown, SessionOperationError>(undefined)
+      return ResultAsync.fromPromise(response.json(), toError)
+    },
+  )
 }
