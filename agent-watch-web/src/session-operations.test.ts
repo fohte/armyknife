@@ -76,6 +76,7 @@ const todoMessage: Extract<ChatItem, { type: 'todo' }> = {
   title: 'Todo',
   detail: null,
   completed: false,
+  resolution: null,
   comment: null,
 }
 const deniedMessage: Extract<ChatItem, { type: 'permission_denied' }> = {
@@ -232,13 +233,26 @@ const requests: {
   {
     name: 'complete todo',
     operation: {
-      type: 'todo_complete',
+      type: 'todo_resolve',
       sessionId: 'test-session',
       seq: 4,
+      resolution: 'completed',
       comment: 'Done',
     },
-    path: 'todos/4/complete',
-    body: { comment: 'Done' },
+    path: 'todos/4/resolve',
+    body: { resolution: 'completed', comment: 'Done' },
+  },
+  {
+    name: 'reject todo',
+    operation: {
+      type: 'todo_resolve',
+      sessionId: 'test-session',
+      seq: 4,
+      resolution: 'rejected',
+      comment: 'Not needed',
+    },
+    path: 'todos/4/resolve',
+    body: { resolution: 'rejected', comment: 'Not needed' },
   },
   {
     name: 'approve permission',
@@ -416,9 +430,27 @@ const operationFactories: [
   ],
   [
     'todo completion',
-    'todos/4/complete',
-    { comment: 'Done' },
-    { type: 'todo_complete', sessionId: session.id, seq: 4, comment: 'Done' },
+    'todos/4/resolve',
+    { resolution: 'completed', comment: 'Done' },
+    {
+      type: 'todo_resolve',
+      sessionId: session.id,
+      seq: 4,
+      resolution: 'completed',
+      comment: 'Done',
+    },
+  ],
+  [
+    'todo rejection',
+    'todos/4/resolve',
+    { resolution: 'rejected', comment: null },
+    {
+      type: 'todo_resolve',
+      sessionId: session.id,
+      seq: 4,
+      resolution: 'rejected',
+      comment: null,
+    },
   ],
   [
     'permission approval',
@@ -480,11 +512,24 @@ it('keeps confirmation waiters distinct for different target values', () => {
     title: 'Title A',
   }
   const titleB: SessionOperation = { ...titleA, title: 'Title B' }
+  const completedTodo: SessionOperation = {
+    type: 'todo_resolve',
+    sessionId: session.id,
+    seq: 4,
+    resolution: 'completed',
+    comment: null,
+  }
+  const rejectedTodo: SessionOperation = {
+    ...completedTodo,
+    resolution: 'rejected',
+  }
   const keys = () => [
     sessionOperationKey(taskA),
     sessionOperationKey(taskB),
     sessionOperationKey(titleA),
     sessionOperationKey(titleB),
+    sessionOperationKey(completedTodo),
+    sessionOperationKey(rejectedTodo),
   ]
 
   expect(keys()).toEqual([
@@ -492,6 +537,8 @@ it('keeps confirmation waiters distinct for different target values', () => {
     'test-session:primary_task:task-b',
     'test-session:title:Title A',
     'test-session:title:Title B',
+    'test-session:todo_resolve:4:completed:',
+    'test-session:todo_resolve:4:rejected:',
   ])
 })
 
@@ -749,9 +796,10 @@ const conversationReducerCases: [
   [
     'completes a todo',
     {
-      type: 'todo_complete',
+      type: 'todo_resolve',
       sessionId: session.id,
       seq: 4,
+      resolution: 'completed',
       comment: 'Done',
     },
     {
@@ -760,10 +808,42 @@ const conversationReducerCases: [
         questionMessage,
         decisionMessage,
         proposalMessage,
-        { ...todoMessage, completed: true, comment: 'Done' },
+        {
+          ...todoMessage,
+          completed: true,
+          resolution: 'completed',
+          comment: 'Done',
+        },
         deniedMessage,
       ],
       decisions: decisionList,
+    },
+  ],
+  [
+    'rejects a todo',
+    {
+      type: 'todo_resolve',
+      sessionId: session.id,
+      seq: 4,
+      resolution: 'rejected',
+      comment: 'Not needed',
+    },
+    {
+      ...conversation,
+      messages: [
+        questionMessage,
+        decisionMessage,
+        proposalMessage,
+        {
+          ...todoMessage,
+          completed: true,
+          resolution: 'rejected',
+          comment: 'Not needed',
+        },
+        deniedMessage,
+      ],
+      decisions: decisionList,
+      hasUnansweredProposal: true,
     },
   ],
   [
@@ -985,7 +1065,18 @@ const answeredProposal = {
   answer: { choice: 0, comment: 'Use the first option.' },
   resolved: true,
 }
-const completedTodo = { ...todoMessage, completed: true, comment: 'Done.' }
+const completedTodo = {
+  ...todoMessage,
+  completed: true,
+  resolution: 'completed' as const,
+  comment: 'Done.',
+}
+const rejectedTodo = {
+  ...todoMessage,
+  completed: true,
+  resolution: 'rejected' as const,
+  comment: 'Not needed',
+}
 const retriedPermission = { ...deniedMessage, resolved: true }
 
 const conversationConfirmationCases: [
@@ -1114,9 +1205,10 @@ const conversationConfirmationCases: [
   [
     'keeps a todo completion pending while the todo is open',
     {
-      type: 'todo_complete',
+      type: 'todo_resolve',
       sessionId: session.id,
       seq: todoMessage.seq,
+      resolution: 'completed',
       comment: 'Done.',
     },
     conversation,
@@ -1126,9 +1218,10 @@ const conversationConfirmationCases: [
   [
     'confirms a todo completion from the completed todo',
     {
-      type: 'todo_complete',
+      type: 'todo_resolve',
       sessionId: session.id,
       seq: todoMessage.seq,
+      resolution: 'completed',
       comment: 'Done.',
     },
     {
@@ -1136,6 +1229,39 @@ const conversationConfirmationCases: [
       messages: [
         ...conversation.messages.slice(0, 3),
         completedTodo,
+        deniedMessage,
+      ],
+    },
+    allowedActions,
+    true,
+  ],
+  [
+    'keeps a todo rejection pending while the todo is open',
+    {
+      type: 'todo_resolve',
+      sessionId: session.id,
+      seq: todoMessage.seq,
+      resolution: 'rejected',
+      comment: 'Not needed',
+    },
+    conversation,
+    allowedActions,
+    false,
+  ],
+  [
+    'confirms a todo rejection from the rejected todo',
+    {
+      type: 'todo_resolve',
+      sessionId: session.id,
+      seq: todoMessage.seq,
+      resolution: 'rejected',
+      comment: 'Not needed',
+    },
+    {
+      ...conversation,
+      messages: [
+        ...conversation.messages.slice(0, 3),
+        rejectedTodo,
         deniedMessage,
       ],
     },

@@ -80,10 +80,13 @@ function requestFor(operation: SessionOperation) {
         path: `proposals/${String(operation.seq)}/answer`,
         body: { choice: operation.choice, comment: operation.comment },
       }
-    case 'todo_complete':
+    case 'todo_resolve':
       return {
-        path: `todos/${String(operation.seq)}/complete`,
-        body: { comment: operation.comment },
+        path: `todos/${String(operation.seq)}/resolve`,
+        body: {
+          resolution: operation.resolution,
+          comment: operation.comment,
+        },
       }
     case 'permission':
       return {
@@ -259,13 +262,22 @@ export function createSessionOperation(
           comment: payload['comment'],
         })
       }
-      const todo = sequenceFromPath('todos', 'complete')
-      if (todo !== null && requiredString('comment') !== null) {
+      const todo = sequenceFromPath('todos', 'resolve')
+      if (
+        todo !== null &&
+        (payload['resolution'] === 'completed' ||
+          payload['resolution'] === 'rejected') &&
+        (payload['comment'] === null ||
+          typeof payload['comment'] === 'string' ||
+          payload['comment'] === undefined)
+      ) {
         return ok<SessionOperation, Error>({
-          type: 'todo_complete',
+          type: 'todo_resolve',
           sessionId,
           seq: todo,
-          comment: requiredString('comment') ?? '',
+          resolution: payload['resolution'],
+          comment:
+            typeof payload['comment'] === 'string' ? payload['comment'] : null,
         })
       }
       const retry = sequenceFromPath('permission-denials', 'retry')

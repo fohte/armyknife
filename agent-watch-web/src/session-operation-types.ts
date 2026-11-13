@@ -45,10 +45,11 @@ export type SessionOperation =
       comment: string | null
     }
   | {
-      type: 'todo_complete'
+      type: 'todo_resolve'
       sessionId: string
       seq: number
-      comment: string
+      resolution: 'completed' | 'rejected'
+      comment: string | null
     }
   | {
       type: 'permission'
@@ -105,8 +106,8 @@ function operationKey(operation: SessionOperation) {
   if (operation.type === 'proposal_answer') {
     return `${operation.sessionId}:proposal_answer:${String(operation.seq)}:${String(operation.choice)}:${operation.comment ?? ''}`
   }
-  if (operation.type === 'todo_complete') {
-    return `${operation.sessionId}:todo_complete:${String(operation.seq)}:${operation.comment}`
+  if (operation.type === 'todo_resolve') {
+    return `${operation.sessionId}:todo_resolve:${String(operation.seq)}:${operation.resolution}:${operation.comment ?? ''}`
   }
   return `${operation.sessionId}:${operation.type}`
 }

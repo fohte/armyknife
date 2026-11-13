@@ -160,10 +160,15 @@ export function applyConversationOperation(
           : message,
       )
       break
-    case 'todo_complete':
+    case 'todo_resolve':
       messages = updateChatItems(messages, (message) =>
         message.type === 'todo' && message.seq === operation.seq
-          ? { ...message, completed: true, comment: operation.comment }
+          ? {
+              ...message,
+              completed: true,
+              resolution: operation.resolution,
+              comment: operation.comment,
+            }
           : message,
       )
       break
@@ -252,12 +257,13 @@ export function isConversationOperationConfirmed(
           message.answer.comment === operation.comment &&
           message.resolved,
       )
-    case 'todo_complete':
+    case 'todo_resolve':
       return conversation.messages.some(
         (message) =>
           message.type === 'todo' &&
           message.seq === operation.seq &&
           message.completed &&
+          message.resolution === operation.resolution &&
           message.comment === operation.comment,
       )
     case 'permission':
@@ -356,7 +362,7 @@ export function requiresStateConfirmation(operation: SessionOperation) {
     operation.type === 'decision_ok' ||
     operation.type === 'decision_change' ||
     operation.type === 'proposal_answer' ||
-    operation.type === 'todo_complete' ||
+    operation.type === 'todo_resolve' ||
     operation.type === 'permission' ||
     operation.type === 'permission_retry'
   )
