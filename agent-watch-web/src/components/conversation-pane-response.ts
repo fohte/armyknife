@@ -68,13 +68,19 @@ function isChatItem(value: unknown): value is ChatItem {
       return typeof value['text'] === 'string'
     case 'user':
       return (
-        typeof value['text'] === 'string' && hasValidOptionalTimestamp(value)
+        typeof value['text'] === 'string' &&
+        (value['rewindId'] === undefined ||
+          typeof value['rewindId'] === 'string') &&
+        hasValidOptionalTimestamp(value)
       )
     case 'queued_user':
     case 'user_with_content':
       return (
         Array.isArray(value['content']) &&
         value['content'].every(isUserContentPart) &&
+        (value['type'] !== 'user_with_content' ||
+          value['rewindId'] === undefined ||
+          typeof value['rewindId'] === 'string') &&
         (value['from'] === undefined || typeof value['from'] === 'string') &&
         hasValidOptionalTimestamp(value)
       )
@@ -104,6 +110,20 @@ function isChatItem(value: unknown): value is ChatItem {
           value['kind'] === 'hook') &&
         typeof value['text'] === 'string' &&
         typeof value['failed'] === 'boolean' &&
+        hasValidOptionalTimestamp(value)
+      )
+    case 'file_attachment':
+      return (
+        Array.isArray(value['files']) &&
+        value['files'].every(
+          (file) =>
+            isRecord(file) &&
+            typeof file['name'] === 'string' &&
+            typeof file['source'] === 'string' &&
+            typeof file['isImage'] === 'boolean' &&
+            typeof file['available'] === 'boolean',
+        ) &&
+        (value['caption'] === null || typeof value['caption'] === 'string') &&
         hasValidOptionalTimestamp(value)
       )
     case 'todo':
@@ -299,11 +319,18 @@ export function isSessionActions(value: unknown): value is SessionActions {
     typeof value['answerQuestion'] === 'boolean' &&
     typeof value['interrupt'] === 'boolean' &&
     typeof value['openInTerminal'] === 'boolean' &&
+    typeof value['rewind'] === 'boolean' &&
     (value['permission'] === undefined ||
       (isRecord(value['permission']) &&
         typeof value['permission']['approve'] === 'boolean' &&
         typeof value['permission']['reject'] === 'boolean'))
   )
+}
+
+export function isRewindResponse(
+  value: unknown,
+): value is { sessionId: string } {
+  return isRecord(value) && typeof value['sessionId'] === 'string'
 }
 
 export type ReviewDocumentResponse = {

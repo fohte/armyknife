@@ -60,6 +60,7 @@ pub(in crate::commands::agent::watch_web::messages) type ParsedTranscript = (
 
 #[derive(Clone, Copy)]
 pub(in crate::commands::agent::watch_web::messages) struct ParserAdditions<'a> {
+    pub(in crate::commands::agent::watch_web::messages) session_id: &'a str,
     pub(in crate::commands::agent::watch_web::messages) parent: Option<&'a ParentSession>,
     pub(in crate::commands::agent::watch_web::messages) pending_tool:
         Option<&'a PermissionRequestData>,
@@ -103,6 +104,7 @@ fn parse_with_image_directory(
         image_directory,
         Utc::now(),
         ParserAdditions {
+            session_id: "fixture-session",
             parent,
             pending_tool,
             user_marker,
@@ -130,6 +132,7 @@ fn parse_with_decisions_and_queued_prompts(
         reader,
         now,
         ParserAdditions {
+            session_id: "fixture-session",
             parent,
             pending_tool,
             user_marker,
@@ -155,6 +158,7 @@ fn parse_with_background_tasks_and_peer_out_messages(
         reader,
         now,
         ParserAdditions {
+            session_id: "fixture-session",
             parent,
             pending_tool,
             user_marker,
@@ -182,6 +186,7 @@ fn parse_with_queued_prompts_and_proposals(
         reader,
         now,
         ParserAdditions {
+            session_id: "fixture-session",
             parent,
             pending_tool,
             user_marker,
@@ -230,6 +235,7 @@ fn parse_with_background_tasks_and_image_directory(
 #[cfg(test)]
 mod tests {
     use std::io::{self, BufRead, Cursor, Read, Seek, SeekFrom};
+    use std::path::Path;
 
     use chrono::{DateTime, TimeZone, Utc};
     use indoc::{formatdoc, indoc};
@@ -242,6 +248,71 @@ mod tests {
         parse_with_queued_prompts_and_peer_out_messages_and_proposals_and_skills,
         parse_with_queued_prompts_and_proposals,
     };
+    #[test]
+    fn renders_send_user_file_as_a_conversation_attachment() {
+        let directory = tempfile::tempdir().unwrap();
+        let image_path = directory.path().join("sample.png");
+        std::fs::write(&image_path, [137, 80, 78, 71, 13, 10, 26, 10]).unwrap();
+        let transcript = [
+            serde_json::json!({
+                "type": "assistant",
+                "uuid": "fixture-call-row",
+                "timestamp": "2030-01-01T12:00:00Z",
+                "message": {
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "fixture-tool-use",
+                        "name": "SendUserFile",
+                        "input": {
+                            "files": [image_path.to_string_lossy()],
+                            "caption": "Inspect the sample image."
+                        }
+                    }]
+                }
+            }),
+            serde_json::json!({
+                "type": "user",
+                "uuid": "fixture-result-row",
+                "parentUuid": "fixture-call-row",
+                "timestamp": "2030-01-01T12:00:01Z",
+                "message": {
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": "fixture-tool-use",
+                        "content": "File sent."
+                    }]
+                }
+            }),
+        ]
+        .into_iter()
+        .map(|record| record.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+        let messages = super::parse_with_image_directory(
+            std::io::Cursor::new(transcript),
+            None,
+            None,
+            None,
+            Some(Path::new("/fixture/unused-image-directory")),
+        )
+        .unwrap();
+
+        assert_eq!(
+            messages,
+            vec![ChatItem::FileAttachment {
+                files: vec![super::super::super::super::file_attachments::ChatFile {
+                    name: "sample.png".to_owned(),
+                    source:
+                        "/api/sessions/fixture-session/transcript-files/Zml4dHVyZS10b29sLXVzZQ/0"
+                            .to_owned(),
+                    is_image: true,
+                    available: true,
+                }],
+                caption: Some("Inspect the sample image.".to_owned()),
+                timestamp: Some("2030-01-01T12:00:01+00:00".to_owned()),
+            }]
+        );
+    }
     use crate::commands::agent::store::{
         AgentDecision, AgentTodo, PermissionRequestData, TodoResolution,
     };
@@ -249,6 +320,23 @@ mod tests {
         ChatItem, ParentSession, PeerDirection, ProposalOption, QuestionChoice, SkillSuggestion,
         ToolOperation, UserContentPart,
     };
+
+    #[test]
+    fn user_message_keeps_its_transcript_uuid_for_rewind() {
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-user-message","parentUuid":null,"timestamp":"2026-06-01T12:00:00Z","type":"user","message":{"content":"Selected request."}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
+            vec![ChatItem::User {
+                rewind_id: Some("fixture-user-message".to_string()),
+                text: "Selected request.".to_string(),
+                timestamp: Some("2026-06-01T12:00:00+00:00".to_string()),
+                from: None,
+            }],
+        );
+    }
 
     #[rstest]
     #[case::completed(true)]
@@ -277,6 +365,7 @@ mod tests {
                 Cursor::new(transcript),
                 Utc::now(),
                 ParserAdditions {
+                    session_id: "fixture-session",
                     parent: None,
                     pending_tool: None,
                     user_marker: None,
@@ -333,6 +422,7 @@ mod tests {
                 Cursor::new(transcript),
                 Utc::now(),
                 ParserAdditions {
+                    session_id: "fixture-session",
                     parent: None,
                     pending_tool: None,
                     user_marker: None,
@@ -837,6 +927,7 @@ mod tests {
             parse(Cursor::new(transcript), None, None, None).unwrap(),
             vec![
                 ChatItem::User {
+                    rewind_id: None,
                     text: "Human request.".to_string(),
                     from: None,
                     timestamp: Some("2026-11-11T10:00:00+00:00".to_string()),
@@ -951,6 +1042,7 @@ mod tests {
             .0,
             vec![
                 ChatItem::User {
+                    rewind_id: Some("fixture-root".to_string()),
                     text: "Earlier message.".to_string(),
                     timestamp: Some("2026-11-11T10:00:00+00:00".to_string()),
                     from: None,
@@ -1121,9 +1213,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            parse_with_image_directory(Cursor::new(transcript), None, None, Some(marker), None,)
+            parse_with_image_directory(Cursor::new(transcript), None, None, Some(marker), None)
                 .unwrap(),
             vec![ChatItem::User {
+                rewind_id: None,
                 text: attachment_text.to_owned(),
                 timestamp: None,
                 from: None,
@@ -1444,6 +1537,7 @@ mod tests {
             parse(Cursor::new(transcript), None, None, None).unwrap(),
             vec![
                 ChatItem::User {
+                    rewind_id: None,
                     text: "Before the queued prompt.".to_string(),
                     timestamp: None,
                     from: None,
@@ -1453,11 +1547,13 @@ mod tests {
                     operations: vec![operation("Read", None)],
                 },
                 ChatItem::User {
+                    rewind_id: None,
                     text: queued_text.to_string(),
                     timestamp: None,
                     from: None,
                 },
                 ChatItem::User {
+                    rewind_id: None,
                     text: "After the queued prompt.".to_string(),
                     timestamp: None,
                     from: None,
@@ -1503,6 +1599,7 @@ mod tests {
             parse(Cursor::new(transcript), None, None, Some(marker)).unwrap(),
             vec![
                 ChatItem::UserWithContent {
+                    rewind_id: None,
                     content: vec![
                         UserContentPart::Text {
                             text: "Before ".to_string(),
@@ -1519,6 +1616,7 @@ mod tests {
                     from: None,
                 },
                 ChatItem::UserWithContent {
+                    rewind_id: None,
                     content: vec![
                         UserContentPart::Text {
                             text: "Queued ".to_string(),
@@ -1561,6 +1659,7 @@ mod tests {
             parse(Cursor::new(transcript), Some(&parent), None, None).unwrap(),
             vec![
                 ChatItem::User {
+                    rewind_id: None,
                     text: "Review the notification flow.".to_string(),
                     timestamp: None,
                     from: None,
@@ -1829,6 +1928,7 @@ mod tests {
         assert_eq!(
             parse(Cursor::new(transcript), None, None, None).unwrap(),
             vec![ChatItem::User {
+                rewind_id: None,
                 text: "Visible user message.".to_string(),
                 timestamp: None,
                 from: None,
@@ -1867,6 +1967,7 @@ mod tests {
                     failed: false,
                 },
                 ChatItem::User {
+                    rewind_id: None,
                     text: "/inspect fixture-argument".to_string(),
                     timestamp: None,
                     from: None,
@@ -1876,6 +1977,7 @@ mod tests {
                     operations: vec![operation("Edit", Some("fixture/notes.txt"))],
                 },
                 ChatItem::User {
+                    rewind_id: None,
                     text: "A visible user message.".to_string(),
                     timestamp: None,
                     from: None,
@@ -1960,16 +2062,19 @@ mod tests {
             parse(Cursor::new(transcript), None, None, None).unwrap(),
             vec![
                 ChatItem::User {
+                    rewind_id: Some("fixture-root-id".to_string()),
                     text: "Keep this earlier message.".to_string(),
                     timestamp: None,
                     from: None,
                 },
                 ChatItem::User {
+                    rewind_id: None,
                     text: "Show this queued text.".to_string(),
                     timestamp: None,
                     from: None,
                 },
                 ChatItem::User {
+                    rewind_id: Some("fixture-active-id".to_string()),
                     text: "Keep this replacement message.".to_string(),
                     timestamp: None,
                     from: None,
@@ -1992,6 +2097,7 @@ mod tests {
             parse(Cursor::new(transcript), None, None, None).unwrap(),
             vec![
                 ChatItem::User {
+                    rewind_id: Some("fixture-root-id".to_string()),
                     text: "Update the fixture.".to_string(),
                     timestamp: None,
                     from: None,
@@ -2022,6 +2128,7 @@ mod tests {
             parse(Cursor::new(transcript), None, None, None).unwrap(),
             vec![
                 ChatItem::User {
+                    rewind_id: Some("fixture-before-compact-id".to_string()),
                     text: "Keep this pre-compact message.".to_string(),
                     timestamp: None,
                     from: None,
@@ -2033,6 +2140,7 @@ mod tests {
                     failed: false,
                 },
                 ChatItem::User {
+                    rewind_id: Some("fixture-after-compact-id".to_string()),
                     text: "Keep this post-compact message.".to_string(),
                     timestamp: None,
                     from: None,
@@ -2055,6 +2163,7 @@ mod tests {
             parse(Cursor::new(transcript), None, None, None).unwrap(),
             vec![
                 ChatItem::User {
+                    rewind_id: Some("fixture-earlier-history-id".to_string()),
                     text: "Keep the earlier history.".to_string(),
                     timestamp: None,
                     from: None,
@@ -2066,11 +2175,13 @@ mod tests {
                     failed: false,
                 },
                 ChatItem::User {
+                    rewind_id: Some("fixture-post-compact-context-id".to_string()),
                     text: "Keep the post-compact context.".to_string(),
                     timestamp: None,
                     from: None,
                 },
                 ChatItem::User {
+                    rewind_id: Some("fixture-current-id".to_string()),
                     text: "Keep this replacement message.".to_string(),
                     timestamp: None,
                     from: None,
@@ -2100,11 +2211,13 @@ mod tests {
             parse(reader, None, None, None).unwrap(),
             vec![
                 ChatItem::User {
+                    rewind_id: Some("fixture-root-id".to_string()),
                     text: "Keep this earlier message.".to_string(),
                     timestamp: None,
                     from: None,
                 },
                 ChatItem::User {
+                    rewind_id: Some("fixture-current-id".to_string()),
                     text: "Keep this current message.".to_string(),
                     timestamp: None,
                     from: None,
@@ -2134,6 +2247,7 @@ mod tests {
             parse(reader, None, None, None).unwrap(),
             vec![
                 ChatItem::User {
+                    rewind_id: Some("fixture-root-id".to_string()),
                     text: "Read the plan.".to_string(),
                     timestamp: None,
                     from: None,
@@ -2157,11 +2271,13 @@ mod tests {
             parse(Cursor::new(transcript), None, None, None).unwrap(),
             vec![
                 ChatItem::User {
+                    rewind_id: None,
                     text: "Keep the first legacy message.".to_string(),
                     timestamp: None,
                     from: None,
                 },
                 ChatItem::User {
+                    rewind_id: None,
                     text: "Keep the second legacy message.".to_string(),
                     timestamp: None,
                     from: None,
@@ -2183,16 +2299,19 @@ mod tests {
             parse(Cursor::new(transcript), None, None, None).unwrap(),
             vec![
                 ChatItem::User {
+                    rewind_id: Some("fixture-root-id".to_string()),
                     text: "Keep the first legacy message.".to_string(),
                     timestamp: None,
                     from: None,
                 },
                 ChatItem::User {
+                    rewind_id: Some("fixture-unreachable-id".to_string()),
                     text: "Keep the second legacy message.".to_string(),
                     timestamp: None,
                     from: None,
                 },
                 ChatItem::User {
+                    rewind_id: Some("fixture-active-id".to_string()),
                     text: "Keep this current message.".to_string(),
                     timestamp: None,
                     from: None,
@@ -2225,11 +2344,13 @@ mod tests {
             parse(Cursor::new(transcript), Some(&parent), None, Some(marker)).unwrap(),
             vec![
                 ChatItem::User {
+                    rewind_id: None,
                     text: "Direct user request.".to_string(),
                     timestamp: None,
                     from: None,
                 },
                 ChatItem::User {
+                    rewind_id: None,
                     text: "Queued user request.".to_string(),
                     timestamp: None,
                     from: None,
@@ -2256,11 +2377,13 @@ mod tests {
                     }],
                 },
                 ChatItem::User {
+                    rewind_id: None,
                     text: "Direct user request.".to_string(),
                     timestamp: None,
                     from: None,
                 },
                 ChatItem::User {
+                    rewind_id: None,
                     text: "Queued user request.".to_string(),
                     timestamp: None,
                     from: None,

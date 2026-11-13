@@ -154,6 +154,7 @@ mod tests {
             super::super::parse(Cursor::new(transcript), None, None, None).unwrap(),
             vec![
                 ChatItem::UserWithContent {
+                    rewind_id: None,
                     content: vec![
                         UserContentPart::Text {
                             text: "User ".to_string(),
@@ -170,6 +171,7 @@ mod tests {
                     from: None,
                 },
                 ChatItem::UserWithContent {
+                    rewind_id: None,
                     content: vec![
                         UserContentPart::Text {
                             text: "Queued ".to_string(),

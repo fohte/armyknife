@@ -3,6 +3,7 @@ import '#components/conversation-message.css'
 import type { ReactNode } from 'react'
 
 import { DecisionCard } from '#components/decision-card'
+import { FileAttachmentCard } from '#components/file-attachment-card'
 import { MarkdownMessage } from '#components/markdown-message'
 import { formatMessageTime } from '#components/message-time'
 import { PeerMessage } from '#components/peer-message'
@@ -21,6 +22,7 @@ import { UserWithContent } from '#components/user-with-content'
 import type {
   ChatItem,
   OpenInTerminalStatus,
+  RewindMode,
   Session,
   SessionActions,
   SessionLinkTarget,
@@ -44,6 +46,11 @@ export type ConversationMessageRowProps = {
   onCommandExecuted?: () => void
   onOpenInTerminal: () => void
   onSelectSession: (id: string) => void
+  onRewind?: (
+    messageId: string,
+    mode: RewindMode,
+    draft: string,
+  ) => Promise<boolean>
   sessionEngine: Session['engine']
   sessionId?: string
   sessions: readonly SessionLinkTarget[]
@@ -64,11 +71,20 @@ export function renderConversationMessage({
   onCommandExecuted,
   onOpenInTerminal,
   onSelectSession,
+  onRewind = () => Promise.resolve(false),
   sessionEngine,
   sessionId,
   sessions,
   now,
 }: ConversationMessageRowProps): ReactNode {
+  if (message.type === 'file_attachment') {
+    return (
+      <FileAttachmentCard
+        message={message}
+        {...(now === undefined ? {} : { now })}
+      />
+    )
+  }
   if (
     message.type === 'user' ||
     message.type === 'queued_user' ||
@@ -79,6 +95,9 @@ export function renderConversationMessage({
         message={message}
         onSelectSession={onSelectSession}
         sessions={sessions}
+        canRewind={actions?.rewind === true}
+        sessionEngine={sessionEngine}
+        onRewind={onRewind}
         {...(now === undefined ? {} : { now })}
       />
     )

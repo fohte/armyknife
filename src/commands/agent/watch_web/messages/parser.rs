@@ -327,6 +327,30 @@ fn append_text_with_user_marker_and_image_directory(
         image_directory,
         parent,
         timestamp,
+        None,
+    );
+}
+
+pub(in crate::commands::agent::watch_web::messages::parser) fn append_user_text_with_rewind_id(
+    items: &mut Vec<ChatItem>,
+    text: String,
+    parent: Option<&ParentSession>,
+    timestamp: Option<DateTime<Utc>>,
+    rewind_id: Option<String>,
+) {
+    if text.trim().is_empty() {
+        return;
+    }
+    let classification =
+        classifier::classify_inbound(&serde_json::json!({"type":"user"}), &text, None);
+    append_classification(
+        items,
+        classification,
+        Vec::new(),
+        None,
+        parent,
+        timestamp,
+        rewind_id,
     );
 }
 
@@ -337,6 +361,7 @@ fn append_classification(
     image_directory: Option<&Path>,
     parent: Option<&ParentSession>,
     timestamp: Option<DateTime<Utc>>,
+    rewind_id: Option<String>,
 ) {
     match classification {
         classifier::MessageKind::User { text } if !text.trim().is_empty() || !images.is_empty() => {
@@ -346,6 +371,7 @@ fn append_classification(
                 images,
                 image_directory,
                 timestamp,
+                rewind_id,
             ));
         }
         classifier::MessageKind::PeerIn { session_id, text }
@@ -403,13 +429,14 @@ fn append_classification(
     }
 }
 
-pub(in crate::commands::agent::watch_web::messages::parser) fn append_classification_with_image_directory(
+pub(in crate::commands::agent::watch_web::messages::parser) fn append_classification_with_rewind_id(
     items: &mut Vec<ChatItem>,
     classification: classifier::MessageKind,
     images: Vec<UserContentPart>,
     image_directory: Option<&Path>,
     parent: Option<&ParentSession>,
     timestamp: Option<DateTime<Utc>>,
+    rewind_id: Option<String>,
 ) {
     append_classification(
         items,
@@ -418,6 +445,7 @@ pub(in crate::commands::agent::watch_web::messages::parser) fn append_classifica
         image_directory,
         parent,
         timestamp,
+        rewind_id,
     );
 }
 
@@ -448,16 +476,19 @@ fn user_item_with_image_directory(
     images: Vec<UserContentPart>,
     image_directory: Option<&Path>,
     timestamp: Option<DateTime<Utc>>,
+    rewind_id: Option<String>,
 ) -> ChatItem {
     let (text, content) = user_content_parts_with_image_directory(text, images, image_directory);
     match content {
         Some(content) => ChatItem::UserWithContent {
             content,
+            rewind_id,
             from,
             timestamp: timestamp.map(|timestamp| timestamp.to_rfc3339()),
         },
         None => ChatItem::User {
             text,
+            rewind_id,
             from,
             timestamp: timestamp.map(|timestamp| timestamp.to_rfc3339()),
         },
@@ -626,6 +657,7 @@ mod tests {
         assert_eq!(
             items,
             vec![ChatItem::User {
+                rewind_id: None,
                 text,
                 from: None,
                 timestamp: None,
@@ -648,6 +680,7 @@ mod tests {
         assert_eq!(
             items,
             vec![ChatItem::User {
+                rewind_id: None,
                 text,
                 from: None,
                 timestamp: None,

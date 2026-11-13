@@ -44,12 +44,15 @@ pub struct ResumeArgs {
 /// If a session ID argument is provided, resumes that session directly.
 /// Otherwise, reads the session ID from the current tmux pane's user option.
 pub fn run(args: &ResumeArgs) -> Result<()> {
-    let session_id = match args.session_id.as_deref() {
+    let requested_session_id = match args.session_id.as_deref() {
         Some(id) if !id.is_empty() => id.to_string(),
         _ => resolve_session_id_from_pane()?,
     };
 
-    let stored_engine = store::load_session(&session_id)?.map(|session| session.engine);
+    let sessions_dir = store::sessions_dir()?;
+    let session_id = resolve_resume_session_id(&sessions_dir, &requested_session_id)?;
+    let stored_engine =
+        store::load_session_from(&sessions_dir, &session_id)?.map(|session| session.engine);
     let engine = resolve_resume_engine(args.engine, stored_engine);
 
     let (binary_name, resume_args) = resume_binary_and_args(engine, &session_id);
@@ -93,6 +96,10 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
 /// override an explicit engine supplied by a restore state file or the user.
 fn resolve_resume_engine(explicit: Option<Engine>, stored: Option<Engine>) -> Engine {
     explicit.or(stored).unwrap_or_default()
+}
+
+fn resolve_resume_session_id(sessions_dir: &Path, session_id: &str) -> Result<String> {
+    store::resolve_current_session_id_from(sessions_dir, session_id)
 }
 
 fn resume_environment_variables(
@@ -412,6 +419,37 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    #[test]
+    fn resume_resolves_replaced_session_ids_to_the_latest_successor() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut previous: Session = serde_json::from_value(serde_json::json!({
+            "session_id": "fixture-previous",
+            "cwd": "/fixture/worktree",
+            "transcript_path": null,
+            "tmux_info": null,
+            "status": "ended",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": null,
+        }))
+        .unwrap();
+        previous.ancestor_session_ids = vec!["fixture-root".to_string()];
+        let mut middle = previous.clone();
+        middle.session_id = "fixture-middle".to_string();
+        middle.status = SessionStatus::Stopped;
+        store::save_rewind_sessions(directory.path(), &previous, &middle).unwrap();
+
+        previous = middle.clone();
+        previous.status = SessionStatus::Ended;
+        let mut latest = middle;
+        latest.session_id = "fixture-latest".to_string();
+        store::save_rewind_sessions(directory.path(), &previous, &latest).unwrap();
+
+        let actual = resolve_resume_session_id(directory.path(), "fixture-previous").unwrap();
+
+        assert_eq!(actual, "fixture-latest");
+    }
 
     #[rstest]
     #[case::returns_value_when_set(Some("%12"), Ok("%12".to_string()))]

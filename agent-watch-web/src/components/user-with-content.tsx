@@ -4,7 +4,13 @@ import { useEffect, useState } from 'react'
 
 import { MarkdownMessage } from '#components/markdown-message'
 import { formatMessageTime } from '#components/message-time'
-import type { ChatItem, SessionLinkTarget, UserContentPart } from '#types'
+import type {
+  ChatItem,
+  RewindMode,
+  Session,
+  SessionLinkTarget,
+  UserContentPart,
+} from '#types'
 
 type UserMessage = Extract<
   ChatItem,
@@ -47,11 +53,23 @@ export function UserWithContent({
   onSelectSession,
   sessions,
   now,
+  canRewind,
+  sessionEngine,
+  onRewind = () => Promise.resolve(false),
+  rewindMenuOpen = false,
 }: {
   message: UserMessage
   onSelectSession?: (id: string) => void
   sessions?: readonly SessionLinkTarget[]
   now?: Date
+  canRewind?: boolean
+  sessionEngine?: Session['engine']
+  onRewind?: (
+    messageId: string,
+    mode: RewindMode,
+    draft: string,
+  ) => Promise<boolean>
+  rewindMenuOpen?: boolean
 }) {
   const content: UserContentPart[] =
     message.type === 'user'
@@ -64,6 +82,17 @@ export function UserWithContent({
     : message.from != null && message.from !== ''
       ? `From ${message.from}`
       : 'You'
+  const rewindId =
+    message.type === 'user' || message.type === 'user_with_content'
+      ? message.rewindId
+      : undefined
+  const draftText = content
+    .filter(
+      (part): part is Extract<UserContentPart, { type: 'text' }> =>
+        part.type === 'text',
+    )
+    .map((part) => part.text)
+    .join('\n')
 
   return (
     <article className="chat-user-group">
@@ -75,6 +104,58 @@ export function UserWithContent({
             <time dateTime={message.timestamp}>{time}</time>
           </>
         )}
+        {canRewind === true && rewindId !== undefined ? (
+          <details className="chat-rewind-menu" open={rewindMenuOpen}>
+            <summary>Rewind</summary>
+            <div
+              className="chat-rewind-menu-options"
+              role="group"
+              aria-label="Rewind options"
+            >
+              {sessionEngine === 'codex' ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void onRewind(rewindId, 'conversation', draftText)
+                  }}
+                >
+                  Conversation only
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void onRewind(
+                        rewindId,
+                        'conversation_and_code',
+                        draftText,
+                      )
+                    }}
+                  >
+                    Conversation and code
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void onRewind(rewindId, 'conversation', draftText)
+                    }}
+                  >
+                    Conversation only
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void onRewind(rewindId, 'code', draftText)
+                    }}
+                  >
+                    Code only
+                  </button>
+                </>
+              )}
+            </div>
+          </details>
+        ) : null}
       </div>
       {content.map((part, partIndex) =>
         part.type === 'text' ? (

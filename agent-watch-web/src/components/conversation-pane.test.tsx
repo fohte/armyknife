@@ -17,6 +17,7 @@ import { useSessionPullRequests } from '#components/use-session-pull-requests'
 import type {
   BackgroundTask,
   ChatItem,
+  RewindMode,
   Session,
   SessionActions,
   SessionTreeNode,
@@ -90,6 +91,7 @@ const actions: SessionActions = {
   permission: { approve: true, reject: true },
   interrupt: true,
   openInTerminal: true,
+  rewind: false,
 }
 
 const codexTerminalActions: SessionActions = {
@@ -98,6 +100,7 @@ const codexTerminalActions: SessionActions = {
   permission: { approve: false, reject: false },
   interrupt: true,
   openInTerminal: true,
+  rewind: false,
 }
 
 const questionPrompt = {
@@ -300,6 +303,11 @@ function renderView(
     onToggleToday: (isToday: boolean) => void
   } = { isToday: false, onToggleToday: () => undefined },
   mobileStatusPanel?: ReactNode,
+  onRewind?: (
+    messageId: string,
+    mode: RewindMode,
+    draft: string,
+  ) => Promise<boolean>,
 ) {
   root ??= createRoot(container)
   act(() => {
@@ -321,6 +329,7 @@ function renderView(
         loading={false}
         error={null}
         onAction={onAction}
+        {...(onRewind === undefined ? {} : { onRewind })}
         onSelectSession={onSelectSession}
         isMobile={isMobile}
         isToday={today.isToday}
@@ -3933,6 +3942,7 @@ it('accepts classified messages and the active tool from messages endpoint', asy
         answerQuestion: false,
         interrupt: false,
         openInTerminal: false,
+        rewind: false,
       }),
     )
   vi.stubGlobal('fetch', fetcher)
@@ -4956,6 +4966,7 @@ it('directs Codex questions and permissions to the terminal', () => {
     answerQuestion: false,
     interrupt: true,
     openInTerminal: true,
+    rewind: false,
   }
   renderView(
     onAction,
@@ -5061,6 +5072,116 @@ it('keeps the message draft when sending fails', async () => {
     draft: 'Retain this draft',
     storedDraft: 'Retain this draft',
     actions: [['messages', { content: 'Retain this draft' }]],
+  })
+})
+
+it('opens the forked session with the selected message when storage rejects its draft', async () => {
+  const originalSession = { ...session, engine: 'claude' as const }
+  const forkedSession = { ...originalSession, id: 'fixture-fork-session' }
+  const selectedSessions = vi.fn()
+  const selectedMessage: ChatItem = {
+    type: 'user',
+    text: 'Revisit this request.',
+    rewindId: 'fixture-user-message',
+  }
+  const originalSetItem = Storage.prototype.setItem.bind(window.localStorage)
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation((key, value) => {
+    if (key === `agent-watch-web:composer-draft:${forkedSession.id}`) {
+      throw new Error('storage unavailable')
+    }
+    originalSetItem(key, value)
+  })
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(
+        jsonResponse(
+          url.includes(forkedSession.id)
+            ? messagesResponse([])
+            : messagesResponse([selectedMessage]),
+        ),
+      )
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse({ ...actions, rewind: true }))
+    }
+    if (url.endsWith('/rewind')) {
+      return Promise.resolve(jsonResponse({ sessionId: forkedSession.id }))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  function RewindHarness() {
+    const [currentSession, setCurrentSession] = useState(originalSession)
+    return (
+      <ConversationPane
+        key={currentSession.id}
+        session={currentSession}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={(id) => {
+          selectedSessions(id)
+          setCurrentSession(forkedSession)
+        }}
+      />
+    )
+  }
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(<RewindHarness />)
+  })
+  expect(
+    await waitForState(
+      () => container.querySelector('.chat-rewind-menu summary') !== null,
+    ),
+  ).toBe(true)
+  act(() => {
+    container.querySelector<HTMLElement>('.chat-rewind-menu summary')?.click()
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.chat-rewind-menu button')
+      ?.click()
+  })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector<HTMLTextAreaElement>('textarea')?.value ===
+        selectedMessage.text,
+    ),
+  ).toBe(true)
+
+  const snapshot = () => ({
+    selectedSessions: selectedSessions.mock.calls,
+    rewindRequests: fetcher.mock.calls
+      .filter(([, init]) => init?.method === 'POST')
+      .map(([input, init]) => ({
+        url: requestUrl(input),
+        body:
+          typeof init?.body === 'string'
+            ? (JSON.parse(init.body) as unknown)
+            : null,
+      })),
+    draft: window.localStorage.getItem(
+      `agent-watch-web:composer-draft:${forkedSession.id}`,
+    ),
+    composer: container.querySelector<HTMLTextAreaElement>('textarea')?.value,
+  })
+  expect(snapshot()).toEqual({
+    selectedSessions: [['fixture-fork-session']],
+    rewindRequests: [
+      {
+        url: '/api/sessions/sample-session/rewind',
+        body: {
+          messageId: 'fixture-user-message',
+          mode: 'conversation_and_code',
+        },
+      },
+    ],
+    draft: null,
+    composer: 'Revisit this request.',
   })
 })
 
@@ -5427,6 +5548,7 @@ it('shows a server attachment validation error and retains the rejected attachme
         answerQuestion: false,
         interrupt: false,
         openInTerminal: true,
+        rewind: false,
       }),
     )
     .mockResolvedValueOnce(
@@ -5519,6 +5641,7 @@ it('waits for pasted image optimization and sends the optimized attachment', asy
             answerQuestion: false,
             interrupt: false,
             openInTerminal: true,
+            rewind: false,
           })
         : jsonResponse(messagesResponse([])),
     ),
@@ -5956,6 +6079,7 @@ it.each([
         permission: { approve: true, reject: true },
         interrupt: true,
         openInTerminal: true,
+        rewind: false,
       }),
     )
     .mockResolvedValueOnce(
@@ -6210,6 +6334,7 @@ it('shows an HTTP status when the initial messages response has no body', async 
       answerQuestion: false,
       interrupt: false,
       openInTerminal: true,
+      rewind: false,
     }),
     { headers: { 'Content-Type': 'application/json' } },
   )
@@ -6276,6 +6401,7 @@ it('reloads the selected conversation when the session feed changes', async () =
         answerQuestion: false,
         interrupt: true,
         openInTerminal: true,
+        rewind: false,
       }),
     )
     .mockResolvedValueOnce(
@@ -6289,6 +6415,7 @@ it('reloads the selected conversation when the session feed changes', async () =
         answerQuestion: false,
         interrupt: true,
         openInTerminal: true,
+        rewind: false,
       }),
     )
   vi.stubGlobal('fetch', fetcher)
@@ -6357,6 +6484,7 @@ it('keeps conversation DOM connected while toggling the status panel', async () 
     answerQuestion: false,
     interrupt: true,
     openInTerminal: true,
+    rewind: false,
   }
   const fetcher = vi
     .fn<typeof fetch>()
@@ -6442,6 +6570,7 @@ it('keeps the conversation and focused draft while a feed refresh is pending', a
         permission: { approve: true, reject: true },
         interrupt: true,
         openInTerminal: true,
+        rewind: false,
       }),
     )
     .mockImplementation(() => new Promise<Response>(() => undefined))
@@ -6942,6 +7071,7 @@ it('keeps question and permission actions active after a refresh error', async (
         permission: { approve: true, reject: true },
         interrupt: true,
         openInTerminal: true,
+        rewind: false,
       }),
     )
     .mockResolvedValueOnce(
@@ -6957,6 +7087,7 @@ it('keeps question and permission actions active after a refresh error', async (
         permission: { approve: true, reject: true },
         interrupt: true,
         openInTerminal: true,
+        rewind: false,
       }),
     )
   vi.stubGlobal('fetch', fetcher)
@@ -8033,6 +8164,61 @@ it('skips committing an unchanged memoized conversation row', () => {
   })
 
   expect(renderMessage).toHaveBeenCalledTimes(1)
+})
+
+it('rerenders a user message when rewind becomes available', () => {
+  const message: ChatItem = {
+    type: 'user',
+    text: 'Revisit this request.',
+    rewindId: 'fixture-user-message',
+  }
+  const sessions: Session[] = []
+  const onAction = () => Promise.resolve(true)
+  const onOpenInTerminal = () => undefined
+  const onSelectDecision = () => undefined
+  const onSelectSession = () => undefined
+  const onRewind = () => Promise.resolve(true)
+  const renderMessage = vi.mocked(renderConversationMessage)
+  renderMessage.mockClear()
+  const rowProps = {
+    actions,
+    actionsReady: true,
+    isMobile: false,
+    selected: false,
+    decisionPosition: undefined,
+    message,
+    pendingAction: null,
+    openInTerminalStatus: null,
+    sessionEngine: 'claude' as const,
+    sessions,
+    onAction,
+    onOpenInTerminal,
+    onSelectDecision,
+    onSelectSession,
+    onRewind,
+  }
+  root = createRoot(container)
+  act(() => {
+    root?.render(<ConversationMessageRow {...rowProps} />)
+  })
+  act(() => {
+    root?.render(
+      <ConversationMessageRow
+        {...rowProps}
+        actions={{ ...actions, rewind: true }}
+      />,
+    )
+  })
+
+  const snapshot = () => ({
+    renderCount: renderMessage.mock.calls.length,
+    rewindLabel:
+      container.querySelector('.chat-rewind-menu summary')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    renderCount: 2,
+    rewindLabel: 'Rewind',
+  })
 })
 
 it('refreshes a memoized message time when the local day changes', () => {

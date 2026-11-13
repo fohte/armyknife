@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.681](https://github.com/fohte/armyknife/compare/v0.1.680...v0.1.681) (2026-11-13)
+
+
+### Features
+
+* **watch-web:** support conversation rewind ([#1739](https://github.com/fohte/armyknife/issues/1739)) ([c03a6ac](https://github.com/fohte/armyknife/commit/c03a6ac65404c4f052c2f5a9452d62581048ebab))
+
+## [0.1.680](https://github.com/fohte/armyknife/compare/v0.1.679...v0.1.680) (2026-11-13)
+
+
+### Features
+
+* **watch-web:** share files in conversations ([#1737](https://github.com/fohte/armyknife/issues/1737)) ([d3c69c1](https://github.com/fohte/armyknife/commit/d3c69c1f037fe55102b58a63d66b92fa21af9ae8))
+
 ## [0.1.679](https://github.com/fohte/armyknife/compare/v0.1.678...v0.1.679) (2026-11-13)
 
 

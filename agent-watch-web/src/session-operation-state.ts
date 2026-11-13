@@ -354,6 +354,7 @@ export function isSessionListOperation(operation: SessionOperation) {
 }
 
 export function requiresStateConfirmation(operation: SessionOperation) {
+  if (operation.type === 'rewind') return false
   if (operation.type === 'title' && operation.title.trim() === '') return false
   return (
     isSessionListOperation(operation) ||

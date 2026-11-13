@@ -36,6 +36,7 @@ const actions: SessionActions = {
   permission: { approve: false, reject: false },
   interrupt: false,
   openInTerminal: false,
+  rewind: false,
 }
 
 function requireElement<T extends Element>(element: T | null): T {

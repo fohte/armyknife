@@ -296,6 +296,7 @@ it('shows the cached conversation after switching to the Board and back', async 
           permission: { approve: true, reject: true },
           interrupt: true,
           openInTerminal: true,
+          rewind: false,
         }),
       )
     }
@@ -4046,6 +4047,7 @@ it('reloads only the selected conversation when its session changes', async () =
           answerQuestion: false,
           interrupt: true,
           openInTerminal: true,
+          rewind: false,
         }
     return Promise.resolve(
       new Response(JSON.stringify(body), {
@@ -4135,6 +4137,7 @@ it('opens a known session ID from a conversation message', async () => {
           answerQuestion: false,
           interrupt: true,
           openInTerminal: true,
+          rewind: false,
         }
     return Promise.resolve(
       new Response(JSON.stringify(body), {
@@ -4224,6 +4227,7 @@ it('answers an Inbox question with its request ID and selected answer', async ()
             answerQuestion: true,
             interrupt: true,
             openInTerminal: true,
+            rewind: false,
           }
         : {}
     return Promise.resolve(

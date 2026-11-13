@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use super::super::super::{ChatItem, UserContentPart};
+use super::state::ToolUse;
 
 #[derive(Clone)]
 pub(super) struct TimedClaudeEvent {
@@ -21,10 +22,15 @@ pub(super) enum ClaudeEffect {
         images: Vec<UserContentPart>,
         use_user_marker: bool,
         simplify_slash_command: bool,
+        rewind_id: Option<String>,
     },
     ToolAction {
         name: String,
         input: Option<Value>,
+        failed: bool,
+    },
+    SendUserFile {
+        tool_use: ToolUse,
         failed: bool,
     },
     Question {

@@ -108,13 +108,19 @@ pub(super) fn resolve_transcript_messages(
         let Some(prompt) = prompts_by_message_id.get(message_id.as_str()).copied() else {
             continue;
         };
-        let (timestamp, from) = match message {
+        let (timestamp, from, rewind_id) = match message {
             ChatItem::User {
-                timestamp, from, ..
+                timestamp,
+                from,
+                rewind_id,
+                ..
             }
             | ChatItem::UserWithContent {
-                timestamp, from, ..
-            } => (timestamp.clone(), from.clone()),
+                timestamp,
+                from,
+                rewind_id,
+                ..
+            } => (timestamp.clone(), from.clone(), rewind_id.clone()),
             _ => continue,
         };
         let content = user_content(prompt);
@@ -123,12 +129,14 @@ pub(super) fn resolve_transcript_messages(
                 text: prompt.content.clone(),
                 from,
                 timestamp,
+                rewind_id,
             }
         } else {
             ChatItem::UserWithContent {
                 content,
                 from,
                 timestamp,
+                rewind_id,
             }
         };
         if !prompt.resolved {

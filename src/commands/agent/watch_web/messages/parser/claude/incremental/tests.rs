@@ -15,6 +15,7 @@ fn fixed_time() -> DateTime<Utc> {
 
 fn empty_additions() -> ParserAdditions<'static> {
     ParserAdditions {
+        session_id: "fixture-session",
         parent: None,
         pending_tool: None,
         user_marker: None,
@@ -236,6 +237,7 @@ fn pending_sibling_renders_only_the_active_branch() {
     let expected: super::ParsedTranscript = (
         vec![
             ChatItem::User {
+                rewind_id: Some("root".to_owned()),
                 text: "The original request.".to_owned(),
                 timestamp: None,
                 from: None,

@@ -8,10 +8,7 @@ use super::super::super::ChatItem;
 use super::super::decision_position::{DecisionTimeline, insert_time_placed_decisions};
 use super::super::time_placed::TimePlacedTimeline;
 use super::super::todos::TodoTimeline;
-use super::super::{
-    ToolSummary, append_classification_with_image_directory, append_text_with_image_directory,
-    classifier, tool_target,
-};
+use super::super::{ToolSummary, append_text_with_image_directory, classifier, tool_target};
 use super::events::{ClaudeEffect, TimedClaudeEvent};
 use super::proposals::ProposalTimeline;
 use super::questions::apply_question_answers;
@@ -118,6 +115,7 @@ fn render_timed_event(
                 images,
                 use_user_marker,
                 simplify_slash_command,
+                rewind_id,
             } => {
                 let marker = use_user_marker.then_some(additions.user_marker).flatten();
                 let classification = classifier::classify_inbound(record, text, marker);
@@ -129,13 +127,14 @@ fn render_timed_event(
                     }
                     classification => classification,
                 };
-                append_classification_with_image_directory(
+                super::super::append_classification_with_rewind_id(
                     items,
                     classification,
                     images.clone(),
                     image_directory,
                     additions.parent,
                     event.timestamp,
+                    rewind_id.clone(),
                 );
             }
             ClaudeEffect::ToolAction {
@@ -143,6 +142,16 @@ fn render_timed_event(
                 input,
                 failed,
             } => tools.record(name, input.as_ref(), *failed),
+            ClaudeEffect::SendUserFile { tool_use, failed } => {
+                let file_item =
+                    send_user_file_item(tool_use, *failed, additions.session_id, event.timestamp);
+                if let Some(file_item) = file_item {
+                    tools.flush_into(items);
+                    items.push(file_item);
+                } else {
+                    tools.record("SendUserFile", tool_use.input.as_ref(), *failed);
+                }
+            }
             ClaudeEffect::Question { id, item } => {
                 let index = items.len();
                 items.push(item.clone());
@@ -157,6 +166,44 @@ fn render_timed_event(
             }
         }
     }
+}
+
+fn send_user_file_item(
+    tool_use: &ToolUse,
+    failed: bool,
+    session_id: &str,
+    timestamp: Option<DateTime<Utc>>,
+) -> Option<ChatItem> {
+    if failed {
+        return None;
+    }
+    let input = tool_use.input.as_ref()?;
+    let paths = input.get("files")?.as_array()?;
+    let files = paths
+        .iter()
+        .enumerate()
+        .filter_map(|(index, value)| {
+            value.as_str().map(|path| {
+                super::super::super::super::file_attachments::transcript_chat_file(
+                    session_id,
+                    &tool_use.id,
+                    index,
+                    path,
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    if files.is_empty() {
+        return None;
+    }
+    Some(ChatItem::FileAttachment {
+        files,
+        caption: input
+            .get("caption")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        timestamp: timestamp.map(|timestamp| timestamp.to_rfc3339()),
+    })
 }
 
 fn active_tool_item(

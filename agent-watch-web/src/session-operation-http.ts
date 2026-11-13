@@ -33,6 +33,25 @@ function toError(error: unknown): SessionOperationError {
     : new Error('Session operation failed', { cause: error })
 }
 
+function postAction(
+  sessionId: string,
+  path: string,
+  payload?: Record<string, unknown>,
+) {
+  return ResultAsync.fromPromise(
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/${path}`, {
+      method: 'POST',
+      ...(payload === undefined
+        ? {}
+        : {
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          }),
+    }),
+    toError,
+  )
+}
+
 function requestFor(operation: SessionOperation) {
   switch (operation.type) {
     case 'today':
@@ -127,6 +146,11 @@ function requestFor(operation: SessionOperation) {
           repo: operation.repo,
           expectedHeadSha: operation.expectedHeadSha,
         },
+      }
+    case 'rewind':
+      return {
+        path: 'rewind',
+        body: { messageId: operation.messageId, mode: operation.mode },
       }
     case 'review_document_save':
     case 'review_document_finish':
@@ -235,6 +259,24 @@ export function createSessionOperation(
         sessionId,
         messageText,
         commands,
+      })
+    }
+    case 'rewind': {
+      const messageId = requiredString('messageId')
+      const mode = payload['mode']
+      if (
+        messageId === null ||
+        (mode !== 'conversation_and_code' &&
+          mode !== 'conversation' &&
+          mode !== 'code')
+      ) {
+        return errOperation('Invalid rewind operation')
+      }
+      return ok<SessionOperation, Error>({
+        type: 'rewind',
+        sessionId,
+        messageId,
+        mode,
       })
     }
     case 'messages':
@@ -366,33 +408,21 @@ function errOperation(message: string) {
 
 export function submitSessionOperation(operation: SessionOperation) {
   const request = requestFor(operation)
-  const hasBody = request.body !== undefined
-  return ResultAsync.fromPromise(
-    fetch(
-      `/api/sessions/${encodeURIComponent(operation.sessionId)}/${request.path}`,
-      {
-        method: 'POST',
-        ...(hasBody
-          ? {
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(request.body),
-            }
-          : {}),
-      },
-    ),
-    toError,
-  ).andThen((response) => {
-    if (!response.ok)
-      return errorFromResponse(response).andThen((error) => err(error))
-    if (
-      operation.type !== 'merge' &&
-      operation.type !== 'command_preview' &&
-      operation.type !== 'command_execute'
-    )
-      return ok<unknown, SessionOperationError>(undefined)
-    return ResultAsync.fromPromise<unknown, SessionOperationError>(
-      response.json(),
-      toError,
-    )
-  })
+  return postAction(operation.sessionId, request.path, request.body).andThen(
+    (response) => {
+      if (!response.ok)
+        return errorFromResponse(response).andThen((error) => err(error))
+      if (
+        operation.type !== 'merge' &&
+        operation.type !== 'rewind' &&
+        operation.type !== 'command_preview' &&
+        operation.type !== 'command_execute'
+      )
+        return ok<unknown, SessionOperationError>(undefined)
+      return ResultAsync.fromPromise<unknown, SessionOperationError>(
+        response.json(),
+        toError,
+      )
+    },
+  )
 }

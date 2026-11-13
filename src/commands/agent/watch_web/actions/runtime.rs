@@ -17,6 +17,23 @@ impl ActionRuntime for LiveActionRuntime {
         super::messages::send_live_message(session, content)
     }
 
+    fn rewind_session(
+        &self,
+        sessions_dir: &std::path::Path,
+        session: &Session,
+        message_id: &str,
+        mode: super::super::rewind::RewindMode,
+    ) -> Result<String> {
+        super::super::rewind::rewind_session(
+            sessions_dir,
+            session,
+            message_id,
+            mode,
+            &super::super::rewind::LiveHost,
+        )
+        .map(|session| session.session_id)
+    }
+
     fn pane_current_command(&self, tmux_info: &TmuxInfo) -> Option<String> {
         crate::infra::tmux::get_pane_current_command_for_socket(
             tmux_info.socket_path.as_deref(),

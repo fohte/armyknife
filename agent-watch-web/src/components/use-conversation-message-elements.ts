@@ -8,6 +8,7 @@ import type {
 import type {
   ChatItem,
   OpenInTerminalStatus,
+  RewindMode,
   Session,
   SessionActions,
   SessionLinkTarget,
@@ -35,6 +36,11 @@ type UseConversationMessageElementsOptions = {
   onOpenInTerminal: () => void
   openInTerminalStatus: OpenInTerminalStatus
   onSelectSession: (id: string) => void
+  onRewind?: (
+    messageId: string,
+    mode: RewindMode,
+    draft: string,
+  ) => Promise<boolean>
   pendingActions: PendingPermissionActions
   sessions: readonly SessionLinkTarget[]
   now: Date
@@ -122,6 +128,12 @@ function getConversationMessageIdentity(message: ChatItem): string {
         : `${message.type}:${JSON.stringify([message.kind, message.timestamp])}`
     case 'assistant':
       return `${message.type}:${JSON.stringify([message.text])}`
+    case 'file_attachment':
+      return `${message.type}:${JSON.stringify([
+        message.caption ?? '',
+        message.timestamp ?? '',
+        ...message.files.flatMap((file) => [file.source, file.name]),
+      ])}`
   }
 }
 
@@ -143,6 +155,7 @@ export function useConversationMessageElements({
   onOpenInTerminal,
   openInTerminalStatus,
   onSelectSession,
+  onRewind,
   pendingActions,
   sessions,
   now,
@@ -203,6 +216,7 @@ export function useConversationMessageElements({
         ...(onCommandExecuted === undefined ? {} : { onCommandExecuted }),
         onOpenInTerminal,
         onSelectSession,
+        ...(onRewind === undefined ? {} : { onRewind }),
         pendingAction: messagePendingAction,
         openInTerminalStatus,
         sessionEngine,
@@ -231,6 +245,7 @@ export function useConversationMessageElements({
     onOpenInTerminal,
     onSelectDecision,
     onSelectSession,
+    onRewind,
     openInTerminalStatus,
     pendingActions,
     proposalPending,

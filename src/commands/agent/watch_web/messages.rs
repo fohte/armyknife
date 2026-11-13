@@ -19,8 +19,8 @@ use serde_json::Value;
 
 use crate::commands::agent::proposal::{ProposalAnswer, ProposalOption};
 use crate::commands::agent::store::{
-    AgentDecision, AgentProposal, AgentTodo, PermissionDeniedOperation, PermissionRequestData,
-    TodoResolution, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
+    AgentDecision, AgentFile, AgentProposal, AgentTodo, PermissionDeniedOperation,
+    PermissionRequestData, TodoResolution, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
 };
 use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 use crate::commands::agent::user_turn::is_ask_user_question;
@@ -46,6 +46,8 @@ use self::range::MessageRange;
 
 mod cache;
 use self::cache::{MessageCache, MessageCacheKey, MessageCacheRecords, RunningBackgroundTaskCache};
+mod file_attachments;
+use self::file_attachments::merge_stored_files;
 mod session_titles;
 use self::session_titles::{parent_session, resolve_peer_session_titles};
 
@@ -75,6 +77,7 @@ type PermissionRequestDataLoader =
     Arc<dyn Fn(&str, &str) -> Result<Option<PermissionRequestData>> + Send + Sync>;
 type PermissionDeniedLoader =
     Arc<dyn Fn(&str) -> Result<Vec<PermissionDeniedOperation>> + Send + Sync>;
+type AgentFileLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentFile>> + Send + Sync>;
 
 #[derive(Clone)]
 pub(super) struct RouteLoaders {
@@ -86,6 +89,7 @@ pub(super) struct RouteLoaders {
     todos: TodoLoader,
     permission_request_data: PermissionRequestDataLoader,
     permission_denials: PermissionDeniedLoader,
+    agent_files: AgentFileLoader,
     message_cache: MessageCache,
     running_background_task_cache: RunningBackgroundTaskCache,
 }
@@ -110,6 +114,7 @@ impl RouteLoaders {
             todos: Arc::new(|_| Ok(Vec::new())),
             permission_request_data: Arc::new(|_, _| Ok(None)),
             permission_denials: Arc::new(|_| Ok(Vec::new())),
+            agent_files: Arc::new(|_| Ok(Vec::new())),
             message_cache: MessageCache::default(),
             running_background_task_cache: RunningBackgroundTaskCache::default(),
         }
@@ -142,6 +147,14 @@ impl RouteLoaders {
         + 'static,
     ) -> Self {
         self.permission_denials = Arc::new(load_permission_denials);
+        self
+    }
+
+    pub(super) fn with_agent_file_loader(
+        mut self,
+        load_agent_files: impl Fn(&str) -> Result<Vec<AgentFile>> + Send + Sync + 'static,
+    ) -> Self {
+        self.agent_files = Arc::new(load_agent_files);
         self
     }
 
@@ -284,6 +297,7 @@ fn load_conversation_with_queued_prompts(
         .map(proposal_chat_item)
         .collect::<Result<Vec<_>>>()?;
     let todos = (loaders.todos)(session_id)?;
+    let agent_files = (loaders.agent_files)(session_id)?;
     let permission_denials = (loaders.permission_denials)(session_id)?;
     let parent = parent_session(&session, &mut load_session)?;
     let main_permission_pending = session
@@ -318,6 +332,7 @@ fn load_conversation_with_queued_prompts(
         MessageCacheRecords {
             proposals: proposals.clone(),
             todos: todos.clone(),
+            agent_files: agent_files.clone(),
             permission_denials: permission_denials.clone(),
         },
     )?;
@@ -336,6 +351,7 @@ fn load_conversation_with_queued_prompts(
             main_permission_data.as_ref(),
         );
         resolve_peer_session_titles(&mut cached.conversation.messages, &mut load_session)?;
+        cached.conversation.update_metadata();
         cache::mark_resolved_queued_prompts(
             loaders,
             session_id,
@@ -347,6 +363,7 @@ fn load_conversation_with_queued_prompts(
         path: session.transcript_path.as_deref(),
         engine: session.engine,
         additions: parser::claude::ParserAdditions {
+            session_id,
             parent: parent.as_ref(),
             pending_tool,
             user_marker: user_marker.as_deref(),
@@ -365,6 +382,7 @@ fn load_conversation_with_queued_prompts(
     )?;
     cache::refresh_image_availability(&mut conversation);
     resolve_peer_session_titles(&mut conversation.messages, &mut load_session)?;
+    merge_stored_files(session_id, &agent_files, &mut conversation.messages);
 
     attach_question_request_if_present(
         &mut conversation.messages,
@@ -714,6 +732,8 @@ fn compressed_path(path: &Path) -> PathBuf {
 enum ChatItem {
     User {
         text: String,
+        #[serde(rename = "rewindId", skip_serializing_if = "Option::is_none")]
+        rewind_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         timestamp: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -728,6 +748,8 @@ enum ChatItem {
     },
     UserWithContent {
         content: Vec<UserContentPart>,
+        #[serde(rename = "rewindId", skip_serializing_if = "Option::is_none")]
+        rewind_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         timestamp: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -755,6 +777,12 @@ enum ChatItem {
         kind: EventKind,
         text: String,
         failed: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timestamp: Option<String>,
+    },
+    FileAttachment {
+        files: Vec<super::file_attachments::ChatFile>,
+        caption: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         timestamp: Option<String>,
     },
@@ -951,8 +979,8 @@ mod tests {
         routes_with_proposals_and_peer_out_messages,
     };
     use crate::commands::agent::store::{
-        AgentDecision, AgentProposal, AgentTodo, PermissionDeniedOperation, PermissionRequestData,
-        TodoResolution, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
+        AgentDecision, AgentFile, AgentProposal, AgentTodo, PermissionDeniedOperation,
+        PermissionRequestData, TodoResolution, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
     };
     use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 
@@ -1066,6 +1094,208 @@ mod tests {
                     StatusCode::OK,
                     Some("application/json".to_string()),
                     json!({"messages":[{"type":"assistant","text":"Other response."}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
+                ),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn messages_route_refreshes_and_orders_stored_files_before_applying_ranges() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("fixture.jsonl");
+        std::fs::write(
+            &transcript_path,
+            indoc::indoc! {r#"
+                {"type":"user","origin":{"kind":"human"},"timestamp":"2026-01-01T00:00:01Z","message":{"content":"Earlier message."}}
+                {"type":"assistant","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"text","text":"Assistant response."}]}}
+                {"type":"user","origin":{"kind":"human"},"timestamp":"2026-01-01T00:00:05Z","message":{"content":"Later message."}}
+            "#},
+        )
+        .unwrap();
+
+        let session = Session {
+            transcript_path: Some(transcript_path),
+            ..stored_session()
+        };
+        let file_available = Arc::new(AtomicBool::new(false));
+        let loader_file_available = Arc::clone(&file_available);
+        let file_created_at = || {
+            chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:04Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
+        let files = vec![
+            AgentFile {
+                id: "file-fixture-id".to_string(),
+                position: 0,
+                name: "fixture.png".to_string(),
+                caption: Some("Compare these files.".to_string()),
+                mime_type: Some("image/png".to_string()),
+                size: 3,
+                created_at: file_created_at(),
+            },
+            AgentFile {
+                id: "file-fixture-report-id".to_string(),
+                position: 1,
+                name: "fixture-report.pdf".to_string(),
+                caption: Some("Compare these files.".to_string()),
+                mime_type: None,
+                size: 7,
+                created_at: file_created_at(),
+            },
+        ];
+        let decision = AgentDecision {
+            session_id: "fixture-session".to_string(),
+            seq: 1,
+            title: "Keep the timeline order".to_string(),
+            why: "The fixture places a decision between the file and later message.".to_string(),
+            considered: Vec::new(),
+            easy_to_change: "Change the fixture timestamp.".to_string(),
+            created_at: "2026-01-01T00:00:04.500Z".to_string(),
+            review: None,
+            reviewed_at: None,
+        };
+        let decision_item = json!({
+            "type": "decision",
+            "seq": 1,
+            "title": "Keep the timeline order",
+            "why": "The fixture places a decision between the file and later message.",
+            "considered": [],
+            "easyToChange": "Change the fixture timestamp.",
+            "review": null,
+            "createdAt": "2026-01-01T00:00:04.500Z",
+        });
+        let loaders = RouteLoaders::new(
+            move |_| Ok(vec![decision.clone()]),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
+        .with_agent_file_loader(move |_| {
+            Ok(if loader_file_available.load(Ordering::Relaxed) {
+                files.clone()
+            } else {
+                Vec::new()
+            })
+        });
+        let router = routes_with_proposals_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            loaders,
+        );
+
+        let initial = message_response(&router).await;
+        file_available.store(true, Ordering::Relaxed);
+        let refreshed = message_response(&router).await;
+        let cached = message_response(&router).await;
+        let ranged_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages?limit=3")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let ranged = response_json_snapshot(ranged_response).await;
+
+        let expected_initial = json!({
+            "messages": [
+                {"type": "user", "text": "Earlier message.", "timestamp": "2026-01-01T00:00:01+00:00"},
+                {"type": "assistant", "text": "Assistant response."},
+                decision_item.clone(),
+                {"type": "user", "text": "Later message.", "timestamp": "2026-01-01T00:00:05+00:00"},
+            ],
+            "backgroundTasks": [],
+            "start": 0,
+            "total": 4,
+            "decisions": [decision_item.clone()],
+            "hasUnansweredProposal": false,
+            "activeQuestionIndex": null,
+        });
+        let expected_refreshed = json!({
+            "messages": [
+                {"type": "user", "text": "Earlier message.", "timestamp": "2026-01-01T00:00:01+00:00"},
+                {"type": "assistant", "text": "Assistant response."},
+                {
+                    "type": "file_attachment",
+                    "files": [{
+                        "name": "fixture.png",
+                        "source": "/api/sessions/fixture-session/files/file-fixture-id",
+                        "isImage": true,
+                        "available": true,
+                    }, {
+                        "name": "fixture-report.pdf",
+                        "source": "/api/sessions/fixture-session/files/file-fixture-report-id",
+                        "isImage": false,
+                        "available": true,
+                    }],
+                    "caption": "Compare these files.",
+                    "timestamp": "2026-01-01T00:00:04+00:00",
+                },
+                decision_item.clone(),
+                {"type": "user", "text": "Later message.", "timestamp": "2026-01-01T00:00:05+00:00"},
+            ],
+            "backgroundTasks": [],
+            "start": 0,
+            "total": 5,
+            "decisions": [decision_item.clone()],
+            "hasUnansweredProposal": false,
+            "activeQuestionIndex": null,
+        });
+        let expected_ranged = json!({
+            "messages": [
+                {
+                    "type": "file_attachment",
+                    "files": [{
+                        "name": "fixture.png",
+                        "source": "/api/sessions/fixture-session/files/file-fixture-id",
+                        "isImage": true,
+                        "available": true,
+                    }, {
+                        "name": "fixture-report.pdf",
+                        "source": "/api/sessions/fixture-session/files/file-fixture-report-id",
+                        "isImage": false,
+                        "available": true,
+                    }],
+                    "caption": "Compare these files.",
+                    "timestamp": "2026-01-01T00:00:04+00:00",
+                },
+                decision_item.clone(),
+                {"type": "user", "text": "Later message.", "timestamp": "2026-01-01T00:00:05+00:00"},
+            ],
+            "backgroundTasks": [],
+            "start": 2,
+            "total": 5,
+            "decisions": [decision_item],
+            "hasUnansweredProposal": false,
+            "activeQuestionIndex": null,
+        });
+
+        assert_eq!(
+            (initial, refreshed, cached, ranged),
+            (
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    expected_initial
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    expected_refreshed.clone(),
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    expected_refreshed,
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    expected_ranged,
                 ),
             ),
         );
@@ -3536,7 +3766,11 @@ mod tests {
             normalized_first,
             json!({
                 "messages": [
-                    {"type": "user", "text": "Watch the fixture build."},
+                    {
+                        "type": "user",
+                        "text": "Watch the fixture build.",
+                        "rewindId": "fixture-prompt-row",
+                    },
                     {
                         "type": "tool_summary",
                         "summary": "Bash ×1",

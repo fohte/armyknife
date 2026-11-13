@@ -461,6 +461,7 @@ mod tests {
 
         let mut expected_messages = background_bash_messages();
         expected_messages.push(ChatItem::User {
+            rewind_id: None,
             text: user_text.to_string(),
             timestamp: None,
             from: None,
@@ -581,6 +582,7 @@ mod tests {
             (
                 vec![
                     ChatItem::User {
+                        rewind_id: Some("fixture-prompt-row".to_string()),
                         text: "Watch the fixture build.".to_string(),
                         timestamp: None,
                         from: None,
@@ -627,6 +629,7 @@ mod tests {
             (
                 vec![
                     ChatItem::User {
+                        rewind_id: Some("fixture-task-prompt-row".to_string()),
                         text: "Delegate a synthetic task.".to_string(),
                         timestamp: None,
                         from: None,
@@ -710,6 +713,7 @@ mod tests {
             (
                 vec![
                     ChatItem::User {
+                        rewind_id: Some("fixture-agent-prompt-row".to_string()),
                         text: "Review the synthetic change.".to_string(),
                         timestamp: None,
                         from: None,
@@ -743,6 +747,7 @@ mod tests {
     fn background_bash_messages() -> Vec<ChatItem> {
         vec![
             ChatItem::User {
+                rewind_id: Some("fixture-prompt-row".to_string()),
                 text: "Watch the fixture build.".to_string(),
                 timestamp: None,
                 from: None,

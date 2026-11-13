@@ -9,6 +9,7 @@ const actions: SessionActions = {
   permission: { approve: true, reject: true },
   interrupt: true,
   openInTerminal: true,
+  rewind: false,
 }
 
 const sessions: SessionLinkTarget[] = []

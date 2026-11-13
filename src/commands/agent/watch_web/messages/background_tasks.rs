@@ -44,6 +44,7 @@ pub(super) fn running_background_task_session_ids(
                     path: session.transcript_path.as_deref(),
                     engine: Engine::Claude,
                     additions: ParserAdditions {
+                        session_id: &session.session_id,
                         parent: None,
                         pending_tool: None,
                         user_marker: None,

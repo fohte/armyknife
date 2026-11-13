@@ -10,6 +10,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use crate::commands::agent::error::CcError;
 use crate::commands::agent::types::Session;
 
+mod agent_files;
 mod decisions;
 mod migration;
 mod migrations;
@@ -18,10 +19,13 @@ mod permission_denied;
 mod permission_requests;
 mod proposals;
 mod queued_prompts;
+mod replacements;
 mod todos;
 mod wake;
 mod web_state;
 
+pub(crate) use agent_files::AgentFile;
+pub(crate) use agent_files::{agent_file, agent_files, insert_agent_files};
 pub(crate) use decisions::{
     AgentDecision, AgentDecisionCounts, agent_decision_counts_by_session, agent_decisions,
     insert_agent_decision, set_agent_decision_review,
@@ -49,6 +53,9 @@ pub(crate) use queued_prompts::{WatchWebQueuedAttachment, WatchWebQueuedPrompt};
 pub(crate) use queued_prompts::{
     delete_watch_web_queued_prompts, insert_watch_web_queued_prompt,
     mark_watch_web_queued_prompts_resolved, watch_web_queued_prompts,
+};
+pub(crate) use replacements::{
+    all_unreplaced_sessions, resolve_current_session_id, save_rewind_sessions,
 };
 pub(crate) use todos::{AgentTodo, TodoResolution};
 pub(crate) use todos::{
@@ -563,6 +570,112 @@ mod tests {
         assert_eq!(
             (preserved, state_table_exists, queued_prompt_table_exists),
             (("preserved-data".to_string(), 7, 7), true, true),
+        );
+    }
+
+    #[test]
+    fn save_rewind_sessions_copies_task_and_user_marker_state() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut previous: Session = serde_json::from_value(serde_json::json!({
+            "session_id": "fixture-session",
+            "cwd": "/fixture/worktree",
+            "transcript_path": null,
+            "tmux_info": null,
+            "status": "paused",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": null,
+        }))
+        .unwrap();
+        previous.status = crate::commands::agent::types::SessionStatus::Ended;
+        previous.ancestor_session_ids = vec!["fixture-parent".to_string()];
+        let mut forked = previous.clone();
+        forked.session_id = "fixture-fork".to_string();
+        forked.status = crate::commands::agent::types::SessionStatus::Stopped;
+        let mut child = previous.clone();
+        child.session_id = "fixture-child".to_string();
+        child.ancestor_session_ids =
+            vec!["fixture-parent".to_string(), previous.session_id.clone()];
+        let mut grandchild = previous.clone();
+        grandchild.session_id = "fixture-grandchild".to_string();
+        grandchild.ancestor_session_ids = vec![
+            "fixture-parent".to_string(),
+            previous.session_id.clone(),
+            child.session_id.clone(),
+        ];
+
+        let connection = open_connection(temp_dir.path()).unwrap();
+        connection
+            .execute(
+                "INSERT INTO watch_web_session_state
+                    (session_id, is_today, primary_task_id, watch_web_user_marker)
+                 VALUES (?1, 1, ?2, ?3)",
+                params![previous.session_id, "fixture-task", "fixture-marker"],
+            )
+            .unwrap();
+        drop(connection);
+        save_session(temp_dir.path(), &child).unwrap();
+        save_session(temp_dir.path(), &grandchild).unwrap();
+
+        save_rewind_sessions(temp_dir.path(), &previous, &forked).unwrap();
+
+        let previous_after = load_session(temp_dir.path(), &previous.session_id)
+            .unwrap()
+            .unwrap();
+        let replacement =
+            resolve_current_session_id(temp_dir.path(), &previous.session_id).unwrap();
+        let forked_after = load_session(temp_dir.path(), &forked.session_id)
+            .unwrap()
+            .unwrap();
+        let child_after = load_session(temp_dir.path(), &child.session_id)
+            .unwrap()
+            .unwrap();
+        let grandchild_after = load_session(temp_dir.path(), &grandchild.session_id)
+            .unwrap()
+            .unwrap();
+        let connection = open_connection(temp_dir.path()).unwrap();
+        let copied_state = connection
+            .query_row(
+                "SELECT is_today, primary_task_id, watch_web_user_marker
+                 FROM watch_web_session_state WHERE session_id = ?1",
+                [&forked.session_id],
+                |row| {
+                    Ok((
+                        row.get::<_, bool>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            (
+                previous_after.status,
+                replacement,
+                forked_after.session_id,
+                forked_after.ancestor_session_ids,
+                child_after.ancestor_session_ids,
+                grandchild_after.ancestor_session_ids,
+                copied_state,
+            ),
+            (
+                crate::commands::agent::types::SessionStatus::Ended,
+                "fixture-fork".to_string(),
+                "fixture-fork".to_string(),
+                vec!["fixture-parent".to_string()],
+                vec!["fixture-parent".to_string(), "fixture-fork".to_string()],
+                vec![
+                    "fixture-parent".to_string(),
+                    "fixture-fork".to_string(),
+                    "fixture-child".to_string(),
+                ],
+                (
+                    true,
+                    Some("fixture-task".to_string()),
+                    Some("fixture-marker".to_string())
+                ),
+            ),
         );
     }
 

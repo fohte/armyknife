@@ -117,7 +117,13 @@ export type SessionLinkTarget = Pick<Session, 'id' | 'repo'> & {
 }
 
 export type ChatItem =
-  | { type: 'user'; text: string; from?: string; timestamp?: string }
+  | {
+      type: 'user'
+      text: string
+      rewindId?: string
+      from?: string
+      timestamp?: string
+    }
   | {
       type: 'queued_user'
       content: UserContentPart[]
@@ -127,6 +133,7 @@ export type ChatItem =
   | {
       type: 'user_with_content'
       content: UserContentPart[]
+      rewindId?: string
       from?: string
       timestamp?: string
     }
@@ -151,6 +158,17 @@ export type ChatItem =
       kind: 'armyknife' | 'compact_boundary' | 'system' | 'hook'
       text: string
       failed: boolean
+      timestamp?: string
+    }
+  | {
+      type: 'file_attachment'
+      files: {
+        name: string
+        source: string
+        isImage: boolean
+        available: boolean
+      }[]
+      caption: string | null
       timestamp?: string
     }
   | { type: 'assistant'; text: string }
@@ -282,7 +300,10 @@ export type SessionActions = {
   permission?: { approve: boolean; reject: boolean }
   interrupt: boolean
   openInTerminal: boolean
+  rewind: boolean
 }
+
+export type RewindMode = 'conversation_and_code' | 'conversation' | 'code'
 
 export type OpenInTerminalStatus =
   | { state: 'sending' }
