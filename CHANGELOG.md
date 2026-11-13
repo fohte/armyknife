@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.660](https://github.com/fohte/armyknife/compare/v0.1.659...v0.1.660) (2026-11-13)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** fill mobile drawer height ([#1693](https://github.com/fohte/armyknife/issues/1693)) ([5cdd36e](https://github.com/fohte/armyknife/commit/5cdd36ecf27357a05e8594d89228c0a68b42d51c))
+
 ## [0.1.659](https://github.com/fohte/armyknife/compare/v0.1.658...v0.1.659) (2026-11-13)
 
 
