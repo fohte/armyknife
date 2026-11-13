@@ -16,3 +16,38 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.session-title-heading,
+.session-title-editor {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.session-title-heading > .session-heading-title-row {
+  min-width: 0;
+}
+
+.session-title-edit {
+  flex: 0 0 auto;
+}
+
+.session-title-editor input {
+  width: min(420px, 55vw);
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--aw-border-control);
+  border-radius: var(--aw-radius);
+  background: var(--aw-bg-surface);
+  color: var(--aw-text-primary);
+  font: inherit;
+}
+
+.conversation-pane[data-mobile='true'] .session-title-editor {
+  flex: 1;
+}
+
+.conversation-pane[data-mobile='true'] .session-title-editor input {
+  width: 100%;
+}

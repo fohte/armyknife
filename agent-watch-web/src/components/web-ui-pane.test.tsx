@@ -2,7 +2,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
-import { CritPane } from '#components/crit-pane'
+import { WebUiPane } from '#components/web-ui-pane'
 
 let container: HTMLDivElement
 let root: Root | null = null
@@ -33,7 +33,8 @@ it('toggles the review between its column and fullscreen layouts', () => {
   root = createRoot(container)
   act(() => {
     root?.render(
-      <CritPane
+      <WebUiPane
+        name="Editor"
         url="http://127.0.0.1:5000/review/sample"
         onClose={() => undefined}
       />,
@@ -43,7 +44,7 @@ it('toggles the review between its column and fullscreen layouts', () => {
   act(() => {
     container
       .querySelector<HTMLButtonElement>(
-        'button[aria-label="Show crit fullscreen"]',
+        'button[aria-label="Show Editor fullscreen"]',
       )
       ?.click()
   })
@@ -51,7 +52,7 @@ it('toggles the review between its column and fullscreen layouts', () => {
     className: container.querySelector('aside')?.className,
     exitLabel: container
       .querySelector<HTMLButtonElement>(
-        'button[aria-label="Exit crit fullscreen"]',
+        'button[aria-label="Exit Editor fullscreen"]',
       )
       ?.getAttribute('aria-pressed'),
   }
@@ -59,7 +60,7 @@ it('toggles the review between its column and fullscreen layouts', () => {
   act(() => {
     container
       .querySelector<HTMLButtonElement>(
-        'button[aria-label="Exit crit fullscreen"]',
+        'button[aria-label="Exit Editor fullscreen"]',
       )
       ?.click()
   })
@@ -69,17 +70,17 @@ it('toggles the review between its column and fullscreen layouts', () => {
     restoredClassName: container.querySelector('aside')?.className,
     restoredLabel: container
       .querySelector<HTMLButtonElement>(
-        'button[aria-label="Show crit fullscreen"]',
+        'button[aria-label="Show Editor fullscreen"]',
       )
       ?.getAttribute('aria-pressed'),
   })
 
   expect(snapshot()).toEqual({
     fullscreenState: {
-      className: 'crit-pane is-fullscreen',
+      className: 'web-ui-pane is-fullscreen',
       exitLabel: 'true',
     },
-    restoredClassName: 'crit-pane',
+    restoredClassName: 'web-ui-pane',
     restoredLabel: 'false',
   })
 })
@@ -88,7 +89,8 @@ it('opens the iframe and external link through the crit relay', () => {
   root = createRoot(container)
   act(() => {
     root?.render(
-      <CritPane
+      <WebUiPane
+        name="crit"
         url="http://127.0.0.1:48761/review/sample"
         onClose={() => undefined}
       />,
@@ -96,7 +98,7 @@ it('opens the iframe and external link through the crit relay', () => {
   })
 
   expect(relayTargets()).toEqual({
-    iframe: `${window.location.protocol}//localhost:4318/_crit/48761/review/sample`,
-    link: `${window.location.protocol}//localhost:4318/_crit/48761/review/sample`,
+    iframe: `${window.location.protocol}//localhost:4318/_web-ui/48761/review/sample`,
+    link: `${window.location.protocol}//localhost:4318/_web-ui/48761/review/sample`,
   })
 })

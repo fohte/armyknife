@@ -1,10 +1,14 @@
 import '#components/markdown-message.css'
 
-import { memo, type ReactNode } from 'react'
+import { createContext, memo, type ReactNode, useContext } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 import { SessionLink } from '#components/session-link'
+import {
+  SyntaxCodeBlock,
+  type SyntaxCodeBlockLink,
+} from '#components/syntax-code-block'
 import type { SessionLinkTarget } from '#types'
 
 type MarkdownNode = {
@@ -30,6 +34,8 @@ type SessionLinkTextPart = {
   session: SessionLinkTarget | null
   text: string
 }
+
+const MarkdownCodeBlockContext = createContext(false)
 
 function remarkHtmlBreaks() {
   return (tree: MarkdownRoot) => {
@@ -221,28 +227,68 @@ function createMarkdownComponents(
     return null
   }
 
-  const renderCode: NonNullable<Components['code']> = ({ node, ...props }) => {
+  const MarkdownCodeRenderer: NonNullable<Components['code']> = ({
+    node,
+    ...props
+  }) => {
+    const isCodeBlock = useContext(MarkdownCodeBlockContext)
     if (node?.tagName !== 'code') return props.children
     const { className, children, ...codeProps } = props
     const text = typeof children === 'string' ? children : null
+    const language = className?.match(/(?:^|\s)language-([\w-]+)/)?.[1]
     const parts = text === null ? [] : splitSessionIds(text, sessionsById)
+    const codeChildren =
+      parts.length === 0
+        ? children
+        : parts.map((part, index) =>
+            part.session === null ? (
+              part.text
+            ) : (
+              <SessionLink
+                key={String(index)}
+                onSelectSession={onSelectSession}
+                session={part.session}
+              >
+                {part.text}
+              </SessionLink>
+            ),
+          )
+    let offset = 0
+    const links = parts.flatMap((part, index): SyntaxCodeBlockLink[] => {
+      const start = offset
+      offset += part.text.length
+      if (part.session === null) return []
+      const session = part.session
+      return [
+        {
+          start,
+          end: offset,
+          render: (children) => (
+            <SessionLink
+              key={String(index)}
+              onSelectSession={onSelectSession}
+              session={session}
+            >
+              {children}
+            </SessionLink>
+          ),
+        },
+      ]
+    })
+    if (isCodeBlock && text !== null) {
+      return (
+        <SyntaxCodeBlock
+          code={text}
+          language={language ?? 'text'}
+          links={links}
+        >
+          <>{codeChildren}</>
+        </SyntaxCodeBlock>
+      )
+    }
     return (
       <code className={className} {...codeProps}>
-        {parts.length === 0
-          ? children
-          : parts.map((part, index) =>
-              part.session === null ? (
-                part.text
-              ) : (
-                <SessionLink
-                  key={String(index)}
-                  onSelectSession={onSelectSession}
-                  session={part.session}
-                >
-                  {part.text}
-                </SessionLink>
-              ),
-            )}
+        {codeChildren}
       </code>
     )
   }
@@ -259,7 +305,12 @@ function createMarkdownComponents(
         )
       )
     },
-    code: renderCode,
+    code: MarkdownCodeRenderer,
+    pre: ({ children }) => (
+      <MarkdownCodeBlockContext.Provider value={true}>
+        {children}
+      </MarkdownCodeBlockContext.Provider>
+    ),
   }
 
   return {

@@ -14,7 +14,10 @@ use super::super::parser::{
     codex_tool_summary_record, operation_target, record_timestamp,
 };
 use super::decision_position::{DecisionTimeline, insert_time_placed_decisions};
-use crate::commands::agent::store::{AgentDecision, AgentTodo};
+use super::time_placed::TimePlacedTimeline;
+use crate::commands::agent::store::{
+    AgentDecision, AgentTodo, PermissionRequestData, WatchWebPeerOutMessage,
+};
 use crate::commands::agent::watch_web::messages::EventKind;
 
 #[cfg(test)]
@@ -129,14 +132,43 @@ impl CodexParserState {
         self.render_with_decisions_and_todos(parent, decisions, &[])
     }
 
-    pub(in crate::commands::agent::watch_web::messages) fn render_with_decisions_and_todos(
+    #[cfg(test)]
+    fn render_with_decisions_and_todos(
         &self,
         parent: Option<&ParentSession>,
         decisions: &[AgentDecision],
         todos: &[AgentTodo],
     ) -> io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
+        self.render_with_decisions_todos_and_peer_out_messages(parent, decisions, todos, &[])
+    }
+
+    #[cfg(test)]
+    pub(in crate::commands::agent::watch_web::messages) fn render_with_decisions_todos_and_peer_out_messages(
+        &self,
+        parent: Option<&ParentSession>,
+        decisions: &[AgentDecision],
+        todos: &[AgentTodo],
+        peer_out_messages: &[WatchWebPeerOutMessage],
+    ) -> io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
+        self.render_with_permission_request(parent, decisions, todos, peer_out_messages, None)
+    }
+
+    pub(in crate::commands::agent::watch_web::messages) fn render_with_permission_request(
+        &self,
+        parent: Option<&ParentSession>,
+        decisions: &[AgentDecision],
+        todos: &[AgentTodo],
+        peer_out_messages: &[WatchWebPeerOutMessage],
+        pending_permission: Option<&PermissionRequestData>,
+    ) -> io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
         if self.lines.pending().is_empty() {
-            return self.render_events(parent, decisions, todos);
+            return self.render_events(
+                parent,
+                decisions,
+                todos,
+                peer_out_messages,
+                pending_permission,
+            );
         }
         let mut parser = self.clone();
         let mut lines = std::mem::take(&mut parser.lines);
@@ -152,7 +184,13 @@ impl CodexParserState {
         if let Some(error) = parser_error {
             return Err(error);
         }
-        parser.render_events(parent, decisions, todos)
+        parser.render_events(
+            parent,
+            decisions,
+            todos,
+            peer_out_messages,
+            pending_permission,
+        )
     }
 
     fn process_line(&mut self, line: &[u8]) -> io::Result<()> {
@@ -318,11 +356,14 @@ impl CodexParserState {
         parent: Option<&ParentSession>,
         decisions: &[AgentDecision],
         todos: &[AgentTodo],
+        peer_out_messages: &[WatchWebPeerOutMessage],
+        pending_permission: Option<&PermissionRequestData>,
     ) -> io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
         let mut items = Vec::new();
         let mut tools = ToolSummary::default();
         let mut decision_timeline = DecisionTimeline::new(decisions);
         let mut todo_timeline = TodoTimeline::new(todos);
+        let mut peer_out_timeline = TimePlacedTimeline::new(peer_out_messages);
         for event in &self.events {
             insert_time_placed_decisions(
                 event.timestamp,
@@ -331,6 +372,7 @@ impl CodexParserState {
                 &mut items,
             );
             todo_timeline.insert_before_record(event.timestamp, &mut items, &mut tools);
+            peer_out_timeline.insert_before_record(event.timestamp, &mut items, &mut tools);
             for effect in &event.effects {
                 match effect {
                     CodexEffect::AssistantMessage { text, timestamp } => {
@@ -359,14 +401,49 @@ impl CodexParserState {
                 }
             }
         }
-        let active_tool = self
-            .pending_tool_calls
-            .last()
-            .map(|pending| ChatItem::ToolInProgress {
-                tool: pending.name.clone(),
-                target: operation_target(&pending.name, pending.input.as_ref()),
+        let pending_tool_call = pending_permission.and_then(|permission| {
+            permission.tool_name.as_deref().and_then(|name| {
+                self.pending_tool_calls.iter().rev().find(|pending| {
+                    pending.name == name && pending.input.as_ref() == Some(&permission.tool_input)
+                })
+            })
+        });
+        let active_tool = pending_tool_call
+            .map(|pending| {
+                let command = super::super::permission_request_command(
+                    Some(&pending.name),
+                    pending.input.as_ref(),
+                );
+                let waiting_message = operation_target(&pending.name, pending.input.as_ref())
+                    .map(|target| format!("{}: {target}", pending.name))
+                    .unwrap_or_else(|| pending.name.clone());
+                let description = if command.is_some() {
+                    String::new()
+                } else {
+                    super::super::permission_request_description(
+                        Some(&pending.name),
+                        pending.input.as_ref(),
+                        command.as_deref(),
+                        &waiting_message,
+                    )
+                };
+                ChatItem::Permission {
+                    request_id: None,
+                    tool: pending.name.clone(),
+                    description,
+                    command,
+                }
+            })
+            .or_else(|| {
+                self.pending_tool_calls
+                    .last()
+                    .map(|pending| ChatItem::ToolInProgress {
+                        tool: pending.name.clone(),
+                        target: operation_target(&pending.name, pending.input.as_ref()),
+                    })
             });
         tools.flush_into(&mut items);
+        peer_out_timeline.append_remaining(&mut items);
         if let Some(active_tool) = active_tool {
             items.push(active_tool);
         }
@@ -452,10 +529,39 @@ mod tests {
     use serde_json::json;
 
     use super::{CodexParserState, parse, parse_with_skills};
-    use crate::commands::agent::store::AgentTodo;
+    use crate::commands::agent::store::{AgentTodo, PermissionRequestData, TodoResolution};
     use crate::commands::agent::watch_web::messages::{
         ChatItem, EventKind, ParentSession, PeerDirection, SkillSuggestion, UserContentPart,
     };
+
+    #[test]
+    fn permission_request_matches_codex_call_name_and_json_input() {
+        let transcript = concat!(
+            r#"{"type":"response_item","payload":{"type":"function_call","call_id":"call-one","name":"Bash","arguments":"{\"command\":\"run fixture\"}"}}"#,
+            "\n",
+            r#"{"type":"response_item","payload":{"type":"function_call","call_id":"call-two","name":"Bash","arguments":"{\"command\":\"different fixture\"}"}}"#,
+        );
+        let mut parser = CodexParserState::new();
+        parser.append(Cursor::new(transcript)).unwrap();
+        let permission = PermissionRequestData {
+            tool_name: Some("Bash".to_string()),
+            tool_input: json!({"command": "run fixture"}),
+            pending: true,
+        };
+
+        assert_eq!(
+            parser
+                .render_with_permission_request(None, &[], &[], &[], Some(&permission))
+                .unwrap()
+                .0,
+            vec![ChatItem::Permission {
+                request_id: None,
+                tool: "Bash".to_string(),
+                description: String::new(),
+                command: Some("run fixture".to_string()),
+            }],
+        );
+    }
 
     #[fixture]
     fn todo() -> AgentTodo {
@@ -472,6 +578,7 @@ mod tests {
                     .unwrap()
                     .with_timezone(&Utc),
             ),
+            resolution: Some(TodoResolution::Completed),
             comment: Some("The sample is ready.".to_string()),
         }
     }
@@ -653,6 +760,7 @@ mod tests {
                             title: "Review the fictional report".to_string(),
                             detail: None,
                             completed: true,
+                            resolution: Some(TodoResolution::Completed),
                             comment: Some("The sample is ready.".to_string()),
                         },
                         ChatItem::User {
@@ -698,6 +806,7 @@ mod tests {
                         direction: PeerDirection::From,
                         session_id: "fixture-parent-id".to_string(),
                         session_title: Some("First parent title".to_string()),
+                        failed: false,
                         content: vec![UserContentPart::Text {
                             text: "Please keep the summary brief.".to_string(),
                         }],
@@ -710,6 +819,7 @@ mod tests {
                         direction: PeerDirection::From,
                         session_id: "fixture-parent-id".to_string(),
                         session_title: Some("Updated parent title".to_string()),
+                        failed: false,
                         content: vec![UserContentPart::Text {
                             text: "Please keep the summary brief.".to_string(),
                         }],
@@ -765,6 +875,7 @@ mod tests {
                         title: "Review the fictional report".to_string(),
                         detail: None,
                         completed: true,
+                        resolution: Some(TodoResolution::Completed),
                         comment: Some("The sample is ready.".to_string()),
                     },
                     ChatItem::User {
@@ -785,6 +896,7 @@ mod tests {
             {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"after"}}}
         "#};
         todo.completed_at = None;
+        todo.resolution = None;
         todo.comment = None;
         let mut earlier_todo = todo.clone();
         earlier_todo.seq = 2;
@@ -810,6 +922,7 @@ mod tests {
                         title: "Review the fictional checklist".to_string(),
                         detail: None,
                         completed: false,
+                        resolution: None,
                         comment: None,
                     },
                     ChatItem::Todo {
@@ -817,6 +930,7 @@ mod tests {
                         title: "Review the fictional report".to_string(),
                         detail: None,
                         completed: false,
+                        resolution: None,
                         comment: None,
                     },
                 ],
@@ -836,6 +950,23 @@ mod tests {
             vec![ChatItem::Event {
                 kind: EventKind::Armyknife,
                 text: "Fixture action text.".to_string(),
+                failed: false,
+                timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
+            }],
+        );
+    }
+
+    #[test]
+    fn renders_marked_todo_rejections_as_armyknife_events() {
+        let transcript = indoc! {r#"
+            {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<armyknife-todo-rejected>Fixture rejection text.</armyknife-todo-rejected>"}}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None).unwrap(),
+            vec![ChatItem::Event {
+                kind: EventKind::Armyknife,
+                text: "Fixture rejection text.".to_string(),
                 failed: false,
                 timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
             }],
@@ -881,6 +1012,7 @@ mod tests {
                     direction: PeerDirection::From,
                     session_id: "fixture-parent-id".to_string(),
                     session_title: Some("fixture-parent-title".to_string()),
+                    failed: false,
                     timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "Please keep the summary brief.".to_string(),

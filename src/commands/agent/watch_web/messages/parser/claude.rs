@@ -1,4 +1,4 @@
-use std::io::{BufRead, Seek};
+use std::io::{self, BufRead, Seek};
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
@@ -23,8 +23,33 @@ use super::super::ParentSession;
 use super::super::SkillSuggestion;
 use super::super::proposals::ProposalItem;
 use crate::commands::agent::store::{
-    AgentDecision, AgentTodo, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
+    AgentDecision, AgentTodo, PermissionRequestData, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
 };
+
+pub(in crate::commands::agent::watch_web::messages) fn matching_pending_tool_use_exists(
+    reader: impl BufRead,
+    permission: &PermissionRequestData,
+) -> io::Result<bool> {
+    if permission.tool_name.is_none() {
+        return Ok(false);
+    }
+    let mut state = state::ClaudeParserState::new();
+    for line in reader.lines() {
+        let line = line?;
+        let Ok(record) = serde_json::from_str(&line) else {
+            continue;
+        };
+        state.process_record(record, Utc::now());
+        // Permission matching needs unresolved tool uses, not the render timelines.
+        state.events.clear();
+        state.queue_events.clear();
+    }
+    Ok(state
+        .tool_uses
+        .iter()
+        .rev()
+        .any(|tool_use| tool_use.matches_permission_request(permission)))
+}
 
 pub(in crate::commands::agent::watch_web::messages) type ParsedTranscript = (
     Vec<ChatItem>,
@@ -36,7 +61,8 @@ pub(in crate::commands::agent::watch_web::messages) type ParsedTranscript = (
 #[derive(Clone, Copy)]
 pub(in crate::commands::agent::watch_web::messages) struct ParserAdditions<'a> {
     pub(in crate::commands::agent::watch_web::messages) parent: Option<&'a ParentSession>,
-    pub(in crate::commands::agent::watch_web::messages) pending_tool: Option<&'a str>,
+    pub(in crate::commands::agent::watch_web::messages) pending_tool:
+        Option<&'a PermissionRequestData>,
     pub(in crate::commands::agent::watch_web::messages) user_marker: Option<&'a str>,
     pub(in crate::commands::agent::watch_web::messages) decisions: &'a [AgentDecision],
     pub(in crate::commands::agent::watch_web::messages) queued_prompts:
@@ -51,7 +77,7 @@ pub(in crate::commands::agent::watch_web::messages) struct ParserAdditions<'a> {
 fn parse(
     reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
-    pending_tool: Option<&str>,
+    pending_tool: Option<&PermissionRequestData>,
     user_marker: Option<&str>,
 ) -> std::io::Result<Vec<ChatItem>> {
     let image_directory = super::super::super::image_attachments::storage_directory().ok();
@@ -68,7 +94,7 @@ fn parse(
 fn parse_with_image_directory(
     reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
-    pending_tool: Option<&str>,
+    pending_tool: Option<&PermissionRequestData>,
     user_marker: Option<&str>,
     image_directory: Option<&Path>,
 ) -> std::io::Result<Vec<ChatItem>> {
@@ -94,7 +120,7 @@ fn parse_with_image_directory(
 fn parse_with_decisions_and_queued_prompts(
     reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
-    pending_tool: Option<&str>,
+    pending_tool: Option<&PermissionRequestData>,
     user_marker: Option<&str>,
     now: DateTime<Utc>,
     decisions: &[AgentDecision],
@@ -120,7 +146,7 @@ fn parse_with_decisions_and_queued_prompts(
 fn parse_with_background_tasks_and_peer_out_messages(
     reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
-    pending_tool: Option<&str>,
+    pending_tool: Option<&PermissionRequestData>,
     user_marker: Option<&str>,
     now: DateTime<Utc>,
     peer_out_messages: &[WatchWebPeerOutMessage],
@@ -146,7 +172,7 @@ fn parse_with_background_tasks_and_peer_out_messages(
 fn parse_with_queued_prompts_and_proposals(
     reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
-    pending_tool: Option<&str>,
+    pending_tool: Option<&PermissionRequestData>,
     user_marker: Option<&str>,
     now: DateTime<Utc>,
     queued_prompts: &[WatchWebQueuedPrompt],
@@ -216,7 +242,9 @@ mod tests {
         parse_with_queued_prompts_and_peer_out_messages_and_proposals_and_skills,
         parse_with_queued_prompts_and_proposals,
     };
-    use crate::commands::agent::store::{AgentDecision, AgentTodo};
+    use crate::commands::agent::store::{
+        AgentDecision, AgentTodo, PermissionRequestData, TodoResolution,
+    };
     use crate::commands::agent::watch_web::messages::{
         ChatItem, ParentSession, PeerDirection, ProposalOption, QuestionChoice, SkillSuggestion,
         ToolOperation, UserContentPart,
@@ -240,6 +268,7 @@ mod tests {
             detail: Some("Open the sample summary.".to_string()),
             created_at,
             completed_at: is_completed.then(|| created_at + chrono::Duration::minutes(1)),
+            resolution: is_completed.then_some(TodoResolution::Completed),
             comment: is_completed.then(|| "The sample is ready.".to_string()),
         };
 
@@ -265,6 +294,7 @@ mod tests {
             title: "Review the sample report".to_string(),
             detail: Some("Open the sample summary.".to_string()),
             completed: is_completed,
+            resolution: is_completed.then_some(TodoResolution::Completed),
             comment: is_completed.then(|| "The sample is ready.".to_string()),
         };
         let expected = if is_completed {
@@ -815,6 +845,7 @@ mod tests {
                     direction: PeerDirection::From,
                     session_id: "fixture-peer".to_string(),
                     session_title: None,
+                    failed: false,
                     content: vec![UserContentPart::Text {
                         text: "Peer request.".to_string(),
                     }],
@@ -936,20 +967,22 @@ mod tests {
     #[rstest]
     #[case::permission_requested(
         "a agent decision add 'Decision 1'",
-        Some("Bash(a agent decision add 'Decision 1')"),
+        Some(serde_json::json!({"command": "a agent decision add 'Decision 1'"})),
         ChatItem::Permission {
             request_id: None,
             tool: "Bash".to_string(),
-            description: "Bash: a agent decision add 'Decision 1'".to_string(),
+            description: String::new(),
+            command: Some("a agent decision add 'Decision 1'".to_string()),
         }
     )]
     #[case::compound_bash_permission_requested(
         "cd ./fixture && a agent decision add 'Decision 1'",
-        Some("Bash(cd ./fixture && a agent decision add 'Decision 1')"),
+        Some(serde_json::json!({"command": "cd ./fixture && a agent decision add 'Decision 1'"})),
         ChatItem::Permission {
             request_id: None,
             tool: "Bash".to_string(),
-            description: "Bash: cd ./fixture && a agent decision add 'Decision 1'".to_string(),
+            description: String::new(),
+            command: Some("cd ./fixture && a agent decision add 'Decision 1'".to_string()),
         }
     )]
     #[case::still_running(
@@ -962,7 +995,7 @@ mod tests {
     )]
     fn pending_decision_add_keeps_normal_bash_status(
         #[case] decision_command: &str,
-        #[case] pending_tool: Option<&str>,
+        #[case] pending_tool_input: Option<serde_json::Value>,
         #[case] pending_item: ChatItem,
     ) {
         let transcript = [
@@ -998,8 +1031,13 @@ mod tests {
         ]
         .join("\n");
 
+        let pending_tool = pending_tool_input.map(|tool_input| PermissionRequestData {
+            tool_name: Some("Bash".to_string()),
+            tool_input,
+            pending: true,
+        });
         assert_eq!(
-            parse(Cursor::new(transcript), None, pending_tool, None).unwrap(),
+            parse(Cursor::new(transcript), None, pending_tool.as_ref(), None).unwrap(),
             vec![
                 ChatItem::ToolSummary {
                     summary: "Bash ×1".to_string(),
@@ -1201,6 +1239,7 @@ mod tests {
                 direction: PeerDirection::From,
                 session_id: "fixture-peer-session".to_string(),
                 session_title: None,
+                failed: false,
                 timestamp: None,
                 content: vec![
                     UserContentPart::Text {
@@ -1216,7 +1255,7 @@ mod tests {
     }
 
     #[test]
-    fn classifies_peer_messages_events_and_outgoing_notifications() {
+    fn renders_peer_notify_commands_as_regular_tool_actions() {
         let transcript = indoc! {r#"
             {"attachment":{"type":"queued_command","prompt":"<peer-message>\n- From session_id: fixture-remote-session\n- Sender engine: fixture-engine\n\nReview the fictional output.\n</peer-message>"}}
             {"type":"user","isMeta":true,"message":{"content":"<delegation-update>Worker completed the fictional check.</delegation-update>"}}
@@ -1225,7 +1264,7 @@ mod tests {
             {"type":"user","message":{"content":"<future-notice>Unknown wrapped notice.</future-notice>"}}
             {"type":"user","message":{"content":"<system-reminder>Internal-only context.</system-reminder>"}}
             {"type":"system","subtype":"compact_boundary"}
-            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-peer-notify-call","name":"Bash","input":{"command":"a agent peer notify --message 'Please verify the fictional result.' $sid"}}]}}
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-peer-notify-call","name":"Bash","input":{"command":"cargo check --example sample && a agent peer notify --message 'Please verify the fictional result.' $sid"}}]}}
             {"type":"user","sourceToolAssistantUUID":"fixture-assistant-call","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-peer-notify-call","content":"Delivered to session fixture-resolved-session."}]}}
         "#};
         let parent = ParentSession {
@@ -1240,6 +1279,7 @@ mod tests {
                     direction: PeerDirection::From,
                     session_id: "fixture-remote-session".to_string(),
                     session_title: None,
+                    failed: false,
                     timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "Review the fictional output.".to_string(),
@@ -1275,13 +1315,12 @@ mod tests {
                     timestamp: None,
                     failed: false,
                 },
-                ChatItem::Peer {
-                    direction: PeerDirection::To,
-                    session_id: "fixture-resolved-session".to_string(),
-                    session_title: None,
-                    timestamp: None,
-                    content: vec![UserContentPart::Text {
-                        text: "Please verify the fictional result.".to_string(),
+                ChatItem::ToolSummary {
+                    summary: "Bash ×1".to_string(),
+                    operations: vec![ToolOperation {
+                        tool: "Bash".to_string(),
+                        target: Some("cargo check --example sample && a agent peer notify --message 'Please verify the fictional result.' $sid".to_string()),
+                        failed: false,
                     }],
                 },
             ]
@@ -1324,21 +1363,9 @@ mod tests {
     }
 
     #[rstest]
-    #[case::tool_error(
-        true,
-        "The fictional target was unavailable.\nPlease retry later.",
-        "The fictional target was unavailable. Please retry later."
-    )]
-    #[case::saved_for_retry(
-        false,
-        "Failed to deliver to session fixture-parent-session: synthetic transport error. Saved the message; a agent sweep retries it for 24 hours.",
-        "Failed to deliver to session fixture-parent-session: synthetic transport error. Saved the message; a agent sweep retries it for 24 hours."
-    )]
-    fn shows_failed_parent_peer_notifications_as_failed_events(
-        #[case] is_error: bool,
-        #[case] result_text: &str,
-        #[case] expected_text: &str,
-    ) {
+    #[case::failure_word("Delivery failed for the fictional target.")]
+    #[case::zero_failed("0 failed")]
+    fn peer_notify_output_text_does_not_change_tool_failure_status(#[case] result_text: &str) {
         let tool_call = serde_json::to_string(&json!({
             "type": "assistant",
             "message": {"content": [{
@@ -1355,24 +1382,24 @@ mod tests {
             "message": {"content": [{
                 "type": "tool_result",
                 "tool_use_id": "fixture-peer-notify-call",
-                "is_error": is_error,
+                "is_error": false,
                 "content": result_text,
             }]},
         }))
         .unwrap();
         let transcript = format!("{tool_call}\n{tool_result}");
-        let parent = ParentSession {
-            session_id: "fixture-parent-session".to_string(),
-            title: "Fixture parent session".to_string(),
-        };
-
         assert_eq!(
-            parse(Cursor::new(transcript), Some(&parent), None, None).unwrap(),
-            vec![ChatItem::Event {
-                kind: super::super::super::EventKind::Armyknife,
-                text: expected_text.to_string(),
-                timestamp: None,
-                failed: true,
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
+            vec![ChatItem::ToolSummary {
+                summary: "Bash ×1".to_string(),
+                operations: vec![ToolOperation {
+                    tool: "Bash".to_string(),
+                    target: Some(
+                        "a agent peer notify --parent -m 'Please verify the fictional result.'"
+                            .to_string()
+                    ),
+                    failed: false,
+                }],
             }],
         );
     }
@@ -1508,6 +1535,7 @@ mod tests {
                 direction: PeerDirection::From,
                 session_id: "fixture-parent-id".to_string(),
                 session_title: Some("fixture-parent-title".to_string()),
+                failed: false,
                 timestamp: None,
                 content: vec![UserContentPart::Text {
                     text: "Please group these fictional events.".to_string(),
@@ -1620,6 +1648,7 @@ mod tests {
                     direction: PeerDirection::From,
                     session_id: "fixture-parent-id".to_string(),
                     session_title: Some("fixture-parent-title".to_string()),
+                    failed: false,
                     timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "Group the events by source.".to_string(),
@@ -1629,6 +1658,7 @@ mod tests {
                     direction: PeerDirection::From,
                     session_id: "fixture-other-id".to_string(),
                     session_title: None,
+                    failed: false,
                     timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "This came from another child.".to_string(),
@@ -1780,7 +1810,11 @@ mod tests {
             parse(
                 Cursor::new(transcript),
                 None,
-                Some("Bash(echo awaiting approval)"),
+                Some(&PermissionRequestData {
+                    tool_name: Some("Bash".to_string()),
+                    tool_input: serde_json::json!({"command": "echo awaiting approval"}),
+                    pending: true,
+                }),
                 None,
             )
             .unwrap(),
@@ -1792,7 +1826,8 @@ mod tests {
                 ChatItem::Permission {
                     request_id: None,
                     tool: "Bash".to_string(),
-                    description: "Bash: echo awaiting approval".to_string(),
+                    description: String::new(),
+                    command: Some("echo awaiting approval".to_string()),
                 },
             ]
         );
@@ -1921,6 +1956,7 @@ mod tests {
                     direction: PeerDirection::From,
                     session_id: "fixture-parent-id".to_string(),
                     session_title: Some("fixture-parent-title".to_string()),
+                    failed: false,
                     timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "Synthetic peer request contains </peer-message> inside.".to_string(),
@@ -1930,6 +1966,7 @@ mod tests {
                     direction: PeerDirection::From,
                     session_id: "fixture-other-id".to_string(),
                     session_title: None,
+                    failed: false,
                     timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "Synthetic unrelated request.".to_string(),
@@ -2254,6 +2291,7 @@ mod tests {
                     direction: PeerDirection::From,
                     session_id: "unknown".to_string(),
                     session_title: None,
+                    failed: false,
                     timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "⟦armyknife-user:fixture-marker-amber⟧\nUnknown queued request."
@@ -2264,6 +2302,7 @@ mod tests {
                     direction: PeerDirection::From,
                     session_id: "unknown".to_string(),
                     session_title: None,
+                    failed: false,
                     timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "Missing queued marker request.".to_string(),
@@ -2283,6 +2322,7 @@ mod tests {
                     direction: PeerDirection::From,
                     session_id: "unknown".to_string(),
                     session_title: None,
+                    failed: false,
                     timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "⟦armyknife-user:fixture-marker-amber⟧\nUnknown direct request."
@@ -2293,6 +2333,7 @@ mod tests {
                     direction: PeerDirection::From,
                     session_id: "unknown".to_string(),
                     session_title: None,
+                    failed: false,
                     timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "Missing marker request.".to_string(),
@@ -2302,6 +2343,7 @@ mod tests {
                     direction: PeerDirection::From,
                     session_id: "fixture-parent-id".to_string(),
                     session_title: Some("Fixture parent".to_string()),
+                    failed: false,
                     timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "⟦armyknife-user:fixture-marker-amber⟧\nDirect peer request."
@@ -2312,6 +2354,7 @@ mod tests {
                     direction: PeerDirection::From,
                     session_id: "fixture-parent-id".to_string(),
                     session_title: Some("Fixture parent".to_string()),
+                    failed: false,
                     timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "⟦armyknife-user:fixture-marker-amber⟧\nQueued peer request."

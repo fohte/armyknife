@@ -5,7 +5,6 @@ import {
   type ReviewDocumentResponse,
 } from '#components/conversation-pane-response'
 import { requestAction, requestJson } from '#components/conversation-requests'
-import { CritPane } from '#components/crit-pane'
 import type { Decision } from '#components/decision-card'
 import { DecisionsPanel } from '#components/decisions-panel'
 import { PullRequestListPanel } from '#components/pull-request-list-panel'
@@ -14,6 +13,7 @@ import { RunningTasksPanel } from '#components/running-tasks-panel'
 import type { SessionStatusPanelTab } from '#components/session-status-panel'
 import { SessionTreePanel } from '#components/session-tree-panel'
 import { useSessionPullRequests } from '#components/use-session-pull-requests'
+import { WebUiPane } from '#components/web-ui-pane'
 import {
   needsActionDescendantCount,
   type SessionTreeViewState,
@@ -133,13 +133,19 @@ export function useConversationStatusPanel({
     decisions.find((decision) => decision.seq === selectedDecisionSeq) ??
     decisions.find((decision) => decision.review === null) ??
     decisions[0]
-  const critUrl =
+  const legacyCritUrl =
     session.kind === 'Review' &&
     session.category === 'needs_action' &&
     session.critUrl != null &&
     session.critUrl !== ''
       ? session.critUrl
       : null
+  const webUis =
+    session.webUis ??
+    (legacyCritUrl === null ? [] : [{ name: 'crit', url: legacyCritUrl }])
+  const webUiTabIds = webUis.map((webUi) =>
+    webUi.name === 'crit' ? 'crit' : `web-ui-${encodeURIComponent(webUi.url)}`,
+  )
   const treeCount =
     sessionTree === null
       ? 0
@@ -155,10 +161,10 @@ export function useConversationStatusPanel({
     ...(pullRequestListAvailable ? ['pull-requests'] : []),
     ...(reviewDocumentId == null ? [] : ['review-document']),
     ...(decisionCount === 0 ? [] : ['decisions']),
-    ...(critUrl === null ? [] : ['crit']),
+    ...webUiTabIds,
   ]
   const defaultPanelTabId =
-    ['crit', 'review-document', 'running'].find((id) =>
+    [...[...webUiTabIds].reverse(), 'review-document', 'running'].find((id) =>
       availableTabIds.includes(id),
     ) ??
     availableTabIds[0] ??
@@ -415,19 +421,18 @@ export function useConversationStatusPanel({
           },
         ]
       : []),
-    ...(availableTabIds.includes('crit')
-      ? [
-          {
-            id: 'crit',
-            label: 'crit',
-            count: 1,
-            content:
-              critUrl === null ? null : (
-                <CritPane url={critUrl} onClose={onCloseStatusPanel} />
-              ),
-          },
-        ]
-      : []),
+    ...webUis.map((webUi, index) => ({
+      id: webUiTabIds[index] ?? `web-ui-${String(index)}`,
+      label: webUi.name,
+      count: 1,
+      content: (
+        <WebUiPane
+          name={webUi.name}
+          url={webUi.url}
+          onClose={onCloseStatusPanel}
+        />
+      ),
+    })),
   ]
   useEffect(() => {
     if (activePanelTabId !== activeTabId) setActivePanelTabId(activeTabId)

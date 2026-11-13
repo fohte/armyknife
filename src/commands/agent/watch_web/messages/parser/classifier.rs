@@ -32,12 +32,6 @@ pub(super) enum EventKind {
     Hook,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PeerOut {
-    pub(super) session_id: String,
-    pub(super) text: String,
-}
-
 pub(super) fn classify_inbound(
     record: &Value,
     text: &str,
@@ -194,128 +188,6 @@ fn peer_transport_body(text: &str) -> &str {
         .strip_prefix("Another peer session sent a message:\n")
         .unwrap_or(text);
     without_peer_transport_notice(body)
-}
-
-pub(super) fn is_peer_notify_tool(name: &str, input: Option<&Value>) -> bool {
-    peer_notify_arguments(name, input).is_some()
-}
-
-pub(super) fn peer_out_from_tool(
-    name: &str,
-    input: Option<&Value>,
-    parent_session_id: Option<&str>,
-    result: Option<&str>,
-) -> Option<PeerOut> {
-    let arguments = peer_notify_arguments(name, input)?;
-    let mut message = None;
-    let mut session_id = None;
-    let mut parent = false;
-    let mut index = 0;
-    while index < arguments.len() {
-        let argument = &arguments[index];
-        if matches!(argument.as_str(), "--message" | "-m") {
-            message = arguments.get(index + 1).cloned();
-            index += 2;
-            continue;
-        }
-        if let Some(value) = argument.strip_prefix("--message=") {
-            message = Some(value.to_owned());
-        } else if argument == "--parent" {
-            parent = true;
-        } else if argument == "--" {
-            session_id = arguments.get(index + 1).cloned();
-            break;
-        } else if !argument.starts_with('-') {
-            session_id = Some(argument.clone());
-        }
-        index += 1;
-    }
-    Some(PeerOut {
-        session_id: result
-            .and_then(peer_notify_result_session_id)
-            .map(str::to_owned)
-            .or_else(|| {
-                if parent {
-                    parent_session_id.map(str::to_owned)
-                } else {
-                    session_id.filter(|id| is_literal_session_id(id))
-                }
-            })
-            .unwrap_or_else(|| "unknown".to_owned()),
-        text: message?,
-    })
-}
-
-fn peer_notify_result_session_id(text: &str) -> Option<&str> {
-    const PREFIXES: [&str; 3] = [
-        "Delivered to session ",
-        "Injected into the running turn of Codex session ",
-        "Started a new turn in idle Codex session ",
-    ];
-
-    text.lines().find_map(|line| {
-        let line = line.trim();
-        PREFIXES.iter().find_map(|prefix| {
-            line.strip_prefix(prefix)
-                .and_then(|value| value.strip_suffix('.'))
-                .filter(|id| is_literal_session_id(id))
-        })
-    })
-}
-
-fn is_literal_session_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
-        })
-}
-
-fn peer_notify_arguments(name: &str, input: Option<&Value>) -> Option<Vec<String>> {
-    agent_command_arguments(name, input, &["a", "agent", "peer", "notify"])
-}
-
-fn agent_command_arguments(
-    name: &str,
-    input: Option<&Value>,
-    command_path: &[&str],
-) -> Option<Vec<String>> {
-    if name != "Bash" {
-        return None;
-    }
-    let command_text = input?
-        .get("command")
-        .and_then(Value::as_str)
-        .or_else(|| input.and_then(Value::as_str))?;
-    let arguments = shlex::split(command_text)?;
-    let command_start = arguments.windows(command_path.len()).position(|parts| {
-        parts
-            .iter()
-            .zip(command_path)
-            .all(|(part, expected)| part == expected)
-    })?;
-    Some(
-        arguments
-            .into_iter()
-            .skip(command_start + command_path.len())
-            .collect(),
-    )
-}
-
-pub(super) fn failed_peer_notification(text: &str) -> MessageKind {
-    let text = one_line(text);
-    MessageKind::Event {
-        kind: EventKind::Armyknife,
-        text: if text.is_empty() {
-            "Peer notification failed".to_owned()
-        } else {
-            text
-        },
-        failed: true,
-    }
-}
-
-pub(super) fn peer_notification_failed(record: &Value, text: &str) -> bool {
-    is_failure(record, "peer-notify", text)
 }
 
 fn event(tag: &str, body: &str, record: &Value) -> MessageKind {
@@ -475,7 +347,7 @@ fn marked_user_message(text: &str, marker: Option<&str>) -> Option<MessageKind> 
 pub(super) fn is_watch_web_action_tag(tag: &str) -> bool {
     matches!(
         tag,
-        "armyknife-todo-completed" | "armyknife-decision-change"
+        "armyknife-todo-completed" | "armyknife-todo-rejected" | "armyknife-decision-change"
     )
 }
 
@@ -509,7 +381,7 @@ mod tests {
     use rstest::rstest;
     use serde_json::json;
 
-    use super::{EventKind, MessageKind, classify_inbound, peer_out_from_tool};
+    use super::{EventKind, MessageKind, classify_inbound};
 
     const HUMAN_PEER_ENVELOPE: &str = indoc! {r#"
         <peer-message>
@@ -632,99 +504,6 @@ mod tests {
                 text: "task".to_owned(),
                 failed: true,
             },
-        );
-    }
-
-    #[rstest]
-    #[case::long_flag(
-        "a agent peer notify --message 'Please inspect this fictional task.' fixture-target-id",
-        Some("fixture-target-id")
-    )]
-    #[case::short_flag(
-        "a agent peer notify -m 'Please inspect this fictional task.' fixture-target-id",
-        Some("fixture-target-id")
-    )]
-    #[case::parent(
-        "a agent peer notify --parent -m 'Please inspect this fictional task.'",
-        Some("fixture-parent-id")
-    )]
-    fn classifies_peer_notify_bash_input(
-        #[case] command: &str,
-        #[case] parent_session_id: Option<&str>,
-    ) {
-        assert_eq!(
-            peer_out_from_tool(
-                "Bash",
-                Some(&json!({"command":command})),
-                parent_session_id,
-                None,
-            ),
-            Some(super::PeerOut {
-                session_id: if command.contains("--parent") {
-                    "fixture-parent-id".to_owned()
-                } else {
-                    "fixture-target-id".to_owned()
-                },
-                text: "Please inspect this fictional task.".to_owned(),
-            }),
-        );
-    }
-
-    #[rstest]
-    #[case::shell_variable("a agent peer notify -m 'Please inspect this fictional task.' $sid")]
-    #[case::command_substitution(
-        "a agent peer notify -m 'Please inspect this fictional task.' $(resolve_target)"
-    )]
-    #[case::backtick_substitution(
-        "a agent peer notify -m 'Please inspect this fictional task.' `resolve_target`"
-    )]
-    fn does_not_treat_shell_expansions_as_session_ids(#[case] command: &str) {
-        assert_eq!(
-            peer_out_from_tool("Bash", Some(&json!({"command":command})), None, None,),
-            Some(super::PeerOut {
-                session_id: "unknown".to_owned(),
-                text: "Please inspect this fictional task.".to_owned(),
-            }),
-        );
-    }
-
-    #[rstest]
-    #[case::current_output("Delivered to session fixture-result-target.")]
-    #[case::legacy_codex_output(
-        "Injected into the running turn of Codex session fixture-result-target."
-    )]
-    fn prefers_session_id_from_tool_result(#[case] result: &str) {
-        assert_eq!(
-            peer_out_from_tool(
-                "Bash",
-                Some(
-                    &json!({"command":"a agent peer notify -m 'Inspect the fictional result.' fixture-argument-target"})
-                ),
-                None,
-                Some(result),
-            ),
-            Some(super::PeerOut {
-                session_id: "fixture-result-target".to_owned(),
-                text: "Inspect the fictional result.".to_owned(),
-            }),
-        );
-    }
-
-    #[test]
-    fn shows_unknown_when_shell_target_has_no_resolved_result() {
-        assert_eq!(
-            peer_out_from_tool(
-                "Bash",
-                Some(
-                    &json!({"command":"a agent peer notify --message 'Inspect the fictional result.' $sid"})
-                ),
-                None,
-                Some("delivered"),
-            ),
-            Some(super::PeerOut {
-                session_id: "unknown".to_owned(),
-                text: "Inspect the fictional result.".to_owned(),
-            }),
         );
     }
 }

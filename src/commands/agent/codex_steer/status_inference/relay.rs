@@ -102,6 +102,13 @@ impl Relay {
             self.path.trim_end_matches("/responses")
         )
     }
+
+    pub(super) fn credential(&self) -> &str {
+        self.path
+            .strip_prefix('/')
+            .and_then(|path| path.split('/').next())
+            .unwrap_or_default()
+    }
 }
 
 impl Drop for Relay {

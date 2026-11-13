@@ -8,8 +8,8 @@ const meta = {
     title: 'Check the updated layout on a phone',
     detail:
       'Open the preview on a small screen and confirm the action stays visible.',
-    completed: false,
-    onComplete: () => Promise.resolve(true),
+    resolution: null,
+    onResolve: () => Promise.resolve(true),
   },
 } satisfies Meta<typeof TodoCard>
 
@@ -27,10 +27,20 @@ export const TodoHasNoAdditionalDetail: Story = {
 
 export const TodoIsCompleted: Story = {
   name: 'A completed to-do shows its title and saved comment compactly',
-  args: { completed: true, defaultComment: 'The sample is ready.' },
+  args: { resolution: 'completed', defaultComment: 'The sample is ready.' },
 }
 
 export const TodoIsCompletedWithoutAComment: Story = {
   name: 'A completed to-do without a comment shows only its title',
-  args: { completed: true, defaultComment: '' },
+  args: { resolution: 'completed', defaultComment: '' },
+}
+
+export const TodoIsRejected: Story = {
+  name: 'A rejected to-do shows its reason and title distinctly',
+  args: { resolution: 'rejected', defaultComment: 'This is no longer needed.' },
+}
+
+export const TodoIsWithdrawn: Story = {
+  name: 'A withdrawn to-do shows its title without a comment',
+  args: { resolution: 'withdrawn', defaultComment: '' },
 }

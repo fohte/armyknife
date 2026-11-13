@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
@@ -6,16 +6,18 @@ use serde_json::Value;
 
 use super::super::super::ChatItem;
 use super::super::decision_position::{DecisionTimeline, insert_time_placed_decisions};
+use super::super::time_placed::TimePlacedTimeline;
 use super::super::todos::TodoTimeline;
 use super::super::{
-    ToolSummary, append_classification_with_image_directory, append_peer_out,
-    append_text_with_image_directory, classifier, tool_target,
+    ToolSummary, append_classification_with_image_directory, append_text_with_image_directory,
+    classifier, tool_target,
 };
 use super::events::{ClaudeEffect, TimedClaudeEvent};
 use super::proposals::ProposalTimeline;
 use super::questions::apply_question_answers;
 use super::state::{ClaudeParserState, ToolUse};
 use super::{ParsedTranscript, ParserAdditions};
+use crate::commands::agent::store::PermissionRequestData;
 
 pub(super) fn render(
     state: &ClaudeParserState,
@@ -28,8 +30,8 @@ pub(super) fn render(
     let mut decision_timeline = DecisionTimeline::new(additions.decisions);
     let mut proposal_timeline = ProposalTimeline::new(additions.proposals);
     let mut todo_timeline = TodoTimeline::new(additions.todos);
+    let mut peer_out_timeline = TimePlacedTimeline::new(additions.peer_out_messages);
     let mut question_indices = HashMap::<String, Vec<usize>>::new();
-    let mut matched_peer_out_message_ids = HashSet::new();
 
     for event in &state.events {
         render_timed_event(
@@ -39,15 +41,16 @@ pub(super) fn render(
             &mut decision_timeline,
             &mut proposal_timeline,
             &mut todo_timeline,
+            &mut peer_out_timeline,
             &mut tools,
             &mut items,
             &mut question_indices,
-            &mut matched_peer_out_message_ids,
         );
     }
 
     let active_tool = active_tool_item(&state.tool_uses, additions.pending_tool);
     tools.flush_into(&mut items);
+    peer_out_timeline.append_remaining(&mut items);
     if let Some(active_tool) = active_tool {
         items.push(active_tool);
     }
@@ -84,14 +87,17 @@ fn render_timed_event(
     decision_timeline: &mut DecisionTimeline,
     proposal_timeline: &mut ProposalTimeline,
     todo_timeline: &mut TodoTimeline,
+    peer_out_timeline: &mut TimePlacedTimeline<
+        crate::commands::agent::store::WatchWebPeerOutMessage,
+    >,
     tools: &mut ToolSummary,
     items: &mut Vec<ChatItem>,
     question_indices: &mut HashMap<String, Vec<usize>>,
-    matched_peer_out_message_ids: &mut HashSet<i64>,
 ) {
     insert_time_placed_decisions(event.timestamp, decision_timeline, tools, items);
     proposal_timeline.insert_before_record(event.timestamp, items, tools);
     todo_timeline.insert_before_record(event.timestamp, items, tools);
+    peer_out_timeline.insert_before_record(event.timestamp, items, tools);
 
     for effect in &event.effects {
         match effect {
@@ -137,20 +143,6 @@ fn render_timed_event(
                 input,
                 failed,
             } => tools.record(name, input.as_ref(), *failed),
-            ClaudeEffect::PeerNotification {
-                tool_use,
-                text,
-                failed,
-                timestamp,
-            } => render_peer_notification(
-                tool_use,
-                text,
-                *failed,
-                *timestamp,
-                additions,
-                matched_peer_out_message_ids,
-                items,
-            ),
             ClaudeEffect::Question { id, item } => {
                 let index = items.len();
                 items.push(item.clone());
@@ -167,71 +159,32 @@ fn render_timed_event(
     }
 }
 
-fn render_peer_notification(
-    tool_use: &ToolUse,
-    text: &str,
-    failed: bool,
-    timestamp: Option<DateTime<Utc>>,
-    additions: ParserAdditions<'_>,
-    matched_peer_out_message_ids: &mut HashSet<i64>,
-    items: &mut Vec<ChatItem>,
-) {
-    if failed {
-        append_classification_with_image_directory(
-            items,
-            classifier::failed_peer_notification(text),
-            Vec::new(),
-            None,
-            additions.parent,
-            timestamp,
+fn active_tool_item(
+    tool_uses: &[ToolUse],
+    pending_tool: Option<&PermissionRequestData>,
+) -> Option<ChatItem> {
+    let pending_tool_use =
+        pending_tool.and_then(|pending| latest_matching_pending_tool_use(tool_uses, pending));
+    let tool_use = pending_tool_use.or_else(|| tool_uses.last())?;
+    if pending_tool_use.is_some() {
+        let command = super::super::super::permission_request_command(
+            Some(&tool_use.name),
+            tool_use.input.as_ref(),
         );
-        return;
-    }
-    let Some(mut peer) = classifier::peer_out_from_tool(
-        &tool_use.name,
-        tool_use.input.as_ref(),
-        additions.parent.map(|parent| parent.session_id.as_str()),
-        Some(text),
-    ) else {
-        return;
-    };
-    let delivered = additions.peer_out_messages.iter().find(|message| {
-        !matched_peer_out_message_ids.contains(&message.id)
-            && message.to_session_id == peer.session_id
-            && tool_use
-                .started_at
-                .is_some_and(|started_at| started_at <= message.sent_at)
-            && timestamp.is_some_and(|completed_at| message.sent_at <= completed_at)
-    });
-    if let Some(delivered) = delivered {
-        peer.text.clone_from(&delivered.content);
-        matched_peer_out_message_ids.insert(delivered.id);
-    }
-    append_peer_out(
-        items,
-        peer,
-        delivered.map(|message| message.sent_at).or(timestamp),
-    );
-}
-
-fn active_tool_item(tool_uses: &[ToolUse], pending_tool: Option<&str>) -> Option<ChatItem> {
-    let tool_use = pending_tool
-        .and_then(|pending| {
-            tool_uses.iter().rev().find(|tool_use| {
-                matches_pending_tool(tool_use, pending)
-                    && !classifier::is_peer_notify_tool(&tool_use.name, tool_use.input.as_ref())
-            })
-        })
-        .or_else(|| {
-            tool_uses.last().filter(|tool_use| {
-                !classifier::is_peer_notify_tool(&tool_use.name, tool_use.input.as_ref())
-            })
-        })?;
-    if pending_tool.is_some_and(|pending| matches_pending_tool(tool_use, pending)) {
+        let description = if command.is_some() {
+            String::new()
+        } else if tool_use.name == "Bash" {
+            super::super::super::permission_request_command_summary(tool_use.input.as_ref())
+                .map(|preview| format!("Command preview: {preview}"))
+                .unwrap_or_else(|| tool_detail(&tool_use.name, tool_use.input.as_ref()))
+        } else {
+            tool_detail(&tool_use.name, tool_use.input.as_ref())
+        };
         Some(ChatItem::Permission {
             request_id: None,
             tool: tool_use.name.clone(),
-            description: tool_detail(&tool_use.name, tool_use.input.as_ref()),
+            description,
+            command,
         })
     } else {
         Some(ChatItem::ToolInProgress {
@@ -241,23 +194,14 @@ fn active_tool_item(tool_uses: &[ToolUse], pending_tool: Option<&str>) -> Option
     }
 }
 
-fn matches_pending_tool(tool_use: &ToolUse, pending_tool: &str) -> bool {
-    let (name, detail) = pending_tool
-        .split_once('(')
-        .map_or((pending_tool, None), |(name, detail)| {
-            (name, detail.strip_suffix(')'))
-        });
-    if tool_use.name != name {
-        return false;
-    }
-    let Some(detail) = detail else {
-        return true;
-    };
-    tool_use
-        .input
-        .as_ref()
-        .and_then(super::super::super::permission_request_tool_detail)
-        == Some(detail)
+fn latest_matching_pending_tool_use<'a>(
+    tool_uses: &'a [ToolUse],
+    pending: &PermissionRequestData,
+) -> Option<&'a ToolUse> {
+    tool_uses
+        .iter()
+        .rev()
+        .find(|tool_use| tool_use.matches_permission_request(pending))
 }
 
 fn tool_detail(name: &str, input: Option<&Value>) -> String {
@@ -265,4 +209,48 @@ fn tool_detail(name: &str, input: Option<&Value>) -> String {
         return name.to_owned();
     };
     format!("{name}: {target}")
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::latest_matching_pending_tool_use;
+    use crate::commands::agent::store::PermissionRequestData;
+    use crate::commands::agent::watch_web::messages::parser::claude::state::ToolUse;
+
+    #[test]
+    fn pending_permission_selects_the_latest_equal_unresolved_tool_use() {
+        let tool_uses = [
+            ToolUse {
+                id: "first-call".to_string(),
+                name: "Bash".to_string(),
+                input: Some(json!({"command": "run fixture"})),
+                started_at: None,
+            },
+            ToolUse {
+                id: "different-call".to_string(),
+                name: "Read".to_string(),
+                input: Some(json!({"file_path": "fixture.txt"})),
+                started_at: None,
+            },
+            ToolUse {
+                id: "latest-call".to_string(),
+                name: "Bash".to_string(),
+                input: Some(json!({"command": "run fixture"})),
+                started_at: None,
+            },
+        ];
+        let permission = PermissionRequestData {
+            tool_name: Some("Bash".to_string()),
+            tool_input: json!({"command": "run fixture"}),
+            pending: true,
+        };
+
+        assert_eq!(
+            latest_matching_pending_tool_use(&tool_uses, &permission)
+                .map(|tool_use| tool_use.id.as_str()),
+            Some("latest-call"),
+        );
+    }
 }

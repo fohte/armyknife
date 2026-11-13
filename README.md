@@ -564,6 +564,9 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `decision add <TITLE> --why <WHY> --considered <ALT> [--considered <ALT>...] --easy-to-change <TEXT>` |         | Record a provisional decision for later review                                              |
 | `proposal add`                                                                                        |         | Record a structured proposal from JSON read from stdin                                      |
 | `todo add`                                                                                            |         | Record one task the user needs to do from JSON read from stdin                              |
+| `todo withdraw <seq> [--comment <reason>]`                                                            |         | Withdraw a pending task from the calling session                                            |
+| `title set <TITLE>`                                                                                   |         | Set the calling session's title; an empty title restores the automatic title                |
+| `web-ui add <url> --name <name>`                                                                      |         | Register a named local web interface for the watch-web status panel                         |
 | `profile use <profile> / show`                                                                        |         | Select a profile and show its effective settings for every type                             |
 | `vibe on / off / status / grant <session-id>`                                                         |         | Enable, disable, check, or grant vibe mode to a descendant session                          |
 | `resume [session_id]`                                                                                 | `r`     | Resume the pane's Claude Code session (reads pane option if no argument)                    |
@@ -621,7 +624,7 @@ JSON
 Recorded proposal 1
 ```
 
-Run `a agent todo add` from a tracked Claude Code or Codex session and pipe a JSON object to stdin. The required field is `title`; `detail` is optional. The todo stays in the watch-web conversation after completion and is shown as done. Use a proposal when the user should choose from options. The command prints `Recorded todo <seq>` after saving the todo.
+Run `a agent todo add` from a tracked Claude Code or Codex session and pipe a JSON object to stdin. The required field is `title`; `detail` is optional. A todo stays in the watch-web conversation after it is completed, rejected, or withdrawn, with its final state and optional comment. Use a proposal when the user should choose from options. The command prints `Recorded todo <seq>` after saving the todo. The user can complete or reject a todo in watch-web; an agent can withdraw a pending todo from its own session with `a agent todo withdraw <seq> [--comment <reason>]`. Withdrawal does not send a message to the session.
 
 ```console
 $ cat <<'JSON' | a agent todo add
@@ -631,6 +634,18 @@ $ cat <<'JSON' | a agent todo add
 }
 JSON
 Recorded todo 1
+```
+
+```console
+$ a agent todo withdraw 1 --comment "The plan changed."
+Withdrew todo 1
+```
+
+Run `a agent title set <TITLE>` from a tracked Claude Code or Codex session to set its title. The title is trimmed before it is saved; an empty or whitespace-only value restores the automatic title. The same title can be changed from `a agent watch` or the watch-web conversation header, and the most recent change wins. When the session has a tmux window, the window title is refreshed best-effort.
+
+```console
+$ a agent title set "Investigate the session refresh flow"
+$ a agent title set ""
 ```
 
 Vibe mode is an opt-in marker recorded by armyknife. Vibe-gated actions are denied for every repository by default, even when the marker is enabled. Set `orgs.<owner>.vibe` to `true` to allow repositories for an owner; `repos.<owner>/<repo>.vibe` can override that value for one repository. The effective repository value defaults to `false`.
@@ -680,7 +695,14 @@ To refer to it in another session or task, describe its contents; this sequence 
 
 Tracked, hook-processed Claude Code sessions receive the instruction on `SessionStart` to record choices that are cheap to reverse and continue working. They should stop and ask about choices that are hard to reverse. Internal and headless invocations do not receive this instruction.
 
-[`crit`](https://github.com/tomasz-tomczyk/crit) review URLs passed to `a agent crit add <url>` must include an explicit port. When a tracked session is available, the command associates the URL with that session and sends a desktop notification. Its lifecycle monitor needs `crit` on `PATH`; without it, automatic cleanup is unavailable. If no tracked session ID is available, the command opens a review pane in the current tmux pane when `TMUX_PANE` is set; otherwise, macOS opens the URL with `open` and other platforms use `xdg-open`.
+`a agent web-ui add <url> --name <name>` registers a named local HTTP interface with the calling session. The URL must use `localhost` or `127.0.0.1` and include an explicit port. Registered interfaces appear in the watch-web conversation's right panel and share the same HTTP and WebSocket relay. Ports without a registered URL are rejected. Run the command from the session that owns the interface:
+
+```console
+$ a agent web-ui add http://127.0.0.1:48761/design/sample/ --name "Design editor"
+Recorded web UI 'Design editor'
+```
+
+[`crit`](https://github.com/tomasz-tomczyk/crit) review URLs passed to `a agent crit add <url>` must include an explicit port. The command records crit through the same web UI registration path, labels it `crit`, and keeps the existing notification, queue, and lifecycle-monitor behavior. When a tracked session is available, the command associates the URL with that session and sends a desktop notification. Its lifecycle monitor needs `crit` on `PATH`; without it, automatic cleanup is unavailable. If no tracked session ID is available, the command opens a review pane in the current tmux pane when `TMUX_PANE` is set; otherwise, macOS opens the URL with `open` and other platforms use `xdg-open`.
 
 If recording the URL to a tracked session fails, the command warns and still attempts to display the review in a tmux pane or browser and send a notification.
 
@@ -1155,7 +1177,7 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 
 ### `a agent watch-web`
 
-`a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` and opens it in the default browser. Pass `--no-open` to keep it from opening a browser, such as when running it as a background service. If the running executable is replaced, the server restarts with the new binary and open pages reload the embedded SPA. It serves the SPA embedded in the binary, with an Inbox grouped into Needs action, Later, In progress, and Done, plus a Board grouped by project. Sessions can be starred for TODAY from the Inbox and Nav. Later sessions return to Needs action when their timer expires or when they change. The Board puts projects that need action first and can hide quiet projects. Both views reload session metadata when the server sends an update. When a session has an active parent or child, the conversation pane adds a Tree tab that shows their hierarchy and lets users open available sessions. A session with an active review document adds a Review tab that displays its frontmatter and Markdown body. The backend provides `GET /api/sessions` for session metadata, `GET /api/events` for session-store and enrichment updates, and `GET /api/sessions/{id}/messages` for conversation items. `GET /api/sessions/{id}/review-document` returns the frontmatter and Markdown body for the active review document, or `404` when no live review lock is active. `GET /api/sessions/{id}/background-tasks/{task_id}/output` returns plain-text output for a running background Bash task, capped to the last 20 lines and 64 KiB. It reads only the output file recorded in that session's transcript. Saved conversation images are served by `GET /api/images/{name}`; the route only serves files in watch-web's image storage directory, and expired images return `404`. Session actions are available through the routes below. If the SPA has not been built, the page shows the build instructions; build it with:
+`a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` and opens it in the default browser. Its local relay listens on `127.0.0.1:4318` and forwards requests only to ports recorded by `a agent web-ui add` or `a agent crit add`, including WebSocket connections. Pass `--no-open` to keep it from opening a browser, such as when running it as a background service. If the running executable is replaced, the server restarts with the new binary and open pages reload the embedded SPA. It serves the SPA embedded in the binary, with an Inbox grouped into Needs action, Later, In progress, and Done, plus a Board grouped by project. Sessions can be starred for TODAY from the Inbox and Nav. Later sessions return to Needs action when their timer expires or when they change. The Board puts projects that need action first and can hide quiet projects. Both views reload session metadata when the server sends an update. When a session has an active parent or child, the conversation pane adds a Tree tab that shows their hierarchy and lets users open available sessions. A session with an active review document adds a Review tab that displays its frontmatter and Markdown body. The backend provides `GET /api/sessions` for session metadata, `GET /api/events` for session-store and enrichment updates, and `GET /api/sessions/{id}/messages` for conversation items. `GET /api/sessions/{id}/review-document` returns the frontmatter and Markdown body for the active review document, or `404` when no live review lock is active. `GET /api/sessions/{id}/background-tasks/{task_id}/output` returns plain-text output for a running background Bash task, capped to the last 20 lines and 64 KiB. It reads only the output file recorded in that session's transcript. Saved conversation images are served by `GET /api/images/{name}`; the route only serves files in watch-web's image storage directory, and expired images return `404`. Session actions are available through the routes below. If the SPA has not been built, the page shows the build instructions; build it with:
 
 - `POST /api/sessions/{id}/review-document/save` with `{"id":"review-id","frontmatter":{"approved":true},"body":"Updated Markdown."}` saves edits to the active review document path recorded by the server.
 - `POST /api/sessions/{id}/review-document/finish` accepts the same payload, saves the edits, then asks the review process to close its editor and run the completion handler.
@@ -1170,6 +1192,7 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 - `POST /api/sessions/{id}/messages` with `{"content":"..."}`
 - `POST /api/sessions/{id}/answer` with `{"requestId":"...","answers":{"Which formats?":"Markdown, Plain text","Include examples?":"Yes"}}`, or `{"requestId":"...","skip":true}`
 - `POST /api/sessions/{id}/proposals/{seq}/answer` with `{"choice":0,"comment":"..."}`; `choice` is a zero-based option index or `null` to request another proposal, and `comment` may be `null`
+- `POST /api/sessions/{id}/todos/{seq}/resolve` with `{"resolution":"completed","comment":"..."}` or `{"resolution":"rejected","comment":"..."}`; the comment may be `null`, and a live session receives the selected outcome as a user action before it is saved
 - `POST /api/sessions/{id}/permission/approve` with `{"requestId":"..."}`
 - `POST /api/sessions/{id}/permission/reject` with `{"requestId":"..."}`
 - `POST /api/sessions/{id}/permission-denials/{seq}/retry` sends a one-time approval message for a classifier denial; denials without a classifier verdict cannot be retried
@@ -1180,6 +1203,7 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 - `POST /api/sessions/{id}/close` to close a session; send `{"keepWorktree":true}` to preserve its linked worktree
 - `POST /api/sessions/{id}/later` with `{"preset":"one_hour"}` (also accepts `this_evening`, `tomorrow`, `next_week`, `until_it_changes`, and `back_now`)
 - `POST /api/sessions/{id}/today` with `{"isToday":true}` or `{"isToday":false}`
+- `POST /api/sessions/{id}/title` with `{"title":"A fixture title"}`; an empty or whitespace-only title restores the automatic title
 - `POST /api/sessions/{id}/decisions/{seq}/ok` to mark a decision reviewed
 - `POST /api/sessions/{id}/decisions/{seq}/change` with `{"comment":"Revise the fixture choice."}` to request a change
 
@@ -1243,7 +1267,7 @@ tailscale serve 4317
 tailscale serve --bg --https=8443 http://127.0.0.1:4318
 ```
 
-Open the `https://example-device.example-tailnet.ts.net` address printed by Tailscale. The second serve rule publishes Crit reviews through the local relay on port `4318`. See the [Tailscale Serve CLI reference](https://tailscale.com/docs/reference/tailscale-cli/serve) for details. Both servers listen only on `127.0.0.1`; they do not bind to `0.0.0.0`.
+Open the `https://example-device.example-tailnet.ts.net` address printed by Tailscale. The second serve rule publishes registered local web interfaces, including Crit reviews, through the relay on port `4318`. See the [Tailscale Serve CLI reference](https://tailscale.com/docs/reference/tailscale-cli/serve) for details. Both servers listen only on `127.0.0.1`; they do not bind to `0.0.0.0`.
 
 ### `a agent clean`
 

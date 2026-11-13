@@ -68,6 +68,20 @@ pub(super) fn has_undelivered_since(session_id: &str, since: SystemTime) -> Resu
 
 /// Saves a message that is not tied to a background task for the same retries
 /// as a failed completion notification.
-pub(super) fn save_undelivered(session_id: &str, message: &str) -> Result<()> {
-    undelivered::save(session_id, &Uuid::new_v4().to_string(), message)
+pub(super) fn save_undelivered(
+    session_id: &str,
+    message: &str,
+    peer_out_message_id: Option<i64>,
+) -> Result<()> {
+    let task_id = Uuid::new_v4().to_string();
+    if let Some(peer_out_message_id) = peer_out_message_id {
+        undelivered::save_with_peer_out_message_id(
+            session_id,
+            &task_id,
+            message,
+            peer_out_message_id,
+        )
+    } else {
+        undelivered::save(session_id, &task_id, message)
+    }
 }

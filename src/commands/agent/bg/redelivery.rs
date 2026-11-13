@@ -74,7 +74,30 @@ pub fn run(args: &RedeliverDetachedArgs) -> Result<()> {
         notifications,
         RETRY_WINDOW,
         |session_id, message| notify::notify(session_id, message, None, None),
-        undelivered::remove,
+        |session_id, notification| {
+            if let Some(peer_out_message_id) = notification.peer_out_message_id
+                && let Err(error) =
+                    crate::commands::agent::store::mark_watch_web_peer_out_message_delivered(
+                        peer_out_message_id,
+                        chrono::Utc::now(),
+                    )
+            {
+                tracing::warn!(
+                    event = "agent.peer.notify.record_failed",
+                    session = %session_id,
+                    task = %notification.task_id,
+                    error = %format!("{error:#}"),
+                );
+            }
+            if let Err(error) = undelivered::remove(session_id, &notification.task_id) {
+                tracing::warn!(
+                    event = "agent.bg_run.redelivery_remove_failed",
+                    session = %session_id,
+                    task = %notification.task_id,
+                    error = %format!("{error:#}"),
+                );
+            }
+        },
         Instant::now,
         std::thread::sleep,
     );
@@ -86,7 +109,7 @@ fn redeliver_messages(
     notifications: Vec<undelivered::UndeliveredNotification>,
     retry_window: Duration,
     mut send: impl FnMut(&str, &str) -> Result<notify::Delivery>,
-    mut remove: impl FnMut(&str, &str) -> Result<()>,
+    mut on_success: impl FnMut(&str, &undelivered::UndeliveredNotification),
     mut now: impl FnMut() -> Instant,
     mut sleep: impl FnMut(Duration),
 ) {
@@ -117,14 +140,7 @@ fn redeliver_messages(
                     task = %notification.task_id,
                     delivery = ?delivery,
                 );
-                if let Err(error) = remove(session_id, &notification.task_id) {
-                    tracing::warn!(
-                        event = "agent.bg_run.redelivery_remove_failed",
-                        session = %session_id,
-                        task = %notification.task_id,
-                        error = %format!("{error:#}"),
-                    );
-                }
+                on_success(session_id, &notification);
             }
             Err(error) => tracing::warn!(
                 event = "agent.bg_run.redelivery_failed",
@@ -147,6 +163,7 @@ mod tests {
         undelivered::UndeliveredNotification {
             task_id: TASK_ID.to_string(),
             message: "fixture completion".to_string(),
+            peer_out_message_id: Some(17),
         }
     }
 
@@ -156,6 +173,7 @@ mod tests {
         let mut sent = Vec::new();
         let mut sleeps = Vec::new();
         let mut removed = Vec::new();
+        let mut delivered_records = Vec::new();
         let elapsed = std::cell::Cell::new(Duration::ZERO);
         let started_at = Instant::now();
 
@@ -171,9 +189,9 @@ mod tests {
                 }
                 Ok(notify::Delivery::Started)
             },
-            |session_id, task_id| {
-                removed.push((session_id.to_string(), task_id.to_string()));
-                Ok(())
+            |session_id, notification| {
+                delivered_records.push(notification.peer_out_message_id);
+                removed.push((session_id.to_string(), notification.task_id.clone()));
             },
             || started_at + elapsed.get(),
             |duration| {
@@ -183,7 +201,7 @@ mod tests {
         );
 
         assert_eq!(
-            (attempts, sent, sleeps, removed),
+            (attempts, sent, sleeps, delivered_records, removed),
             (
                 3,
                 vec![
@@ -192,6 +210,7 @@ mod tests {
                     (SESSION_ID.to_string(), "fixture completion".to_string()),
                 ],
                 vec![RETRY_INTERVAL, RETRY_INTERVAL],
+                vec![Some(17)],
                 vec![(SESSION_ID.to_string(), TASK_ID.to_string())],
             ),
         );
@@ -202,6 +221,7 @@ mod tests {
         let mut attempts = 0;
         let mut sleeps = Vec::new();
         let mut removed = Vec::new();
+        let mut delivered_records = Vec::new();
         let elapsed = std::cell::Cell::new(Duration::ZERO);
         let started_at = Instant::now();
 
@@ -213,9 +233,9 @@ mod tests {
                 attempts += 1;
                 anyhow::bail!("fixture delivery unavailable");
             },
-            |_, task_id| {
-                removed.push(task_id.to_string());
-                Ok(())
+            |_, notification| {
+                delivered_records.push(notification.peer_out_message_id);
+                removed.push(notification.task_id.clone());
             },
             || started_at + elapsed.get(),
             |duration| {
@@ -225,8 +245,8 @@ mod tests {
         );
 
         assert_eq!(
-            (attempts, sleeps, removed),
-            (2, vec![RETRY_INTERVAL, RETRY_INTERVAL], vec![]),
+            (attempts, sleeps, delivered_records, removed),
+            (2, vec![RETRY_INTERVAL, RETRY_INTERVAL], vec![], vec![],),
         );
     }
 }

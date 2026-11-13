@@ -486,6 +486,7 @@ mod tests {
             archived_at: None,
             pr_context: None,
             crit_urls: Vec::new(),
+            web_uis: Vec::new(),
             pending_human_review_ids: BTreeSet::from([review_marker(
                 "fixture-review",
                 path,
@@ -503,6 +504,7 @@ mod tests {
             updated_at: Utc::now(),
             last_message: None,
             current_tool: None,
+            current_tool_name: None,
             label: None,
             work_type: None,
             vibe_enabled: false,
