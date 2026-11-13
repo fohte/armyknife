@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.669](https://github.com/fohte/armyknife/compare/v0.1.668...v0.1.669) (2026-11-13)
+
+
+### Features
+
+* **watch-web:** support retrying denied actions ([#1712](https://github.com/fohte/armyknife/issues/1712)) ([7dcce76](https://github.com/fohte/armyknife/commit/7dcce76143af9f0b1f77851b8fd3e421a9a99e33))
+
 ## [0.1.668](https://github.com/fohte/armyknife/compare/v0.1.667...v0.1.668) (2026-11-13)
 
 
