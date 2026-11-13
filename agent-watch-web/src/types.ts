@@ -12,6 +12,9 @@ type SessionKind =
   | 'Stopped'
   | (string & {})
 
+export type JsonValue =
+  null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
+
 export type SessionTask = {
   id: string
   number: number
@@ -75,6 +78,7 @@ export type Session = {
   ancestorSessionIds: string[]
   pullRequest: PullRequest | null
   critUrl?: string | null
+  reviewDocumentAvailable?: boolean
   laterUntil?: string | null
   isToday?: boolean
   decisionCount?: number

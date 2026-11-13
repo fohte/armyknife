@@ -1,9 +1,15 @@
 import { useEffect, useState } from 'react'
 
+import {
+  isReviewDocumentResponse,
+  type ReviewDocumentResponse,
+} from '#components/conversation-pane-response'
+import { requestJson } from '#components/conversation-requests'
 import { CritPane } from '#components/crit-pane'
 import type { Decision } from '#components/decision-card'
 import { DecisionsPanel } from '#components/decisions-panel'
 import { PullRequestListPanel } from '#components/pull-request-list-panel'
+import { ReviewDocumentPanel } from '#components/review-document-panel'
 import { RunningTasksPanel } from '#components/running-tasks-panel'
 import type { SessionStatusPanelTab } from '#components/session-status-panel'
 import { SessionTreePanel } from '#components/session-tree-panel'
@@ -50,6 +56,12 @@ export function useConversationStatusPanel({
   const [selectedDecisionSeq, setSelectedDecisionSeq] = useState<number | null>(
     null,
   )
+  const [reviewDocumentState, setReviewDocumentState] = useState<{
+    sessionId: string
+    document: ReviewDocumentResponse | null
+    error: string | null
+    loading: boolean
+  } | null>(null)
   const decisions =
     allDecisions ??
     messages.filter(
@@ -85,14 +97,16 @@ export function useConversationStatusPanel({
     ...(backgroundTasks.length === 0 ? [] : ['running']),
     ...(treeAvailable ? ['tree'] : []),
     ...(pullRequestListAvailable ? ['pull-requests'] : []),
+    ...(session.reviewDocumentAvailable === true ? ['review-document'] : []),
     ...(decisionCount === 0 ? [] : ['decisions']),
     ...(critUrl === null ? [] : ['crit']),
   ]
-  const defaultPanelTabId = availableTabIds.includes('crit')
-    ? 'crit'
-    : availableTabIds.includes('running')
-      ? 'running'
-      : (availableTabIds[0] ?? null)
+  const defaultPanelTabId =
+    ['crit', 'review-document', 'running'].find((id) =>
+      availableTabIds.includes(id),
+    ) ??
+    availableTabIds[0] ??
+    null
   const activeTabId =
     activePanelTabId !== null && availableTabIds.includes(activePanelTabId)
       ? activePanelTabId
@@ -104,6 +118,55 @@ export function useConversationStatusPanel({
       pullRequestListAvailable &&
       activeTabId === 'pull-requests',
   })
+  useEffect(() => {
+    if (session.reviewDocumentAvailable !== true) {
+      setReviewDocumentState(null)
+      return
+    }
+    if (!statusPanelOpen || activeTabId !== 'review-document') {
+      return
+    }
+    let current = true
+    setReviewDocumentState({
+      sessionId: session.id,
+      document: null,
+      error: null,
+      loading: true,
+    })
+    void requestJson(
+      `/api/sessions/${encodeURIComponent(session.id)}/review-document`,
+      isReviewDocumentResponse,
+    ).match(
+      (document) => {
+        if (current) {
+          setReviewDocumentState({
+            sessionId: session.id,
+            document,
+            error: null,
+            loading: false,
+          })
+        }
+      },
+      (error) => {
+        if (current) {
+          setReviewDocumentState({
+            sessionId: session.id,
+            document: null,
+            error: error.message,
+            loading: false,
+          })
+        }
+      },
+    )
+    return () => {
+      current = false
+    }
+  }, [
+    activeTabId,
+    session.id,
+    session.reviewDocumentAvailable,
+    statusPanelOpen,
+  ])
   const tabs: readonly SessionStatusPanelTab[] = [
     ...(availableTabIds.includes('running')
       ? [
@@ -179,6 +242,35 @@ export function useConversationStatusPanel({
                 onRefresh={pullRequestList.refresh}
               />
             ),
+          },
+        ]
+      : []),
+    ...(availableTabIds.includes('review-document')
+      ? [
+          {
+            id: 'review-document',
+            label: 'Review',
+            count: 0,
+            visible: true,
+            showCount: false,
+            content:
+              reviewDocumentState === null ||
+              reviewDocumentState.sessionId !== session.id ||
+              reviewDocumentState.loading ? (
+                <div className="session-tree-feedback" role="status">
+                  Loading review document…
+                </div>
+              ) : reviewDocumentState.error !== null ? (
+                <div className="session-tree-feedback" role="alert">
+                  Could not load the review document:{' '}
+                  {reviewDocumentState.error}
+                </div>
+              ) : reviewDocumentState.document === null ? null : (
+                <ReviewDocumentPanel
+                  frontmatter={reviewDocumentState.document.frontmatter}
+                  body={reviewDocumentState.document.body}
+                />
+              ),
           },
         ]
       : []),

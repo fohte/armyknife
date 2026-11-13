@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 
 use super::types::{DisplayStatus, Session, SessionStatus};
 use crate::shared::config::{AgentConfig, AgentStatusState};
-use crate::shared::human_in_the_loop::PR_DRAFT_REVIEW_MARKER;
+use crate::shared::human_in_the_loop::{PR_DRAFT_REVIEW_MARKER, review_document_path};
 
 /// Variant order is the shared next-action priority used by tmux status and watch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -83,17 +83,7 @@ fn user_turn<'a>(session: &'a Session, agent_config: &AgentConfig) -> Option<Use
     } else if is_ask_user_question(session) {
         Some(UserTurnKind::Ask)
     } else if session.display_status() == DisplayStatus::WaitingInput {
-        if !session.crit_urls.is_empty() {
-            Some(UserTurnKind::Crit)
-        } else if session
-            .pending_human_review_ids
-            .iter()
-            .any(|id| id.starts_with(PR_DRAFT_REVIEW_MARKER))
-        {
-            Some(UserTurnKind::Body)
-        } else {
-            None
-        }
+        waiting_input_user_turn(session)
     } else if matches!(
         session.status,
         SessionStatus::Stopped | SessionStatus::Paused | SessionStatus::Ended
@@ -131,6 +121,23 @@ fn user_turn<'a>(session: &'a Session, agent_config: &AgentConfig) -> Option<Use
         label,
         note,
     })
+}
+
+fn has_pending_review_document(session: &Session) -> bool {
+    session
+        .pending_human_review_ids
+        .iter()
+        .any(|id| review_document_path(id).is_some() || id.starts_with(PR_DRAFT_REVIEW_MARKER))
+}
+
+fn waiting_input_user_turn(session: &Session) -> Option<UserTurnKind> {
+    if !session.crit_urls.is_empty() {
+        Some(UserTurnKind::Crit)
+    } else if has_pending_review_document(session) {
+        Some(UserTurnKind::Body)
+    } else {
+        None
+    }
 }
 
 pub(crate) fn is_ask_user_question(session: &Session) -> bool {
@@ -266,7 +273,7 @@ mod tests {
             UserTurnKind::Body => {
                 session
                     .pending_human_review_ids
-                    .insert(format!("{PR_DRAFT_REVIEW_MARKER}review-marker"));
+                    .insert("review-marker\0/fixture/document.md".to_string());
                 session
                     .pending_bg_task_ids
                     .insert("review-task".to_string());
@@ -286,6 +293,20 @@ mod tests {
         assert_eq!(
             next_user_turn(&[session], &AgentConfig::default()).map(|turn| turn.kind),
             Some(expected)
+        );
+    }
+
+    #[test]
+    fn legacy_pr_draft_marker_still_marks_a_body_review() {
+        let mut session = session("waiting", timestamp(1));
+        session.status = SessionStatus::WaitingInput;
+        session
+            .pending_human_review_ids
+            .insert(format!("{PR_DRAFT_REVIEW_MARKER}review-marker"));
+
+        assert_eq!(
+            next_user_turn(&[session], &AgentConfig::default()).map(|turn| turn.kind),
+            Some(UserTurnKind::Body)
         );
     }
 

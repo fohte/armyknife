@@ -3,6 +3,7 @@ import type {
   BackgroundTask,
   ChatItem,
   ConversationResponse,
+  JsonValue,
   SessionActions,
   SessionPullRequestListResponse,
   SessionTreeNode,
@@ -275,6 +276,34 @@ export function isSessionActions(value: unknown): value is SessionActions {
       (isRecord(value['permission']) &&
         typeof value['permission']['approve'] === 'boolean' &&
         typeof value['permission']['reject'] === 'boolean'))
+  )
+}
+
+export type ReviewDocumentResponse = {
+  frontmatter: JsonValue
+  body: string
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  if (
+    value === null ||
+    typeof value === 'boolean' ||
+    typeof value === 'number' ||
+    typeof value === 'string'
+  ) {
+    return true
+  }
+  if (Array.isArray(value)) return value.every(isJsonValue)
+  return isRecord(value) && Object.values(value).every(isJsonValue)
+}
+
+export function isReviewDocumentResponse(
+  value: unknown,
+): value is ReviewDocumentResponse {
+  return (
+    isRecord(value) &&
+    isJsonValue(value['frontmatter']) &&
+    typeof value['body'] === 'string'
   )
 }
 

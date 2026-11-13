@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 
+import { ReviewDocumentPanel } from '#components/review-document-panel'
 import { SessionStatusPanel } from '#components/session-status-panel'
 
 const meta = {
@@ -31,6 +32,32 @@ type Story = StoryObj<typeof meta>
 
 export const CritIsTheActiveTab: Story = {
   name: 'The panel shows crit as the active tab',
+}
+
+export const ReviewDocumentIsActive: Story = {
+  name: 'The panel shows an active Review tab with typed frontmatter',
+  args: {
+    tabs: [
+      {
+        id: 'review-document',
+        label: 'Review',
+        count: 0,
+        visible: true,
+        showCount: false,
+        content: (
+          <ReviewDocumentPanel
+            frontmatter={{
+              title: 'Review the retry policy',
+              enabled: true,
+              steps: { publish: false },
+            }}
+            body={'## Summary\n\nReview the retry behavior.'}
+          />
+        ),
+      },
+    ],
+    activeTabId: 'review-document',
+  },
 }
 
 export const OneRunningItemIsAvailable: Story = {

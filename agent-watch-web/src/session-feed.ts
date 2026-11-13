@@ -96,6 +96,8 @@ function isSession(value: unknown): value is Session {
       typeof value['waitingForBackgroundTasks'] === 'boolean') &&
     (value['hasSessionTree'] === undefined ||
       typeof value['hasSessionTree'] === 'boolean') &&
+    (value['reviewDocumentAvailable'] === undefined ||
+      typeof value['reviewDocumentAvailable'] === 'boolean') &&
     (value['workType'] === undefined ||
       value['workType'] === null ||
       typeof value['workType'] === 'string') &&

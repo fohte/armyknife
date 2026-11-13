@@ -81,6 +81,7 @@ mod tests {
             is_compacting: false,
             decision_count: 0,
             unreviewed_decision_count: 0,
+            review_document_available: false,
         }
     }
 

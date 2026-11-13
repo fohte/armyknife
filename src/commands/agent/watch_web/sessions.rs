@@ -116,6 +116,12 @@ struct SessionView {
     is_compacting: bool,
     decision_count: i64,
     unreviewed_decision_count: i64,
+    #[serde(skip_serializing_if = "is_false")]
+    review_document_available: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -526,6 +532,11 @@ async fn list_sessions<S: SessionSource>(
                     .decision_counts
                     .get(&session.session_id)
                     .map_or(0, |counts| counts.unreviewed),
+                review_document_available: session.pending_human_review_ids.iter().any(
+                    |review_id| {
+                        crate::shared::human_in_the_loop::review_document_path(review_id).is_some()
+                    },
+                ),
             }
         })
         .collect::<Vec<_>>();
@@ -1378,37 +1389,37 @@ mod tests {
         source.web_states[0].is_today = false;
         source.sessions[0].status = SessionStatus::WaitingInput;
         source.sessions[0].crit_urls = vec!["http://127.0.0.1:6000".to_string()];
+        source.sessions[0]
+            .pending_human_review_ids
+            .insert("fixture-review\0/fixture/draft.md".to_string());
         source.sessions[0].work_type = Some("release-guide".to_string());
         source
             .work_type_nav_labels
             .insert("release-guide".to_string(), "Guides".to_string());
 
-        assert_eq!(
-            sessions_response(source).await,
-            (
-                StatusCode::OK,
-                expected_response(
-                    "needs_action",
-                    None,
-                    false,
-                    ExpectedSessionDetails {
-                        kind: Some("Review"),
-                        category_when_not_later: "needs_action",
-                        is_paused: false,
-                        unread: false,
-                        crit_url: Some("http://127.0.0.1:6000"),
-                    },
-                    ExpectedSessionResponse {
-                        engine: "claude",
-                        work_type: Some("release-guide"),
-                        work_type_nav_labels: serde_json::json!({"release-guide": "Guides"}),
-                        updated_at: "1970-01-01T00:16:40Z",
-                        elapsed_seconds: 100,
-                        can_open_in_terminal: true,
-                    },
-                ),
-            ),
+        let mut expected = expected_response(
+            "needs_action",
+            None,
+            false,
+            ExpectedSessionDetails {
+                kind: Some("Review"),
+                category_when_not_later: "needs_action",
+                is_paused: false,
+                unread: false,
+                crit_url: Some("http://127.0.0.1:6000"),
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: Some("release-guide"),
+                work_type_nav_labels: serde_json::json!({"release-guide": "Guides"}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
         );
+        expected["sessions"][0]["reviewDocumentAvailable"] = serde_json::json!(true);
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
 
     #[rstest]

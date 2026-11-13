@@ -10,7 +10,7 @@ pub(super) struct PendingReviewGuard {
 }
 
 impl PendingReviewGuard {
-    pub(super) fn for_current_session(marker: Option<&str>) -> Option<Self> {
+    pub(super) fn for_current_session(marker: Option<&str>, review_path: &Path) -> Option<Self> {
         let session_id = EnvVars::load().own_session_id()?;
         let sessions_dir = match store::sessions_dir() {
             Ok(path) => path,
@@ -23,7 +23,7 @@ impl PendingReviewGuard {
             }
         };
 
-        match Self::for_session(&sessions_dir, &session_id, marker) {
+        match Self::for_session_with_path(&sessions_dir, &session_id, marker, review_path) {
             Ok(guard) => Some(guard),
             Err(error) => {
                 tracing::warn!(
@@ -35,15 +35,38 @@ impl PendingReviewGuard {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn for_session(
         sessions_dir: &Path,
         session_id: &str,
         marker: Option<&str>,
     ) -> anyhow::Result<Self> {
+        Self::for_session_inner(sessions_dir, session_id, marker, None)
+    }
+
+    pub(super) fn for_session_with_path(
+        sessions_dir: &Path,
+        session_id: &str,
+        marker: Option<&str>,
+        review_path: &Path,
+    ) -> anyhow::Result<Self> {
+        Self::for_session_inner(sessions_dir, session_id, marker, Some(review_path))
+    }
+
+    fn for_session_inner(
+        sessions_dir: &Path,
+        session_id: &str,
+        marker: Option<&str>,
+        review_path: Option<&Path>,
+    ) -> anyhow::Result<Self> {
         let id = uuid::Uuid::new_v4().to_string();
-        let review_id = match marker {
+        let marker_id = match marker {
             Some(marker) => format!("{marker}{id}"),
             None => id,
+        };
+        let review_id = match review_path {
+            Some(path) => format!("{marker_id}\0{}", path.to_string_lossy()),
+            None => marker_id,
         };
         store::update_session_in(sessions_dir, session_id, |session| {
             session.pending_human_review_ids.insert(review_id.clone());
@@ -56,6 +79,15 @@ impl PendingReviewGuard {
             review_id,
         })
     }
+}
+
+/// Returns the document path stored with an active review marker.
+pub(crate) fn review_document_path(review_id: &str) -> Option<PathBuf> {
+    let (_, path) = review_id.split_once('\0')?;
+    if path.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(path))
 }
 
 impl Drop for PendingReviewGuard {
@@ -85,7 +117,7 @@ mod tests {
     use crate::commands::agent::store;
     use crate::commands::agent::types::{Engine, Session, SessionStatus};
 
-    use super::PendingReviewGuard;
+    use super::{PendingReviewGuard, review_document_path};
 
     fn session(session_id: &str) -> Session {
         Session {
@@ -176,6 +208,41 @@ mod tests {
                 BTreeSet::from([format!("{marker}<generated>")]),
                 BTreeSet::new()
             )
+        );
+    }
+
+    #[test]
+    fn review_document_path_is_stored_and_removed_with_its_marker() {
+        let temp_dir = TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path().join("sessions");
+        let draft_path = temp_dir.path().join("fixture-draft.md");
+        store::save_session_to(&sessions_dir, &session("session-a"))
+            .expect("session should be saved");
+
+        let guard = PendingReviewGuard::for_session_with_path(
+            &sessions_dir,
+            "session-a",
+            None,
+            &draft_path,
+        )
+        .expect("PR draft review marker should be added");
+        let stored_markers = store::load_session_from(&sessions_dir, "session-a")
+            .expect("session should load")
+            .expect("session should exist")
+            .pending_human_review_ids;
+        let stored_path = stored_markers
+            .iter()
+            .find_map(|review_id| review_document_path(review_id));
+
+        drop(guard);
+        let remaining_markers = store::load_session_from(&sessions_dir, "session-a")
+            .expect("session should load")
+            .expect("session should exist")
+            .pending_human_review_ids;
+
+        assert_eq!(
+            (stored_path, remaining_markers),
+            (Some(draft_path), BTreeSet::new())
         );
     }
 }

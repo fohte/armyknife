@@ -18,6 +18,7 @@ mod pending_review;
 mod queue_entry;
 mod session_watch;
 mod tmux;
+pub(crate) use pending_review::review_document_path;
 
 pub use approval::{ApprovalManager, TEST_APPROVAL_DIR_OVERRIDE};
 pub use document::{Document, DocumentSchema};
@@ -206,8 +207,10 @@ where
     let review_session = launch_review(document_path, &done_fifo_path, lock_guard.lock_id())?;
 
     {
-        let _pending_review =
-            pending_review::PendingReviewGuard::for_current_session(pending_review_marker);
+        let _pending_review = pending_review::PendingReviewGuard::for_current_session(
+            pending_review_marker,
+            document_path,
+        );
         if let Some(session) = review_session.as_deref() {
             wait_for_fifo_signal_or_session_exit(done_fifo_reader, session, is_session_alive)?;
         } else {
