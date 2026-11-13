@@ -648,38 +648,40 @@ mod tests {
         )
         .unwrap();
 
-        let mut fork_records = fs::read_to_string(forked.transcript_path.as_ref().unwrap())
+        let fork_records = fs::read_to_string(forked.transcript_path.as_ref().unwrap())
             .unwrap()
             .lines()
             .map(|line| serde_json::from_str::<Value>(line).unwrap())
             .collect::<Vec<_>>();
-        let mut calls = host.calls.lock().unwrap().clone();
-        normalize_fork_session_id(&mut fork_records, &forked.session_id);
-        normalize_fork_session_id(&mut calls, &forked.session_id);
+        let calls = host.calls.lock().unwrap().clone();
+        let forked_session_id = forked.session_id.clone();
 
         let previous = store::load_session_from(directory.path(), &session.session_id)
             .unwrap()
             .unwrap();
 
+        let mut actual = serde_json::json!({
+            "forkedSessionId": forked.session_id,
+            "forkedStatus": forked.status,
+            "previousStatus": previous.status,
+            "previousSweepSignaled": previous.sweep_signaled,
+            "ancestorSessionIds": forked.ancestor_session_ids,
+            "source": fs::read_to_string(source).unwrap(),
+            "forkRecords": fork_records,
+            "calls": calls,
+        });
+        normalize_fork_session_id_value(&mut actual, &forked_session_id);
+
         assert_eq!(
-            (
-                forked.session_id != session.session_id,
-                forked.status,
-                previous.status,
-                previous.sweep_signaled,
-                forked.ancestor_session_ids,
-                fs::read_to_string(source).unwrap(),
-                fork_records,
-                calls,
-            ),
-            (
-                true,
-                SessionStatus::Stopped,
-                SessionStatus::Ended,
-                false,
-                vec!["fixture-ancestor".to_string()],
-                original.to_string(),
-                vec![
+            actual,
+            serde_json::json!({
+                "forkedSessionId": "<fork-session>",
+                "forkedStatus": SessionStatus::Stopped,
+                "previousStatus": SessionStatus::Ended,
+                "previousSweepSignaled": false,
+                "ancestorSessionIds": ["fixture-ancestor"],
+                "source": original,
+                "forkRecords": [
                     serde_json::json!({
                         "uuid": "fixture-before",
                         "sessionId": "<fork-session>",
@@ -699,12 +701,12 @@ mod tests {
                         "message": {"content": [{"type": "text", "text": "Later response."}]}
                     }),
                 ],
-                vec![
+                "calls": [
                     serde_json::json!({"stop": "fixture-session"}),
                     serde_json::json!({"rewindFiles": ["fixture-session", "fixture-selected"]}),
                     serde_json::json!({"respawn": ["fixture-session", "<fork-session>"]}),
                 ],
-            ),
+            }),
         );
     }
 
@@ -731,42 +733,45 @@ mod tests {
         let forked =
             rewind_session(directory.path(), &session, "fixture-selected", mode, &host).unwrap();
 
-        let mut fork_records = fs::read_to_string(forked.transcript_path.as_ref().unwrap())
+        let fork_records = fs::read_to_string(forked.transcript_path.as_ref().unwrap())
             .unwrap()
             .lines()
             .map(|line| serde_json::from_str::<Value>(line).unwrap())
             .collect::<Vec<_>>();
-        let mut calls = host.calls.lock().unwrap().clone();
-        normalize_fork_session_id(&mut fork_records, &forked.session_id);
-        normalize_fork_session_id(&mut calls, &forked.session_id);
+        let calls = host.calls.lock().unwrap().clone();
+        let forked_session_id = forked.session_id.clone();
         let mut expected_calls = vec![serde_json::json!({"stop": "fixture-session"})];
         if rewind_files {
             expected_calls
                 .push(serde_json::json!({"rewindFiles": ["fixture-session", "fixture-selected"]}));
         }
         expected_calls.push(serde_json::json!({"respawn": ["fixture-session", "<fork-session>"]}));
+        let previous = store::load_session_from(directory.path(), &session.session_id)
+            .unwrap()
+            .unwrap();
+        let mut actual = serde_json::json!({
+            "forkedSessionId": forked.session_id,
+            "source": fs::read_to_string(&source).unwrap(),
+            "forkRecords": fork_records,
+            "calls": calls,
+            "previousStatus": previous.status,
+        });
+        normalize_fork_session_id_value(&mut actual, &forked_session_id);
 
         assert_eq!(
-            (
-                fs::read_to_string(&source).unwrap(),
-                fork_records,
-                calls,
-                store::load_session_from(directory.path(), &session.session_id)
-                    .unwrap()
-                    .unwrap()
-                    .status,
-            ),
-            (
-                original.to_string(),
-                vec![serde_json::json!({
+            actual,
+            serde_json::json!({
+                "forkedSessionId": "<fork-session>",
+                "source": original,
+                "forkRecords": [serde_json::json!({
                     "uuid": "fixture-before",
                     "sessionId": "<fork-session>",
                     "type": "user",
                     "message": {"content": "Earlier request."}
                 })],
-                expected_calls,
-                SessionStatus::Ended,
-            ),
+                "calls": expected_calls,
+                "previousStatus": SessionStatus::Ended,
+            }),
         );
     }
 
@@ -853,12 +858,6 @@ mod tests {
                 SessionStatus::Running,
             ),
         );
-    }
-
-    fn normalize_fork_session_id(values: &mut [Value], fork_session_id: &str) {
-        for value in values {
-            normalize_fork_session_id_value(value, fork_session_id);
-        }
     }
 
     fn normalize_fork_session_id_value(value: &mut Value, fork_session_id: &str) {
