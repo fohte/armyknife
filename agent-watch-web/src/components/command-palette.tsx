@@ -30,6 +30,7 @@ type CommandPaletteProps = {
   initialQuery?: string
   initialScope?: PaletteScope
   initialActionItemId?: string
+  pendingFocusSessionId?: string | null
   onClose: () => void
   onOpenSession: (id: string) => void
   onOpenSessionBeside: (id: string) => void
@@ -54,6 +55,7 @@ export function CommandPalette({
   initialQuery = '',
   initialScope = 'all',
   initialActionItemId,
+  pendingFocusSessionId = null,
   onClose,
   onOpenSession,
   onOpenSessionBeside,
@@ -184,7 +186,6 @@ export function CommandPalette({
         if (actionsFor.type === 'session') {
           onOpenInTerminal(actionsFor.session.id)
         }
-        setActionsFor(null)
         return
       case 'destination':
         activate(actionsFor)
@@ -367,17 +368,31 @@ export function CommandPalette({
                   <button
                     role="menuitem"
                     type="button"
+                    aria-busy={
+                      action.id === 'terminal' &&
+                      actionsFor.type === 'session' &&
+                      pendingFocusSessionId === actionsFor.session.id
+                    }
+                    disabled={
+                      action.id === 'terminal' &&
+                      actionsFor.type === 'session' &&
+                      pendingFocusSessionId === actionsFor.session.id
+                    }
                     onClick={() => {
                       activateAction(action)
                     }}
                   >
-                    {action.id === 'copy'
-                      ? copyStatus === 'copied'
-                        ? 'Copied'
-                        : copyStatus === 'failed'
-                          ? 'Copy failed'
-                          : 'Copy session ID'
-                      : action.label}
+                    {action.id === 'terminal' &&
+                    actionsFor.type === 'session' &&
+                    pendingFocusSessionId === actionsFor.session.id
+                      ? 'Opening terminal…'
+                      : action.id === 'copy'
+                        ? copyStatus === 'copied'
+                          ? 'Copied'
+                          : copyStatus === 'failed'
+                            ? 'Copy failed'
+                            : 'Copy session ID'
+                        : action.label}
                   </button>
                 </div>
               ))}

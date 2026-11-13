@@ -147,3 +147,11 @@ export const MobileComposerWithAttachmentAndInterrupt: Story = {
   },
   decorators: [mobileViewportDecorator],
 }
+
+export const InterruptRequestIsSending: Story = {
+  name: 'The interrupt control shows progress while its request is sending',
+  args: {
+    canInterrupt: true,
+    isInterrupting: true,
+  },
+}

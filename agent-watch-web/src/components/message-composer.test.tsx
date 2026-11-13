@@ -15,6 +15,8 @@ function requireElement<T extends Element>(element: T | null): T {
 
 function ComposerHarness({
   isMobile = false,
+  canInterrupt = false,
+  isInterrupting = false,
   isProcessingAttachments = false,
   engine,
   skills = [],
@@ -23,8 +25,11 @@ function ComposerHarness({
   onKeyDown = () => undefined,
   onPasteFiles = () => undefined,
   onRemoveAttachment = () => undefined,
+  onInterrupt = () => undefined,
 }: {
   isMobile?: boolean
+  canInterrupt?: boolean
+  isInterrupting?: boolean
   isProcessingAttachments?: boolean
   engine?: 'claude' | 'codex'
   skills?: readonly SkillSuggestion[]
@@ -33,6 +38,7 @@ function ComposerHarness({
   onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void
   onPasteFiles?: (files: File[]) => void
   onRemoveAttachment?: (id: string) => void
+  onInterrupt?: () => void
 }) {
   const [draft, setDraft] = useState(initialDraft)
   return (
@@ -45,14 +51,15 @@ function ComposerHarness({
       isMobile={isMobile}
       engine={engine}
       skills={skills}
-      canInterrupt={false}
+      canInterrupt={canInterrupt}
+      isInterrupting={isInterrupting}
       attachments={[]}
       onDraftChange={setDraft}
       onKeyDown={onKeyDown}
       onPasteFiles={onPasteFiles}
       onRemoveAttachment={onRemoveAttachment}
       onSend={onSend}
-      onInterrupt={() => undefined}
+      onInterrupt={onInterrupt}
     />
   )
 }
@@ -144,6 +151,42 @@ it('disables message sending while attachments are being prepared', () => {
     disabled: true,
     formBusy: 'true',
     status: 'Preparing attachments…',
+  })
+})
+
+it('shows desktop and mobile interrupt progress while the request is pending', () => {
+  const onInterrupt = vi.fn()
+  renderFreshComposer({ canInterrupt: true, isInterrupting: true, onInterrupt })
+  const desktop = {
+    hint: container.querySelector('[role="status"]')?.textContent,
+    buttonCount: container.querySelectorAll('.mobile-interrupt-button').length,
+  }
+
+  renderFreshComposer({
+    canInterrupt: true,
+    isInterrupting: true,
+    isMobile: true,
+    onInterrupt,
+  })
+  const button = container.querySelector<HTMLButtonElement>(
+    '.mobile-interrupt-button',
+  )
+  const mobile = {
+    label: button?.getAttribute('aria-label'),
+    busy: button?.getAttribute('aria-busy'),
+    disabled: button?.disabled,
+  }
+  act(() => button?.click())
+
+  const snapshot = () => ({
+    desktop,
+    mobile,
+    repeatCalls: onInterrupt.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    desktop: { hint: 'Interrupting…', buttonCount: 0 },
+    mobile: { label: 'Interrupting…', busy: 'true', disabled: true },
+    repeatCalls: [],
   })
 })
 
