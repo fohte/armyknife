@@ -246,8 +246,12 @@ mod tests {
             .expect("session should save");
         add_agent_proposal(sessions_dir.path(), "session-a", "body").expect("proposal should save");
 
-        crate::commands::agent::store::delete_session_from(sessions_dir.path(), "session-a")
-            .expect("session should delete");
+        crate::commands::agent::store::delete_session_from_with_storage(
+            sessions_dir.path(),
+            "session-a",
+            Some(&sessions_dir.path().join("attachments")),
+        )
+        .expect("session should delete");
 
         assert_eq!(
             (

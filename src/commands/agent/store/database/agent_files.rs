@@ -17,12 +17,13 @@ pub(crate) struct AgentFile {
     pub(crate) created_at: DateTime<Utc>,
 }
 
-pub(crate) fn insert_agent_file(
+pub(crate) fn insert_agent_files(
     sessions_dir: &Path,
     session_id: &str,
-    file: &AgentFile,
+    files: &[AgentFile],
 ) -> Result<()> {
     validate_session_id(session_id)?;
+    ensure!(!files.is_empty(), "at least one file record is required");
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let session_exists: bool = transaction.query_row(
@@ -31,20 +32,22 @@ pub(crate) fn insert_agent_file(
         |row| row.get(0),
     )?;
     ensure!(session_exists, "session not found: {session_id}");
-    transaction.execute(
-        "INSERT INTO agent_file (session_id, id, position, name, caption, mime_type, size, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![
-            session_id,
-            file.id,
-            file.position,
-            file.name,
-            file.caption,
-            file.mime_type,
-            file.size,
-            file.created_at.to_rfc3339(),
-        ],
-    )?;
+    for file in files {
+        transaction.execute(
+            "INSERT INTO agent_file (session_id, id, position, name, caption, mime_type, size, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                session_id,
+                file.id,
+                file.position,
+                file.name,
+                file.caption,
+                file.mime_type,
+                file.size,
+                file.created_at.to_rfc3339(),
+            ],
+        )?;
+    }
     increment_revision(&transaction)?;
     transaction.commit()?;
     Ok(())

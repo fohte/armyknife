@@ -13,7 +13,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use std::sync::Arc;
 
-pub(super) const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
+use super::super::file_attachment_support::{MAX_AGENT_FILE_BYTES, image_format_from_bytes};
+
+pub(super) const MAX_IMAGE_BYTES: usize = MAX_AGENT_FILE_BYTES as usize;
 pub(super) const MAX_IMAGES_PER_MESSAGE: usize = 16;
 const MAX_SAVED_IMAGE_BYTES: usize = 50 * 1024 * 1024;
 const ATTACHMENT_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
@@ -192,7 +194,7 @@ fn read_image(directory: &Path, filename: &str) -> anyhow::Result<Option<(&'stat
     if bytes.len() > MAX_SAVED_IMAGE_BYTES {
         return Ok(None);
     }
-    let Some((mime_type, _)) = super::attachments::image_format_from_bytes(&bytes) else {
+    let Some((mime_type, _)) = image_format_from_bytes(&bytes) else {
         return Ok(None);
     };
     Ok(Some((mime_type, bytes)))
@@ -231,7 +233,7 @@ fn image_file_has_supported_signature(path: &Path) -> bool {
     let Ok(bytes_read) = file.take(signature.len() as u64).read(&mut signature) else {
         return false;
     };
-    super::attachments::image_format_from_bytes(&signature[..bytes_read]).is_some()
+    image_format_from_bytes(&signature[..bytes_read]).is_some()
 }
 
 fn is_valid_image_filename(filename: &str) -> bool {

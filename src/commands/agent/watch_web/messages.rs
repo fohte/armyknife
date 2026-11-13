@@ -253,7 +253,7 @@ async fn get_messages(
     }
 }
 
-fn append_stored_files(session_id: &str, files: &[AgentFile], messages: &mut Vec<ChatItem>) {
+fn merge_stored_files(session_id: &str, files: &[AgentFile], messages: &mut Vec<ChatItem>) {
     let mut groups: Vec<(
         Option<String>,
         chrono::DateTime<chrono::Utc>,
@@ -268,13 +268,43 @@ fn append_stored_files(session_id: &str, files: &[AgentFile], messages: &mut Vec
             groups.push((file.caption.clone(), file.created_at, vec![file.clone()]));
         }
     }
-    for (caption, created_at, grouped_files) in groups {
-        messages.push(ChatItem::FileAttachment {
-            files: super::file_attachments::stored_chat_files(session_id, &grouped_files),
-            caption,
-            timestamp: Some(created_at.to_rfc3339()),
-        });
+    let mut attachments = groups
+        .into_iter()
+        .map(|(caption, created_at, grouped_files)| {
+            (
+                created_at,
+                ChatItem::FileAttachment {
+                    files: super::file_attachments::stored_chat_files(session_id, &grouped_files),
+                    caption,
+                    timestamp: Some(created_at.to_rfc3339()),
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    attachments.sort_by_key(|(created_at, _)| *created_at);
+    for (created_at, attachment) in attachments {
+        let insertion_index = messages
+            .iter()
+            .position(|message| {
+                chat_item_timestamp(message).is_some_and(|timestamp| timestamp > created_at)
+            })
+            .unwrap_or(messages.len());
+        messages.insert(insertion_index, attachment);
     }
+}
+
+fn chat_item_timestamp(message: &ChatItem) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+    let timestamp = match message {
+        ChatItem::User { timestamp, .. }
+        | ChatItem::QueuedUser { timestamp, .. }
+        | ChatItem::UserWithContent { timestamp, .. }
+        | ChatItem::Peer { timestamp, .. }
+        | ChatItem::Event { timestamp, .. }
+        | ChatItem::FileAttachment { timestamp, .. } => timestamp.as_deref(),
+        ChatItem::Decision { created_at, .. } => Some(created_at.as_str()),
+        _ => None,
+    }?;
+    chrono::DateTime::parse_from_rfc3339(timestamp).ok()
 }
 
 #[cfg(test)]
@@ -360,6 +390,7 @@ fn load_conversation_with_queued_prompts(
         MessageCacheRecords {
             proposals: proposals.clone(),
             todos: todos.clone(),
+            agent_files: agent_files.clone(),
             permission_denials: permission_denials.clone(),
         },
     )?;
@@ -378,7 +409,7 @@ fn load_conversation_with_queued_prompts(
             main_permission_data.as_ref(),
         );
         resolve_peer_session_titles(&mut cached.conversation.messages, &mut load_session)?;
-        append_stored_files(session_id, &agent_files, &mut cached.conversation.messages);
+        cached.conversation.update_metadata();
         cache::delete_resolved_queued_prompts(
             loaders,
             session_id,
@@ -408,7 +439,7 @@ fn load_conversation_with_queued_prompts(
         &loaders.message_cache,
     )?;
     resolve_peer_session_titles(&mut conversation.messages, &mut load_session)?;
-    append_stored_files(session_id, &agent_files, &mut conversation.messages);
+    merge_stored_files(session_id, &agent_files, &mut conversation.messages);
 
     attach_question_request_if_present(
         &mut conversation.messages,
@@ -951,8 +982,8 @@ mod tests {
         routes_with_proposals_and_peer_out_messages,
     };
     use crate::commands::agent::store::{
-        AgentDecision, AgentProposal, AgentTodo, PermissionDeniedOperation, PermissionRequestData,
-        WatchWebPeerOutMessage, WatchWebQueuedPrompt,
+        AgentDecision, AgentFile, AgentProposal, AgentTodo, PermissionDeniedOperation,
+        PermissionRequestData, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
     };
     use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 
@@ -1066,6 +1097,184 @@ mod tests {
                     StatusCode::OK,
                     Some("application/json".to_string()),
                     json!({"messages":[{"type":"assistant","text":"Other response."}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
+                ),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn messages_route_refreshes_and_orders_stored_files_before_applying_ranges() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("fixture.jsonl");
+        std::fs::write(
+            &transcript_path,
+            indoc::indoc! {r#"
+                {"type":"user","origin":{"kind":"human"},"timestamp":"2026-01-01T00:00:01Z","message":{"content":"Earlier message."}}
+                {"type":"assistant","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"text","text":"Assistant response."}]}}
+                {"type":"user","origin":{"kind":"human"},"timestamp":"2026-01-01T00:00:05Z","message":{"content":"Later message."}}
+            "#},
+        )
+        .unwrap();
+
+        let session = Session {
+            transcript_path: Some(transcript_path),
+            ..stored_session()
+        };
+        let file_available = Arc::new(AtomicBool::new(false));
+        let loader_file_available = Arc::clone(&file_available);
+        let file = AgentFile {
+            id: "file-fixture-id".to_string(),
+            position: 0,
+            name: "fixture.png".to_string(),
+            caption: Some("Compare this image.".to_string()),
+            mime_type: Some("image/png".to_string()),
+            size: 3,
+            created_at: chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:04Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        };
+        let decision = AgentDecision {
+            session_id: "fixture-session".to_string(),
+            seq: 1,
+            title: "Keep the timeline order".to_string(),
+            why: "The fixture places a decision between the file and later message.".to_string(),
+            considered: Vec::new(),
+            easy_to_change: "Change the fixture timestamp.".to_string(),
+            created_at: "2026-01-01T00:00:04.500Z".to_string(),
+            review: None,
+            reviewed_at: None,
+        };
+        let decision_item = json!({
+            "type": "decision",
+            "seq": 1,
+            "title": "Keep the timeline order",
+            "why": "The fixture places a decision between the file and later message.",
+            "considered": [],
+            "easyToChange": "Change the fixture timestamp.",
+            "review": null,
+            "createdAt": "2026-01-01T00:00:04.500Z",
+        });
+        let loaders = RouteLoaders::new(
+            move |_| Ok(vec![decision.clone()]),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
+        .with_agent_file_loader(move |_| {
+            Ok(if loader_file_available.load(Ordering::Relaxed) {
+                vec![file.clone()]
+            } else {
+                Vec::new()
+            })
+        });
+        let router = routes_with_proposals_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            loaders,
+        );
+
+        let initial = message_response(&router).await;
+        file_available.store(true, Ordering::Relaxed);
+        let refreshed = message_response(&router).await;
+        let cached = message_response(&router).await;
+        let ranged_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages?limit=3")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let ranged = response_json_snapshot(ranged_response).await;
+
+        let expected_initial = json!({
+            "messages": [
+                {"type": "user", "text": "Earlier message.", "timestamp": "2026-01-01T00:00:01+00:00"},
+                {"type": "assistant", "text": "Assistant response."},
+                decision_item.clone(),
+                {"type": "user", "text": "Later message.", "timestamp": "2026-01-01T00:00:05+00:00"},
+            ],
+            "backgroundTasks": [],
+            "start": 0,
+            "total": 4,
+            "decisions": [decision_item.clone()],
+            "hasUnansweredProposal": false,
+            "activeQuestionIndex": null,
+        });
+        let expected_refreshed = json!({
+            "messages": [
+                {"type": "user", "text": "Earlier message.", "timestamp": "2026-01-01T00:00:01+00:00"},
+                {"type": "assistant", "text": "Assistant response."},
+                {
+                    "type": "file_attachment",
+                    "files": [{
+                        "name": "fixture.png",
+                        "source": "/api/sessions/fixture-session/files/file-fixture-id",
+                        "isImage": true,
+                        "available": true,
+                    }],
+                    "caption": "Compare this image.",
+                    "timestamp": "2026-01-01T00:00:04+00:00",
+                },
+                decision_item.clone(),
+                {"type": "user", "text": "Later message.", "timestamp": "2026-01-01T00:00:05+00:00"},
+            ],
+            "backgroundTasks": [],
+            "start": 0,
+            "total": 5,
+            "decisions": [decision_item.clone()],
+            "hasUnansweredProposal": false,
+            "activeQuestionIndex": null,
+        });
+        let expected_ranged = json!({
+            "messages": [
+                {
+                    "type": "file_attachment",
+                    "files": [{
+                        "name": "fixture.png",
+                        "source": "/api/sessions/fixture-session/files/file-fixture-id",
+                        "isImage": true,
+                        "available": true,
+                    }],
+                    "caption": "Compare this image.",
+                    "timestamp": "2026-01-01T00:00:04+00:00",
+                },
+                decision_item.clone(),
+                {"type": "user", "text": "Later message.", "timestamp": "2026-01-01T00:00:05+00:00"},
+            ],
+            "backgroundTasks": [],
+            "start": 2,
+            "total": 5,
+            "decisions": [decision_item],
+            "hasUnansweredProposal": false,
+            "activeQuestionIndex": null,
+        });
+
+        assert_eq!(
+            (initial, refreshed, cached, ranged),
+            (
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    expected_initial
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    expected_refreshed.clone(),
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    expected_refreshed,
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    expected_ranged,
                 ),
             ),
         );

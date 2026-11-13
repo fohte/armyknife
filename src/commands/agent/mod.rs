@@ -21,6 +21,7 @@ mod decision;
 mod display;
 mod error;
 mod file;
+mod file_attachment_support;
 mod focus;
 mod generate_title_detached;
 mod graceful_quit;

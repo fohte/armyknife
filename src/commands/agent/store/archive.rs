@@ -15,9 +15,12 @@ pub(crate) enum ArchiveLogContext {
 /// Archives a Codex thread before deleting its session row.
 /// Returns false when an incomplete todo keeps the row available or it was already absent.
 pub(crate) fn delete_session_with_archive(session_id: &str) -> Result<bool> {
+    let sessions_dir = super::sessions_dir()?;
+    let storage_root = super::agent_file_storage_root();
     delete_session_with_archive_in(
-        &super::sessions_dir()?,
+        &sessions_dir,
         session_id,
+        storage_root.as_deref(),
         crate::commands::agent::codex_steer::archive_thread,
     )
 }
@@ -25,6 +28,7 @@ pub(crate) fn delete_session_with_archive(session_id: &str) -> Result<bool> {
 fn delete_session_with_archive_in(
     sessions_dir: &Path,
     session_id: &str,
+    storage_root: Option<&Path>,
     mut archive_codex_thread: impl FnMut(&str) -> anyhow::Result<()>,
 ) -> Result<bool> {
     if let Some(session) = super::load_session_from(sessions_dir, session_id)? {
@@ -35,7 +39,7 @@ fn delete_session_with_archive_in(
         );
     }
 
-    super::delete_session_from(sessions_dir, session_id)
+    super::delete_session_from_with_storage(sessions_dir, session_id, storage_root)
 }
 
 pub(crate) fn archive_codex_thread_before_delete_with(
@@ -65,8 +69,32 @@ pub(crate) fn archive_codex_thread_before_delete_with(
     }
 }
 
+#[cfg(test)]
 pub(super) fn cleanup_stale_sessions_in_with_archive_at<F, G, A>(
     dir: &Path,
+    is_pane_alive: F,
+    cwd_exists: G,
+    now: DateTime<Utc>,
+    archive_codex_thread: A,
+) -> Result<bool>
+where
+    F: Fn(&TmuxInfo) -> Option<bool>,
+    G: Fn(&Path) -> bool,
+    A: FnMut(&str) -> anyhow::Result<()>,
+{
+    cleanup_stale_sessions_in_with_archive_at_and_storage(
+        dir,
+        None,
+        is_pane_alive,
+        cwd_exists,
+        now,
+        archive_codex_thread,
+    )
+}
+
+pub(super) fn cleanup_stale_sessions_in_with_archive_at_and_storage<F, G, A>(
+    dir: &Path,
+    storage_root: Option<&Path>,
     is_pane_alive: F,
     cwd_exists: G,
     now: DateTime<Utc>,
@@ -95,6 +123,7 @@ where
             if !keeps_vibe_inheritance {
                 changed_any |= collect_expired_session(
                     dir,
+                    storage_root,
                     session_id,
                     now,
                     retention,
@@ -134,6 +163,7 @@ fn vibe_inheritance_ancestors(
 
 fn collect_expired_session<A>(
     dir: &Path,
+    storage_root: Option<&Path>,
     session_id: &str,
     now: DateTime<Utc>,
     retention: TimeDelta,
@@ -193,6 +223,13 @@ where
         }
     };
     drop(session_lock);
+    if removed
+        && let Some(storage_root) = storage_root
+        && let Err(error) =
+            crate::commands::agent::file::remove_session_storage(storage_root, session_id)
+    {
+        warn_cleanup_entry_failure(session_id, "delete_attachment_files", &error);
+    }
     removed
 }
 
@@ -293,13 +330,13 @@ mod tests {
     use crate::commands::agent::types::{SessionStatus, TmuxInfo};
     use chrono::Utc;
     use rstest::{fixture, rstest};
+    use sha2::Digest;
     use std::cell::RefCell;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
     struct TestSessionDir {
-        #[expect(dead_code, reason = "kept alive to prevent cleanup until dropped")]
         temp_dir: TempDir,
         sessions_dir: PathBuf,
     }
@@ -376,10 +413,12 @@ mod tests {
                 .is_some()
         };
         let archive_calls = RefCell::new(Vec::new());
+        let storage_root = test_session_dir.temp_dir.path().join("attachments");
 
         delete_session_with_archive_in(
             &test_session_dir.sessions_dir,
             &session.session_id,
+            Some(&storage_root),
             |session_id| {
                 archive_calls
                     .borrow_mut()
@@ -406,10 +445,12 @@ mod tests {
                 .is_some()
         };
         let archive_calls = RefCell::new(Vec::new());
+        let storage_root = test_session_dir.temp_dir.path().join("attachments");
 
         let result = delete_session_with_archive_in(
             &test_session_dir.sessions_dir,
             &session.session_id,
+            Some(&storage_root),
             |session_id| {
                 archive_calls
                     .borrow_mut()
@@ -422,5 +463,31 @@ mod tests {
             (result.is_ok(), archive_calls.into_inner(), is_stored(),),
             (true, vec![("session-to-delete".to_string(), true)], false,),
         );
+    }
+
+    #[rstest]
+    fn deletes_session_attachments_when_archived_session_is_removed(
+        test_session_dir: TestSessionDir,
+    ) {
+        let session_id = "session-with-files";
+        let session = make_session(session_id, Engine::Claude);
+        super::super::save_session_to(&test_session_dir.sessions_dir, &session)
+            .expect("session save should succeed");
+        let storage_root = test_session_dir.temp_dir.path().join("attachments");
+        let digest = crate::shared::hex::encode(&sha2::Sha256::digest(session_id.as_bytes()));
+        let session_storage = storage_root.join(digest);
+        fs::create_dir_all(&session_storage).expect("attachment directory should be created");
+        fs::write(session_storage.join("stored-file"), b"fixture bytes")
+            .expect("attachment should be written");
+
+        let removed = delete_session_with_archive_in(
+            &test_session_dir.sessions_dir,
+            session_id,
+            Some(&storage_root),
+            |_| Ok(()),
+        )
+        .expect("session deletion should succeed");
+
+        assert_eq!((removed, session_storage.exists()), (true, false));
     }
 }

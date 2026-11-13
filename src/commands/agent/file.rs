@@ -11,10 +11,12 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::error::CcError;
+use super::file_attachment_support::{
+    MAX_AGENT_FILE_BYTES as MAX_FILE_BYTES, image_format_from_bytes, sanitize_filename,
+};
 use super::store::{self, AgentFile};
 use crate::shared::env_var::EnvVars;
 
-const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
 const MAX_FILES_PER_SEND: usize = 16;
 const MAX_SEND_BYTES: u64 = 50 * 1024 * 1024;
 
@@ -55,20 +57,16 @@ fn send(args: &SendArgs) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn record_files(
+fn record_files(
     session_id: &str,
     paths: &[PathBuf],
     caption: Option<&str>,
     sessions_dir: &Path,
     storage_root: &Path,
 ) -> Result<Vec<AgentFile>> {
-    ensure!(!paths.is_empty(), "at least one file is required");
-    ensure!(
-        paths.len() <= MAX_FILES_PER_SEND,
-        "a send can include at most {MAX_FILES_PER_SEND} files"
-    );
+    validate_send_limits(paths.len(), &[])?;
     let mut pending_files = Vec::with_capacity(paths.len());
-    let mut total_size = 0_u64;
+    let mut file_sizes = Vec::with_capacity(paths.len());
     for source in paths {
         let mut file =
             File::open(source).with_context(|| format!("opening file {}", source.display()))?;
@@ -77,35 +75,30 @@ pub(super) fn record_files(
             .take(MAX_FILE_BYTES + 1)
             .read_to_end(&mut bytes)
             .with_context(|| format!("reading file {}", source.display()))?;
-        ensure!(
-            bytes.len() as u64 <= MAX_FILE_BYTES,
-            "file exceeds the 10 MiB limit: {}",
-            source.display()
-        );
-        total_size = total_size
-            .checked_add(bytes.len() as u64)
-            .context("file size overflow")?;
-        ensure!(
-            total_size <= MAX_SEND_BYTES,
-            "files exceed the 50 MiB limit"
-        );
+        file_sizes.push(bytes.len() as u64);
+        validate_send_limits(paths.len(), &file_sizes)
+            .with_context(|| format!("validating file {}", source.display()))?;
         let name = source
             .file_name()
             .and_then(|name| name.to_str())
-            .map(sanitize_name)
-            .filter(|name| !name.is_empty())
+            .map(sanitize_filename)
             .context("file name is not valid UTF-8")?;
-        let mime_type = image_mime_type(&bytes).map(str::to_owned);
+        let mime_type = image_format_from_bytes(&bytes).map(|(mime_type, _)| mime_type.to_owned());
         pending_files.push((name, mime_type, bytes));
     }
 
     let directory = session_directory(storage_root, session_id)?;
     let mut stored = Vec::with_capacity(pending_files.len());
+    let mut created_paths = Vec::with_capacity(pending_files.len());
     let created_at = Utc::now();
     for (position, (name, mime_type, bytes)) in pending_files.into_iter().enumerate() {
         let id = Uuid::new_v4().to_string();
         let path = directory.join(&id);
-        write_new_file(&path, &bytes)?;
+        if let Err(error) = write_new_file(&path, &bytes) {
+            remove_created_files(&created_paths);
+            return Err(error);
+        }
+        created_paths.push(path);
         let record = AgentFile {
             id,
             position: position as i64,
@@ -115,13 +108,43 @@ pub(super) fn record_files(
             size: bytes.len() as i64,
             created_at,
         };
-        if let Err(error) = store::insert_agent_file_from(sessions_dir, session_id, &record) {
-            let _ = fs::remove_file(path);
-            return Err(error);
-        }
         stored.push(record);
     }
+    if let Err(error) = store::insert_agent_files_from(sessions_dir, session_id, &stored) {
+        remove_created_files(&created_paths);
+        return Err(error);
+    }
     Ok(stored)
+}
+
+fn validate_send_limits(file_count: usize, file_sizes: &[u64]) -> Result<()> {
+    ensure!(file_count > 0, "at least one file is required");
+    ensure!(
+        file_count <= MAX_FILES_PER_SEND,
+        "a send can include at most {MAX_FILES_PER_SEND} files"
+    );
+    let mut total_size = 0_u64;
+    for size in file_sizes {
+        ensure!(*size <= MAX_FILE_BYTES, "file exceeds the 10 MiB limit");
+        total_size = total_size
+            .checked_add(*size)
+            .context("file size overflow")?;
+        ensure!(
+            total_size <= MAX_SEND_BYTES,
+            "files exceed the 50 MiB limit"
+        );
+    }
+    Ok(())
+}
+
+fn remove_created_files(paths: &[PathBuf]) {
+    for path in paths {
+        if let Err(error) = fs::remove_file(path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(path = %path.display(), %error, "failed to remove a partial agent file send");
+        }
+    }
 }
 
 pub(crate) fn read_stored_file(
@@ -168,6 +191,37 @@ pub(crate) fn storage_root() -> Result<PathBuf> {
     Ok(path)
 }
 
+pub(crate) fn remove_session_storage(storage_root: &Path, session_id: &str) -> Result<()> {
+    let root_metadata = match fs::symlink_metadata(storage_root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    ensure!(
+        root_metadata.is_dir() && !root_metadata.file_type().is_symlink(),
+        "file attachment path is not a real directory"
+    );
+    let root = storage_root.canonicalize()?;
+    let digest = crate::shared::hex::encode(&Sha256::digest(session_id.as_bytes()));
+    let directory = root.join(digest);
+    let metadata = match fs::symlink_metadata(&directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    ensure!(
+        metadata.is_dir() && !metadata.file_type().is_symlink(),
+        "file attachment session path is not a real directory"
+    );
+    let directory = directory.canonicalize()?;
+    ensure!(
+        directory.parent() == Some(root.as_path()),
+        "file attachment path escaped storage directory"
+    );
+    fs::remove_dir_all(directory)?;
+    Ok(())
+}
+
 fn session_directory(storage_root: &Path, session_id: &str) -> Result<PathBuf> {
     fs::create_dir_all(storage_root)?;
     let metadata = fs::symlink_metadata(storage_root)?;
@@ -208,8 +262,12 @@ fn write_new_file(path: &Path, bytes: &[u8]) -> Result<()> {
     #[cfg(unix)]
     options.mode(0o600);
     let mut file = options.open(path)?;
-    std::io::Write::write_all(&mut file, bytes)?;
-    file.sync_all()?;
+    let result = std::io::Write::write_all(&mut file, bytes).and_then(|()| file.sync_all());
+    drop(file);
+    if let Err(error) = result {
+        let _ = fs::remove_file(path);
+        return Err(error.into());
+    }
     Ok(())
 }
 
@@ -219,44 +277,17 @@ fn set_private_permissions(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn sanitize_name(name: &str) -> String {
-    let sanitized = name
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    let trimmed = sanitized.trim_matches('.');
-    trimmed.chars().take(180).collect()
-}
-
-fn image_mime_type(bytes: &[u8]) -> Option<&'static str> {
-    if bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]) {
-        Some("image/png")
-    } else if bytes.starts_with(&[255, 216, 255]) {
-        Some("image/jpeg")
-    } else if bytes.starts_with(b"GIF8") {
-        Some("image/gif")
-    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
-        Some("image/webp")
-    } else {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
 
+    use chrono::Utc;
     use clap::Parser;
     use rstest::{fixture, rstest};
+    use sha2::Digest;
     use tempfile::TempDir;
 
-    use super::{read_stored_file, record_files};
+    use super::{read_stored_file, record_files, validate_send_limits};
     use crate::cli::{Cli, Commands};
     use crate::commands::agent::store::{self, AgentFile};
     use crate::commands::agent::{AgentCommands, FileCommands};
@@ -344,6 +375,90 @@ mod tests {
                 Some(b"fixture report".to_vec())
             )
         );
+    }
+
+    #[rstest]
+    #[case::exact_per_file_limit(1, &[10 * 1024 * 1024], None)]
+    #[case::over_per_file_limit(1, &[10 * 1024 * 1024 + 1], Some("file exceeds the 10 MiB limit"))]
+    #[case::exact_combined_limit(5, &[10 * 1024 * 1024; 5], None)]
+    #[case::over_combined_limit(6, &[10 * 1024 * 1024, 10 * 1024 * 1024, 10 * 1024 * 1024, 10 * 1024 * 1024, 10 * 1024 * 1024, 1], Some("files exceed the 50 MiB limit"))]
+    #[case::exact_file_count_limit(16, &[], None)]
+    #[case::over_file_count_limit(17, &[], Some("a send can include at most 16 files"))]
+    fn validates_send_limits(
+        #[case] file_count: usize,
+        #[case] sizes: &[u64],
+        #[case] expected_error: Option<&str>,
+    ) {
+        let actual = validate_send_limits(file_count, sizes).map_err(|error| error.to_string());
+        let expected = expected_error.map_or(Ok(()), |error| Err(error.to_owned()));
+
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest]
+    fn removes_copied_files_when_batch_registration_fails(storage: (TempDir, TempDir)) {
+        let (sessions, state) = storage;
+        store::session_store_revision_from(sessions.path()).unwrap();
+        let first_source = state.path().join("first-report.txt");
+        let second_source = state.path().join("second-report.txt");
+        fs::write(&first_source, b"first report").unwrap();
+        fs::write(&second_source, b"second report").unwrap();
+        let storage_root = state.path().join("attachments");
+
+        let result = record_files(
+            "missing-session",
+            &[first_source, second_source],
+            None,
+            sessions.path(),
+            &storage_root,
+        );
+        let digest = crate::shared::hex::encode(&sha2::Sha256::digest(b"missing-session"));
+        let stored_bytes = fs::read_dir(storage_root.join(digest))
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .count();
+        let stored_records = store::agent_files_from(sessions.path(), "missing-session").unwrap();
+
+        assert_eq!(
+            (result.is_err(), stored_bytes, stored_records),
+            (true, 0, Vec::new())
+        );
+    }
+
+    #[rstest]
+    fn batch_registration_rolls_back_when_a_file_id_conflicts(storage: (TempDir, TempDir)) {
+        let (sessions, _) = storage;
+        create_session(sessions.path());
+        let revision_before = store::session_store_revision_from(sessions.path()).unwrap();
+        let files = [
+            AgentFile {
+                id: "duplicate-file-id".to_owned(),
+                position: 0,
+                name: "first.txt".to_owned(),
+                caption: None,
+                mime_type: None,
+                size: 1,
+                created_at: Utc::now(),
+            },
+            AgentFile {
+                id: "duplicate-file-id".to_owned(),
+                position: 1,
+                name: "second.txt".to_owned(),
+                caption: None,
+                mime_type: None,
+                size: 1,
+                created_at: Utc::now(),
+            },
+        ];
+
+        let result = store::insert_agent_files_from(sessions.path(), "fixture-session", &files);
+        let actual = (
+            result.is_err(),
+            store::agent_files_from(sessions.path(), "fixture-session").unwrap(),
+            store::session_store_revision_from(sessions.path()).unwrap(),
+        );
+
+        assert_eq!(actual, (true, Vec::new(), revision_before));
     }
 
     #[rstest]

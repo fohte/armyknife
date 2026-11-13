@@ -17,10 +17,13 @@ use base64::Engine as _;
 use serde::Serialize;
 
 use super::super::file::{self, storage_root};
+use super::super::file_attachment_support::{
+    MAX_AGENT_FILE_BYTES, image_format_from_bytes, is_image_mime_type, sanitize_filename,
+};
 use super::super::store::{self, AgentFile};
 use super::super::types::{Engine, Session};
 
-pub(super) const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
+pub(super) const MAX_FILE_BYTES: u64 = MAX_AGENT_FILE_BYTES;
 
 type SessionLoader = Arc<dyn Fn(&str) -> Result<Option<Session>> + Send + Sync>;
 type FileLoader = Arc<dyn Fn(&str, &str) -> Result<Option<AgentFile>> + Send + Sync>;
@@ -81,7 +84,7 @@ pub(super) fn stored_chat_files(session_id: &str, records: &[AgentFile]) -> Vec<
         .map(|record| ChatFile {
             name: record.name.clone(),
             source: format!("/api/sessions/{session_id}/files/{}", record.id),
-            is_image: record.mime_type.as_deref().is_some_and(is_image_mime),
+            is_image: record.mime_type.as_deref().is_some_and(is_image_mime_type),
             available: true,
         })
         .collect()
@@ -97,11 +100,17 @@ pub(super) fn transcript_chat_file(
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
-        .map(sanitize_name)
+        .map(sanitize_filename)
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| "download".to_owned());
-    let availability = read_file_for_delivery(path).ok().flatten();
-    let is_image = availability.as_deref().and_then(image_mime_type).is_some();
+    let (available, is_image) = match inspect_transcript_file(path) {
+        Ok(Some(is_image)) => (true, is_image),
+        Ok(None) => (false, false),
+        Err(error) => {
+            tracing::warn!(path = %path.display(), %error, "failed to check transcript attachment availability");
+            (false, false)
+        }
+    };
     ChatFile {
         name,
         source: format!(
@@ -109,29 +118,61 @@ pub(super) fn transcript_chat_file(
             encode_tool_use_id(tool_use_id)
         ),
         is_image,
-        available: availability.is_some(),
+        available,
     }
+}
+
+fn inspect_transcript_file(path: &Path) -> Result<Option<bool>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() && metadata.len() <= MAX_FILE_BYTES => {}
+        Ok(_) => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = match options.open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() > MAX_FILE_BYTES {
+        return Ok(None);
+    }
+    let mut prefix = Vec::with_capacity(12);
+    file.by_ref().take(12).read_to_end(&mut prefix)?;
+    Ok(Some(image_format_from_bytes(&prefix).is_some()))
 }
 
 async fn get_stored_file(
     State(state): State<RoutesState>,
     AxumPath((session_id, file_id)): AxumPath<(String, String)>,
 ) -> Response {
-    let Some(record) = (match (state.load_file)(&session_id, &file_id) {
-        Ok(record) => record,
-        Err(error) => {
-            tracing::warn!(%error, "failed to load stored agent file record");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    }) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let result = file::read_stored_file(&state.storage_root, &session_id, &record);
+    let load_file = Arc::clone(&state.load_file);
+    let storage_root = state.storage_root;
+    let result = tokio::task::spawn_blocking(move || -> Result<Option<(String, Vec<u8>)>> {
+        let Some(record) = load_file(&session_id, &file_id)? else {
+            return Ok(None);
+        };
+        Ok(file::read_stored_file(&storage_root, &session_id, &record)?
+            .map(|bytes| (record.name, bytes)))
+    })
+    .await;
     match result {
-        Ok(Some(bytes)) => file_response(&record.name, &bytes),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(error) => {
+        Ok(Ok(Some((name, bytes)))) => file_response(&name, &bytes),
+        Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(error)) => {
             tracing::warn!(%error, "failed to read stored agent file");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+        Err(error) => {
+            tracing::warn!(%error, "stored agent file task failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
@@ -160,30 +201,45 @@ async fn get_transcript_file(
     let Some(transcript_path) = session.transcript_path.as_deref() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let path = match transcript_file_path(transcript_path, &tool_use_id, index) {
-        Ok(Some(path)) => path,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+    let transcript_path = PathBuf::from(transcript_path);
+    let file = match tokio::task::spawn_blocking(move || {
+        read_transcript_file(&transcript_path, &tool_use_id, index)
+    })
+    .await
+    {
+        Ok(Ok(file)) => file,
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "failed to read transcript attachment");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
         Err(error) => {
-            tracing::warn!(%error, "failed to resolve transcript attachment");
+            tracing::warn!(%error, "transcript attachment task failed");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
-    match read_file_for_delivery(&path) {
-        Ok(Some(bytes)) => {
+    match file {
+        Some((path, bytes)) => {
             let name = path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .map(sanitize_name)
+                .map(sanitize_filename)
                 .filter(|name| !name.is_empty())
                 .unwrap_or_else(|| "download".to_owned());
             file_response(&name, &bytes)
         }
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(error) => {
-            tracing::warn!(%error, "failed to read transcript attachment");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+        None => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+fn read_transcript_file(
+    transcript_path: &Path,
+    tool_use_id: &str,
+    index: usize,
+) -> Result<Option<(PathBuf, Vec<u8>)>> {
+    let Some(path) = transcript_file_path(transcript_path, tool_use_id, index)? else {
+        return Ok(None);
+    };
+    Ok(read_file_for_delivery(&path)?.map(|bytes| (path, bytes)))
 }
 
 fn encode_tool_use_id(tool_use_id: &str) -> String {
@@ -294,7 +350,7 @@ fn read_file_for_delivery(path: &Path) -> Result<Option<Vec<u8>>> {
 }
 
 fn file_response(name: &str, bytes: &[u8]) -> Response {
-    let mime_type = image_mime_type(bytes);
+    let mime_type = image_format_from_bytes(bytes).map(|(mime_type, _)| mime_type);
     let (mime_type, disposition) = match mime_type {
         Some(mime_type) => (mime_type, format!("inline; filename=\"{name}\"")),
         None => (
@@ -315,52 +371,111 @@ fn file_response(name: &str, bytes: &[u8]) -> Response {
         .into_response()
 }
 
-fn image_mime_type(bytes: &[u8]) -> Option<&'static str> {
-    if bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]) {
-        Some("image/png")
-    } else if bytes.starts_with(&[255, 216, 255]) {
-        Some("image/jpeg")
-    } else if bytes.starts_with(b"GIF8") {
-        Some("image/gif")
-    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
-        Some("image/webp")
-    } else {
-        None
-    }
-}
-
-fn is_image_mime(mime_type: &str) -> bool {
-    matches!(
-        mime_type,
-        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
-    )
-}
-
-fn sanitize_name(name: &str) -> String {
-    let sanitized = name
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    sanitized.trim_matches('.').chars().take(180).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
+    use chrono::Utc;
     use rstest::rstest;
+    use sha2::{Digest, Sha256};
     use tempfile::TempDir;
     use tower::ServiceExt;
 
-    use super::{MAX_FILE_BYTES, encode_tool_use_id, routes_with, transcript_file_path};
-    use crate::commands::agent::store;
+    use super::{
+        ChatFile, MAX_FILE_BYTES, encode_tool_use_id, routes_with, transcript_chat_file,
+        transcript_file_path,
+    };
+    use crate::commands::agent::store::{self, AgentFile};
     use crate::commands::agent::types::Session;
+
+    #[rstest]
+    #[case::png("sample.PNG", &[137, 80, 78, 71, 13, 10, 26, 10])]
+    #[case::jpeg("sample.JPEG", &[255, 216, 255])]
+    #[case::gif("sample.GIF", b"GIF89a")]
+    #[case::webp("sample.WEBP", b"RIFF0000WEBP")]
+    #[case::extensionless("image", &[137, 80, 78, 71, 13, 10, 26, 10])]
+    fn transcript_card_detects_images_from_content(#[case] name: &str, #[case] bytes: &[u8]) {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join(name);
+        std::fs::write(&path, bytes).unwrap();
+
+        let actual = transcript_chat_file(
+            "fixture-session",
+            "fixture-tool-use",
+            0,
+            path.to_str().unwrap(),
+        );
+
+        assert_eq!(
+            actual,
+            ChatFile {
+                name: name.to_owned(),
+                source: format!(
+                    "/api/sessions/fixture-session/transcript-files/{}/0",
+                    encode_tool_use_id("fixture-tool-use")
+                ),
+                is_image: true,
+                available: true,
+            }
+        );
+    }
+
+    #[test]
+    fn transcript_card_does_not_trust_an_image_extension() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("not-an-image.png");
+        std::fs::write(&path, b"not image content").unwrap();
+
+        let actual = transcript_chat_file(
+            "fixture-session",
+            "fixture-tool-use",
+            0,
+            path.to_str().unwrap(),
+        );
+
+        assert_eq!(
+            actual,
+            ChatFile {
+                name: "not-an-image.png".to_owned(),
+                source: format!(
+                    "/api/sessions/fixture-session/transcript-files/{}/0",
+                    encode_tool_use_id("fixture-tool-use")
+                ),
+                is_image: false,
+                available: true,
+            }
+        );
+    }
+
+    #[test]
+    fn transcript_card_marks_oversized_files_unavailable() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("large-report.pdf");
+        std::fs::File::create(&path)
+            .unwrap()
+            .set_len(MAX_FILE_BYTES + 1)
+            .unwrap();
+
+        let actual = transcript_chat_file(
+            "fixture-session",
+            "fixture-tool-use",
+            0,
+            path.to_str().unwrap(),
+        );
+
+        assert_eq!(
+            actual,
+            ChatFile {
+                name: "large-report.pdf".to_owned(),
+                source: format!(
+                    "/api/sessions/fixture-session/transcript-files/{}/0",
+                    encode_tool_use_id("fixture-tool-use")
+                ),
+                is_image: false,
+                available: false,
+            }
+        );
+    }
 
     #[tokio::test]
     async fn serves_a_registered_file_and_rejects_an_unregistered_id() {
@@ -375,18 +490,23 @@ mod tests {
                 [session_id],
             )
             .unwrap();
-        let source = storage.path().join("sample-report.pdf");
-        std::fs::write(&source, b"fixture report").unwrap();
         let storage_root = storage.path().join("attachments");
-        let file = super::super::super::file::record_files(
-            session_id,
-            &[source],
-            Some("A sample report"),
-            sessions.path(),
-            &storage_root,
-        )
-        .unwrap()
-        .remove(0);
+        let file = AgentFile {
+            id: uuid::Uuid::new_v4().to_string(),
+            position: 0,
+            name: "sample-report.pdf".to_owned(),
+            caption: Some("A sample report".to_owned()),
+            mime_type: None,
+            size: b"fixture report".len() as i64,
+            created_at: Utc::now(),
+        };
+        let session_storage = storage_root.join(crate::shared::hex::encode(&Sha256::digest(
+            session_id.as_bytes(),
+        )));
+        std::fs::create_dir_all(&session_storage).unwrap();
+        std::fs::write(session_storage.join(&file.id), b"fixture report").unwrap();
+        store::insert_agent_files_from(sessions.path(), session_id, std::slice::from_ref(&file))
+            .unwrap();
         let registered_file_id = file.id.clone();
         let request_file_id = file.id.clone();
         let app = routes_with(

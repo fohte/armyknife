@@ -10,6 +10,7 @@ use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 use thiserror::Error;
 
+use super::super::file_attachment_support::{image_format_from_bytes, sanitize_filename};
 pub(super) use super::limits::MAX_REQUEST_BODY_BYTES as MAX_ATTACHMENT_BYTES;
 pub(super) const MAX_ATTACHMENTS_PER_MESSAGE: usize = 16;
 const MAX_STORAGE_BYTES: u64 = 1024 * 1024 * 1024;
@@ -111,28 +112,6 @@ pub(super) fn validate(
 fn preview_extension(mime_type: Option<&str>, bytes: &[u8]) -> Option<&'static str> {
     let (detected_mime_type, extension) = image_format_from_bytes(bytes)?;
     (mime_type? == detected_mime_type).then_some(extension)
-}
-
-pub(super) fn image_format_from_bytes(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
-    let mime_type = if bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]) {
-        "image/png"
-    } else if bytes.starts_with(&[255, 216, 255]) {
-        "image/jpeg"
-    } else if bytes.starts_with(b"GIF8") {
-        "image/gif"
-    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
-        "image/webp"
-    } else {
-        return None;
-    };
-    let extension = match mime_type {
-        "image/png" => "png",
-        "image/jpeg" => "jpg",
-        "image/gif" => "gif",
-        "image/webp" => "webp",
-        _ => return None,
-    };
-    Some((mime_type, extension))
 }
 
 fn ensure_image_extension(name: String, extension: &str) -> String {
@@ -329,28 +308,6 @@ fn save_one(directory: &Path, attachment: Attachment) -> anyhow::Result<PathBuf>
         return Err(error.into());
     }
     path.canonicalize().map_err(Into::into)
-}
-
-fn sanitize_filename(name: &str) -> String {
-    let basename = name.replace('\\', "/");
-    let basename = basename.rsplit('/').next().unwrap_or_default();
-    let sanitized: String = basename
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .take(180)
-        .collect();
-    let sanitized = sanitized.trim_matches('.');
-    if sanitized.is_empty() {
-        "attachment".to_string()
-    } else {
-        sanitized.to_string()
-    }
 }
 
 fn create_private_directory(path: &Path) -> std::io::Result<()> {

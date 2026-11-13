@@ -253,9 +253,10 @@ mod tests {
         )
         .unwrap();
 
-        crate::commands::agent::store::delete_session_from(
+        crate::commands::agent::store::delete_session_from_with_storage(
             sessions_dir.path(),
             &session.session_id,
+            Some(&sessions_dir.path().join("attachments")),
         )
         .unwrap();
 
