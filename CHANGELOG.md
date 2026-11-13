@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.667](https://github.com/fohte/armyknife/compare/v0.1.666...v0.1.667) (2026-11-13)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** keep attachments on switch ([#1707](https://github.com/fohte/armyknife/issues/1707)) ([bc03b3f](https://github.com/fohte/armyknife/commit/bc03b3fc83621576ae01bacb900e568590133ee4))
+
 ## [0.1.666](https://github.com/fohte/armyknife/compare/v0.1.665...v0.1.666) (2026-11-13)
 
 
