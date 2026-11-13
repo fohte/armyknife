@@ -1,5 +1,4 @@
-use std::collections::VecDeque;
-use std::io::{ErrorKind, Read};
+use std::io::ErrorKind;
 use std::process::{Child, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -9,6 +8,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 
 use super::super::CommandResult;
+use crate::infra::process::{
+    DrainDeadlineCheck, OutputTail, OutputTailOptions, read_output_tail, set_nonblocking,
+};
 use crate::shared::command;
 
 pub(super) const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
@@ -47,27 +49,39 @@ pub(in crate::commands::agent::watch_web::actions) fn execute_command(
     if let Err(error) = set_nonblocking(&stdout).and_then(|()| set_nonblocking(&stderr)) {
         terminate_process(&mut child);
         let _ = child.wait();
-        return Err(error);
+        return Err(error).context("failed to make output pipe nonblocking");
     }
 
     let stop_reading = Arc::new(AtomicBool::new(false));
     let stdout_stop_reading = Arc::clone(&stop_reading);
     let stderr_stop_reading = Arc::clone(&stop_reading);
     let stdout_reader = thread::spawn(move || {
-        read_tail(
+        read_output_tail(
             stdout,
-            OUTPUT_TAIL_BYTES,
             stdout_stop_reading,
-            OUTPUT_DRAIN_TIMEOUT,
+            OutputTailOptions {
+                max_bytes: OUTPUT_TAIL_BYTES,
+                poll_interval: PROCESS_CHECK_INTERVAL,
+                drain_timeout: OUTPUT_DRAIN_TIMEOUT,
+                drain_deadline_check: DrainDeadlineCheck::AfterRead,
+                retry_interrupted: false,
+            },
         )
+        .map(format_output_tail)
     });
     let stderr_reader = thread::spawn(move || {
-        read_tail(
+        read_output_tail(
             stderr,
-            OUTPUT_TAIL_BYTES,
             stderr_stop_reading,
-            OUTPUT_DRAIN_TIMEOUT,
+            OutputTailOptions {
+                max_bytes: OUTPUT_TAIL_BYTES,
+                poll_interval: PROCESS_CHECK_INTERVAL,
+                drain_timeout: OUTPUT_DRAIN_TIMEOUT,
+                drain_deadline_check: DrainDeadlineCheck::AfterRead,
+                retry_interrupted: false,
+            },
         )
+        .map(format_output_tail)
     });
     let (status, timed_out) = wait_for_process(&mut child, COMMAND_TIMEOUT)?;
     stop_reading.store(true, Ordering::Release);
@@ -199,162 +213,37 @@ fn terminate_process(child: &mut Child) {
     }
 }
 
-#[cfg(unix)]
-fn set_nonblocking(reader: &impl std::os::fd::AsRawFd) -> Result<()> {
-    let fd = reader.as_raw_fd();
-    // SAFETY: F_GETFL only reads flags from the live pipe descriptor.
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags == -1 {
-        return Err(std::io::Error::last_os_error()).context("failed to read pipe flags");
-    }
-    // SAFETY: F_SETFL updates flags on the live pipe descriptor.
-    let result = unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
-    if result == -1 {
-        return Err(std::io::Error::last_os_error())
-            .context("failed to make output pipe nonblocking");
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn set_nonblocking(_: &impl Read) -> Result<()> {
-    Ok(())
-}
-
-fn read_tail(
-    mut reader: impl Read,
-    limit: usize,
-    stop_reading: Arc<AtomicBool>,
-    drain_timeout: Duration,
-) -> Result<String> {
-    let mut tail = VecDeque::with_capacity(limit);
-    let mut buffer = [0; 4096];
-    let mut total_bytes = 0usize;
-    let mut cancellation_deadline = None;
-    let mut output_omitted = false;
-    loop {
-        let read = match reader.read(&mut buffer) {
-            Ok(read) => read,
-            Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                if stop_reading.load(Ordering::Acquire) {
-                    break;
-                }
-                thread::sleep(PROCESS_CHECK_INTERVAL);
-                continue;
-            }
-            Err(error) => return Err(error.into()),
-        };
-        if read == 0 {
-            break;
-        }
-        total_bytes = total_bytes.saturating_add(read);
-        for byte in &buffer[..read] {
-            if limit == 0 {
-                continue;
-            }
-            if tail.len() == limit {
-                tail.pop_front();
-            }
-            tail.push_back(*byte);
-        }
-        if stop_reading.load(Ordering::Acquire) {
-            let deadline =
-                *cancellation_deadline.get_or_insert_with(|| Instant::now() + drain_timeout);
-            if Instant::now() >= deadline {
-                output_omitted = true;
-                break;
-            }
-        }
-    }
-    let truncated = total_bytes > limit || output_omitted;
-    let output = String::from_utf8_lossy(&tail.into_iter().collect::<Vec<_>>()).into_owned();
-    Ok(if truncated {
+fn format_output_tail(tail: OutputTail) -> String {
+    let output = String::from_utf8_lossy(&tail.bytes).into_owned();
+    if tail.truncated {
         format!("[earlier output omitted]\n{output}")
     } else {
         output
-    })
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Cursor, Error, Read};
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
     use std::time::Duration;
 
     use rstest::rstest;
 
-    use super::{read_tail, wait_for_completion};
-
-    struct ReaderThatWouldBlock {
-        has_emitted_data: bool,
-    }
-
-    struct RepeatingReader;
-
-    impl Read for RepeatingReader {
-        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-            buffer[..3].copy_from_slice(b"out");
-            Ok(3)
-        }
-    }
-
-    impl Read for ReaderThatWouldBlock {
-        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-            if self.has_emitted_data {
-                return Err(Error::from(std::io::ErrorKind::WouldBlock));
-            }
-            self.has_emitted_data = true;
-            buffer[..7].copy_from_slice(b"partial");
-            Ok(7)
-        }
-    }
-
-    #[test]
-    fn stops_reading_when_a_pipe_would_block_after_process_cleanup() {
-        let reader = ReaderThatWouldBlock {
-            has_emitted_data: false,
-        };
-        let stop_reading = Arc::new(AtomicBool::new(true));
-
-        assert_eq!(
-            read_tail(reader, 32, stop_reading, Duration::from_millis(100),).unwrap(),
-            "partial",
-        );
-    }
-
-    #[test]
-    fn stops_after_one_batch_when_cancellation_is_requested() {
-        assert_eq!(
-            read_tail(
-                RepeatingReader,
-                8,
-                Arc::new(AtomicBool::new(true)),
-                Duration::ZERO,
-            )
-            .unwrap(),
-            "[earlier output omitted]\nout",
-        );
-    }
+    use super::{format_output_tail, wait_for_completion};
+    use crate::infra::process::OutputTail;
 
     #[rstest]
-    #[case::within_limit(b"result", 8, "result")]
-    #[case::exact_limit(b"result", 6, "result")]
-    #[case::over_limit(b"first second", 6, "[earlier output omitted]\nsecond")]
-    #[case::zero_limit(b"result", 0, "[earlier output omitted]\n")]
-    fn keeps_only_the_tail_when_output_exceeds_limit(
-        #[case] input: &[u8],
-        #[case] limit: usize,
+    #[case::within_limit(b"plain output", false, "plain output")]
+    #[case::truncated(b"second", true, "[earlier output omitted]\nsecond")]
+    fn formats_output_with_the_existing_truncation_marker(
+        #[case] bytes: &[u8],
+        #[case] truncated: bool,
         #[case] expected: &str,
     ) {
         assert_eq!(
-            read_tail(
-                Cursor::new(input),
-                limit,
-                Arc::new(AtomicBool::new(false)),
-                Duration::from_millis(100),
-            )
-            .unwrap(),
+            format_output_tail(OutputTail {
+                bytes: bytes.to_vec(),
+                truncated,
+            }),
             expected,
         );
     }
