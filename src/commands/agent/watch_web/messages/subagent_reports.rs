@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
@@ -19,22 +19,8 @@ pub(super) fn add_descriptions(transcript_path: &Path, messages: &mut [ChatItem]
 }
 
 fn description_for(transcript_path: &Path, agent_id: &str) -> Option<String> {
-    if agent_id.is_empty()
-        || agent_id
-            .chars()
-            .any(|character| matches!(character, '/' | '\\'))
-    {
-        return None;
-    }
-    let transcript_name = transcript_path.file_name()?.to_str()?;
-    let session_id = transcript_name
-        .strip_suffix(".jsonl")
-        .or_else(|| transcript_name.strip_suffix(".jsonl.zst"))?;
-    let metadata_path = transcript_path
-        .parent()?
-        .join(session_id)
-        .join("subagents")
-        .join(format!("agent-{agent_id}.meta.json"));
+    let metadata_path =
+        subagent_directory(transcript_path, agent_id)?.join(format!("agent-{agent_id}.meta.json"));
     let metadata = match std::fs::read(&metadata_path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
@@ -63,4 +49,29 @@ fn description_for(transcript_path: &Path, agent_id: &str) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|description| !description.trim().is_empty())
         .map(str::to_owned)
+}
+
+pub(super) fn transcript_path_for_agent(transcript_path: &Path, agent_id: &str) -> Option<PathBuf> {
+    let directory = subagent_directory(transcript_path, agent_id)?;
+    let transcript = directory.join(format!("agent-{agent_id}.jsonl"));
+    if transcript.is_file() {
+        return Some(transcript);
+    }
+    let compressed = directory.join(format!("agent-{agent_id}.jsonl.zst"));
+    compressed.is_file().then_some(compressed)
+}
+
+fn subagent_directory(transcript_path: &Path, agent_id: &str) -> Option<PathBuf> {
+    if agent_id.is_empty()
+        || agent_id
+            .chars()
+            .any(|character| matches!(character, '/' | '\\'))
+    {
+        return None;
+    }
+    let transcript_name = transcript_path.file_name()?.to_str()?;
+    let session_id = transcript_name
+        .strip_suffix(".jsonl")
+        .or_else(|| transcript_name.strip_suffix(".jsonl.zst"))?;
+    Some(transcript_path.parent()?.join(session_id).join("subagents"))
 }
