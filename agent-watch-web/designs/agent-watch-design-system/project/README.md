@@ -30,7 +30,7 @@ agent watch is a dark, dense, square-cornered console for watching coding-agent 
 - Use the steps the rules use, `space-2` to `space-24`. There is no 4px grid: `space-5` and `space-7` are real steps.
 - The conversation column is at most `size-reading` wide, centered, with `space-24` padding on desktop; on phones the message list has `space-16` side padding and `space-14` between messages.
 - The mobile layout applies below `breakpoint-mobile`. Pad for the safe areas: the top bar's top padding is `max(space-8, env(safe-area-inset-top))`, the composer's bottom padding `max(30px, env(safe-area-inset-bottom))`.
-- On phones, primary actions are `size-tap` (44px) square, answer choices `size-choice` (48px) tall, and nothing tappable is under `size-tap-secondary` (36px).
+- On phones, primary actions are `size-tap` (44px) square, answer choices `size-choice` (48px) tall, and the header's text buttons and star `size-tap-secondary` (36px). Two header controls are smaller: the copy-id button (`size-control`, 26px) and the `+N tasks` toggle (22px tall).
 
 ## Shape and depth
 
