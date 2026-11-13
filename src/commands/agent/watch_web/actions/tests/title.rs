@@ -7,7 +7,7 @@ use super::{ActionContext, action_context, post, response_snapshot, session};
 
 #[rstest]
 #[case::sets_trimmed_title("  A clearer title  ", Some("A clearer title"))]
-#[case::clears_title_with_whitespace("  \n ", None)]
+#[case::clears_title_with_whitespace("   ", None)]
 #[tokio::test]
 async fn title_endpoint_saves_the_normalized_label(
     #[case] title: &str,

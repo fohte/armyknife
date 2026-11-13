@@ -20,7 +20,7 @@ pub(crate) fn set_session_title_in(
 
     if let Ok(Some(mut session)) = store::load_session_from(sessions_dir, session_id) {
         session.label = label.clone();
-        window_status::sync_window_title_for_session(&session);
+        window_status::sync_window_title_for_session_in(&session, sessions_dir);
     }
 
     Ok(label)

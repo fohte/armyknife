@@ -94,14 +94,37 @@ afterEach(() => {
 })
 
 it.each([
-  { layout: 'desktop', isMobile: false, title: 'Updated fixture title' },
-  { layout: 'mobile', isMobile: true, title: '' },
-])('$layout header saves an edited title', async ({ isMobile, title }) => {
+  {
+    description: 'desktop header saves a nonempty title',
+    isMobile: false,
+    title: 'Updated fixture title',
+    saved: true,
+    expectedDraft: null,
+  },
+  {
+    description: 'mobile header clears the title',
+    isMobile: true,
+    title: '',
+    saved: true,
+    expectedDraft: null,
+  },
+  {
+    description: 'desktop header keeps an unsaved title after failure',
+    isMobile: false,
+    title: 'Uncommitted fixture title',
+    saved: false,
+    expectedDraft: 'Uncommitted fixture title',
+  },
+])('$description', async ({ isMobile, title, saved, expectedDraft }) => {
+  let completeSave: (result: boolean) => void = () => undefined
+  const saveResult = new Promise<boolean>((resolve) => {
+    completeSave = resolve
+  })
   const onAction = vi.fn(
     (action: string, payload?: Record<string, unknown>): Promise<boolean> => {
-      return Promise.resolve(
-        action === 'title' && typeof payload?.['title'] === 'string',
-      )
+      return action === 'title' && typeof payload?.['title'] === 'string'
+        ? saveResult
+        : Promise.resolve(false)
     },
   )
   renderHeader(isMobile, onAction)
@@ -121,20 +144,35 @@ it.each([
   act(() => {
     setInputValue(input, title)
   })
-  await act(async () => {
+  act(() => {
     requireElement(
       container.querySelector<HTMLButtonElement>('button[type="submit"]'),
     ).click()
-    await Promise.resolve()
+  })
+  const inputDisabledDuringSave = input.disabled
+  await act(async () => {
+    completeSave(saved)
+    await saveResult
   })
 
   const snapshot = () => ({
     action: onAction.mock.calls,
-    editorVisible:
-      container.querySelector('input[aria-label="Session title"]') !== null,
+    inputDisabledDuringSave,
+    editor: (() => {
+      const editor = container.querySelector<HTMLInputElement>(
+        'input[aria-label="Session title"]',
+      )
+      return editor === null
+        ? { visible: false, draft: null }
+        : { visible: true, draft: editor.value }
+    })(),
   })
   expect(snapshot()).toEqual({
     action: [['title', { title }]],
-    editorVisible: false,
+    inputDisabledDuringSave: true,
+    editor:
+      expectedDraft === null
+        ? { visible: false, draft: null }
+        : { visible: true, draft: expectedDraft },
   })
 })

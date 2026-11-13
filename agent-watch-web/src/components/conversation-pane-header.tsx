@@ -92,6 +92,7 @@ export function ConversationPaneHeader({
         aria-label="Session title"
         autoFocus
         value={titleDraft}
+        disabled={isSavingTitle}
         onChange={(event) => {
           setTitleDraft(event.currentTarget.value)
         }}
