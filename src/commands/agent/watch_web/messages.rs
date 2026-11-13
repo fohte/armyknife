@@ -20,7 +20,7 @@ use serde_json::Value;
 use crate::commands::agent::proposal::{ProposalAnswer, ProposalOption};
 use crate::commands::agent::store::{
     AgentDecision, AgentFile, AgentProposal, AgentTodo, PermissionDeniedOperation,
-    PermissionRequestData, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
+    PermissionRequestData, TodoResolution, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
 };
 use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 use crate::commands::agent::user_turn::is_ask_user_question;
@@ -45,6 +45,8 @@ use self::range::MessageRange;
 
 mod cache;
 use self::cache::{MessageCache, MessageCacheKey, MessageCacheRecords, RunningBackgroundTaskCache};
+mod file_attachments;
+use self::file_attachments::merge_stored_files;
 mod session_titles;
 use self::session_titles::{parent_session, resolve_peer_session_titles};
 
@@ -251,60 +253,6 @@ async fn get_messages(
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
-}
-
-fn merge_stored_files(session_id: &str, files: &[AgentFile], messages: &mut Vec<ChatItem>) {
-    let mut groups: Vec<(
-        Option<String>,
-        chrono::DateTime<chrono::Utc>,
-        Vec<AgentFile>,
-    )> = Vec::new();
-    for file in files {
-        if let Some((_, _, grouped_files)) = groups.iter_mut().find(|(caption, created_at, _)| {
-            *caption == file.caption && *created_at == file.created_at
-        }) {
-            grouped_files.push(file.clone());
-        } else {
-            groups.push((file.caption.clone(), file.created_at, vec![file.clone()]));
-        }
-    }
-    let mut attachments = groups
-        .into_iter()
-        .map(|(caption, created_at, grouped_files)| {
-            (
-                created_at,
-                ChatItem::FileAttachment {
-                    files: super::file_attachments::stored_chat_files(session_id, &grouped_files),
-                    caption,
-                    timestamp: Some(created_at.to_rfc3339()),
-                },
-            )
-        })
-        .collect::<Vec<_>>();
-    attachments.sort_by_key(|(created_at, _)| *created_at);
-    for (created_at, attachment) in attachments {
-        let insertion_index = messages
-            .iter()
-            .position(|message| {
-                chat_item_timestamp(message).is_some_and(|timestamp| timestamp > created_at)
-            })
-            .unwrap_or(messages.len());
-        messages.insert(insertion_index, attachment);
-    }
-}
-
-fn chat_item_timestamp(message: &ChatItem) -> Option<chrono::DateTime<chrono::FixedOffset>> {
-    let timestamp = match message {
-        ChatItem::User { timestamp, .. }
-        | ChatItem::QueuedUser { timestamp, .. }
-        | ChatItem::UserWithContent { timestamp, .. }
-        | ChatItem::Peer { timestamp, .. }
-        | ChatItem::Event { timestamp, .. }
-        | ChatItem::FileAttachment { timestamp, .. } => timestamp.as_deref(),
-        ChatItem::Decision { created_at, .. } => Some(created_at.as_str()),
-        _ => None,
-    }?;
-    chrono::DateTime::parse_from_rfc3339(timestamp).ok()
 }
 
 #[cfg(test)]
@@ -820,6 +768,7 @@ enum ChatItem {
         title: String,
         detail: Option<String>,
         completed: bool,
+        resolution: Option<TodoResolution>,
         comment: Option<String>,
     },
     Permission {
@@ -983,7 +932,7 @@ mod tests {
     };
     use crate::commands::agent::store::{
         AgentDecision, AgentFile, AgentProposal, AgentTodo, PermissionDeniedOperation,
-        PermissionRequestData, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
+        PermissionRequestData, TodoResolution, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
     };
     use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 
@@ -1892,6 +1841,7 @@ mod tests {
                 detail: Some("Use a phone".to_string()),
                 created_at: epoch,
                 completed_at: None,
+                resolution: None,
                 comment: None,
             },
             AgentTodo {
@@ -1901,6 +1851,7 @@ mod tests {
                 detail: None,
                 created_at: epoch,
                 completed_at: Some(epoch),
+                resolution: Some(TodoResolution::Completed),
                 comment: Some("Done".to_string()),
             },
         ];
@@ -1931,6 +1882,7 @@ mod tests {
                             "title": "Update settings",
                             "detail": null,
                             "completed": true,
+                            "resolution": "completed",
                             "comment": "Done",
                         },
                         {
@@ -1939,6 +1891,7 @@ mod tests {
                             "title": "Check the page",
                             "detail": "Use a phone",
                             "completed": false,
+                            "resolution": null,
                             "comment": null,
                         },
                     ],

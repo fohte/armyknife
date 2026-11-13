@@ -216,10 +216,13 @@ export function renderConversationMessage({
       <TodoCard
         title={message.title}
         detail={message.detail}
-        completed={message.completed}
+        resolution={message.resolution}
         defaultComment={message.comment ?? ''}
-        onComplete={(comment) =>
-          onAction(`todos/${String(message.seq)}/complete`, { comment })
+        onResolve={(resolution, comment) =>
+          onAction(`todos/${String(message.seq)}/resolve`, {
+            resolution,
+            comment,
+          })
         }
       />
     )

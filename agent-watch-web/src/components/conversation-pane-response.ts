@@ -119,6 +119,19 @@ function isChatItem(value: unknown): value is ChatItem {
         (value['caption'] === null || typeof value['caption'] === 'string') &&
         hasValidOptionalTimestamp(value)
       )
+    case 'todo':
+      return (
+        typeof value['seq'] === 'number' &&
+        typeof value['title'] === 'string' &&
+        (value['detail'] === null || typeof value['detail'] === 'string') &&
+        typeof value['completed'] === 'boolean' &&
+        value['completed'] === (value['resolution'] !== null) &&
+        (value['resolution'] === null ||
+          value['resolution'] === 'completed' ||
+          value['resolution'] === 'rejected' ||
+          value['resolution'] === 'withdrawn') &&
+        (value['comment'] === null || typeof value['comment'] === 'string')
+      )
     case 'tool_summary':
       return (
         typeof value['summary'] === 'string' &&

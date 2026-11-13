@@ -32,7 +32,11 @@ pub(crate) fn is_image_mime_type(mime_type: &str) -> bool {
 pub(crate) fn sanitize_filename(name: &str) -> String {
     let basename = name.replace('\\', "/");
     let basename = basename.rsplit('/').next().unwrap_or_default();
-    let sanitized: String = basename
+    sanitize_basename(basename)
+}
+
+pub(crate) fn sanitize_basename(name: &str) -> String {
+    let sanitized: String = name
         .chars()
         .map(|character| {
             if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {

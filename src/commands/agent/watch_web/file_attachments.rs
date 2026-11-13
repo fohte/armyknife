@@ -18,7 +18,7 @@ use serde::Serialize;
 
 use super::super::file::{self, storage_root};
 use super::super::file_attachment_support::{
-    MAX_AGENT_FILE_BYTES, image_format_from_bytes, is_image_mime_type, sanitize_filename,
+    MAX_AGENT_FILE_BYTES, image_format_from_bytes, is_image_mime_type, sanitize_basename,
 };
 use super::super::store::{self, AgentFile};
 use super::super::types::{Engine, Session};
@@ -100,7 +100,7 @@ pub(super) fn transcript_chat_file(
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
-        .map(sanitize_filename)
+        .map(sanitize_basename)
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| "download".to_owned());
     let (available, is_image) = match inspect_transcript_file(path) {
@@ -222,7 +222,7 @@ async fn get_transcript_file(
             let name = path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .map(sanitize_filename)
+                .map(sanitize_basename)
                 .filter(|name| !name.is_empty())
                 .unwrap_or_else(|| "download".to_owned());
             file_response(&name, &bytes)

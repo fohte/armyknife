@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use rusqlite_migration::{Error as MigrationError, M, MigrationDefinitionError, Migrations};
 
 // Keep older binaries compatible: new columns need defaults or must be nullable.
-static MIGRATION_ENTRIES: [M<'static>; 15] = [
+static MIGRATION_ENTRIES: [M<'static>; 16] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -164,8 +164,9 @@ static MIGRATION_ENTRIES: [M<'static>; 15] = [
         "ALTER TABLE watch_web_peer_out_message
          ADD COLUMN failed INTEGER NOT NULL DEFAULT 0;",
     ),
+    M::up("ALTER TABLE agent_todo ADD COLUMN resolution TEXT;"),
     M::up(
-        "CREATE TABLE agent_file (
+        "CREATE TABLE IF NOT EXISTS agent_file (
             session_id TEXT NOT NULL,
             id TEXT NOT NULL,
             position INTEGER NOT NULL DEFAULT 0,
@@ -176,9 +177,9 @@ static MIGRATION_ENTRIES: [M<'static>; 15] = [
             created_at TEXT NOT NULL,
             PRIMARY KEY (session_id, id)
         );
-        CREATE INDEX agent_file_session_id_created_at
+        CREATE INDEX IF NOT EXISTS agent_file_session_id_created_at
             ON agent_file (session_id, created_at, position);
-        CREATE TRIGGER agent_file_delete_session
+        CREATE TRIGGER IF NOT EXISTS agent_file_delete_session
             AFTER DELETE ON sessions
             BEGIN
                 DELETE FROM agent_file WHERE session_id = OLD.session_id;

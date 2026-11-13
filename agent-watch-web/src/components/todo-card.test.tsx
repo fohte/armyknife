@@ -14,8 +14,8 @@ function props(overrides: Partial<Props> = {}): Props {
   return {
     title: 'Check the updated layout on a phone',
     detail: 'Confirm the action stays visible on a small screen.',
-    completed: false,
-    onComplete: vi.fn(() => Promise.resolve(true)),
+    resolution: null,
+    onResolve: vi.fn(() => Promise.resolve(true)),
     ...overrides,
   }
 }
@@ -82,13 +82,16 @@ it('shows a pending task with optional detail and a completion action', () => {
     detail: 'Confirm the action stays visible on a small screen.',
     commentLabel: 'Comment (optional)',
     commentDisabled: false,
-    button: [{ text: 'Mark done', disabled: false }],
+    button: [
+      { text: 'Mark done', disabled: false },
+      { text: 'Reject', disabled: false },
+    ],
   })
 })
 
 it('sends a trimmed optional comment and keeps the task as completed', async () => {
-  const onComplete = vi.fn(() => Promise.resolve(true))
-  renderCard(props({ onComplete }))
+  const onResolve = vi.fn(() => Promise.resolve(true))
+  renderCard(props({ onResolve }))
   const comment = requireElement(
     container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
   )
@@ -101,7 +104,7 @@ it('sends a trimmed optional comment and keeps the task as completed', async () 
   })
 
   const snapshot = () => ({
-    completeCalls: onComplete.mock.calls,
+    resolveCalls: onResolve.mock.calls,
     status: container.querySelector('h2')?.textContent,
     title: container.querySelector('h3')?.textContent,
     completionComment: container.querySelector('.chat-todo-completed-comment')
@@ -111,7 +114,7 @@ it('sends a trimmed optional comment and keeps the task as completed', async () 
   })
 
   expect(snapshot()).toEqual({
-    completeCalls: [['The layout looks good.']],
+    resolveCalls: [['completed', 'The layout looks good.']],
     status: 'To-do · done',
     title: 'Check the updated layout on a phone',
     completionComment: 'The layout looks good.',
@@ -123,7 +126,7 @@ it('sends a trimmed optional comment and keeps the task as completed', async () 
 it('shows a completed task compactly with its saved comment', () => {
   renderCard(
     props({
-      completed: true,
+      resolution: 'completed',
       defaultComment: 'The task was completed in another tab.',
     }),
   )
@@ -152,7 +155,7 @@ it('shows the persisted comment when a pending task becomes completed', () => {
   renderCard(props())
   renderCard(
     props({
-      completed: true,
+      resolution: 'completed',
       defaultComment: 'The task was completed in another tab.',
     }),
   )
@@ -167,6 +170,62 @@ it('shows the persisted comment when a pending task becomes completed', () => {
   expect(snapshot()).toEqual({
     comment: 'The task was completed in another tab.',
     commentInput: false,
+    buttonCount: 0,
+  })
+})
+
+it('rejects a task with the trimmed optional comment', async () => {
+  const onResolve = vi.fn(() => Promise.resolve(true))
+  renderCard(props({ onResolve }))
+  setTextareaValue(
+    requireElement(
+      container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+    ),
+    '  No longer needed.  ',
+  )
+  await act(async () => {
+    const buttons = container.querySelectorAll<HTMLButtonElement>(
+      '.chat-todo-footer button',
+    )
+    requireElement(buttons.item(1)).click()
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    calls: onResolve.mock.calls,
+    status: container.querySelector('h2')?.textContent,
+    resolution: container
+      .querySelector('.chat-todo-card')
+      ?.getAttribute('data-resolution'),
+    comment: container.querySelector('.chat-todo-completed-comment')
+      ?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    calls: [['rejected', 'No longer needed.']],
+    status: 'To-do · rejected',
+    resolution: 'rejected',
+    comment: 'No longer needed.',
+  })
+})
+
+it('shows a withdrawn task as distinct from a completed task', () => {
+  renderCard(
+    props({ resolution: 'withdrawn', defaultComment: 'The plan changed.' }),
+  )
+
+  const snapshot = () => ({
+    status: container.querySelector('h2')?.textContent,
+    resolution: container
+      .querySelector('.chat-todo-card')
+      ?.getAttribute('data-resolution'),
+    comment: container.querySelector('.chat-todo-completed-comment')
+      ?.textContent,
+    buttonCount: container.querySelectorAll('.chat-todo-footer button').length,
+  })
+  expect(snapshot()).toEqual({
+    status: 'To-do · withdrawn',
+    resolution: 'withdrawn',
+    comment: 'The plan changed.',
     buttonCount: 0,
   })
 })

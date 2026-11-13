@@ -434,7 +434,11 @@ fn drop_port_from_session_in(
     session
         .crit_urls
         .retain(|url| parse_port(url).ok() != Some(port));
-    if session.crit_urls.len() != previous_len {
+    let previous_web_ui_len = session.web_uis.len();
+    session
+        .web_uis
+        .retain(|web_ui| web_ui.name != "crit" || parse_port(&web_ui.url).ok() != Some(port));
+    if session.crit_urls.len() != previous_len || session.web_uis.len() != previous_web_ui_len {
         lock.save(&session)?;
     }
     Ok(Some(session))
@@ -578,6 +582,7 @@ mod tests {
                 pr_context: None,
                 session_id: id.to_string(),
                 crit_urls: urls.iter().map(|url| (*url).to_string()).collect(),
+                web_uis: Vec::new(),
                 pending_human_review_ids: BTreeSet::new(),
                 cwd: PathBuf::from("/tmp/fixture-worktree"),
                 transcript_path: None,
@@ -612,7 +617,7 @@ mod tests {
 
         let temp = TempDir::new().expect("temporary directory should be created");
         let sessions_dir = temp.path();
-        let active = fixture_session(
+        let mut active = fixture_session(
             "fixture-active-session",
             &[
                 "http://localhost:43210/review",
@@ -628,6 +633,20 @@ mod tests {
             ],
             true,
         );
+        active.web_uis = vec![
+            crate::commands::agent::types::WebUiRegistration {
+                name: "crit".to_owned(),
+                url: "http://localhost:43210/review".to_owned(),
+            },
+            crate::commands::agent::types::WebUiRegistration {
+                name: "Design editor".to_owned(),
+                url: "http://localhost:43210/design/sample/".to_owned(),
+            },
+            crate::commands::agent::types::WebUiRegistration {
+                name: "crit".to_owned(),
+                url: "http://localhost:43211/review".to_owned(),
+            },
+        ];
         store::save_session_to(sessions_dir, &active).expect("active session should save");
         store::save_session_to(sessions_dir, &archived_fallback)
             .expect("archived fallback session should save");
@@ -642,21 +661,35 @@ mod tests {
         )
         .expect("session links should be cleaned");
 
+        let active_after = store::load_session_from(sessions_dir, "fixture-active-session")
+            .expect("active session should load")
+            .expect("active session should exist");
+        let archived_after = store::load_session_from(sessions_dir, "fixture-archived-session")
+            .expect("archived session should load")
+            .expect("archived session should exist");
+
         assert_eq!(
             (
-                store::load_session_from(sessions_dir, "fixture-active-session")
-                    .expect("active session should load")
-                    .expect("active session should exist")
-                    .crit_urls,
-                store::load_session_from(sessions_dir, "fixture-archived-session")
-                    .expect("archived session should load")
-                    .expect("archived session should exist")
-                    .crit_urls,
+                active_after.crit_urls,
+                active_after.web_uis,
+                archived_after.crit_urls,
+                archived_after.web_uis,
                 updated_sessions.keys().cloned().collect::<Vec<_>>(),
             ),
             (
                 vec!["http://localhost:43211/review".to_string()],
+                vec![
+                    crate::commands::agent::types::WebUiRegistration {
+                        name: "Design editor".to_owned(),
+                        url: "http://localhost:43210/design/sample/".to_owned(),
+                    },
+                    crate::commands::agent::types::WebUiRegistration {
+                        name: "crit".to_owned(),
+                        url: "http://localhost:43211/review".to_owned(),
+                    },
+                ],
                 vec!["http://localhost:43212/review".to_string()],
+                Vec::new(),
                 vec![
                     "fixture-active-session".to_string(),
                     "fixture-archived-session".to_string(),

@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use super::error::CcError;
 use super::file_attachment_support::{
-    MAX_AGENT_FILE_BYTES as MAX_FILE_BYTES, image_format_from_bytes, sanitize_filename,
+    MAX_AGENT_FILE_BYTES as MAX_FILE_BYTES, image_format_from_bytes, sanitize_basename,
 };
 use super::store::{self, AgentFile};
 use crate::shared::env_var::EnvVars;
@@ -81,7 +81,7 @@ fn record_files(
         let name = source
             .file_name()
             .and_then(|name| name.to_str())
-            .map(sanitize_filename)
+            .map(sanitize_basename)
             .context("file name is not valid UTF-8")?;
         let mime_type = image_format_from_bytes(&bytes).map(|(mime_type, _)| mime_type.to_owned());
         pending_files.push((name, mime_type, bytes));
@@ -265,7 +265,11 @@ fn write_new_file(path: &Path, bytes: &[u8]) -> Result<()> {
     let result = std::io::Write::write_all(&mut file, bytes).and_then(|()| file.sync_all());
     drop(file);
     if let Err(error) = result {
-        let _ = fs::remove_file(path);
+        if let Err(cleanup_error) = fs::remove_file(path)
+            && cleanup_error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(path = %path.display(), %cleanup_error, "failed to remove a partially written agent file");
+        }
         return Err(error.into());
     }
     Ok(())
@@ -287,7 +291,7 @@ mod tests {
     use sha2::Digest;
     use tempfile::TempDir;
 
-    use super::{read_stored_file, record_files, validate_send_limits};
+    use super::{MAX_FILE_BYTES, read_stored_file, record_files, validate_send_limits};
     use crate::cli::{Cli, Commands};
     use crate::commands::agent::store::{self, AgentFile};
     use crate::commands::agent::{AgentCommands, FileCommands};
@@ -373,6 +377,64 @@ mod tests {
                 Some("Fixture caption"),
                 Some(records[0].clone()),
                 Some(b"fixture report".to_vec())
+            )
+        );
+    }
+
+    #[cfg(unix)]
+    #[rstest]
+    fn preserves_unix_backslashes_in_the_sent_file_name(storage: (TempDir, TempDir)) {
+        let (sessions, state) = storage;
+        create_session(sessions.path());
+        let source = state.path().join("design\\final.pdf");
+        fs::write(&source, b"fixture report").unwrap();
+
+        let records = record_files(
+            "fixture-session",
+            &[source],
+            None,
+            sessions.path(),
+            &state.path().join("attachments"),
+        )
+        .unwrap();
+        let names = records
+            .into_iter()
+            .map(|record| record.name)
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["design_final.pdf"]);
+    }
+
+    #[rstest]
+    fn rejects_an_oversized_input_before_persisting_files(storage: (TempDir, TempDir)) {
+        let (sessions, state) = storage;
+        create_session(sessions.path());
+        let source = state.path().join("oversized-report.bin");
+        fs::File::create(&source)
+            .unwrap()
+            .set_len(MAX_FILE_BYTES + 1)
+            .unwrap();
+        let storage_root = state.path().join("attachments");
+        let session_storage = storage_root.join(crate::shared::hex::encode(&sha2::Sha256::digest(
+            b"fixture-session",
+        )));
+
+        let result = record_files(
+            "fixture-session",
+            &[source],
+            None,
+            sessions.path(),
+            &storage_root,
+        )
+        .map_err(|error| error.root_cause().to_string());
+        let records = store::agent_files_from(sessions.path(), "fixture-session").unwrap();
+
+        assert_eq!(
+            (result, session_storage.exists(), records),
+            (
+                Err("file exceeds the 10 MiB limit".to_owned()),
+                false,
+                Vec::new(),
             )
         );
     }

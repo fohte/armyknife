@@ -1,7 +1,7 @@
 use axum::extract::Request;
-use axum::http::header::{HOST, ORIGIN};
+use axum::http::header::{HOST, ORIGIN, UPGRADE};
 use axum::http::uri::{Authority, Uri};
-use axum::http::{Method, StatusCode};
+use axum::http::{HeaderMap, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
@@ -13,7 +13,7 @@ pub(super) async fn validate_request(request: Request, next: Next) -> Response {
     }
 }
 
-fn request_is_allowed(method: &Method, headers: &axum::http::HeaderMap) -> bool {
+fn request_is_allowed(method: &Method, headers: &HeaderMap) -> bool {
     let Some(host) = headers
         .get(HOST)
         .and_then(|value| value.to_str().ok())
@@ -26,7 +26,7 @@ fn request_is_allowed(method: &Method, headers: &axum::http::HeaderMap) -> bool 
         return false;
     }
 
-    if method == Method::GET || method == Method::HEAD {
+    if (method == Method::GET || method == Method::HEAD) && !is_websocket_upgrade(headers) {
         return true;
     }
 
@@ -46,6 +46,13 @@ fn request_is_allowed(method: &Method, headers: &axum::http::HeaderMap) -> bool 
         })
 }
 
+pub(super) fn is_websocket_upgrade(headers: &HeaderMap) -> bool {
+    headers
+        .get(UPGRADE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("websocket"))
+}
+
 fn allowed_host(host: &str) -> bool {
     let host = host.to_ascii_lowercase();
     host == "localhost" || host == "127.0.0.1" || (host.ends_with(".ts.net") && host.len() > 7)
@@ -53,7 +60,8 @@ fn allowed_host(host: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use axum::http::{HeaderMap, HeaderValue};
+    use axum::http::header::{ORIGIN, UPGRADE};
+    use axum::http::{HeaderMap, HeaderValue, Method};
     use rstest::rstest;
 
     use super::request_is_allowed;
@@ -115,6 +123,24 @@ mod tests {
             request_is_allowed(&axum::http::Method::POST, &headers),
             expected
         );
+    }
+
+    #[rstest]
+    #[case::missing_origin(None, false)]
+    #[case::different_port(Some("http://localhost:4318"), false)]
+    #[case::matching_origin(Some("http://localhost:4317"), true)]
+    fn websocket_upgrades_require_an_origin_matching_host(
+        #[case] origin: Option<&str>,
+        #[case] expected: bool,
+    ) {
+        let mut headers = HeaderMap::new();
+        headers.insert("host", HeaderValue::from_static("localhost:4317"));
+        headers.insert(UPGRADE, HeaderValue::from_static("websocket"));
+        if let Some(origin) = origin {
+            headers.insert(ORIGIN, HeaderValue::from_str(origin).unwrap());
+        }
+
+        assert_eq!(request_is_allowed(&Method::GET, &headers), expected);
     }
 
     #[rstest]

@@ -288,7 +288,7 @@ mod tests {
             }]
         );
     }
-    use crate::commands::agent::store::{AgentDecision, AgentTodo};
+    use crate::commands::agent::store::{AgentDecision, AgentTodo, TodoResolution};
     use crate::commands::agent::watch_web::messages::{
         ChatItem, ParentSession, PeerDirection, ProposalOption, QuestionChoice, SkillSuggestion,
         ToolOperation, UserContentPart,
@@ -312,6 +312,7 @@ mod tests {
             detail: Some("Open the sample summary.".to_string()),
             created_at,
             completed_at: is_completed.then(|| created_at + chrono::Duration::minutes(1)),
+            resolution: is_completed.then_some(TodoResolution::Completed),
             comment: is_completed.then(|| "The sample is ready.".to_string()),
         };
 
@@ -338,6 +339,7 @@ mod tests {
             title: "Review the sample report".to_string(),
             detail: Some("Open the sample summary.".to_string()),
             completed: is_completed,
+            resolution: is_completed.then_some(TodoResolution::Completed),
             comment: is_completed.then(|| "The sample is ready.".to_string()),
         };
         let expected = if is_completed {
