@@ -37,12 +37,10 @@ impl ActionRuntime for LiveActionRuntime {
         )
     }
 
-    fn send_keys_if_agent_is_running(
+    fn send_claude_escape_if_agent_is_running(
         &self,
         tmux_info: &TmuxInfo,
-        engine: Engine,
         current_command: &str,
-        keys: &[&str],
     ) -> Result<bool> {
         let Some(pane_pid) = crate::infra::tmux::get_pane_pid_for_socket(
             tmux_info.socket_path.as_deref(),
@@ -57,7 +55,7 @@ impl ActionRuntime for LiveActionRuntime {
         };
         if !super::super::super::pane::process::pane_has_live_agent_process(
             pane_pid,
-            engine,
+            Engine::Claude,
             Some(&process_snapshot),
         ) {
             return Ok(false);
@@ -67,9 +65,13 @@ impl ActionRuntime for LiveActionRuntime {
             tmux_info.socket_path.as_deref(),
             &tmux_info.pane_id,
             current_command,
-            keys,
+            &["Escape"],
         )
         .map_err(anyhow::Error::from)
+    }
+
+    fn interrupt_codex(&self, thread_id: &str) -> Result<()> {
+        crate::commands::agent::codex_steer::interrupt_turn(thread_id)
     }
 
     fn focus(&self, tmux_info: &TmuxInfo) -> Result<()> {

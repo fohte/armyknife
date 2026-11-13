@@ -8,6 +8,7 @@ import {
   useCallback,
   useMemo,
   useRef,
+  useState,
 } from 'react'
 
 import { ConversationPaneHeader } from '#components/conversation-pane-header'
@@ -119,6 +120,8 @@ export function ConversationPaneView({
   isToday = false,
   onToggleToday,
 }: ConversationPaneViewProps) {
+  const interruptInFlight = useRef(false)
+  const [isInterrupting, setIsInterrupting] = useState(false)
   const currentDate = new Date()
   const currentYear = currentDate.getFullYear()
   const currentMonth = currentDate.getMonth()
@@ -221,6 +224,16 @@ export function ConversationPaneView({
     onPasteFiles(files)
     onClearError()
   }
+  const interrupt = useCallback(() => {
+    if (interruptInFlight.current || actions?.interrupt !== true) return
+    interruptInFlight.current = true
+    setIsInterrupting(true)
+    const finish = () => {
+      interruptInFlight.current = false
+      setIsInterrupting(false)
+    }
+    void onAction('interrupt').then(finish, finish)
+  }, [actions?.interrupt, onAction])
   const {
     isFileDragActive,
     handleDragEnter,
@@ -240,7 +253,7 @@ export function ConversationPaneView({
     }
     if (event.key === 'Escape' && actions?.interrupt === true) {
       event.preventDefault()
-      void onAction('interrupt')
+      interrupt()
       return
     }
     if (event.key === 'Enter' && !isMobile && event.altKey && !event.shiftKey) {
@@ -282,6 +295,7 @@ export function ConversationPaneView({
         </div>
       ) : null}
       <ConversationPaneHeader
+        key={session.id}
         session={session}
         sessions={sessions}
         actions={actions}
@@ -378,6 +392,7 @@ export function ConversationPaneView({
         }
         disabled={actions?.message !== true}
         isSending={isSending}
+        isInterrupting={isInterrupting}
         isProcessingAttachments={isProcessingAttachments}
         isMobile={isMobile}
         canInterrupt={actions?.interrupt === true}
@@ -390,7 +405,7 @@ export function ConversationPaneView({
           void sendMessage()
         }}
         onInterrupt={() => {
-          void onAction('interrupt')
+          interrupt()
         }}
       />
       <ConversationSelectionReply

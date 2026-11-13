@@ -62,3 +62,18 @@ type Story = StoryObj<typeof meta>
 export const SessionContextAndActionsAreVisible: Story = {
   name: 'The header shows session context and actions',
 }
+
+export const EditingTheSessionTitle: Story = {
+  name: 'The header edits the session title',
+  args: {
+    titleEditing: true,
+  },
+}
+
+export const EditingTheSessionTitleOnMobile: Story = {
+  name: 'The mobile header edits the session title',
+  args: {
+    isMobile: true,
+    titleEditing: true,
+  },
+}

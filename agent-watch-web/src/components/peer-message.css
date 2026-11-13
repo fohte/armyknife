@@ -55,6 +55,20 @@
   color: var(--aw-text-body);
 }
 
+.chat-peer-status {
+  color: var(--aw-text-muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.chat-peer-message-to[data-failed='true'] {
+  border-color: var(--aw-color-error);
+}
+
+.chat-peer-message-to[data-failed='true'] .chat-peer-status {
+  color: var(--aw-color-error);
+}
+
 .chat-peer-label .session-link-trigger {
   padding: 0;
   background: transparent;

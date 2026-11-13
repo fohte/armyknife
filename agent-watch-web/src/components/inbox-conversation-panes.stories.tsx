@@ -115,12 +115,17 @@ export const DesktopShowsTheInboxAndConversation: Story = {
 }
 
 export const NarrowDesktopOverlaysTheStatusPanel: Story = {
-  name: 'A narrow desktop overlays the status panel while keeping the Inbox open',
+  name: 'The narrow desktop shows the editor in the status panel',
   args: {
     statusPanelOpen: true,
     selectedSession: {
       ...session,
-      critUrl: '/review/sample',
+      webUis: [
+        {
+          name: 'Design editor',
+          url: '/design/sample/',
+        },
+      ],
     },
   },
   decorators: [

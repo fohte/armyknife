@@ -54,9 +54,6 @@ pub(super) struct ToolSummary {
 
 impl ToolSummary {
     pub(super) fn record(&mut self, name: &str, input: Option<&serde_json::Value>, failed: bool) {
-        if classifier::is_peer_notify_tool(name, input) {
-            return;
-        }
         self.actions += 1;
         self.operations.push(ToolOperation {
             tool: name.to_owned(),
@@ -357,22 +354,6 @@ pub(in crate::commands::agent::watch_web::messages::parser) fn append_user_text_
     );
 }
 
-pub(in crate::commands::agent::watch_web::messages::parser) fn append_peer_out(
-    items: &mut Vec<ChatItem>,
-    peer: classifier::PeerOut,
-    timestamp: Option<DateTime<Utc>>,
-) {
-    items.push(peer_item(
-        peer.session_id,
-        super::PeerDirection::To,
-        None,
-        peer.text,
-        Vec::new(),
-        None,
-        timestamp,
-    ));
-}
-
 fn append_classification(
     items: &mut Vec<ChatItem>,
     classification: classifier::MessageKind,
@@ -448,25 +429,6 @@ fn append_classification(
     }
 }
 
-pub(in crate::commands::agent::watch_web::messages::parser) fn append_classification_with_image_directory(
-    items: &mut Vec<ChatItem>,
-    classification: classifier::MessageKind,
-    images: Vec<UserContentPart>,
-    image_directory: Option<&Path>,
-    parent: Option<&ParentSession>,
-    timestamp: Option<DateTime<Utc>>,
-) {
-    append_classification(
-        items,
-        classification,
-        images,
-        image_directory,
-        parent,
-        timestamp,
-        None,
-    );
-}
-
 pub(in crate::commands::agent::watch_web::messages::parser) fn append_classification_with_rewind_id(
     items: &mut Vec<ChatItem>,
     classification: classifier::MessageKind,
@@ -504,6 +466,7 @@ fn peer_item(
         session_title,
         content,
         timestamp: timestamp.map(|timestamp| timestamp.to_rfc3339()),
+        failed: false,
     }
 }
 

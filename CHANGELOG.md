@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.1.674](https://github.com/fohte/armyknife/compare/v0.1.673...v0.1.674) (2026-11-13)
+
+
+### Features
+
+* **agent/todo:** allow rejection and withdrawal ([#1724](https://github.com/fohte/armyknife/issues/1724)) ([137c05f](https://github.com/fohte/armyknife/commit/137c05ff4f23a4109763b5820d29013eed1c4c54))
+
+## [0.1.673](https://github.com/fohte/armyknife/compare/v0.1.672...v0.1.673) (2026-11-13)
+
+
+### Features
+
+* **agent:** support local web UIs in watch-web ([#1722](https://github.com/fohte/armyknife/issues/1722)) ([74a3bd2](https://github.com/fohte/armyknife/commit/74a3bd2f83b891c6ef7624788b3d1012f1fc2461))
+
+## [0.1.672](https://github.com/fohte/armyknife/compare/v0.1.671...v0.1.672) (2026-11-13)
+
+
+### Features
+
+* **watch-web:** highlight Bash commands and code ([#1719](https://github.com/fohte/armyknife/issues/1719)) ([d10ff38](https://github.com/fohte/armyknife/commit/d10ff38cb03295eb74216dad932a6ec7d16a9357))
+
+## [0.1.671](https://github.com/fohte/armyknife/compare/v0.1.670...v0.1.671) (2026-11-13)
+
+
+### Bug Fixes
+
+* **watch-web:** render peer messages from records ([#1717](https://github.com/fohte/armyknife/issues/1717)) ([62ba2b7](https://github.com/fohte/armyknife/commit/62ba2b7e062b0609108ef7bb61874e4651e652b2))
+
+## [0.1.670](https://github.com/fohte/armyknife/compare/v0.1.669...v0.1.670) (2026-11-13)
+
+
+### Features
+
+* **agent:** support session title changes ([#1714](https://github.com/fohte/armyknife/issues/1714)) ([a1d3032](https://github.com/fohte/armyknife/commit/a1d30322ef022500527a5b21eb52a344d8cea9b8))
+
 ## [0.1.669](https://github.com/fohte/armyknife/compare/v0.1.668...v0.1.669) (2026-11-13)
 
 

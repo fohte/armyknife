@@ -45,6 +45,7 @@ mod status;
 mod status_inference;
 pub(crate) mod store;
 mod sweep;
+mod title;
 pub(crate) mod tmux_sync;
 mod todo;
 pub(crate) mod tq_session_tasks;
@@ -56,6 +57,7 @@ mod vibe;
 mod watch;
 mod watch_web;
 mod watch_web_user_marker;
+mod web_ui;
 mod window_status;
 
 use clap::Subcommand;
@@ -92,11 +94,13 @@ pub use resurrect::ResurrectCommands;
 pub use status::StatusCommands;
 pub use status_inference::StatusInferenceArgs;
 pub use sweep::SweepArgs;
+pub use title::TitleCommands;
 pub use todo::TodoCommands;
 pub(crate) use vibe::ensure_repo_vibe_access;
 pub use vibe::{VibeCommands, is_vibe_enabled};
 pub use watch::WatchArgs;
 pub use watch_web::WatchWebArgs;
+pub use web_ui::WebUiCommands;
 pub use window_status::WindowStatusArgs;
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
@@ -125,6 +129,10 @@ pub enum AgentCommands {
     /// Associate crit reviews with agent sessions and open them in tmux floating panes
     #[command(subcommand)]
     Crit(CritCommands),
+
+    /// Register named local web interfaces with agent sessions
+    #[command(name = "web-ui", subcommand)]
+    WebUi(WebUiCommands),
 
     /// Record Claude Code session events (called from hooks)
     Hook(HookArgs),
@@ -171,6 +179,10 @@ pub enum AgentCommands {
     /// Record user tasks for watch-web
     #[command(subcommand)]
     Todo(TodoCommands),
+
+    /// Set the calling session's title
+    #[command(subcommand)]
+    Title(TitleCommands),
     /// Internal: infer a missing stop status from a forked session.
     #[command(name = "status-inference", hide = true)]
     StatusInference(StatusInferenceArgs),
@@ -244,6 +256,7 @@ impl AgentCommands {
             Self::Clean(args) => clean::run(args).await?,
             Self::Close(args) => close::run(args).await?,
             Self::Crit(command) => crit::run(command)?,
+            Self::WebUi(command) => web_ui::run(command)?,
             Self::Hook(args) => hook::run(args)?,
             Self::Attribution(command) => attribution::run(command)?,
             Self::PermissionNotification(args) => hook::permission_notification::run(args)?,
@@ -256,6 +269,7 @@ impl AgentCommands {
             Self::Decision(command) => decision::run(command)?,
             Self::Proposal(command) => proposal::run(command)?,
             Self::Todo(command) => todo::run(command)?,
+            Self::Title(command) => title::run(command)?,
             Self::StatusInference(args) => status_inference::run(args)?,
             Self::Profile(command) => profile::run(command)?,
             Self::Vibe(command) => vibe::run(command)?,

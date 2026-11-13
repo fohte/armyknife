@@ -29,7 +29,8 @@ pub(crate) use decisions::{
 };
 pub(crate) use peer_out_messages::WatchWebPeerOutMessage;
 pub(crate) use peer_out_messages::{
-    insert_watch_web_peer_out_message, watch_web_peer_out_messages,
+    insert_watch_web_peer_out_message, mark_watch_web_peer_out_message_delivered,
+    watch_web_peer_out_messages,
 };
 pub(crate) use permission_denied::PermissionDeniedOperation;
 pub(crate) use permission_denied::{
@@ -52,9 +53,10 @@ pub(crate) use queued_prompts::{
 pub(crate) use replacements::{
     all_unreplaced_sessions, resolve_current_session_id, save_rewind_sessions,
 };
-pub(crate) use todos::AgentTodo;
+pub(crate) use todos::{AgentTodo, TodoResolution};
 pub(crate) use todos::{
-    add_agent_todo, agent_todos, complete_agent_todo, incomplete_agent_todo_titles,
+    add_agent_todo, agent_todos, incomplete_agent_todo_titles, lock_agent_todo_resolution,
+    resolve_agent_todo,
 };
 pub(crate) use web_state::WatchWebSessionState;
 pub(crate) use web_state::set_watch_web_compacting;

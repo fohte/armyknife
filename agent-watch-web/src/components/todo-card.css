@@ -5,8 +5,16 @@
   border-radius: var(--aw-radius);
 }
 
-.chat-todo-card[data-completed='true'] {
+.chat-todo-card[data-resolution='completed'] {
   border-color: var(--aw-border-emphasis);
+}
+
+.chat-todo-card[data-resolution='rejected'] {
+  border-color: var(--aw-danger, #b91c1c);
+}
+
+.chat-todo-card[data-resolution='withdrawn'] {
+  border-color: var(--aw-border-control);
 }
 
 .chat-todo-card h2 {
@@ -58,8 +66,13 @@
 
 .chat-todo-footer {
   display: flex;
+  gap: 8px;
   justify-content: flex-end;
   margin-top: 12px;
+}
+
+.chat-todo-reject {
+  border: 1px solid var(--aw-border-control);
 }
 
 .chat-todo-footer .aw-button:disabled {

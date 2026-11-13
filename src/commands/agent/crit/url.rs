@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 
-pub(super) fn add_url(crit_urls: &mut Vec<String>, url: &str) {
+pub(in crate::commands::agent) fn add_url(crit_urls: &mut Vec<String>, url: &str) {
     if let Ok(new_url) = reqwest::Url::parse(url)
         && new_url.path() == "/"
         && new_url.query().is_none()

@@ -214,13 +214,17 @@ pub(super) fn turn_status<'a>(thread: &'a Value, turn_id: &str) -> Option<&'a st
 }
 
 pub(super) fn latest_turn_status(thread: &Value) -> Option<&str> {
+    latest_turn(thread).map(|(_, status)| status)
+}
+
+pub(super) fn latest_turn(thread: &Value) -> Option<(&str, &str)> {
     thread
         .get("turns")
         .and_then(Value::as_array)?
         .iter()
         .max_by(|left, right| compare_turn_recency(left, right))?
-        .get("status")
-        .and_then(Value::as_str)
+        .as_object()
+        .and_then(|turn| Some((turn.get("id")?.as_str()?, turn.get("status")?.as_str()?)))
 }
 
 fn compare_turn_recency(left: &Value, right: &Value) -> std::cmp::Ordering {

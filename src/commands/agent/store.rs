@@ -20,7 +20,6 @@ mod peer_out_messages;
 mod queued_prompts;
 
 pub(crate) use archive::{ArchiveLogContext, archive_codex_thread_before_delete_with};
-pub(crate) use database::AgentTodo;
 pub(crate) use database::set_watch_web_compacting;
 pub(crate) use database::{
     AgentDecision, AgentDecisionCounts, AgentProposal, PermissionDeniedOperation,
@@ -29,8 +28,10 @@ pub(crate) use database::{
     WatchWebPeerOutMessage, WatchWebQueuedPrompt, WatchWebSessionState, permission_request_data,
     resolve_permission_request, resolve_permission_request_with_answers, serialize_session,
 };
+pub(crate) use database::{AgentTodo, TodoResolution};
 pub(crate) use peer_out_messages::{
-    insert_watch_web_peer_out_message, watch_web_peer_out_messages_from,
+    insert_watch_web_peer_out_message, mark_watch_web_peer_out_message_delivered,
+    watch_web_peer_out_messages_from,
 };
 pub(crate) use queued_prompts::{
     delete_watch_web_queued_prompts, ensure_watch_web_user_marker_from,
@@ -269,13 +270,6 @@ pub(crate) fn update_session_last_message_if_unchanged_in(
         session.last_message = last_message;
         true
     })
-}
-
-/// Sets `label` on a session, resolving the default sessions directory.
-/// Thin wrapper so callers (e.g. the TUI's rename key) do not need to know
-/// about `sessions_dir()`.
-pub fn update_session_label(session_id: &str, label: Option<String>) -> Result<()> {
-    update_session_label_in(&sessions_dir()?, session_id, label)
 }
 
 /// Atomically overwrites a session's `label` field. Unlike
@@ -519,21 +513,30 @@ pub(crate) fn incomplete_agent_todo_titles_from(
     database::incomplete_agent_todo_titles(sessions_dir, session_ids)
 }
 
-pub(crate) fn complete_agent_todo_from(
+pub(crate) fn resolve_agent_todo_from(
     sessions_dir: &Path,
     session_id: &str,
     seq: i64,
+    resolution: TodoResolution,
     comment: Option<&str>,
 ) -> Result<bool> {
-    database::complete_agent_todo(sessions_dir, session_id, seq, comment)
+    database::resolve_agent_todo(sessions_dir, session_id, seq, resolution, comment)
 }
 
-pub(crate) fn complete_agent_todo(
+pub(crate) fn lock_agent_todo_resolution(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<std::fs::File> {
+    database::lock_agent_todo_resolution(sessions_dir, session_id)
+}
+
+pub(crate) fn resolve_agent_todo(
     session_id: &str,
     seq: i64,
+    resolution: TodoResolution,
     comment: Option<&str>,
 ) -> Result<bool> {
-    complete_agent_todo_from(&sessions_dir()?, session_id, seq, comment)
+    resolve_agent_todo_from(&sessions_dir()?, session_id, seq, resolution, comment)
 }
 
 pub(crate) fn watch_web_session_states_from(
@@ -753,6 +756,7 @@ mod tests {
             launched_with_vibe: false,
             child_launch: Default::default(),
             crit_urls: Vec::new(),
+            web_uis: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/tmp/test"),
             transcript_path: None,
@@ -2645,6 +2649,7 @@ mod tests {
                 launched_with_vibe: false,
                 child_launch: Default::default(),
                 crit_urls: Vec::new(),
+                web_uis: Vec::new(),
                 pending_human_review_ids: Default::default(),
                 cwd: PathBuf::from("/tmp/test"),
                 transcript_path: None,

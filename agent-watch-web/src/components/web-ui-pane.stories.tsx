@@ -1,10 +1,11 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 
-import { CritPane } from '#components/crit-pane'
+import { WebUiPane } from '#components/web-ui-pane'
 
 const meta = {
-  component: CritPane,
+  component: WebUiPane,
   args: {
+    name: 'crit',
     url: 'http://127.0.0.1:5000/review/sample',
     onClose: () => undefined,
   },
@@ -15,7 +16,7 @@ const meta = {
       </div>
     ),
   ],
-} satisfies Meta<typeof CritPane>
+} satisfies Meta<typeof WebUiPane>
 
 export default meta
 type Story = StoryObj<typeof meta>
