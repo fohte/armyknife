@@ -129,12 +129,14 @@ fn adds_todo_resolution_to_master_version_fourteen_database() {
         .expect("master migration fourteen schema should be created");
     connection
         .execute(
-            "INSERT INTO agent_todo (
-                session_id, seq, title, created_at, completed_at, comment
-            ) VALUES (
-                'sample-session', 1, 'Task', '2026-01-01T00:00:00Z',
-                '2026-01-02T00:00:00Z', 'Already handled'
-            )",
+            indoc! {"
+                INSERT INTO agent_todo (
+                    session_id, seq, title, created_at, completed_at, comment
+                ) VALUES (
+                    'sample-session', 1, 'Task', '2026-01-01T00:00:00Z',
+                    '2026-01-02T00:00:00Z', 'Already handled'
+                )
+            "},
             [],
         )
         .expect("completed todo should be inserted before migration fifteen");
