@@ -1477,7 +1477,7 @@ it('updates the crit frame when keyboard navigation selects another review', () 
       ?.click()
   })
   const firstSrc = container
-    .querySelector<HTMLIFrameElement>('.crit-pane iframe')
+    .querySelector<HTMLIFrameElement>('.web-ui-pane iframe')
     ?.getAttribute('src')
   act(() => {
     dispatchKey(window, 'j')
@@ -1486,7 +1486,7 @@ it('updates the crit frame when keyboard navigation selects another review', () 
   const snapshot = () => ({
     firstSrc,
     secondSrc: container
-      .querySelector<HTMLIFrameElement>('.crit-pane iframe')
+      .querySelector<HTMLIFrameElement>('.web-ui-pane iframe')
       ?.getAttribute('src'),
     selectedTitle: readSelectedTitle(),
     panelOpen: container

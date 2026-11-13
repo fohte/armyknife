@@ -22,6 +22,7 @@ pub(super) fn session() -> Session {
         launched_with_vibe: false,
         child_launch: Default::default(),
         crit_urls: Vec::new(),
+        web_uis: Vec::new(),
         pending_human_review_ids: Default::default(),
         cwd: PathBuf::from("/tmp/test-repo"),
         transcript_path: None,

@@ -40,7 +40,7 @@ const appTestFiles = [
   'src/components/permission-card.test.tsx',
   'src/components/message-composer.test.tsx',
   'src/components/use-composer-message.test.tsx',
-  'src/components/crit-pane.test.tsx',
+  'src/components/web-ui-pane.test.tsx',
   'src/components/resizable-columns.test.tsx',
   'src/components/markdown-message.browser.test.tsx',
   'src/components/session-link.browser.test.tsx',
