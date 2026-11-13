@@ -3,7 +3,8 @@ import '#components/pull-request-list-panel.css'
 import { useState } from 'react'
 
 import { CompletedItemsToggle } from '#components/completed-items-toggle'
-import { requestActionJson } from '#components/conversation-requests'
+import { useSessionOperations } from '#session-operation-context'
+import type { SessionOperation } from '#session-operations'
 import type { SessionPullRequest } from '#types'
 
 type PullRequestListPanelProps = {
@@ -80,29 +81,47 @@ export function PullRequestListPanel({
         (pullRequest) => pullRequest.number === confirmingPullRequestNumber,
       ) ?? null,
   )
-  const [merging, setMerging] = useState(false)
+  const { pendingOperations, run } = useSessionOperations()
+  const mergeOperation: SessionOperation | null =
+    pendingMerge === null ||
+    pendingMerge.owner === null ||
+    pendingMerge.repo === null ||
+    pendingMerge.headSha === null
+      ? null
+      : {
+          type: 'merge',
+          sessionId,
+          number: pendingMerge.number,
+          owner: pendingMerge.owner,
+          repo: pendingMerge.repo,
+          expectedHeadSha: pendingMerge.headSha,
+        }
+  const merging =
+    mergeOperation !== null &&
+    pendingOperations.some(
+      ({ operation }) =>
+        operation.type === 'merge' &&
+        operation.sessionId === sessionId &&
+        operation.number === mergeOperation.number,
+    )
   const [feedback, setFeedback] = useState<{
     kind: 'success' | 'error'
     message: string
   } | null>(null)
 
   const confirmMerge = async () => {
-    if (pendingMerge === null || merging || pendingMerge.headSha === null)
-      return
-    if (pendingMerge.owner === null || pendingMerge.repo === null) return
-    setMerging(true)
+    if (pendingMerge === null || mergeOperation === null || merging) return
     setFeedback(null)
-    await requestActionJson(
-      sessionId,
-      `pull-requests/${String(pendingMerge.number)}/merge`,
-      {
-        owner: pendingMerge.owner,
-        repo: pendingMerge.repo,
-        expectedHeadSha: pendingMerge.headSha,
-      },
-      isMergeResponse,
-    ).match(
+    const result = await run(mergeOperation)
+    result.match(
       (response) => {
+        if (!isMergeResponse(response)) {
+          setFeedback({
+            kind: 'error',
+            message: 'The server returned an invalid merge response.',
+          })
+          return
+        }
         const message =
           response.result === 'merged'
             ? `PR #${String(pendingMerge.number)} merged.`
@@ -117,7 +136,6 @@ export function PullRequestListPanel({
       },
     )
     setPendingMerge(null)
-    setMerging(false)
   }
   if (error !== null && pullRequests.length === 0) {
     return (

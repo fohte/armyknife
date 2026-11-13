@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useOptimistic,
+  useRef,
+  useState,
+} from 'react'
 
 import { buildBoardProjects, buildWorkTypeNavGroups } from '#board-model'
 import { useCommandPaletteController } from '#command-palette-controller'
@@ -17,24 +24,32 @@ import {
   parseInboxFilterQuery,
 } from '#inbox-filter'
 import { useMobileLayout, useSessionMobileNavigation } from '#mobile-layout'
-import {
-  getLaterPresetTimes,
-  setSessionBackNow,
-  setSessionLater,
-} from '#session-actions'
+import { getLaterPresetTimes } from '#session-actions'
 import { startSessionFeed } from '#session-feed'
 import { useSessionHistory } from '#session-history'
 import { useSessionKeyboardNavigation } from '#session-keyboard-navigation'
 import { type LaterPreset, type LaterPresetTimes } from '#session-navigation'
+import {
+  SessionOperationProvider,
+  useSessionOperations,
+} from '#session-operation-context'
+import {
+  applySessionOperation,
+  isSessionListOperation,
+  isSessionOperationConfirmed,
+  type SessionOperation,
+} from '#session-operations'
 import type { Session } from '#types'
 import { useSavedInboxViews } from '#use-saved-inbox-views'
 import { useSessionRefreshRevisions } from '#use-session-refresh-revisions'
 
 export function App() {
   return (
-    <SessionConversationCacheProvider>
-      <AppContent />
-    </SessionConversationCacheProvider>
+    <SessionOperationProvider>
+      <SessionConversationCacheProvider>
+        <AppContent />
+      </SessionConversationCacheProvider>
+    </SessionOperationProvider>
   )
 }
 
@@ -63,6 +78,24 @@ function AppContent() {
     setDoneExpanded,
   } = useMobileLayout()
   const [sessions, setSessions] = useState<Session[]>([])
+  const sessionSnapshot = useRef<readonly Session[]>([])
+  const { pendingOperations, run, confirm } = useSessionOperations()
+  const pendingOperationsRef = useRef(pendingOperations)
+  pendingOperationsRef.current = pendingOperations
+  const sessionBaseWithPendingOperations = useMemo(
+    () =>
+      pendingOperations
+        .filter(({ operation }) => isSessionListOperation(operation))
+        .reduce(
+          (current, { operation }) => applySessionOperation(current, operation),
+          sessions,
+        ),
+    [pendingOperations, sessions],
+  )
+  const [optimisticSessions, dispatchSessionOperation] = useOptimistic(
+    sessionBaseWithPendingOperations,
+    applySessionOperation,
+  )
   const [workTypeNavLabels, setWorkTypeNavLabels] = useState<
     Record<string, string>
   >({})
@@ -92,7 +125,6 @@ function AppContent() {
   const [laterSessionId, setLaterSessionId] = useState<string | null>(null)
   const [laterTimes, setLaterTimes] = useState<LaterPresetTimes | null>(null)
   const [laterTimesError, setLaterTimesError] = useState(false)
-  const [laterMutationPending, setLaterMutationPending] = useState(false)
   const laterSubmissionInFlight = useRef(false)
   const laterRequestId = useRef(0)
   const [error, setError] = useState<string | null>(null)
@@ -108,12 +140,34 @@ function AppContent() {
     setStatusPanelOpen((open) => !open)
   }, [])
 
+  const runSessionOperation = useCallback(
+    (operation: SessionOperation) =>
+      run(operation, {
+        optimisticDispatchers: [dispatchSessionOperation],
+        ...(isSessionListOperation(operation)
+          ? {
+              refresh: () => {
+                if (
+                  isSessionOperationConfirmed(
+                    operation,
+                    sessionSnapshot.current,
+                  )
+                ) {
+                  confirm(operation)
+                }
+                return Promise.resolve()
+              },
+            }
+          : {}),
+      }),
+    [confirm, dispatchSessionOperation, run],
+  )
   const elapsedOffsetSeconds = Math.floor(
     Math.max(0, nowMs - sessionsReceivedAt) / 1_000,
   )
   const sessionsWithElapsedTime = useMemo(
     () =>
-      sessions.map((session) => {
+      optimisticSessions.map((session) => {
         const deadlinePassed =
           session.category === 'later' &&
           session.laterUntil !== null &&
@@ -127,7 +181,7 @@ function AppContent() {
           elapsedSeconds: session.elapsedSeconds + elapsedOffsetSeconds,
         }
       }),
-    [elapsedOffsetSeconds, sessions],
+    [elapsedOffsetSeconds, optimisticSessions],
   )
   const todaySessions = useMemo(
     () => sessionsWithElapsedTime.filter((session) => session.isToday === true),
@@ -181,6 +235,7 @@ function AppContent() {
     openSessionInInbox,
     openTodaySession,
     focusSession,
+    pendingFocusSessionId,
     closeDoneSessions,
     toggleToday,
   } = useCommandPaletteController({
@@ -197,6 +252,7 @@ function AppContent() {
     view,
     isMobile,
     conversationOpen: mobileConversationOpen,
+    runOperation: runSessionOperation,
   })
   const projects = useMemo(
     () => buildBoardProjects(sessionsWithElapsedTime),
@@ -236,12 +292,10 @@ function AppContent() {
       return false
     }
     laterSubmissionInFlight.current = true
-    setLaterMutationPending(true)
     return true
   }, [])
   const finishLaterMutation = useCallback(() => {
     laterSubmissionInFlight.current = false
-    setLaterMutationPending(false)
   }, [])
   const submitLater = useCallback(
     (sessionId: string, preset: LaterPreset) => {
@@ -253,31 +307,39 @@ function AppContent() {
         return
       }
 
-      void setSessionLater(sessionId, preset, expectedDeadline).match(
-        () => {
-          finishLaterMutation()
-          closeLater()
-          if (isMobile) {
-            setLaterExpanded(false)
-            navigate(
-              (current) => ({
-                ...current,
-                selectedId:
-                  navigableSessions.find((session) => session.id !== sessionId)
-                    ?.id ?? null,
-                conversationOpen: false,
-              }),
-              'push',
-            )
-          }
-          setError(null)
-        },
-        () => {
-          finishLaterMutation()
-          openLater(sessionId)
-          setError('Could not move the session to Later.')
-        },
-      )
+      void runSessionOperation({
+        type: 'later',
+        sessionId,
+        preset,
+        expectedDeadline,
+      }).then((result) => {
+        result.match(
+          () => {
+            finishLaterMutation()
+            closeLater()
+            if (isMobile) {
+              setLaterExpanded(false)
+              navigate(
+                (current) => ({
+                  ...current,
+                  selectedId:
+                    navigableSessions.find(
+                      (session) => session.id !== sessionId,
+                    )?.id ?? null,
+                  conversationOpen: false,
+                }),
+                'push',
+              )
+            }
+            setError(null)
+          },
+          () => {
+            finishLaterMutation()
+            openLater(sessionId)
+            setError('Could not move the session to Later.')
+          },
+        )
+      })
     },
     [
       beginLaterMutation,
@@ -288,6 +350,7 @@ function AppContent() {
       navigableSessions,
       navigate,
       openLater,
+      runSessionOperation,
     ],
   )
   const submitBackNow = useCallback(
@@ -295,19 +358,23 @@ function AppContent() {
       if (!beginLaterMutation()) {
         return
       }
-      void setSessionBackNow(sessionId).match(
-        () => {
-          finishLaterMutation()
-          closeLater()
-          setError(null)
-        },
-        () => {
-          finishLaterMutation()
-          setError('Could not return the session now.')
+      void runSessionOperation({ type: 'back_now', sessionId }).then(
+        (result) => {
+          result.match(
+            () => {
+              finishLaterMutation()
+              closeLater()
+              setError(null)
+            },
+            () => {
+              finishLaterMutation()
+              setError('Could not return the session now.')
+            },
+          )
         },
       )
     },
-    [beginLaterMutation, closeLater, finishLaterMutation],
+    [beginLaterMutation, closeLater, finishLaterMutation, runSessionOperation],
   )
 
   const closeDoneSession = useCallback(
@@ -326,6 +393,16 @@ function AppContent() {
     () =>
       startSessionFeed((response, changedSessionIds) => {
         const receivedAt = Date.now()
+        sessionSnapshot.current = response.sessions
+        for (const pending of pendingOperationsRef.current) {
+          if (
+            pending.status === 'sent' &&
+            isSessionListOperation(pending.operation) &&
+            isSessionOperationConfirmed(pending.operation, response.sessions)
+          ) {
+            confirm(pending.operation)
+          }
+        }
         setWorkTypeNavLabels(response.workTypeNavLabels ?? {})
         setSessions(
           response.sessions.filter(
@@ -341,7 +418,7 @@ function AppContent() {
         setNowMs(receivedAt)
         setLoaded(true)
       }, setError),
-    [],
+    [confirm],
   )
 
   useEffect(() => {
@@ -405,6 +482,11 @@ function AppContent() {
   const laterSession = sessionsWithElapsedTime.find(
     (session) => session.id === laterSessionId,
   )
+  const laterMutationPending = pendingOperations.some(
+    ({ operation }) =>
+      operation.sessionId === laterSessionId &&
+      (operation.type === 'later' || operation.type === 'back_now'),
+  )
   const selectedSession = sessionsWithElapsedTime.find(
     (session) => session.id === selectedId,
   )
@@ -427,6 +509,7 @@ function AppContent() {
       isMobile,
       conversationOpen: mobileConversationOpen,
       navigableSessions,
+      selectedId,
       selectedSessionExists: selectedSession !== undefined,
       sessionsLoaded: loaded,
       navigate,
@@ -548,6 +631,7 @@ function AppContent() {
           onBack={backToInbox}
           onLater={openLater}
           onCloseSession={closeDoneSession}
+          onOptimisticSessionOperation={dispatchSessionOperation}
           onSelectSession={(id) => {
             if (orderedSessions.some((session) => session.id === id)) {
               navigate((current) => ({ ...current, selectedId: id }))
@@ -626,8 +710,7 @@ function AppContent() {
             openLater(id)
           }}
           onOpenInTerminal={(id) => {
-            setCommandPaletteOpen(false)
-            focusSession(id)
+            void focusSession(id)
           }}
           onOpenProject={(project) => {
             setCommandPaletteOpen(false)
@@ -655,6 +738,7 @@ function AppContent() {
           recentSessionIds={recentSessionIds}
           sessions={sessionsWithElapsedTime}
           workTypeNavLabels={workTypeNavLabels}
+          pendingFocusSessionId={pendingFocusSessionId}
         />
       ) : null}
     </div>

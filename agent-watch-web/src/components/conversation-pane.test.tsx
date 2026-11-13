@@ -3441,7 +3441,7 @@ it('posts a proposal answer to its sequence route and refreshes the conversation
       method: 'POST',
       body: '{"choice":1,"comment":null}',
     },
-    placeholder: 'Choose an option above, or message the session',
+    placeholder: 'Message session',
     status: 'Proposal · chose B',
   })
 })

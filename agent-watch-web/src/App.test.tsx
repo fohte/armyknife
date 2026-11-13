@@ -4248,17 +4248,8 @@ it('answers an Inbox question with its request ID and selected answer', async ()
     ),
   ).find((button) => button.textContent.includes('Window B'))
   if (choice === undefined) throw new Error('Expected an answer choice')
-  act(() => {
-    choice.click()
-  })
-  const submit = container.querySelector<HTMLButtonElement>(
-    '.chat-question-actions button.aw-button--primary',
-  )
-  if (submit === null) throw new Error('Expected a question submit button')
-  act(() => {
-    submit.click()
-  })
   await act(async () => {
+    choice.click()
     for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
 

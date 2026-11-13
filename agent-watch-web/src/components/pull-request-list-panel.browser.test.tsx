@@ -143,6 +143,63 @@ it('sends the confirmed head SHA and reports a successful merge', async () => {
   })
 })
 
+it('shows merge progress and blocks duplicate confirmation', async () => {
+  let completePost: (response: Response) => void = () => {
+    throw new Error('Expected the merge request to be pending')
+  }
+  const fetcher = vi.fn<typeof fetch>(
+    () =>
+      new Promise<Response>((resolve) => {
+        completePost = resolve
+      }),
+  )
+  vi.stubGlobal('fetch', fetcher)
+  const onRefresh = renderPanel()
+  await act(async () => {
+    await userEvent.click(
+      requireElement(container.querySelector('button'), 'Merge button'),
+    )
+  })
+  const dialog = requireElement(
+    container.querySelector('[role="alertdialog"]'),
+    'merge confirmation',
+  )
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        dialog.querySelector('button:last-child'),
+        'Confirm merge button',
+      ),
+    )
+  })
+  const beforeResponse = {
+    confirmLabel: dialog.querySelector('button:last-child')?.textContent,
+    confirmDisabled:
+      dialog.querySelector<HTMLButtonElement>('button:last-child')?.disabled,
+    cancelDisabled:
+      dialog.querySelector<HTMLButtonElement>('button:first-child')?.disabled,
+  }
+
+  await act(async () => {
+    completePost(Response.json({ result: 'merged' }))
+    await new Promise((resolve) => window.setTimeout(resolve, 20))
+  })
+  const afterResponse = {
+    feedback: container.querySelector('[role="status"]')?.textContent,
+    refreshCalls: onRefresh.mock.calls.length,
+  }
+
+  const snapshot = () => ({ beforeResponse, afterResponse })
+  expect(snapshot()).toEqual({
+    beforeResponse: {
+      confirmLabel: 'Merging…',
+      confirmDisabled: true,
+      cancelDisabled: true,
+    },
+    afterResponse: { feedback: 'PR #42 merged.', refreshCalls: 1 },
+  })
+})
+
 it.each([
   [
     'already merged',
