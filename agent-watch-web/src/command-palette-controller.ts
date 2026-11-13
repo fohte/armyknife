@@ -1,3 +1,4 @@
+import type { Result } from 'neverthrow'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
@@ -9,12 +10,12 @@ import {
 import { getCommandPaletteShortcut } from '#command-palette-shortcut'
 import { useSessionConversationCache } from '#components/session-conversation-cache'
 import { clearSessionAttachments } from '#components/use-composer-message'
-import {
-  closeDoneSessions as closeDoneSessionsRequest,
-  openSessionInTerminal,
-} from '#session-actions'
 import type { HistoryMode, SessionHistoryState } from '#session-history'
 import { createSessionNavigationActions } from '#session-navigation-actions'
+import type {
+  SessionOperation,
+  SessionOperationError,
+} from '#session-operations'
 import type { Session } from '#types'
 
 type Navigate = (
@@ -40,6 +41,9 @@ type CommandPaletteControllerOptions = {
   view: SessionHistoryState['view']
   isMobile: boolean
   conversationOpen: boolean
+  runOperation: (
+    operation: SessionOperation,
+  ) => Promise<Result<unknown, SessionOperationError>>
 }
 
 export function useCommandPaletteController({
@@ -54,9 +58,13 @@ export function useCommandPaletteController({
   view,
   isMobile,
   conversationOpen,
+  runOperation,
 }: CommandPaletteControllerOptions) {
   const sessionConversationCache = useSessionConversationCache()
   const [isOpen, setIsOpen] = useState(false)
+  const [pendingFocusSessionId, setPendingFocusSessionId] = useState<
+    string | null
+  >(null)
   const [recentSessionIds, setRecentSessionIds] = useState(() =>
     readRecentSessionIds(getRecentSessionStorage()),
   )
@@ -101,17 +109,30 @@ export function useCommandPaletteController({
           const batch = closeQueue.current.shift()
           if (batch === undefined) continue
 
-          const failure = await closeDoneSessionsRequest(
-            batch.sessions,
-            batch.keepWorktree,
-          )
+          let failure: string | null = null
+          let unmergedSessionId: string | null = null
+          for (const session of batch.sessions) {
+            const result = await runOperation({
+              type: 'close',
+              sessionId: session.id,
+              keepWorktree: batch.keepWorktree,
+            })
+            if (result.isErr()) {
+              failure =
+                result.error.message || `Could not close ${session.title}.`
+              if (result.error.code === 'unmerged_worktree') {
+                unmergedSessionId = session.id
+              }
+              break
+            }
+          }
           for (const session of batch.sessions) {
             pendingCloseSessionIds.current.delete(session.id)
           }
-          if (failure.failure !== null) {
-            lastFailure = failure.failure
-            setError(failure.failure)
-            setCloseRetrySessionId(failure.unmergedSessionId)
+          if (failure !== null) {
+            lastFailure = failure
+            setError(failure)
+            setCloseRetrySessionId(unmergedSessionId)
           } else {
             batch.sessions.forEach(({ id }) => {
               clearSessionAttachments(id)
@@ -131,6 +152,7 @@ export function useCommandPaletteController({
     },
     [
       sessionConversationCache?.clearCachedConversation,
+      runOperation,
       setCloseRetrySessionId,
       setError,
     ],
@@ -155,23 +177,26 @@ export function useCommandPaletteController({
     sessions,
     navigate,
     setLaterExpanded,
-    setError,
+    toggleToday: (id, isToday) => {
+      void runOperation({ type: 'today', sessionId: id, isToday }).then(
+        (result) => {
+          setError(result.isOk() ? null : 'Could not update Starred.')
+        },
+      )
+    },
   })
   const openConversation = withRecentSession(openConversationAction)
   const openSessionInInbox = withRecentSession(openSessionInInboxAction)
   const openTodaySession = withRecentSession(openTodaySessionAction)
   const focusSession = useCallback(
-    (id: string) => {
-      void openSessionInTerminal(id).match(
-        () => {
-          setError(null)
-        },
-        () => {
-          setError('Could not open the session in terminal.')
-        },
-      )
+    async (id: string) => {
+      setPendingFocusSessionId(id)
+      const result = await runOperation({ type: 'focus', sessionId: id })
+      setPendingFocusSessionId(null)
+      setError(result.isOk() ? null : 'Could not open the session in terminal.')
+      setIsOpen(false)
     },
-    [setError],
+    [runOperation, setError],
   )
   useEffect(() => {
     if (
@@ -241,6 +266,7 @@ export function useCommandPaletteController({
     openSessionInInbox,
     openTodaySession,
     focusSession,
+    pendingFocusSessionId,
     closeDoneSessions,
     toggleToday,
     runCommand,
