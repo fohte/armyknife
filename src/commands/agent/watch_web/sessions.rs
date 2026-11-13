@@ -503,6 +503,7 @@ async fn list_sessions<S: SessionSource>(
                     proposal_title.is_some(),
                     todo_title.is_some(),
                     has_running_background_task,
+                    &snapshot.agent_config,
                 ),
                 title: snapshot
                     .title_by_id
@@ -1942,9 +1943,13 @@ mod tests {
                 kind: status_kind.to_string(),
                 note: "The synthetic task is complete.".to_string(),
             });
-            source
-                .agent_statuses
-                .insert(status_kind.to_string(), AgentStatusConfig { state });
+            source.agent_statuses.insert(
+                status_kind.to_string(),
+                AgentStatusConfig {
+                    state,
+                    watch_web_kind: config::AgentStatusWebKind::Stopped,
+                },
+            );
         }
 
         let mut expected = expected_response(
@@ -1996,6 +2001,7 @@ mod tests {
             "external_wait".to_string(),
             AgentStatusConfig {
                 state: AgentStatusState::Waiting,
+                watch_web_kind: config::AgentStatusWebKind::Stopped,
             },
         );
         source.web_states[0].later_until = None;

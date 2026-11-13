@@ -403,6 +403,11 @@
       "properties": {
         "state": {
           "$ref": "#/$defs/AgentStatusState"
+        },
+        "watch_web_kind": {
+          "description": "Call kind shown in watch-web. Omitted values default to `stopped`.",
+          "$ref": "#/$defs/AgentStatusWebKind",
+          "default": "stopped"
         }
       },
       "additionalProperties": false,
@@ -417,6 +422,15 @@
         "user",
         "waiting",
         "done"
+      ]
+    },
+    "AgentStatusWebKind": {
+      "description": "Call kind shown in watch-web for a configured agent status.",
+      "type": "string",
+      "enum": [
+        "question",
+        "review",
+        "stopped"
       ]
     },
     "AgentWorkTypeColor": {

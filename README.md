@@ -35,11 +35,11 @@ armyknife reads every `*.yaml` and `*.yml` file directly under `~/.config/armykn
 
 Mapping keys are merged recursively; sequences and scalars are replaced wholesale by later files. All fields are optional and fall back to sensible defaults. If no config files exist and no `ARMYKNIFE_*` environment variable overrides are set (see [Environment variable overrides](#environment-variable-overrides)), armyknife runs entirely on defaults.
 
-Unknown configuration keys fail parsing. Put worktree settings under `agent.worktree`, pause settings under `agent.auto_pause`, compaction settings under `agent.auto_compact`, background task reminders under `agent.bg_task_reminder`, merge notification text under `agent.merge_notification`, status names and states under `agent.statuses`, Stop hook instructions under `agent.stop_hook_instruction`, status inference prompts under `agent.status_inference_prompt`, and Codex inference settings under `agent.codex_status_inference`.
+Unknown configuration keys fail parsing. Put worktree settings under `agent.worktree`, pause settings under `agent.auto_pause`, compaction settings under `agent.auto_compact`, background task reminders under `agent.bg_task_reminder`, merge notification text under `agent.merge_notification`, status names, states, and watch-web call kinds under `agent.statuses`, Stop hook instructions under `agent.stop_hook_instruction`, status inference prompts under `agent.status_inference_prompt`, and Codex inference settings under `agent.codex_status_inference`.
 
 `agent.merge_notification` is an optional template sent to the delegator after a delegated PR merges. Use `{branch}` and `{pr_url}` where the branch name and PR URL should appear. When the key is omitted, no merge notification is sent.
 
-`agent.statuses` maps user-defined names to `user`, `waiting`, or `done` states. `user` status names appear as red labels on TASKS rows and in tmux's next action; `waiting` and `done` status names mark TASKS rows without signaling a user action. `a agent status set` accepts only names from this map. A stored name missing from the current map is treated as `user` so it remains visible.
+`agent.statuses` maps user-defined names to `user`, `waiting`, or `done` states and an optional `watch_web_kind` call kind. `user` status names appear as red labels on TASKS rows and in tmux's next action; `waiting` and `done` status names mark TASKS rows without signaling a user action. `watch_web_kind` accepts `question`, `review`, or `stopped` and defaults to `stopped`; watch-web uses this configured value without interpreting the status name or note. `a agent status set` accepts only names from this map. A stored name missing from the current map is treated as `user` so it remains visible and has the `stopped` call kind.
 
 `agent.stop_hook_instruction` is the optional blocking instruction returned when the hook blocks. Codex uses it when inference is disabled in a valid config, and Claude uses it when status inference is not configured. The hook blocks only when at least one status is configured; an absent or empty `agent.statuses` map disables blocking even when an instruction is present.
 
@@ -68,8 +68,9 @@ agent:
   # Sent to the delegator after a delegated PR merges; omitted means no notification.
   merge_notification: 'Branch {branch} merged: {pr_url}'
   statuses: # user-defined status names mapped to display behavior
-    needs_attention: { state: user }
-    awaiting_build: { state: waiting }
+    needs_attention: { state: user, watch_web_kind: question }
+    request_review: { state: user, watch_web_kind: review }
+    awaiting_build: { state: waiting, watch_web_kind: stopped }
     work_finished: { state: done }
   # Used to infer a missing status from a Claude Code fork or Codex fork.
   status_inference_prompt: |
@@ -668,6 +669,8 @@ Define status names under `agent.statuses`; the configured state controls how ea
 - `user`: the user has a turn; the status name and note explain what they need to do
 - `waiting`: another session, CI job, or external event needs to finish
 - `done`: the work is finished
+
+The optional `watch_web_kind` field independently selects the call kind shown in watch-web. Use `question`, `review`, or `stopped`; omitted values and status names missing from the configuration use `stopped`.
 
 When introducing `agent.statuses`, include names already stored in session records to preserve their configured states. A stored name missing from the map is treated as `user` so it remains visible.
 
