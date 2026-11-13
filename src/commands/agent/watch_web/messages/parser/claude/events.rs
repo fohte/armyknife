@@ -28,6 +28,10 @@ pub(super) enum ClaudeEffect {
         input: Option<Value>,
         failed: bool,
     },
+    SendUserFile {
+        tool_use: ToolUse,
+        failed: bool,
+    },
     PeerNotification {
         tool_use: ToolUse,
         text: String,

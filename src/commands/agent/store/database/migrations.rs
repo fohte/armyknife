@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use rusqlite_migration::{Error as MigrationError, M, MigrationDefinitionError, Migrations};
 
 // Migrations must stay readable by older binaries: add tables or nullable columns only.
-static MIGRATION_ENTRIES: [M<'static>; 13] = [
+static MIGRATION_ENTRIES: [M<'static>; 14] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -158,6 +158,26 @@ static MIGRATION_ENTRIES: [M<'static>; 13] = [
             AFTER DELETE ON sessions
             BEGIN
                 DELETE FROM agent_permission_denied WHERE session_id = OLD.session_id;
+            END;",
+    ),
+    M::up(
+        "CREATE TABLE agent_file (
+            session_id TEXT NOT NULL,
+            id TEXT NOT NULL,
+            position INTEGER NOT NULL DEFAULT 0,
+            name TEXT NOT NULL,
+            caption TEXT,
+            mime_type TEXT,
+            size INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (session_id, id)
+        );
+        CREATE INDEX agent_file_session_id_created_at
+            ON agent_file (session_id, created_at, position);
+        CREATE TRIGGER agent_file_delete_session
+            AFTER DELETE ON sessions
+            BEGIN
+                DELETE FROM agent_file WHERE session_id = OLD.session_id;
             END;",
     ),
 ];

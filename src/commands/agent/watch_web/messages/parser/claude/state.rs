@@ -152,16 +152,19 @@ impl ClaudeParserState {
                             self.tool_uses.iter().position(|tool_use| tool_use.id == id)
                         {
                             let tool_use = self.tool_uses.remove(index);
+                            let failed = tool_result_failed(record, block);
                             let text = block
                                 .get("content")
                                 .and_then(tool_result_text)
                                 .unwrap_or_default();
-                            if classifier::is_peer_notify_tool(
+                            if tool_use.name == "SendUserFile" {
+                                effects.push(ClaudeEffect::SendUserFile { tool_use, failed });
+                            } else if classifier::is_peer_notify_tool(
                                 &tool_use.name,
                                 tool_use.input.as_ref(),
                             ) {
-                                let failed = tool_result_failed(record, block)
-                                    || classifier::peer_notification_failed(record, &text);
+                                let failed =
+                                    failed || classifier::peer_notification_failed(record, &text);
                                 effects.push(ClaudeEffect::PeerNotification {
                                     tool_use,
                                     text,
@@ -172,7 +175,7 @@ impl ClaudeParserState {
                                 effects.push(ClaudeEffect::ToolAction {
                                     name: tool_use.name.clone(),
                                     input: tool_use.input.clone(),
-                                    failed: tool_result_failed(record, block),
+                                    failed,
                                 });
                                 self.background_tasks
                                     .complete_tool_use(&tool_use, record, block, now);

@@ -269,6 +269,7 @@ mod tests {
                 path: Some(&path),
                 engine: Engine::Claude,
                 additions: ParserAdditions {
+                    session_id: &session.session_id,
                     parent: None,
                     pending_tool: None,
                     user_marker: None,

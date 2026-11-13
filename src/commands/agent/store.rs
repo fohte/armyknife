@@ -20,6 +20,7 @@ mod peer_out_messages;
 mod queued_prompts;
 
 pub(crate) use archive::{ArchiveLogContext, archive_codex_thread_before_delete_with};
+pub(crate) use database::AgentFile;
 pub(crate) use database::AgentTodo;
 pub(crate) use database::set_watch_web_compacting;
 pub(crate) use database::{
@@ -496,6 +497,30 @@ pub(crate) fn agent_todos_from(sessions_dir: &Path, session_id: &str) -> Result<
 
 pub(crate) fn agent_todos(session_id: &str) -> Result<Vec<AgentTodo>> {
     agent_todos_from(&sessions_dir()?, session_id)
+}
+
+pub(crate) fn insert_agent_file_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    file: &AgentFile,
+) -> Result<()> {
+    database::insert_agent_file(sessions_dir, session_id, file)
+}
+
+pub(crate) fn agent_files_from(sessions_dir: &Path, session_id: &str) -> Result<Vec<AgentFile>> {
+    database::agent_files(sessions_dir, session_id)
+}
+
+pub(crate) fn agent_files(session_id: &str) -> Result<Vec<AgentFile>> {
+    agent_files_from(&sessions_dir()?, session_id)
+}
+
+pub(crate) fn agent_file_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    file_id: &str,
+) -> Result<Option<AgentFile>> {
+    database::agent_file(sessions_dir, session_id, file_id)
 }
 
 pub(crate) fn incomplete_agent_todo_titles_from(

@@ -19,8 +19,8 @@ use serde_json::Value;
 
 use crate::commands::agent::proposal::{ProposalAnswer, ProposalOption};
 use crate::commands::agent::store::{
-    AgentDecision, AgentProposal, AgentTodo, PermissionDeniedOperation, PermissionRequestData,
-    WatchWebPeerOutMessage, WatchWebQueuedPrompt,
+    AgentDecision, AgentFile, AgentProposal, AgentTodo, PermissionDeniedOperation,
+    PermissionRequestData, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
 };
 use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 use crate::commands::agent::user_turn::is_ask_user_question;
@@ -74,6 +74,7 @@ type PermissionRequestDataLoader =
     Arc<dyn Fn(&str, &str) -> Result<Option<PermissionRequestData>> + Send + Sync>;
 type PermissionDeniedLoader =
     Arc<dyn Fn(&str) -> Result<Vec<PermissionDeniedOperation>> + Send + Sync>;
+type AgentFileLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentFile>> + Send + Sync>;
 
 #[derive(Clone)]
 pub(super) struct RouteLoaders {
@@ -85,6 +86,7 @@ pub(super) struct RouteLoaders {
     todos: TodoLoader,
     permission_request_data: PermissionRequestDataLoader,
     permission_denials: PermissionDeniedLoader,
+    agent_files: AgentFileLoader,
     message_cache: MessageCache,
     running_background_task_cache: RunningBackgroundTaskCache,
 }
@@ -109,6 +111,7 @@ impl RouteLoaders {
             todos: Arc::new(|_| Ok(Vec::new())),
             permission_request_data: Arc::new(|_, _| Ok(None)),
             permission_denials: Arc::new(|_| Ok(Vec::new())),
+            agent_files: Arc::new(|_| Ok(Vec::new())),
             message_cache: MessageCache::default(),
             running_background_task_cache: RunningBackgroundTaskCache::default(),
         }
@@ -141,6 +144,14 @@ impl RouteLoaders {
         + 'static,
     ) -> Self {
         self.permission_denials = Arc::new(load_permission_denials);
+        self
+    }
+
+    pub(super) fn with_agent_file_loader(
+        mut self,
+        load_agent_files: impl Fn(&str) -> Result<Vec<AgentFile>> + Send + Sync + 'static,
+    ) -> Self {
+        self.agent_files = Arc::new(load_agent_files);
         self
     }
 
@@ -242,6 +253,30 @@ async fn get_messages(
     }
 }
 
+fn append_stored_files(session_id: &str, files: &[AgentFile], messages: &mut Vec<ChatItem>) {
+    let mut groups: Vec<(
+        Option<String>,
+        chrono::DateTime<chrono::Utc>,
+        Vec<AgentFile>,
+    )> = Vec::new();
+    for file in files {
+        if let Some((_, _, grouped_files)) = groups.iter_mut().find(|(caption, created_at, _)| {
+            *caption == file.caption && *created_at == file.created_at
+        }) {
+            grouped_files.push(file.clone());
+        } else {
+            groups.push((file.caption.clone(), file.created_at, vec![file.clone()]));
+        }
+    }
+    for (caption, created_at, grouped_files) in groups {
+        messages.push(ChatItem::FileAttachment {
+            files: super::file_attachments::stored_chat_files(session_id, &grouped_files),
+            caption,
+            timestamp: Some(created_at.to_rfc3339()),
+        });
+    }
+}
+
 #[cfg(test)]
 fn load_messages_with(
     session_id: &str,
@@ -291,6 +326,7 @@ fn load_conversation_with_queued_prompts(
         .map(proposal_chat_item)
         .collect::<Result<Vec<_>>>()?;
     let todos = (loaders.todos)(session_id)?;
+    let agent_files = (loaders.agent_files)(session_id)?;
     let permission_denials = (loaders.permission_denials)(session_id)?;
     let parent = parent_session(&session, &mut load_session)?;
     let main_permission_pending = session
@@ -346,6 +382,7 @@ fn load_conversation_with_queued_prompts(
             main_permission_data.as_ref(),
         );
         resolve_peer_session_titles(&mut cached.conversation.messages, &mut load_session)?;
+        append_stored_files(session_id, &agent_files, &mut cached.conversation.messages);
         cache::delete_resolved_queued_prompts(
             loaders,
             session_id,
@@ -357,6 +394,7 @@ fn load_conversation_with_queued_prompts(
         path: session.transcript_path.as_deref(),
         engine: session.engine,
         additions: parser::claude::ParserAdditions {
+            session_id,
             parent: parent.as_ref(),
             pending_tool: pending_tool.as_deref(),
             user_marker: user_marker.as_deref(),
@@ -374,6 +412,7 @@ fn load_conversation_with_queued_prompts(
         &loaders.message_cache,
     )?;
     resolve_peer_session_titles(&mut conversation.messages, &mut load_session)?;
+    append_stored_files(session_id, &agent_files, &mut conversation.messages);
 
     attach_question_request_if_present(
         &mut conversation.messages,
@@ -630,6 +669,12 @@ enum ChatItem {
         kind: EventKind,
         text: String,
         failed: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timestamp: Option<String>,
+    },
+    FileAttachment {
+        files: Vec<super::file_attachments::ChatFile>,
+        caption: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         timestamp: Option<String>,
     },
