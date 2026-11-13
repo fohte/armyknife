@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.664](https://github.com/fohte/armyknife/compare/v0.1.663...v0.1.664) (2026-11-13)
+
+
+### Bug Fixes
+
+* **agent:** keep unanswered proposals open ([#1701](https://github.com/fohte/armyknife/issues/1701)) ([eddb0d3](https://github.com/fohte/armyknife/commit/eddb0d317ef836d904a633a7f6d1e55dcff1bcc3))
+
 ## [0.1.663](https://github.com/fohte/armyknife/compare/v0.1.662...v0.1.663) (2026-11-13)
 
 
