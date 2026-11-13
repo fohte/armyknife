@@ -269,6 +269,7 @@ mod tests {
             updated_at: Utc::now(),
             last_message: None,
             current_tool: None,
+            current_tool_name: None,
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: std::collections::BTreeSet::new(),
@@ -442,6 +443,7 @@ mod tests {
                 updated_at: now,
                 last_message: None,
                 current_tool: None,
+                current_tool_name: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
                 pending_bg_task_ids: std::collections::BTreeSet::new(),
@@ -478,6 +480,7 @@ mod tests {
                 updated_at: now,
                 last_message: None,
                 current_tool: None,
+                current_tool_name: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
                 pending_bg_task_ids: std::collections::BTreeSet::new(),
@@ -514,6 +517,7 @@ mod tests {
                 updated_at: now,
                 last_message: None,
                 current_tool: None,
+                current_tool_name: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
                 pending_bg_task_ids: std::collections::BTreeSet::new(),
@@ -550,6 +554,7 @@ mod tests {
                 updated_at: now,
                 last_message: None,
                 current_tool: None,
+                current_tool_name: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
                 pending_bg_task_ids: std::collections::BTreeSet::from(["bg-1".to_string()]),
@@ -735,6 +740,7 @@ mod tests {
         let mut ask = create_test_session();
         ask.status = SessionStatus::Running;
         ask.current_tool = Some("AskUserQuestion".to_string());
+        ask.current_tool_name = Some("AskUserQuestion".to_string());
 
         assert_eq!(
             [body, permission, ask]
@@ -871,6 +877,7 @@ mod tests {
                 updated_at: now,
                 last_message: None,
                 current_tool: None,
+                current_tool_name: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
                 pending_bg_task_ids: std::collections::BTreeSet::new(),
@@ -913,6 +920,7 @@ mod tests {
                 updated_at: now - Duration::minutes(5),
                 last_message: None,
                 current_tool: None,
+                current_tool_name: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
                 pending_bg_task_ids: std::collections::BTreeSet::new(),
@@ -949,6 +957,7 @@ mod tests {
                 updated_at: now - Duration::hours(1),
                 last_message: None,
                 current_tool: None,
+                current_tool_name: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
                 pending_bg_task_ids: std::collections::BTreeSet::new(),

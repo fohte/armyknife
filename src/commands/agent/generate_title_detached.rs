@@ -144,6 +144,7 @@ mod tests {
             updated_at: chrono::Utc::now(),
             last_message: None,
             current_tool: None,
+            current_tool_name: None,
             label: label.map(str::to_string),
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: std::collections::BTreeSet::new(),
