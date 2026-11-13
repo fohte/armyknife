@@ -950,7 +950,16 @@ mod tests {
             let Some(content) = call.get("content").and_then(Value::as_str) else {
                 continue;
             };
+            let content =
+                if let Some(marker_start) = content.rfind("<!-- armyknife-queued-prompt-id:") {
+                    content[..marker_start]
+                        .strip_suffix('\n')
+                        .unwrap_or(&content[..marker_start])
+                } else {
+                    content
+                };
             let Some((marker, _)) = content.split_once('\n') else {
+                call["content"] = Value::String(content.to_owned());
                 continue;
             };
             if marker.starts_with("⟦armyknife-user:")
@@ -959,6 +968,8 @@ mod tests {
                     crate::commands::agent::watch_web_user_marker::strip_message(marker, content)
             {
                 call["content"] = Value::String(body.to_owned());
+            } else {
+                call["content"] = Value::String(content.to_owned());
             }
         }
         json!({

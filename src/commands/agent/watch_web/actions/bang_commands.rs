@@ -79,12 +79,9 @@ pub(super) async fn execute(
 
     validate_transcript(&session, &request).await?;
 
-    let sessions_dir = if session.engine == Engine::Claude {
-        Some(resolve_sessions_dir(state.sessions_dir).map_err(ApiError::internal)?)
-    } else {
-        None
-    };
-    let marker = if let Some(sessions_dir) = sessions_dir.as_ref() {
+    let sessions_dir =
+        resolve_sessions_dir(state.sessions_dir.clone()).map_err(ApiError::internal)?;
+    let marker = if session.engine == Engine::Claude {
         let sessions_dir = sessions_dir.clone();
         let session_id = session.session_id.clone();
         Some(
@@ -103,17 +100,15 @@ pub(super) async fn execute(
     let result = run_blocking(move || runtime.execute_command(&cwd, &command)).await?;
     let result_message = command_result_message(&request.commands, &session.cwd, &result);
     let queued_content = result_message.clone();
-    let result_message =
-        super::messages::watch_web_message_content(&session, marker.as_deref(), &result_message);
-    let runtime = state.runtime;
-    run_blocking(move || {
-        super::messages::deliver_user_message(
-            runtime.as_ref(),
-            &session,
-            sessions_dir.as_deref(),
-            &result_message,
-            &queued_content,
-        )
+    super::messages::send_queued_prompt(super::messages::QueuedPromptDelivery {
+        runtime: state.runtime,
+        sessions_dir,
+        session,
+        marker,
+        queued_content,
+        message_content: result_message,
+        queued_attachments: Vec::new(),
+        attachment_paths: Vec::new(),
     })
     .await?;
 

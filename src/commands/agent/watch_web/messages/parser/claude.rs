@@ -1095,16 +1095,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_a_marked_peer_message_with_a_saved_image() {
-        let directory = tempfile::tempdir().unwrap();
-        let image_directory = directory.path().canonicalize().unwrap();
-        let image_name = "00000000-0000-4000-8000-000000000001.png";
-        let image_path = image_directory.join(image_name);
-        std::fs::write(
-            &image_path,
-            [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
-        )
-        .unwrap();
+    fn keeps_attachment_paths_as_text_in_a_marked_peer_message() {
         let marker = "⟦armyknife-user:00000000-0000-4000-8000-000000000002⟧";
         let content = formatdoc! {"
             Another Claude session sent a message:
@@ -1112,9 +1103,15 @@ mod tests {
             This message was typed by the human user in armyknife watch-web.
             Inspect this image.
 
-            Attached image(s):
-            - {}
-        ", image_path.display()};
+            Attached file(s):
+            - /fixture/image.png
+        "};
+        let attachment_text = indoc! {"
+            Inspect this image.
+
+            Attached file(s):
+            - /fixture/image.png
+        "};
         let transcript = serde_json::to_string(&json!({
             "type": "user",
             "isMeta": true,
@@ -1124,24 +1121,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            parse_with_image_directory(
-                Cursor::new(transcript),
-                None,
-                None,
-                Some(marker),
-                Some(&image_directory),
-            )
-            .unwrap(),
-            vec![ChatItem::UserWithContent {
-                content: vec![
-                    UserContentPart::Text {
-                        text: "Inspect this image.".to_string(),
-                    },
-                    UserContentPart::Image {
-                        source: format!("/api/images/{image_name}"),
-                        available: true,
-                    },
-                ],
+            parse_with_image_directory(Cursor::new(transcript), None, None, Some(marker), None,)
+                .unwrap(),
+            vec![ChatItem::User {
+                text: attachment_text.to_owned(),
                 timestamp: None,
                 from: None,
             }]
@@ -1149,22 +1132,13 @@ mod tests {
     }
 
     #[test]
-    fn pending_queued_message_resolves_saved_image_references() {
-        let directory = tempfile::tempdir().unwrap();
-        let image_directory = directory.path().canonicalize().unwrap();
-        let image_name = "00000000-0000-4000-8000-000000000001.png";
-        let image_path = image_directory.join(image_name);
-        std::fs::write(
-            &image_path,
-            [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
-        )
-        .unwrap();
-        let content = formatdoc! {"
+    fn keeps_attachment_paths_as_text_in_a_pending_queue_entry() {
+        let content = indoc! {"
             Inspect this image.
 
-            Attached image(s):
-            - {}
-        ", image_path.display()};
+            Attached file(s):
+            - /fixture/image.png
+        "};
         let transcript = serde_json::to_string(&json!({
             "type": "queue-operation",
             "operation": "enqueue",
@@ -1173,24 +1147,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            parse_with_image_directory(
-                Cursor::new(transcript),
-                None,
-                None,
-                None,
-                Some(&image_directory),
-            )
-            .unwrap(),
+            parse_with_image_directory(Cursor::new(transcript), None, None, None, None,).unwrap(),
             vec![ChatItem::QueuedUser {
-                content: vec![
-                    UserContentPart::Text {
-                        text: "Inspect this image.".to_string(),
-                    },
-                    UserContentPart::Image {
-                        source: format!("/api/images/{image_name}"),
-                        available: true,
-                    },
-                ],
+                content: vec![UserContentPart::Text {
+                    text: content.to_owned(),
+                },],
                 timestamp: None,
                 from: None,
             }],
@@ -1198,16 +1159,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_an_unmarked_peer_message_with_a_saved_image() {
-        let directory = tempfile::tempdir().unwrap();
-        let image_directory = directory.path().canonicalize().unwrap();
-        let image_name = "00000000-0000-4000-8000-000000000003.png";
-        let image_path = image_directory.join(image_name);
-        std::fs::write(
-            &image_path,
-            [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
-        )
-        .unwrap();
+    fn keeps_attachment_paths_as_text_in_an_unmarked_peer_message() {
         let content = formatdoc! {"
             <peer-message>
             - From session_id: fixture-peer-session
@@ -1215,41 +1167,36 @@ mod tests {
 
             Inspect this image.
 
-            Attached image(s):
-            - {}
+            Attached file(s):
+            - /fixture/image.png
             </peer-message>
-        ", image_path.display()};
+        "};
         let transcript = serde_json::to_string(&json!({
             "type": "user",
             "origin": {"kind": "peer", "from": "fixture-peer-session"},
             "message": {"content": content},
         }))
         .unwrap();
+        let attachment_text = indoc! {"
+            Inspect this image.
+
+            Attached file(s):
+            - /fixture/image.png
+        "}
+        .trim_end()
+        .to_owned();
 
         assert_eq!(
-            parse_with_image_directory(
-                Cursor::new(transcript),
-                None,
-                None,
-                None,
-                Some(&image_directory),
-            )
-            .unwrap(),
+            parse_with_image_directory(Cursor::new(transcript), None, None, None, None,).unwrap(),
             vec![ChatItem::Peer {
                 direction: PeerDirection::From,
                 session_id: "fixture-peer-session".to_string(),
                 session_title: None,
                 failed: false,
                 timestamp: None,
-                content: vec![
-                    UserContentPart::Text {
-                        text: "Inspect this image.".to_string(),
-                    },
-                    UserContentPart::Image {
-                        source: format!("/api/images/{image_name}"),
-                        available: true,
-                    },
-                ],
+                content: vec![UserContentPart::Text {
+                    text: attachment_text
+                }],
             }]
         );
     }
