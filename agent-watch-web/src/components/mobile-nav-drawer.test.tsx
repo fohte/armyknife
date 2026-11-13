@@ -74,17 +74,20 @@ it('opens the modal and calls onClose when Escape closes it', async () => {
     await userEvent.click(trigger)
   })
   const opened = dialog.open
+  const modal = dialog.matches(':modal')
   await act(async () => {
     await userEvent.keyboard('{Escape}')
   })
 
   const snapshot = () => ({
     opened,
+    modal,
     closed: dialog.open,
     onCloseCalls: onClose.mock.calls,
   })
   expect(snapshot()).toEqual({
     opened: true,
+    modal: true,
     closed: false,
     onCloseCalls: [[]],
   })
