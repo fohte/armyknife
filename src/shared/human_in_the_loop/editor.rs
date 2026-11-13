@@ -50,7 +50,7 @@ pub fn run_editor(
     editor_command_with_args(editor_command, file_path, window_title).status()
 }
 
-pub(super) enum ReviewEditorOutcome {
+pub(crate) enum ReviewEditorOutcome {
     Exited(ExitStatus),
     FinishRequested,
 }

@@ -178,7 +178,7 @@ pub fn run_review_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
         repo_slug: args.repo.clone(),
     };
 
-    complete_review::<ThreadsFrontmatter, _>(
+    complete_review::<ThreadsFrontmatter, _, _>(
         &args.filepath,
         args.window_title.as_deref(),
         &handler,

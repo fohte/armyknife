@@ -12,7 +12,9 @@ use crate::commands::agent::review_queue::{ReviewDocumentQueue, review_document_
 use crate::commands::agent::store;
 use crate::commands::agent::types::Session;
 use crate::shared::human_in_the_loop::{
-    LockGuard, ReviewDocumentMarker, finish_request_fifo_path, review_document_marker,
+    FINISH_ACK_TIMEOUT, LockGuard, ReviewDocumentMarker, ReviewDocumentOperationLock,
+    finish_ack_fifo_path, finish_request_fifo_path, open_fifo_reader, review_document_marker,
+    wait_for_finish_ack,
 };
 
 type SessionLoader = Arc<dyn Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync>;
@@ -146,10 +148,7 @@ async fn finish_review_document(
     axum::Json(request): axum::Json<ReviewDocumentEditRequest>,
 ) -> Result<axum::Json<ReviewDocumentSaved>, StatusCode> {
     let _edit_guard = edit_lock.lock().await;
-    let finish_fifo_path =
-        save_document_for_session(load_session, load_review_queue, session_id, request, true)
-            .await?;
-    crate::shared::human_in_the_loop::signal_fifo(&finish_fifo_path);
+    save_document_for_session(load_session, load_review_queue, session_id, request, true).await?;
     Ok(axum::Json(ReviewDocumentSaved { success: true }))
 }
 
@@ -159,7 +158,7 @@ async fn save_document_for_session(
     session_id: String,
     request: ReviewDocumentEditRequest,
     finishing: bool,
-) -> Result<std::path::PathBuf, StatusCode> {
+) -> Result<(), StatusCode> {
     tokio::task::spawn_blocking(move || {
         let session = load_session(&session_id)
             .map_err(|error| {
@@ -172,16 +171,68 @@ async fn save_document_for_session(
         if marker.id != request.id {
             return Err(StatusCode::CONFLICT);
         }
-        if !LockGuard::is_locked(&marker.path) {
+        let review_lock = ReviewDocumentOperationLock::acquire(&marker.path).map_err(|error| {
+            tracing::warn!(%error, "failed to lock active review document for editing");
+            if error.kind() == std::io::ErrorKind::NotFound {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        })?;
+        let current_session = load_session(&session_id)
+            .map_err(|error| {
+                tracing::warn!(%error, "failed to recheck session for review document edit");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?
+            .ok_or(StatusCode::NOT_FOUND)?;
+        let current_marker =
+            select_review_document(&current_session, load_review_queue(&current_session))
+                .ok_or(StatusCode::NOT_FOUND)?;
+        if current_marker.id != request.id
+            || current_marker.path != marker.path
+            || !review_lock.is_active(&marker.path)
+        {
             return Err(StatusCode::CONFLICT);
         }
         let fifo_path = finish_request_fifo_path(&marker.path);
-        if finishing && !is_fifo(&fifo_path) {
+        if !is_fifo(&fifo_path) {
             return Err(StatusCode::CONFLICT);
         }
+        let mut ack_reader = if finishing {
+            Some(
+                open_fifo_reader(&finish_ack_fifo_path(&marker.path)).map_err(|error| {
+                    tracing::warn!(%error, "failed to open review finish acknowledgement FIFO");
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?,
+            )
+        } else {
+            None
+        };
         let content = render_review_document(&marker.path, request.frontmatter, &request.body)?;
         overwrite_review_document(&marker.path, content.as_bytes())?;
-        Ok(fifo_path)
+        if finishing {
+            crate::shared::human_in_the_loop::try_signal_fifo(&fifo_path).map_err(|error| {
+                tracing::warn!(%error, "failed to signal review finish request");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+        }
+        drop(review_lock);
+        if let Some(ack_reader) = ack_reader.as_mut() {
+            let acknowledgement =
+                wait_for_finish_ack(ack_reader, FINISH_ACK_TIMEOUT).map_err(|error| {
+                    tracing::warn!(%error, "review process did not acknowledge finish request");
+                    if error.kind() == std::io::ErrorKind::TimedOut {
+                        StatusCode::CONFLICT
+                    } else {
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    }
+                })?;
+            if acknowledgement != b'0' {
+                tracing::warn!("review completion handler rejected the finish request");
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+        }
+        Ok(())
     })
     .await
     .map_err(|error| {
@@ -337,11 +388,18 @@ fn active_review_document(
     session: &Session,
     queue: ReviewDocumentQueue,
 ) -> Option<ReviewDocumentMarker> {
+    let marker = select_review_document(session, queue)?;
+    LockGuard::is_locked(&marker.path).then_some(marker)
+}
+
+fn select_review_document(
+    session: &Session,
+    queue: ReviewDocumentQueue,
+) -> Option<ReviewDocumentMarker> {
     let mut markers = session
         .pending_human_review_ids
         .iter()
         .filter_map(|review_id| review_document_marker(review_id))
-        .filter(|marker| LockGuard::is_locked(&marker.path))
         .collect::<Vec<_>>();
 
     match queue {
@@ -397,7 +455,10 @@ mod tests {
     use crate::commands::agent::types::{Engine, Session, SessionStatus};
     use crate::shared::human_in_the_loop::LockGuard;
 
-    use super::{finish_request_fifo_path, router_with_loaders, router_with_session_loader};
+    use super::{
+        ReviewDocumentOperationLock, finish_ack_fifo_path, finish_request_fifo_path,
+        router_with_loaders, router_with_session_loader,
+    };
 
     struct ActiveReviewDocument {
         temp_dir: TempDir,
@@ -462,12 +523,26 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    fn create_fixture_fifo(path: &std::path::Path) {
+        let fifo_name = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
+            .expect("fixture FIFO path should not contain NUL");
+        // SAFETY: The path is inside this test's temporary directory.
+        let result = unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) };
+        assert_eq!(result, 0, "fixture FIFO should be created");
+    }
+
     #[fixture]
     fn active_review_document() -> ActiveReviewDocument {
         let temp_dir = TempDir::new().expect("fixture directory should be created");
         let document_path = temp_dir.path().join("fixture-document.md");
         std::fs::write(&document_path, "Original body.")
             .expect("fixture document should be written");
+        #[cfg(unix)]
+        {
+            create_fixture_fifo(&finish_request_fifo_path(&document_path));
+            create_fixture_fifo(&finish_ack_fifo_path(&document_path));
+        }
         let session = session_with_review(&document_path);
         let review_lock =
             LockGuard::acquire(&document_path).expect("fixture review lock should be acquired");
@@ -844,16 +919,11 @@ mod tests {
 
         let document_path = active_review_document.document_path;
         let finish_fifo_path = finish_request_fifo_path(&document_path);
+        let finish_ack_path = finish_ack_fifo_path(&document_path);
         let mut done_fifo_name = document_path.as_os_str().to_os_string();
         done_fifo_name.push(".done");
         let done_fifo_path = std::path::PathBuf::from(done_fifo_name);
-        for fifo_path in [&finish_fifo_path, &done_fifo_path] {
-            let fifo_name = std::ffi::CString::new(fifo_path.as_os_str().as_encoded_bytes())
-                .expect("fixture FIFO path should not contain NUL");
-            // SAFETY: The path is NUL-terminated and points inside this test's temporary directory.
-            let fifo_result = unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) };
-            assert_eq!(fifo_result, 0, "fixture FIFO should be created");
-        }
+        create_fixture_fifo(&done_fifo_path);
         let mut finish_reader = std::fs::OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NONBLOCK)
@@ -875,30 +945,47 @@ mod tests {
             move |_| Ok(Some(session.clone())),
             |_| ReviewDocumentQueue::Managed(Some("fixture-editor-session".to_string())),
         );
-        let response = app
-            .oneshot(
-                Request::post("/sessions/fixture-session/review-document/finish")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::json!({
-                            "id": "fixture-review",
-                            "frontmatter": null,
-                            "body": "Saved before review closes.",
-                        })
-                        .to_string(),
-                    ))
-                    .expect("request should be valid"),
-            )
+        let request = Request::post("/sessions/fixture-session/review-document/finish")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "id": "fixture-review",
+                    "frontmatter": null,
+                    "body": "Saved before review closes.",
+                })
+                .to_string(),
+            ))
+            .expect("request should be valid");
+        let finish_task = tokio::spawn(async move { app.oneshot(request).await });
+        let start = std::time::Instant::now();
+        let mut finish_signal = [0_u8; 1];
+        let finish_bytes_read = loop {
+            let bytes_read = finish_reader
+                .read(&mut finish_signal)
+                .expect("finish request FIFO should be readable");
+            if bytes_read > 0 || start.elapsed() >= std::time::Duration::from_secs(2) {
+                break bytes_read;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        };
+        let document_when_signaled = std::fs::read_to_string(&document_path)
+            .expect("saved document should be readable before finish acknowledgement");
+        if finish_bytes_read > 0 {
+            let review_operation_lock = ReviewDocumentOperationLock::acquire(&document_path)
+                .expect("review process should acquire the shared edit lock");
+            std::fs::remove_file(&finish_fifo_path)
+                .expect("review process should close the finish FIFO");
+            drop(review_operation_lock);
+            crate::shared::human_in_the_loop::signal_fifo(&finish_ack_path);
+        }
+        let response = finish_task
             .await
+            .expect("finish task should not panic")
             .expect("request should complete");
         let status = response.status();
         let body = to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("response body should be read");
-        let mut finish_signal = [0_u8; 1];
-        let finish_bytes_read = finish_reader
-            .read(&mut finish_signal)
-            .expect("finish should signal the editor process");
         let mut done_signal = [0_u8; 1];
         let done_bytes_read = done_reader
             .read(&mut done_signal)
@@ -910,6 +997,7 @@ mod tests {
                 serde_json::from_slice::<serde_json::Value>(&body)
                     .expect("response should be JSON"),
                 std::fs::read_to_string(&document_path).expect("saved document should be readable"),
+                document_when_signaled,
                 finish_bytes_read,
                 finish_signal,
                 done_bytes_read,
@@ -919,11 +1007,49 @@ mod tests {
                 StatusCode::OK,
                 serde_json::json!({ "success": true }),
                 "Saved before review closes.".to_string(),
+                "Saved before review closes.".to_string(),
                 1,
                 *b"0",
                 0,
                 [0],
             ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn finish_rejects_without_saving_after_review_closes_finish_fifo(
+        active_review_document: ActiveReviewDocument,
+    ) {
+        let document_path = active_review_document.document_path;
+        std::fs::remove_file(finish_request_fifo_path(&document_path))
+            .expect("review process should close the finish FIFO before finishing");
+        let session = active_review_document.session;
+        let app = router_with_session_loader(move |_| Ok(Some(session.clone())));
+        let response = app
+            .oneshot(
+                Request::post("/sessions/fixture-session/review-document/finish")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "id": "fixture-review",
+                            "frontmatter": null,
+                            "body": "Late finish should not overwrite this document.",
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should be valid"),
+            )
+            .await
+            .expect("request should complete");
+
+        assert_eq!(
+            (
+                response.status(),
+                std::fs::read_to_string(&document_path)
+                    .expect("fixture document should be readable"),
+            ),
+            (StatusCode::CONFLICT, "Original body.".to_string()),
         );
     }
 }

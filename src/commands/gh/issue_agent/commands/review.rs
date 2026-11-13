@@ -268,7 +268,7 @@ pub fn run_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
 
     let config = load_config()?;
 
-    complete_review::<SubmitSchema, _>(
+    complete_review::<SubmitSchema, _, _>(
         &args.path,
         args.window_title.as_deref(),
         &IssueReviewHandler,
