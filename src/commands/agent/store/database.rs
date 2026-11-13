@@ -28,7 +28,8 @@ pub(crate) use decisions::{
 };
 pub(crate) use peer_out_messages::WatchWebPeerOutMessage;
 pub(crate) use peer_out_messages::{
-    insert_watch_web_peer_out_message, watch_web_peer_out_messages,
+    insert_watch_web_peer_out_message, mark_watch_web_peer_out_message_delivered,
+    watch_web_peer_out_messages,
 };
 pub(crate) use permission_denied::PermissionDeniedOperation;
 pub(crate) use permission_denied::{

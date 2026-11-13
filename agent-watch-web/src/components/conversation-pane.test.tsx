@@ -2889,6 +2889,48 @@ it('interrupts the session on Escape', () => {
   expect(actual).toBe(expected)
 })
 
+it('sends one interrupt while its request is pending', async () => {
+  let finishInterrupt: (succeeded: boolean) => void = () => undefined
+  const pendingInterrupt = new Promise<boolean>((resolve) => {
+    finishInterrupt = resolve
+  })
+  const onAction = vi.fn(() => pendingInterrupt)
+  renderView(onAction, session, undefined, [], actions, true)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  dispatchKeyInAct(textarea, 'Escape')
+  dispatchKeyInAct(textarea, 'Escape')
+  const button = requireElement(
+    container.querySelector<HTMLButtonElement>('.mobile-interrupt-button'),
+  )
+  act(() => {
+    button.click()
+  })
+  const during = {
+    actions: onAction.mock.calls,
+    interruptDisabled: button.disabled,
+  }
+
+  await act(async () => {
+    finishInterrupt(true)
+    await pendingInterrupt
+  })
+
+  const snapshot = () => ({
+    during,
+    after: {
+      actions: onAction.mock.calls,
+      interruptDisabled: button.disabled,
+    },
+  })
+  const expected = {
+    during: { actions: [['interrupt']], interruptDisabled: true },
+    after: { actions: [['interrupt']], interruptDisabled: false },
+  }
+  expect(snapshot()).toEqual(expected)
+})
+
 it('does not use question shortcuts while typing', () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction)
@@ -3167,7 +3209,7 @@ it('shows peer images and supports keyboard navigation', () => {
     items: [
       {
         className: 'chat-peer-message chat-peer-message-to',
-        text: 'TOBuild verificationPlease check the fictional output.画像はもうありません',
+        text: 'TOSENTBuild verificationPlease check the fictional output.画像はもうありません',
         imageSources: [],
         unavailableImageText: '画像はもうありません',
         fileNames: [],

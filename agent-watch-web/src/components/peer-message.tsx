@@ -27,6 +27,7 @@ export function PeerMessage({
       ? 'armyknife'
       : `${message.session_title ?? message.session_id} (ended)`)
   const directionLabel = message.direction === 'from' ? 'FROM' : 'TO'
+  const isFailed = message.failed === true
   const time = formatMessageTime(message.timestamp, now)
   const openSession = () => {
     if (foundTarget === undefined) return
@@ -36,9 +37,15 @@ export function PeerMessage({
   return (
     <article
       className={`chat-peer-message chat-peer-message-${message.direction}`}
+      data-failed={isFailed ? 'true' : undefined}
     >
       <div className="chat-peer-label">
         <span>{directionLabel}</span>
+        {message.direction === 'to' && (
+          <span className="chat-peer-status">
+            {isFailed ? 'FAILED' : 'SENT'}
+          </span>
+        )}
         {foundTarget === undefined ? (
           <span>{sessionName}</span>
         ) : (

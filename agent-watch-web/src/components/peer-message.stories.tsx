@@ -58,6 +58,21 @@ export const PeerMessageIsSentToAnotherSession: Story = {
   },
 }
 
+export const PeerMessageDeliveryFails: Story = {
+  name: 'A failed peer message shows its destination and body',
+  args: {
+    message: {
+      type: 'peer',
+      direction: 'to',
+      session_id: target.id,
+      content: [
+        { type: 'text', text: 'The fictional request could not be sent.' },
+      ],
+      failed: true,
+    },
+  },
+}
+
 export const PeerMessageNamesAnUntrackedSession: Story = {
   name: 'A peer message shows an untracked session ID as plain text',
   args: {

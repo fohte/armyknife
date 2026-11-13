@@ -5,7 +5,7 @@ use serde_json::{Map, Value};
 
 use super::super::super::SkillSuggestion;
 use super::super::queue::QueueReplayEvent;
-use super::super::{classifier, record_timestamp};
+use super::super::record_timestamp;
 use super::background_tasks::{BackgroundTaskTracker, task_notification_text};
 use super::events::{ClaudeEffect, TimedClaudeEvent};
 use super::questions::{append_questions, parse_question_answers, tool_use_result_answers};
@@ -152,31 +152,13 @@ impl ClaudeParserState {
                             self.tool_uses.iter().position(|tool_use| tool_use.id == id)
                         {
                             let tool_use = self.tool_uses.remove(index);
-                            let text = block
-                                .get("content")
-                                .and_then(tool_result_text)
-                                .unwrap_or_default();
-                            if classifier::is_peer_notify_tool(
-                                &tool_use.name,
-                                tool_use.input.as_ref(),
-                            ) {
-                                let failed = tool_result_failed(record, block)
-                                    || classifier::peer_notification_failed(record, &text);
-                                effects.push(ClaudeEffect::PeerNotification {
-                                    tool_use,
-                                    text,
-                                    failed,
-                                    timestamp,
-                                });
-                            } else {
-                                effects.push(ClaudeEffect::ToolAction {
-                                    name: tool_use.name.clone(),
-                                    input: tool_use.input.clone(),
-                                    failed: tool_result_failed(record, block),
-                                });
-                                self.background_tasks
-                                    .complete_tool_use(&tool_use, record, block, now);
-                            }
+                            effects.push(ClaudeEffect::ToolAction {
+                                name: tool_use.name.clone(),
+                                input: tool_use.input.clone(),
+                                failed: tool_result_failed(record, block),
+                            });
+                            self.background_tasks
+                                .complete_tool_use(&tool_use, record, block, now);
                         }
                     }
                     let (text, images) = user_content(message.get("content"));
@@ -226,17 +208,7 @@ impl ClaudeParserState {
                                     .and_then(Value::as_str)
                                     .unwrap_or_default();
                                 let input = block.get("input");
-                                if classifier::is_peer_notify_tool(name, input) {
-                                    effects.push(ClaudeEffect::FlushTools);
-                                    if let Some(id) = block.get("id").and_then(Value::as_str) {
-                                        self.tool_uses.push(ToolUse {
-                                            id: id.to_owned(),
-                                            name: name.to_owned(),
-                                            input: input.cloned(),
-                                            started_at: timestamp,
-                                        });
-                                    }
-                                } else if name == "AskUserQuestion" {
+                                if name == "AskUserQuestion" {
                                     effects.push(ClaudeEffect::FlushTools);
                                     let mut questions = Vec::new();
                                     let id =
