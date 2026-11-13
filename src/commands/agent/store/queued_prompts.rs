@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 
-use super::database::{self, WatchWebQueuedPrompt};
+use super::database::{self, WatchWebQueuedAttachment, WatchWebQueuedPrompt};
 
 pub(crate) fn ensure_watch_web_user_marker_from(
     sessions_dir: &Path,
@@ -18,10 +18,35 @@ pub(crate) fn ensure_watch_web_user_marker_from(
 pub(crate) fn insert_watch_web_queued_prompt_from(
     sessions_dir: &Path,
     session_id: &str,
+    message_id: &str,
     content: &str,
+    attachments: &[WatchWebQueuedAttachment],
     sent_at: DateTime<Utc>,
+) -> Result<i64> {
+    database::insert_watch_web_queued_prompt(
+        sessions_dir,
+        session_id,
+        message_id,
+        content,
+        attachments,
+        sent_at,
+    )
+}
+
+pub(crate) fn delete_watch_web_queued_prompts_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    ids: &[i64],
 ) -> Result<()> {
-    database::insert_watch_web_queued_prompt(sessions_dir, session_id, content, sent_at).map(|_| ())
+    database::delete_watch_web_queued_prompts(sessions_dir, session_id, ids)
+}
+
+pub(crate) fn mark_watch_web_queued_prompts_resolved_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    ids: &[i64],
+) -> Result<()> {
+    database::mark_watch_web_queued_prompts_resolved(sessions_dir, session_id, ids)
 }
 
 pub(crate) fn watch_web_queued_prompts_from(
@@ -31,6 +56,6 @@ pub(crate) fn watch_web_queued_prompts_from(
     database::watch_web_queued_prompts(sessions_dir, session_id)
 }
 
-pub(crate) fn delete_watch_web_queued_prompts(session_id: &str, ids: &[i64]) -> Result<()> {
-    database::delete_watch_web_queued_prompts(&super::sessions_dir()?, session_id, ids)
+pub(crate) fn mark_watch_web_queued_prompts_resolved(session_id: &str, ids: &[i64]) -> Result<()> {
+    mark_watch_web_queued_prompts_resolved_from(&super::sessions_dir()?, session_id, ids)
 }

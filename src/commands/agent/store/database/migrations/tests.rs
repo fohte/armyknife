@@ -1,9 +1,25 @@
 use indoc::indoc;
-use rstest::rstest;
+use rstest::{fixture, rstest};
 use rusqlite::Connection;
 use rusqlite_migration::{Error as MigrationError, MigrationDefinitionError, Migrations};
 
 use super::*;
+
+struct DatabaseFixture {
+    temp_dir: tempfile::TempDir,
+    connection: Connection,
+}
+
+#[fixture]
+fn database_fixture() -> DatabaseFixture {
+    let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+    let connection = Connection::open(temp_dir.path().join("sessions.db"))
+        .expect("temporary database should open");
+    DatabaseFixture {
+        temp_dir,
+        connection,
+    }
+}
 
 #[rstest]
 #[case::newer_database(1, true)]
@@ -24,11 +40,12 @@ fn accepts_database_too_far_ahead_only_for_a_newer_version(
     assert_eq!(actual, expected_accepted);
 }
 
-#[test]
-fn adds_permission_request_mailbox_to_version_nine_database() {
-    let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
-    let database_path = temp_dir.path().join("sessions.db");
-    let mut connection = Connection::open(&database_path).expect("temporary database should open");
+#[rstest]
+fn adds_permission_request_mailbox_to_version_nine_database(database_fixture: DatabaseFixture) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
     Migrations::from_slice(&MIGRATION_ENTRIES[..9])
         .to_latest(&mut connection)
         .expect("master migrations should create the version nine schema");
@@ -118,12 +135,77 @@ fn adds_permission_request_mailbox_to_version_nine_database() {
         ),
     );
 }
+#[rstest]
+fn resolves_legacy_queued_prompts_without_message_ids(database_fixture: DatabaseFixture) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
+    Migrations::from_slice(&MIGRATION_ENTRIES[..16])
+        .to_latest(&mut connection)
+        .expect("version sixteen migrations should create the message id schema");
+    connection
+        .execute(
+            indoc! {"
+                INSERT INTO watch_web_queued_prompt (
+                session_id, content, sent_at, message_id
+                ) VALUES
+                ('fixture-session', 'Legacy prompt.', '2026-01-01T00:00:00Z', NULL),
+                ('fixture-session', 'New prompt.', '2026-01-01T00:00:01Z', 'fixture-message-cyan')",
+            },
+            [],
+        )
+        .expect("legacy and id-bearing queued prompts should be inserted");
+    drop(connection);
 
-#[test]
-fn adds_todo_resolution_to_master_version_fourteen_database() {
-    let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
-    let database_path = temp_dir.path().join("sessions.db");
-    let mut connection = Connection::open(&database_path).expect("temporary database should open");
+    let connection = super::super::open_connection(temp_dir.path())
+        .expect("version sixteen database should migrate to the current schema");
+    connection
+        .execute(
+            indoc! {"
+                INSERT INTO watch_web_queued_prompt (session_id, content, sent_at)
+                VALUES ('fixture-session', 'Old writer prompt.', '2026-01-01T00:00:02Z')
+            "},
+            [],
+        )
+        .expect("old writer should be able to insert into the migrated schema");
+    let actual = connection
+        .prepare(indoc! {"
+                SELECT message_id, resolved, attachments
+                FROM watch_web_queued_prompt ORDER BY id
+            "})
+        .expect("queued prompt migration query should prepare")
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .expect("queued prompts should be queryable")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("queued prompts should deserialize");
+
+    assert_eq!(
+        actual,
+        vec![
+            (None, 1, "[]".to_string()),
+            (
+                Some("fixture-message-cyan".to_string()),
+                0,
+                "[]".to_string()
+            ),
+            (None, 1, "[]".to_string()),
+        ],
+    );
+}
+
+#[rstest]
+fn adds_todo_resolution_to_master_version_fourteen_database(database_fixture: DatabaseFixture) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
     Migrations::from_slice(&MIGRATION_ENTRIES[..14])
         .to_latest(&mut connection)
         .expect("master migration fourteen schema should be created");

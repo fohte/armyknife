@@ -43,6 +43,13 @@ pub(super) struct Attachment {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub(super) struct SavedAttachment {
+    pub(super) path: PathBuf,
+    pub(super) name: String,
+    pub(super) image_source: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
 enum AttachmentKind {
     Image,
     File,
@@ -187,7 +194,7 @@ fn validate_legacy_image(image: LegacyImageRequest) -> Result<Attachment, Valida
 pub(super) fn save(
     attachments: Vec<Attachment>,
     directory: Option<PathBuf>,
-) -> anyhow::Result<Vec<PathBuf>> {
+) -> anyhow::Result<Vec<SavedAttachment>> {
     if attachments.is_empty() {
         return Ok(Vec::new());
     }
@@ -215,17 +222,21 @@ pub(super) fn save(
     if existing_usage.saturating_add(incoming_usage) > MAX_STORAGE_BYTES {
         anyhow::bail!("file attachment storage is full");
     }
+    let mut saved = Vec::with_capacity(attachments.len());
     let mut paths = Vec::with_capacity(attachments.len());
     for attachment in attachments {
         match save_one(&directory, attachment) {
-            Ok(path) => paths.push(path),
+            Ok(attachment) => {
+                paths.push(attachment.path.clone());
+                saved.push(attachment);
+            }
             Err(error) => {
                 remove_files_unlocked(&paths);
                 return Err(error);
             }
         }
     }
-    Ok(paths)
+    Ok(saved)
 }
 
 pub(super) fn remove(paths: &[PathBuf]) {
@@ -305,16 +316,13 @@ fn directory_usage_bytes(directory: &Path) -> std::io::Result<u64> {
     })
 }
 
-fn save_one(directory: &Path, attachment: Attachment) -> anyhow::Result<PathBuf> {
-    let kind = match attachment.kind {
-        AttachmentKind::Image => "image",
-        AttachmentKind::File => "file",
+fn save_one(directory: &Path, attachment: Attachment) -> anyhow::Result<SavedAttachment> {
+    let (kind, image) = match attachment.kind {
+        AttachmentKind::Image => ("image", true),
+        AttachmentKind::File => ("file", false),
     };
-    let path = directory.join(format!(
-        "{}~{kind}~{}",
-        uuid::Uuid::new_v4(),
-        sanitize_filename(&attachment.name),
-    ));
+    let name = sanitize_filename(&attachment.name);
+    let path = directory.join(format!("{}~{kind}~{}", uuid::Uuid::new_v4(), name,));
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -328,7 +336,20 @@ fn save_one(directory: &Path, attachment: Attachment) -> anyhow::Result<PathBuf>
         let _ = fs::remove_file(&path);
         return Err(error.into());
     }
-    path.canonicalize().map_err(Into::into)
+    let path = path.canonicalize()?;
+    let image_source = image.then(|| {
+        format!(
+            "/api/images/{}",
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+        )
+    });
+    Ok(SavedAttachment {
+        path,
+        name,
+        image_source,
+    })
 }
 
 fn sanitize_filename(name: &str) -> String {
@@ -526,7 +547,8 @@ mod tests {
         let canonical_directory = directory.path().canonicalize().unwrap();
         let snapshot = paths
             .iter()
-            .map(|path| {
+            .map(|attachment| {
+                let path = &attachment.path;
                 let filename = path.file_name().unwrap().to_string_lossy();
                 let sanitized_name = filename.split_once("~file~").unwrap().1.to_string();
                 (
@@ -539,7 +561,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(
-            (snapshot, paths[0] != paths[1]),
+            (snapshot, paths[0].path != paths[1].path),
             (
                 vec![
                     (true, true, "design_mock.html".to_string(), b"one".to_vec(),),

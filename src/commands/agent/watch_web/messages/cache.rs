@@ -124,18 +124,14 @@ impl RunningBackgroundTaskCache {
     }
 }
 
-pub(super) fn delete_resolved_queued_prompts(
-    loaders: &RouteLoaders,
-    session_id: &str,
-    ids: &[i64],
-) {
+pub(super) fn mark_resolved_queued_prompts(loaders: &RouteLoaders, session_id: &str, ids: &[i64]) {
     if !ids.is_empty()
-        && let Err(error) = (loaders.delete_queued_prompts)(session_id, ids)
+        && let Err(error) = (loaders.mark_queued_prompts_resolved)(session_id, ids)
     {
         tracing::warn!(
             session_id,
             %error,
-            "failed to remove resolved watch-web queued prompts"
+            "failed to mark resolved watch-web queued prompts"
         );
     }
 }
