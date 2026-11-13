@@ -46,6 +46,8 @@ function requestFor(operation: SessionOperation) {
       return { path: 'focus', body: undefined }
     case 'interrupt':
       return { path: 'interrupt', body: undefined }
+    case 'title':
+      return { path: 'title', body: { title: operation.title } }
     case 'message':
       return {
         path: 'messages',
@@ -159,6 +161,12 @@ export function createSessionOperation(
       return ok<SessionOperation, Error>({ type: 'focus', sessionId })
     case 'interrupt':
       return ok<SessionOperation, Error>({ type: 'interrupt', sessionId })
+    case 'title': {
+      const title = requiredString('title')
+      return title === null
+        ? errOperation('Invalid title operation')
+        : ok<SessionOperation, Error>({ type: 'title', sessionId, title })
+    }
     case 'messages':
       return typeof payload['content'] === 'string'
         ? ok<SessionOperation, Error>({

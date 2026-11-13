@@ -14,6 +14,7 @@ export type SessionOperation =
   | { type: 'close'; sessionId: string; keepWorktree: boolean }
   | { type: 'focus'; sessionId: string }
   | { type: 'interrupt'; sessionId: string }
+  | { type: 'title'; sessionId: string; title: string }
   | {
       type: 'message'
       sessionId: string
@@ -91,6 +92,9 @@ function operationKey(operation: SessionOperation) {
   }
   if (operation.type === 'primary_task') {
     return `${operation.sessionId}:primary_task:${operation.taskId}`
+  }
+  if (operation.type === 'title') {
+    return `${operation.sessionId}:title:${operation.title.trim()}`
   }
   if (operation.type === 'answer') {
     return `${operation.sessionId}:answer:${operation.requestId}`

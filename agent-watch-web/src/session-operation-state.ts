@@ -52,6 +52,10 @@ export function applySessionOperation(
         const task = session.tasks?.find(({ id }) => id === operation.taskId)
         return task === undefined ? session : { ...session, task }
       }
+      case 'title':
+        return operation.title.trim() === ''
+          ? session
+          : { ...session, title: operation.title.trim() }
       default:
         return session
     }
@@ -323,6 +327,10 @@ export function isSessionOperationConfirmed(
       return session === undefined
     case 'primary_task':
       return session?.task?.id === operation.taskId
+    case 'title':
+      return operation.title.trim() === ''
+        ? false
+        : session?.title === operation.title.trim()
     default:
       return true
   }
@@ -334,11 +342,13 @@ export function isSessionListOperation(operation: SessionOperation) {
     operation.type === 'later' ||
     operation.type === 'back_now' ||
     operation.type === 'close' ||
-    operation.type === 'primary_task'
+    operation.type === 'primary_task' ||
+    operation.type === 'title'
   )
 }
 
 export function requiresStateConfirmation(operation: SessionOperation) {
+  if (operation.type === 'title' && operation.title.trim() === '') return false
   return (
     isSessionListOperation(operation) ||
     operation.type === 'message' ||

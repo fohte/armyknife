@@ -6,6 +6,7 @@ import {
   createSessionOperation,
   isConversationOperationConfirmed,
   isSessionOperationConfirmed,
+  requiresStateConfirmation,
   type SessionOperation,
   sessionOperationKey,
   submitSessionOperation,
@@ -154,6 +155,16 @@ const requests: {
     name: 'interrupt session',
     operation: { type: 'interrupt', sessionId: 'test-session' },
     path: 'interrupt',
+  },
+  {
+    name: 'set session title',
+    operation: {
+      type: 'title',
+      sessionId: 'test-session',
+      title: 'A clearer title',
+    },
+    path: 'title',
+    body: { title: 'A clearer title' },
   },
   {
     name: 'send message',
@@ -328,6 +339,12 @@ const operationFactories: [
   ['terminal focus', 'focus', {}, { type: 'focus', sessionId: session.id }],
   ['interrupt', 'interrupt', {}, { type: 'interrupt', sessionId: session.id }],
   [
+    'title change',
+    'title',
+    { title: 'A clearer title' },
+    { type: 'title', sessionId: session.id, title: 'A clearer title' },
+  ],
+  [
     'message',
     'messages',
     {
@@ -457,11 +474,24 @@ it('keeps confirmation waiters distinct for different target values', () => {
     taskId: 'task-a',
   }
   const taskB: SessionOperation = { ...taskA, taskId: 'task-b' }
-  const keys = () => [sessionOperationKey(taskA), sessionOperationKey(taskB)]
+  const titleA: SessionOperation = {
+    type: 'title',
+    sessionId: session.id,
+    title: 'Title A',
+  }
+  const titleB: SessionOperation = { ...titleA, title: 'Title B' }
+  const keys = () => [
+    sessionOperationKey(taskA),
+    sessionOperationKey(taskB),
+    sessionOperationKey(titleA),
+    sessionOperationKey(titleB),
+  ]
 
   expect(keys()).toEqual([
     'test-session:primary_task:task-a',
     'test-session:primary_task:task-b',
+    'test-session:title:Title A',
+    'test-session:title:Title B',
   ])
 })
 
@@ -551,6 +581,18 @@ const sessionReducerCases: [
     { type: 'primary_task', sessionId: session.id, taskId: 'task-new' },
     [session],
     [{ ...session, task: session.tasks?.[1] ?? null }],
+  ],
+  [
+    'changes session title',
+    { type: 'title', sessionId: session.id, title: 'A clearer title' },
+    [session],
+    [{ ...session, title: 'A clearer title' }],
+  ],
+  [
+    'leaves the title unchanged while clearing its manual override',
+    { type: 'title', sessionId: session.id, title: '  ' },
+    [session],
+    [session],
   ],
 ]
 
@@ -876,6 +918,24 @@ const sessionListConfirmationCases: [
     [session],
     false,
   ],
+  [
+    'confirms a title change from a matching session snapshot',
+    { type: 'title', sessionId: session.id, title: 'A clearer title' },
+    [{ ...session, title: 'A clearer title' }],
+    true,
+  ],
+  [
+    'keeps a title change pending for the old session snapshot',
+    { type: 'title', sessionId: session.id, title: 'A clearer title' },
+    [session],
+    false,
+  ],
+  [
+    'does not predict the generated title after clearing its manual override',
+    { type: 'title', sessionId: session.id, title: '' },
+    [session],
+    false,
+  ],
 ]
 
 it.each(sessionListConfirmationCases)(
@@ -886,6 +946,16 @@ it.each(sessionListConfirmationCases)(
     )
   },
 )
+
+it('does not wait for state confirmation when clearing a manual title', () => {
+  expect(
+    requiresStateConfirmation({
+      type: 'title',
+      sessionId: session.id,
+      title: '  ',
+    }),
+  ).toEqual(false)
+})
 
 const permissionMessage: Extract<ChatItem, { type: 'permission' }> = {
   type: 'permission',

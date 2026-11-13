@@ -103,7 +103,7 @@ export function ConversationPaneHeader({
         variant="plain"
         disabled={isSavingTitle}
       >
-        Save
+        {isSavingTitle ? 'Saving…' : 'Save'}
       </Button>
       <Button
         className="cursor-pointer"
