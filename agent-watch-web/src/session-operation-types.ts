@@ -17,6 +17,7 @@ export type SessionOperation =
   | {
       type: 'message'
       sessionId: string
+      operationId?: string
       content: string
       attachments?: unknown[]
       messageCountBefore?: number
@@ -95,7 +96,7 @@ function operationKey(operation: SessionOperation) {
     return `${operation.sessionId}:answer:${operation.requestId}`
   }
   if (operation.type === 'message') {
-    return `${operation.sessionId}:message:${String(operation.messageCountBefore ?? 'unknown')}:${operation.content}:${JSON.stringify(operation.attachments ?? [])}`
+    return `${operation.sessionId}:message:${operation.operationId ?? String(operation.messageCountBefore ?? 'unknown')}`
   }
   if (operation.type === 'proposal_answer') {
     return `${operation.sessionId}:proposal_answer:${String(operation.seq)}:${String(operation.choice)}:${operation.comment ?? ''}`

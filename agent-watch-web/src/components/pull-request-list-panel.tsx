@@ -3,6 +3,7 @@ import '#components/pull-request-list-panel.css'
 import { useState } from 'react'
 
 import { CompletedItemsToggle } from '#components/completed-items-toggle'
+import { PullRequestMergeConfirmation } from '#components/pull-request-merge-confirmation'
 import { useSessionOperations } from '#session-operation-context'
 import type { SessionOperation } from '#session-operations'
 import type { SessionPullRequest } from '#types'
@@ -235,39 +236,15 @@ export function PullRequestListPanel({
         />
       )}
       {pendingMerge === null ? null : (
-        <div className="pull-request-list-confirm-backdrop">
-          <section
-            className="pull-request-list-confirm"
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="pull-request-merge-title"
-          >
-            <h3 id="pull-request-merge-title">Merge this pull request?</h3>
-            <p>
-              Merge PR #{String(pendingMerge.number)} using the confirmed head
-              commit?
-            </p>
-            <code>{pendingMerge.headSha}</code>
-            <div className="pull-request-list-confirm-actions">
-              <button
-                type="button"
-                disabled={merging}
-                onClick={() => {
-                  setPendingMerge(null)
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={merging}
-                onClick={() => void confirmMerge()}
-              >
-                {merging ? 'Merging…' : 'Confirm merge'}
-              </button>
-            </div>
-          </section>
-        </div>
+        <PullRequestMergeConfirmation
+          number={pendingMerge.number}
+          headSha={pendingMerge.headSha ?? ''}
+          merging={merging}
+          onCancel={() => {
+            setPendingMerge(null)
+          }}
+          onConfirm={() => void confirmMerge()}
+        />
       )}
     </div>
   )

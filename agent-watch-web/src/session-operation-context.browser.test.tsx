@@ -42,6 +42,8 @@ let resolvePost: ((response: Response) => void) | null = null
 let resolveRefresh: (() => void) | null = null
 let confirmServerState: (() => void) | null = null
 let operationRequest: Promise<void> | null = null
+let resolveMessagePosts: ((response: Response) => void)[] = []
+let messageRequests: Promise<unknown>[] = []
 
 function OperationHarness() {
   const [sessions, setSessions] = useState([session])
@@ -99,6 +101,56 @@ function OperationHarness() {
   )
 }
 
+function MessageOperationHarness() {
+  const { pendingOperations, run } = useSessionOperations()
+  const send = (messageCountBefore: number) => {
+    messageRequests.push(
+      run({
+        type: 'message',
+        sessionId: session.id,
+        operationId: messageCountBefore === 0 ? 'first' : 'second',
+        content: 'Repeated message',
+        messageCountBefore,
+      }),
+    )
+  }
+  const pendingMessages = pendingOperations.filter(
+    ({ operation }) => operation.type === 'message',
+  )
+  return (
+    <>
+      <span data-testid="message-counts">
+        {pendingMessages
+          .map(({ operation }) =>
+            operation.type === 'message'
+              ? String(operation.messageCountBefore)
+              : '',
+          )
+          .join(',')}
+      </span>
+      <span data-testid="message-statuses">
+        {pendingMessages.map(({ status }) => status).join(',')}
+      </span>
+      <button
+        type="button"
+        onClick={() => {
+          send(0)
+        }}
+      >
+        Send first
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          send(1)
+        }}
+      >
+        Send second
+      </button>
+    </>
+  )
+}
+
 function renderHarness() {
   root = createRoot(container)
   act(() => {
@@ -126,6 +178,8 @@ beforeEach(() => {
   resolveRefresh = null
   confirmServerState = null
   operationRequest = null
+  resolveMessagePosts = []
+  messageRequests = []
 })
 
 afterEach(() => {
@@ -230,5 +284,92 @@ it('rolls back the optimistic state and shows an error when the POST fails', asy
       pending: '',
       error: 'The operation was rejected.',
     },
+  })
+})
+
+it('renumbers later sends when an earlier message POST fails', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn<typeof fetch>(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveMessagePosts.push(resolve)
+        }),
+    ),
+  )
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionOperationProvider>
+        <MessageOperationHarness />
+      </SessionOperationProvider>,
+    )
+  })
+  const buttons = container.querySelectorAll<HTMLButtonElement>('button')
+  const firstButton = buttons[0]
+  const secondButton = buttons[1]
+  if (firstButton === undefined || secondButton === undefined) {
+    throw new Error('Expected both send buttons')
+  }
+  act(() => {
+    firstButton.click()
+  })
+  act(() => {
+    secondButton.click()
+  })
+  const beforeFailure = {
+    messageCounts: container.querySelector('[data-testid="message-counts"]')
+      ?.textContent,
+    messageStatuses: container.querySelector('[data-testid="message-statuses"]')
+      ?.textContent,
+  }
+
+  const failFirstPost = resolveMessagePosts[0]
+  if (failFirstPost === undefined)
+    throw new Error('Expected the first message request')
+  await act(async () => {
+    failFirstPost(
+      Response.json(
+        { error: 'The first message was rejected.' },
+        {
+          status: 500,
+        },
+      ),
+    )
+    await messageRequests[0]
+  })
+  const afterFailure = {
+    messageCounts: container.querySelector('[data-testid="message-counts"]')
+      ?.textContent,
+    messageStatuses: container.querySelector('[data-testid="message-statuses"]')
+      ?.textContent,
+  }
+
+  const completeSecondPost = resolveMessagePosts[1]
+  if (completeSecondPost === undefined)
+    throw new Error('Expected the second message request')
+  await act(async () => {
+    completeSecondPost(new Response(null, { status: 204 }))
+    await messageRequests[1]
+  })
+  const afterSecondPost = {
+    messageCounts: container.querySelector('[data-testid="message-counts"]')
+      ?.textContent,
+    messageStatuses: container.querySelector('[data-testid="message-statuses"]')
+      ?.textContent,
+  }
+
+  const failureSnapshots = () => ({
+    beforeFailure,
+    afterFailure,
+    afterSecondPost,
+  })
+  expect(failureSnapshots()).toEqual({
+    beforeFailure: {
+      messageCounts: '0,1',
+      messageStatuses: 'sending,sending',
+    },
+    afterFailure: { messageCounts: '0', messageStatuses: 'sending' },
+    afterSecondPost: { messageCounts: '0', messageStatuses: 'sent' },
   })
 })

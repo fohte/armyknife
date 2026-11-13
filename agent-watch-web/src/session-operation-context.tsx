@@ -64,7 +64,33 @@ function useOperationRunner(): SessionOperationContextValue {
       })
       const result = await submitSessionOperation(operation)
       if (result.isErr()) {
-        confirm(operation)
+        const failedMessageCountBefore =
+          operation.type === 'message'
+            ? operation.messageCountBefore
+            : undefined
+        setPendingOperations((current) =>
+          current
+            .filter((pending) => sessionOperationKey(pending.operation) !== key)
+            .map((pending) => {
+              const pendingOperation = pending.operation
+              if (
+                failedMessageCountBefore === undefined ||
+                pendingOperation.type !== 'message' ||
+                pendingOperation.sessionId !== operation.sessionId ||
+                pendingOperation.messageCountBefore === undefined ||
+                pendingOperation.messageCountBefore <= failedMessageCountBefore
+              ) {
+                return pending
+              }
+              return {
+                ...pending,
+                operation: {
+                  ...pendingOperation,
+                  messageCountBefore: pendingOperation.messageCountBefore - 1,
+                },
+              }
+            }),
+        )
         return result
       }
       setPendingOperations((current) =>

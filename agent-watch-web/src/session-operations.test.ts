@@ -5,11 +5,17 @@ import {
   applySessionOperation,
   createSessionOperation,
   isConversationOperationConfirmed,
+  isSessionOperationConfirmed,
   type SessionOperation,
   sessionOperationKey,
   submitSessionOperation,
 } from '#session-operations'
-import type { ChatItem, ConversationResponse, Session } from '#types'
+import type {
+  ChatItem,
+  ConversationResponse,
+  Session,
+  SessionActions,
+} from '#types'
 
 const session: Session = {
   id: 'test-session',
@@ -324,10 +330,15 @@ const operationFactories: [
   [
     'message',
     'messages',
-    { content: 'A message', _messageCountBefore: 2 },
+    {
+      content: 'A message',
+      _messageCountBefore: 2,
+      _operationId: 'message-fixture',
+    },
     {
       type: 'message',
       sessionId: session.id,
+      operationId: 'message-fixture',
       content: 'A message',
       messageCountBefore: 2,
     },
@@ -773,4 +784,384 @@ it('confirms a message after it appears in the server response', () => {
   expect(
     isConversationOperationConfirmed(serverConversation, operation, null),
   ).toBe(true)
+})
+
+const sessionListConfirmationCases: [
+  string,
+  SessionOperation,
+  readonly Session[],
+  boolean,
+][] = [
+  [
+    'keeps Starred pending for an old session snapshot',
+    { type: 'today', sessionId: session.id, isToday: true },
+    [session],
+    false,
+  ],
+  [
+    'confirms Starred from a matching session snapshot',
+    { type: 'today', sessionId: session.id, isToday: true },
+    [{ ...session, isToday: true }],
+    true,
+  ],
+  [
+    'confirms Later from its scheduled deadline',
+    {
+      type: 'later',
+      sessionId: session.id,
+      preset: 'tomorrow',
+      expectedDeadline: '2030-01-02T09:00:00Z',
+    },
+    [
+      {
+        ...session,
+        category: 'later',
+        categoryWhenNotLater: 'needs_action',
+        laterUntil: '2030-01-02T09:00:00Z',
+      },
+    ],
+    true,
+  ],
+  [
+    'keeps Later pending when the session is still in its old category',
+    {
+      type: 'later',
+      sessionId: session.id,
+      preset: 'tomorrow',
+      expectedDeadline: '2030-01-02T09:00:00Z',
+    },
+    [session],
+    false,
+  ],
+  [
+    'confirms Back now after the session leaves Later',
+    { type: 'back_now', sessionId: session.id },
+    [session],
+    true,
+  ],
+  [
+    'keeps Back now pending while the session remains in Later',
+    { type: 'back_now', sessionId: session.id },
+    [
+      {
+        ...session,
+        category: 'later',
+        categoryWhenNotLater: 'needs_action',
+        laterUntil: '2030-01-02T09:00:00Z',
+      },
+    ],
+    false,
+  ],
+  [
+    'confirms Close when the session leaves the snapshot',
+    { type: 'close', sessionId: session.id, keepWorktree: false },
+    [],
+    true,
+  ],
+  [
+    'keeps Close pending while the session remains in the snapshot',
+    { type: 'close', sessionId: session.id, keepWorktree: false },
+    [session],
+    false,
+  ],
+  [
+    'confirms the selected primary task',
+    { type: 'primary_task', sessionId: session.id, taskId: 'task-new' },
+    [{ ...session, task: session.tasks?.[1] ?? null }],
+    true,
+  ],
+  [
+    'keeps a primary task change pending on the old task',
+    { type: 'primary_task', sessionId: session.id, taskId: 'task-new' },
+    [session],
+    false,
+  ],
+]
+
+it.each(sessionListConfirmationCases)(
+  '%s',
+  (_name, operation, serverSessions, expected) => {
+    expect(isSessionOperationConfirmed(operation, serverSessions)).toEqual(
+      expected,
+    )
+  },
+)
+
+const permissionMessage: Extract<ChatItem, { type: 'permission' }> = {
+  type: 'permission',
+  requestId: 'permission-request',
+  tool: 'Shell',
+  description: 'Run the formatter.',
+}
+const allowedActions: SessionActions = {
+  message: true,
+  answerQuestion: true,
+  permission: { approve: true, reject: true },
+  interrupt: true,
+  openInTerminal: true,
+}
+
+const answeredQuestion: Extract<ChatItem, { type: 'question' }> = {
+  ...questionMessage,
+  questions: questionMessage.questions.map((question) => ({
+    ...question,
+    answer: 'Option A',
+  })),
+}
+const approvedDecision = { ...decisionMessage, review: 'ok' as const }
+const changedDecision = { ...decisionMessage, review: 'change' as const }
+const answeredProposal = {
+  ...proposalMessage,
+  answer: { choice: 0, comment: 'Use the first option.' },
+  resolved: true,
+}
+const completedTodo = { ...todoMessage, completed: true, comment: 'Done.' }
+const retriedPermission = { ...deniedMessage, resolved: true }
+
+const conversationConfirmationCases: [
+  string,
+  SessionOperation,
+  ConversationResponse,
+  SessionActions | null,
+  boolean,
+][] = [
+  [
+    'keeps a question answer pending on the old answer',
+    {
+      type: 'answer',
+      sessionId: session.id,
+      requestId: 'question-request',
+      answers: { 'Choose an option': 'Option A' },
+    },
+    conversation,
+    allowedActions,
+    false,
+  ],
+  [
+    'confirms a question answer from the updated answer',
+    {
+      type: 'answer',
+      sessionId: session.id,
+      requestId: 'question-request',
+      answers: { 'Choose an option': 'Option A' },
+    },
+    {
+      ...conversation,
+      messages: [answeredQuestion, ...conversation.messages.slice(1)],
+    },
+    allowedActions,
+    true,
+  ],
+  [
+    'confirms a skipped question after it disappears',
+    {
+      type: 'answer',
+      sessionId: session.id,
+      requestId: 'question-request',
+      skip: true,
+    },
+    { ...conversation, messages: conversation.messages.slice(1) },
+    allowedActions,
+    true,
+  ],
+  [
+    'keeps a decision review pending on the old decision',
+    { type: 'decision_ok', sessionId: session.id, seq: decisionMessage.seq },
+    conversation,
+    allowedActions,
+    false,
+  ],
+  [
+    'confirms a decision review from the updated decision',
+    { type: 'decision_ok', sessionId: session.id, seq: decisionMessage.seq },
+    {
+      ...conversation,
+      messages: [
+        questionMessage,
+        approvedDecision,
+        ...conversation.messages.slice(2),
+      ],
+      decisions: [approvedDecision],
+    },
+    allowedActions,
+    true,
+  ],
+  [
+    'confirms a decision change from the updated decision',
+    {
+      type: 'decision_change',
+      sessionId: session.id,
+      seq: decisionMessage.seq,
+      comment: 'Change the retry limit.',
+    },
+    {
+      ...conversation,
+      messages: [
+        questionMessage,
+        changedDecision,
+        ...conversation.messages.slice(2),
+      ],
+      decisions: [changedDecision],
+    },
+    allowedActions,
+    true,
+  ],
+  [
+    'keeps a proposal answer pending while the proposal is unresolved',
+    {
+      type: 'proposal_answer',
+      sessionId: session.id,
+      seq: proposalMessage.seq,
+      choice: 0,
+      comment: 'Use the first option.',
+    },
+    conversation,
+    allowedActions,
+    false,
+  ],
+  [
+    'confirms a proposal answer from the resolved proposal',
+    {
+      type: 'proposal_answer',
+      sessionId: session.id,
+      seq: proposalMessage.seq,
+      choice: 0,
+      comment: 'Use the first option.',
+    },
+    {
+      ...conversation,
+      messages: [
+        questionMessage,
+        decisionMessage,
+        answeredProposal,
+        ...conversation.messages.slice(3),
+      ],
+      hasUnansweredProposal: false,
+    },
+    allowedActions,
+    true,
+  ],
+  [
+    'keeps a todo completion pending while the todo is open',
+    {
+      type: 'todo_complete',
+      sessionId: session.id,
+      seq: todoMessage.seq,
+      comment: 'Done.',
+    },
+    conversation,
+    allowedActions,
+    false,
+  ],
+  [
+    'confirms a todo completion from the completed todo',
+    {
+      type: 'todo_complete',
+      sessionId: session.id,
+      seq: todoMessage.seq,
+      comment: 'Done.',
+    },
+    {
+      ...conversation,
+      messages: [
+        ...conversation.messages.slice(0, 3),
+        completedTodo,
+        deniedMessage,
+      ],
+    },
+    allowedActions,
+    true,
+  ],
+  [
+    'keeps permission approval pending while permission is available',
+    {
+      type: 'permission',
+      sessionId: session.id,
+      action: 'approve',
+      requestId: 'permission-request',
+    },
+    {
+      ...conversation,
+      messages: [...conversation.messages, permissionMessage],
+    },
+    allowedActions,
+    false,
+  ],
+  [
+    'confirms permission approval after the action is disabled',
+    {
+      type: 'permission',
+      sessionId: session.id,
+      action: 'approve',
+      requestId: 'permission-request',
+    },
+    {
+      ...conversation,
+      messages: [...conversation.messages, permissionMessage],
+    },
+    { ...allowedActions, permission: { approve: false, reject: true } },
+    true,
+  ],
+  [
+    'keeps a denied action retry pending while it is unresolved',
+    { type: 'permission_retry', sessionId: session.id, seq: deniedMessage.seq },
+    conversation,
+    allowedActions,
+    false,
+  ],
+  [
+    'confirms a denied action retry from the resolved item',
+    { type: 'permission_retry', sessionId: session.id, seq: deniedMessage.seq },
+    {
+      ...conversation,
+      messages: [...conversation.messages.slice(0, 4), retriedPermission],
+    },
+    allowedActions,
+    true,
+  ],
+]
+
+it.each(conversationConfirmationCases)(
+  '%s',
+  (_name, operation, serverConversation, actions, expected) => {
+    expect(
+      isConversationOperationConfirmed(serverConversation, operation, actions),
+    ).toEqual(expected)
+  },
+)
+
+it('does not confirm a second matching send from the first server message', () => {
+  const firstOperation: SessionOperation = {
+    type: 'message',
+    sessionId: session.id,
+    operationId: 'first-message',
+    content: 'Repeated message',
+    messageCountBefore: conversation.total,
+  }
+  const secondOperation: SessionOperation = {
+    ...firstOperation,
+    operationId: 'second-message',
+    messageCountBefore: conversation.total + 1,
+  }
+  const serverConversation: ConversationResponse = {
+    ...conversation,
+    messages: [
+      ...conversation.messages,
+      { type: 'user', text: 'Repeated message' },
+    ],
+    total: conversation.total + 1,
+  }
+
+  const confirmationSnapshot = () => [
+    isConversationOperationConfirmed(serverConversation, firstOperation, null),
+    isConversationOperationConfirmed(serverConversation, secondOperation, null),
+    sessionOperationKey(firstOperation),
+    sessionOperationKey(secondOperation),
+  ]
+  expect(confirmationSnapshot()).toEqual([
+    true,
+    false,
+    `${session.id}:message:first-message`,
+    `${session.id}:message:second-message`,
+  ])
 })

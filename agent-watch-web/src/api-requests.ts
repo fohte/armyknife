@@ -10,22 +10,25 @@ function toError(error: unknown) {
     : new Error('Request failed', { cause: error })
 }
 
-function errorFromResponse(response: Response) {
+export function errorFromResponse(response: Response) {
   const fallback =
     response.statusText || `Request failed (${String(response.status)})`
   return ResultAsync.fromPromise(response.text(), toError).map((body) => {
+    let message = fallback
+    let code: string | null = null
     const parsed =
       body === ''
         ? null
         : Result.fromThrowable(() => JSON.parse(body) as unknown, toError)()
-    const message =
-      parsed !== null &&
-      parsed.isOk() &&
-      isRecord(parsed.value) &&
-      typeof parsed.value['error'] === 'string'
-        ? parsed.value['error']
-        : fallback
-    return new Error(message)
+    if (parsed !== null && parsed.isOk() && isRecord(parsed.value)) {
+      if (typeof parsed.value['error'] === 'string') {
+        message = parsed.value['error']
+      }
+      if (typeof parsed.value['code'] === 'string') {
+        code = parsed.value['code']
+      }
+    }
+    return Object.assign(new Error(message), { code })
   })
 }
 

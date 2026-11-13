@@ -131,6 +131,17 @@ export function ConversationPane({
       ),
     [pendingOperations, session.id],
   )
+  const nextMessageCountBefore = useRef<number | null>(null)
+  useEffect(() => {
+    nextMessageCountBefore.current = pendingConversationOperations.reduce(
+      (nextCount, pending) =>
+        pending.operation.type === 'message' &&
+        pending.operation.messageCountBefore !== undefined
+          ? Math.max(nextCount, pending.operation.messageCountBefore + 1)
+          : nextCount,
+      conversation.total,
+    )
+  }, [conversation.total, pendingConversationOperations])
   const displayedConversation = useMemo(
     () =>
       pendingConversationOperations.reduce(
@@ -439,13 +450,20 @@ export function ConversationPane({
 
   const onAction = useCallback(
     (action: string, payload?: Record<string, unknown>) => {
+      const messageCountBefore =
+        action === 'messages'
+          ? Math.max(
+              conversationRef.current.total,
+              nextMessageCountBefore.current ?? 0,
+            )
+          : undefined
       const operationResult = createSessionOperation(
         session.id,
         action,
         action === 'messages'
           ? {
               ...payload,
-              _messageCountBefore: conversationRef.current.total,
+              _messageCountBefore: messageCountBefore,
             }
           : payload,
       )
@@ -454,6 +472,9 @@ export function ConversationPane({
         return Promise.resolve(false)
       }
       const operation = operationResult.value
+      if (operation.type === 'message' && messageCountBefore !== undefined) {
+        nextMessageCountBefore.current = messageCountBefore + 1
+      }
       const dispatchers = [dispatchConversationOperation]
       if (onOptimisticSessionOperation !== undefined) {
         dispatchers.push(onOptimisticSessionOperation)

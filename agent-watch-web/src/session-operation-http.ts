@@ -1,10 +1,13 @@
-import { err, ok, Result, ResultAsync } from 'neverthrow'
+import { err, ok, ResultAsync } from 'neverthrow'
 
+import { errorFromResponse } from '#api-requests'
 import { LATER_PRESET_OPTIONS } from '#session-navigation'
 import type {
   SessionOperation,
   SessionOperationError,
 } from '#session-operation-types'
+
+let nextMessageOperationId = 0
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -161,6 +164,9 @@ export function createSessionOperation(
         ? ok<SessionOperation, Error>({
             type: 'message',
             sessionId,
+            operationId:
+              requiredString('_operationId') ??
+              `message-${String(++nextMessageOperationId)}`,
             content: payload['content'],
             ...(Array.isArray(payload['attachments'])
               ? { attachments: payload['attachments'] }
@@ -271,29 +277,6 @@ function errOperation(message: string) {
   return err<SessionOperation, Error>(new Error(message))
 }
 
-function responseError(
-  response: Response,
-): ResultAsync<SessionOperationError, SessionOperationError> {
-  const fallback =
-    response.statusText || `Request failed (${String(response.status)})`
-  return ResultAsync.fromPromise(response.text(), toError).map((body) => {
-    let message = fallback
-    let code: string | null = null
-    if (body !== '') {
-      const parsed = Result.fromThrowable(
-        () => JSON.parse(body) as unknown,
-        toError,
-      )()
-      if (parsed.isOk() && isRecord(parsed.value)) {
-        const data = parsed.value
-        if (typeof data['error'] === 'string') message = data['error']
-        if (typeof data['code'] === 'string') code = data['code']
-      }
-    }
-    return Object.assign(new Error(message), { code })
-  })
-}
-
 export function submitSessionOperation(operation: SessionOperation) {
   const request = requestFor(operation)
   const hasBody = request.body !== undefined
@@ -313,7 +296,7 @@ export function submitSessionOperation(operation: SessionOperation) {
     toError,
   ).andThen((response) => {
     if (!response.ok)
-      return responseError(response).andThen((error) => err(error))
+      return errorFromResponse(response).andThen((error) => err(error))
     if (operation.type !== 'merge')
       return ok<unknown, SessionOperationError>(undefined)
     return ResultAsync.fromPromise(response.json(), toError)
