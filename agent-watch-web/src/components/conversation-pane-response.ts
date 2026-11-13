@@ -1,3 +1,4 @@
+import { isJsonValue } from '#json-value'
 import { isPullRequest, isSessionTask } from '#session-record-validation'
 import type {
   BackgroundTask,
@@ -309,19 +310,6 @@ export type ReviewDocumentResponse = {
   id: string
   frontmatter: JsonValue
   body: string
-}
-
-function isJsonValue(value: unknown): value is JsonValue {
-  if (
-    value === null ||
-    typeof value === 'boolean' ||
-    typeof value === 'number' ||
-    typeof value === 'string'
-  ) {
-    return true
-  }
-  if (Array.isArray(value)) return value.every(isJsonValue)
-  return isRecord(value) && Object.values(value).every(isJsonValue)
 }
 
 export function isReviewDocumentResponse(

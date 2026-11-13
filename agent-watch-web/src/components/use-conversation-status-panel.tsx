@@ -4,7 +4,7 @@ import {
   isReviewDocumentResponse,
   type ReviewDocumentResponse,
 } from '#components/conversation-pane-response'
-import { requestAction, requestJson } from '#components/conversation-requests'
+import { requestJson } from '#components/conversation-requests'
 import type { Decision } from '#components/decision-card'
 import { DecisionsPanel } from '#components/decisions-panel'
 import { PullRequestListPanel } from '#components/pull-request-list-panel'
@@ -14,6 +14,8 @@ import type { SessionStatusPanelTab } from '#components/session-status-panel'
 import { SessionTreePanel } from '#components/session-tree-panel'
 import { useSessionPullRequests } from '#components/use-session-pull-requests'
 import { WebUiPane } from '#components/web-ui-pane'
+import { useSessionOperations } from '#session-operation-context'
+import { createSessionOperation } from '#session-operations'
 import {
   needsActionDescendantCount,
   type SessionTreeViewState,
@@ -54,6 +56,7 @@ function requestReviewDocumentAction(
   document: ReviewDocumentResponse,
   action: 'save' | 'finish',
   setState: Dispatch<SetStateAction<ReviewDocumentState | null>>,
+  run: ReturnType<typeof useSessionOperations>['run'],
 ) {
   const matchesDocument = (
     current: ReviewDocumentState | null,
@@ -70,31 +73,39 @@ function requestReviewDocumentAction(
     }
   })
 
-  void requestAction(sessionId, `review-document/${action}`, {
-    id: document.id,
-    frontmatter: document.frontmatter,
-    body: document.body,
-  }).match(
-    () => {
-      setState((current) => {
-        if (!matchesDocument(current)) return current
-        return action === 'save'
-          ? { ...current, saveStatus: 'saved', saveError: null }
-          : null
-      })
-    },
-    (error) => {
-      setState((current) =>
-        matchesDocument(current)
-          ? {
-              ...current,
-              saveStatus: 'error',
-              saveError: error.message,
-            }
-          : current,
-      )
+  const onSuccess = () => {
+    setState((current) => {
+      if (!matchesDocument(current)) return current
+      return action === 'save'
+        ? { ...current, saveStatus: 'saved', saveError: null }
+        : null
+    })
+  }
+  const onError = (error: Error) => {
+    setState((current) =>
+      matchesDocument(current)
+        ? {
+            ...current,
+            saveStatus: 'error',
+            saveError: error.message,
+          }
+        : current,
+    )
+  }
+  const operation = createSessionOperation(
+    sessionId,
+    `review-document/${action}`,
+    {
+      id: document.id,
+      frontmatter: document.frontmatter,
+      body: document.body,
     },
   )
+  operation.match((value) => {
+    void run(value).then((result) => {
+      result.match(onSuccess, onError)
+    })
+  }, onError)
 }
 
 export function useConversationStatusPanel({
@@ -111,6 +122,7 @@ export function useConversationStatusPanel({
   onAction,
   onCloseStatusPanel,
 }: UseConversationStatusPanelOptions) {
+  const { run } = useSessionOperations()
   const [activePanelTabId, setActivePanelTabId] = useState<string | null>(null)
   const [selectedDecisionSeq, setSelectedDecisionSeq] = useState<number | null>(
     null,
@@ -380,6 +392,7 @@ export function useConversationStatusPanel({
                         document,
                         'save',
                         setReviewDocumentState,
+                        run,
                       )
                   }}
                   onFinish={() => {
@@ -390,6 +403,7 @@ export function useConversationStatusPanel({
                         document,
                         'finish',
                         setReviewDocumentState,
+                        run,
                       )
                   }}
                 />
