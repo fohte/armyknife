@@ -5007,7 +5007,7 @@ it('keeps the message draft when sending fails', async () => {
 
 it('sends pasted file data with the message and keeps it when sending fails', async () => {
   const onAction = vi.fn(() => Promise.resolve(false))
-  renderView(onAction)
+  renderView(onAction, { ...session, id: crypto.randomUUID() })
   const textarea = requireElement(
     container.querySelector<HTMLTextAreaElement>('textarea'),
   )
@@ -5063,7 +5063,7 @@ it('sends pasted file data with the message and keeps it when sending fails', as
 
 it('attaches dropped files through the composer and sends their data', async () => {
   const onAction = vi.fn(() => Promise.resolve(true))
-  renderView(onAction)
+  renderView(onAction, { ...session, id: crypto.randomUUID() })
   const file = new File(['payload'], 'dropped.png', { type: 'image/png' })
   const pane = requireElement(container.querySelector('.conversation-pane'))
   const dataTransfer = { types: ['Files'], files: [file], dropEffect: 'none' }
@@ -5168,7 +5168,7 @@ it('hides the drop target when a file drag leaves the conversation', () => {
 
 it('clears pasted attachments after a successful send', async () => {
   const onAction = vi.fn(() => Promise.resolve(true))
-  renderView(onAction)
+  renderView(onAction, { ...session, id: crypto.randomUUID() })
   const file = new File(['payload'], 'clipboard.bin', {
     type: 'application/octet-stream',
   })
@@ -5230,7 +5230,7 @@ it('clears pasted attachments after a successful send', async () => {
 
 it('names the attachment that crosses the message size limit before sending', async () => {
   const onAction = vi.fn(() => Promise.resolve(false))
-  renderView(onAction)
+  renderView(onAction, { ...session, id: crypto.randomUUID() })
   const firstFile = new File(['first'], 'first.bin', {
     type: 'application/octet-stream',
   })
@@ -5286,7 +5286,7 @@ it('names the attachment that crosses the message size limit before sending', as
 
 it('names and blocks the attachment that crosses the attachment count limit', async () => {
   const onAction = vi.fn(() => Promise.resolve(false))
-  renderView(onAction)
+  renderView(onAction, { ...session, id: crypto.randomUUID() })
   const files = Array.from(
     { length: 17 },
     (_, index) => new File(['x'], `file-${String(index + 1)}.txt`),
@@ -5353,6 +5353,7 @@ it('names and blocks the attachment that crosses the attachment count limit', as
 })
 
 it('shows a server attachment validation error and retains the rejected attachment', async () => {
+  const currentSession = { ...session, id: crypto.randomUUID() }
   const jsonResponse = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), {
       status,
@@ -5377,7 +5378,7 @@ it('shows a server attachment validation error and retains the rejected attachme
   act(() => {
     root?.render(
       <ConversationPane
-        session={session}
+        session={currentSession}
         refreshKey={0}
         sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
@@ -5450,6 +5451,7 @@ it('shows a server attachment validation error and retains the rejected attachme
 })
 
 it('waits for pasted image optimization and sends the optimized attachment', async () => {
+  const currentSession = { ...session, id: crypto.randomUUID() }
   const fetcher = vi.fn<typeof fetch>((input) =>
     Promise.resolve(
       requestUrl(input).endsWith('/actions')
@@ -5477,7 +5479,7 @@ it('waits for pasted image optimization and sends the optimized attachment', asy
   act(() => {
     root?.render(
       <ConversationPane
-        session={session}
+        session={currentSession}
         refreshKey={0}
         sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}

@@ -133,6 +133,7 @@ export function ConversationPaneView({
     removeAttachment,
     sendMessage,
   } = useComposerMessage({
+    sessionId: session.id,
     draft,
     messageEnabled: actions?.message === true,
     externalSending: sending,
@@ -248,7 +249,7 @@ export function ConversationPaneView({
       !event.altKey
     ) {
       event.preventDefault()
-      sendMessage()
+      void sendMessage()
     }
   }
 
@@ -544,7 +545,9 @@ export function ConversationPaneView({
         onKeyDown={onComposerKeyDown}
         onPasteFiles={handlePasteFiles}
         onRemoveAttachment={removeAttachment}
-        onSend={sendMessage}
+        onSend={() => {
+          void sendMessage()
+        }}
         onInterrupt={() => {
           void onAction('interrupt')
         }}
