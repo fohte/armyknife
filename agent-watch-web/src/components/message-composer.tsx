@@ -13,6 +13,7 @@ type MessageComposerProps = {
   placeholder: string
   disabled: boolean
   isSending: boolean
+  isInterrupting?: boolean
   isProcessingAttachments: boolean
   isMobile: boolean
   canInterrupt: boolean
@@ -50,6 +51,7 @@ export function MessageComposer({
   placeholder,
   disabled,
   isSending,
+  isInterrupting = false,
   isProcessingAttachments,
   isMobile,
   canInterrupt,
@@ -307,6 +309,7 @@ export function MessageComposer({
             type="button"
             variant="plain"
             aria-label="Interrupt"
+            disabled={isInterrupting}
             onClick={onInterrupt}
           >
             <CircleStop aria-hidden="true" size={18} />
