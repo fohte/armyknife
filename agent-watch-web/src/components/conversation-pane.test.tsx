@@ -2798,7 +2798,7 @@ it('shows desktop newline shortcuts with the applicable interrupt hint', () => {
   })
 })
 
-it('keeps Enter for newlines and exposes mobile conversation actions', () => {
+it('keeps Enter for newlines and exposes mobile conversation actions', async () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction, session, undefined, [question], actions, true)
   const textarea = requireElement(
@@ -2829,13 +2829,21 @@ it('keeps Enter for newlines and exposes mobile conversation actions', () => {
     interruptLabel: container
       .querySelector('.mobile-interrupt-button')
       ?.getAttribute('aria-label'),
+    interruptBusy: container
+      .querySelector('.mobile-interrupt-button')
+      ?.getAttribute('aria-busy'),
   })
-  expect(snapshot()).toEqual({
+  const duringInterrupt = snapshot()
+  await act(async () => {
+    await Promise.resolve()
+  })
+  expect(duringInterrupt).toEqual({
     actions: [['interrupt']],
     defaultPrevented: [false, false],
     keyboardHint: undefined,
     choiceShortcutBadges: 0,
-    interruptLabel: 'Interrupt',
+    interruptLabel: 'Interrupting…',
+    interruptBusy: 'true',
   })
 })
 
@@ -2887,6 +2895,48 @@ it('interrupts the session on Escape', () => {
   const actual = JSON.stringify([onAction.mock.calls, event.defaultPrevented])
   const expected = JSON.stringify([[['interrupt']], true])
   expect(actual).toBe(expected)
+})
+
+it('sends one interrupt while its request is pending', async () => {
+  let finishInterrupt: (succeeded: boolean) => void = () => undefined
+  const pendingInterrupt = new Promise<boolean>((resolve) => {
+    finishInterrupt = resolve
+  })
+  const onAction = vi.fn(() => pendingInterrupt)
+  renderView(onAction, session, undefined, [], actions, true)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  dispatchKeyInAct(textarea, 'Escape')
+  dispatchKeyInAct(textarea, 'Escape')
+  const button = requireElement(
+    container.querySelector<HTMLButtonElement>('.mobile-interrupt-button'),
+  )
+  act(() => {
+    button.click()
+  })
+  const during = {
+    actions: onAction.mock.calls,
+    interruptDisabled: button.disabled,
+  }
+
+  await act(async () => {
+    finishInterrupt(true)
+    await pendingInterrupt
+  })
+
+  const snapshot = () => ({
+    during,
+    after: {
+      actions: onAction.mock.calls,
+      interruptDisabled: button.disabled,
+    },
+  })
+  const expected = {
+    during: { actions: [['interrupt']], interruptDisabled: true },
+    after: { actions: [['interrupt']], interruptDisabled: false },
+  }
+  expect(snapshot()).toEqual(expected)
 })
 
 it('does not use question shortcuts while typing', () => {
@@ -3167,7 +3217,7 @@ it('shows peer images and supports keyboard navigation', () => {
     items: [
       {
         className: 'chat-peer-message chat-peer-message-to',
-        text: 'TOBuild verificationPlease check the fictional output.画像はもうありません',
+        text: 'TOSENTBuild verificationPlease check the fictional output.画像はもうありません',
         imageSources: [],
         unavailableImageText: '画像はもうありません',
         fileNames: [],
@@ -3441,23 +3491,25 @@ it('posts a proposal answer to its sequence route and refreshes the conversation
       method: 'POST',
       body: '{"choice":1,"comment":null}',
     },
-    placeholder: 'Choose an option above, or message the session',
+    placeholder: 'Message session',
     status: 'Proposal · chose B',
   })
 })
 
-it('posts a todo completion to its sequence route with the comment', async () => {
+it('posts a todo rejection to its resolution route with the comment', async () => {
   const todo: ChatItem = {
     type: 'todo',
     seq: 4,
     title: 'Check the page on a phone',
     detail: 'Confirm the action remains visible.',
     completed: false,
+    resolution: null,
     comment: null,
   }
-  const completedTodo: ChatItem = {
+  const rejectedTodo: ChatItem = {
     ...todo,
     completed: true,
+    resolution: 'rejected',
     comment: 'The page is readable.',
   }
   const requests: Array<{
@@ -3479,7 +3531,7 @@ it('posts a todo completion to its sequence route with the comment', async () =>
       method === 'POST'
         ? new Response(null, { status: 204 })
         : url.split('?')[0]?.endsWith('/messages') === true
-          ? jsonResponse(messagesResponse([completed ? completedTodo : todo]))
+          ? jsonResponse(messagesResponse([completed ? rejectedTodo : todo]))
           : jsonResponse(actions),
     )
   })
@@ -3509,9 +3561,9 @@ it('posts a todo completion to its sequence route with the comment', async () =>
   )
   act(() => {
     requireElement(
-      container.querySelector<HTMLButtonElement>(
-        '.chat-todo-footer .aw-button--primary',
-      ),
+      container
+        .querySelectorAll<HTMLButtonElement>('.chat-todo-footer button')
+        .item(1),
     ).click()
   })
   expect(
@@ -3525,9 +3577,9 @@ it('posts a todo completion to its sequence route with the comment', async () =>
 
   expect(requests.filter((request) => request.method === 'POST')).toEqual([
     {
-      url: '/api/sessions/sample-session/todos/4/complete',
+      url: '/api/sessions/sample-session/todos/4/resolve',
       method: 'POST',
-      body: '{"comment":"The page is readable."}',
+      body: '{"resolution":"rejected","comment":"The page is readable."}',
     },
   ])
 })
@@ -4299,7 +4351,7 @@ it('shows the unreviewed count instead of the total on the Decisions tab', () =>
   })
 })
 
-it('prefers crit when other status tabs are available', () => {
+it('opens a registered web UI when other status tabs are available', () => {
   const decision: ChatItem = {
     type: 'decision',
     seq: 1,
@@ -4323,7 +4375,12 @@ it('prefers crit when other status tabs are available', () => {
         ...session,
         category: 'needs_action',
         kind: 'Review',
-        critUrl: 'http://127.0.0.1:5000/review/sample',
+        webUis: [
+          {
+            name: 'Design editor',
+            url: 'http://127.0.0.1:5000/design/sample/',
+          },
+        ],
         decisionCount: 1,
         unreviewedDecisionCount: 1,
       },
@@ -4353,16 +4410,18 @@ it('prefers crit when other status tabs are available', () => {
     })),
     selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
       ?.textContent,
-    critPane: container.querySelector('.crit-pane') !== null,
+    webUiPane: container.querySelector('.web-ui-pane') !== null,
+    iframe: container.querySelector('iframe')?.getAttribute('src'),
   })
   expect(snapshot()).toEqual({
     tabs: [
       { label: 'Running1', selected: 'false' },
       { label: 'Decisions1', selected: 'false' },
-      { label: 'crit', selected: 'true' },
+      { label: 'Design editor', selected: 'true' },
     ],
-    selectedTab: 'crit',
-    critPane: true,
+    selectedTab: 'Design editor',
+    webUiPane: true,
+    iframe: `${window.location.protocol}//localhost:4318/_web-ui/5000/design/sample/`,
   })
 })
 
@@ -8089,6 +8148,7 @@ it('keeps a todo comment when a preceding conversation row arrives', () => {
     title: 'Review the deployment plan',
     detail: null,
     completed: false,
+    resolution: null,
     comment: null,
   }
   renderConversationMessages([todo], 0)

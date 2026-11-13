@@ -19,19 +19,23 @@ mod answer_question;
 mod api_error;
 mod close;
 mod decisions;
+mod interrupt_locks;
 mod keyed_mutex_registry;
 mod merge_pull_request;
 mod messages;
+mod permission_denied;
+mod permission_denied_locks;
 mod proposal_answer_locks;
 mod proposals;
 mod runtime;
-mod todo_completion_locks;
+mod title;
 mod todos;
 
 pub(super) use api_error::ApiError;
+use interrupt_locks::InterruptLocks;
+use permission_denied_locks::PermissionDeniedRetryLocks;
 use proposal_answer_locks::ProposalAnswerLocks;
 use runtime::LiveActionRuntime;
-use todo_completion_locks::TodoCompletionLocks;
 
 pub(super) fn router(message_loaders: RouteLoaders) -> Router {
     router_with_state(ActionState {
@@ -39,7 +43,8 @@ pub(super) fn router(message_loaders: RouteLoaders) -> Router {
         attachment_dir: None,
         runtime: Arc::new(LiveActionRuntime),
         proposal_answer_locks: ProposalAnswerLocks::default(),
-        todo_completion_locks: TodoCompletionLocks::default(),
+        permission_denied_retry_locks: PermissionDeniedRetryLocks::default(),
+        interrupt_locks: InterruptLocks::default(),
         message_loaders,
     })
 }
@@ -65,9 +70,14 @@ fn router_with_state(state: ActionState) -> Router {
             post(proposals::answer_proposal),
         )
         .route(
-            "/sessions/{id}/todos/{seq}/complete",
-            post(todos::complete_todo),
+            "/sessions/{id}/permission-denials/{seq}/retry",
+            post(permission_denied::retry_permission_denied),
         )
+        .route(
+            "/sessions/{id}/todos/{seq}/resolve",
+            post(todos::resolve_todo),
+        )
+        .route("/sessions/{id}/title", post(title::set_title))
         .route(
             "/sessions/{id}/answer",
             post(answer_question::answer_question),
@@ -97,19 +107,19 @@ struct ActionState {
     message_loaders: RouteLoaders,
     // Delivery precedes persistence, so repeated answers for one proposal must serialize.
     proposal_answer_locks: ProposalAnswerLocks,
-    todo_completion_locks: TodoCompletionLocks,
+    permission_denied_retry_locks: PermissionDeniedRetryLocks,
+    interrupt_locks: InterruptLocks,
 }
 
 trait ActionRuntime: Send + Sync {
     fn send_message(&self, session: &Session, content: &str) -> Result<()>;
     fn pane_current_command(&self, tmux_info: &TmuxInfo) -> Option<String>;
-    fn send_keys_if_agent_is_running(
+    fn send_claude_escape_if_agent_is_running(
         &self,
         tmux_info: &TmuxInfo,
-        engine: Engine,
         current_command: &str,
-        keys: &[&str],
     ) -> Result<bool>;
+    fn interrupt_codex(&self, thread_id: &str) -> Result<()>;
     fn focus(&self, tmux_info: &TmuxInfo) -> Result<()>;
     fn close_session<'a>(
         &'a self,
@@ -161,7 +171,7 @@ async fn actions(
             approve: true,
             reject: true,
         }),
-        interrupt: has_live_session && has_tmux,
+        interrupt: session.status == SessionStatus::Running && has_tmux,
         open_in_terminal: has_tmux,
     }))
 }
@@ -265,8 +275,29 @@ async fn interrupt(
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Success>, ApiError> {
     let session = load_session(state.clone(), id).await?;
-    let tmux_info = require_tmux(&session)?;
-    send_keys(state.runtime, &session, tmux_info, vec!["Escape"]).await?;
+    if session.status == SessionStatus::Ended {
+        return Err(ApiError::conflict("session has ended"));
+    }
+    if session.status != SessionStatus::Running {
+        return Err(ApiError::conflict("session is not running"));
+    }
+    let _guard = state
+        .interrupt_locks
+        .try_acquire(&session.session_id)
+        .await
+        .ok_or_else(|| ApiError::conflict("interrupt is already in progress"))?;
+
+    let runtime = state.runtime;
+    match session.engine {
+        Engine::Codex => {
+            let thread_id = session.session_id;
+            run_blocking(move || runtime.interrupt_codex(&thread_id)).await?;
+        }
+        Engine::Claude => {
+            let tmux_info = require_tmux(&session)?;
+            send_claude_escape(runtime, tmux_info).await?;
+        }
+    }
     Ok(Json(Success::new()))
 }
 
@@ -368,17 +399,11 @@ fn resolve_sessions_dir(override_dir: Option<PathBuf>) -> Result<PathBuf> {
     }
 }
 
-async fn send_keys(
+async fn send_claude_escape(
     runtime: Arc<dyn ActionRuntime>,
-    session: &Session,
     tmux_info: &TmuxInfo,
-    keys: Vec<&'static str>,
 ) -> Result<(), ApiError> {
-    if session.status == SessionStatus::Ended {
-        return Err(ApiError::conflict("session has ended"));
-    }
     let tmux_info = tmux_info.clone();
-    let engine = session.engine;
     let result = tokio::task::spawn_blocking(move || {
         let Some(current_command) = runtime.pane_current_command(&tmux_info) else {
             return Ok(false);
@@ -386,7 +411,7 @@ async fn send_keys(
         if SHELL_COMMANDS.contains(&current_command.as_str()) {
             return Ok(false);
         }
-        runtime.send_keys_if_agent_is_running(&tmux_info, engine, &current_command, &keys)
+        runtime.send_claude_escape_if_agent_is_running(&tmux_info, &current_command)
     })
     .await
     .map_err(ApiError::internal)?;
@@ -441,8 +466,14 @@ mod tests {
     #[path = "proposals.rs"]
     mod proposals;
 
+    #[path = "permission_denied.rs"]
+    mod permission_denied;
+
     #[path = "todos.rs"]
     mod todos;
+
+    #[path = "title.rs"]
+    mod title;
 
     #[path = "merge_pull_request.rs"]
     mod merge_pull_request;
@@ -464,6 +495,12 @@ mod tests {
         sessions_dir: Mutex<Option<PathBuf>>,
         merge_error: Mutex<Option<String>>,
         merge_result: Mutex<crate::commands::gh::WatchWebPrMergeResult>,
+        interrupt_gate: Mutex<
+            Option<(
+                tokio::sync::oneshot::Sender<()>,
+                tokio::sync::oneshot::Receiver<()>,
+            )>,
+        >,
     }
 
     impl Default for FakeRuntime {
@@ -480,6 +517,7 @@ mod tests {
                 sessions_dir: Mutex::new(None),
                 merge_error: Mutex::new(None),
                 merge_result: Mutex::new(crate::commands::gh::WatchWebPrMergeResult::Merged),
+                interrupt_gate: Mutex::new(None),
             }
         }
     }
@@ -513,19 +551,18 @@ mod tests {
             self.pane_command.lock().unwrap().clone()
         }
 
-        fn send_keys_if_agent_is_running(
+        fn send_claude_escape_if_agent_is_running(
             &self,
             tmux_info: &TmuxInfo,
-            engine: Engine,
             current_command: &str,
-            keys: &[&str],
         ) -> Result<bool> {
+            let keys = ["Escape"];
             let pane_has_agent_process = *self.pane_has_agent_process.lock().unwrap();
             let pane_command_matches = *self.pane_command_matches.lock().unwrap();
             self.calls.lock().unwrap().push(json!({
                 "kind": "guarded-keys",
                 "paneId": tmux_info.pane_id,
-                "engine": engine,
+                "engine": Engine::Claude,
                 "currentCommand": current_command,
                 "keys": &keys,
                 "paneHasAgentProcess": pane_has_agent_process,
@@ -540,7 +577,19 @@ mod tests {
                 "socketPath": tmux_info.socket_path,
                 "keys": keys,
             }));
+            if let Some((started, release)) = self.interrupt_gate.lock().unwrap().take() {
+                let _ = started.send(());
+                let _ = release.blocking_recv();
+            }
             Ok(true)
+        }
+
+        fn interrupt_codex(&self, thread_id: &str) -> Result<()> {
+            self.calls.lock().unwrap().push(json!({
+                "kind": "codex-interrupt",
+                "threadId": thread_id,
+            }));
+            Ok(())
         }
 
         fn focus(&self, tmux_info: &TmuxInfo) -> Result<()> {
@@ -626,6 +675,22 @@ mod tests {
             self.router_with_loaders_and_proposal_answer_locks(empty_message_loaders())
         }
 
+        fn router_with_permission_denied_retry_locks(
+            &self,
+        ) -> (Router, PermissionDeniedRetryLocks) {
+            let permission_denied_retry_locks = PermissionDeniedRetryLocks::default();
+            let router = router_with_state(ActionState {
+                sessions_dir: Some(self.temp_dir.path().join("sessions")),
+                attachment_dir: Some(self.temp_dir.path().join("attachments")),
+                runtime: self.runtime.clone(),
+                proposal_answer_locks: ProposalAnswerLocks::default(),
+                permission_denied_retry_locks: permission_denied_retry_locks.clone(),
+                interrupt_locks: InterruptLocks::default(),
+                message_loaders: empty_message_loaders(),
+            });
+            (router, permission_denied_retry_locks)
+        }
+
         fn router_with_loaders_and_proposal_answer_locks(
             &self,
             message_loaders: super::super::messages::RouteLoaders,
@@ -636,7 +701,8 @@ mod tests {
                 attachment_dir: Some(self.temp_dir.path().join("attachments")),
                 runtime: self.runtime.clone(),
                 proposal_answer_locks: proposal_answer_locks.clone(),
-                todo_completion_locks: TodoCompletionLocks::default(),
+                permission_denied_retry_locks: PermissionDeniedRetryLocks::default(),
+                interrupt_locks: InterruptLocks::default(),
                 message_loaders,
             });
             (router, proposal_answer_locks)
@@ -724,6 +790,18 @@ mod tests {
             *self.runtime.message_gate.lock().unwrap() = Some((started, release_receiver));
             (started_receiver, release)
         }
+
+        fn block_next_interrupt(
+            &self,
+        ) -> (
+            tokio::sync::oneshot::Receiver<()>,
+            tokio::sync::oneshot::Sender<()>,
+        ) {
+            let (started, started_receiver) = tokio::sync::oneshot::channel();
+            let (release, release_receiver) = tokio::sync::oneshot::channel();
+            *self.runtime.interrupt_gate.lock().unwrap() = Some((started, release_receiver));
+            (started_receiver, release)
+        }
     }
 
     #[fixture]
@@ -750,6 +828,7 @@ mod tests {
             archived_at: None,
             pr_context: None,
             crit_urls: Vec::new(),
+            web_uis: Vec::new(),
             pending_human_review_ids: BTreeSet::new(),
             cwd: PathBuf::from("/tmp/example"),
             transcript_path: None,
@@ -768,6 +847,7 @@ mod tests {
             updated_at: Utc::now(),
             last_message: None,
             current_tool: None,
+            current_tool_name: None,
             label: None,
             work_type: None,
             work_type_pinned: false,
@@ -796,7 +876,16 @@ mod tests {
             let Some(content) = call.get("content").and_then(Value::as_str) else {
                 continue;
             };
+            let content =
+                if let Some(marker_start) = content.rfind("<!-- armyknife-queued-prompt-id:") {
+                    content[..marker_start]
+                        .strip_suffix('\n')
+                        .unwrap_or(&content[..marker_start])
+                } else {
+                    content
+                };
             let Some((marker, _)) = content.split_once('\n') else {
+                call["content"] = Value::String(content.to_owned());
                 continue;
             };
             if marker.starts_with("⟦armyknife-user:")
@@ -805,6 +894,8 @@ mod tests {
                     crate::commands::agent::watch_web_user_marker::strip_message(marker, content)
             {
                 call["content"] = Value::String(body.to_owned());
+            } else {
+                call["content"] = Value::String(content.to_owned());
             }
         }
         json!({
@@ -1518,6 +1609,7 @@ mod tests {
         let mut session = session("sample-session");
         session.engine = Engine::Codex;
         session.current_tool = Some("AskUserQuestion".to_string());
+        session.current_tool_name = Some("AskUserQuestion".to_string());
         session
             .pending_permission_agent_ids
             .insert("main".to_string());
@@ -1562,7 +1654,7 @@ mod tests {
                     "body": {
                         "message": true,
                         "answerQuestion": false,
-                        "interrupt": true,
+                        "interrupt": false,
                         "openInTerminal": true,
                     },
                     "calls": [],
@@ -1578,6 +1670,46 @@ mod tests {
                     "calls": [],
                 }),
             ),
+        );
+    }
+
+    #[rstest]
+    #[case::running(SessionStatus::Running, true)]
+    #[case::waiting_input(SessionStatus::WaitingInput, false)]
+    #[case::stopped(SessionStatus::Stopped, false)]
+    #[tokio::test]
+    async fn interrupt_capability_is_available_only_while_running(
+        #[case] status: SessionStatus,
+        #[case] enabled: bool,
+        action_context: ActionContext,
+    ) {
+        let mut session = session("sample-session");
+        session.status = status;
+        action_context.save_session(&session);
+
+        let response = action_context
+            .router()
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/sample-session/actions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": {
+                    "message": true,
+                    "answerQuestion": false,
+                    "interrupt": enabled,
+                    "openInTerminal": true,
+                },
+                "calls": [],
+            }),
         );
     }
 
@@ -1692,15 +1824,42 @@ mod tests {
     #[case::claude(Engine::Claude, "claude")]
     #[case::codex(Engine::Codex, "a")]
     #[tokio::test]
-    async fn interrupt_sends_escape_to_the_session_pane(
+    async fn interrupt_uses_engine_specific_strategy(
         #[case] engine: Engine,
         #[case] current_command: &str,
         action_context: ActionContext,
     ) {
         let mut session = session("sample-session");
         session.engine = engine;
+        session.status = SessionStatus::Running;
         action_context.save_session(&session);
-        action_context.set_pane_command(Some(current_command));
+        let expected_calls = match engine {
+            Engine::Claude => {
+                action_context.set_pane_command(Some(current_command));
+                json!([{
+                    "kind": "pane-command",
+                    "paneId": "%4",
+                    "socketPath": "/tmp/example-tmux.sock",
+                }, {
+                    "kind": "guarded-keys",
+                    "paneId": "%4",
+                    "engine": "claude",
+                    "currentCommand": current_command,
+                    "keys": ["Escape"],
+                    "paneHasAgentProcess": true,
+                    "paneCommandMatches": true,
+                }, {
+                    "kind": "keys",
+                    "paneId": "%4",
+                    "socketPath": "/tmp/example-tmux.sock",
+                    "keys": ["Escape"],
+                }])
+            }
+            Engine::Codex => json!([{
+                "kind": "codex-interrupt",
+                "threadId": "sample-session",
+            }]),
+        };
 
         let response = action_context
             .router()
@@ -1713,24 +1872,7 @@ mod tests {
             json!({
                 "status": StatusCode::OK.as_u16(),
                 "body": { "ok": true },
-                "calls": [{
-                    "kind": "pane-command",
-                    "paneId": "%4",
-                    "socketPath": "/tmp/example-tmux.sock",
-                }, {
-                    "kind": "guarded-keys",
-                    "paneId": "%4",
-                    "engine": engine,
-                    "currentCommand": current_command,
-                    "keys": ["Escape"],
-                    "paneHasAgentProcess": true,
-                    "paneCommandMatches": true,
-                }, {
-                    "kind": "keys",
-                    "paneId": "%4",
-                    "socketPath": "/tmp/example-tmux.sock",
-                    "keys": ["Escape"],
-                }],
+                "calls": expected_calls,
             }),
         );
     }
@@ -1790,27 +1932,19 @@ mod tests {
     }
 
     #[rstest]
-    #[case::interrupt_missing("interrupt", None, true, true)]
-    #[case::interrupt_shell("interrupt", Some("fish"), true, true)]
-    #[case::interrupt_other_program("interrupt", Some("nvim"), false, true)]
-    #[case::interrupt_command_changed("interrupt", Some("claude"), true, false)]
+    #[case::missing_pane_command(None, true, true)]
+    #[case::shell(Some("fish"), true, true)]
+    #[case::other_program(Some("nvim"), false, true)]
+    #[case::command_changed(Some("claude"), true, false)]
     #[tokio::test]
-    async fn interrupt_rejects_unavailable_or_idle_panes(
-        #[case] action: &str,
+    async fn running_claude_interrupt_rejects_unavailable_or_idle_panes(
         #[case] pane_command: Option<&str>,
         #[case] pane_has_agent_process: bool,
         #[case] pane_command_matches: bool,
         action_context: ActionContext,
     ) {
-        let session = session("sample-session");
-        let (uri, body, keys) = match action {
-            "interrupt" => (
-                "/sessions/sample-session/interrupt",
-                json!({}),
-                vec!["Escape"],
-            ),
-            _ => unreachable!(),
-        };
+        let mut session = session("sample-session");
+        session.status = SessionStatus::Running;
         action_context.save_session(&session);
         action_context.set_pane_command(pane_command);
         action_context.set_pane_has_agent_process(pane_has_agent_process);
@@ -1818,7 +1952,7 @@ mod tests {
 
         let response = action_context
             .router()
-            .oneshot(post(uri, body))
+            .oneshot(post_empty("/sessions/sample-session/interrupt"))
             .await
             .unwrap();
 
@@ -1833,7 +1967,7 @@ mod tests {
                 "paneId": "%4",
                 "engine": "claude",
                 "currentCommand": pane_command,
-                "keys": &keys,
+                "keys": ["Escape"],
                 "paneHasAgentProcess": pane_has_agent_process,
                 "paneCommandMatches": pane_command_matches,
             }));
@@ -1842,7 +1976,7 @@ mod tests {
                     "kind": "keys",
                     "paneId": "%4",
                     "socketPath": "/tmp/example-tmux.sock",
-                    "keys": &keys,
+                    "keys": ["Escape"],
                 }));
             }
         }
@@ -1858,11 +1992,106 @@ mod tests {
     }
 
     #[rstest]
+    #[case::claude_waiting_input(Engine::Claude, SessionStatus::WaitingInput)]
+    #[case::codex_waiting_input(Engine::Codex, SessionStatus::WaitingInput)]
+    #[case::claude_stopped(Engine::Claude, SessionStatus::Stopped)]
+    #[tokio::test]
+    async fn interrupt_rejects_sessions_that_are_not_running(
+        #[case] engine: Engine,
+        #[case] status: SessionStatus,
+        action_context: ActionContext,
+    ) {
+        let mut session = session("sample-session");
+        session.engine = engine;
+        session.status = status;
+        action_context.save_session(&session);
+
+        let response = action_context
+            .router()
+            .oneshot(post_empty("/sessions/sample-session/interrupt"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::CONFLICT.as_u16(),
+                "body": { "error": "session is not running" },
+                "calls": [],
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn concurrent_interrupt_is_rejected_while_the_first_is_in_flight(
+        action_context: ActionContext,
+    ) {
+        let mut session = session("sample-session");
+        session.engine = Engine::Claude;
+        session.status = SessionStatus::Running;
+        action_context.save_session(&session);
+        let (started, release) = action_context.block_next_interrupt();
+        let app = action_context.router();
+        let first_app = app.clone();
+        let first = tokio::spawn(async move {
+            first_app
+                .oneshot(post_empty("/sessions/sample-session/interrupt"))
+                .await
+                .unwrap()
+        });
+        started.await.unwrap();
+
+        let second = app
+            .oneshot(post_empty("/sessions/sample-session/interrupt"))
+            .await
+            .unwrap();
+        let second_snapshot = response_snapshot(second, &action_context).await;
+        let _ = release.send(());
+        let first_snapshot = response_snapshot(first.await.unwrap(), &action_context).await;
+
+        let expected = json!({
+            "status": StatusCode::OK.as_u16(),
+            "body": { "ok": true },
+            "calls": [{
+                "kind": "pane-command",
+                "paneId": "%4",
+                "socketPath": "/tmp/example-tmux.sock",
+            }, {
+                "kind": "guarded-keys",
+                "paneId": "%4",
+                "engine": "claude",
+                "currentCommand": "claude",
+                "keys": ["Escape"],
+                "paneHasAgentProcess": true,
+                "paneCommandMatches": true,
+            }, {
+                "kind": "keys",
+                "paneId": "%4",
+                "socketPath": "/tmp/example-tmux.sock",
+                "keys": ["Escape"],
+            }],
+        });
+        assert_eq!(
+            (first_snapshot, second_snapshot),
+            (
+                expected.clone(),
+                json!({
+                    "status": StatusCode::CONFLICT.as_u16(),
+                    "body": { "error": "interrupt is already in progress" },
+                    "calls": expected["calls"],
+                }),
+            ),
+        );
+    }
+
+    #[rstest]
     #[tokio::test]
     async fn ended_sessions_hide_and_reject_key_actions(action_context: ActionContext) {
         let mut session = session("sample-session");
         session.status = SessionStatus::Ended;
         session.current_tool = Some("AskUserQuestion".to_string());
+        session.current_tool_name = Some("AskUserQuestion".to_string());
         session
             .pending_permission_agent_ids
             .insert("main".to_string());

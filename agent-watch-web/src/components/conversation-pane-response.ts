@@ -1,3 +1,4 @@
+import { isJsonValue } from '#json-value'
 import { isPullRequest, isSessionTask } from '#session-record-validation'
 import type {
   BackgroundTask,
@@ -105,6 +106,19 @@ function isChatItem(value: unknown): value is ChatItem {
         typeof value['failed'] === 'boolean' &&
         hasValidOptionalTimestamp(value)
       )
+    case 'todo':
+      return (
+        typeof value['seq'] === 'number' &&
+        typeof value['title'] === 'string' &&
+        (value['detail'] === null || typeof value['detail'] === 'string') &&
+        typeof value['completed'] === 'boolean' &&
+        value['completed'] === (value['resolution'] !== null) &&
+        (value['resolution'] === null ||
+          value['resolution'] === 'completed' ||
+          value['resolution'] === 'rejected' ||
+          value['resolution'] === 'withdrawn') &&
+        (value['comment'] === null || typeof value['comment'] === 'string')
+      )
     case 'tool_summary':
       return (
         typeof value['summary'] === 'string' &&
@@ -178,6 +192,19 @@ function isChatItem(value: unknown): value is ChatItem {
           typeof value['requestId'] === 'string') &&
         typeof value['tool'] === 'string' &&
         typeof value['description'] === 'string'
+      )
+    case 'permission_denied':
+      return (
+        typeof value['seq'] === 'number' &&
+        Number.isInteger(value['seq']) &&
+        value['seq'] > 0 &&
+        (value['toolUseId'] === undefined ||
+          typeof value['toolUseId'] === 'string') &&
+        typeof value['tool'] === 'string' &&
+        typeof value['inputSummary'] === 'string' &&
+        (value['reason'] === null || typeof value['reason'] === 'string') &&
+        typeof value['retryable'] === 'boolean' &&
+        typeof value['resolved'] === 'boolean'
       )
     case 'decision':
       return (
@@ -283,19 +310,6 @@ export type ReviewDocumentResponse = {
   id: string
   frontmatter: JsonValue
   body: string
-}
-
-function isJsonValue(value: unknown): value is JsonValue {
-  if (
-    value === null ||
-    typeof value === 'boolean' ||
-    typeof value === 'number' ||
-    typeof value === 'string'
-  ) {
-    return true
-  }
-  if (Array.isArray(value)) return value.every(isJsonValue)
-  return isRecord(value) && Object.values(value).every(isJsonValue)
 }
 
 export function isReviewDocumentResponse(

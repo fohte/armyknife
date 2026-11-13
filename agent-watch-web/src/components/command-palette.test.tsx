@@ -546,7 +546,38 @@ it('opens the highlighted session in its terminal from the actions submenu', asy
     )
   })
 
-  expect(onOpenInTerminal.mock.calls).toEqual([['session-alerts']])
+  const snapshot = () => ({
+    calls: onOpenInTerminal.mock.calls,
+    submenuVisible: container.querySelector('[role="menu"]') !== null,
+  })
+  expect(snapshot()).toEqual({
+    calls: [['session-alerts']],
+    submenuVisible: true,
+  })
+})
+
+it('shows terminal focus progress in the actions submenu', () => {
+  renderPalette({
+    initialActionItemId: session.id,
+    pendingFocusSessionId: session.id,
+  })
+  const button = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+  ).find((item) => item.textContent === 'Opening terminal…')
+  if (button === undefined) throw new Error('Expected terminal focus action')
+
+  const snapshot = () => ({
+    label: button.textContent,
+    disabled: button.disabled,
+    busy: button.getAttribute('aria-busy'),
+    submenuVisible: container.querySelector('[role="menu"]') !== null,
+  })
+  expect(snapshot()).toEqual({
+    label: 'Opening terminal…',
+    disabled: true,
+    busy: 'true',
+    submenuVisible: true,
+  })
 })
 
 it('copies the session ID from the actions submenu with Enter', async () => {

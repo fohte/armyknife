@@ -315,6 +315,7 @@ fn overlay_changes_render_the_cached_transcript_without_reingestion() {
             .unwrap()
             .with_timezone(&Utc),
         completed_at: None,
+        resolution: None,
         comment: None,
     };
     let mut parser = incremental_parser(prefix.as_bytes());

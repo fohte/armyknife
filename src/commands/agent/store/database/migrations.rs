@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 use rusqlite_migration::{Error as MigrationError, M, MigrationDefinitionError, Migrations};
 
-// Migrations must stay readable by older binaries: add tables or nullable columns only.
-static MIGRATION_ENTRIES: [M<'static>; 12] = [
+// Keep older binaries compatible: new columns need defaults or must be nullable.
+static MIGRATION_ENTRIES: [M<'static>; 17] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -138,6 +138,44 @@ static MIGRATION_ENTRIES: [M<'static>; 12] = [
             BEGIN
                 DELETE FROM agent_todo WHERE session_id = OLD.session_id;
             END;",
+    ),
+    M::up(
+        "CREATE TABLE agent_permission_denied (
+            session_id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            tool_use_id TEXT,
+            tool_name TEXT NOT NULL,
+            tool_input TEXT NOT NULL,
+            reason TEXT,
+            created_at TEXT NOT NULL,
+            resolved_at TEXT,
+            PRIMARY KEY (session_id, seq),
+            UNIQUE (session_id, tool_use_id)
+        );
+        CREATE INDEX agent_permission_denied_session_seq
+            ON agent_permission_denied (session_id, seq);
+        CREATE TRIGGER agent_permission_denied_delete_session
+            AFTER DELETE ON sessions
+            BEGIN
+                DELETE FROM agent_permission_denied WHERE session_id = OLD.session_id;
+            END;",
+    ),
+    M::up(
+        "ALTER TABLE watch_web_peer_out_message
+         ADD COLUMN failed INTEGER NOT NULL DEFAULT 0;",
+    ),
+    M::up("ALTER TABLE agent_todo ADD COLUMN resolution TEXT;"),
+    M::up(
+        "ALTER TABLE watch_web_queued_prompt
+         ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]';
+         ALTER TABLE watch_web_queued_prompt
+         ADD COLUMN message_id TEXT;",
+    ),
+    M::up(
+        "ALTER TABLE watch_web_queued_prompt
+         ADD COLUMN resolved INTEGER NOT NULL DEFAULT 1;
+         UPDATE watch_web_queued_prompt
+         SET resolved = CASE WHEN message_id IS NULL THEN 1 ELSE 0 END;",
     ),
 ];
 

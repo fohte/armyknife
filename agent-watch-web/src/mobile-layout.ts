@@ -71,6 +71,7 @@ type MobileNavigationOptions = {
   isMobile: boolean
   conversationOpen: boolean
   navigableSessions: readonly Session[]
+  selectedId: string | null
   selectedSessionExists: boolean
   sessionsLoaded: boolean
   setSelectedId: (id: string | null) => void
@@ -81,11 +82,14 @@ function useMobileNavigation({
   isMobile,
   conversationOpen,
   navigableSessions,
+  selectedId,
   selectedSessionExists,
   sessionsLoaded,
   setSelectedId,
   setConversationOpen,
 }: MobileNavigationOptions) {
+  const firstNavigableSessionId = navigableSessions[0]?.id ?? null
+
   useEffect(() => {
     if (!sessionsLoaded) {
       return
@@ -93,14 +97,16 @@ function useMobileNavigation({
     if (isMobile && conversationOpen && !selectedSessionExists) {
       setConversationOpen(false)
     }
-    if (!selectedSessionExists) {
-      setSelectedId(navigableSessions[0]?.id ?? null)
+    if (!selectedSessionExists && selectedId !== firstNavigableSessionId) {
+      setSelectedId(firstNavigableSessionId)
     }
   }, [
     conversationOpen,
+    firstNavigableSessionId,
     isMobile,
-    navigableSessions,
+    selectedId,
     sessionsLoaded,
+    selectedSessionExists,
     setConversationOpen,
     setSelectedId,
   ])

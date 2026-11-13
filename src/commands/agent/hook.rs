@@ -302,6 +302,7 @@ fn new_session_record(
         vibe_enabled: false,
         launched_with_vibe: env.session_vibe_launch,
         crit_urls: Vec::new(),
+        web_uis: Vec::new(),
         pending_human_review_ids: Default::default(),
         cwd: input.cwd.clone(),
         transcript_path: input.transcript_path.clone(),
@@ -312,6 +313,7 @@ fn new_session_record(
         updated_at: now,
         last_message: None,
         current_tool: None,
+        current_tool_name: None,
         label: env.session_label.clone(),
         child_launch: ChildLaunchPermission::from_env(env.session_child_launch.as_deref()),
         ancestor_session_ids,
@@ -700,7 +702,7 @@ fn process_hook_event_impl_with_settings(
     }
     let was_waiting_for_input = session.status == SessionStatus::WaitingInput;
     let had_pending_permission_requests = session.has_pending_permission_requests();
-    let was_asking_user = session.current_tool.as_deref() == Some("AskUserQuestion");
+    let was_asking_user = session.is_current_tool_named("AskUserQuestion");
 
     let work_type_config =
         (may_contain_work_type || session.work_type.is_some()).then(config::load_config_or_default);
@@ -883,7 +885,8 @@ fn process_hook_event_impl_with_settings(
     if !keep_paused && !keep_failed_after_idle_prompt {
         if let Some(status) = status {
             session.status = status;
-        } else if was_waiting_for_input
+        } else if event != HookEvent::PermissionDenied
+            && was_waiting_for_input
             && had_pending_permission_requests
             && !session.has_pending_permission_requests()
         {
@@ -908,6 +911,13 @@ fn process_hook_event_impl_with_settings(
         HookEvent::PreToolUse => format_current_tool(&input),
         HookEvent::PostToolUse | HookEvent::Stop | HookEvent::StopFailure => None,
         _ => session.current_tool,
+    };
+    session.current_tool_name = match event {
+        HookEvent::PreToolUse | HookEvent::PermissionRequest => {
+            input.tool_name.clone().or(session.current_tool_name)
+        }
+        HookEvent::PostToolUse | HookEvent::Stop | HookEvent::StopFailure => None,
+        _ => session.current_tool_name,
     };
 
     if let Some(config) = &work_type_config {
@@ -951,7 +961,6 @@ fn process_hook_event_impl_with_settings(
     // database-wide writer lock. `sync_tmux` also reloads this session.
     ensure_watch_web_user_marker(&session_lock, event, input.engine)?;
     if event == HookEvent::PermissionRequest
-        && input.engine == Engine::Claude
         && let Some(request_id) = session
             .pending_permission_request_ids
             .get(&permission_agent_key)
@@ -962,15 +971,35 @@ fn process_hook_event_impl_with_settings(
             .map(|tool_input| &tool_input.raw)
             .cloned()
             .unwrap_or_else(|| serde_json::json!({}));
-        session_lock.register_permission_request(
-            &permission_agent_key,
-            request_id,
-            input.tool_name.as_deref(),
-            &tool_input,
-        )?;
+        if input.engine == Engine::Claude
+            || (input.tool_name.is_some() && input.tool_input.is_some())
+        {
+            session_lock.register_permission_request(
+                &permission_agent_key,
+                request_id,
+                input.tool_name.as_deref(),
+                &tool_input,
+            )?;
+        }
     }
     session_lock.save(&session)?;
     drop(session_lock);
+
+    if event == HookEvent::PermissionDenied && input.engine == Engine::Claude {
+        let tool_input = input
+            .tool_input
+            .as_ref()
+            .map(|tool_input| tool_input.raw.clone())
+            .unwrap_or_else(|| serde_json::json!({}));
+        store::add_permission_denied_from(
+            sessions_dir,
+            &session.session_id,
+            input.tool_use_id.as_deref(),
+            input.tool_name.as_deref().unwrap_or("Unknown tool"),
+            &tool_input,
+            input.reason.as_deref(),
+        )?;
+    }
 
     if session.engine == Engine::Claude && input.agent_id.is_none() {
         let compacting = match event {
@@ -1484,6 +1513,7 @@ fn determine_status(event: HookEvent, input: &HookInput) -> Option<SessionStatus
         | HookEvent::PreToolUse
         | HookEvent::PostToolUse
         | HookEvent::SessionEnd => Some(SessionStatus::Running),
+        HookEvent::PermissionDenied => None,
         HookEvent::PreCompact => None,
     };
 
@@ -2009,6 +2039,7 @@ mod tests {
         None,
         Some(SessionStatus::WaitingInput)
     )]
+    #[case::permission_denied(HookEvent::PermissionDenied, None, None, None)]
     #[case::stop(HookEvent::Stop, None, None, Some(SessionStatus::Stopped))]
     #[case::stop_failure(HookEvent::StopFailure, None, None, Some(SessionStatus::Failed))]
     #[case::notification_unknown(HookEvent::Notification, Some("info"), None, None)]
@@ -2175,6 +2206,7 @@ mod tests {
     #[case::pre_tool_use("pre-tool-use", HookEvent::PreToolUse)]
     #[case::post_tool_use("post-tool-use", HookEvent::PostToolUse)]
     #[case::permission_request("permission-request", HookEvent::PermissionRequest)]
+    #[case::permission_denied("permission-denied", HookEvent::PermissionDenied)]
     #[case::notification("notification", HookEvent::Notification)]
     #[case::stop("stop", HookEvent::Stop)]
     #[case::stop_failure("stop-failure", HookEvent::StopFailure)]
@@ -2182,6 +2214,78 @@ mod tests {
     #[case::session_end("session-end", HookEvent::SessionEnd)]
     fn test_hook_event_parsing(#[case] event: &str, #[case] expected: HookEvent) {
         assert_eq!(HookEvent::from_str(event).expect("valid event"), expected);
+    }
+
+    #[test]
+    fn permission_denied_records_operation_without_changing_session_status() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+        save_test_session(sessions_dir, "denied-session", |session| {
+            session.status = SessionStatus::WaitingInput;
+            session
+                .pending_permission_agent_ids
+                .insert(MAIN_THREAD_AGENT_KEY.to_string());
+            session.pending_permission_request_ids.insert(
+                MAIN_THREAD_AGENT_KEY.to_string(),
+                "pending-request-fixture".to_string(),
+            );
+        });
+        let input = serde_json::from_value(serde_json::json!({
+            "session_id": "denied-session",
+            "cwd": "/tmp/test",
+            "tool_name": "Bash",
+            "tool_input": { "command": "printf fixture" },
+            "tool_use_id": "tool-call-fixture",
+            "reason": "[Sensitive Operation]",
+        }))
+        .expect("PermissionDenied input should deserialize");
+
+        let result = process_hook_event_impl(
+            HookEvent::PermissionDenied,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("PermissionDenied hook should succeed");
+        let session = store::load_session_from(sessions_dir, "denied-session")
+            .expect("session should load")
+            .expect("session should exist");
+        let denied = store::permission_denied_operations_from(sessions_dir, "denied-session")
+            .expect("denied operation should load");
+
+        assert_eq!(
+            (
+                result,
+                session.status,
+                session.pending_permission_agent_ids,
+                session.pending_permission_request_ids,
+                denied
+                    .into_iter()
+                    .map(|operation| (
+                        operation.seq,
+                        operation.tool_use_id,
+                        operation.tool_name,
+                        operation.tool_input,
+                        operation.reason,
+                        operation.resolved_at.is_some(),
+                    ))
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                ProcessResult::SessionSaved,
+                SessionStatus::WaitingInput,
+                BTreeSet::new(),
+                std::collections::BTreeMap::new(),
+                vec![(
+                    1,
+                    Some("tool-call-fixture".to_string()),
+                    "Bash".to_string(),
+                    serde_json::json!({ "command": "printf fixture" }),
+                    Some("[Sensitive Operation]".to_string()),
+                    false,
+                )],
+            ),
+        );
     }
 
     #[rstest]
@@ -2787,6 +2891,7 @@ mod tests {
             launched_with_vibe: false,
             child_launch: Default::default(),
             crit_urls: Vec::new(),
+            web_uis: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: "/tmp/test".into(),
             transcript_path: None,
@@ -2797,6 +2902,7 @@ mod tests {
             updated_at: Utc::now(),
             last_message: None,
             current_tool: None,
+            current_tool_name: None,
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
@@ -3067,10 +3173,27 @@ mod tests {
             .expect("load")
             .expect("session exists");
         assert_eq!(
-            (session.status, session.pending_permission_agent_ids),
+            (
+                session.status,
+                session.pending_permission_agent_ids,
+                store::permission_request_data(
+                    sessions_dir,
+                    "codex-lifecycle",
+                    session
+                        .pending_permission_request_ids
+                        .get(MAIN_THREAD_AGENT_KEY)
+                        .expect("Codex request should be tracked"),
+                )
+                .expect("permission data should load"),
+            ),
             (
                 SessionStatus::WaitingInput,
                 BTreeSet::from([MAIN_THREAD_AGENT_KEY.to_string()]),
+                Some(store::PermissionRequestData {
+                    tool_name: Some("Bash".to_string()),
+                    tool_input: serde_json::json!({"command": "echo waiting"}),
+                    pending: true,
+                }),
             ),
         );
     }
@@ -3260,6 +3383,7 @@ mod tests {
             launched_with_vibe: false,
             child_launch: Default::default(),
             crit_urls: Vec::new(),
+            web_uis: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: "/tmp/test".into(),
             transcript_path: None,
@@ -3270,6 +3394,7 @@ mod tests {
             updated_at: Utc::now(),
             last_message: None,
             current_tool: None,
+            current_tool_name: None,
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
@@ -3634,6 +3759,31 @@ mod tests {
     }
 
     #[test]
+    fn pre_tool_use_persists_the_structured_tool_name() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+
+        process_hook_event_impl(
+            HookEvent::PreToolUse,
+            create_test_input_with_tool("ExitPlanMode", None),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("hook should save the tool name");
+
+        let session = store::load_session_from(sessions_dir, "test-123")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(
+            (session.current_tool_name, session.current_tool),
+            (
+                Some("ExitPlanMode".to_string()),
+                Some("ExitPlanMode".to_string())
+            ),
+        );
+    }
+
+    #[test]
     fn sibling_agent_event_does_not_clear_another_agents_pending_permission() {
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
@@ -3922,6 +4072,7 @@ mod tests {
             launched_with_vibe: false,
             child_launch: Default::default(),
             crit_urls: Vec::new(),
+            web_uis: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: "/tmp/test".into(),
             transcript_path: None,
@@ -3932,6 +4083,7 @@ mod tests {
             updated_at: Utc::now(),
             last_message: None,
             current_tool: None,
+            current_tool_name: None,
             label: None,
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
@@ -4085,6 +4237,7 @@ mod tests {
             StopReason::PermissionPrompt => session.status = SessionStatus::WaitingInput,
             StopReason::AskUserQuestion => {
                 session.current_tool = Some("AskUserQuestion".to_string());
+                session.current_tool_name = Some("AskUserQuestion".to_string());
             }
             StopReason::Paused => session.status = SessionStatus::Paused,
         });
@@ -4335,6 +4488,7 @@ mod tests {
                 StopReason::PermissionPrompt => session.status = SessionStatus::WaitingInput,
                 StopReason::AskUserQuestion => {
                     session.current_tool = Some("AskUserQuestion".to_string());
+                    session.current_tool_name = Some("AskUserQuestion".to_string());
                 }
                 StopReason::Paused => session.status = SessionStatus::Paused,
                 StopReason::BackgroundTask
@@ -6147,6 +6301,7 @@ mod tests {
                 launched_with_vibe: false,
                 child_launch: Default::default(),
                 crit_urls: Vec::new(),
+                web_uis: Vec::new(),
                 pending_human_review_ids: Default::default(),
                 cwd: std::path::PathBuf::from("/tmp/test"),
                 transcript_path: None,
@@ -6163,6 +6318,7 @@ mod tests {
                 updated_at: now,
                 last_message: None,
                 current_tool: None,
+                current_tool_name: None,
                 label: None,
                 ancestor_session_ids: Vec::new(),
                 pending_bg_task_ids: BTreeSet::new(),

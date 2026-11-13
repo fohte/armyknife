@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
 use rusqlite::params;
 
@@ -13,6 +13,7 @@ pub(crate) struct WatchWebPeerOutMessage {
     pub(crate) to_session_id: String,
     pub(crate) content: String,
     pub(crate) sent_at: DateTime<Utc>,
+    pub(crate) failed: bool,
 }
 
 pub(crate) fn insert_watch_web_peer_out_message(
@@ -21,22 +22,42 @@ pub(crate) fn insert_watch_web_peer_out_message(
     to_session_id: &str,
     content: &str,
     sent_at: DateTime<Utc>,
+    failed: bool,
 ) -> Result<i64> {
     super::validate_session_id(from_session_id)?;
     super::validate_session_id(to_session_id)?;
     let connection = open_connection(sessions_dir)?;
     connection.execute(
         "INSERT INTO watch_web_peer_out_message
-            (from_session_id, to_session_id, content, sent_at)
-         VALUES (?1, ?2, ?3, ?4)",
+            (from_session_id, to_session_id, content, sent_at, failed)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
         params![
             from_session_id,
             to_session_id,
             content,
-            sent_at.to_rfc3339()
+            sent_at.to_rfc3339(),
+            failed
         ],
     )?;
     Ok(connection.last_insert_rowid())
+}
+
+pub(crate) fn mark_watch_web_peer_out_message_delivered(
+    sessions_dir: &Path,
+    id: i64,
+    sent_at: DateTime<Utc>,
+) -> Result<()> {
+    let connection = open_connection(sessions_dir)?;
+    let updated_rows = connection.execute(
+        "UPDATE watch_web_peer_out_message
+         SET sent_at = ?1, failed = 0
+         WHERE id = ?2",
+        params![sent_at.to_rfc3339(), id],
+    )?;
+    if updated_rows == 0 {
+        bail!("peer message {id} does not exist");
+    }
+    Ok(())
 }
 
 pub(crate) fn watch_web_peer_out_messages(
@@ -50,7 +71,7 @@ pub(crate) fn watch_web_peer_out_messages(
 
     let connection = open_connection(sessions_dir)?;
     let mut statement = connection.prepare(
-        "SELECT id, from_session_id, to_session_id, content, sent_at
+        "SELECT id, from_session_id, to_session_id, content, sent_at, failed
          FROM watch_web_peer_out_message
          WHERE from_session_id = ?1
          ORDER BY sent_at, id",
@@ -62,17 +83,19 @@ pub(crate) fn watch_web_peer_out_messages(
             row.get::<_, String>(2)?,
             row.get::<_, String>(3)?,
             row.get::<_, String>(4)?,
+            row.get::<_, bool>(5)?,
         ))
     })?;
 
     rows.map(|row| {
-        let (id, from_session_id, to_session_id, content, sent_at) = row?;
+        let (id, from_session_id, to_session_id, content, sent_at, failed) = row?;
         Ok(WatchWebPeerOutMessage {
             id,
             from_session_id,
             to_session_id,
             content,
             sent_at: DateTime::parse_from_rfc3339(&sent_at)?.with_timezone(&Utc),
+            failed,
         })
     })
     .collect()
@@ -85,7 +108,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        WatchWebPeerOutMessage, insert_watch_web_peer_out_message, watch_web_peer_out_messages,
+        WatchWebPeerOutMessage, insert_watch_web_peer_out_message,
+        mark_watch_web_peer_out_message_delivered, watch_web_peer_out_messages,
     };
 
     #[fixture]
@@ -105,6 +129,7 @@ mod tests {
             "fixture-recipient",
             "Delivered after expansion",
             later_sent_at,
+            false,
         )
         .unwrap();
         let earlier_id = insert_watch_web_peer_out_message(
@@ -113,6 +138,7 @@ mod tests {
             "fixture-other-recipient",
             "Earlier delivered message",
             earlier_sent_at,
+            false,
         )
         .unwrap();
         insert_watch_web_peer_out_message(
@@ -121,6 +147,7 @@ mod tests {
             "fixture-recipient",
             "Another sender's message",
             earlier_sent_at,
+            false,
         )
         .unwrap();
 
@@ -133,6 +160,7 @@ mod tests {
                     to_session_id: "fixture-other-recipient".to_string(),
                     content: "Earlier delivered message".to_string(),
                     sent_at: earlier_sent_at,
+                    failed: false,
                 },
                 WatchWebPeerOutMessage {
                     id: later_id,
@@ -140,8 +168,64 @@ mod tests {
                     to_session_id: "fixture-recipient".to_string(),
                     content: "Delivered after expansion".to_string(),
                     sent_at: later_sent_at,
+                    failed: false,
                 },
             ],
+        );
+    }
+
+    #[rstest]
+    fn stores_failed_delivery_results(sessions_dir: TempDir) {
+        let sent_at = chrono::Utc.with_ymd_and_hms(2026, 6, 1, 12, 29, 0).unwrap();
+        insert_watch_web_peer_out_message(
+            sessions_dir.path(),
+            "fixture-sender",
+            "fixture-recipient",
+            "Delivery failed for the fictional request.",
+            sent_at,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(
+            watch_web_peer_out_messages(sessions_dir.path(), "fixture-sender").unwrap(),
+            vec![WatchWebPeerOutMessage {
+                id: 1,
+                from_session_id: "fixture-sender".to_string(),
+                to_session_id: "fixture-recipient".to_string(),
+                content: "Delivery failed for the fictional request.".to_string(),
+                sent_at,
+                failed: true,
+            }],
+        );
+    }
+
+    #[rstest]
+    fn marks_a_failed_delivery_as_sent_after_redelivery(sessions_dir: TempDir) {
+        let failed_at = chrono::Utc.with_ymd_and_hms(2026, 6, 1, 12, 29, 0).unwrap();
+        let sent_at = chrono::Utc.with_ymd_and_hms(2026, 6, 1, 12, 30, 0).unwrap();
+        let id = insert_watch_web_peer_out_message(
+            sessions_dir.path(),
+            "fixture-sender",
+            "fixture-recipient",
+            "A fictional peer message.",
+            failed_at,
+            true,
+        )
+        .unwrap();
+
+        mark_watch_web_peer_out_message_delivered(sessions_dir.path(), id, sent_at).unwrap();
+
+        assert_eq!(
+            watch_web_peer_out_messages(sessions_dir.path(), "fixture-sender").unwrap(),
+            vec![WatchWebPeerOutMessage {
+                id,
+                from_session_id: "fixture-sender".to_string(),
+                to_session_id: "fixture-recipient".to_string(),
+                content: "A fictional peer message.".to_string(),
+                sent_at,
+                failed: false,
+            }],
         );
     }
 }

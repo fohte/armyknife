@@ -1,5 +1,75 @@
 # Changelog
 
+## [0.1.678](https://github.com/fohte/armyknife/compare/v0.1.677...v0.1.678) (2026-11-13)
+
+
+### Bug Fixes
+
+* **watch-web:** show action feedback immediately ([#1732](https://github.com/fohte/armyknife/issues/1732)) ([0f059e0](https://github.com/fohte/armyknife/commit/0f059e00500b1fc2c9a1ceab4db2c2eb628bf40f))
+
+## [0.1.677](https://github.com/fohte/armyknife/compare/v0.1.676...v0.1.677) (2026-11-13)
+
+
+### Features
+
+* **watch-web:** edit review documents ([#1729](https://github.com/fohte/armyknife/issues/1729)) ([ba0dfcc](https://github.com/fohte/armyknife/commit/ba0dfcc1a1e1eb53df899de84ba9774ff81e36bd))
+
+## [0.1.676](https://github.com/fohte/armyknife/compare/v0.1.675...v0.1.676) (2026-11-13)
+
+
+### Bug Fixes
+
+* **watch-web:** match queued messages by send ID ([#1730](https://github.com/fohte/armyknife/issues/1730)) ([859c0f4](https://github.com/fohte/armyknife/commit/859c0f43088245e1187744493e55c3b033afb3ba))
+
+## [0.1.675](https://github.com/fohte/armyknife/compare/v0.1.674...v0.1.675) (2026-11-13)
+
+
+### Bug Fixes
+
+* **watch-web:** match pending permissions to calls ([#1725](https://github.com/fohte/armyknife/issues/1725)) ([a5e12bf](https://github.com/fohte/armyknife/commit/a5e12bfcaa39bf00b8c69ae633c25017aa4fb7cf))
+
+## [0.1.674](https://github.com/fohte/armyknife/compare/v0.1.673...v0.1.674) (2026-11-13)
+
+
+### Features
+
+* **agent/todo:** allow rejection and withdrawal ([#1724](https://github.com/fohte/armyknife/issues/1724)) ([137c05f](https://github.com/fohte/armyknife/commit/137c05ff4f23a4109763b5820d29013eed1c4c54))
+
+## [0.1.673](https://github.com/fohte/armyknife/compare/v0.1.672...v0.1.673) (2026-11-13)
+
+
+### Features
+
+* **agent:** support local web UIs in watch-web ([#1722](https://github.com/fohte/armyknife/issues/1722)) ([74a3bd2](https://github.com/fohte/armyknife/commit/74a3bd2f83b891c6ef7624788b3d1012f1fc2461))
+
+## [0.1.672](https://github.com/fohte/armyknife/compare/v0.1.671...v0.1.672) (2026-11-13)
+
+
+### Features
+
+* **watch-web:** highlight Bash commands and code ([#1719](https://github.com/fohte/armyknife/issues/1719)) ([d10ff38](https://github.com/fohte/armyknife/commit/d10ff38cb03295eb74216dad932a6ec7d16a9357))
+
+## [0.1.671](https://github.com/fohte/armyknife/compare/v0.1.670...v0.1.671) (2026-11-13)
+
+
+### Bug Fixes
+
+* **watch-web:** render peer messages from records ([#1717](https://github.com/fohte/armyknife/issues/1717)) ([62ba2b7](https://github.com/fohte/armyknife/commit/62ba2b7e062b0609108ef7bb61874e4651e652b2))
+
+## [0.1.670](https://github.com/fohte/armyknife/compare/v0.1.669...v0.1.670) (2026-11-13)
+
+
+### Features
+
+* **agent:** support session title changes ([#1714](https://github.com/fohte/armyknife/issues/1714)) ([a1d3032](https://github.com/fohte/armyknife/commit/a1d30322ef022500527a5b21eb52a344d8cea9b8))
+
+## [0.1.669](https://github.com/fohte/armyknife/compare/v0.1.668...v0.1.669) (2026-11-13)
+
+
+### Features
+
+* **watch-web:** support retrying denied actions ([#1712](https://github.com/fohte/armyknife/issues/1712)) ([7dcce76](https://github.com/fohte/armyknife/commit/7dcce76143af9f0b1f77851b8fd3e421a9a99e33))
+
 ## [0.1.668](https://github.com/fohte/armyknife/compare/v0.1.667...v0.1.668) (2026-11-13)
 
 

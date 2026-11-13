@@ -14,6 +14,7 @@ mod decisions;
 mod migration;
 mod migrations;
 mod peer_out_messages;
+mod permission_denied;
 mod permission_requests;
 mod proposals;
 mod queued_prompts;
@@ -27,7 +28,12 @@ pub(crate) use decisions::{
 };
 pub(crate) use peer_out_messages::WatchWebPeerOutMessage;
 pub(crate) use peer_out_messages::{
-    insert_watch_web_peer_out_message, watch_web_peer_out_messages,
+    insert_watch_web_peer_out_message, mark_watch_web_peer_out_message_delivered,
+    watch_web_peer_out_messages,
+};
+pub(crate) use permission_denied::PermissionDeniedOperation;
+pub(crate) use permission_denied::{
+    add_permission_denied, permission_denied_operations, resolve_permission_denied,
 };
 pub(crate) use permission_requests::{
     PermissionRequestData, PermissionRequestDecision, PermissionRequestResolution,
@@ -39,13 +45,15 @@ pub(crate) use proposals::{
     add_agent_proposal, agent_proposals, unanswered_agent_proposal_bodies,
     write_agent_proposal_answer,
 };
-pub(crate) use queued_prompts::WatchWebQueuedPrompt;
+pub(crate) use queued_prompts::{WatchWebQueuedAttachment, WatchWebQueuedPrompt};
 pub(crate) use queued_prompts::{
-    delete_watch_web_queued_prompts, insert_watch_web_queued_prompt, watch_web_queued_prompts,
+    delete_watch_web_queued_prompts, insert_watch_web_queued_prompt,
+    mark_watch_web_queued_prompts_resolved, watch_web_queued_prompts,
 };
-pub(crate) use todos::AgentTodo;
+pub(crate) use todos::{AgentTodo, TodoResolution};
 pub(crate) use todos::{
-    add_agent_todo, agent_todos, complete_agent_todo, incomplete_agent_todo_titles,
+    add_agent_todo, agent_todos, incomplete_agent_todo_titles, lock_agent_todo_resolution,
+    resolve_agent_todo,
 };
 pub(crate) use web_state::WatchWebSessionState;
 pub(crate) use web_state::set_watch_web_compacting;

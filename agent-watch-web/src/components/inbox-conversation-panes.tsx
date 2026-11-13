@@ -5,6 +5,7 @@ import { ConversationPane } from '#components/conversation-pane'
 import { InboxView } from '#components/inbox-view'
 import { ResizableColumns } from '#components/resizable-columns'
 import { useSessionConversationCache } from '#components/session-conversation-cache'
+import type { SessionOperation } from '#session-operations'
 import {
   defaultExpandedSessionIds,
   expandSessionAncestors,
@@ -84,6 +85,7 @@ type InboxConversationPanesProps = {
   onBack: () => void
   onLater: (id: string) => void
   onCloseSession: (id: string, keepWorktree?: boolean) => void
+  onOptimisticSessionOperation?: (operation: SessionOperation) => void
   onSelectSession: (id: string) => void
 }
 
@@ -101,6 +103,7 @@ export function InboxConversationPanes({
   onBack,
   onLater,
   onCloseSession,
+  onOptimisticSessionOperation,
   onSelectSession,
 }: InboxConversationPanesProps) {
   const sessionConversationCache = useSessionConversationCache()
@@ -325,6 +328,9 @@ export function InboxConversationPanes({
         statusPanelOpen={statusPanelOpen}
         onToggleStatusPanel={onToggleStatusPanel}
         onCloseStatusPanel={onCloseStatusPanel}
+        {...(onOptimisticSessionOperation === undefined
+          ? {}
+          : { onOptimisticSessionOperation })}
         onBack={onBack}
         onLater={() => {
           onLater(selectedSession.id)

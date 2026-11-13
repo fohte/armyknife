@@ -16,10 +16,20 @@ mod lock;
 mod notification;
 mod pending_review;
 mod queue_entry;
+mod review_completion;
+mod review_finish;
 mod session_watch;
 mod tmux;
 pub(crate) use pending_review::{
     ReviewDocumentMarker, review_document_marker, review_document_path,
+};
+pub(crate) use review_completion::complete_review;
+pub(crate) use review_finish::{
+    FINISH_ACK_TIMEOUT, ReviewDocumentOperationLock, finish_ack_fifo_path,
+    finish_request_fifo_path, open_fifo_reader, wait_for_finish_ack,
+};
+use review_finish::{
+    create_fifo_at_path, path_with_suffix, remove_fifo_if_present, try_read_fifo_signal,
 };
 
 pub use approval::{ApprovalManager, TEST_APPROVAL_DIR_OVERRIDE};
@@ -126,16 +136,17 @@ where
     start_review_with_marker::<S, _, _>(
         &document_path,
         <H as ReviewHandler<S>>::PENDING_REVIEW_MARKER,
-        |document_path, done_fifo_path, lock_id| {
+        |document_path, done_fifo_path, finish_fifo_path, lock_id| {
             let context = launch::ReviewContext {
                 lock_id,
+                done_fifo_path,
+                finish_fifo_path,
                 window_title,
                 command_name: <H as ReviewHandler<S>>::NOTIFICATION_COMMAND_NAME,
             };
             let (session, entry) = launch::launch_review::<S, H>(
                 tmux_pane_id.as_deref(),
                 document_path,
-                done_fifo_path,
                 &context,
                 handler,
                 editor_config,
@@ -170,7 +181,7 @@ where
     start_review_with_marker(
         document_path,
         None,
-        |document_path, done_fifo_path, lock_id| {
+        |document_path, done_fifo_path, _finish_fifo_path, lock_id| {
             launch_review(document_path, done_fifo_path, lock_id).map(ReviewLaunch::without_queue)
         },
         is_session_alive,
@@ -200,7 +211,7 @@ fn start_review_with_marker<S, L, P>(
 ) -> Result<Option<Document<S>>>
 where
     S: DocumentSchema,
-    L: FnOnce(&Path, &Path, &str) -> Result<ReviewLaunch>,
+    L: FnOnce(&Path, &Path, &Path, &str) -> Result<ReviewLaunch>,
     P: FnMut(&str) -> Result<bool>,
 {
     let lock_path = LockGuard::lock_path(document_path);
@@ -231,7 +242,18 @@ where
     // signal cannot race with the read call.
     let done_fifo_reader = open_fifo_reader(&done_fifo_path)?;
 
-    let review = launch_review(document_path, &done_fifo_path, lock_guard.lock_id())?;
+    let finish_fifo_path = create_fifo_at_path(&finish_request_fifo_path(document_path))?;
+    let mut finish_fifo_cleanup = FifoCleanupGuard::new(&finish_fifo_path);
+    let finish_fifo_reader = open_fifo_reader(&finish_fifo_path)?;
+    let finish_ack_fifo_path = create_fifo_at_path(&finish_ack_fifo_path(document_path))?;
+    let mut finish_ack_fifo_cleanup = FifoCleanupGuard::new(&finish_ack_fifo_path);
+
+    let review = launch_review(
+        document_path,
+        &done_fifo_path,
+        &finish_fifo_path,
+        lock_guard.lock_id(),
+    )?;
 
     {
         let _pending_review = pending_review::PendingReviewGuard::for_current_session(
@@ -246,6 +268,12 @@ where
             wait_for_fifo_signal(done_fifo_reader, &done_fifo_path)?;
         }
     }
+
+    drop(finish_fifo_reader);
+    finish_fifo_cleanup.disarm();
+    let _ = remove_fifo_if_present(&finish_fifo_path);
+    finish_ack_fifo_cleanup.disarm();
+    let _ = remove_fifo_if_present(&finish_ack_fifo_path);
 
     // Clean up the FIFO (disarm guard since we're cleaning up explicitly)
     done_fifo_cleanup.disarm();
@@ -297,95 +325,12 @@ fn write_edit_diff<W: Write>(
     write_unified_diff(writer, pre, post, DIFF_CONTEXT_LINES, use_color)
 }
 
-/// Complete a review session after the user closes the editor.
-///
-/// This function:
-/// 1. Holds the caller-provided cleanup guard for lock file and tmux restoration
-/// 2. Launches the configured editor for the user to edit the document
-/// 3. After the editor exits, parses the document and calls the handler's callback
-///
-/// If `window_title` is provided and the editor is nvim, it will be displayed in the title bar.
-///
-/// The caller creates a `FifoSignalGuard` before calling this function so the FIFO is
-/// signaled even if earlier initialization fails.
-/// The child is registered before loading configuration so the parent cannot
-/// mistake a live editor process for a stale lock.
-///
-/// This is typically called by the review-complete subcommand that the terminal runs.
-pub fn complete_review<S, H>(
-    document_path: &Path,
-    window_title: Option<&str>,
-    handler: &H,
-    editor_config: &EditorConfig,
-    cleanup_guard: CleanupGuard,
-) -> Result<()>
-where
-    S: DocumentSchema,
-    H: ReviewHandler<S>,
-{
-    let _cleanup_guard = cleanup_guard;
-
-    // Launch editor
-    let status = run_editor(&editor_config.editor_command, document_path, window_title)?;
-
-    if !status.success() {
-        eprintln!("Editor exited with non-zero status");
-        return Ok(());
-    }
-
-    // After editor exits, parse the document and call the handler
-    let document = Document::<S>::from_path(document_path.to_path_buf())?;
-    handler.on_review_complete(&document)
-}
-
 /// Create a FIFO (named pipe) next to `document_path` with the given suffix.
 ///
 /// Example: suffix `.done` for `/tmp/foo.md` yields `/tmp/foo.md.done`.
 #[cfg(unix)]
 fn create_fifo_with_suffix(document_path: &Path, suffix: &str) -> Result<PathBuf> {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-
-    let mut p = document_path.as_os_str().to_os_string();
-    p.push(suffix);
-    let fifo_path = PathBuf::from(p);
-
-    // Remove stale FIFO if it exists
-    let _ = std::fs::remove_file(&fifo_path);
-
-    let c_path = CString::new(fifo_path.as_os_str().as_bytes()).map_err(|e| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("FIFO path contains interior NUL byte: {e}"),
-        )
-    })?;
-
-    // SAFETY: `c_path` is a valid NUL-terminated C string owned by this scope.
-    // Mode 0o600 restricts the FIFO to the current user, matching the access
-    // the document itself has.
-    let ret = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
-    if ret != 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-
-    Ok(fifo_path)
-}
-
-/// Open a FIFO for reading in non-blocking mode.
-///
-/// Must be called *before* launching the terminal so the reader end is
-/// connected when the writer signals. `O_NONBLOCK` is used so the open
-/// returns immediately even without a writer.
-#[cfg(unix)]
-fn open_fifo_reader(fifo_path: &Path) -> Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(fifo_path)?;
-
-    Ok(file)
+    create_fifo_at_path(&path_with_suffix(document_path, suffix))
 }
 
 /// Block until the writer sends a signal byte on the FIFO.
@@ -512,22 +457,6 @@ fn poll_fifo_signal(
     }
 }
 
-fn try_read_fifo_signal(file: &mut std::fs::File) -> Result<bool> {
-    use std::io::{self, Read};
-
-    let mut buf = [0u8; 1];
-    match file.read(&mut buf) {
-        Ok(n) => Ok(n > 0),
-        Err(error)
-            if error.kind() == io::ErrorKind::WouldBlock
-                || error.kind() == io::ErrorKind::Interrupted =>
-        {
-            Ok(false)
-        }
-        Err(error) => Err(error.into()),
-    }
-}
-
 /// Like `wait_for_fifo_signal` but gives up after `timeout`, returning a
 /// `TerminalLaunchFailed` error. Used for the started-FIFO so a dead terminal
 /// emulator doesn't cause the parent process to hang.
@@ -582,7 +511,7 @@ impl FifoCleanupGuard {
 impl Drop for FifoCleanupGuard {
     fn drop(&mut self) {
         if !self.disarmed {
-            let _ = std::fs::remove_file(&self.fifo_path);
+            let _ = remove_fifo_if_present(&self.fifo_path);
         }
     }
 }
@@ -620,21 +549,37 @@ impl Drop for FifoSignalGuard {
 ///
 /// Uses `O_WRONLY | O_NONBLOCK` so the open returns ENXIO immediately
 /// if no reader has the FIFO open, instead of blocking forever.
-fn signal_fifo(fifo_path: &Path) {
+pub(crate) fn signal_fifo(fifo_path: &Path) {
+    let _ = try_signal_fifo(fifo_path);
+}
+
+pub(crate) fn try_signal_fifo(fifo_path: &Path) -> std::io::Result<()> {
+    try_signal_fifo_with_byte(fifo_path, b'0')
+}
+
+pub(crate) fn try_signal_fifo_with_byte(fifo_path: &Path, byte: u8) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
+        use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
 
-        let file = std::fs::OpenOptions::new()
+        let mut file = std::fs::OpenOptions::new()
             .write(true)
-            .custom_flags(libc::O_NONBLOCK)
-            .open(fifo_path);
-
-        if let Ok(mut f) = file {
-            let _ = f.write_all(b"0");
+            .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW)
+            .open(fifo_path)?;
+        if !file.metadata()?.file_type().is_fifo() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "review signal path is not a FIFO",
+            ));
         }
+        file.write_all(&[byte])?;
     }
+
+    #[cfg(not(unix))]
+    let _ = (fifo_path, byte);
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -884,6 +829,27 @@ mod tests {
     }
 
     #[rstest]
+    fn create_fifo_at_path_preserves_an_existing_regular_file() {
+        let temp = TempDir::new().expect("tempdir");
+        let fifo_path = temp.path().join("example-review.md.finish");
+        let original_contents = "keep this file";
+        std::fs::write(&fifo_path, original_contents).expect("write existing file");
+
+        let result = create_fifo_at_path(&fifo_path);
+        let existing_contents = std::fs::read_to_string(&fifo_path).expect("read existing file");
+        let rejected_existing_file = matches!(
+            result,
+            Err(HumanInTheLoopError::Io(error))
+                if error.kind() == std::io::ErrorKind::AlreadyExists
+        );
+
+        assert_eq!(
+            (rejected_existing_file, existing_contents),
+            (true, original_contents.to_string()),
+        );
+    }
+
+    #[rstest]
     fn start_review_releases_parent_lock_after_done_fifo_signal(
         review_document: ReviewDocumentFixture,
     ) {
@@ -1040,33 +1006,41 @@ mod tests {
     }
 
     #[rstest]
-    fn start_review_cleans_lock_and_done_fifo_when_review_session_disappears(
+    fn start_review_cleans_lock_and_review_fifos_when_review_session_disappears(
         review_document: ReviewDocumentFixture,
     ) {
         let document_path = review_document.path;
         let mut done_fifo_path = None;
+        let mut finish_fifo_path = None;
 
-        let result = start_review_with_launcher::<ReviewTestSchema, _, _>(
+        let result = start_review_with_marker::<ReviewTestSchema, _, _>(
             &document_path,
-            |_, fifo_path, _lock_id| {
-                done_fifo_path = Some(fifo_path.to_path_buf());
-                Ok(Some("review-session".to_string()))
+            None,
+            |_, done_path, finish_path, _lock_id| {
+                done_fifo_path = Some(done_path.to_path_buf());
+                finish_fifo_path = Some(finish_path.to_path_buf());
+                Ok(ReviewLaunch::without_queue(Some(
+                    "review-session".to_string(),
+                )))
             },
             |_| Ok(false),
         )
         .map(|document| document.is_some())
         .map_err(|error| error.to_string());
         let done_fifo_path = done_fifo_path.expect("launcher receives done FIFO path");
+        let finish_fifo_path = finish_fifo_path.expect("launcher receives finish FIFO path");
 
         assert_eq!(
             (
                 result,
                 LockGuard::is_locked(&document_path),
                 done_fifo_path.exists(),
+                finish_fifo_path.exists(),
                 exit_code::REVIEW_SESSION_CLOSED,
             ),
             (
                 Err("Review editor session ended before the review completed".into()),
+                false,
                 false,
                 false,
                 4,

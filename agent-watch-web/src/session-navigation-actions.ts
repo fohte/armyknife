@@ -1,4 +1,3 @@
-import { setSessionToday } from '#session-actions'
 import type { HistoryMode, SessionHistoryState } from '#session-history'
 import type { Session } from '#types'
 
@@ -9,14 +8,14 @@ type SessionNavigationOptions = {
     mode?: HistoryMode,
   ) => void
   setLaterExpanded: (expanded: boolean) => void
-  setError: (error: string | null) => void
+  toggleToday: (id: string, isToday: boolean) => void
 }
 
 export function createSessionNavigationActions({
   sessions,
   navigate,
   setLaterExpanded,
-  setError,
+  toggleToday,
 }: SessionNavigationOptions) {
   const openConversation = (sessionId: string) => {
     navigate((current) => ({
@@ -50,17 +49,6 @@ export function createSessionNavigationActions({
     }
     openConversation(sessionId)
   }
-  const toggleToday = (id: string, isToday: boolean) => {
-    void setSessionToday(id, isToday).match(
-      () => {
-        setError(null)
-      },
-      () => {
-        setError('Could not update Starred.')
-      },
-    )
-  }
-
   return {
     openConversation,
     openSessionInInbox,
