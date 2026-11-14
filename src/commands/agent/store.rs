@@ -21,6 +21,7 @@ mod queued_prompts;
 
 pub(crate) use archive::{ArchiveLogContext, archive_codex_thread_before_delete_with};
 pub(crate) use database::AgentFile;
+pub(crate) use database::ProposalResolution;
 pub(crate) use database::set_watch_web_compacting;
 pub(crate) use database::{
     AgentDecision, AgentDecisionCounts, AgentProposal, PermissionDeniedOperation,
@@ -525,6 +526,23 @@ pub(crate) fn write_agent_proposal_answer_from(
     answer: &str,
 ) -> Result<bool> {
     database::write_agent_proposal_answer(sessions_dir, session_id, seq, answer)
+}
+
+pub(crate) fn resolve_agent_proposal_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    comment: Option<&str>,
+) -> Result<bool> {
+    database::resolve_agent_proposal(sessions_dir, session_id, seq, comment)
+}
+
+pub(crate) fn lock_agent_proposal_resolution_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+) -> Result<std::fs::File> {
+    database::lock_agent_proposal_resolution(sessions_dir, session_id, seq)
 }
 
 pub(crate) fn add_agent_todo_in(

@@ -326,6 +326,8 @@ it('leaves a number shortcut to the proposal card that owns the target', () => {
           ]}
           answer={null}
           resolved={false}
+          resolution={null}
+          withdrawalComment={null}
           isMobile={false}
           onAnswer={onProposalAnswer}
         />
