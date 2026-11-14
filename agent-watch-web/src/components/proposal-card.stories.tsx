@@ -47,6 +47,24 @@ export const ProposalWaitsForAChoice: Story = {
   name: 'A proposal waits for a choice',
 }
 
+export const ProposalFormatsItsAgentTextAsMarkdown: Story = {
+  name: 'A proposal formats its summary and option descriptions as markdown',
+  args: {
+    summary: 'Compare **the options** in [the guide](https://example.test).',
+    options: [
+      {
+        label: 'Use the existing flow',
+        description:
+          'Keep **the current flow** and [review details](https://example.test).',
+        pros: ['Small change'],
+        cons: ['Adds one step'],
+        recommended: true,
+      },
+      ...options.slice(1),
+    ],
+  },
+}
+
 export const ProposalShowsASelectedChoice: Story = {
   name: 'A proposal marks the selected choice',
   args: { defaultChoice: 1 },
@@ -91,6 +109,7 @@ export const ProposalShowsItWasWithdrawn: Story = {
   args: {
     resolved: true,
     resolution: 'withdrawn',
-    withdrawalComment: 'The direction changed.',
+    withdrawalComment:
+      'See [the update](https://example.test) for **context**.',
   },
 }

@@ -4,6 +4,7 @@ import { Button } from '@fohte/ui/button'
 import { useEffect, useId, useState } from 'react'
 
 import { CollapsibleText } from '#components/collapsible-text'
+import { MarkdownMessage } from '#components/markdown-message'
 
 type TodoCardProps = {
   title: string
@@ -72,7 +73,9 @@ export function TodoCard({
         <h2>To-do · {status}</h2>
         <h3>{title}</h3>
         {completionComment !== '' ? (
-          <p className="chat-todo-completed-comment">{completionComment}</p>
+          <MarkdownMessage className="chat-todo-completed-comment">
+            {completionComment}
+          </MarkdownMessage>
         ) : null}
       </article>
     )
@@ -90,10 +93,11 @@ export function TodoCard({
       {detail !== null ? (
         <CollapsibleText
           className="chat-todo-detail"
-          text={detail}
           expanded={detailExpanded}
           onExpandedChange={setDetailExpanded}
-        />
+        >
+          <MarkdownMessage>{detail}</MarkdownMessage>
+        </CollapsibleText>
       ) : null}
       <label className="chat-todo-comment-label" htmlFor={commentId}>
         Comment (optional)

@@ -159,6 +159,46 @@ it('renders the proposal heading, recommended option, and pros and cons', () => 
   })
 })
 
+it('renders proposal summaries, descriptions, and withdrawal comments as markdown', () => {
+  renderCard(
+    props({
+      summary: 'Compare **the options** in [the guide](https://example.test).',
+      options: [
+        {
+          label: 'Use the existing flow',
+          description:
+            'Keep **the current flow** and [review details](https://example.test).',
+          pros: [],
+          cons: [],
+          recommended: false,
+        },
+      ],
+      resolved: true,
+      resolution: 'withdrawn',
+      withdrawalComment:
+        'See [the update](https://example.test) for **context**.',
+    }),
+  )
+
+  const snapshot = () => ({
+    summary: container.querySelector('.chat-proposal-summary')?.innerHTML,
+    description: container.querySelector('.chat-proposal-option-description')
+      ?.innerHTML,
+    withdrawalComment: container.querySelector(
+      '.chat-proposal-withdrawal-comment',
+    )?.innerHTML,
+  })
+
+  expect(snapshot()).toEqual({
+    summary:
+      '<p>Compare <strong>the options</strong> in <a href="https://example.test" target="_blank" rel="noopener noreferrer">the guide</a>.</p>',
+    description:
+      '<p>Keep <strong>the current flow</strong> and <a href="https://example.test" target="_blank" rel="noopener noreferrer">review details</a>.</p>',
+    withdrawalComment:
+      '<p>See <a href="https://example.test" target="_blank" rel="noopener noreferrer">the update</a> for <strong>context</strong>.</p>',
+  })
+})
+
 it('selects a numbered option and sends it with the comment on Command-Enter', async () => {
   const onAnswer = vi.fn(() => Promise.resolve(true))
   renderCard(props({ onAnswer }))

@@ -4,6 +4,7 @@ import { Button } from '@fohte/ui/button'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { numberShortcutChoice } from '#components/conversation-keyboard'
+import { MarkdownMessage } from '#components/markdown-message'
 import type { ProposalAnswer, ProposalOption } from '#types'
 
 type ProposalCardProps = {
@@ -147,10 +148,14 @@ export function ProposalCard({
       <h2>Proposal · {status}</h2>
       <h3>{title}</h3>
       {summary !== null ? (
-        <p className="chat-proposal-summary">{summary}</p>
+        <MarkdownMessage className="chat-proposal-summary">
+          {summary}
+        </MarkdownMessage>
       ) : null}
       {isWithdrawn && withdrawalComment !== null ? (
-        <p className="chat-proposal-withdrawal-comment">{withdrawalComment}</p>
+        <MarkdownMessage className="chat-proposal-withdrawal-comment">
+          {withdrawalComment}
+        </MarkdownMessage>
       ) : null}
       <div
         className="chat-proposal-options"
@@ -173,7 +178,7 @@ export function ProposalCard({
                 setSelectedChoice(index)
               }}
             />
-            <span className="chat-proposal-option-content">
+            <div className="chat-proposal-option-content">
               <span className="chat-proposal-option-heading">
                 <span className="chat-proposal-option-label">
                   {choiceLabel(index)} · {option.label}
@@ -183,9 +188,9 @@ export function ProposalCard({
                 ) : null}
               </span>
               {option.description !== null ? (
-                <span className="chat-proposal-option-description">
+                <MarkdownMessage className="chat-proposal-option-description">
                   {option.description}
-                </span>
+                </MarkdownMessage>
               ) : null}
               {option.pros.length > 0 || option.cons.length > 0 ? (
                 <span className="chat-proposal-option-details">
@@ -201,7 +206,7 @@ export function ProposalCard({
                   ))}
                 </span>
               ) : null}
-            </span>
+            </div>
           </label>
         ))}
       </div>
