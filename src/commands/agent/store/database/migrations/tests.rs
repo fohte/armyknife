@@ -210,7 +210,7 @@ fn adds_proposal_resolution_and_comment_to_version_nineteen_database(
 
     assert_eq!(
         (actual, actual_user_version),
-        ((None, None, true, true), 20)
+        ((None, None, true, true), current_version())
     );
 }
 
