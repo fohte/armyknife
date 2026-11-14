@@ -36,7 +36,9 @@ pub(in crate::commands::agent::watch_web) mod queued_prompt;
 mod range;
 mod subagent_reports;
 
-use self::incremental::parse_session_transcript_incrementally;
+use self::incremental::{
+    parse_session_transcript_incrementally, parse_session_transcript_tail_window,
+};
 use self::proposals::proposal_chat_item;
 #[cfg(test)]
 use self::questions::QuestionChoice;
@@ -219,14 +221,22 @@ async fn get_messages(
     if !range.is_valid() {
         return StatusCode::BAD_REQUEST.into_response();
     }
+    let tail_window_limit = range.initial_tail_window_limit();
 
-    match tokio::task::spawn_blocking(move || {
-        load_conversation_with_queued_prompts(
+    match tokio::task::spawn_blocking(move || match tail_window_limit {
+        Some(limit) => load_conversation_with_initial_tail_window(
             &session_id,
             |id| load_session(id),
             |id| load_user_marker(id),
             &loaders,
-        )
+            limit,
+        ),
+        None => load_conversation_with_queued_prompts(
+            &session_id,
+            |id| load_session(id),
+            |id| load_user_marker(id),
+            &loaders,
+        ),
     })
     .await
     {
@@ -277,9 +287,35 @@ fn load_messages_with(
 
 fn load_conversation_with_queued_prompts(
     session_id: &str,
+    load_session: impl FnMut(&str) -> Result<Option<Session>>,
+    load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
+    loaders: &RouteLoaders,
+) -> Result<Option<ConversationResponse>> {
+    load_conversation_with_tail_window(session_id, load_session, load_user_marker, loaders, None)
+}
+
+fn load_conversation_with_initial_tail_window(
+    session_id: &str,
+    load_session: impl FnMut(&str) -> Result<Option<Session>>,
+    load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
+    loaders: &RouteLoaders,
+    message_limit: usize,
+) -> Result<Option<ConversationResponse>> {
+    load_conversation_with_tail_window(
+        session_id,
+        load_session,
+        load_user_marker,
+        loaders,
+        Some(message_limit),
+    )
+}
+
+fn load_conversation_with_tail_window(
+    session_id: &str,
     mut load_session: impl FnMut(&str) -> Result<Option<Session>>,
     load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
     loaders: &RouteLoaders,
+    tail_window_limit: Option<usize>,
 ) -> Result<Option<ConversationResponse>> {
     let Some(session) = load_session(session_id)? else {
         return Ok(None);
@@ -375,15 +411,36 @@ fn load_conversation_with_queued_prompts(
             todos: &todos,
         },
     };
-    let (mut conversation, resolved_queued_prompt_ids) = parse_session_transcript_incrementally(
-        session_id,
-        transcript_input,
-        cache_key.transcript_fingerprint.clone(),
-        &loaders.message_cache,
-    )?;
+    let pending_task_ids = session
+        .pending_bg_task_ids
+        .union(&session.pending_agent_task_ids)
+        .cloned()
+        .collect::<Vec<_>>();
+    let tail_window_result = match tail_window_limit {
+        Some(limit) => {
+            parse_session_transcript_tail_window(&transcript_input, limit, &pending_task_ids)?
+        }
+        None => None,
+    };
+    let used_tail_window = tail_window_result.is_some();
+    let (mut conversation, resolved_queued_prompt_ids) = match tail_window_result {
+        Some(result) => result,
+        None => parse_session_transcript_incrementally(
+            session_id,
+            transcript_input,
+            cache_key.transcript_fingerprint.clone(),
+            &loaders.message_cache,
+        )?,
+    };
     cache::refresh_image_availability(&mut conversation);
     resolve_peer_session_titles(&mut conversation.messages, &mut load_session)?;
-    merge_stored_files(session_id, &agent_files, &mut conversation.messages);
+    let tail_window_start = conversation.tail_window_start;
+    let recent_agent_files = agent_files
+        .iter()
+        .filter(|file| tail_window_start.is_none_or(|cutoff| file.created_at >= cutoff))
+        .cloned()
+        .collect::<Vec<_>>();
+    merge_stored_files(session_id, &recent_agent_files, &mut conversation.messages);
 
     attach_question_request_if_present(
         &mut conversation.messages,
@@ -437,7 +494,10 @@ fn load_conversation_with_queued_prompts(
         });
     }
 
-    for proposal in &proposal_items {
+    for proposal in proposal_items
+        .iter()
+        .filter(|proposal| tail_window_start.is_none_or(|cutoff| proposal.created_at >= cutoff))
+    {
         if !messages
             .iter()
             .any(|message| matches!(message, ChatItem::Proposal { seq: existing, .. } if existing == &proposal.seq))
@@ -446,7 +506,10 @@ fn load_conversation_with_queued_prompts(
         }
     }
 
-    for operation in permission_denials {
+    for operation in permission_denials
+        .into_iter()
+        .filter(|operation| tail_window_start.is_none_or(|cutoff| operation.created_at >= cutoff))
+    {
         if !messages.iter().any(|message| {
             matches!(message, ChatItem::PermissionDenied { seq, .. } if *seq == operation.seq)
         }) {
@@ -537,14 +600,22 @@ fn load_conversation_with_queued_prompts(
     }
 
     conversation.update_metadata();
+    if used_tail_window {
+        conversation.decisions = decisions.iter().cloned().map(ChatItem::from).collect();
+        conversation.has_unanswered_proposal = proposals
+            .iter()
+            .any(|proposal| proposal.answer.is_none() && proposal.resolved_at.is_none());
+    }
 
     cache::mark_resolved_queued_prompts(loaders, session_id, &resolved_queued_prompt_ids);
-    loaders.message_cache.insert(
-        session_id,
-        cache_key,
-        conversation.clone(),
-        resolved_queued_prompt_ids,
-    );
+    if !used_tail_window {
+        loaders.message_cache.insert(
+            session_id,
+            cache_key,
+            conversation.clone(),
+            resolved_queued_prompt_ids,
+        );
+    }
     Ok(Some(conversation))
 }
 
@@ -908,6 +979,8 @@ struct ConversationResponse {
     stable_end: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stable_digest: Option<String>,
+    #[serde(skip)]
+    tail_window_start: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

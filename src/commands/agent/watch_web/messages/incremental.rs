@@ -12,6 +12,10 @@ use super::{
     subagent_reports,
 };
 
+mod tail_window;
+
+pub(super) use tail_window::parse_session_transcript_tail_window;
+
 pub(super) fn parse_session_transcript(
     input: TranscriptInput<'_>,
 ) -> Result<(ConversationResponse, Vec<i64>)> {

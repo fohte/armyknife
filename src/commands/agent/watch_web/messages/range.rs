@@ -17,6 +17,10 @@ pub(super) struct MessageRange {
 }
 
 impl MessageRange {
+    pub(super) fn initial_tail_window_limit(&self) -> Option<usize> {
+        (self.limit == Some(100) && self.before.is_none() && self.from.is_none()).then_some(100)
+    }
+
     pub(super) fn is_valid(&self) -> bool {
         matches!(
             (
@@ -109,4 +113,23 @@ impl ConversationResponse {
 fn message_digest(messages: &[ChatItem]) -> Option<String> {
     let encoded = serde_json::to_vec(messages).ok()?;
     Some(crate::shared::hex::encode(&Sha256::digest(encoded)))
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::MessageRange;
+
+    #[rstest]
+    #[case::initial_page(MessageRange { limit: Some(100), ..MessageRange::default() }, Some(100))]
+    #[case::older_page(MessageRange { limit: Some(100), before: Some(200), ..MessageRange::default() }, None)]
+    #[case::stable_refresh(MessageRange { from: Some(0), ..MessageRange::default() }, None)]
+    #[case::other_limit(MessageRange { limit: Some(50), ..MessageRange::default() }, None)]
+    fn only_the_initial_hundred_message_page_uses_a_tail_window(
+        #[case] range: MessageRange,
+        #[case] expected: Option<usize>,
+    ) {
+        assert_eq!(range.initial_tail_window_limit(), expected);
+    }
 }
