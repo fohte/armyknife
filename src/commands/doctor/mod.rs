@@ -207,7 +207,7 @@ mod tests {
         &[
             ExternalTool::Git, ExternalTool::Gh, ExternalTool::Tmux,
             ExternalTool::Nvim, ExternalTool::Wezterm, ExternalTool::Delta,
-            ExternalTool::Claude, ExternalTool::Codex, ExternalTool::Opencode, ExternalTool::Hammerspoon,
+            ExternalTool::Claude, ExternalTool::Opencode, ExternalTool::Hammerspoon,
             ExternalTool::Tq, ExternalTool::Lsof,
             ExternalTool::Crit, ExternalTool::Shpool, ExternalTool::TerminalBrowser,
             ExternalTool::Open, ExternalTool::XdgOpen,
@@ -222,7 +222,7 @@ mod tests {
         &[
             ExternalTool::Git, ExternalTool::Gh, ExternalTool::Tmux,
             ExternalTool::Nvim, ExternalTool::Ghostty, ExternalTool::Delta,
-            ExternalTool::Claude, ExternalTool::Codex, ExternalTool::Opencode, ExternalTool::Hammerspoon,
+            ExternalTool::Claude, ExternalTool::Opencode, ExternalTool::Hammerspoon,
             ExternalTool::Tq, ExternalTool::Lsof,
             ExternalTool::Crit, ExternalTool::Shpool, ExternalTool::TerminalBrowser,
             ExternalTool::Open, ExternalTool::XdgOpen,
@@ -237,7 +237,7 @@ mod tests {
         &[
             ExternalTool::Git, ExternalTool::Gh, ExternalTool::Tmux,
             ExternalTool::Wezterm, ExternalTool::Delta,
-            ExternalTool::Claude, ExternalTool::Codex, ExternalTool::Opencode, ExternalTool::Hammerspoon,
+            ExternalTool::Claude, ExternalTool::Opencode, ExternalTool::Hammerspoon,
             ExternalTool::Tq, ExternalTool::Lsof,
             ExternalTool::Crit, ExternalTool::Shpool, ExternalTool::TerminalBrowser,
             ExternalTool::Open, ExternalTool::XdgOpen,
@@ -252,7 +252,7 @@ mod tests {
         &[
             ExternalTool::Git, ExternalTool::Gh, ExternalTool::Tmux,
             ExternalTool::Nvim, ExternalTool::Wezterm, ExternalTool::Delta,
-            ExternalTool::Claude, ExternalTool::Codex, ExternalTool::Opencode,
+            ExternalTool::Claude, ExternalTool::Opencode,
             ExternalTool::Tq, ExternalTool::Lsof,
             ExternalTool::Crit, ExternalTool::Shpool, ExternalTool::TerminalBrowser,
             ExternalTool::Open, ExternalTool::XdgOpen,

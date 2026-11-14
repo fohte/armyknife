@@ -1298,7 +1298,7 @@ armyknife writes JSONL diagnostic logs to `~/.cache/armyknife/logs/armyknife.log
 
 ### `a doctor`
 
-Check availability and versions of external tools armyknife depends on (`git`, `gh`, `tmux`, `nvim`, `wezterm`, `ghostty`, `delta`, `claude`, `codex`, `opencode`, `lsof`, and Hammerspoon on macOS). Missing tools include an install hint. Exits with status 0 regardless of findings — it is informational, not a gate.
+Check availability and versions of external tools armyknife depends on (`git`, `gh`, `tmux`, `nvim`, `wezterm`, `ghostty`, `delta`, `claude`, `opencode`, `lsof`, and Hammerspoon on macOS). Missing tools include an install hint. Exits with status 0 regardless of findings — it is informational, not a gate.
 
 ```sh
 a doctor
