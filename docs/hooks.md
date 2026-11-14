@@ -8,15 +8,15 @@ A synchronous hook fails the calling command if it exits with a non-zero status,
 
 ## `web-ui-expose` and `web-ui-unexpose`
 
-`web-ui-expose` runs after `a agent web-ui add` or `a agent crit add` records an interface. It receives the local URL and port and may print an external URL to stdout. armyknife stores that URL for remote watch-web clients. Missing hooks, hook failures, and empty output leave the interface without an external URL; registration still succeeds.
+When watch-web starts, it opens a separate loopback relay for each registered web interface and calls `web-ui-expose` with that relay URL and port. The URL keeps the registered interface's path and query. The relay forwards HTTP requests, streaming responses, and WebSocket connections to the registered local port. The hook may print an external URL to stdout; watch-web stores that URL for remote clients. A missing hook, hook failure, or empty output leaves the interface without an external URL, while the local relay remains available.
 
-`web-ui-unexpose` runs when a registration is replaced or its session ends. It receives the same URL and port plus the saved external URL, if any. Failures are logged and do not interrupt session cleanup.
+When a registration disappears or watch-web shuts down, watch-web calls `web-ui-unexpose` with the relay URL and port plus the URL returned by `web-ui-expose`, if any, then closes the relay. Failures are logged and do not interrupt cleanup. Adding or removing a registration only updates the session record; hook execution follows when watch-web observes that change.
 
-| Variable                       | Description                                       |
-| ------------------------------ | ------------------------------------------------- |
-| `ARMYKNIFE_WEB_UI_URL`         | Registered interface URL on the local machine     |
-| `ARMYKNIFE_WEB_UI_PORT`        | Port from the registered URL                      |
-| `ARMYKNIFE_WEB_UI_EXPOSED_URL` | URL returned by `web-ui-expose`; set for unexpose |
+| Variable                       | Description                                        |
+| ------------------------------ | -------------------------------------------------- |
+| `ARMYKNIFE_WEB_UI_URL`         | Loopback relay URL, with the registered path/query |
+| `ARMYKNIFE_WEB_UI_PORT`        | Port assigned to that relay                        |
+| `ARMYKNIFE_WEB_UI_EXPOSED_URL` | URL returned by `web-ui-expose`; set for unexpose  |
 
 Example `web-ui-expose` hook:
 
@@ -25,7 +25,7 @@ Example `web-ui-expose` hook:
 printf 'https://review.example.invalid/%s\n' "$ARMYKNIFE_WEB_UI_PORT"
 ```
 
-The hook decides how to expose or remove an interface. armyknife does not manage a network tunnel.
+The hook decides how to expose or remove an interface. Each registration has its own relay port, so separate interfaces do not share browser cookies or routing state.
 
 ## `post-worktree-create`
 

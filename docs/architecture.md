@@ -73,7 +73,7 @@ The request middleware accepts loopback addresses and exact DNS hostnames listed
 
 `GET /api/sessions/{id}/pull-requests` uses the same progress fetcher as the TUI. It lists PRs from sessions linked to the selected primary tq task and that task's implementation checklist, or from direct delegates when no task is selected. Open PRs come first, with each PR's state, CI state, diff-review mark, and GitHub link.
 
-The HTTP server stays bound to the loopback listener. Remote access is configured outside armyknife; registered web interfaces can provide their own external URL through the `web-ui-expose` hook.
+The watch-web server stays bound to the loopback listener. Each registered web interface gets its own loopback relay, and the `web-ui-expose` hook can publish that relay for remote access. watch-web reconciles relay and hook lifetimes with session registrations.
 
 ## Internal Subcommands
 
