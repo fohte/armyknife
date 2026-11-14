@@ -1,17 +1,16 @@
-use std::io::{self, BufRead, Seek, SeekFrom};
+use std::io::{self, BufRead, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Utc};
-use serde_json::Value;
-
 use super::super::super::parser::jsonl::JsonlLineBuffer;
-use super::super::record_timestamp;
 use super::state::{ClaudeParserState, is_attachment_record, record_parent_uuid};
 use super::transcript_branch::{BranchMembership, TranscriptNode, mark_active_branch};
 use super::user_input::is_tool_result_only_user_record;
 use super::{ParsedTranscript, ParserAdditions};
+use chrono::{DateTime, Utc};
+use serde_json::Value;
 
 mod tail_window;
+mod window;
 
 #[derive(Clone)]
 pub(in crate::commands::agent::watch_web::messages) struct IncrementalClaudeParser {
@@ -112,216 +111,12 @@ impl IncrementalClaudeParser {
     }
 
     pub(in crate::commands::agent::watch_web::messages) fn new_tail_window(
-        mut reader: impl BufRead + Seek,
+        reader: impl BufRead + Seek,
         image_directory: Option<&Path>,
         message_limit: usize,
         pending_task_ids: &[String],
     ) -> io::Result<Option<Self>> {
-        const INITIAL_WINDOW_BYTES: u64 = 4 * 1024 * 1024;
-        const MAX_WINDOW_BYTES: u64 = 64 * 1024 * 1024;
-        const MAX_PREFIX_SEARCH_BYTES: u64 = 256 * 1024 * 1024;
-        const MAX_ANCESTRY_SEARCHES: usize = 4096;
-
-        let file_length = reader.seek(SeekFrom::End(0))?;
-        let mut window_length = INITIAL_WINDOW_BYTES.min(file_length);
-        let window_start = loop {
-            let start = file_length.saturating_sub(window_length);
-            reader.seek(SeekFrom::Start(start))?;
-            let window_size = usize::try_from(window_length)
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
-            let mut bytes = vec![0; window_size];
-            reader.read_exact(&mut bytes)?;
-            let aligned_start = if start == 0 {
-                0
-            } else {
-                bytes
-                    .iter()
-                    .position(|byte| *byte == b'\n')
-                    .map_or(bytes.len(), |index| index + 1)
-            };
-            let mut row_offset = 0;
-            let rows = bytes[aligned_start..]
-                .split(|byte| *byte == b'\n')
-                .filter_map(|line| {
-                    let offset = row_offset;
-                    row_offset += line.len() + 1;
-                    let record = serde_json::from_slice::<tail_window::GraphRecord>(line).ok()?;
-                    let is_human_input = record.record_type.as_deref() == Some("user")
-                        && record.origin_kind() != Some("task-notification")
-                        && !serde_json::from_slice::<Value>(line)
-                            .ok()
-                            .is_some_and(|record| is_tool_result_only_user_record(&record));
-                    Some((offset, record, is_human_input))
-                })
-                .collect::<Vec<_>>();
-            let user_inputs = rows.iter().filter(|(_, _, is_user)| *is_user).count();
-            if message_limit > 0 && user_inputs >= message_limit {
-                let selected_index = rows
-                    .iter()
-                    .enumerate()
-                    .rev()
-                    .filter(|(_, (_, _, is_user))| *is_user)
-                    .nth(message_limit - 1)
-                    .map(|(index, _)| index)
-                    .ok_or_else(|| {
-                        io::Error::new(io::ErrorKind::InvalidData, "tail window start was lost")
-                    })?;
-                let selected_offset = rows[selected_index].0;
-                break start + aligned_start as u64 + selected_offset as u64;
-            }
-            if start == 0 {
-                break 0;
-            }
-            if window_length == MAX_WINDOW_BYTES {
-                return Ok(None);
-            }
-            window_length = (window_length.saturating_mul(2)).min(MAX_WINDOW_BYTES);
-        };
-        if window_start == 0 {
-            return Ok(None);
-        }
-
-        let mut window_bytes = vec![
-            0;
-            usize::try_from(file_length - window_start).map_err(
-                |error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()),
-            )?
-        ];
-        reader.seek(SeekFrom::Start(window_start))?;
-        reader.read_exact(&mut window_bytes)?;
-        let selected_records = window_bytes
-            .split(|byte| *byte == b'\n')
-            .filter_map(parse_record)
-            .collect::<Vec<_>>();
-
-        let mut graph_records = selected_records
-            .iter()
-            .filter_map(|record| {
-                let uuid = record.get("uuid").and_then(Value::as_str)?;
-                Some((uuid.to_owned(), record_parent_uuid(record)))
-            })
-            .collect::<std::collections::BTreeMap<_, _>>();
-        let mut unresolved = graph_records
-            .values()
-            .filter_map(Clone::clone)
-            .filter(|uuid| !graph_records.contains_key(uuid))
-            .collect::<std::collections::BTreeSet<_>>();
-        let missing_task_ids = pending_task_ids
-            .iter()
-            .filter(|task_id| {
-                !selected_records
-                    .iter()
-                    .any(|record| tail_window::record_has_task_id(record, task_id))
-            })
-            .collect::<Vec<_>>();
-        let needs_skill_baseline = !selected_records
-            .iter()
-            .any(tail_window::resets_skill_listing_state);
-        if window_start > MAX_PREFIX_SEARCH_BYTES
-            && (!unresolved.is_empty()
-                || !missing_task_ids.is_empty()
-                || (needs_skill_baseline && window_start > 0))
-        {
-            return Ok(None);
-        }
-        if missing_task_ids.len() > MAX_ANCESTRY_SEARCHES {
-            return Ok(None);
-        }
-        let mut searches = 0;
-        if !unresolved.is_empty()
-            && !tail_window::resolve_ancestry_from_prefix(
-                &mut reader,
-                window_start,
-                &mut unresolved,
-                &mut graph_records,
-                MAX_ANCESTRY_SEARCHES,
-                &mut searches,
-            )?
-        {
-            return Ok(None);
-        }
-
-        let mut helper_records = Vec::new();
-        if needs_skill_baseline {
-            let (skill_listings, complete) =
-                tail_window::find_skill_listing_prefix_state(&mut reader, window_start)?;
-            if !complete {
-                return Ok(None);
-            }
-            helper_records.extend(
-                skill_listings
-                    .into_iter()
-                    .map(|record| (record_timestamp(&record), record)),
-            );
-        }
-        for task_id in missing_task_ids {
-            let (result, complete) =
-                tail_window::find_background_task_start(&mut reader, window_start, task_id)?;
-            if !complete {
-                return Ok(None);
-            }
-            if let Some(result) = result {
-                if let Some(uuid) = result.get("uuid").and_then(Value::as_str) {
-                    graph_records.insert(uuid.to_owned(), record_parent_uuid(&result));
-                }
-                if let Some(parent_uuid) = record_parent_uuid(&result) {
-                    let (tool_use, complete) =
-                        tail_window::find_record_by_uuid(&mut reader, window_start, &parent_uuid)?;
-                    if !complete {
-                        return Ok(None);
-                    }
-                    if let Some(tool_use) = tool_use {
-                        if let Some(uuid) = tool_use.get("uuid").and_then(Value::as_str) {
-                            graph_records.insert(uuid.to_owned(), record_parent_uuid(&tool_use));
-                        }
-                        helper_records.push((record_timestamp(&tool_use), tool_use));
-                    }
-                }
-                helper_records.push((record_timestamp(&result), result));
-            }
-        }
-        helper_records.sort_by_key(|(timestamp, _)| *timestamp);
-
-        let mut selected_bytes = Vec::new();
-        for (uuid, parent_uuid) in graph_records.iter().filter(|(uuid, _)| {
-            !selected_records
-                .iter()
-                .any(|record| record.get("uuid").and_then(Value::as_str) == Some(uuid.as_str()))
-        }) {
-            let mut record = serde_json::Map::new();
-            record.insert("uuid".to_owned(), Value::String(uuid.clone()));
-            if let Some(parent_uuid) = parent_uuid {
-                record.insert("parentUuid".to_owned(), Value::String(parent_uuid.clone()));
-            } else {
-                record.insert("parentUuid".to_owned(), Value::Null);
-            }
-            let projected = serde_json::to_string(&record)
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
-            selected_bytes.extend_from_slice(projected.as_bytes());
-            selected_bytes.push(b'\n');
-        }
-        for (_, record) in helper_records {
-            let encoded = serde_json::to_string(&record)
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
-            selected_bytes.extend_from_slice(encoded.as_bytes());
-            selected_bytes.push(b'\n');
-        }
-        selected_bytes.extend_from_slice(&window_bytes);
-
-        let tail_window_start = selected_records
-            .iter()
-            .find(|record| tail_window::is_human_input_record(record))
-            .and_then(super::super::record_timestamp);
-        let mut parser = Self::new(std::io::Cursor::new(selected_bytes), image_directory)?;
-        parser.tail_window_start = tail_window_start;
-        parser.tail_window_start_offset = Some(window_start);
-        if let Some(cutoff) = tail_window_start {
-            parser
-                .state
-                .events
-                .retain(|event| event.timestamp.is_none_or(|timestamp| timestamp >= cutoff));
-        }
-        Ok(Some(parser))
+        window::new_tail_window(reader, image_directory, message_limit, pending_task_ids)
     }
 
     pub(in crate::commands::agent::watch_web::messages) fn tail_window_start(
@@ -334,6 +129,28 @@ impl IncrementalClaudeParser {
         &self,
     ) -> Option<u64> {
         self.tail_window_start_offset
+    }
+
+    pub(in crate::commands::agent::watch_web::messages) fn resolve_queued_prompt_ids_before_window(
+        &self,
+        reader: &mut (impl Read + Seek),
+        prefix_length: u64,
+        queued_prompts: &[crate::commands::agent::store::WatchWebQueuedPrompt],
+        user_marker: Option<&str>,
+    ) -> io::Result<Option<Vec<i64>>> {
+        const MAX_PREFIX_SEARCH_BYTES: u64 = 256 * 1024 * 1024;
+
+        if prefix_length > MAX_PREFIX_SEARCH_BYTES {
+            return Ok(None);
+        }
+        let (resolved_ids, complete) = tail_window::find_queued_prompt_deliveries(
+            reader,
+            prefix_length,
+            queued_prompts,
+            user_marker,
+            &self.state.transcript_nodes,
+        )?;
+        Ok(complete.then_some(resolved_ids))
     }
 
     pub(in crate::commands::agent::watch_web::messages) fn append_bytes(

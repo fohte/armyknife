@@ -36,9 +36,7 @@ pub(in crate::commands::agent::watch_web) mod queued_prompt;
 mod range;
 mod subagent_reports;
 
-use self::incremental::{
-    parse_session_transcript_incrementally, parse_session_transcript_tail_window,
-};
+use self::incremental::{filter_after_tail_window, parse_initial_or_full};
 use self::proposals::proposal_chat_item;
 #[cfg(test)]
 use self::questions::QuestionChoice;
@@ -416,30 +414,19 @@ fn load_conversation_with_tail_window(
         .union(&session.pending_agent_task_ids)
         .cloned()
         .collect::<Vec<_>>();
-    let tail_window_result = match tail_window_limit {
-        Some(limit) => {
-            parse_session_transcript_tail_window(&transcript_input, limit, &pending_task_ids)?
-        }
-        None => None,
-    };
-    let used_tail_window = tail_window_result.is_some();
-    let (mut conversation, resolved_queued_prompt_ids) = match tail_window_result {
-        Some(result) => result,
-        None => parse_session_transcript_incrementally(
-            session_id,
-            transcript_input,
-            cache_key.transcript_fingerprint.clone(),
-            &loaders.message_cache,
-        )?,
-    };
+    let (mut conversation, resolved_queued_prompt_ids, used_tail_window) = parse_initial_or_full(
+        session_id,
+        transcript_input,
+        tail_window_limit,
+        &pending_task_ids,
+        cache_key.transcript_fingerprint.clone(),
+        &loaders.message_cache,
+    )?;
     cache::refresh_image_availability(&mut conversation);
     resolve_peer_session_titles(&mut conversation.messages, &mut load_session)?;
     let tail_window_start = conversation.tail_window_start;
-    let recent_agent_files = agent_files
-        .iter()
-        .filter(|file| tail_window_start.is_none_or(|cutoff| file.created_at >= cutoff))
-        .cloned()
-        .collect::<Vec<_>>();
+    let recent_agent_files =
+        filter_after_tail_window(&agent_files, tail_window_start, |file| file.created_at);
     merge_stored_files(session_id, &recent_agent_files, &mut conversation.messages);
 
     attach_question_request_if_present(
@@ -494,10 +481,11 @@ fn load_conversation_with_tail_window(
         });
     }
 
-    for proposal in proposal_items
-        .iter()
-        .filter(|proposal| tail_window_start.is_none_or(|cutoff| proposal.created_at >= cutoff))
-    {
+    let recent_proposal_items =
+        filter_after_tail_window(&proposal_items, tail_window_start, |proposal| {
+            proposal.created_at
+        });
+    for proposal in &recent_proposal_items {
         if !messages
             .iter()
             .any(|message| matches!(message, ChatItem::Proposal { seq: existing, .. } if existing == &proposal.seq))
@@ -506,10 +494,11 @@ fn load_conversation_with_tail_window(
         }
     }
 
-    for operation in permission_denials
-        .into_iter()
-        .filter(|operation| tail_window_start.is_none_or(|cutoff| operation.created_at >= cutoff))
-    {
+    let recent_permission_denials =
+        filter_after_tail_window(&permission_denials, tail_window_start, |operation| {
+            operation.created_at
+        });
+    for operation in recent_permission_denials {
         if !messages.iter().any(|message| {
             matches!(message, ChatItem::PermissionDenied { seq, .. } if *seq == operation.seq)
         }) {
@@ -3741,6 +3730,142 @@ mod tests {
                 ),
                 vec![7],
             ),
+        );
+    }
+
+    #[rstest]
+    #[case::active_delivery(true, 0, 101)]
+    #[case::abandoned_delivery(false, 0, 101)]
+    #[case::rewound_history(false, 100, 1)]
+    #[tokio::test]
+    async fn initial_tail_window_matches_full_parse_for_queued_prompt_branches(
+        #[case] delivery_is_active: bool,
+        #[case] abandoned_input_count: usize,
+        #[case] active_input_count: usize,
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        let delivery_content = indoc::indoc! {r#"
+            ⟦armyknife-user:fixture-marker-cobalt⟧
+            This message was typed by the human user in armyknife watch-web.
+            Delivered fixture request.
+            <!-- armyknife-queued-prompt-id:fixture-message-7 -->
+        "#};
+        let mut records = vec![
+            json!({
+                "type": "system",
+                "padding": "x".repeat(5 * 1024 * 1024),
+            }),
+            json!({
+                "type": "user",
+                "uuid": "fixture-root",
+                "parentUuid": null,
+                "timestamp": "2026-01-01T00:00:01Z",
+                "message": {"content": "Fixture branch root."},
+            }),
+            json!({
+                "type": "user",
+                "uuid": "fixture-delivery",
+                "parentUuid": "fixture-root",
+                "timestamp": "2026-01-01T00:00:01Z",
+                "origin": {"kind": "peer", "from": "fixture-peer"},
+                "message": {"content": delivery_content},
+            }),
+        ];
+        let mut parent_uuid = "fixture-delivery".to_owned();
+        for index in 0..abandoned_input_count {
+            let uuid = format!("fixture-abandoned-request-{index}");
+            records.push(json!({
+                "type": "user",
+                "uuid": uuid,
+                "parentUuid": parent_uuid,
+                "timestamp": "2026-01-01T00:00:01Z",
+                "message": {"content": format!("Abandoned fixture request {index}.")},
+            }));
+            parent_uuid = uuid;
+        }
+        if !delivery_is_active {
+            records.push(json!({
+                "type": "assistant",
+                "uuid": "fixture-current-branch",
+                "parentUuid": "fixture-root",
+                "timestamp": "2026-01-01T00:00:01Z",
+                "message": {"content": [{"type": "text", "text": "Current fixture branch."}]},
+            }));
+            parent_uuid = "fixture-current-branch".to_owned();
+        }
+        for index in 0..active_input_count {
+            let uuid = format!("fixture-request-{index}");
+            records.push(json!({
+                "type": "user",
+                "uuid": uuid,
+                "parentUuid": parent_uuid,
+                "timestamp": "2026-01-01T00:00:01Z",
+                "message": {"content": format!("Fixture request {index}.")},
+            }));
+            parent_uuid = uuid;
+        }
+        let transcript = records
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&transcript_path, transcript).unwrap();
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path);
+        let queued = saved_prompt(7, "Delivered fixture request.");
+        let full_marked_ids = Arc::new(Mutex::new(Vec::new()));
+        let tail_marked_ids = Arc::new(Mutex::new(Vec::new()));
+        let make_router = |marked_ids: Arc<Mutex<Vec<i64>>>| {
+            let session = session.clone();
+            let queued = queued.clone();
+            routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+                move |_| Ok(Some(session.clone())),
+                |_| Ok(Some("⟦armyknife-user:fixture-marker-cobalt⟧".to_string())),
+                |_| Ok(Vec::new()),
+                move |_| Ok(vec![queued.clone()]),
+                |_| Ok(Vec::new()),
+                move |_, ids| {
+                    marked_ids.lock().unwrap().extend_from_slice(ids);
+                    Ok(())
+                },
+            )
+        };
+        let full_response = make_router(Arc::clone(&full_marked_ids))
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let full_messages = response_json_snapshot(full_response).await.2["messages"]
+            .as_array()
+            .unwrap()
+            .clone();
+        let tail_response = make_router(Arc::clone(&tail_marked_ids))
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages?limit=100")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let tail_messages = response_json_snapshot(tail_response).await.2["messages"]
+            .as_array()
+            .unwrap()
+            .clone();
+        let expected_messages = full_messages
+            .iter()
+            .skip(full_messages.len().saturating_sub(100))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            (tail_messages, tail_marked_ids.lock().unwrap().clone(),),
+            (expected_messages, full_marked_ids.lock().unwrap().clone(),),
         );
     }
 

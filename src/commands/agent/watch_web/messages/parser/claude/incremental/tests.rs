@@ -388,7 +388,7 @@ fn tail_window_matches_the_full_parse_when_an_attachment_follows_tool_results() 
 }
 
 #[test]
-fn tail_window_restores_older_pending_tasks_and_skill_listings() {
+fn tail_window_restores_an_older_pending_task_start() {
     let prefix = indoc! {r#"
         {"type":"assistant","uuid":"fixture-task-call","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"fixture-task-use","name":"Bash","input":{"command":"fixture background task","run_in_background":true}}]}}
         {"type":"user","uuid":"fixture-task-started","parentUuid":"fixture-task-call","timestamp":"2026-01-01T00:00:02Z","toolUseResult":{"task_id":"fixture-task-id"},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-task-use","content":"Background task started (id: fixture-task-id)"}]}}
@@ -398,7 +398,6 @@ fn tail_window_restores_older_pending_tasks_and_skill_listings() {
         "x".repeat(70 * 1024),
     );
     let suffix = indoc! {r#"
-        {"type":"attachment","attachment":{"type":"skill_listing","content":"- fixture-skill: Retained skill description."}}
         {"type":"user","uuid":"fixture-first-request","parentUuid":"fixture-task-started","timestamp":"2026-01-01T00:00:03Z","message":{"content":"First request."}}
         {"type":"user","uuid":"fixture-latest-request","parentUuid":"fixture-first-request","timestamp":"2026-01-01T00:00:04Z","message":{"content":"Latest request."}}
     "#};

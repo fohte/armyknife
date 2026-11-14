@@ -1,12 +1,46 @@
-use std::io::{Read, Seek, SeekFrom};
-
 use anyhow::Result;
-use memchr::memmem;
 
-use super::super::cache::IncrementalTranscriptParser;
+use super::super::cache::{IncrementalTranscriptParser, MessageCache, TranscriptFingerprint};
 use super::super::parser;
 use super::super::{ConversationResponse, Engine, TranscriptInput, open_seekable_transcript};
 use super::render_parser;
+
+pub(in crate::commands::agent::watch_web::messages) fn parse_initial_or_full<'a>(
+    session_id: &str,
+    input: TranscriptInput<'a>,
+    tail_window_limit: Option<usize>,
+    pending_task_ids: &[String],
+    fingerprint: Option<TranscriptFingerprint>,
+    cache: &MessageCache,
+) -> Result<(ConversationResponse, Vec<i64>, bool)> {
+    let tail_result = match tail_window_limit {
+        Some(limit) => parse_session_transcript_tail_window(&input, limit, pending_task_ids)?,
+        None => None,
+    };
+    match tail_result {
+        Some((conversation, resolved_ids)) => Ok((conversation, resolved_ids, true)),
+        None => {
+            super::parse_session_transcript_incrementally(session_id, input, fingerprint, cache)
+                .map(|(conversation, resolved_ids)| (conversation, resolved_ids, false))
+        }
+    }
+}
+
+pub(in crate::commands::agent::watch_web::messages) fn filter_after_tail_window<T: Clone>(
+    records: &[T],
+    cutoff: Option<chrono::DateTime<chrono::Utc>>,
+    created_at: impl Fn(&T) -> chrono::DateTime<chrono::Utc>,
+) -> Vec<T> {
+    records
+        .iter()
+        .filter(|record| {
+            cutoff
+                .as_ref()
+                .is_none_or(|cutoff| created_at(record) >= *cutoff)
+        })
+        .cloned()
+        .collect()
+}
 
 pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript_tail_window(
     input: &TranscriptInput<'_>,
@@ -46,6 +80,8 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript_
         parser.tail_window_start_offset().unwrap_or_default(),
         input.additions.queued_prompts,
         cutoff,
+        input.additions.user_marker,
+        &parser,
     )?
     else {
         return Ok(None);
@@ -97,6 +133,10 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript_
         &IncrementalTranscriptParser::Claude(Box::new(parser)),
         &tail_input,
     )?;
+    // Branch filtering can leave older visible messages outside the selected suffix.
+    if conversation.messages.len() < message_limit {
+        return Ok(None);
+    }
     resolved_ids.extend(prior_resolved_ids);
     resolved_ids.sort_unstable();
     resolved_ids.dedup();
@@ -109,41 +149,37 @@ fn resolve_queued_prompts_before_window(
     window_start: u64,
     queued_prompts: &[crate::commands::agent::store::WatchWebQueuedPrompt],
     cutoff: chrono::DateTime<chrono::Utc>,
+    user_marker: Option<&str>,
+    parser: &parser::claude::IncrementalClaudeParser,
 ) -> Result<
     Option<(
         Vec<crate::commands::agent::store::WatchWebQueuedPrompt>,
         Vec<i64>,
     )>,
 > {
-    const MAX_PREFIX_SEARCH_BYTES: u64 = 256 * 1024 * 1024;
-    const MAX_MARKER_SEARCHES: usize = 4096;
-
     let Some(path) = path else {
         return Ok(Some((queued_prompts.to_vec(), Vec::new())));
     };
-    if window_start > MAX_PREFIX_SEARCH_BYTES {
-        return Ok(None);
-    }
     let unresolved_prompts = queued_prompts
         .iter()
         .filter(|prompt| !prompt.resolved && prompt.sent_at < cutoff)
+        .cloned()
         .collect::<Vec<_>>();
-    if unresolved_prompts.len() > MAX_MARKER_SEARCHES {
-        return Ok(None);
+    if unresolved_prompts.is_empty() {
+        return Ok(Some((queued_prompts.to_vec(), Vec::new())));
     }
     let Some(mut reader) = open_seekable_transcript(path)? else {
         return Ok(Some((queued_prompts.to_vec(), Vec::new())));
     };
-    let mut prior_resolved_ids = Vec::new();
-    for prompt in unresolved_prompts {
-        let Some(message_id) = prompt.message_id.as_deref() else {
-            continue;
-        };
-        let marker = format!("<!-- armyknife-queued-prompt-id:{message_id} -->");
-        if prefix_contains(&mut reader, window_start, marker.as_bytes())? {
-            prior_resolved_ids.push(prompt.id);
-        }
-    }
+    let Some(prior_resolved_ids) = parser.resolve_queued_prompt_ids_before_window(
+        &mut reader,
+        window_start,
+        &unresolved_prompts,
+        user_marker,
+    )?
+    else {
+        return Ok(None);
+    };
     let resolved_set = prior_resolved_ids
         .iter()
         .copied()
@@ -154,32 +190,4 @@ fn resolve_queued_prompts_before_window(
         .cloned()
         .collect();
     Ok(Some((remaining_prompts, prior_resolved_ids)))
-}
-
-fn prefix_contains(
-    reader: &mut (impl Read + Seek),
-    prefix_length: u64,
-    needle: &[u8],
-) -> Result<bool> {
-    const CHUNK_BYTES: u64 = 64 * 1024;
-
-    if needle.is_empty() {
-        return Ok(true);
-    }
-    let mut offset = 0;
-    let mut overlap = Vec::new();
-    while offset < prefix_length {
-        let chunk_length = CHUNK_BYTES.min(prefix_length - offset);
-        let mut chunk = vec![0; usize::try_from(chunk_length)?];
-        reader.seek(SeekFrom::Start(offset))?;
-        reader.read_exact(&mut chunk)?;
-        overlap.extend_from_slice(&chunk);
-        if memmem::find(&overlap, needle).is_some() {
-            return Ok(true);
-        }
-        let keep = needle.len().saturating_sub(1).min(overlap.len());
-        overlap.drain(..overlap.len() - keep);
-        offset += chunk_length;
-    }
-    Ok(false)
 }

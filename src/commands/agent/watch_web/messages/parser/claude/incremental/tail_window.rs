@@ -1,19 +1,42 @@
+use std::collections::{BTreeMap, HashSet};
 use std::io::{self, Read, Seek, SeekFrom};
 
 use memchr::{memchr, memmem};
 use serde_json::Value;
 
+use super::super::super::queue::{Queue, QueueReplayEvent};
+use super::super::transcript_branch::{BranchMembership, TranscriptNode};
 use super::super::user_input::is_tool_result_only_user_record;
 use super::parse_record;
+use crate::commands::agent::store::WatchWebQueuedPrompt;
 
 pub(super) fn is_human_input_record(record: &Value) -> bool {
-    record.get("type").and_then(Value::as_str) == Some("user")
-        && !is_tool_result_only_user_record(record)
-        && record
+    is_human_input(
+        record.get("type").and_then(Value::as_str),
+        record
             .get("origin")
             .and_then(|origin| origin.get("kind"))
-            .and_then(Value::as_str)
-            != Some("task-notification")
+            .and_then(Value::as_str),
+        is_tool_result_only_user_record(record),
+    )
+}
+
+pub(super) fn is_human_input_line(record: &GraphRecord, line: &[u8]) -> bool {
+    let is_tool_result_only = record.record_type.as_deref() == Some("user")
+        && parse_record(line).is_some_and(|value| is_tool_result_only_user_record(&value));
+    is_human_input(
+        record.record_type.as_deref(),
+        record.origin_kind(),
+        is_tool_result_only,
+    )
+}
+
+fn is_human_input(
+    record_type: Option<&str>,
+    origin_kind: Option<&str>,
+    is_tool_result_only: bool,
+) -> bool {
+    record_type == Some("user") && !is_tool_result_only && origin_kind != Some("task-notification")
 }
 
 pub(super) fn is_skill_listing_record(record: &Value) -> bool {
@@ -33,28 +56,36 @@ pub(super) fn resets_skill_listing_state(record: &Value) -> bool {
             != Some(false)
 }
 
-pub(super) fn find_record_by_uuid<R: Read + Seek>(
+pub(super) fn find_records_by_uuid<R: Read + Seek>(
     reader: &mut R,
     prefix_length: u64,
-    uuid: &str,
-) -> io::Result<(Option<Value>, bool)> {
-    let needle = serde_json::to_string(uuid)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
-    let mut matching_record = None;
+    uuids: &HashSet<String>,
+) -> io::Result<(BTreeMap<String, Value>, bool)> {
+    let mut unresolved = uuids.clone();
+    let mut matching_records = BTreeMap::new();
+    if unresolved.is_empty() {
+        return Ok((matching_records, true));
+    }
     let complete_scan = visit_prefix_lines_reverse(reader, prefix_length, |line| {
-        if memmem::find(line, needle.as_bytes()).is_none() {
+        if memmem::find(line, b"\"uuid\"").is_none() {
             return true;
         }
-        if let Some(record) = parse_record(line)
-            && record.get("uuid").and_then(Value::as_str) == Some(uuid)
-        {
-            matching_record = Some(record);
-            return false;
+        let Ok(graph_record) = serde_json::from_slice::<GraphRecord>(line) else {
+            return true;
+        };
+        let Some(uuid) = graph_record.uuid.as_deref() else {
+            return true;
+        };
+        if !unresolved.remove(uuid) {
+            return true;
         }
-        true
+        if let Some(record) = parse_record(line) {
+            matching_records.insert(uuid.to_owned(), record);
+        }
+        !unresolved.is_empty()
     })?;
-    let complete = complete_scan || matching_record.is_some();
-    Ok((matching_record, complete))
+    let complete = complete_scan || unresolved.is_empty();
+    Ok((matching_records, complete))
 }
 
 #[derive(serde::Deserialize)]
@@ -137,27 +168,102 @@ pub(super) fn resolve_ancestry_from_prefix(
     Ok(!exceeded_search_limit && (complete_scan || unresolved.is_empty()))
 }
 
-pub(super) fn find_background_task_start<R: Read + Seek>(
+pub(super) fn find_background_task_starts<R: Read + Seek>(
     reader: &mut R,
     prefix_length: u64,
-    task_id: &str,
-) -> io::Result<(Option<Value>, bool)> {
-    let mut matching_record = None;
+    task_ids: &[String],
+) -> io::Result<(BTreeMap<String, Value>, bool)> {
+    let mut unresolved = task_ids.iter().cloned().collect::<HashSet<_>>();
+    let mut matching_records = BTreeMap::new();
+    if unresolved.is_empty() {
+        return Ok((matching_records, true));
+    }
     let complete_scan = visit_prefix_lines_reverse(reader, prefix_length, |line| {
-        if memmem::find(line, task_id.as_bytes()).is_none() {
+        if memmem::find(line, b"toolUseResult").is_none() {
             return true;
         }
-        if let Some(record) = parse_record(line)
-            && record.get("type").and_then(Value::as_str) == Some("user")
-            && record_has_task_id(&record, task_id)
-        {
-            matching_record = Some(record);
+        let Some(record) = parse_record(line) else {
+            return true;
+        };
+        if record.get("type").and_then(Value::as_str) != Some("user") {
+            return true;
+        }
+        let Some(result) = record.get("toolUseResult").and_then(Value::as_object) else {
+            return true;
+        };
+        for key in [
+            "task_id",
+            "taskId",
+            "background_task_id",
+            "backgroundTaskId",
+            "shell_id",
+            "shellId",
+            "agentId",
+        ] {
+            let Some(task_id) = result.get(key).and_then(Value::as_str) else {
+                continue;
+            };
+            if unresolved.remove(task_id) {
+                matching_records.insert(task_id.to_owned(), record.clone());
+            }
+        }
+        !unresolved.is_empty()
+    })?;
+    let complete = complete_scan || unresolved.is_empty();
+    Ok((matching_records, complete))
+}
+
+pub(super) fn find_queued_prompt_deliveries<R: Read + Seek>(
+    reader: &mut R,
+    prefix_length: u64,
+    queued_prompts: &[WatchWebQueuedPrompt],
+    user_marker: Option<&str>,
+    transcript_nodes: &std::collections::BTreeMap<String, TranscriptNode>,
+) -> io::Result<(Vec<i64>, bool)> {
+    const MAX_MARKER_RECORDS: usize = 4096;
+
+    if !queued_prompts
+        .iter()
+        .any(|prompt| prompt.message_id.is_some())
+    {
+        return Ok((Vec::new(), true));
+    }
+
+    let mut queue = Queue::new(queued_prompts);
+    let mut marker_records = 0;
+    let mut exceeded_record_limit = false;
+    let complete_scan = visit_prefix_lines_reverse(reader, prefix_length, |line| {
+        if memmem::find(line, b"armyknife-queued-prompt-id:").is_none() {
+            return true;
+        }
+        marker_records += 1;
+        if marker_records > MAX_MARKER_RECORDS {
+            exceeded_record_limit = true;
             return false;
+        }
+        let Some(record) = parse_record(line) else {
+            return true;
+        };
+        let Some(event) = QueueReplayEvent::from_record(&record) else {
+            return true;
+        };
+        let on_active_branch = event.delivery_branch_uuid.as_deref().is_none_or(|uuid| {
+            transcript_nodes
+                .get(uuid)
+                .is_some_and(|node| node.membership == BranchMembership::Active)
+        });
+        if on_active_branch {
+            queue.observe_queued_prompt_delivery(&event, user_marker);
+            if queue.all_queued_prompt_ids_delivered() {
+                return false;
+            }
         }
         true
     })?;
-    let complete = complete_scan || matching_record.is_some();
-    Ok((matching_record, complete))
+    Ok((
+        queue.resolved_queued_prompt_ids(),
+        !exceeded_record_limit && (complete_scan || queue.all_queued_prompt_ids_delivered()),
+    ))
 }
 
 pub(super) fn find_skill_listing_prefix_state<R: Read + Seek>(
