@@ -800,6 +800,7 @@ mod tests {
                         text: "Review the synthetic change.".to_string(),
                         timestamp: None,
                         from: None,
+                        queued_prompt_id: None,
                     },
                     ChatItem::ToolSummary {
                         summary: "Agent ×1".to_string(),
@@ -848,6 +849,7 @@ mod tests {
                         text: "Review the synthetic change.".to_string(),
                         timestamp: None,
                         from: None,
+                        queued_prompt_id: None,
                     },
                     ChatItem::ToolSummary {
                         summary: "Agent ×1".to_string(),
