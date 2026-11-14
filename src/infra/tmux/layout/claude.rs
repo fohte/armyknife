@@ -15,7 +15,12 @@ const REGISTRY_POLL_TIMEOUT: Duration = Duration::from_secs(20);
 
 trait MessagingClient {
     fn wait_for_connection(&mut self, tmux_location: &str) -> anyhow::Result<PeerConnection>;
-    fn send_message(&mut self, connection: &PeerConnection, prompt: &str) -> anyhow::Result<()>;
+    fn send_message(
+        &mut self,
+        connection: &PeerConnection,
+        prompt: &str,
+        before_send: &dyn Fn() -> anyhow::Result<()>,
+    ) -> anyhow::Result<()>;
 }
 
 struct Client;
@@ -41,12 +46,22 @@ impl MessagingClient for Client {
         }
     }
 
-    fn send_message(&mut self, connection: &PeerConnection, prompt: &str) -> anyhow::Result<()> {
+    fn send_message(
+        &mut self,
+        connection: &PeerConnection,
+        prompt: &str,
+        before_send: &dyn Fn() -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
         let socket_path = connection
             .messaging_socket_path
             .as_deref()
             .context("Claude registry entry has no messaging socket path")?;
-        claude_messaging::send_message(socket_path, connection.pid, prompt)
+        claude_messaging::send_message_with_before_send(
+            socket_path,
+            connection.pid,
+            prompt,
+            before_send,
+        )
     }
 }
 
@@ -171,12 +186,31 @@ impl Launch {
                 let connection = client
                     .wait_for_connection(tmux_location)
                     .context("Failed to wait for Claude messaging connection")?;
-                if let Some(marker) = initial_prompt_marker {
-                    (marker.mark_pending)(&connection.session_id)?;
+                let before_send = || {
+                    if let Some(marker) = initial_prompt_marker
+                        && let Err(error) = (marker.mark_pending)(&connection.session_id)
+                    {
+                        tracing::warn!(
+                            event = "agent.new.initial_prompt_marker_write_failed",
+                            session_id = %connection.session_id,
+                            error = %error,
+                        );
+                    }
+                    Ok(())
+                };
+                if let Err(error) = client.send_message(&connection, &prompt, &before_send) {
+                    if let Some(marker) = initial_prompt_marker
+                        && let Err(clear_error) = (marker.clear_pending)(&connection.session_id)
+                    {
+                        tracing::warn!(
+                            event = "agent.new.initial_prompt_marker_cleanup_failed",
+                            session_id = %connection.session_id,
+                            error = %clear_error,
+                        );
+                    }
+                    return Err(error)
+                        .context("Failed to send initial prompt through Claude messaging");
                 }
-                client
-                    .send_message(&connection, &prompt)
-                    .context("Failed to send initial prompt through Claude messaging")?;
                 Ok(AgentLaunchRoute::ClaudeMessaging)
             }
         }
@@ -220,7 +254,9 @@ mod tests {
             &mut self,
             connection: &PeerConnection,
             prompt: &str,
+            before_send: &dyn Fn() -> anyhow::Result<()>,
         ) -> anyhow::Result<()> {
+            before_send()?;
             self.calls
                 .lock()
                 .unwrap()
@@ -341,6 +377,89 @@ mod tests {
                     Call::Mark("session-example".to_string()),
                     Call::Send(connection(), "prompt".to_string()),
                 ],
+            ),
+        );
+    }
+
+    #[test]
+    fn marker_write_failure_does_not_block_initial_prompt_delivery() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mark_pending = |_session_id: &str| Err(anyhow::anyhow!("database unavailable"));
+        let clear_pending = |_session_id: &str| Ok(());
+        let launch = Launch::prepare_with(Engine::Claude, Some("prompt"), 1, || {
+            Box::new(StubClient {
+                connection: Ok(connection()),
+                delivery: Some(Ok(())),
+                calls: calls.clone(),
+            })
+        })
+        .expect("messaging client should be created");
+
+        let route = launch.finish_and_recover_with(
+            RecoverySpec {
+                prompt_file: None,
+                pane_id: Some("%2"),
+                initial_prompt_marker: Some(super::super::InitialPromptMarker {
+                    mark_pending: &mark_pending,
+                    clear_pending: &clear_pending,
+                }),
+            },
+            |_| Some("example/repo:@1.%2".to_string()),
+        );
+
+        assert_eq!(
+            (
+                route.map_err(|error| error.to_string()),
+                calls.lock().unwrap().clone(),
+            ),
+            (
+                Ok(AgentLaunchRoute::ClaudeMessaging),
+                vec![
+                    Call::Wait("example/repo:@1.%2".to_string()),
+                    Call::Send(connection(), "prompt".to_string()),
+                ],
+            ),
+        );
+    }
+
+    #[test]
+    fn failed_initial_prompt_delivery_clears_the_pending_marker() {
+        let cleared_ids = Arc::new(Mutex::new(Vec::new()));
+        let clear_ids = cleared_ids.clone();
+        let mark_pending = |_session_id: &str| Ok(());
+        let clear_pending = move |session_id: &str| {
+            clear_ids.lock().unwrap().push(session_id.to_string());
+            Ok(())
+        };
+        let launch = Launch::prepare_with(Engine::Claude, Some("prompt"), 1, || {
+            Box::new(StubClient {
+                connection: Ok(connection()),
+                delivery: Some(Err(anyhow::anyhow!("socket unavailable"))),
+                calls: Arc::new(Mutex::new(Vec::new())),
+            })
+        })
+        .expect("messaging client should be created");
+
+        let route = launch.finish_and_recover_with(
+            RecoverySpec {
+                prompt_file: None,
+                pane_id: Some("%2"),
+                initial_prompt_marker: Some(super::super::InitialPromptMarker {
+                    mark_pending: &mark_pending,
+                    clear_pending: &clear_pending,
+                }),
+            },
+            |_| Some("example/repo:@1.%2".to_string()),
+        );
+
+        assert_eq!(
+            (
+                route.map_err(|error| format!("{error:#}")),
+                cleared_ids.lock().unwrap().clone(),
+            ),
+            (
+                Err("Claude pane %2 was created, but initial prompt delivery failed: Failed to send initial prompt through Claude messaging: socket unavailable".to_string()),
+                vec!["session-example".to_string()],
             ),
         );
     }

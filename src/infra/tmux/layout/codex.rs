@@ -172,8 +172,14 @@ impl Launch {
                 let thread_id = client
                     .wait_for_thread_started(cwd)
                     .context("Failed to wait for Codex app-server thread/start")?;
-                if let Some(marker) = initial_prompt_marker {
-                    (marker.mark_pending)(&thread_id)?;
+                if let Some(marker) = initial_prompt_marker
+                    && let Err(error) = (marker.mark_pending)(&thread_id)
+                {
+                    tracing::warn!(
+                        event = "agent.new.initial_prompt_marker_write_failed",
+                        session_id = %thread_id,
+                        error = %error,
+                    );
                 }
                 match client.start_turn(&thread_id, &prompt, effort) {
                     Ok(()) => Ok(AgentLaunchRoute::CodexDaemon { thread_id }),
@@ -319,6 +325,100 @@ mod tests {
                     Call::Mark("thread-example".to_string()),
                     Call::StartTurn("thread-example".to_string(), "prompt".to_string()),
                 ],
+            ),
+        );
+    }
+
+    #[test]
+    fn initial_prompt_marker_write_failure_does_not_block_starting_the_turn() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mark_pending = |_session_id: &str| Err(anyhow::anyhow!("database unavailable"));
+        let clear_pending = |_session_id: &str| Ok(());
+        let launch = Launch::prepare_with(Engine::Codex, Some("prompt"), 1, || {
+            Ok((
+                Box::new(OrderedClient {
+                    calls: calls.clone(),
+                }),
+                None,
+            ))
+        })
+        .expect("app-server client should be created");
+
+        let route = launch.finish_and_recover_with(
+            RecoverySpec {
+                cwd: Path::new("/workspace/project-a"),
+                effort: None,
+                prompt_file: None,
+                pane_id: Some("%42"),
+                initial_prompt_marker: Some(super::super::InitialPromptMarker {
+                    mark_pending: &mark_pending,
+                    clear_pending: &clear_pending,
+                }),
+            },
+            |_, _| Ok(()),
+        );
+
+        assert_eq!(
+            (
+                route.map_err(|error| error.to_string()),
+                calls.lock().unwrap().clone(),
+            ),
+            (
+                Ok(AgentLaunchRoute::CodexDaemon {
+                    thread_id: "thread-example".to_string(),
+                }),
+                vec![
+                    Call::Wait,
+                    Call::StartTurn("thread-example".to_string(), "prompt".to_string()),
+                ],
+            ),
+        );
+    }
+
+    #[test]
+    fn rejected_turn_clears_the_pending_initial_prompt_marker() {
+        let cleared_ids = Arc::new(Mutex::new(Vec::new()));
+        let clear_ids = cleared_ids.clone();
+        let mark_pending = |_session_id: &str| Ok(());
+        let clear_pending = move |session_id: &str| {
+            clear_ids.lock().unwrap().push(session_id.to_string());
+            Ok(())
+        };
+        let launch = Launch::prepare_with(Engine::Codex, Some("prompt"), 1, || {
+            Ok((
+                Box::new(StubClient {
+                    thread: Ok("thread-example".to_string()),
+                    turn: Some(Err(codex_steer::DeliveryError::NotDelivered(
+                        anyhow::anyhow!("rejected"),
+                    ))),
+                }),
+                None,
+            ))
+        })
+        .expect("app-server client should be created");
+
+        let route = launch.finish_and_recover_with(
+            RecoverySpec {
+                cwd: Path::new("/workspace/project-a"),
+                effort: None,
+                prompt_file: None,
+                pane_id: Some("%42"),
+                initial_prompt_marker: Some(super::super::InitialPromptMarker {
+                    mark_pending: &mark_pending,
+                    clear_pending: &clear_pending,
+                }),
+            },
+            |_, _| panic!("a rejected turn must not bind the pane"),
+        );
+
+        assert_eq!(
+            (
+                route.map_err(|error| format!("{error:#}")),
+                cleared_ids.lock().unwrap().clone(),
+            ),
+            (
+                Err("Codex pane %42 was created, but initial prompt delivery failed: Codex app-server rejected the initial turn/start request: rejected".to_string()),
+                vec!["thread-example".to_string()],
             ),
         );
     }
