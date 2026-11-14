@@ -4300,9 +4300,9 @@ mod tests {
     #[case::other_session_todo(NonPendingAgentRequest::OtherSessionTodo)]
     fn non_pending_agent_requests_do_not_suppress_status_inference(
         #[case] request: NonPendingAgentRequest,
+        hook_status_sessions_dir: tempfile::TempDir,
     ) {
-        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
-        let sessions_dir = temp_dir.path();
+        let sessions_dir = hook_status_sessions_dir.path();
         save_test_session(sessions_dir, "test-123", |_| {});
         let request_session_id = match request {
             NonPendingAgentRequest::ResolvedProposal | NonPendingAgentRequest::CompletedTodo => {
