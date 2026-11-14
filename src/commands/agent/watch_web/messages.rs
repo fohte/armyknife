@@ -3945,6 +3945,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stale_epoch_message_request_returns_the_latest_page() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        let mut records = Vec::new();
+        let mut parent_uuid = None;
+        for index in 0..120 {
+            let uuid = format!("fixture-message-{index}");
+            records.push(json!({
+                "type": "user",
+                "uuid": uuid,
+                "parentUuid": parent_uuid,
+                "timestamp": "2026-01-01T00:00:01Z",
+                "message": {"content": format!("Old fixture message {index}.")},
+            }));
+            parent_uuid = Some(uuid);
+        }
+        let transcript = records
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&transcript_path, transcript).unwrap();
+
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path.clone());
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+            move |_| Ok(Some(session.clone())),
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+        );
+        let initial_response = message_response_with_query(&router, "?limit=100").await;
+        let stale_epoch = initial_response.2["epoch"].as_str().unwrap().to_owned();
+
+        let replacement_record = json!({
+            "type": "user",
+            "uuid": "fixture-replacement-root",
+            "parentUuid": null,
+            "timestamp": "2026-01-02T00:00:01Z",
+            "message": {"content": "Replacement fixture message."},
+        });
+        std::fs::write(&transcript_path, replacement_record.to_string()).unwrap();
+        let stale_response = message_response_with_query(
+            &router,
+            &format!("?from=0&epoch={stale_epoch}&olderCursor={stale_epoch}"),
+        )
+        .await;
+        let mut expected_response = message_response_with_query(&router, "?limit=100").await;
+        expected_response.2["epochReset"] = json!(true);
+
+        assert_eq!(stale_response, expected_response);
+    }
+
+    #[tokio::test]
     async fn codex_message_route_loads_and_resolves_saved_prompts_by_id() {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("transcript.jsonl");

@@ -286,6 +286,7 @@ export function useConversationPaneData({
     loadingOlderRef.current = true
     const generation = olderRequestGeneration.current + 1
     olderRequestGeneration.current = generation
+    const requestedEpoch = current.epoch
     setLoadingOlder(true)
     const paginationQuery =
       current.epoch === undefined
@@ -301,6 +302,11 @@ export function useConversationPaneData({
         if (olderRequestGeneration.current !== generation) return
         if (conversationSessionId.current !== sessionId) return
         const latest = conversationRef.current
+        if (requestedEpoch !== undefined && latest.epoch !== requestedEpoch) {
+          loadingOlderRef.current = false
+          setLoadingOlder(false)
+          return
+        }
         const noMoreOlderPages =
           latest.epoch !== undefined &&
           response.epoch === latest.epoch &&
