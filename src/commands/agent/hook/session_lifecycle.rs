@@ -63,6 +63,7 @@ fn finish_ended_session(
     sessions_dir: &Path,
     side_effects: &SideEffects,
 ) {
+    side_effects.unexpose_web_uis(session);
     side_effects.remove_notification_group(session_id);
     side_effects.archive_tq_session(session_id);
     let work_type_config = session
@@ -222,12 +223,14 @@ mod tests {
             )>,
         >,
     >;
+    type RecordedWebUiUnexposes = Arc<Mutex<Vec<crate::commands::agent::types::WebUiRegistration>>>;
 
     struct RecordingSideEffects {
         side_effects: SideEffects,
         removed: RecordedIds,
         archived: RecordedIds,
         synced: RecordedSyncs,
+        unexposed: RecordedWebUiUnexposes,
     }
 
     struct LifecycleTestContext {
@@ -294,16 +297,19 @@ mod tests {
         let removed = Arc::new(Mutex::new(Vec::new()));
         let archived = Arc::new(Mutex::new(Vec::new()));
         let synced = Arc::new(Mutex::new(Vec::new()));
+        let unexposed = Arc::new(Mutex::new(Vec::new()));
         let mut side_effects = SideEffects::none();
         side_effects.removed_notification_groups = Some(removed.clone());
         side_effects.tq_archive = true;
         side_effects.tq_archive_calls = Some(archived.clone());
         side_effects.tmux_sync_calls = Some(synced.clone());
+        side_effects.web_ui_unexpose_calls = Some(unexposed.clone());
         RecordingSideEffects {
             side_effects,
             removed,
             archived,
             synced,
+            unexposed,
         }
     }
 
@@ -398,11 +404,13 @@ mod tests {
     #[rstest]
     fn explicit_close_ends_a_paused_codex_session(lifecycle_test_context: LifecycleTestContext) {
         let LifecycleTestContext { temp_dir, sinks } = lifecycle_test_context;
-        store::save_session_to(
-            temp_dir.path(),
-            &session(Engine::Codex, SessionStatus::Paused, false),
-        )
-        .expect("save session");
+        let mut closing_session = session(Engine::Codex, SessionStatus::Paused, false);
+        closing_session.web_uis = vec![crate::commands::agent::types::WebUiRegistration {
+            name: "Editor".to_owned(),
+            url: "http://localhost:48761/design/sample/".to_owned(),
+            exposed_url: Some("https://public.example.test/design/sample/".to_owned()),
+        }];
+        store::save_session_to(temp_dir.path(), &closing_session).expect("save session");
 
         end_codex_session_in("thread-one", temp_dir.path(), &sinks.side_effects)
             .expect("explicit close should confirm the session end");
@@ -415,11 +423,13 @@ mod tests {
                 updated.status,
                 sinks.removed.lock().expect("removed lock").clone(),
                 sinks.archived.lock().expect("archive lock").clone(),
+                sinks.unexposed.lock().expect("unexposed lock").clone(),
             ),
             (
                 SessionStatus::Ended,
                 vec!["thread-one".to_string()],
                 vec!["thread-one".to_string()],
+                closing_session.web_uis,
             ),
         );
     }

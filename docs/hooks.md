@@ -2,9 +2,30 @@
 
 armyknife supports git-style hooks for command lifecycle events. Place executable scripts in `~/.config/armyknife/hooks/` (or `$XDG_CONFIG_HOME/armyknife/hooks/`).
 
-A synchronous hook fails the calling command if it exits with a non-zero status, or if the file exists without execute permission. A hook that does not exist is silently skipped. `pre-worktree-delete` and `post-worktree-delete` are best-effort exceptions.
+A synchronous hook fails the calling command if it exits with a non-zero status, or if the file exists without execute permission. A hook that does not exist is silently skipped. `pre-worktree-delete`, `post-worktree-delete`, `web-ui-expose`, and `web-ui-unexpose` are best-effort exceptions.
 
 > **Behavior change (post 0.1.160).** Earlier versions only printed a warning on hook failure and continued the calling command. Synchronous hooks (including `post-worktree-create` and `pre-session-start`) now abort the calling command on a non-zero exit or a non-executable file. Worktree deletion hooks are exceptions: `pre-worktree-delete` runs best-effort and `post-worktree-delete` runs detached, so neither blocks deletion.
+
+## `web-ui-expose` and `web-ui-unexpose`
+
+`web-ui-expose` runs after `a agent web-ui add` or `a agent crit add` records an interface. It receives the local URL and port and may print an external URL to stdout. armyknife stores that URL for remote watch-web clients. Missing hooks, hook failures, and empty output leave the interface without an external URL; registration still succeeds.
+
+`web-ui-unexpose` runs when a registration is replaced or its session ends. It receives the same URL and port plus the saved external URL, if any. Failures are logged and do not interrupt session cleanup.
+
+| Variable                       | Description                                       |
+| ------------------------------ | ------------------------------------------------- |
+| `ARMYKNIFE_WEB_UI_URL`         | Registered interface URL on the local machine     |
+| `ARMYKNIFE_WEB_UI_PORT`        | Port from the registered URL                      |
+| `ARMYKNIFE_WEB_UI_EXPOSED_URL` | URL returned by `web-ui-expose`; set for unexpose |
+
+Example `web-ui-expose` hook:
+
+```sh
+#!/bin/sh
+printf 'https://review.example.invalid/%s\n' "$ARMYKNIFE_WEB_UI_PORT"
+```
+
+The hook decides how to expose or remove an interface. armyknife does not manage a network tunnel.
 
 ## `post-worktree-create`
 

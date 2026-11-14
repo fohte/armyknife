@@ -54,8 +54,29 @@ pub(super) fn is_websocket_upgrade(headers: &HeaderMap) -> bool {
 }
 
 fn allowed_host(host: &str) -> bool {
-    let host = host.to_ascii_lowercase();
-    host == "localhost" || host == "127.0.0.1" || (host.ends_with(".ts.net") && host.len() > 7)
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return ip.is_loopback();
+    }
+
+    host.len() <= 253
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+                && label
+                    .as_bytes()
+                    .last()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
 }
 
 #[cfg(test)]
@@ -69,16 +90,15 @@ mod tests {
     #[rstest]
     #[case::localhost("localhost:4317", true)]
     #[case::loopback("127.0.0.1:4317", true)]
-    #[case::tailscale_host("device.example.ts.net", true)]
+    #[case::external_domain("watch.example.test", true)]
     #[case::userinfo_host("user@localhost", false)]
-    #[case::evil_ts_net("evil-ts.net", false)]
-    #[case::localhost_with_evil_suffix("localhost.evil.com", false)]
-    #[case::tailscale_host_with_evil_suffix("foo.ts.net.evil.com", false)]
-    #[case::bare_tailscale_suffix(".ts.net", false)]
-    #[case::tailscale_suffix_is_not_a_host("example.ts.net.attacker.invalid", false)]
+    #[case::external_domain_without_suffix("outside.example.test", true)]
+    #[case::localhost_with_domain_suffix("localhost.evil.com", true)]
+    #[case::domain_with_empty_label("watch..example.test", false)]
+    #[case::domain_with_leading_hyphen("-watch.example.test", false)]
     #[case::remote_ip("192.0.2.10:4317", false)]
     #[case::missing_host("", false)]
-    fn only_loopback_and_tailscale_hosts_are_allowed(#[case] host: &str, #[case] expected: bool) {
+    fn loopback_and_external_domains_are_allowed(#[case] host: &str, #[case] expected: bool) {
         let mut headers = HeaderMap::new();
         if !host.is_empty() {
             headers.insert("host", HeaderValue::from_str(host).unwrap());
@@ -92,18 +112,10 @@ mod tests {
 
     #[rstest]
     #[case::matching_origin("localhost:4317", "http://localhost:4317", true)]
-    #[case::matching_tailscale_origin(
-        "device.example.ts.net",
-        "https://device.example.ts.net",
-        true
-    )]
-    #[case::origin_with_userinfo(
-        "device.example.ts.net",
-        "https://user@device.example.ts.net",
-        false
-    )]
+    #[case::matching_external_origin("watch.example.test", "https://watch.example.test", true)]
+    #[case::origin_with_userinfo("watch.example.test", "https://user@watch.example.test", false)]
     #[case::different_host("localhost:4317", "http://attacker.invalid:4317", false)]
-    #[case::different_port("localhost:4317", "http://localhost:4318", false)]
+    #[case::different_port("localhost:4317", "http://localhost:4320", false)]
     #[case::origin_with_path("localhost:4317", "http://localhost:4317/path", false)]
     #[case::relative_origin("localhost:4317", "//localhost:4317", false)]
     #[case::null_origin("localhost:4317", "null", false)]
@@ -127,7 +139,7 @@ mod tests {
 
     #[rstest]
     #[case::missing_origin(None, false)]
-    #[case::different_port(Some("http://localhost:4318"), false)]
+    #[case::different_port(Some("http://localhost:4320"), false)]
     #[case::matching_origin(Some("http://localhost:4317"), true)]
     fn websocket_upgrades_require_an_origin_matching_host(
         #[case] origin: Option<&str>,

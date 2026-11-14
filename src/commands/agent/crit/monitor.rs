@@ -638,14 +638,17 @@ mod tests {
             crate::commands::agent::types::WebUiRegistration {
                 name: "crit".to_owned(),
                 url: "http://localhost:43210/review".to_owned(),
+                exposed_url: None,
             },
             crate::commands::agent::types::WebUiRegistration {
                 name: "Design editor".to_owned(),
                 url: "http://localhost:43210/design/sample/".to_owned(),
+                exposed_url: None,
             },
             crate::commands::agent::types::WebUiRegistration {
                 name: "crit".to_owned(),
                 url: "http://localhost:43211/review".to_owned(),
+                exposed_url: None,
             },
         ];
         store::save_session_to(sessions_dir, &active).expect("active session should save");
@@ -683,10 +686,12 @@ mod tests {
                     crate::commands::agent::types::WebUiRegistration {
                         name: "Design editor".to_owned(),
                         url: "http://localhost:43210/design/sample/".to_owned(),
+                        exposed_url: None,
                     },
                     crate::commands::agent::types::WebUiRegistration {
                         name: "crit".to_owned(),
                         url: "http://localhost:43211/review".to_owned(),
+                        exposed_url: None,
                     },
                 ],
                 vec!["http://localhost:43212/review".to_string()],

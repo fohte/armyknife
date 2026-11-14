@@ -242,10 +242,12 @@ mod tests {
             WebUiRegistration {
                 name: "Editor".to_owned(),
                 url: "http://localhost:42501/design/sample/".to_owned(),
+                exposed_url: None,
             },
             WebUiRegistration {
                 name: "Preview".to_owned(),
                 url: "http://127.0.0.1:42502/preview/".to_owned(),
+                exposed_url: None,
             },
         ];
         let dir = sessions_dir(&before);
@@ -262,6 +264,7 @@ mod tests {
                 vec![WebUiRegistration {
                     name: "Preview".to_owned(),
                     url: "http://127.0.0.1:42502/preview/".to_owned(),
+                    exposed_url: None,
                 }],
             ),
         );

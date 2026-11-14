@@ -714,9 +714,11 @@ To refer to it in another session or task, describe its contents; this sequence 
 
 Tracked, hook-processed Claude Code sessions receive the instruction on `SessionStart` to record choices that are cheap to reverse and continue working. They should stop and ask about choices that are hard to reverse. Internal and headless invocations do not receive this instruction.
 
-`a agent web-ui add <url> --name <name>` registers a named local HTTP interface with the calling session. The URL must use `localhost` or `127.0.0.1` and include an explicit port. Registered interfaces appear in the watch-web conversation's right panel and share the same HTTP and WebSocket relay. Ports without a registered URL are rejected. Run the command from the session that owns the interface:
+`a agent web-ui add <url> --name <name>` registers a named local HTTP interface with the calling session. The URL must use `localhost` or `127.0.0.1` and include an explicit port. Registered interfaces appear in the watch-web conversation's right panel and open directly when watch-web runs on the same machine. When opened remotely, watch-web uses the URL returned by the optional `web-ui-expose` hook. Run the command from the session that owns the interface:
 
 Within a session, registering an interface with an existing trimmed name replaces its previous URL. Registering an existing URL also replaces that entry.
+
+After registration, armyknife calls `~/.config/armyknife/hooks/web-ui-expose` with `ARMYKNIFE_WEB_UI_URL` and `ARMYKNIFE_WEB_UI_PORT`. The hook prints the external URL to stdout. A missing hook, failure, or empty output leaves the interface available only on the local machine. Armyknife calls `web-ui-unexpose` with those variables and `ARMYKNIFE_WEB_UI_EXPOSED_URL` when a registration is replaced or its session ends; unexpose failures do not interrupt cleanup. See [Hooks](docs/hooks.md#web-ui-expose-and-web-ui-unexpose) for details.
 
 ```console
 $ a agent web-ui add http://127.0.0.1:48761/design/sample/ --name "Design editor"
@@ -1198,7 +1200,7 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 
 ### `a agent watch-web`
 
-`a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` and opens it in the default browser. Its local relay listens on `127.0.0.1:4318` and forwards requests only to ports recorded by `a agent web-ui add` or `a agent crit add`, including WebSocket connections. Pass `--no-open` to keep it from opening a browser, such as when running it as a background service. If the running executable is replaced, the server restarts with the new binary and open pages reload the embedded SPA. It serves the SPA embedded in the binary, with an Inbox grouped into Needs action, Later, In progress, and Done, plus a Board grouped by project. Sessions can be starred for TODAY from the Inbox and Nav. Later sessions return to Needs action when their timer expires or when they change. The Board puts projects that need action first and can hide quiet projects. Both views reload session metadata when the server sends an update. When a session has an active parent or child, the conversation pane adds a Tree tab that shows their hierarchy and lets users open available sessions. A session with an active review document adds a Review tab that displays its frontmatter and Markdown body. The backend provides `GET /api/sessions` for session metadata, `GET /api/events` for session-store and enrichment updates, and `GET /api/sessions/{id}/messages` for conversation items. `GET /api/sessions/{id}/review-document` returns the frontmatter and Markdown body for the active review document, or `404` when no live review lock is active. `GET /api/sessions/{id}/background-tasks/{task_id}/output` returns plain-text output for a running background Bash task, capped to the last 20 lines and 64 KiB. It reads only the output file recorded in that session's transcript. Saved conversation images are served by `GET /api/images/{name}`; the route only serves files in watch-web's image storage directory, and expired images return `404`. Session actions are available through the routes below. If the SPA has not been built, the page shows the build instructions; build it with:
+`a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` and opens it in the default browser. Pass `--no-open` to keep it from opening a browser, such as when running it as a background service. If the running executable is replaced, the server restarts with the new binary and open pages reload the embedded SPA. It serves the SPA embedded in the binary, with an Inbox grouped into Needs action, Later, In progress, and Done, plus a Board grouped by project. Sessions can be starred for TODAY from the Inbox and Nav. Later sessions return to Needs action when their timer expires or when they change. The Board puts projects that need action first and can hide quiet projects. Both views reload session metadata when the server sends an update. When a session has an active parent or child, the conversation pane adds a Tree tab that shows their hierarchy and lets users open available sessions. A session with an active review document adds a Review tab that displays its frontmatter and Markdown body. The backend provides `GET /api/sessions` for session metadata, `GET /api/events` for session-store and enrichment updates, and `GET /api/sessions/{id}/messages` for conversation items. `GET /api/sessions/{id}/review-document` returns the frontmatter and Markdown body for the active review document, or `404` when no live review lock is active. `GET /api/sessions/{id}/background-tasks/{task_id}/output` returns plain-text output for a running background Bash task, capped to the last 20 lines and 64 KiB. It reads only the output file recorded in that session's transcript. Saved conversation images are served by `GET /api/images/{name}`; the route only serves files in watch-web's image storage directory, and expired images return `404`. Session actions are available through the routes below. If the SPA has not been built, the page shows the build instructions; build it with:
 
 Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` only when recorded for that session, or by `GET /api/sessions/{id}/transcript-files/{tool_use_id}/{index}` only when the session transcript contains the matching file-send record and file index.
 
@@ -1283,15 +1285,6 @@ pnpm run build
 cd ..
 cargo build
 ```
-
-To access the server from another device in your tailnet, keep `a agent watch-web` running and run this in another terminal:
-
-```sh
-tailscale serve 4317
-tailscale serve --bg --https=8443 http://127.0.0.1:4318
-```
-
-Open the `https://example-device.example-tailnet.ts.net` address printed by Tailscale. The second serve rule publishes registered local web interfaces, including Crit reviews, through the relay on port `4318`. See the [Tailscale Serve CLI reference](https://tailscale.com/docs/reference/tailscale-cli/serve) for details. Both servers listen only on `127.0.0.1`; they do not bind to `0.0.0.0`.
 
 ### `a agent clean`
 
