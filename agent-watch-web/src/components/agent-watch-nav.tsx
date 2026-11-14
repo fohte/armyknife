@@ -9,7 +9,11 @@ import type { WorkTypeNavGroup } from '#board-model'
 import type { CommandPaletteShortcut } from '#command-palette-shortcut'
 import { cn } from '#lib/utils'
 import type { SavedInboxView } from '#saved-inbox-views'
-import { sessionKindLabel, sessionKindTone } from '#session-kind-label'
+import {
+  sessionKindIcon,
+  sessionKindLabel,
+  sessionKindTone,
+} from '#session-kind-label'
 import type { Session } from '#types'
 
 type View = 'inbox' | 'board'
@@ -192,6 +196,9 @@ export function AgentWatchNav({
         <h2 id="today-nav-title">Starred</h2>
         {todaySessions.map((session) => {
           const tone = sessionKindTone(session)
+          const label = sessionKindLabel(session)
+          const KindIcon =
+            session.kind === null ? null : sessionKindIcon(session.kind)
           return (
             <div key={session.id} className="today-nav-item">
               <Button
@@ -220,8 +227,15 @@ export function AgentWatchNav({
                     tone === 'in-progress' && 'is-working',
                     tone === 'error' && 'is-error',
                   )}
+                  aria-label={KindIcon === null ? undefined : label}
+                  role={KindIcon === null ? undefined : 'img'}
+                  title={label}
                 >
-                  {sessionKindLabel(session)}
+                  {KindIcon === null ? (
+                    label
+                  ) : (
+                    <KindIcon aria-hidden="true" size={13} />
+                  )}
                 </span>
               </Button>
               {session.task !== null ? (

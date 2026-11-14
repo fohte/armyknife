@@ -65,6 +65,25 @@ function snapshot() {
   }
 }
 
+function sessionKindPresentationSnapshot(iconClass: string) {
+  const kindIcon = container.querySelector<HTMLElement>('.session-kind-icon')
+  const icon = kindIcon?.querySelector('svg')
+  const sessionContent = container.querySelector('.session-content')
+  const sessionPreview = container.querySelector('.session-preview')
+
+  return {
+    contentLines: Array.from(sessionContent?.children ?? [], (line) =>
+      line.getAttribute('class'),
+    ),
+    kindIcon: {
+      ariaLabel: kindIcon?.getAttribute('aria-label'),
+      classMatches: icon?.classList.contains(iconClass) ?? false,
+      title: kindIcon?.getAttribute('title'),
+    },
+    preview: sessionPreview?.textContent,
+  }
+}
+
 function mobileMetaSnapshot() {
   return {
     task: container.querySelector('.session-task')?.textContent,
@@ -139,16 +158,41 @@ it('keeps the merged pull request label on a paused row', () => {
   expect(snapshot()).toEqual(expected)
 })
 
-it('keeps only the request chip on a paused needs-action row', () => {
-  renderRow({ ...session, category: 'needs_action', kind: 'Question' })
+it.each([
+  { kind: 'Plan', iconClass: 'lucide-list' },
+  { kind: 'Question', iconClass: 'lucide-message-circle-question-mark' },
+  { kind: 'Approve', iconClass: 'lucide-shield-question-mark' },
+  { kind: 'Proposal', iconClass: 'lucide-signpost' },
+  { kind: 'Todo', iconClass: 'lucide-square' },
+  { kind: 'Error', iconClass: 'lucide-triangle-alert' },
+  { kind: 'Stopped', iconClass: 'lucide-circle-pause' },
+  { kind: 'Review', iconClass: 'lucide-eye' },
+  { kind: 'UnmappedKind', iconClass: 'lucide-circle-question-mark' },
+])(
+  'renders $kind as a named icon and keeps the preview text',
+  ({ kind, iconClass }) => {
+    renderRow({
+      ...session,
+      category: 'needs_action',
+      kind,
+      preview: 'Review the mockup',
+    })
 
-  const expected = {
-    chips: ['Question'],
-    age: '2m',
-    task: '— No task',
-  }
-  expect(snapshot()).toEqual(expected)
-})
+    expect(sessionKindPresentationSnapshot(iconClass)).toEqual({
+      contentLines: [
+        'session-title-line',
+        'session-preview',
+        'session-meta-line',
+      ],
+      kindIcon: {
+        ariaLabel: kind,
+        classMatches: true,
+        title: kind,
+      },
+      preview: ' Review the mockup',
+    })
+  },
+)
 
 it('shows the primary tq task and the number of other linked tasks', () => {
   renderRow({

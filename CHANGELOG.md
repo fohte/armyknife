@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.1.708](https://github.com/fohte/armyknife/compare/v0.1.707...v0.1.708) (2026-11-14)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show permission actions ([#1795](https://github.com/fohte/armyknife/issues/1795)) ([e262fe3](https://github.com/fohte/armyknife/commit/e262fe3a4e65fb66afc9fb0945940a02db2e6239))
+
+## [0.1.707](https://github.com/fohte/armyknife/compare/v0.1.706...v0.1.707) (2026-11-14)
+
+
+### Bug Fixes
+
+* **agent/sweep:** keep live Crit links ([#1793](https://github.com/fohte/armyknife/issues/1793)) ([385d6c1](https://github.com/fohte/armyknife/commit/385d6c1c1efae95f1443789c177b7142db9f22b0))
+
+## [0.1.706](https://github.com/fohte/armyknife/compare/v0.1.705...v0.1.706) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** keep waiting subagents visible ([#1791](https://github.com/fohte/armyknife/issues/1791)) ([1b4bad3](https://github.com/fohte/armyknife/commit/1b4bad348c52e3707f3bd5691c344528156b04c8))
+
+## [0.1.705](https://github.com/fohte/armyknife/compare/v0.1.704...v0.1.705) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** show Inbox and Starred kind icons ([#1789](https://github.com/fohte/armyknife/issues/1789)) ([e237a98](https://github.com/fohte/armyknife/commit/e237a98cd9086aa508cceaa96b3aa2f58f62690b))
+
 ## [0.1.704](https://github.com/fohte/armyknife/compare/v0.1.703...v0.1.704) (2026-11-14)
 
 

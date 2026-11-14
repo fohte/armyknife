@@ -117,6 +117,42 @@ export const NeedsActionShowsAPlan: Story = {
   },
 }
 
+export const NeedsActionShowsATodo: Story = {
+  name: 'A todo request uses an empty square icon',
+  args: {
+    session: {
+      ...session,
+      kind: 'Todo',
+      title: 'Update the onboarding guide',
+      preview: 'Publish the revised guide.',
+    },
+  },
+}
+
+export const NeedsActionShowsAProposal: Story = {
+  name: 'A proposal request uses a signpost icon',
+  args: {
+    session: {
+      ...session,
+      kind: 'Proposal',
+      title: 'Choose a dashboard layout',
+      preview: 'Select a navigation style.',
+    },
+  },
+}
+
+export const NeedsActionShowsAnUnmappedKind: Story = {
+  name: 'An unmapped kind uses a generic question mark icon',
+  args: {
+    session: {
+      ...session,
+      kind: 'UnmappedKind',
+      title: 'Review an experimental workflow',
+      preview: 'The session uses an unrecognized kind.',
+    },
+  },
+}
+
 export const NeedsActionShowsAnError: Story = {
   name: 'An error request uses the red status color',
   args: {

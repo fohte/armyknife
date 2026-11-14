@@ -260,6 +260,8 @@
 }
 
 .today-session-status {
+  display: inline-flex;
+  align-items: center;
   color: var(--aw-text-secondary);
   font-family: var(--font-mono);
   font-size: 11.5px;
