@@ -17,10 +17,6 @@
     {
       "id": "components",
       "name": "部品"
-    },
-    {
-      "id": "topbar",
-      "name": "トップバー案"
     }
   ],
   "boards": {
@@ -255,70 +251,6 @@
       "h": 900,
       "title": "V9Review",
       "page": "components"
-    },
-    "explore/topbar/topbar-current.dc.html": {
-      "x": 0,
-      "y": 0,
-      "w": 390,
-      "h": 844,
-      "title": "Current",
-      "page": "topbar"
-    },
-    "explore/topbar/topbar-a.dc.html": {
-      "x": 470,
-      "y": 0,
-      "w": 390,
-      "h": 844,
-      "title": "A · Two rows",
-      "page": "topbar"
-    },
-    "explore/topbar/topbar-b.dc.html": {
-      "x": 940,
-      "y": 0,
-      "w": 390,
-      "h": 844,
-      "title": "B · Overflow menu",
-      "page": "topbar"
-    },
-    "explore/topbar/topbar-c.dc.html": {
-      "x": 1410,
-      "y": 0,
-      "w": 390,
-      "h": 844,
-      "title": "C · Actions at the bottom",
-      "page": "topbar"
-    },
-    "explore/topbar/topbar-current-crowded.dc.html": {
-      "x": 0,
-      "y": 1200,
-      "w": 390,
-      "h": 844,
-      "title": "Current, crowded",
-      "page": "topbar"
-    },
-    "explore/topbar/topbar-a-crowded.dc.html": {
-      "x": 470,
-      "y": 1200,
-      "w": 390,
-      "h": 844,
-      "title": "A, crowded",
-      "page": "topbar"
-    },
-    "explore/topbar/topbar-b-crowded.dc.html": {
-      "x": 940,
-      "y": 1200,
-      "w": 390,
-      "h": 844,
-      "title": "B, crowded, menu open",
-      "page": "topbar"
-    },
-    "explore/topbar/topbar-c-crowded.dc.html": {
-      "x": 1410,
-      "y": 1200,
-      "w": 390,
-      "h": 844,
-      "title": "C, crowded",
-      "page": "topbar"
     }
   },
   "order": [
@@ -350,34 +282,9 @@
     "components/V8Nav.dc.html",
     "components/V9Decision.dc.html",
     "components/V9Proposal.dc.html",
-    "components/V9Review.dc.html",
-    "explore/topbar/topbar-current.dc.html",
-    "explore/topbar/topbar-a.dc.html",
-    "explore/topbar/topbar-b.dc.html",
-    "explore/topbar/topbar-c.dc.html",
-    "explore/topbar/topbar-current-crowded.dc.html",
-    "explore/topbar/topbar-a-crowded.dc.html",
-    "explore/topbar/topbar-b-crowded.dc.html",
-    "explore/topbar/topbar-c-crowded.dc.html"
+    "components/V9Review.dc.html"
   ],
-  "notes": {
-    "typical": {
-      "x": 0,
-      "y": -300,
-      "text": "Waiting on a question · 1 task · 2 background tasks",
-      "kind": "title1",
-      "maxW": 1800,
-      "page": "topbar"
-    },
-    "crowded": {
-      "x": 0,
-      "y": 964,
-      "text": "Done · starred · 3 tasks · 1 background task · long title",
-      "kind": "title1",
-      "maxW": 1800,
-      "page": "topbar"
-    }
-  },
+  "notes": {},
   "designSystems": [
     {
       "title": "agent watch",

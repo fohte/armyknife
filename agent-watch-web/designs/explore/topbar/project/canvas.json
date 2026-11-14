@@ -1,0 +1,105 @@
+{
+  "v": 3,
+  "createdOnFiles": {
+    "v": 1,
+    "at": "2026-11-14T07:21:56Z"
+  },
+  "title": "Mobile session top bar",
+  "launch": {
+    "view": "canvas"
+  },
+  "pages": [],
+  "boards": {
+    "topbar-current.dc.html": {
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "Current"
+    },
+    "topbar-a.dc.html": {
+      "x": 470,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "A · Two rows"
+    },
+    "topbar-b.dc.html": {
+      "x": 940,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "B · Overflow menu"
+    },
+    "topbar-c.dc.html": {
+      "x": 1410,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "C · Actions at the bottom"
+    },
+    "topbar-current-crowded.dc.html": {
+      "x": 0,
+      "y": 1200,
+      "w": 390,
+      "h": 844,
+      "title": "Current, crowded"
+    },
+    "topbar-a-crowded.dc.html": {
+      "x": 470,
+      "y": 1200,
+      "w": 390,
+      "h": 844,
+      "title": "A, crowded"
+    },
+    "topbar-b-crowded.dc.html": {
+      "x": 940,
+      "y": 1200,
+      "w": 390,
+      "h": 844,
+      "title": "B, crowded, menu open"
+    },
+    "topbar-c-crowded.dc.html": {
+      "x": 1410,
+      "y": 1200,
+      "w": 390,
+      "h": 844,
+      "title": "C, crowded"
+    }
+  },
+  "order": [
+    "topbar-current.dc.html",
+    "topbar-a.dc.html",
+    "topbar-b.dc.html",
+    "topbar-c.dc.html",
+    "topbar-current-crowded.dc.html",
+    "topbar-a-crowded.dc.html",
+    "topbar-b-crowded.dc.html",
+    "topbar-c-crowded.dc.html"
+  ],
+  "notes": {
+    "typical": {
+      "x": 0,
+      "y": -300,
+      "text": "Waiting on a question · 1 task · 2 background tasks",
+      "kind": "title1",
+      "maxW": 1800
+    },
+    "crowded": {
+      "x": 0,
+      "y": 964,
+      "text": "Done · starred · 3 tasks · 1 background task · long title",
+      "kind": "title1",
+      "maxW": 1800
+    }
+  },
+  "designSystems": [
+    {
+      "title": "agent watch",
+      "namespace": "agentwatch",
+      "artifact": "agent-watch-web/designs/design-system",
+      "version": null,
+      "copiedAt": "2026-11-14T02:54:45Z"
+    }
+  ]
+}
