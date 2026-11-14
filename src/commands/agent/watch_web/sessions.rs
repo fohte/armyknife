@@ -172,6 +172,13 @@ struct SessionSnapshot {
 trait SessionSource: Clone + Send + Sync + 'static {
     fn load_snapshot(&self) -> impl Future<Output = anyhow::Result<SessionSnapshot>> + Send;
 
+    fn question_previews(
+        &self,
+        _sessions: &[Session],
+    ) -> impl Future<Output = anyhow::Result<HashMap<String, String>>> + Send {
+        async { Ok(HashMap::new()) }
+    }
+
     fn fetch_task_metadata(
         &self,
         sessions: &[Session],
@@ -205,6 +212,15 @@ struct LiveSessionSource {
 impl SessionSource for LiveSessionSource {
     async fn load_snapshot(&self) -> anyhow::Result<SessionSnapshot> {
         tokio::task::spawn_blocking(load_snapshot).await?
+    }
+
+    async fn question_previews(
+        &self,
+        sessions: &[Session],
+    ) -> anyhow::Result<HashMap<String, String>> {
+        let sessions = sessions.to_vec();
+        let loaders = self.message_loaders.clone();
+        tokio::task::spawn_blocking(move || question_previews(&sessions, &loaders)).await?
     }
 
     async fn fetch_task_metadata(&self, sessions: &[Session]) -> SessionTaskMetadata {
@@ -331,10 +347,11 @@ async fn list_sessions<S: SessionSource>(
         .cloned()
         .collect::<Vec<_>>();
 
-    let (task_metadata, pull_requests, running_background_task_sessions) = tokio::join!(
+    let (task_metadata, pull_requests, running_background_task_sessions, question_previews) = tokio::join!(
         source.fetch_task_metadata(&response_sessions),
         source.fetch_pull_requests(&response_sessions),
         source.running_background_task_session_ids(stopped_claude_sessions),
+        source.question_previews(&response_sessions),
     );
     let running_background_task_sessions = running_background_task_sessions.map_err(|error| {
         tracing::warn!(
@@ -346,6 +363,10 @@ async fn list_sessions<S: SessionSource>(
     let interrupted_session_ids = interrupted_sessions
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let question_previews = question_previews.map_err(|error| {
+        tracing::warn!(%error, "failed to load session question previews");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     let turn_kinds = user_turns(response_sessions.iter(), &snapshot.agent_config)
         .into_iter()
         .map(|turn| (turn.session.session_id.as_str(), turn.kind))
@@ -525,8 +546,10 @@ async fn list_sessions<S: SessionSource>(
                     .get(&session.session_id)
                     .cloned()
                     .unwrap_or_default(),
-                preview: proposal_title
+                preview: question_previews
+                    .get(&session.session_id)
                     .cloned()
+                    .or_else(|| proposal_title.cloned())
                     .or_else(|| todo_title.cloned())
                     .or_else(|| session.last_message.clone()),
                 updated_at: session.updated_at,
@@ -638,6 +661,30 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         unanswered_todo_titles,
         agent_config: config::load_config_or_default().agent,
     })
+}
+
+fn question_previews(
+    sessions: &[Session],
+    loaders: &super::messages::RouteLoaders,
+) -> anyhow::Result<HashMap<String, String>> {
+    let mut previews = HashMap::new();
+    for session in sessions
+        .iter()
+        .filter(|session| session.is_current_tool_named("AskUserQuestion"))
+    {
+        match loaders.question_preview(session) {
+            Ok(Some(preview)) => {
+                previews.insert(session.session_id.clone(), preview);
+            }
+            Ok(None) => {}
+            Err(error) => tracing::warn!(
+                session = %session.session_id,
+                %error,
+                "failed to parse session question preview",
+            ),
+        }
+    }
+    Ok(previews)
 }
 
 fn session_tree_related_ids(sessions: &[Session]) -> HashSet<String> {
@@ -775,6 +822,15 @@ mod tests {
             })
         }
 
+        async fn question_previews(
+            &self,
+            sessions: &[Session],
+        ) -> anyhow::Result<HashMap<String, String>> {
+            let sessions = sessions.to_vec();
+            let loaders = self.message_loaders.clone();
+            tokio::task::spawn_blocking(move || question_previews(&sessions, &loaders)).await?
+        }
+
         async fn fetch_task_metadata(&self, _sessions: &[Session]) -> SessionTaskMetadata {
             SessionTaskMetadata {
                 links: self.task_links.clone(),
@@ -857,6 +913,13 @@ mod tests {
 
         async fn fetch_task_metadata(&self, sessions: &[Session]) -> SessionTaskMetadata {
             self.source.fetch_task_metadata(sessions).await
+        }
+
+        async fn question_previews(
+            &self,
+            sessions: &[Session],
+        ) -> anyhow::Result<HashMap<String, String>> {
+            self.source.question_previews(sessions).await
         }
 
         async fn fetch_pull_requests(
@@ -1324,6 +1387,68 @@ mod tests {
                 "critUrl": details.crit_url
             }]
         })
+    }
+
+    #[rstest]
+    #[case::one_question("single-question-request", "Which display mode?")]
+    #[case::three_questions("multiple-question-request", "Which output format? +2")]
+    #[tokio::test]
+    async fn ask_user_question_preview_shows_the_first_question_and_remaining_count(
+        mut source: TestSessionSource,
+        #[case] request_id: &str,
+        #[case] expected_preview: &str,
+    ) {
+        source.web_states[0].later_until = None;
+        source.sessions[0].current_tool = Some("AskUserQuestion".to_string());
+        source.sessions[0].current_tool_name = Some("AskUserQuestion".to_string());
+        let questions = match request_id {
+            "single-question-request" => serde_json::json!([
+                {"question": "Which display mode?"},
+            ]),
+            "multiple-question-request" => serde_json::json!([
+                {"question": "Which output format?"},
+                {"question": "Include examples?"},
+                {"question": "Include a summary?"},
+            ]),
+            _ => serde_json::Value::Null,
+        };
+        let transcript = serde_json::json!({
+            "type": "assistant",
+            "message": {"content": [{
+                "type": "tool_use",
+                "id": "fixture-question-request",
+                "name": "AskUserQuestion",
+                "input": {"questions": questions},
+            }]},
+        });
+        let transcript_dir = tempfile::tempdir().unwrap();
+        let transcript_path = transcript_dir.path().join("transcript.jsonl");
+        std::fs::write(&transcript_path, serde_json::to_vec(&transcript).unwrap()).unwrap();
+        source.sessions[0].transcript_path = Some(transcript_path);
+
+        let mut expected = expected_response(
+            "needs_action",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: Some("Question"),
+                category_when_not_later: "needs_action",
+                is_paused: false,
+                unread: true,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["preview"] = serde_json::json!(expected_preview);
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
 
     #[rstest]
