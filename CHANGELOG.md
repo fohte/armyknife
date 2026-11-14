@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.688](https://github.com/fohte/armyknife/compare/v0.1.687...v0.1.688) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** keep pending cards at the end ([#1754](https://github.com/fohte/armyknife/issues/1754)) ([615680d](https://github.com/fohte/armyknife/commit/615680db23e068269526ad3e353bb1bcbbb046a1))
+
 ## [0.1.687](https://github.com/fohte/armyknife/compare/v0.1.686...v0.1.687) (2026-11-14)
 
 
