@@ -680,15 +680,11 @@ mod tests {
     #[case::not_async(false, "async_launched", false)]
     #[case::not_launched(true, "running", false)]
     fn reports_only_asynchronous_agent_results(
+        mut async_agent_transcript: String,
         #[case] is_async: bool,
         #[case] status: &str,
         #[case] is_reported: bool,
     ) {
-        let mut transcript = indoc! {r#"
-            {"uuid":"fixture-agent-prompt-row","parentUuid":null,"type":"user","message":{"content":"Review the synthetic change."}}
-            {"uuid":"fixture-agent-call-row","parentUuid":"fixture-agent-prompt-row","type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-agent-tool-use-id","name":"Agent","input":{"subagent_type":"FixtureExplorer","description":"Review the synthetic change","prompt":"Review a fictional change."}}]}}
-        "#}
-        .to_string();
         let result_record = json!({
             "uuid": "fixture-agent-result-row",
             "parentUuid": "fixture-agent-call-row",
@@ -705,8 +701,8 @@ mod tests {
                 "content": "agentId: fixture-agent-id (internal ID)",
             }]},
         });
-        transcript.push_str(&serde_json::to_string(&result_record).unwrap());
-        transcript.push('\n');
+        async_agent_transcript.push_str(&serde_json::to_string(&result_record).unwrap());
+        async_agent_transcript.push('\n');
         let expected_tasks = if is_reported {
             vec![BackgroundTask {
                 id: "fixture-agent-id".to_string(),
@@ -722,7 +718,7 @@ mod tests {
 
         assert_eq!(
             parse_with_background_tasks_and_peer_out_messages(
-                Cursor::new(transcript),
+                Cursor::new(async_agent_transcript),
                 None,
                 None,
                 None,
@@ -761,15 +757,28 @@ mod tests {
     )]
     #[case::note("note", "Agent \"Fixture agent\" has interim work")]
     fn keeps_subagent_until_its_own_background_work_finishes(
+        mut async_agent_transcript: String,
         #[case] retained_reason_tag: &str,
         #[case] expected_interim_event_text: &str,
     ) {
-        let mut transcript = indoc! {r#"
-            {"uuid":"fixture-agent-prompt-row","parentUuid":null,"type":"user","message":{"content":"Review the synthetic change."}}
-            {"uuid":"fixture-agent-call-row","parentUuid":"fixture-agent-prompt-row","type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-agent-tool-use-id","name":"Agent","input":{"subagent_type":"FixtureExplorer","description":"Review the synthetic change","prompt":"Review a fictional change."}}]}}
-            {"uuid":"fixture-agent-result-row","parentUuid":"fixture-agent-call-row","type":"user","sourceToolAssistantUUID":"fixture-agent-call-row","toolUseResult":{"agentId":"fixture-agent-id","isAsync":true,"status":"async_launched"},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-agent-tool-use-id","content":"Agent launched."}]}}
-        "#}
-        .to_string();
+        let result_record = json!({
+            "uuid": "fixture-agent-result-row",
+            "parentUuid": "fixture-agent-call-row",
+            "type": "user",
+            "sourceToolAssistantUUID": "fixture-agent-call-row",
+            "toolUseResult": {
+                "agentId": "fixture-agent-id",
+                "isAsync": true,
+                "status": "async_launched",
+            },
+            "message": {"content": [{
+                "type": "tool_result",
+                "tool_use_id": "fixture-agent-tool-use-id",
+                "content": "Agent launched.",
+            }]},
+        });
+        async_agent_transcript.push_str(&serde_json::to_string(&result_record).unwrap());
+        async_agent_transcript.push('\n');
         let mut interim_notification = indoc! {r#"
             {"type":"user","origin":{"kind":"task-notification"},"message":{"content":"<task-notification>\n<task-id>fixture-agent-id</task-id>\n<tool-use-id>fixture-tool-use-id</tool-use-id>\n<output-file>/fixture/agent-output.log</output-file>\n<status>completed</status>\n<summary>Agent \"Fixture agent\" is waiting on its own background work</summary>\n<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>\n</task-notification>"}}
         "#}
@@ -788,9 +797,9 @@ mod tests {
         let final_notification = indoc! {r#"
             {"type":"user","origin":{"kind":"task-notification"},"message":{"content":"<task-notification>\n<task-id>fixture-agent-id</task-id>\n<tool-use-id>fixture-tool-use-id</tool-use-id>\n<output-file>/fixture/agent-output.log</output-file>\n<status>completed</status>\n<summary>Agent \"Fixture agent\" completed its work</summary>\n</task-notification>"}}
         "#};
-        transcript.push_str(&interim_notification);
+        async_agent_transcript.push_str(&interim_notification);
         let interim_result = parse_with_background_tasks_and_peer_out_messages(
-            Cursor::new(transcript.clone()),
+            Cursor::new(async_agent_transcript.clone()),
             None,
             None,
             None,
@@ -836,11 +845,11 @@ mod tests {
             ),
         );
 
-        transcript.push_str(final_notification);
+        async_agent_transcript.push_str(final_notification);
 
         assert_eq!(
             parse_with_background_tasks_and_peer_out_messages(
-                Cursor::new(transcript),
+                Cursor::new(async_agent_transcript),
                 None,
                 None,
                 None,
@@ -882,6 +891,15 @@ mod tests {
                 Vec::new(),
             ),
         );
+    }
+
+    #[fixture]
+    fn async_agent_transcript() -> String {
+        indoc! {r#"
+            {"uuid":"fixture-agent-prompt-row","parentUuid":null,"type":"user","message":{"content":"Review the synthetic change."}}
+            {"uuid":"fixture-agent-call-row","parentUuid":"fixture-agent-prompt-row","type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-agent-tool-use-id","name":"Agent","input":{"subagent_type":"FixtureExplorer","description":"Review the synthetic change","prompt":"Review a fictional change."}}]}}
+        "#}
+        .to_string()
     }
 
     #[fixture]
