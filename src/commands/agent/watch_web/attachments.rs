@@ -265,10 +265,12 @@ pub(super) fn append_image_previews_to_comment(
     let previews = attachments
         .iter()
         .filter_map(|attachment| {
-            attachment
-                .image_source
-                .as_deref()
-                .map(|source| format!("![{}]({source})", attachment.name))
+            attachment.image_source.as_deref().map(|source| {
+                format!(
+                    "![{}]({source})",
+                    escape_markdown_image_alt(&attachment.name)
+                )
+            })
         })
         .collect::<Vec<_>>();
     if previews.is_empty() {
@@ -289,6 +291,17 @@ pub(super) fn append_image_previews_to_comment(
         .to_string(),
         None => previews,
     })
+}
+
+fn escape_markdown_image_alt(name: &str) -> String {
+    let mut escaped = String::with_capacity(name.len());
+    for character in name.chars() {
+        if matches!(character, '\\' | '[' | ']') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
 }
 
 fn prune_expired(directory: &Path) -> std::io::Result<()> {
@@ -400,12 +413,29 @@ mod tests {
 
     use super::{
         Attachment, AttachmentKind, LegacyImageRequest, MAX_ATTACHMENT_BYTES, Request,
-        ValidationError, validate,
+        SavedAttachment, ValidationError, append_image_previews_to_comment, validate,
     };
 
     const PNG_SIGNATURE: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
     const GIF_SIGNATURE: &[u8] = b"GIF89a";
     const WEBP_SIGNATURE: &[u8] = b"RIFF0000WEBP";
+
+    #[rstest]
+    #[case::opening_bracket("map[copy].png", r"![map\[copy\].png](/api/images/fixture.png)")]
+    #[case::closing_bracket("map]copy.png", r"![map\]copy.png](/api/images/fixture.png)")]
+    #[case::backslash("map\\copy.png", r"![map\\copy.png](/api/images/fixture.png)")]
+    fn escapes_markdown_image_alt_text(#[case] name: &str, #[case] expected: &str) {
+        let attachment = SavedAttachment {
+            path: std::path::PathBuf::from("fixture.png"),
+            name: name.to_string(),
+            image_source: Some("/api/images/fixture.png".to_string()),
+        };
+
+        assert_eq!(
+            append_image_previews_to_comment(None, &[attachment]),
+            Some(expected.to_string())
+        );
+    }
 
     #[test]
     fn accepts_non_image_files_and_preserves_their_names() {
