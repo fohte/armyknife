@@ -220,7 +220,7 @@ pub(super) async fn send_queued_prompt(delivery: QueuedPromptDelivery) -> Result
         return Err(error);
     }
     let session_id = session.session_id.clone();
-    run_blocking(move || {
+    if let Err(error) = run_blocking(move || {
         store::update_session_in(&sessions_dir, &session_id, |session| {
             if session
                 .last_prompted_at
@@ -232,7 +232,14 @@ pub(super) async fn send_queued_prompt(delivery: QueuedPromptDelivery) -> Result
             true
         })
     })
-    .await?;
+    .await
+    {
+        tracing::warn!(
+            session_id = %session.session_id,
+            error = %error.message,
+            "failed to save the prompt timestamp after delivering a watch-web message"
+        );
+    }
     Ok(())
 }
 

@@ -36,7 +36,6 @@ mod background_tasks;
 mod pane_binding;
 pub(super) mod permission_notification;
 mod permission_request;
-mod prompt_activity;
 mod prompt_skill;
 mod session_lifecycle;
 mod session_metadata;
@@ -679,7 +678,7 @@ fn process_hook_event_impl_with_settings(
     session.restore_from_archive();
     if event == HookEvent::UserPromptSubmit
         && input.agent_id.is_none()
-        && !prompt_activity::is_peer_message(input.prompt.as_deref())
+        && !super::peer_message::is_peer_message(input.prompt.as_deref())
     {
         session.last_prompted_at = Some(now);
     }
@@ -5520,7 +5519,23 @@ mod tests {
         }
 
         #[rstest]
-        #[case::peer(None, "Another Claude session sent a message:\nContinue the review.")]
+        #[case::peer(
+            None,
+            indoc::indoc! {"
+                Another Claude session sent a message:
+                Continue the review.
+            "}
+        )]
+        #[case::armyknife_peer(
+            None,
+            indoc::indoc! {"
+                <peer-message>
+                - From session_id: fixture-peer-id
+
+                Continue the review.
+                </peer-message>
+            "}
+        )]
         #[case::subagent(Some("subagent-id"), "Continue the review.")]
         fn non_human_prompt_does_not_update_the_human_prompt_timestamp(
             #[case] agent_id: Option<&str>,

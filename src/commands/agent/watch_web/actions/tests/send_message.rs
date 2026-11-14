@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use axum::http::StatusCode;
+use chrono::Utc;
 use rstest::rstest;
 use serde_json::json;
 use tower::ServiceExt;
@@ -43,18 +44,15 @@ async fn send_message_forwards_nonempty_content_unchanged(action_context: Action
         .first()
         .unwrap()
         .sent_at;
-    assert_eq!(
+    let actual = (
+        response_snapshot(response, &action_context).await,
+        normalized_queued_prompts(&action_context, "sample-session", None),
         action_context
             .load_session("sample-session")
             .last_prompted_at,
-        Some(sent_at),
     );
-
     assert_eq!(
-        (
-            response_snapshot(response, &action_context).await,
-            normalized_queued_prompts(&action_context, "sample-session", None),
-        ),
+        actual,
         (
             json!({
                 "status": StatusCode::OK.as_u16(),
@@ -70,7 +68,97 @@ async fn send_message_forwards_nonempty_content_unchanged(action_context: Action
                 "content": "  continue the investigation  ",
                 "sentAt": "<sent-at>",
             }]),
+            Some(sent_at),
         ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn send_message_keeps_a_newer_prompt_timestamp(action_context: ActionContext) {
+    action_context.save_session(&session("sample-session"));
+    let later_prompt_at = Utc::now() + chrono::Duration::seconds(1);
+    let callback_prompt_at = later_prompt_at;
+    let sessions_dir = action_context.temp_dir.path().join("sessions");
+    action_context.set_after_message(move || {
+        store::update_session_in(&sessions_dir, "sample-session", |session| {
+            session.last_prompted_at = Some(callback_prompt_at);
+            true
+        })
+        .unwrap();
+    });
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            "/sessions/sample-session/messages",
+            json!({ "content": "continue the investigation" }),
+        ))
+        .await
+        .unwrap();
+
+    let actual = (
+        response_snapshot(response, &action_context).await,
+        normalized_queued_prompts(&action_context, "sample-session", None),
+        action_context
+            .load_session("sample-session")
+            .last_prompted_at,
+    );
+    assert_eq!(
+        actual,
+        (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "message",
+                    "sessionId": "sample-session",
+                    "content": "continue the investigation",
+                }],
+            }),
+            json!([{
+                "id": "<prompt-id>",
+                "content": "continue the investigation",
+                "sentAt": "<sent-at>",
+            }]),
+            Some(later_prompt_at),
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn send_message_stays_successful_when_prompt_timestamp_cannot_be_saved(
+    action_context: ActionContext,
+) {
+    action_context.save_session(&session("sample-session"));
+    let sessions_dir = action_context.temp_dir.path().join("sessions");
+    action_context.set_after_message(move || {
+        let database_path = sessions_dir.join("sessions.db");
+        std::fs::remove_file(&database_path).unwrap();
+        std::fs::create_dir(&database_path).unwrap();
+    });
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            "/sessions/sample-session/messages",
+            json!({ "content": "continue the investigation" }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response_snapshot(response, &action_context).await,
+        json!({
+            "status": StatusCode::OK.as_u16(),
+            "body": { "ok": true },
+            "calls": [{
+                "kind": "message",
+                "sessionId": "sample-session",
+                "content": "continue the investigation",
+            }],
+        }),
     );
 }
 

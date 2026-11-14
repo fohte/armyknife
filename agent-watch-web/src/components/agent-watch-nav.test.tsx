@@ -228,6 +228,27 @@ it('shows only the ten most recently prompted sessions in newest-first order', (
   ])
 })
 
+it('opens the selected session from Recent', () => {
+  const onSelectSession = vi.fn<(id: string) => void>()
+  renderNav([], {
+    sessions: [
+      {
+        ...baseTodaySession,
+        id: 'recent-session',
+        lastPromptedAt: '2026-01-01T00:00:00Z',
+      },
+    ],
+    onSelectSession,
+  })
+
+  const button = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Open Review the retry policy recent session"]',
+  )
+  act(() => button?.click())
+
+  expect(onSelectSession.mock.calls).toEqual([['recent-session']])
+})
+
 it('keeps the Recent section off the mobile navigation', () => {
   renderNav([], {
     isMobile: true,
