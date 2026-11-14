@@ -1409,6 +1409,42 @@ mod tests {
         expected
     }
 
+    fn unanswered_question_transcript() -> Vec<serde_json::Value> {
+        vec![
+            serde_json::json!({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use",
+                    "id": "fixture-earlier-question",
+                    "name": "AskUserQuestion",
+                    "input": {"questions": [{"question": "Which earlier option?"}]},
+                }]},
+            }),
+            serde_json::json!({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use",
+                    "id": "fixture-latest-question",
+                    "name": "AskUserQuestion",
+                    "input": {"questions": [{"question": "Which recent option?"}]},
+                }]},
+            }),
+        ]
+    }
+
+    fn answered_question_transcript() -> Vec<serde_json::Value> {
+        let mut records = unanswered_question_transcript();
+        records.push(serde_json::json!({
+            "type": "user",
+            "message": {"content": [{
+                "type": "tool_result",
+                "tool_use_id": "fixture-latest-question",
+                "content": "Your questions have been answered: \"Which recent option?\"=\"First fictional option\".",
+            }]},
+        }));
+        records
+    }
+
     #[rstest]
     #[case::one_question(
         serde_json::json!([{"question": "Which display mode?"}]),
@@ -1529,59 +1565,13 @@ mod tests {
     #[rstest]
     #[case::latest_question_is_answered(
         Some("AskUserQuestion"),
-        vec![
-            serde_json::json!({
-                "type": "assistant",
-                "message": {"content": [{
-                    "type": "tool_use",
-                    "id": "fixture-earlier-question",
-                    "name": "AskUserQuestion",
-                    "input": {"questions": [{"question": "Which earlier option?"}]},
-                }]},
-            }),
-            serde_json::json!({
-                "type": "assistant",
-                "message": {"content": [{
-                    "type": "tool_use",
-                    "id": "fixture-latest-question",
-                    "name": "AskUserQuestion",
-                    "input": {"questions": [{"question": "Which recent option?"}]},
-                }]},
-            }),
-            serde_json::json!({
-                "type": "user",
-                "message": {"content": [{
-                    "type": "tool_result",
-                    "tool_use_id": "fixture-latest-question",
-                    "content": "Your questions have been answered: \"Which recent option?\"=\"First fictional option\".",
-                }]},
-            }),
-        ],
-        "Question",
+        answered_question_transcript(),
+        "Question"
     )]
     #[case::current_tool_is_not_ask_user_question(
         None,
-        vec![
-            serde_json::json!({
-                "type": "assistant",
-                "message": {"content": [{
-                    "type": "tool_use",
-                    "id": "fixture-earlier-question",
-                    "name": "AskUserQuestion",
-                    "input": {"questions": [{"question": "Which earlier option?"}]},
-                }]},
-            }),
-            serde_json::json!({
-                "type": "assistant",
-                "message": {"content": [{
-                    "type": "tool_use",
-                    "id": "fixture-latest-question",
-                    "name": "AskUserQuestion",
-                    "input": {"questions": [{"question": "Which recent option?"}]},
-                }]},
-            }),
-        ],
-        "Stopped",
+        unanswered_question_transcript(),
+        "Stopped"
     )]
     #[tokio::test]
     async fn question_preview_falls_back_to_last_message_when_no_question_is_pending(
