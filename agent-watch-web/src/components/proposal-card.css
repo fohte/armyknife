@@ -26,6 +26,12 @@
   font-size: 13px;
 }
 
+.chat-proposal-card .chat-proposal-withdrawal-comment {
+  margin: 0 0 12px;
+  color: var(--aw-text-muted);
+  font-size: 13px;
+}
+
 .chat-proposal-options {
   display: grid;
   gap: 7px;

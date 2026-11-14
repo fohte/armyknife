@@ -166,6 +166,55 @@ fn adds_session_replacement_table_to_version_eighteen_database(database_fixture:
 }
 
 #[rstest]
+fn adds_proposal_resolution_and_comment_to_version_nineteen_database(
+    database_fixture: DatabaseFixture,
+) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
+    Migrations::from_slice(&MIGRATION_ENTRIES[..19])
+        .to_latest(&mut connection)
+        .expect("version nineteen schema should be created");
+    connection
+        .execute(
+            "INSERT INTO agent_proposal (session_id, seq, body, created_at)
+             VALUES ('fixture-session', 1, '{}', '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("version nineteen proposal should be inserted");
+    drop(connection);
+
+    let connection = super::super::open_connection(temp_dir.path())
+        .expect("version nineteen database should migrate to the latest schema");
+    let actual = connection
+        .query_row(
+            "SELECT resolution, comment,
+                    EXISTS(SELECT 1 FROM pragma_table_info('agent_proposal') WHERE name = 'resolution'),
+                    EXISTS(SELECT 1 FROM pragma_table_info('agent_proposal') WHERE name = 'comment')
+             FROM agent_proposal WHERE session_id = 'fixture-session' AND seq = 1",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, bool>(2)?,
+                    row.get::<_, bool>(3)?,
+                ))
+            },
+        )
+        .expect("legacy proposal and new columns should be queryable");
+    let actual_user_version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("database migration version should be readable");
+
+    assert_eq!(
+        (actual, actual_user_version),
+        ((None, None, true, true), 20)
+    );
+}
+
+#[rstest]
 fn resolves_legacy_queued_prompts_without_message_ids(database_fixture: DatabaseFixture) {
     let DatabaseFixture {
         temp_dir,

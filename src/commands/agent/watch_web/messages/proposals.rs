@@ -31,6 +31,8 @@ pub(super) fn proposal_chat_item(proposal: &AgentProposal) -> Result<ProposalIte
             options: body.options,
             answer,
             resolved: proposal.resolved_at.is_some(),
+            resolution: proposal.resolution,
+            comment: proposal.comment.clone(),
         },
     })
 }

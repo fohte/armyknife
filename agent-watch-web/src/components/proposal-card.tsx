@@ -13,6 +13,8 @@ type ProposalCardProps = {
   options: ProposalOption[]
   answer: ProposalAnswer | null
   resolved: boolean
+  resolution: 'withdrawn' | null
+  withdrawalComment: string | null
   isMobile: boolean
   defaultChoice?: number | null
   defaultComment?: string
@@ -30,6 +32,8 @@ export function ProposalCard({
   options,
   answer,
   resolved,
+  resolution,
+  withdrawalComment,
   isMobile,
   defaultChoice = null,
   defaultComment = '',
@@ -45,15 +49,16 @@ export function ProposalCard({
   const [isSubmitting, setIsSubmitting] = useState(false)
   const cardRef = useRef<HTMLElement | null>(null)
   const latestAnswer = answer ?? submittedAnswer
-  const isAnswered = latestAnswer !== null || resolved
+  const isWithdrawn = resolution === 'withdrawn'
+  const isAnswered = latestAnswer !== null || resolved || isWithdrawn
   const isDisabled = isAnswered || isSubmitting
 
   useEffect(() => {
-    if (answer !== null || resolved) {
+    if (answer !== null || resolved || isWithdrawn) {
       setSelectedChoice(answer?.choice ?? null)
       if (answer !== null) setComment(answer.comment ?? '')
     }
-  }, [answer, resolved])
+  }, [answer, resolved, isWithdrawn])
 
   const submitAnswer = useCallback(
     async (choice: number | null) => {
@@ -125,9 +130,11 @@ export function ProposalCard({
       ? latestAnswer.choice === null
         ? 'asked for another option'
         : `chose ${choiceLabel(latestAnswer.choice)}`
-      : resolved
-        ? 'answered elsewhere'
-        : 'waiting for your choice'
+      : isWithdrawn
+        ? 'withdrawn'
+        : resolved
+          ? 'answered elsewhere'
+          : 'waiting for your choice'
 
   return (
     <article
@@ -141,6 +148,9 @@ export function ProposalCard({
       <h3>{title}</h3>
       {summary !== null ? (
         <p className="chat-proposal-summary">{summary}</p>
+      ) : null}
+      {isWithdrawn && withdrawalComment !== null ? (
+        <p className="chat-proposal-withdrawal-comment">{withdrawalComment}</p>
       ) : null}
       <div
         className="chat-proposal-options"

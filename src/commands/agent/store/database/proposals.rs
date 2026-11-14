@@ -14,6 +14,30 @@ pub(crate) struct AgentProposal {
     pub(crate) created_at: DateTime<Utc>,
     pub(crate) answer: Option<String>,
     pub(crate) resolved_at: Option<DateTime<Utc>>,
+    pub(crate) resolution: Option<ProposalResolution>,
+    pub(crate) comment: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ProposalResolution {
+    Withdrawn,
+}
+
+impl ProposalResolution {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Withdrawn => "withdrawn",
+        }
+    }
+
+    fn parse(value: Option<String>) -> Result<Option<Self>> {
+        match value.as_deref() {
+            Some("withdrawn") => Ok(Some(Self::Withdrawn)),
+            Some(value) => anyhow::bail!("unknown proposal resolution: {value}"),
+            None => Ok(None),
+        }
+    }
 }
 
 pub(crate) fn add_agent_proposal(sessions_dir: &Path, session_id: &str, body: &str) -> Result<i64> {
@@ -69,7 +93,7 @@ pub(crate) fn agent_proposals(sessions_dir: &Path, session_id: &str) -> Result<V
 
     let connection = open_connection(sessions_dir)?;
     let mut statement = connection.prepare(
-        "SELECT session_id, seq, body, created_at, answer, resolved_at
+        "SELECT session_id, seq, body, created_at, answer, resolved_at, resolution, comment
          FROM agent_proposal WHERE session_id = ?1 ORDER BY seq",
     )?;
     let rows = statement.query_map([session_id], |row| {
@@ -80,10 +104,12 @@ pub(crate) fn agent_proposals(sessions_dir: &Path, session_id: &str) -> Result<V
             row.get::<_, String>(3)?,
             row.get::<_, Option<String>>(4)?,
             row.get::<_, Option<String>>(5)?,
+            row.get::<_, Option<String>>(6)?,
+            row.get::<_, Option<String>>(7)?,
         ))
     })?;
     rows.map(|row| {
-        let (session_id, seq, body, created_at, answer, resolved_at) = row?;
+        let (session_id, seq, body, created_at, answer, resolved_at, resolution, comment) = row?;
         Ok(AgentProposal {
             session_id,
             seq,
@@ -99,9 +125,39 @@ pub(crate) fn agent_proposals(sessions_dir: &Path, session_id: &str) -> Result<V
                         .map(|parsed| parsed.with_timezone(&Utc))
                 })
                 .transpose()?,
+            resolution: ProposalResolution::parse(resolution)?,
+            comment,
         })
     })
     .collect()
+}
+
+pub(crate) fn resolve_agent_proposal(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    comment: Option<&str>,
+) -> Result<bool> {
+    validate_session_id(session_id)?;
+    let mut connection = open_connection(sessions_dir)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let changed = transaction.execute(
+        "UPDATE agent_proposal
+         SET resolution = ?1, comment = ?2, resolved_at = ?3
+         WHERE session_id = ?4 AND seq = ?5 AND answer IS NULL AND resolved_at IS NULL",
+        params![
+            ProposalResolution::Withdrawn.as_str(),
+            comment,
+            Utc::now().to_rfc3339(),
+            session_id,
+            seq
+        ],
+    )?;
+    if changed > 0 {
+        increment_revision(&transaction)?;
+    }
+    transaction.commit()?;
+    Ok(changed > 0)
 }
 
 pub(crate) fn write_agent_proposal_answer(
@@ -115,7 +171,7 @@ pub(crate) fn write_agent_proposal_answer(
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let changed = transaction.execute(
         "UPDATE agent_proposal SET answer = ?1, resolved_at = COALESCE(resolved_at, ?2)
-         WHERE session_id = ?3 AND seq = ?4 AND answer IS NULL",
+         WHERE session_id = ?3 AND seq = ?4 AND answer IS NULL AND resolved_at IS NULL",
         params![answer, Utc::now().to_rfc3339(), session_id, seq],
     )?;
     if changed > 0 {
@@ -188,6 +244,8 @@ mod tests {
                         created_at: epoch,
                         answer: None,
                         resolved_at: None,
+                        resolution: None,
+                        comment: None,
                     },
                     AgentProposal {
                         session_id: "session-a".to_string(),
@@ -196,6 +254,8 @@ mod tests {
                         created_at: epoch,
                         answer: None,
                         resolved_at: None,
+                        resolution: None,
+                        comment: None,
                     },
                 ],
                 vec![

@@ -33,6 +33,8 @@ function props(overrides: Partial<Props> = {}): Props {
     ],
     answer: null,
     resolved: false,
+    resolution: null,
+    withdrawalComment: null,
     isMobile: false,
     onAnswer: vi.fn(() => Promise.resolve(true)),
     ...overrides,
@@ -326,6 +328,44 @@ it('disables choices when the proposal was answered elsewhere', () => {
 
   expect(snapshot()).toEqual({
     status: 'Proposal · answered elsewhere',
+    optionsDisabled: [true, true],
+    buttonsDisabled: [true, true],
+    commentDisabled: true,
+  })
+})
+
+it('shows a withdrawn proposal reason and disables every answer control', () => {
+  renderCard(
+    props({
+      resolved: true,
+      resolution: 'withdrawn',
+      withdrawalComment: 'The direction changed.',
+    }),
+  )
+
+  const snapshot = () => ({
+    status: container.querySelector('h2')?.textContent,
+    comment: container.querySelector('.chat-proposal-withdrawal-comment')
+      ?.textContent,
+    optionsDisabled: Array.from(
+      container.querySelectorAll<HTMLInputElement>(
+        '.chat-proposal-option input',
+      ),
+      (input) => input.disabled,
+    ),
+    buttonsDisabled: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.chat-proposal-actions button',
+      ),
+      (button) => button.disabled,
+    ),
+    commentDisabled: container.querySelector<HTMLTextAreaElement>(
+      '.chat-proposal-comment',
+    )?.disabled,
+  })
+  expect(snapshot()).toEqual({
+    status: 'Proposal · withdrawn',
+    comment: 'The direction changed.',
     optionsDisabled: [true, true],
     buttonsDisabled: [true, true],
     commentDisabled: true,

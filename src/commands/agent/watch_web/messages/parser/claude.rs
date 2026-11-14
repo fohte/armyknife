@@ -512,6 +512,8 @@ mod tests {
             }],
             answer: None,
             resolved: false,
+            resolution: None,
+            comment: None,
         };
 
         let (messages, background_tasks, queued_prompt_ids) =
@@ -629,6 +631,8 @@ mod tests {
             }],
             answer: None,
             resolved: true,
+            resolution: None,
+            comment: None,
         };
         let recorded_proposal = ChatItem::Proposal {
             seq: 2,
@@ -643,6 +647,8 @@ mod tests {
             }],
             answer: None,
             resolved: false,
+            resolution: None,
+            comment: None,
         };
 
         let (messages, background_tasks, queued_prompt_ids) =
@@ -721,6 +727,8 @@ mod tests {
             }],
             answer: None,
             resolved: false,
+            resolution: None,
+            comment: None,
         };
         let proposal_item = ProposalItem {
             seq: 1,
