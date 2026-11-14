@@ -150,7 +150,7 @@ impl TranscriptFingerprint {
     }
 }
 
-pub(super) fn transcript_fingerprint(
+pub(in crate::commands::agent::watch_web::messages) fn transcript_fingerprint(
     engine: Engine,
     path: Option<&Path>,
 ) -> anyhow::Result<Option<TranscriptFingerprint>> {

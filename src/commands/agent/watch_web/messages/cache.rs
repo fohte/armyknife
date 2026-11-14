@@ -15,8 +15,9 @@ use super::{ConversationResponse, ParentSession, RouteLoaders};
 
 mod transcript_fingerprint;
 
-use transcript_fingerprint::transcript_fingerprint;
-pub(super) use transcript_fingerprint::{TranscriptChange, TranscriptFingerprint};
+pub(super) use transcript_fingerprint::{
+    TranscriptChange, TranscriptFingerprint, transcript_fingerprint,
+};
 
 const MAX_CACHED_SESSIONS: usize = 8;
 const MAX_CACHED_BACKGROUND_TASK_SESSIONS: usize = 256;

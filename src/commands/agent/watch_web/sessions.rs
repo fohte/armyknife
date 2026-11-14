@@ -26,6 +26,7 @@ use crate::infra::github::{PrHeadInfo, PrState};
 use crate::shared::config::{self, AgentConfig};
 
 mod category;
+mod question_preview;
 use self::category::{
     SessionCategory, SessionKind, category_for_with_interruption, category_for_with_later,
     kind_for_with_todo,
@@ -42,6 +43,7 @@ mod tree;
 use self::feed::{
     SessionSnapshotCache, SessionsFeedResponse, SessionsQuery, session_feed_response,
 };
+use self::question_preview::question_previews;
 use self::task_selection::primary_task_id;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -663,30 +665,6 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
     })
 }
 
-fn question_previews(
-    sessions: &[Session],
-    loaders: &super::messages::RouteLoaders,
-) -> anyhow::Result<HashMap<String, String>> {
-    let mut previews = HashMap::new();
-    for session in sessions
-        .iter()
-        .filter(|session| session.is_current_tool_named("AskUserQuestion"))
-    {
-        match loaders.question_preview(session) {
-            Ok(Some(preview)) => {
-                previews.insert(session.session_id.clone(), preview);
-            }
-            Ok(None) => {}
-            Err(error) => tracing::warn!(
-                session = %session.session_id,
-                %error,
-                "failed to parse session question preview",
-            ),
-        }
-    }
-    Ok(previews)
-}
-
 fn session_tree_related_ids(sessions: &[Session]) -> HashSet<String> {
     let tree_sessions = sessions
         .iter()
@@ -711,7 +689,7 @@ fn session_tree_related_ids(sessions: &[Session]) -> HashSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent::types::{AgentStatus, TmuxInfo};
+    use crate::commands::agent::types::{AgentStatus, MAIN_THREAD_AGENT_KEY, TmuxInfo};
     use crate::shared::config::{
         AgentStatusConfig, AgentStatusState, AgentWorkTypeColor, AgentWorkTypeConfig,
         AgentWorkTypeNamedColor,
@@ -1447,6 +1425,65 @@ mod tests {
             },
         );
         expected["sessions"][0]["preview"] = serde_json::json!(expected_preview);
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn ask_user_question_preview_uses_pending_permission_data_without_transcript_question(
+        mut source: TestSessionSource,
+    ) {
+        source.web_states[0].later_until = None;
+        source.sessions[0].current_tool = Some("AskUserQuestion".to_string());
+        source.sessions[0].current_tool_name = Some("AskUserQuestion".to_string());
+        source.sessions[0]
+            .pending_permission_agent_ids
+            .insert(MAIN_THREAD_AGENT_KEY.to_string());
+        source.sessions[0].pending_permission_request_ids.insert(
+            MAIN_THREAD_AGENT_KEY.to_string(),
+            "fixture-permission-question".to_string(),
+        );
+        source.message_loaders = super::super::messages::RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
+        .with_permission_request_data_loader(|_, request_id| {
+            Ok((request_id == "fixture-permission-question").then(|| {
+                store::PermissionRequestData {
+                    tool_name: Some("AskUserQuestion".to_string()),
+                    tool_input: serde_json::json!({
+                        "questions": [{"question": "Which fallback should appear?"}],
+                    }),
+                    pending: true,
+                }
+            }))
+        });
+
+        let mut expected = expected_response(
+            "needs_action",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: Some("Approve"),
+                category_when_not_later: "needs_action",
+                is_paused: false,
+                unread: true,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["preview"] = serde_json::json!("Which fallback should appear?");
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
