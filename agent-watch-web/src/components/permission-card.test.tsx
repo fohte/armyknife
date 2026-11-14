@@ -2,7 +2,10 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
-import { PermissionCard } from '#components/permission-card'
+import {
+  type PendingPermissionActionState,
+  PermissionCard,
+} from '#components/permission-card'
 import type { ChatItem, SessionActions } from '#types'
 
 let container: HTMLDivElement
@@ -29,9 +32,13 @@ afterEach(() => {
 
 function renderPermissionCard(
   message: Extract<ChatItem, { type: 'permission' }>,
-  options: { actions?: SessionActions | null; isCodex?: boolean } = {},
+  options: {
+    actions?: SessionActions | null
+    isCodex?: boolean
+    pendingAction?: PendingPermissionActionState
+  } = {},
 ) {
-  const { actions = null, isCodex = false } = options
+  const { actions = null, isCodex = false, pendingAction = null } = options
   root = createRoot(container)
   act(() => {
     root?.render(
@@ -39,7 +46,7 @@ function renderPermissionCard(
         message={message}
         actions={actions}
         actionsReady
-        pendingAction={null}
+        pendingAction={pendingAction}
         isCodex={isCodex}
         onAction={() => undefined}
         onOpenInTerminal={() => undefined}
@@ -110,6 +117,37 @@ it('keeps the terminal fallback for a Codex permission without web capabilities'
     buttons: ['Open in terminal'],
     fallback: 'Review this permission in terminal.',
   })
+})
+
+it('says Codex is waiting after a web approval is sent', () => {
+  const message: Extract<ChatItem, { type: 'permission' }> = {
+    type: 'permission',
+    requestId: 'permission-request-example',
+    tool: 'Bash',
+    description: '',
+    command,
+  }
+  const actions: SessionActions = {
+    message: true,
+    answerQuestion: false,
+    permission: { approve: true, reject: true },
+    interrupt: false,
+    openInTerminal: true,
+    rewind: false,
+  }
+  renderPermissionCard(message, {
+    actions,
+    isCodex: true,
+    pendingAction: {
+      action: 'approve',
+      status: 'sent',
+      requestId: 'permission-request-example',
+    },
+  })
+
+  expect(
+    container.querySelector('.permission-action-status')?.textContent,
+  ).toBe('Approval sent. Waiting for Codex…')
 })
 
 it('highlights a multiline Bash permission without overflowing its card', async () => {
