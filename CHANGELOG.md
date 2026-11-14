@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.698](https://github.com/fohte/armyknife/compare/v0.1.697...v0.1.698) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** keep command dialogs mounted ([#1774](https://github.com/fohte/armyknife/issues/1774)) ([7d6149d](https://github.com/fohte/armyknife/commit/7d6149d2fe4c54d7f2289bfeec45eda07ba990d7))
+
 ## [0.1.697](https://github.com/fohte/armyknife/compare/v0.1.696...v0.1.697) (2026-11-14)
 
 
