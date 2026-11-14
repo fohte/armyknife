@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.707](https://github.com/fohte/armyknife/compare/v0.1.706...v0.1.707) (2026-11-14)
+
+
+### Bug Fixes
+
+* **agent/sweep:** keep live Crit links ([#1793](https://github.com/fohte/armyknife/issues/1793)) ([385d6c1](https://github.com/fohte/armyknife/commit/385d6c1c1efae95f1443789c177b7142db9f22b0))
+
 ## [0.1.706](https://github.com/fohte/armyknife/compare/v0.1.705...v0.1.706) (2026-11-14)
 
 
