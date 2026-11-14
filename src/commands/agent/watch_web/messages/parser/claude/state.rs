@@ -14,6 +14,10 @@ use super::questions::{append_questions, parse_question_answers, tool_use_result
 use super::transcript_branch::{BranchMembership, TranscriptNode, is_inactive_branch};
 use super::user_input::{content_blocks, is_tool_result_only_user_record, user_content, user_text};
 
+pub(super) fn is_attachment_record(record: &Value) -> bool {
+    record.get("type").and_then(Value::as_str) == Some("attachment")
+}
+
 #[derive(Clone)]
 pub(super) struct ClaudeParserState {
     pub(super) transcript_nodes: BTreeMap<String, TranscriptNode>,
@@ -76,7 +80,7 @@ impl ClaudeParserState {
 
         if is_tool_result_only {
             self.tool_result_parent = record_parent_uuid(&record);
-        } else if uuid.is_some() {
+        } else if uuid.is_some() && !is_attachment_record(&record) {
             self.tool_result_parent = None;
         }
 

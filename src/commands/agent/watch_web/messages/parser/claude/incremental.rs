@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use super::super::super::parser::jsonl::JsonlLineBuffer;
-use super::state::{ClaudeParserState, record_parent_uuid};
+use super::state::{ClaudeParserState, is_attachment_record, record_parent_uuid};
 use super::transcript_branch::{BranchMembership, TranscriptNode, mark_active_branch};
 use super::user_input::is_tool_result_only_user_record;
 use super::{ParsedTranscript, ParserAdditions};
@@ -29,11 +29,13 @@ impl IncrementalClaudeParser {
         let mut graph_latest_uuid = None;
         graph_lines.read_from(&mut reader, |line| {
             if let Some(record) = parse_record(line) {
-                latest_complete_uuid = record
-                    .get("uuid")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-                    .or(latest_complete_uuid.clone());
+                if !is_attachment_record(&record) {
+                    latest_complete_uuid = record
+                        .get("uuid")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                        .or(latest_complete_uuid.clone());
+                }
                 if let Some(uuid) = record.get("uuid").and_then(Value::as_str) {
                     graph_latest_uuid = Some(uuid.to_owned());
                     transcript_nodes.insert(
@@ -210,7 +212,10 @@ fn ingest_record(
             },
         );
         mark_active_branch(&mut state.transcript_nodes, Some(uuid));
-        if matches!(origin, RecordOrigin::Appended) && !parallel_tool_result {
+        if matches!(origin, RecordOrigin::Appended)
+            && !parallel_tool_result
+            && !is_attachment_record(&record)
+        {
             state.latest_uuid = Some(uuid.to_owned());
         }
     }
