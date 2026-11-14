@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.709](https://github.com/fohte/armyknife/compare/v0.1.708...v0.1.709) (2026-11-14)
+
+
+### Bug Fixes
+
+* **agent:** allow Stop with pending requests ([#1797](https://github.com/fohte/armyknife/issues/1797)) ([4da439e](https://github.com/fohte/armyknife/commit/4da439e9ebba9c261199793aba80a4c577e6ceb9))
+
 ## [0.1.708](https://github.com/fohte/armyknife/compare/v0.1.707...v0.1.708) (2026-11-14)
 
 
