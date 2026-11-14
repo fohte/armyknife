@@ -34,6 +34,7 @@ pub(super) struct MessageCacheKey {
     pub(super) engine: Engine,
     pub(super) transcript_path: Option<PathBuf>,
     pub(super) transcript_fingerprint: Option<TranscriptFingerprint>,
+    pub(super) subagent_permission_transcripts: Vec<(String, Option<TranscriptFingerprint>)>,
     pub(super) parent: Option<ParentSession>,
     pub(super) pending_permission_agent_ids: BTreeSet<String>,
     pub(super) pending_permission_request_ids: BTreeMap<String, String>,
@@ -59,6 +60,26 @@ impl MessageCacheKey {
         peer_out_messages: Vec<WatchWebPeerOutMessage>,
         records: MessageCacheRecords,
     ) -> anyhow::Result<Self> {
+        let subagent_permission_transcripts = if session.engine == Engine::Claude {
+            session
+                .pending_permission_agent_ids
+                .iter()
+                .filter(|agent_id| {
+                    agent_id.as_str() != crate::commands::agent::types::MAIN_THREAD_AGENT_KEY
+                })
+                .map(|agent_id| {
+                    let path = session.transcript_path.as_deref().and_then(|transcript| {
+                        super::subagent_reports::transcript_path_for_agent(transcript, agent_id)
+                    });
+                    Ok((
+                        agent_id.clone(),
+                        transcript_fingerprint(session.engine, path.as_deref())?,
+                    ))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?
+        } else {
+            Vec::new()
+        };
         Ok(Self {
             engine: session.engine,
             transcript_path: session.transcript_path.clone(),
@@ -66,6 +87,7 @@ impl MessageCacheKey {
                 session.engine,
                 session.transcript_path.as_deref(),
             )?,
+            subagent_permission_transcripts,
             parent,
             pending_permission_agent_ids: session.pending_permission_agent_ids.clone(),
             pending_permission_request_ids: session.pending_permission_request_ids.clone(),
@@ -297,6 +319,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use indoc::indoc;
     use serde_json::json;
 
     use super::{
@@ -386,6 +409,65 @@ mod tests {
         .unwrap();
 
         assert!(first_key != next_key);
+    }
+
+    #[test]
+    fn message_cache_key_changes_when_a_pending_subagent_transcript_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("fixture-session.jsonl");
+        std::fs::write(&transcript_path, b"").unwrap();
+        let subagent_directory = directory.path().join("fixture-session/subagents");
+        std::fs::create_dir_all(&subagent_directory).unwrap();
+        let subagent_path = subagent_directory.join("agent-fixture-agent.jsonl");
+        std::fs::write(
+            &subagent_path,
+            indoc! {"
+            first record
+        "},
+        )
+        .unwrap();
+
+        let mut session: Session = serde_json::from_value(json!({
+            "session_id": "fixture-session",
+            "cwd": "/fixture/project",
+            "status": "waiting_input",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "pending_permission_agent_ids": ["fixture-agent"],
+        }))
+        .unwrap();
+        session.transcript_path = Some(transcript_path);
+
+        let first_key = MessageCacheKey::new(
+            &session,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            MessageCacheRecords::default(),
+        )
+        .unwrap();
+        std::fs::write(
+            &subagent_path,
+            indoc! {"
+                first record
+                second record
+            "},
+        )
+        .unwrap();
+        let second_key = MessageCacheKey::new(
+            &session,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            MessageCacheRecords::default(),
+        )
+        .unwrap();
+
+        assert!(first_key != second_key);
     }
 
     #[test]
