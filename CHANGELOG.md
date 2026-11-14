@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.684](https://github.com/fohte/armyknife/compare/v0.1.683...v0.1.684) (2026-11-14)
+
+
+### Features
+
+* **watch-web:** collapse long to-do details ([#1745](https://github.com/fohte/armyknife/issues/1745)) ([7ef6bd3](https://github.com/fohte/armyknife/commit/7ef6bd30a3bc4c985b1f49809c37da0e5c9b6755))
+
 ## [0.1.683](https://github.com/fohte/armyknife/compare/v0.1.682...v0.1.683) (2026-11-14)
 
 
