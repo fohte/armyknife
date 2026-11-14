@@ -114,7 +114,7 @@ export const InProgressTodaySession: Story = {
 }
 
 export const TodaySessionStatusesUseTheirCategoryColors: Story = {
-  name: 'Starred sessions show their state labels in category colors',
+  name: 'Starred sessions show kind icons in category colors',
   args: {
     todaySessions: [
       todaySession,
