@@ -20,6 +20,14 @@ export const TodoWaitsForTheUser: Story = {
   name: 'A to-do waits for the user to finish it',
 }
 
+export const TodoShowsMarkdownDetail: Story = {
+  name: 'A to-do detail formats links and emphasis as markdown',
+  args: {
+    detail:
+      'Review [the example preview](https://example.test) before launch.\n\nKeep **the primary action visible** on small screens.',
+  },
+}
+
 export const TodoHasNoAdditionalDetail: Story = {
   name: 'A to-do shows only its title when it has no detail',
   args: { detail: null },
@@ -27,7 +35,10 @@ export const TodoHasNoAdditionalDetail: Story = {
 
 export const TodoIsCompleted: Story = {
   name: 'A completed to-do shows its title and saved comment compactly',
-  args: { resolution: 'completed', defaultComment: 'The sample is ready.' },
+  args: {
+    resolution: 'completed',
+    defaultComment: 'The [sample](https://example.test) is **ready**.',
+  },
 }
 
 export const TodoIsCompletedWithoutAComment: Story = {

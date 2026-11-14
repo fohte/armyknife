@@ -477,6 +477,50 @@ mod tests {
     }
 
     #[test]
+    fn adds_incremental_skill_listings_and_updates_existing_descriptions() {
+        let transcript = indoc! {r#"
+            {"attachment":{"type":"skill_listing","isInitial":true,"skillCount":2,"names":["design-flow","debug-flow"],"content":"- design-flow: Help shape a design.\n- debug-flow: Investigate a failure."}}
+            {"attachment":{"type":"skill_listing","isInitial":false,"skillCount":2,"names":["review-tool","design-flow"],"content":"- review-tool: Review generated examples.\n- design-flow: Help shape a newer design."}}
+        "#};
+        let (_, _, _, skills) =
+            parse_with_queued_prompts_and_peer_out_messages_and_proposals_and_skills(
+                Cursor::new(transcript),
+                Utc::now(),
+                ParserAdditions {
+                    session_id: "fixture-session",
+                    parent: None,
+                    pending_tool: None,
+                    user_marker: None,
+                    decisions: &[],
+                    queued_prompts: &[],
+                    peer_out_messages: &[],
+                    proposals: &[],
+                    todos: &[],
+                    additional_cards: &[],
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            skills,
+            vec![
+                SkillSuggestion {
+                    name: "design-flow".to_string(),
+                    description: "Help shape a newer design.".to_string(),
+                },
+                SkillSuggestion {
+                    name: "debug-flow".to_string(),
+                    description: "Investigate a failure.".to_string(),
+                },
+                SkillSuggestion {
+                    name: "review-tool".to_string(),
+                    description: "Review generated examples.".to_string(),
+                },
+            ],
+        );
+    }
+
+    #[test]
     fn places_a_resolved_proposal_by_creation_time_and_keeps_its_bash_summary() {
         let transcript = [
             json!({

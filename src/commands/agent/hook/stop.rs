@@ -11,6 +11,7 @@ pub(super) struct StopConditions {
     pub stop_hook_active: bool,
     pub has_agent_status: bool,
     pub has_pending_work: bool,
+    pub has_pending_agent_requests: bool,
     pub permission_pending: bool,
     pub asking_user: bool,
     pub paused: bool,
@@ -37,10 +38,17 @@ pub(super) fn block_reason_for_hook<'a>(
     session: &Session,
     was_waiting_for_input: bool,
     was_asking_user: bool,
+    has_pending_agent_requests: bool,
     instruction: Option<&'a str>,
 ) -> Option<&'a str> {
     block_reason(
-        stop_conditions_for_hook(input, session, was_waiting_for_input, was_asking_user),
+        stop_conditions_for_hook(
+            input,
+            session,
+            was_waiting_for_input,
+            was_asking_user,
+            has_pending_agent_requests,
+        ),
         instruction,
     )
 }
@@ -50,12 +58,19 @@ pub(super) fn should_infer_status_for_hook(
     session: &Session,
     was_waiting_for_input: bool,
     was_asking_user: bool,
+    has_pending_agent_requests: bool,
     inference_prompt: Option<&str>,
     codex_inference_enabled: bool,
 ) -> bool {
     match session.engine {
         Engine::Claude => should_infer_status(
-            stop_conditions_for_hook(input, session, was_waiting_for_input, was_asking_user),
+            stop_conditions_for_hook(
+                input,
+                session,
+                was_waiting_for_input,
+                was_asking_user,
+                has_pending_agent_requests,
+            ),
             inference_prompt,
         ),
         Engine::Codex => {
@@ -66,6 +81,7 @@ pub(super) fn should_infer_status_for_hook(
                         session,
                         was_waiting_for_input,
                         was_asking_user,
+                        has_pending_agent_requests,
                     ),
                     inference_prompt,
                 )
@@ -78,15 +94,22 @@ pub(super) fn should_set_background_status_for_hook(
     session: &Session,
     was_waiting_for_input: bool,
     was_asking_user: bool,
+    has_pending_agent_requests: bool,
     codex_inference_enabled: bool,
 ) -> bool {
-    let conditions =
-        stop_conditions_for_hook(input, session, was_waiting_for_input, was_asking_user);
+    let conditions = stop_conditions_for_hook(
+        input,
+        session,
+        was_waiting_for_input,
+        was_asking_user,
+        has_pending_agent_requests,
+    );
     session.engine == Engine::Codex
         && codex_inference_enabled
         && conditions.has_pending_work
         && !conditions.stop_hook_active
         && !conditions.has_agent_status
+        && !conditions.has_pending_agent_requests
         && !conditions.permission_pending
         && !conditions.asking_user
         && !conditions.paused
@@ -101,6 +124,7 @@ fn stop_conditions_for_hook(
     session: &Session,
     was_waiting_for_input: bool,
     was_asking_user: bool,
+    has_pending_agent_requests: bool,
 ) -> StopConditions {
     StopConditions {
         stop_hook_active: input.stop_hook_active,
@@ -108,6 +132,7 @@ fn stop_conditions_for_hook(
         has_pending_work: session.has_pending_bg_tasks()
             || !input.background_tasks.is_empty()
             || !input.session_crons.is_empty(),
+        has_pending_agent_requests,
         permission_pending: was_waiting_for_input || session.has_pending_permission_requests(),
         asking_user: was_asking_user,
         paused: session.status == SessionStatus::Paused,
@@ -118,6 +143,7 @@ fn has_known_stop_reason(conditions: StopConditions) -> bool {
     conditions.stop_hook_active
         || conditions.has_agent_status
         || conditions.has_pending_work
+        || conditions.has_pending_agent_requests
         || conditions.permission_pending
         || conditions.asking_user
         || conditions.paused
@@ -215,6 +241,7 @@ mod tests {
         StopHookAlreadyContinued,
         StatusSet,
         BackgroundWorkPending,
+        PendingAgentRequest,
         PermissionPending,
         AskingUser,
         Paused,
@@ -224,6 +251,7 @@ mod tests {
     #[case::stop_hook_already_continued(KnownStopReason::StopHookAlreadyContinued)]
     #[case::status_set(KnownStopReason::StatusSet)]
     #[case::background_work_pending(KnownStopReason::BackgroundWorkPending)]
+    #[case::pending_agent_request(KnownStopReason::PendingAgentRequest)]
     #[case::permission_pending(KnownStopReason::PermissionPending)]
     #[case::asking_user(KnownStopReason::AskingUser)]
     #[case::paused(KnownStopReason::Paused)]
@@ -233,6 +261,7 @@ mod tests {
             KnownStopReason::StopHookAlreadyContinued => conditions.stop_hook_active = true,
             KnownStopReason::StatusSet => conditions.has_agent_status = true,
             KnownStopReason::BackgroundWorkPending => conditions.has_pending_work = true,
+            KnownStopReason::PendingAgentRequest => conditions.has_pending_agent_requests = true,
             KnownStopReason::PermissionPending => conditions.permission_pending = true,
             KnownStopReason::AskingUser => conditions.asking_user = true,
             KnownStopReason::Paused => conditions.paused = true,
@@ -258,6 +287,7 @@ mod tests {
     #[case::stop_hook_already_continued(KnownStopReason::StopHookAlreadyContinued)]
     #[case::status_set(KnownStopReason::StatusSet)]
     #[case::background_work_pending(KnownStopReason::BackgroundWorkPending)]
+    #[case::pending_agent_request(KnownStopReason::PendingAgentRequest)]
     #[case::permission_pending(KnownStopReason::PermissionPending)]
     #[case::asking_user(KnownStopReason::AskingUser)]
     #[case::paused(KnownStopReason::Paused)]
@@ -267,6 +297,7 @@ mod tests {
             KnownStopReason::StopHookAlreadyContinued => conditions.stop_hook_active = true,
             KnownStopReason::StatusSet => conditions.has_agent_status = true,
             KnownStopReason::BackgroundWorkPending => conditions.has_pending_work = true,
+            KnownStopReason::PendingAgentRequest => conditions.has_pending_agent_requests = true,
             KnownStopReason::PermissionPending => conditions.permission_pending = true,
             KnownStopReason::AskingUser => conditions.asking_user = true,
             KnownStopReason::Paused => conditions.paused = true,

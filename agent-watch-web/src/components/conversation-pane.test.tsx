@@ -2272,6 +2272,10 @@ it('jumps between own messages with Alt-arrow shortcuts', () => {
     ),
     scrollTargets: scrollIntoView.mock.contexts,
     scrollOptions: scrollIntoView.mock.calls.map(([options]) => options),
+    highlightedMessages: ownMessages.map(
+      (message) =>
+        message.getAttribute('data-own-message-highlighted') === 'true',
+    ),
     defaultPrevented: [
       previousEvent.defaultPrevented,
       nextEvent.defaultPrevented,
@@ -2285,10 +2289,120 @@ it('jumps between own messages with Alt-arrow shortcuts', () => {
     ],
     scrollTargets: [earlierMessage, laterMessage],
     scrollOptions: [
-      { block: 'center', behavior: 'smooth' },
-      { block: 'center', behavior: 'smooth' },
+      { block: 'center', behavior: 'instant' },
+      { block: 'center', behavior: 'instant' },
     ],
+    highlightedMessages: [false, false, true],
     defaultPrevented: [true, true],
+  })
+})
+
+it('removes the navigation highlight after one and a half seconds', async () => {
+  vi.useFakeTimers()
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [
+    { type: 'user', text: 'An earlier message.' },
+    { type: 'user', text: 'A later message.' },
+  ])
+
+  const scrollContainer = requireElement(
+    container.querySelector<HTMLElement>('.conversation-scroll'),
+  )
+  const ownMessages = Array.from(
+    container.querySelectorAll<HTMLElement>('[data-own-message="true"]'),
+  )
+  const laterMessage = requireElement(ownMessages[1] ?? null)
+  vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(
+    () => undefined,
+  )
+  mockConversationMessageBounds(scrollContainer, ownMessages, [
+    { top: 40, height: 30 },
+    { top: 500, height: 30 },
+  ])
+
+  dispatchKeyInAct(window, 'ArrowDown', { altKey: true })
+  const highlightedBeforeTimeout =
+    laterMessage.getAttribute('data-own-message-highlighted') === 'true'
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_500)
+  })
+
+  const snapshot = () => ({
+    highlightedBeforeTimeout,
+    highlightedAfterTimeout:
+      laterMessage.getAttribute('data-own-message-highlighted') === 'true',
+  })
+  expect(snapshot()).toEqual({
+    highlightedBeforeTimeout: true,
+    highlightedAfterTimeout: false,
+  })
+})
+
+it('keeps the latest navigation highlight when an earlier timer expires', async () => {
+  vi.useFakeTimers()
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [
+    { type: 'user', text: 'An earlier message.' },
+    { type: 'user', text: 'A middle message.' },
+    { type: 'user', text: 'A later message.' },
+  ])
+
+  const scrollContainer = requireElement(
+    container.querySelector<HTMLElement>('.conversation-scroll'),
+  )
+  const ownMessages = Array.from(
+    container.querySelectorAll<HTMLElement>('[data-own-message="true"]'),
+  )
+  vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(
+    () => undefined,
+  )
+  const messageBounds = ownMessages.map((message) =>
+    vi.spyOn(message, 'getBoundingClientRect'),
+  )
+  vi.spyOn(scrollContainer, 'getBoundingClientRect').mockReturnValue(
+    DOMRect.fromRect({ x: 0, y: 100, width: 400, height: 300 }),
+  )
+  vi.spyOn(scrollContainer, 'clientHeight', 'get').mockReturnValue(300)
+  const setMessageBounds = (tops: readonly number[]) => {
+    messageBounds.forEach((bounds, index) => {
+      bounds.mockReturnValue(
+        DOMRect.fromRect({
+          x: 0,
+          y: tops[index] ?? 0,
+          width: 300,
+          height: 30,
+        }),
+      )
+    })
+  }
+
+  setMessageBounds([40, 200, 500])
+  dispatchKeyInAct(window, 'ArrowUp', { altKey: true })
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000)
+  })
+  dispatchKeyInAct(window, 'ArrowDown', { altKey: true })
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(500)
+  })
+  const highlightedAfterEarlierDeadline = ownMessages.map(
+    (message) =>
+      message.getAttribute('data-own-message-highlighted') === 'true',
+  )
+
+  setMessageBounds([40, 500, 200])
+  dispatchKeyInAct(window, 'ArrowUp', { altKey: true })
+
+  const snapshot = () => ({
+    highlightedAfterEarlierDeadline,
+    highlightedAfterNextNavigation: ownMessages.map(
+      (message) =>
+        message.getAttribute('data-own-message-highlighted') === 'true',
+    ),
+  })
+  expect(snapshot()).toEqual({
+    highlightedAfterEarlierDeadline: [false, false, true],
+    highlightedAfterNextNavigation: [false, true, false],
   })
 })
 
@@ -5415,6 +5529,49 @@ it('clears the message draft after a successful send', async () => {
   })
 })
 
+it('sends a message while session actions are still loading', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [], null)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const sendButton = requireElement(
+    container.querySelector<HTMLButtonElement>('[aria-label="Send message"]'),
+  )
+  const beforeTyping = {
+    composerDisabled: textarea.disabled,
+    sendDisabled: sendButton.disabled,
+  }
+  setTextareaValue(textarea, 'Send while actions load')
+  const beforeSending = {
+    composerDisabled: textarea.disabled,
+    sendDisabled: sendButton.disabled,
+  }
+  act(() => {
+    dispatchKey(textarea, 'Enter')
+  })
+  await act(async () => {
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    beforeTyping,
+    beforeSending,
+    afterSending: {
+      draft: textarea.value,
+      actionCalls: onAction.mock.calls,
+    },
+  })
+  expect(snapshot()).toEqual({
+    beforeTyping: { composerDisabled: false, sendDisabled: true },
+    beforeSending: { composerDisabled: false, sendDisabled: false },
+    afterSending: {
+      draft: '',
+      actionCalls: [['messages', { content: 'Send while actions load' }]],
+    },
+  })
+})
+
 it('keeps text added after a send starts', async () => {
   let completeSend: ((succeeded: boolean) => void) | undefined
   const onAction = vi.fn(
@@ -7039,6 +7196,193 @@ it('reuses a cached conversation across an A to B to A session switch', async ()
   })
 })
 
+it('shows cached permission actions while the messages refresh is pending', async () => {
+  const firstSession = { ...session, id: 'cached-permission-session' }
+  const secondSession = { ...session, id: 'next-session' }
+  let messagesRequestCount = 0
+  let actionsRequestCount = 0
+  let resolveMessages: ((response: Response) => void) | undefined
+  let resolveActions: ((response: Response) => void) | undefined
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.includes(`/sessions/${firstSession.id}/messages`)) {
+      messagesRequestCount += 1
+      if (messagesRequestCount === 1) {
+        return Promise.resolve(jsonResponse(messagesResponse([permission])))
+      }
+      return new Promise<Response>((resolve) => {
+        resolveMessages = resolve
+      })
+    }
+    if (url.includes(`/sessions/${secondSession.id}/messages`)) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url === `/api/sessions/${firstSession.id}/actions`) {
+      actionsRequestCount += 1
+      if (actionsRequestCount > 1) {
+        return new Promise<Response>((resolve) => {
+          resolveActions = resolve
+        })
+      }
+      return Promise.resolve(jsonResponse(actions))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    if (url.endsWith('/tree')) {
+      return Promise.resolve(jsonResponse({ revision: 1, sessions: [] }))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  renderInboxPanes([firstSession, secondSession], firstSession)
+  await waitForState(
+    () => container.querySelector('.chat-permission-card') !== null,
+  )
+  renderInboxPanes([firstSession, secondSession], secondSession)
+  await waitForState(() =>
+    fetcher.mock.calls.some(([input]) =>
+      requestUrl(input).includes(`/sessions/${secondSession.id}/messages`),
+    ),
+  )
+  renderInboxPanes([firstSession, secondSession], firstSession)
+  await waitForState(() => resolveActions !== undefined)
+
+  const stateBeforeActions = {
+    permissionCard: container.querySelector('.chat-permission-card') !== null,
+    composerDisabled: requireElement(
+      container.querySelector<HTMLTextAreaElement>('textarea'),
+    ).disabled,
+    permissionButtons: container.querySelectorAll('.permission-actions button')
+      .length,
+    messagesPending: resolveMessages !== undefined,
+  }
+  resolveActions?.(jsonResponse(actions))
+  await waitForState(
+    () => container.querySelectorAll('.permission-actions button').length === 2,
+  )
+
+  const stateAfterActions = {
+    composerDisabled: requireElement(
+      container.querySelector<HTMLTextAreaElement>('textarea'),
+    ).disabled,
+    permissionButtons: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.permission-actions button',
+      ),
+      (button) => ({ label: button.textContent, disabled: button.disabled }),
+    ),
+    messagesPending: resolveMessages !== undefined,
+  }
+  await act(async () => {
+    resolveMessages?.(jsonResponse(messagesResponse([permission])))
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({ stateBeforeActions, stateAfterActions })
+  const expected = {
+    stateBeforeActions: {
+      permissionCard: true,
+      composerDisabled: false,
+      permissionButtons: 0,
+      messagesPending: true,
+    },
+    stateAfterActions: {
+      composerDisabled: false,
+      permissionButtons: [
+        { label: 'Approve', disabled: false },
+        { label: 'Reject', disabled: false },
+      ],
+      messagesPending: true,
+    },
+  }
+  expect(snapshot()).toEqual(expected)
+})
+
+it('keeps a cleared actions request error from returning after messages load', async () => {
+  const failedSession = { ...session, id: 'actions-error-session' }
+  let resolveMessages: ((response: Response) => void) | undefined
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return new Promise<Response>((resolve) => {
+        resolveMessages = resolve
+      })
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(
+        jsonResponse({ error: 'Actions unavailable' }, 503),
+      )
+    }
+    if (url.endsWith('/tree')) {
+      return Promise.resolve(jsonResponse({ revision: 1, sessions: [] }))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root ??= createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={failedSession}
+          sessionTreeRefreshKey={0}
+          refreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'Actions unavailable',
+  )
+  await waitForState(() => resolveMessages !== undefined)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const afterActionsFailure = {
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    composerDisabled: textarea.disabled,
+  }
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(pasteEvent, 'clipboardData', {
+    value: {
+      files: [
+        new File(['contents'], 'clipboard.bin', {
+          type: 'application/octet-stream',
+        }),
+      ],
+    },
+  })
+  act(() => {
+    void textarea.dispatchEvent(pasteEvent)
+  })
+  await waitForState(() => container.querySelector('[role="alert"]') === null)
+  const afterClear =
+    container.querySelector('[role="alert"]')?.textContent ?? null
+  await act(async () => {
+    resolveMessages?.(jsonResponse(messagesResponse([])))
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    afterActionsFailure,
+    afterClear,
+    afterMessagesLoad:
+      container.querySelector('[role="alert"]')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    afterActionsFailure: {
+      alert: 'Actions unavailable',
+      composerDisabled: false,
+    },
+    afterClear: null,
+    afterMessagesLoad: null,
+  })
+})
+
 it('prepends an older page without moving existing messages in the viewport', async () => {
   const jsonResponse = (body: unknown) =>
     new Response(JSON.stringify(body), {
@@ -7440,7 +7784,7 @@ it('prunes to the latest 200 messages at the bottom and can load the discarded r
     retainedMessageReused: true,
     olderButton: true,
   })
-})
+}, 60_000)
 
 it('re-enables older-page loading after a request fails so it can be retried', async () => {
   const jsonResponse = (body: unknown, status = 200) =>

@@ -55,6 +55,17 @@ export const TextOnlyMessageIsDisplayed: Story = {
   },
 }
 
+export const NavigationTargetIsHighlighted: Story = {
+  name: "The user's message is outlined after keyboard navigation",
+  args: {
+    message: {
+      type: 'user',
+      text: 'Please rerun the example check.',
+    },
+    navigationHighlighted: true,
+  },
+}
+
 export const RewindMenuShowsEngineOptions: Story = {
   name: 'The Claude user message shows all rewind options',
   args: {

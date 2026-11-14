@@ -679,6 +679,10 @@ fn process_hook_event_impl_with_settings(
     if event == HookEvent::UserPromptSubmit
         && input.agent_id.is_none()
         && !super::peer_message::is_peer_message(input.prompt.as_deref())
+        && !input
+            .prompt
+            .as_deref()
+            .is_some_and(|prompt| super::peer_message::task_notification_envelope(prompt).is_some())
         && !session_lock.consume_pending_initial_prompt()?
     {
         session.last_prompted_at = Some(now);
@@ -827,12 +831,15 @@ fn process_hook_event_impl_with_settings(
         status = Some(SessionStatus::WaitingInput);
     }
 
+    let has_pending_agent_requests =
+        event == HookEvent::Stop && session_lock.has_pending_agent_requests()?;
     let should_infer_status = event == HookEvent::Stop
         && stop::should_infer_status_for_hook(
             &input,
             &session,
             was_waiting_for_input,
             was_asking_user,
+            has_pending_agent_requests,
             status_inference_prompt,
             codex_status_inference.is_some(),
         );
@@ -843,6 +850,7 @@ fn process_hook_event_impl_with_settings(
                 &session,
                 was_waiting_for_input,
                 was_asking_user,
+                has_pending_agent_requests,
                 if should_infer_status {
                     None
                 } else {
@@ -922,6 +930,7 @@ fn process_hook_event_impl_with_settings(
             &session,
             was_waiting_for_input,
             was_asking_user,
+            has_pending_agent_requests,
             codex_status_inference.is_some(),
         )
         && let Some(codex_config) = codex_status_inference
@@ -4148,6 +4157,8 @@ mod tests {
         StatusSet,
         BackgroundTask,
         SessionCron,
+        UnansweredProposal,
+        IncompleteTodo,
         PermissionPrompt,
         AskUserQuestion,
         StopHookActive,
@@ -4187,6 +4198,8 @@ mod tests {
     #[case::status_set(StopReason::StatusSet, false, false)]
     #[case::background_task(StopReason::BackgroundTask, false, false)]
     #[case::session_cron(StopReason::SessionCron, false, false)]
+    #[case::unanswered_proposal(StopReason::UnansweredProposal, true, false)]
+    #[case::incomplete_todo(StopReason::IncompleteTodo, true, false)]
     #[case::permission_prompt(StopReason::PermissionPrompt, false, false)]
     #[case::ask_user_question(StopReason::AskUserQuestion, false, false)]
     #[case::stop_hook_active(StopReason::StopHookActive, false, false)]
@@ -4243,7 +4256,20 @@ mod tests {
                 session.current_tool_name = Some("AskUserQuestion".to_string());
             }
             StopReason::Paused => session.status = SessionStatus::Paused,
+            StopReason::UnansweredProposal | StopReason::IncompleteTodo => {}
         });
+
+        match reason {
+            StopReason::UnansweredProposal => {
+                store::add_agent_proposal_in(sessions_dir, "test-123", "Review this choice.")
+                    .expect("proposal should save");
+            }
+            StopReason::IncompleteTodo => {
+                store::add_agent_todo_in(sessions_dir, "test-123", "Check the deployment", None)
+                    .expect("todo should save");
+            }
+            _ => {}
+        }
 
         let instruction = has_instruction.then_some(TEST_STOP_HOOK_INSTRUCTION);
         let result = process_hook_event_impl_with_instruction(
@@ -4261,6 +4287,125 @@ mod tests {
             ProcessResult::SessionSaved
         };
         assert_eq!(result, expected);
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum NonPendingAgentRequest {
+        ResolvedProposal,
+        CompletedTodo,
+        OtherSessionProposal,
+        OtherSessionTodo,
+    }
+
+    #[rstest]
+    #[case::resolved_proposal(NonPendingAgentRequest::ResolvedProposal)]
+    #[case::completed_todo(NonPendingAgentRequest::CompletedTodo)]
+    #[case::other_session_proposal(NonPendingAgentRequest::OtherSessionProposal)]
+    #[case::other_session_todo(NonPendingAgentRequest::OtherSessionTodo)]
+    fn non_pending_agent_requests_do_not_suppress_status_inference(
+        #[case] request: NonPendingAgentRequest,
+        hook_status_sessions_dir: tempfile::TempDir,
+    ) {
+        let sessions_dir = hook_status_sessions_dir.path();
+        save_test_session(sessions_dir, "test-123", |_| {});
+        let request_session_id = match request {
+            NonPendingAgentRequest::ResolvedProposal | NonPendingAgentRequest::CompletedTodo => {
+                "test-123"
+            }
+            NonPendingAgentRequest::OtherSessionProposal
+            | NonPendingAgentRequest::OtherSessionTodo => {
+                save_test_session(sessions_dir, "test-456", |_| {});
+                "test-456"
+            }
+        };
+        match request {
+            NonPendingAgentRequest::ResolvedProposal => {
+                let sequence = store::add_agent_proposal_in(
+                    sessions_dir,
+                    request_session_id,
+                    "Review this choice.",
+                )
+                .expect("proposal should save");
+                store::resolve_agent_proposal_from(
+                    sessions_dir,
+                    request_session_id,
+                    sequence,
+                    None,
+                )
+                .expect("proposal should resolve");
+            }
+            NonPendingAgentRequest::CompletedTodo => {
+                let sequence = store::add_agent_todo_in(
+                    sessions_dir,
+                    request_session_id,
+                    "Check the deployment",
+                    None,
+                )
+                .expect("todo should save");
+                store::resolve_agent_todo_from(
+                    sessions_dir,
+                    request_session_id,
+                    sequence,
+                    store::TodoResolution::Completed,
+                    None,
+                )
+                .expect("todo should complete");
+            }
+            NonPendingAgentRequest::OtherSessionProposal => {
+                store::add_agent_proposal_in(
+                    sessions_dir,
+                    request_session_id,
+                    "Review this choice.",
+                )
+                .expect("proposal should save");
+            }
+            NonPendingAgentRequest::OtherSessionTodo => {
+                store::add_agent_todo_in(
+                    sessions_dir,
+                    request_session_id,
+                    "Check the deployment",
+                    None,
+                )
+                .expect("todo should save");
+            }
+        }
+
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut side_effects = SideEffects::none();
+        side_effects.status_inference = true;
+        side_effects.status_inference_calls = Some(calls.clone());
+        let result = process_hook_event_impl_with_settings(
+            HookEvent::Stop,
+            create_test_input(None),
+            sessions_dir,
+            &side_effects,
+            Some(TEST_STOP_HOOK_INSTRUCTION),
+            Some("Infer the configured status from the session."),
+            None,
+        )
+        .expect("stop hook should succeed");
+        let session = store::load_session_from(sessions_dir, "test-123")
+            .expect("session should load")
+            .expect("session should exist");
+
+        assert_eq!(
+            (
+                result,
+                session.status,
+                session.agent_status,
+                calls.lock().expect("lock").clone()
+            ),
+            (
+                ProcessResult::SessionSaved,
+                SessionStatus::Stopped,
+                None,
+                vec![StatusInferenceSpawnRequest {
+                    session_id: "test-123".to_string(),
+                    stop_updated_at: session.updated_at,
+                    codex_snapshot: None,
+                }],
+            ),
+        );
     }
 
     #[test]
@@ -4468,6 +4613,8 @@ mod tests {
     #[case::asking_user(StopReason::AskUserQuestion)]
     #[case::paused(StopReason::Paused)]
     #[case::stop_hook_active(StopReason::StopHookActive)]
+    #[case::pending_proposal(StopReason::UnansweredProposal)]
+    #[case::pending_todo(StopReason::IncompleteTodo)]
     fn codex_background_status_preserves_higher_priority_reasons(#[case] reason: StopReason) {
         let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
         let sessions_dir = temp_dir.path();
@@ -4482,7 +4629,9 @@ mod tests {
             | StopReason::AskUserQuestion
             | StopReason::StopHookActive
             | StopReason::Paused
-            | StopReason::Unknown => None,
+            | StopReason::Unknown
+            | StopReason::UnansweredProposal
+            | StopReason::IncompleteTodo => None,
         };
         save_test_session(sessions_dir, "test-codex", |session| {
             session.engine = Engine::Codex;
@@ -4497,9 +4646,22 @@ mod tests {
                 StopReason::BackgroundTask
                 | StopReason::SessionCron
                 | StopReason::StopHookActive
-                | StopReason::Unknown => {}
+                | StopReason::Unknown
+                | StopReason::UnansweredProposal
+                | StopReason::IncompleteTodo => {}
             }
         });
+        match reason {
+            StopReason::UnansweredProposal => {
+                store::add_agent_proposal_in(sessions_dir, "test-codex", "Review this choice.")
+                    .expect("proposal should save");
+            }
+            StopReason::IncompleteTodo => {
+                store::add_agent_todo_in(sessions_dir, "test-codex", "Check the deployment", None)
+                    .expect("todo should save");
+            }
+            _ => {}
+        }
         let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut side_effects = SideEffects::none();
         side_effects.status_inference = true;
@@ -5626,6 +5788,26 @@ mod tests {
 
                 Continue the review.
                 </peer-message>
+            "}
+        )]
+        #[case::task_notification(
+            None,
+            indoc::indoc! {"
+                <task-notification>
+                <task-id>fixture-task-id</task-id>
+                <status>completed</status>
+                </task-notification>
+            "}
+        )]
+        #[case::task_notification_with_leading_whitespace(
+            None,
+            " \t<task-notification><task-id>fixture-task-id</task-id><status>completed</status></task-notification>"
+        )]
+        #[case::prefixed_task_notification(
+            None,
+            indoc::indoc! {"
+                [SYSTEM NOTIFICATION - NOT USER INPUT]
+                <task-notification><task-id>fixture-task-id</task-id><status>completed</status></task-notification>
             "}
         )]
         #[case::subagent(Some("subagent-id"), "Continue the review.")]
