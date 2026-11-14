@@ -226,9 +226,11 @@ it('starts a fresh editor when the selected session changes', () => {
 })
 
 it('merges the session pull request after confirming its head SHA', async () => {
-  const fetchMock = vi.fn<typeof fetch>(() =>
-    Promise.resolve(Response.json({ result: 'merged' })),
-  )
+  let resolveMerge: (response: Response) => void = () => undefined
+  const mergeResponse = new Promise<Response>((resolve) => {
+    resolveMerge = resolve
+  })
+  const fetchMock = vi.fn<typeof fetch>(() => mergeResponse)
   vi.stubGlobal('fetch', fetchMock)
   renderHeader(
     false,
@@ -257,12 +259,31 @@ it('merges the session pull request after confirming its head SHA', async () => 
     container.querySelector<HTMLElement>('[role="alertdialog"]'),
   )
   const confirmedSha = confirmation.querySelector('code')?.textContent
-  await act(async () => {
+  act(() => {
     requireElement(
       [...confirmation.querySelectorAll<HTMLButtonElement>('button')].find(
         (button) => button.textContent === 'Confirm merge',
       ) ?? null,
     ).click()
+  })
+
+  const pendingMergeState = () => ({
+    confirmationOpen: container.querySelector('[role="alertdialog"]') !== null,
+    mergeButton: (() => {
+      const button = container.querySelector<HTMLButtonElement>(
+        '.conversation-pr-merge-button',
+      )
+      return button === null
+        ? null
+        : { text: button.textContent, disabled: button.disabled }
+    })(),
+    feedback: container.querySelector('[role="status"]')?.textContent ?? null,
+  })
+
+  const pendingState = pendingMergeState()
+
+  await act(async () => {
+    resolveMerge(Response.json({ result: 'merged' }))
     for (let attempt = 0; attempt < 20; attempt += 1) {
       if (container.querySelector('[role="status"]') !== null) return
       await new Promise((resolve) => window.setTimeout(resolve, 0))
@@ -271,6 +292,7 @@ it('merges the session pull request after confirming its head SHA', async () => 
 
   const mergeState = () => ({
     confirmedSha,
+    pendingState,
     request: fetchMock.mock.calls.map(([url, init]) => ({
       url,
       method: init?.method,
@@ -283,6 +305,11 @@ it('merges the session pull request after confirming its head SHA', async () => 
   })
   expect(mergeState()).toEqual({
     confirmedSha: 'sample-head-sha',
+    pendingState: {
+      confirmationOpen: false,
+      mergeButton: { text: 'Merging…', disabled: true },
+      feedback: null,
+    },
     request: [
       {
         url: '/api/sessions/fixture-session/pull-requests/42/merge',

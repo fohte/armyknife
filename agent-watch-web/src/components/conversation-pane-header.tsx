@@ -124,6 +124,7 @@ export function ConversationPaneHeader({
   const confirmMerge = async () => {
     if (mergeOperation === null || merging) return
     setMergeFeedback(null)
+    setMergeConfirmationOpen(false)
     const result = await run(mergeOperation)
     result.match(
       (response) => {
@@ -155,7 +156,6 @@ export function ConversationPaneHeader({
         })
       },
     )
-    setMergeConfirmationOpen(false)
   }
 
   const saveTitle = async (event: SubmitEvent<HTMLFormElement>) => {
@@ -403,7 +403,7 @@ export function ConversationPaneHeader({
                       setMergeConfirmationOpen(true)
                     }}
                   >
-                    Merge
+                    {merging ? 'Merging…' : 'Merge'}
                   </Button>
                 )}
                 {mergeFeedback === null ||
