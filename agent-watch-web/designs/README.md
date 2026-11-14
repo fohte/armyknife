@@ -1,13 +1,12 @@
 # Designs
 
-Design files for agent-watch-web, edited with the [baoyu-design](https://github.com/JimLiu/baoyu-design) skills.
+Design files for agent-watch-web, edited with the [baoyu-design](https://github.com/JimLiu/baoyu-design) skills. [AGENTS.md](AGENTS.md) describes how designs are explored, decided, and recorded.
 
-| Folder                       | Skill                  | Contents                                                                           |
-| ---------------------------- | ---------------------- | ---------------------------------------------------------------------------------- |
-| `agent-watch-design-system/` | `claude-design-system` | Tokens, type, and static renditions of five components, written from the app's CSS |
-| `mobile-session-top-bar/`    | `claude-design`        | The agent watch UI mock screens, plus three mobile top bar redesign options        |
-
-The design system is written by hand from `agent-watch-web/src`. It does not follow code changes by itself.
+| Folder           | Skill                  | Contents                                                                           |
+| ---------------- | ---------------------- | ---------------------------------------------------------------------------------- |
+| `design-system/` | `claude-design-system` | Tokens, type, and static renditions of five components, written from the app's CSS |
+| `ui/`            | `claude-design`        | The canvas: app screens, their parts, and design options under exploration        |
+| `decisions/`     | -                      | One record per decided design theme, created with the first decision              |
 
 ## Install the skills
 
@@ -24,12 +23,6 @@ DO_NOT_TRACK=1 npx skills@1.7.6 add JimLiu/baoyu-design --skill claude-design-sy
 Each command starts a local editor and prints its URL:
 
 ```sh
-node .claude/skills/claude-design-system/scripts/artifact.mjs open agent-watch-web/designs/agent-watch-design-system
-node .claude/skills/claude-design/scripts/artifact.mjs open agent-watch-web/designs/mobile-session-top-bar
-```
-
-The canvas carries its own copy of the design system's tokens. After changing the design system, update the copy:
-
-```sh
-node .claude/skills/claude-design/scripts/artifact.mjs ds-sync agent-watch-web/designs/mobile-session-top-bar agentwatch
+node .claude/skills/claude-design-system/scripts/artifact.mjs open agent-watch-web/designs/design-system
+node .claude/skills/claude-design/scripts/artifact.mjs open agent-watch-web/designs/ui
 ```

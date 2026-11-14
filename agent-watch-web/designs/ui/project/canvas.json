@@ -24,7 +24,7 @@
     }
   ],
   "boards": {
-    "Main.dc.html": {
+    "screens/Main.dc.html": {
       "x": 0,
       "y": 0,
       "w": 1440,
@@ -32,7 +32,7 @@
       "title": "0. 設計のまとめ",
       "page": "screens"
     },
-    "InboxRail.dc.html": {
+    "screens/InboxRail.dc.html": {
       "x": 1520,
       "y": 0,
       "w": 48,
@@ -40,7 +40,7 @@
       "title": "InboxRail",
       "page": "screens"
     },
-    "Inbox.dc.html": {
+    "screens/Inbox.dc.html": {
       "x": 1720,
       "y": 0,
       "w": 1440,
@@ -48,7 +48,7 @@
       "title": "1. Inbox · 上から片付ける",
       "page": "screens"
     },
-    "Later.dc.html": {
+    "screens/Later.dc.html": {
       "x": 3240,
       "y": 0,
       "w": 1440,
@@ -56,7 +56,7 @@
       "title": "2. Later · 後回しにする",
       "page": "screens"
     },
-    "Board.dc.html": {
+    "screens/Board.dc.html": {
       "x": 0,
       "y": 1760,
       "w": 1440,
@@ -64,7 +64,7 @@
       "title": "3. Board · 全体を見直す",
       "page": "screens"
     },
-    "Proposal.dc.html": {
+    "screens/Proposal.dc.html": {
       "x": 1520,
       "y": 1760,
       "w": 1200,
@@ -72,7 +72,7 @@
       "title": "4. Proposal に答える",
       "page": "screens"
     },
-    "Decision.dc.html": {
+    "screens/Decision.dc.html": {
       "x": 2800,
       "y": 1760,
       "w": 1200,
@@ -80,7 +80,7 @@
       "title": "5. 仮置きの判断 (止まらない)",
       "page": "screens"
     },
-    "SessionDecisions.dc.html": {
+    "screens/SessionDecisions.dc.html": {
       "x": 4080,
       "y": 1760,
       "w": 1440,
@@ -88,7 +88,7 @@
       "title": "6. セッションの判断を見返す",
       "page": "screens"
     },
-    "CritReview.dc.html": {
+    "screens/CritReview.dc.html": {
       "x": 0,
       "y": 2780,
       "w": 1440,
@@ -96,7 +96,7 @@
       "title": "7. crit で設計書をレビュー (横に埋め込み)",
       "page": "screens"
     },
-    "FPhoneInbox.dc.html": {
+    "screens/FPhoneInbox.dc.html": {
       "x": 1520,
       "y": 2780,
       "w": 390,
@@ -104,7 +104,7 @@
       "title": "8. iPhone · Inbox",
       "page": "screens"
     },
-    "FPhoneChat.dc.html": {
+    "screens/FPhoneChat.dc.html": {
       "x": 1990,
       "y": 2780,
       "w": 390,
@@ -112,7 +112,7 @@
       "title": "9. iPhone · 会話から答える",
       "page": "screens"
     },
-    "InboxFilter.dc.html": {
+    "screens/InboxFilter.dc.html": {
       "x": 2460,
       "y": 2780,
       "w": 1440,
@@ -120,7 +120,7 @@
       "title": "10. Inbox を絞り込む (/ で開く)",
       "page": "screens"
     },
-    "InboxFiltered.dc.html": {
+    "screens/InboxFiltered.dc.html": {
       "x": 0,
       "y": 3800,
       "w": 1440,
@@ -128,7 +128,7 @@
       "title": "11. 絞り込んだ状態 · VIEWS に保存できる",
       "page": "screens"
     },
-    "Palette.dc.html": {
+    "screens/Palette.dc.html": {
       "x": 1520,
       "y": 3800,
       "w": 1440,
@@ -136,7 +136,7 @@
       "title": "12. ⌘K · 開いた直後",
       "page": "screens"
     },
-    "PaletteQuery.dc.html": {
+    "screens/PaletteQuery.dc.html": {
       "x": 3040,
       "y": 3800,
       "w": 1440,
@@ -144,7 +144,7 @@
       "title": "13. ⌘K · 入力した状態",
       "page": "screens"
     },
-    "SessionActivity.dc.html": {
+    "screens/SessionActivity.dc.html": {
       "x": 4560,
       "y": 3800,
       "w": 1440,
@@ -152,7 +152,7 @@
       "title": "14. セッションの状況 · subagent と background task",
       "page": "screens"
     },
-    "SessionTree.dc.html": {
+    "screens/SessionTree.dc.html": {
       "x": 0,
       "y": 4820,
       "w": 1440,
@@ -160,7 +160,7 @@
       "title": "15. 親子の木 (右のパネルの Tree)",
       "page": "screens"
     },
-    "SessionTasks.dc.html": {
+    "screens/SessionTasks.dc.html": {
       "x": 1520,
       "y": 4820,
       "w": 1440,
@@ -168,7 +168,7 @@
       "title": "16. 1 つのセッションに tq タスクが複数",
       "page": "screens"
     },
-    "MessageKinds.dc.html": {
+    "screens/MessageKinds.dc.html": {
       "x": 3040,
       "y": 4820,
       "w": 1440,
@@ -176,7 +176,7 @@
       "title": "17. 会話に出るメッセージの種類",
       "page": "screens"
     },
-    "AddedSpec.dc.html": {
+    "screens/AddedSpec.dc.html": {
       "x": 4560,
       "y": 4820,
       "w": 1440,
@@ -184,7 +184,7 @@
       "title": "18. 追加分の仕様 (10〜17)",
       "page": "screens"
     },
-    "ChatPane.dc.html": {
+    "components/ChatPane.dc.html": {
       "x": 0,
       "y": 0,
       "w": 1180,
@@ -192,7 +192,7 @@
       "title": "ChatPane",
       "page": "components"
     },
-    "FPalette.dc.html": {
+    "components/FPalette.dc.html": {
       "x": 1260,
       "y": 0,
       "w": 1440,
@@ -200,7 +200,7 @@
       "title": "FPalette",
       "page": "components"
     },
-    "FSession.dc.html": {
+    "components/FSession.dc.html": {
       "x": 2780,
       "y": 0,
       "w": 1440,
@@ -208,7 +208,7 @@
       "title": "FSession",
       "page": "components"
     },
-    "V8Board.dc.html": {
+    "components/V8Board.dc.html": {
       "x": 4300,
       "y": 0,
       "w": 1440,
@@ -216,7 +216,7 @@
       "title": "V8Board",
       "page": "components"
     },
-    "V8Inbox.dc.html": {
+    "components/V8Inbox.dc.html": {
       "x": 5820,
       "y": 0,
       "w": 1440,
@@ -224,7 +224,7 @@
       "title": "V8Inbox",
       "page": "components"
     },
-    "V8Nav.dc.html": {
+    "components/V8Nav.dc.html": {
       "x": 7340,
       "y": 0,
       "w": 240,
@@ -232,7 +232,7 @@
       "title": "V8Nav",
       "page": "components"
     },
-    "V9Decision.dc.html": {
+    "components/V9Decision.dc.html": {
       "x": 7660,
       "y": 0,
       "w": 1200,
@@ -240,7 +240,7 @@
       "title": "V9Decision",
       "page": "components"
     },
-    "V9Proposal.dc.html": {
+    "components/V9Proposal.dc.html": {
       "x": 8940,
       "y": 0,
       "w": 1200,
@@ -248,7 +248,7 @@
       "title": "V9Proposal",
       "page": "components"
     },
-    "V9Review.dc.html": {
+    "components/V9Review.dc.html": {
       "x": 10220,
       "y": 0,
       "w": 1440,
@@ -256,7 +256,7 @@
       "title": "V9Review",
       "page": "components"
     },
-    "topbar-current.dc.html": {
+    "explore/topbar/topbar-current.dc.html": {
       "x": 0,
       "y": 0,
       "w": 390,
@@ -264,7 +264,7 @@
       "title": "Current",
       "page": "topbar"
     },
-    "topbar-a.dc.html": {
+    "explore/topbar/topbar-a.dc.html": {
       "x": 470,
       "y": 0,
       "w": 390,
@@ -272,7 +272,7 @@
       "title": "A · Two rows",
       "page": "topbar"
     },
-    "topbar-b.dc.html": {
+    "explore/topbar/topbar-b.dc.html": {
       "x": 940,
       "y": 0,
       "w": 390,
@@ -280,7 +280,7 @@
       "title": "B · Overflow menu",
       "page": "topbar"
     },
-    "topbar-c.dc.html": {
+    "explore/topbar/topbar-c.dc.html": {
       "x": 1410,
       "y": 0,
       "w": 390,
@@ -288,7 +288,7 @@
       "title": "C · Actions at the bottom",
       "page": "topbar"
     },
-    "topbar-current-crowded.dc.html": {
+    "explore/topbar/topbar-current-crowded.dc.html": {
       "x": 0,
       "y": 1200,
       "w": 390,
@@ -296,7 +296,7 @@
       "title": "Current, crowded",
       "page": "topbar"
     },
-    "topbar-a-crowded.dc.html": {
+    "explore/topbar/topbar-a-crowded.dc.html": {
       "x": 470,
       "y": 1200,
       "w": 390,
@@ -304,7 +304,7 @@
       "title": "A, crowded",
       "page": "topbar"
     },
-    "topbar-b-crowded.dc.html": {
+    "explore/topbar/topbar-b-crowded.dc.html": {
       "x": 940,
       "y": 1200,
       "w": 390,
@@ -312,7 +312,7 @@
       "title": "B, crowded, menu open",
       "page": "topbar"
     },
-    "topbar-c-crowded.dc.html": {
+    "explore/topbar/topbar-c-crowded.dc.html": {
       "x": 1410,
       "y": 1200,
       "w": 390,
@@ -322,43 +322,43 @@
     }
   },
   "order": [
-    "Main.dc.html",
-    "InboxRail.dc.html",
-    "Inbox.dc.html",
-    "Later.dc.html",
-    "Board.dc.html",
-    "Proposal.dc.html",
-    "Decision.dc.html",
-    "SessionDecisions.dc.html",
-    "CritReview.dc.html",
-    "FPhoneInbox.dc.html",
-    "FPhoneChat.dc.html",
-    "InboxFilter.dc.html",
-    "InboxFiltered.dc.html",
-    "Palette.dc.html",
-    "PaletteQuery.dc.html",
-    "SessionActivity.dc.html",
-    "SessionTree.dc.html",
-    "SessionTasks.dc.html",
-    "MessageKinds.dc.html",
-    "AddedSpec.dc.html",
-    "ChatPane.dc.html",
-    "FPalette.dc.html",
-    "FSession.dc.html",
-    "V8Board.dc.html",
-    "V8Inbox.dc.html",
-    "V8Nav.dc.html",
-    "V9Decision.dc.html",
-    "V9Proposal.dc.html",
-    "V9Review.dc.html",
-    "topbar-current.dc.html",
-    "topbar-a.dc.html",
-    "topbar-b.dc.html",
-    "topbar-c.dc.html",
-    "topbar-current-crowded.dc.html",
-    "topbar-a-crowded.dc.html",
-    "topbar-b-crowded.dc.html",
-    "topbar-c-crowded.dc.html"
+    "screens/Main.dc.html",
+    "screens/InboxRail.dc.html",
+    "screens/Inbox.dc.html",
+    "screens/Later.dc.html",
+    "screens/Board.dc.html",
+    "screens/Proposal.dc.html",
+    "screens/Decision.dc.html",
+    "screens/SessionDecisions.dc.html",
+    "screens/CritReview.dc.html",
+    "screens/FPhoneInbox.dc.html",
+    "screens/FPhoneChat.dc.html",
+    "screens/InboxFilter.dc.html",
+    "screens/InboxFiltered.dc.html",
+    "screens/Palette.dc.html",
+    "screens/PaletteQuery.dc.html",
+    "screens/SessionActivity.dc.html",
+    "screens/SessionTree.dc.html",
+    "screens/SessionTasks.dc.html",
+    "screens/MessageKinds.dc.html",
+    "screens/AddedSpec.dc.html",
+    "components/ChatPane.dc.html",
+    "components/FPalette.dc.html",
+    "components/FSession.dc.html",
+    "components/V8Board.dc.html",
+    "components/V8Inbox.dc.html",
+    "components/V8Nav.dc.html",
+    "components/V9Decision.dc.html",
+    "components/V9Proposal.dc.html",
+    "components/V9Review.dc.html",
+    "explore/topbar/topbar-current.dc.html",
+    "explore/topbar/topbar-a.dc.html",
+    "explore/topbar/topbar-b.dc.html",
+    "explore/topbar/topbar-c.dc.html",
+    "explore/topbar/topbar-current-crowded.dc.html",
+    "explore/topbar/topbar-a-crowded.dc.html",
+    "explore/topbar/topbar-b-crowded.dc.html",
+    "explore/topbar/topbar-c-crowded.dc.html"
   ],
   "notes": {
     "typical": {
@@ -382,7 +382,7 @@
     {
       "title": "agent watch",
       "namespace": "agentwatch",
-      "artifact": "agent-watch-web/designs/agent-watch-design-system",
+      "artifact": "agent-watch-web/designs/design-system",
       "version": null,
       "copiedAt": "2026-11-14T02:54:45Z"
     }
