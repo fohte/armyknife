@@ -1203,7 +1203,7 @@ Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` on
 - `GET /api/images/{name}` for saved conversation images
 - `GET /api/sessions/later-options` for server-calculated return times
 - `POST /api/sessions/{id}/messages` with `{"content":"..."}`
-- `POST /api/sessions/{id}/rewind` rewinds a session waiting for input. Send `{"messageId":"fixture-user-message-id","mode":"conversation_and_code"}`; `mode` accepts `conversation_and_code`, `conversation`, or `code` for Claude Code and only `conversation` for Codex. Returns `{"sessionId":"fixture-fork-session-id"}`.
+- `POST /api/sessions/{id}/rewind` rewinds a stopped or paused session with a tmux pane, no pending background tasks, and no active sweep. Send `{"messageId":"fixture-user-message-id","mode":"conversation_and_code"}`; `mode` accepts `conversation_and_code`, `conversation`, or `code` for Claude Code and only `conversation` for Codex. Returns `{"sessionId":"fixture-fork-session-id"}`.
 - `POST /api/sessions/{id}/answer` with `{"requestId":"...","answers":{"Which formats?":"Markdown, Plain text","Include examples?":"Yes"}}`, or `{"requestId":"...","skip":true}`
 - `POST /api/sessions/{id}/proposals/{seq}/answer` with `{"choice":0,"comment":"..."}`; `choice` is a zero-based option index or `null` to request another proposal, and `comment` may be `null`
 - `POST /api/sessions/{id}/todos/{seq}/resolve` with `{"resolution":"completed","comment":"..."}` or `{"resolution":"rejected","comment":"..."}`; the comment may be `null`, and a live session receives the selected outcome as a user action before it is saved

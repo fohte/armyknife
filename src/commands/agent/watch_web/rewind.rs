@@ -145,7 +145,13 @@ pub(super) fn can_rewind(session: &Session) -> bool {
         session.status,
         SessionStatus::Stopped | SessionStatus::Paused
     ) && session.tmux_info.is_some()
+        && !session.has_pending_bg_tasks()
+        && !session.sweep_signaled
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("session cannot be rewound")]
+pub(super) struct SessionNotRewindableError;
 
 pub(super) fn rewind_session(
     sessions_dir: &Path,
@@ -158,11 +164,9 @@ pub(super) fn rewind_session(
     let _session_wake_lock = store::lock_session_for_wake(sessions_dir, &session.session_id)?;
     let session = store::load_session_from(sessions_dir, &session.session_id)?
         .context("session no longer exists")?;
-    ensure!(can_rewind(&session), "session cannot be rewound");
-    ensure!(
-        !session.sweep_signaled,
-        "session cannot be rewound while a sweep is in progress"
-    );
+    if !can_rewind(&session) {
+        return Err(SessionNotRewindableError.into());
+    }
     if session.engine == Engine::Codex {
         ensure!(
             mode == RewindMode::Conversation,
@@ -300,7 +304,7 @@ fn sessions_after_rewind(
 fn mark_rewind_started(sessions_dir: &Path, session_id: &str) -> Result<Session> {
     let mut marked_session = None;
     store::update_session_in(sessions_dir, session_id, |session| {
-        if !can_rewind(session) || session.sweep_signaled {
+        if !can_rewind(session) {
             return false;
         }
         session.sweep_signaled = true;
@@ -308,7 +312,7 @@ fn mark_rewind_started(sessions_dir: &Path, session_id: &str) -> Result<Session>
         marked_session = Some(session.clone());
         true
     })?;
-    marked_session.context("session cannot be rewound")
+    marked_session.ok_or_else(|| anyhow::Error::new(SessionNotRewindableError))
 }
 
 fn clear_rewind_marker(sessions_dir: &Path, session_id: &str) -> Result<()> {
@@ -821,12 +825,24 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::running(SessionStatus::Running)]
-    #[case::waiting_input(SessionStatus::WaitingInput)]
-    #[case::ended(SessionStatus::Ended)]
-    fn rejects_rewind_when_session_is_not_rewindable(#[case] status: SessionStatus) {
+    #[case::running(SessionStatus::Running, false, false)]
+    #[case::waiting_input(SessionStatus::WaitingInput, false, false)]
+    #[case::ended(SessionStatus::Ended, false, false)]
+    #[case::stopped_during_sweep(SessionStatus::Stopped, true, false)]
+    #[case::stopped_with_pending_task(SessionStatus::Stopped, false, true)]
+    fn rejects_rewind_when_session_is_not_rewindable(
+        #[case] status: SessionStatus,
+        #[case] sweep_signaled: bool,
+        #[case] has_pending_bg_task: bool,
+    ) {
         let mut session = test_session();
         session.status = status;
+        session.sweep_signaled = sweep_signaled;
+        if has_pending_bg_task {
+            session
+                .pending_bg_task_ids
+                .insert("fixture-task".to_string());
+        }
         let directory = TempDir::new().unwrap();
         store::save_session_to(directory.path(), &session).unwrap();
         let host = FakeHost::new();

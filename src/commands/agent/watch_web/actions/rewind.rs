@@ -4,7 +4,7 @@ use axum::extract::{Path as RoutePath, State};
 use serde::{Deserialize, Serialize};
 
 use super::super::rewind::RewindMode;
-use super::{ActionState, ApiError, load_session, resolve_sessions_dir, run_blocking};
+use super::{ActionState, ApiError, load_session, resolve_sessions_dir};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,8 +45,20 @@ pub(super) async fn rewind(
     let runtime = state.runtime;
     let message_id = request.message_id;
     let mode = request.mode;
-    let session_id =
-        run_blocking(move || runtime.rewind_session(&sessions_dir, &session, &message_id, mode))
-            .await?;
+    let session_id = tokio::task::spawn_blocking(move || {
+        runtime.rewind_session(&sessions_dir, &session, &message_id, mode)
+    })
+    .await
+    .map_err(ApiError::internal)?
+    .map_err(|error| {
+        if error
+            .downcast_ref::<super::super::rewind::SessionNotRewindableError>()
+            .is_some()
+        {
+            ApiError::conflict(error.to_string())
+        } else {
+            ApiError::operation(error)
+        }
+    })?;
     Ok(Json(RewindResponse { session_id }))
 }

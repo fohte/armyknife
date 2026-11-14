@@ -493,6 +493,7 @@ mod tests {
     struct FakeRuntime {
         calls: Mutex<Vec<Value>>,
         message_error: Mutex<Option<String>>,
+        rewind_not_available: Mutex<bool>,
         after_message: Mutex<Option<Box<dyn FnOnce() + Send>>>,
         message_gate: Mutex<
             Option<(
@@ -520,6 +521,7 @@ mod tests {
             Self {
                 calls: Mutex::new(Vec::new()),
                 message_error: Mutex::new(None),
+                rewind_not_available: Mutex::new(false),
                 after_message: Mutex::new(None),
                 message_gate: Mutex::new(None),
                 pane_command: Mutex::new(Some("claude".to_string())),
@@ -567,6 +569,9 @@ mod tests {
                 "messageId": message_id,
                 "mode": format!("{mode:?}"),
             }));
+            if *self.rewind_not_available.lock().unwrap() {
+                return Err(super::super::rewind::SessionNotRewindableError.into());
+            }
             Ok("fixture-fork-session".to_string())
         }
 
@@ -797,6 +802,10 @@ mod tests {
 
         fn set_message_error(&self, message: &str) {
             *self.runtime.message_error.lock().unwrap() = Some(message.to_string());
+        }
+
+        fn set_rewind_not_available(&self) {
+            *self.runtime.rewind_not_available.lock().unwrap() = true;
         }
 
         fn set_close_unmerged_worktree(&self, value: bool) {
@@ -1051,16 +1060,26 @@ mod tests {
     }
 
     #[rstest]
-    #[case::running(SessionStatus::Running)]
-    #[case::waiting_input(SessionStatus::WaitingInput)]
-    #[case::ended(SessionStatus::Ended)]
+    #[case::running(SessionStatus::Running, false, false)]
+    #[case::waiting_input(SessionStatus::WaitingInput, false, false)]
+    #[case::ended(SessionStatus::Ended, false, false)]
+    #[case::stopped_during_sweep(SessionStatus::Stopped, true, false)]
+    #[case::stopped_with_pending_task(SessionStatus::Stopped, false, true)]
     #[tokio::test]
     async fn rewind_rejects_a_non_rewindable_session(
         #[case] status: SessionStatus,
+        #[case] sweep_signaled: bool,
+        #[case] has_pending_bg_task: bool,
         action_context: ActionContext,
     ) {
         let mut session = session("sample-session");
         session.status = status;
+        session.sweep_signaled = sweep_signaled;
+        if has_pending_bg_task {
+            session
+                .pending_bg_task_ids
+                .insert("fixture-task".to_string());
+        }
         action_context.save_session(&session);
 
         let response = action_context
@@ -1081,6 +1100,43 @@ mod tests {
                 "status": StatusCode::CONFLICT.as_u16(),
                 "body": { "error": "session cannot be rewound" },
                 "calls": [],
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn rewind_returns_conflict_when_session_becomes_unavailable(
+        action_context: ActionContext,
+    ) {
+        let mut session = session("sample-session");
+        session.status = SessionStatus::Stopped;
+        action_context.save_session(&session);
+        action_context.set_rewind_not_available();
+
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/rewind",
+                json!({
+                    "messageId": "fixture-user-message",
+                    "mode": "conversation"
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::CONFLICT.as_u16(),
+                "body": { "error": "session cannot be rewound" },
+                "calls": [{
+                    "kind": "rewind",
+                    "sessionId": "sample-session",
+                    "messageId": "fixture-user-message",
+                    "mode": "Conversation",
+                }],
             }),
         );
     }
@@ -1849,23 +1905,33 @@ mod tests {
     }
 
     #[rstest]
-    #[case::running_with_pane(SessionStatus::Running, true, false)]
-    #[case::waiting_input_with_pane(SessionStatus::WaitingInput, true, false)]
-    #[case::stopped_with_pane(SessionStatus::Stopped, true, true)]
-    #[case::paused_with_pane(SessionStatus::Paused, true, true)]
-    #[case::ended_with_pane(SessionStatus::Ended, true, false)]
-    #[case::stopped_without_pane(SessionStatus::Stopped, false, false)]
-    #[case::paused_without_pane(SessionStatus::Paused, false, false)]
-    #[case::waiting_input_without_pane(SessionStatus::WaitingInput, false, false)]
+    #[case::running_with_pane(SessionStatus::Running, true, false, false, false)]
+    #[case::waiting_input_with_pane(SessionStatus::WaitingInput, true, false, false, false)]
+    #[case::stopped_with_pane(SessionStatus::Stopped, true, true, false, false)]
+    #[case::paused_with_pane(SessionStatus::Paused, true, true, false, false)]
+    #[case::ended_with_pane(SessionStatus::Ended, true, false, false, false)]
+    #[case::stopped_without_pane(SessionStatus::Stopped, false, false, false, false)]
+    #[case::paused_without_pane(SessionStatus::Paused, false, false, false, false)]
+    #[case::waiting_input_without_pane(SessionStatus::WaitingInput, false, false, false, false)]
+    #[case::stopped_with_pending_task(SessionStatus::Stopped, true, false, true, false)]
+    #[case::stopped_during_sweep(SessionStatus::Stopped, true, false, false, true)]
     #[tokio::test]
     async fn rewind_capability_requires_a_stopped_or_paused_session_with_a_pane(
         #[case] status: SessionStatus,
         #[case] has_pane: bool,
         #[case] rewind_available: bool,
+        #[case] has_pending_bg_task: bool,
+        #[case] sweep_signaled: bool,
         action_context: ActionContext,
     ) {
         let mut session = session("sample-session");
         session.status = status;
+        if has_pending_bg_task {
+            session
+                .pending_bg_task_ids
+                .insert("fixture-task".to_string());
+        }
+        session.sweep_signaled = sweep_signaled;
         if !has_pane {
             session.tmux_info = None;
         }
