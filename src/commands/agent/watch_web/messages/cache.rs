@@ -283,8 +283,12 @@ impl TranscriptParserCache {
     }
 }
 
-fn insert_with_eviction<K, V>(entries: &mut HashMap<K, V>, key: K, value: V, capacity: usize)
-where
+pub(super) fn insert_with_eviction<K, V>(
+    entries: &mut HashMap<K, V>,
+    key: K,
+    value: V,
+    capacity: usize,
+) where
     K: Clone + Eq + std::hash::Hash,
 {
     if !entries.contains_key(&key)

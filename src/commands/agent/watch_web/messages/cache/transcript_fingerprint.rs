@@ -15,7 +15,7 @@ pub(in crate::commands::agent::watch_web::messages) enum TranscriptChange {
     Rewritten,
 }
 
-#[derive(Clone, Hash, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(in crate::commands::agent::watch_web::messages) struct TranscriptFingerprint {
     source_path: PathBuf,
     len: u64,

@@ -6,14 +6,14 @@ use anyhow::Result;
 use crate::commands::agent::store::PermissionRequestData;
 use crate::commands::agent::types::Session;
 
-use super::cache::{TranscriptFingerprint, transcript_fingerprint};
+use super::cache::{TranscriptFingerprint, insert_with_eviction, transcript_fingerprint};
 use super::questions::question_item_from_input;
 use super::{ChatItem, QuestionPrompt, RouteLoaders, TranscriptInput, incremental, parser};
 
 const MAX_CACHED_QUESTION_PREVIEWS: usize = 256;
 
-type QuestionPreviewCacheKey = (String, Option<TranscriptFingerprint>);
-type QuestionPreviewCacheEntries = HashMap<QuestionPreviewCacheKey, Option<String>>;
+type QuestionPreviewCacheEntry = (Option<TranscriptFingerprint>, Option<String>);
+type QuestionPreviewCacheEntries = HashMap<String, QuestionPreviewCacheEntry>;
 
 #[derive(Clone, Default)]
 pub(super) struct QuestionPreviewCache {
@@ -30,9 +30,8 @@ impl QuestionPreviewCache {
             .entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        entries
-            .get(&(session_id.to_owned(), fingerprint.clone()))
-            .cloned()
+        let (cached_fingerprint, preview) = entries.get(session_id)?;
+        (cached_fingerprint == fingerprint).then(|| preview.clone())
     }
 
     fn insert(
@@ -45,13 +44,12 @@ impl QuestionPreviewCache {
             .entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        entries.retain(|(cached_session_id, _), _| cached_session_id != session_id);
-        if entries.len() >= MAX_CACHED_QUESTION_PREVIEWS
-            && let Some(key) = entries.keys().next().cloned()
-        {
-            entries.remove(&key);
-        }
-        entries.insert((session_id.to_owned(), fingerprint), preview);
+        insert_with_eviction(
+            &mut entries,
+            session_id.to_owned(),
+            (fingerprint, preview),
+            MAX_CACHED_QUESTION_PREVIEWS,
+        );
     }
 }
 

@@ -1475,6 +1475,96 @@ mod tests {
     }
 
     #[rstest]
+    #[tokio::test]
+    async fn question_preview_cache_refreshes_after_transcript_update(
+        mut source: TestSessionSource,
+    ) {
+        source.web_states[0].later_until = None;
+        source.sessions[0].current_tool = Some("AskUserQuestion".to_string());
+        source.sessions[0].current_tool_name = Some("AskUserQuestion".to_string());
+        let first_record = serde_json::json!({
+            "type": "assistant",
+            "message": {"content": [{
+                "type": "tool_use",
+                "id": "fixture-first-question",
+                "name": "AskUserQuestion",
+                "input": {"questions": [{"question": "Which initial layout?"}]},
+            }]},
+        });
+        let (_transcript_dir, transcript_path) = write_transcript(&[first_record]);
+        source.sessions[0].transcript_path = Some(transcript_path.clone());
+
+        let first_response = sessions_response(source.clone()).await;
+        let mut transcript = std::fs::read(&transcript_path).unwrap();
+        transcript.extend(
+            serde_json::to_vec(&serde_json::json!({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use",
+                    "id": "fixture-updated-question",
+                    "name": "AskUserQuestion",
+                    "input": {"questions": [{"question": "Which updated layout?"}]},
+                }]},
+            }))
+            .unwrap(),
+        );
+        transcript.push(b'\n');
+        std::fs::write(&transcript_path, transcript).unwrap();
+        let second_response = sessions_response(source).await;
+
+        let mut first_expected = expected_response(
+            "needs_action",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: Some("Question"),
+                category_when_not_later: "needs_action",
+                is_paused: false,
+                unread: true,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        first_expected["sessions"][0]["preview"] = serde_json::json!("Which initial layout?");
+        let mut second_expected = expected_response(
+            "needs_action",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: Some("Question"),
+                category_when_not_later: "needs_action",
+                is_paused: false,
+                unread: true,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        second_expected["sessions"][0]["preview"] = serde_json::json!("Which updated layout?");
+
+        assert_eq!(
+            (first_response, second_response),
+            (
+                (StatusCode::OK, first_expected),
+                (StatusCode::OK, second_expected),
+            ),
+        );
+    }
+
+    #[rstest]
     #[case::latest_question_is_answered(true, "Question")]
     #[case::current_tool_is_not_ask_user_question(false, "Stopped")]
     #[tokio::test]
