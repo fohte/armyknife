@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.714](https://github.com/fohte/armyknife/compare/v0.1.713...v0.1.714) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** align question preview with parser ([#1809](https://github.com/fohte/armyknife/issues/1809)) ([40f9486](https://github.com/fohte/armyknife/commit/40f94868c26b5b491e6f4bae55559a3681cbd733))
+
 ## [0.1.713](https://github.com/fohte/armyknife/compare/v0.1.712...v0.1.713) (2026-11-14)
 
 
