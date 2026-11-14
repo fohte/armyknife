@@ -36,7 +36,6 @@
   margin: 0 0 12px;
   color: var(--aw-text-body);
   font-size: 13px;
-  white-space: pre-wrap;
 }
 
 .chat-todo-comment-label {
