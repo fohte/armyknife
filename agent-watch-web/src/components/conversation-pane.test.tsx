@@ -4673,8 +4673,8 @@ it('directs Codex questions and permissions to the terminal', () => {
   expect(snapshot()).toEqual({
     disabledChoices: [true, true],
     guidance: [
-      'Review this permission in terminal.',
       'Answer in terminal to continue.',
+      'Review this permission in terminal.',
     ],
     terminalButtons: [
       {
