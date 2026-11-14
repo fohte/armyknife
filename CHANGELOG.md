@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.705](https://github.com/fohte/armyknife/compare/v0.1.704...v0.1.705) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** show Inbox and Starred kind icons ([#1789](https://github.com/fohte/armyknife/issues/1789)) ([e237a98](https://github.com/fohte/armyknife/commit/e237a98cd9086aa508cceaa96b3aa2f58f62690b))
+
 ## [0.1.704](https://github.com/fohte/armyknife/compare/v0.1.703...v0.1.704) (2026-11-14)
 
 
