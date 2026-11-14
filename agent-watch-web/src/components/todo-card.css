@@ -10,7 +10,7 @@
 }
 
 .chat-todo-card[data-resolution='rejected'] {
-  border-color: var(--aw-danger, #b91c1c);
+  border-color: var(--aw-color-error);
 }
 
 .chat-todo-card[data-resolution='withdrawn'] {

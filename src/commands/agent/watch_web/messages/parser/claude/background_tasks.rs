@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
+use crate::commands::agent::peer_message::task_notification_envelope;
+
 use super::super::super::claude_content_text;
 use super::super::super::{BackgroundTask, BackgroundTaskKind};
 use super::state::ToolUse;
@@ -53,6 +55,9 @@ impl BackgroundTaskTracker {
         let Some(body) = task_notification_body(text) else {
             return;
         };
+        if is_waiting_for_own_background_work(body) {
+            return;
+        }
         let Some(task_id) = tagged_value(body, "task-id") else {
             return;
         };
@@ -128,32 +133,27 @@ fn notification_text(record: &Value) -> Option<String> {
         .then(|| claude_content_text(attachment.get("prompt")))
 }
 
-pub(super) fn task_notification_envelope(text: &str) -> Option<&str> {
-    let text = text.trim();
-    let envelope = if text.starts_with("<task-notification>") {
-        text
-    } else {
-        let (preamble, remainder) = text.split_once('\n')?;
-        let preamble = preamble.trim();
-        let is_notification_preamble = preamble
-            .strip_prefix('[')
-            .and_then(|preamble| preamble.strip_suffix(']'))
-            .is_some_and(|preamble| preamble.to_ascii_lowercase().contains("notification"));
-        if !is_notification_preamble {
-            return None;
-        }
-        remainder.trim_start()
-    };
-    envelope
-        .strip_prefix("<task-notification>")?
-        .strip_suffix("</task-notification>")?;
-    Some(envelope)
-}
-
 fn task_notification_body(text: &str) -> Option<&str> {
     task_notification_envelope(text)?
         .strip_prefix("<task-notification>")?
         .strip_suffix("</task-notification>")
+}
+
+const WAITING_FOR_OWN_BACKGROUND_WORK_SUMMARY: &str = "is waiting on its own background work";
+const WAITING_FOR_OWN_BACKGROUND_WORK_NOTE: &str =
+    "This agent stopped with background work of its own still running";
+
+fn is_waiting_for_own_background_work(body: &str) -> bool {
+    ["summary", "note"].into_iter().any(|tag| {
+        tagged_value(body, tag).is_some_and(|value| {
+            let marker = match tag {
+                "summary" => WAITING_FOR_OWN_BACKGROUND_WORK_SUMMARY,
+                "note" => WAITING_FOR_OWN_BACKGROUND_WORK_NOTE,
+                _ => return false,
+            };
+            value.contains(marker)
+        })
+    })
 }
 
 #[derive(Clone)]
@@ -465,6 +465,7 @@ mod tests {
             text: user_text.to_string(),
             timestamp: None,
             from: None,
+            queued_prompt_id: None,
         });
 
         assert_eq!(
@@ -586,6 +587,7 @@ mod tests {
                         text: "Watch the fixture build.".to_string(),
                         timestamp: None,
                         from: None,
+                        queued_prompt_id: None,
                     },
                     ChatItem::ToolSummary {
                         summary: format!("Bash ×1  {result_tool} ×1"),
@@ -633,6 +635,7 @@ mod tests {
                         text: "Delegate a synthetic task.".to_string(),
                         timestamp: None,
                         from: None,
+                        queued_prompt_id: None,
                     },
                     ChatItem::ToolSummary {
                         summary: "Task ×1".to_string(),
@@ -660,15 +663,11 @@ mod tests {
     #[case::not_async(false, "async_launched", false)]
     #[case::not_launched(true, "running", false)]
     fn reports_only_asynchronous_agent_results(
+        mut async_agent_transcript: String,
         #[case] is_async: bool,
         #[case] status: &str,
         #[case] is_reported: bool,
     ) {
-        let mut transcript = indoc! {r#"
-            {"uuid":"fixture-agent-prompt-row","parentUuid":null,"type":"user","message":{"content":"Review the synthetic change."}}
-            {"uuid":"fixture-agent-call-row","parentUuid":"fixture-agent-prompt-row","type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-agent-tool-use-id","name":"Agent","input":{"subagent_type":"FixtureExplorer","description":"Review the synthetic change","prompt":"Review a fictional change."}}]}}
-        "#}
-        .to_string();
         let result_record = json!({
             "uuid": "fixture-agent-result-row",
             "parentUuid": "fixture-agent-call-row",
@@ -685,8 +684,8 @@ mod tests {
                 "content": "agentId: fixture-agent-id (internal ID)",
             }]},
         });
-        transcript.push_str(&serde_json::to_string(&result_record).unwrap());
-        transcript.push('\n');
+        async_agent_transcript.push_str(&serde_json::to_string(&result_record).unwrap());
+        async_agent_transcript.push('\n');
         let expected_tasks = if is_reported {
             vec![BackgroundTask {
                 id: "fixture-agent-id".to_string(),
@@ -702,7 +701,139 @@ mod tests {
 
         assert_eq!(
             parse_with_background_tasks_and_peer_out_messages(
-                Cursor::new(transcript),
+                Cursor::new(async_agent_transcript),
+                None,
+                None,
+                None,
+                timestamp("2026-01-01T00:00:45Z"),
+                &[],
+            )
+            .unwrap(),
+            (
+                vec![
+                    ChatItem::User {
+                        rewind_id: Some("fixture-agent-prompt-row".to_string()),
+                        text: "Review the synthetic change.".to_string(),
+                        timestamp: None,
+                        from: None,
+                        queued_prompt_id: None,
+                    },
+                    ChatItem::ToolSummary {
+                        summary: "Agent ×1".to_string(),
+                        operations: vec![ToolOperation {
+                            tool: "Agent".to_string(),
+                            target: Some(
+                                "FixtureExplorer · Review the synthetic change".to_string(),
+                            ),
+                            failed: false,
+                        }],
+                    },
+                ],
+                expected_tasks,
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::summary(
+        "summary",
+        "Agent \"Fixture agent\" is waiting on its own background work"
+    )]
+    #[case::note("note", "Agent \"Fixture agent\" has interim work")]
+    fn keeps_subagent_until_its_own_background_work_finishes(
+        mut async_agent_transcript: String,
+        #[case] retained_reason_tag: &str,
+        #[case] expected_interim_event_text: &str,
+    ) {
+        let result_record = json!({
+            "uuid": "fixture-agent-result-row",
+            "parentUuid": "fixture-agent-call-row",
+            "type": "user",
+            "sourceToolAssistantUUID": "fixture-agent-call-row",
+            "toolUseResult": {
+                "agentId": "fixture-agent-id",
+                "isAsync": true,
+                "status": "async_launched",
+            },
+            "message": {"content": [{
+                "type": "tool_result",
+                "tool_use_id": "fixture-agent-tool-use-id",
+                "content": "Agent launched.",
+            }]},
+        });
+        async_agent_transcript.push_str(&serde_json::to_string(&result_record).unwrap());
+        async_agent_transcript.push('\n');
+        let mut interim_notification = indoc! {r#"
+            {"type":"user","origin":{"kind":"task-notification"},"message":{"content":"<task-notification>\n<task-id>fixture-agent-id</task-id>\n<tool-use-id>fixture-tool-use-id</tool-use-id>\n<output-file>/fixture/agent-output.log</output-file>\n<status>completed</status>\n<summary>Agent \"Fixture agent\" is waiting on its own background work</summary>\n<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>\n</task-notification>"}}
+        "#}
+        .to_string();
+        if retained_reason_tag == "summary" {
+            interim_notification = interim_notification.replace(
+                "<note>This agent stopped with background work of its own still running. It may resume on its own when that work completes or reports, and the same task-id notifies again if it does; the result below may be interim.</note>",
+                "<note>Additional details are unavailable.</note>",
+            );
+        } else {
+            interim_notification = interim_notification.replace(
+                "Agent \\\"Fixture agent\\\" is waiting on its own background work",
+                "Agent \\\"Fixture agent\\\" has interim work",
+            );
+        }
+        let final_notification = indoc! {r#"
+            {"type":"user","origin":{"kind":"task-notification"},"message":{"content":"<task-notification>\n<task-id>fixture-agent-id</task-id>\n<tool-use-id>fixture-tool-use-id</tool-use-id>\n<output-file>/fixture/agent-output.log</output-file>\n<status>completed</status>\n<summary>Agent \"Fixture agent\" completed its work</summary>\n</task-notification>"}}
+        "#};
+        async_agent_transcript.push_str(&interim_notification);
+        let interim_result = parse_with_background_tasks_and_peer_out_messages(
+            Cursor::new(async_agent_transcript.clone()),
+            None,
+            None,
+            None,
+            timestamp("2026-01-01T00:00:45Z"),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            interim_result,
+            (
+                vec![
+                    ChatItem::User {
+                        rewind_id: Some("fixture-agent-prompt-row".to_string()),
+                        text: "Review the synthetic change.".to_string(),
+                        timestamp: None,
+                        from: None,
+                    },
+                    ChatItem::ToolSummary {
+                        summary: "Agent ×1".to_string(),
+                        operations: vec![ToolOperation {
+                            tool: "Agent".to_string(),
+                            target: Some(
+                                "FixtureExplorer · Review the synthetic change".to_string(),
+                            ),
+                            failed: false,
+                        }],
+                    },
+                    ChatItem::Event {
+                        kind: super::super::super::super::EventKind::System,
+                        text: expected_interim_event_text.to_string(),
+                        timestamp: None,
+                        failed: false,
+                    },
+                ],
+                vec![BackgroundTask {
+                    id: "fixture-agent-id".to_string(),
+                    description: "Review the synthetic change".to_string(),
+                    elapsed_seconds: 45,
+                    kind: BackgroundTaskKind::Subagent,
+                    agent_type: Some("FixtureExplorer".to_string()),
+                    output_path: None,
+                }],
+            ),
+        );
+
+        async_agent_transcript.push_str(final_notification);
+
+        assert_eq!(
+            parse_with_background_tasks_and_peer_out_messages(
+                Cursor::new(async_agent_transcript),
                 None,
                 None,
                 None,
@@ -728,10 +859,31 @@ mod tests {
                             failed: false,
                         }],
                     },
+                    ChatItem::Event {
+                        kind: super::super::super::super::EventKind::System,
+                        text: expected_interim_event_text.to_string(),
+                        timestamp: None,
+                        failed: false,
+                    },
+                    ChatItem::Event {
+                        kind: super::super::super::super::EventKind::System,
+                        text: "Agent \"Fixture agent\" completed its work".to_string(),
+                        timestamp: None,
+                        failed: false,
+                    },
                 ],
-                expected_tasks,
+                Vec::new(),
             ),
         );
+    }
+
+    #[fixture]
+    fn async_agent_transcript() -> String {
+        indoc! {r#"
+            {"uuid":"fixture-agent-prompt-row","parentUuid":null,"type":"user","message":{"content":"Review the synthetic change."}}
+            {"uuid":"fixture-agent-call-row","parentUuid":"fixture-agent-prompt-row","type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-agent-tool-use-id","name":"Agent","input":{"subagent_type":"FixtureExplorer","description":"Review the synthetic change","prompt":"Review a fictional change."}}]}}
+        "#}
+        .to_string()
     }
 
     #[fixture]
@@ -751,6 +903,7 @@ mod tests {
                 text: "Watch the fixture build.".to_string(),
                 timestamp: None,
                 from: None,
+                queued_prompt_id: None,
             },
             ChatItem::ToolSummary {
                 summary: "Bash ×1".to_string(),

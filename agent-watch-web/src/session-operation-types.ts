@@ -22,6 +22,7 @@ export type SessionOperation =
       operationId?: string
       content: string
       attachments?: unknown[]
+      queuedPromptId?: string
       messageCountBefore?: number
     }
   | {

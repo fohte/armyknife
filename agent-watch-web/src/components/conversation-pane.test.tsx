@@ -315,6 +315,7 @@ function renderView(
 function renderConversationMessages(
   messages: readonly ChatItem[],
   start: number,
+  isMobile = false,
 ) {
   root ??= createRoot(container)
   act(() => {
@@ -328,6 +329,7 @@ function renderConversationMessages(
         error={null}
         onAction={() => Promise.resolve(true)}
         onSelectSession={() => undefined}
+        isMobile={isMobile}
       />,
     )
   })
@@ -2272,6 +2274,10 @@ it('jumps between own messages with Alt-arrow shortcuts', () => {
     ),
     scrollTargets: scrollIntoView.mock.contexts,
     scrollOptions: scrollIntoView.mock.calls.map(([options]) => options),
+    highlightedMessages: ownMessages.map(
+      (message) =>
+        message.getAttribute('data-own-message-highlighted') === 'true',
+    ),
     defaultPrevented: [
       previousEvent.defaultPrevented,
       nextEvent.defaultPrevented,
@@ -2285,10 +2291,120 @@ it('jumps between own messages with Alt-arrow shortcuts', () => {
     ],
     scrollTargets: [earlierMessage, laterMessage],
     scrollOptions: [
-      { block: 'center', behavior: 'smooth' },
-      { block: 'center', behavior: 'smooth' },
+      { block: 'center', behavior: 'instant' },
+      { block: 'center', behavior: 'instant' },
     ],
+    highlightedMessages: [false, false, true],
     defaultPrevented: [true, true],
+  })
+})
+
+it('removes the navigation highlight after one and a half seconds', async () => {
+  vi.useFakeTimers()
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [
+    { type: 'user', text: 'An earlier message.' },
+    { type: 'user', text: 'A later message.' },
+  ])
+
+  const scrollContainer = requireElement(
+    container.querySelector<HTMLElement>('.conversation-scroll'),
+  )
+  const ownMessages = Array.from(
+    container.querySelectorAll<HTMLElement>('[data-own-message="true"]'),
+  )
+  const laterMessage = requireElement(ownMessages[1] ?? null)
+  vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(
+    () => undefined,
+  )
+  mockConversationMessageBounds(scrollContainer, ownMessages, [
+    { top: 40, height: 30 },
+    { top: 500, height: 30 },
+  ])
+
+  dispatchKeyInAct(window, 'ArrowDown', { altKey: true })
+  const highlightedBeforeTimeout =
+    laterMessage.getAttribute('data-own-message-highlighted') === 'true'
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_500)
+  })
+
+  const snapshot = () => ({
+    highlightedBeforeTimeout,
+    highlightedAfterTimeout:
+      laterMessage.getAttribute('data-own-message-highlighted') === 'true',
+  })
+  expect(snapshot()).toEqual({
+    highlightedBeforeTimeout: true,
+    highlightedAfterTimeout: false,
+  })
+})
+
+it('keeps the latest navigation highlight when an earlier timer expires', async () => {
+  vi.useFakeTimers()
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [
+    { type: 'user', text: 'An earlier message.' },
+    { type: 'user', text: 'A middle message.' },
+    { type: 'user', text: 'A later message.' },
+  ])
+
+  const scrollContainer = requireElement(
+    container.querySelector<HTMLElement>('.conversation-scroll'),
+  )
+  const ownMessages = Array.from(
+    container.querySelectorAll<HTMLElement>('[data-own-message="true"]'),
+  )
+  vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(
+    () => undefined,
+  )
+  const messageBounds = ownMessages.map((message) =>
+    vi.spyOn(message, 'getBoundingClientRect'),
+  )
+  vi.spyOn(scrollContainer, 'getBoundingClientRect').mockReturnValue(
+    DOMRect.fromRect({ x: 0, y: 100, width: 400, height: 300 }),
+  )
+  vi.spyOn(scrollContainer, 'clientHeight', 'get').mockReturnValue(300)
+  const setMessageBounds = (tops: readonly number[]) => {
+    messageBounds.forEach((bounds, index) => {
+      bounds.mockReturnValue(
+        DOMRect.fromRect({
+          x: 0,
+          y: tops[index] ?? 0,
+          width: 300,
+          height: 30,
+        }),
+      )
+    })
+  }
+
+  setMessageBounds([40, 200, 500])
+  dispatchKeyInAct(window, 'ArrowUp', { altKey: true })
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000)
+  })
+  dispatchKeyInAct(window, 'ArrowDown', { altKey: true })
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(500)
+  })
+  const highlightedAfterEarlierDeadline = ownMessages.map(
+    (message) =>
+      message.getAttribute('data-own-message-highlighted') === 'true',
+  )
+
+  setMessageBounds([40, 500, 200])
+  dispatchKeyInAct(window, 'ArrowUp', { altKey: true })
+
+  const snapshot = () => ({
+    highlightedAfterEarlierDeadline,
+    highlightedAfterNextNavigation: ownMessages.map(
+      (message) =>
+        message.getAttribute('data-own-message-highlighted') === 'true',
+    ),
+  })
+  expect(snapshot()).toEqual({
+    highlightedAfterEarlierDeadline: [false, false, true],
+    highlightedAfterNextNavigation: [false, true, false],
   })
 })
 
@@ -4671,8 +4787,8 @@ it('directs Codex questions and permissions to the terminal', () => {
   expect(snapshot()).toEqual({
     disabledChoices: [true, true],
     guidance: [
-      'Review this permission in terminal.',
       'Answer in terminal to continue.',
+      'Review this permission in terminal.',
     ],
     terminalButtons: [
       {
@@ -5412,6 +5528,49 @@ it('clears the message draft after a successful send', async () => {
     draft: '',
     storedDraft: null,
     actions: [['messages', { content: 'Send this message' }]],
+  })
+})
+
+it('sends a message while session actions are still loading', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [], null)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const sendButton = requireElement(
+    container.querySelector<HTMLButtonElement>('[aria-label="Send message"]'),
+  )
+  const beforeTyping = {
+    composerDisabled: textarea.disabled,
+    sendDisabled: sendButton.disabled,
+  }
+  setTextareaValue(textarea, 'Send while actions load')
+  const beforeSending = {
+    composerDisabled: textarea.disabled,
+    sendDisabled: sendButton.disabled,
+  }
+  act(() => {
+    dispatchKey(textarea, 'Enter')
+  })
+  await act(async () => {
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    beforeTyping,
+    beforeSending,
+    afterSending: {
+      draft: textarea.value,
+      actionCalls: onAction.mock.calls,
+    },
+  })
+  expect(snapshot()).toEqual({
+    beforeTyping: { composerDisabled: false, sendDisabled: true },
+    beforeSending: { composerDisabled: false, sendDisabled: false },
+    afterSending: {
+      draft: '',
+      actionCalls: [['messages', { content: 'Send while actions load' }]],
+    },
   })
 })
 
@@ -7039,6 +7198,193 @@ it('reuses a cached conversation across an A to B to A session switch', async ()
   })
 })
 
+it('shows cached permission actions while the messages refresh is pending', async () => {
+  const firstSession = { ...session, id: 'cached-permission-session' }
+  const secondSession = { ...session, id: 'next-session' }
+  let messagesRequestCount = 0
+  let actionsRequestCount = 0
+  let resolveMessages: ((response: Response) => void) | undefined
+  let resolveActions: ((response: Response) => void) | undefined
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.includes(`/sessions/${firstSession.id}/messages`)) {
+      messagesRequestCount += 1
+      if (messagesRequestCount === 1) {
+        return Promise.resolve(jsonResponse(messagesResponse([permission])))
+      }
+      return new Promise<Response>((resolve) => {
+        resolveMessages = resolve
+      })
+    }
+    if (url.includes(`/sessions/${secondSession.id}/messages`)) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url === `/api/sessions/${firstSession.id}/actions`) {
+      actionsRequestCount += 1
+      if (actionsRequestCount > 1) {
+        return new Promise<Response>((resolve) => {
+          resolveActions = resolve
+        })
+      }
+      return Promise.resolve(jsonResponse(actions))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    if (url.endsWith('/tree')) {
+      return Promise.resolve(jsonResponse({ revision: 1, sessions: [] }))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  renderInboxPanes([firstSession, secondSession], firstSession)
+  await waitForState(
+    () => container.querySelector('.chat-permission-card') !== null,
+  )
+  renderInboxPanes([firstSession, secondSession], secondSession)
+  await waitForState(() =>
+    fetcher.mock.calls.some(([input]) =>
+      requestUrl(input).includes(`/sessions/${secondSession.id}/messages`),
+    ),
+  )
+  renderInboxPanes([firstSession, secondSession], firstSession)
+  await waitForState(() => resolveActions !== undefined)
+
+  const stateBeforeActions = {
+    permissionCard: container.querySelector('.chat-permission-card') !== null,
+    composerDisabled: requireElement(
+      container.querySelector<HTMLTextAreaElement>('textarea'),
+    ).disabled,
+    permissionButtons: container.querySelectorAll('.permission-actions button')
+      .length,
+    messagesPending: resolveMessages !== undefined,
+  }
+  resolveActions?.(jsonResponse(actions))
+  await waitForState(
+    () => container.querySelectorAll('.permission-actions button').length === 2,
+  )
+
+  const stateAfterActions = {
+    composerDisabled: requireElement(
+      container.querySelector<HTMLTextAreaElement>('textarea'),
+    ).disabled,
+    permissionButtons: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.permission-actions button',
+      ),
+      (button) => ({ label: button.textContent, disabled: button.disabled }),
+    ),
+    messagesPending: resolveMessages !== undefined,
+  }
+  await act(async () => {
+    resolveMessages?.(jsonResponse(messagesResponse([permission])))
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({ stateBeforeActions, stateAfterActions })
+  const expected = {
+    stateBeforeActions: {
+      permissionCard: true,
+      composerDisabled: false,
+      permissionButtons: 0,
+      messagesPending: true,
+    },
+    stateAfterActions: {
+      composerDisabled: false,
+      permissionButtons: [
+        { label: 'Approve', disabled: false },
+        { label: 'Reject', disabled: false },
+      ],
+      messagesPending: true,
+    },
+  }
+  expect(snapshot()).toEqual(expected)
+})
+
+it('keeps a cleared actions request error from returning after messages load', async () => {
+  const failedSession = { ...session, id: 'actions-error-session' }
+  let resolveMessages: ((response: Response) => void) | undefined
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return new Promise<Response>((resolve) => {
+        resolveMessages = resolve
+      })
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(
+        jsonResponse({ error: 'Actions unavailable' }, 503),
+      )
+    }
+    if (url.endsWith('/tree')) {
+      return Promise.resolve(jsonResponse({ revision: 1, sessions: [] }))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root ??= createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={failedSession}
+          sessionTreeRefreshKey={0}
+          refreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'Actions unavailable',
+  )
+  await waitForState(() => resolveMessages !== undefined)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const afterActionsFailure = {
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    composerDisabled: textarea.disabled,
+  }
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(pasteEvent, 'clipboardData', {
+    value: {
+      files: [
+        new File(['contents'], 'clipboard.bin', {
+          type: 'application/octet-stream',
+        }),
+      ],
+    },
+  })
+  act(() => {
+    void textarea.dispatchEvent(pasteEvent)
+  })
+  await waitForState(() => container.querySelector('[role="alert"]') === null)
+  const afterClear =
+    container.querySelector('[role="alert"]')?.textContent ?? null
+  await act(async () => {
+    resolveMessages?.(jsonResponse(messagesResponse([])))
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    afterActionsFailure,
+    afterClear,
+    afterMessagesLoad:
+      container.querySelector('[role="alert"]')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    afterActionsFailure: {
+      alert: 'Actions unavailable',
+      composerDisabled: false,
+    },
+    afterClear: null,
+    afterMessagesLoad: null,
+  })
+})
+
 it('prepends an older page without moving existing messages in the viewport', async () => {
   const jsonResponse = (body: unknown) =>
     new Response(JSON.stringify(body), {
@@ -7440,7 +7786,7 @@ it('prunes to the latest 200 messages at the bottom and can load the discarded r
     retainedMessageReused: true,
     olderButton: true,
   })
-})
+}, 60_000)
 
 it('re-enables older-page loading after a request fails so it can be retried', async () => {
   const jsonResponse = (body: unknown, status = 200) =>
@@ -8075,139 +8421,309 @@ it('keeps a question answer draft when a preceding conversation row arrives', ()
   )
 })
 
-it('moves pending proposals and questions to the end until they are resolved', () => {
-  const pendingProposal: ChatItem = {
-    ...proposal,
-    seq: 21,
-    title: 'Choose the rollout interval',
-  }
-  const pendingQuestionPrompt = {
-    header: 'Alert channel',
-    question: 'Which alert channel should be enabled?',
-    choices: [{ label: 'Email' }, { label: 'Dashboard' }],
-    multi_select: false,
-    answer: null,
-  }
-  const pendingQuestion: ChatItem = {
-    type: 'question',
-    requestId: 'request-rollout-window',
-    questions: [pendingQuestionPrompt],
-  }
-  const historicalQuestion: ChatItem = {
-    type: 'question',
-    questions: [
+it.each([
+  { formFactor: 'desktop', isMobile: false },
+  { formFactor: 'mobile', isMobile: true },
+])(
+  'pins pending cards above the composer and returns resolved cards to the timeline on $formFactor',
+  ({ isMobile }) => {
+    const pendingQuestionPrompt = {
+      header: 'Alert channel',
+      question: 'Which alert channel should be enabled?',
+      choices: [{ label: 'Email' }, { label: 'Dashboard' }],
+      multi_select: false,
+      answer: null,
+    }
+    const messages: ChatItem[] = [
+      { type: 'assistant', text: 'The rollout plan is ready.' },
       {
-        ...pendingQuestionPrompt,
-        header: 'Previous retry preference',
-        question: 'Which retry preference was selected?',
-      },
-    ],
-  }
-  const withdrawableProposal: ChatItem = {
-    ...proposal,
-    seq: 22,
-    title: 'Choose the fallback mode',
-  }
-  const resolvedElsewhereProposal: ChatItem = {
-    ...proposal,
-    seq: 23,
-    title: 'Keep the saved plan',
-    resolved: true,
-  }
-  const firstMessage: ChatItem = {
-    type: 'assistant',
-    text: 'The rollout plan is ready.',
-  }
-  const secondMessage: ChatItem = {
-    type: 'assistant',
-    text: 'One alert detail remains.',
-  }
-  const thirdMessage: ChatItem = {
-    type: 'assistant',
-    text: 'The session continues working.',
-  }
-  const fourthMessage: ChatItem = {
-    type: 'assistant',
-    text: 'The final summary is ready.',
-  }
-  const messages: ChatItem[] = [
-    firstMessage,
-    pendingProposal,
-    resolvedElsewhereProposal,
-    secondMessage,
-    historicalQuestion,
-    pendingQuestion,
-    thirdMessage,
-    withdrawableProposal,
-    fourthMessage,
-  ]
-  renderConversationMessages(messages, 0)
-
-  const getTimeline = () =>
-    Array.from(
-      container.querySelectorAll<HTMLElement>(
-        '.chat-assistant-message, .chat-question-card, .chat-proposal-card',
-      ),
-      (element) =>
-        element.classList.contains('chat-assistant-message')
-          ? element.textContent
-          : `${element.classList.contains('chat-question-card') ? 'Question' : 'Proposal'}: ${element.querySelector('h3')?.textContent ?? ''}`,
-    )
-
-  const pendingOrder = getTimeline()
-  renderConversationMessages(
-    [
-      firstMessage,
-      {
-        ...pendingProposal,
+        ...proposal,
+        seq: 23,
+        title: 'Keep the saved plan',
         answer: { choice: 0, comment: null },
       },
-      resolvedElsewhereProposal,
-      secondMessage,
-      historicalQuestion,
       {
-        ...pendingQuestion,
+        type: 'question',
         questions: [
           {
             ...pendingQuestionPrompt,
-            answer: 'Dashboard',
+            header: 'Previous retry preference',
+            question: 'Which retry preference was selected?',
+            answer: 'Email',
           },
         ],
       },
-      thirdMessage,
-      { ...withdrawableProposal, resolution: 'withdrawn' },
-      fourthMessage,
-    ],
-    0,
-  )
+      {
+        type: 'todo',
+        seq: 24,
+        title: 'Confirm the fallback mode',
+        detail: null,
+        completed: true,
+        resolution: 'completed',
+        comment: null,
+      },
+      { type: 'assistant', text: 'The final summary is ready.' },
+      {
+        ...proposal,
+        seq: 21,
+        title: 'Choose the rollout interval',
+      },
+      {
+        type: 'question',
+        requestId: 'request-rollout-window',
+        questions: [pendingQuestionPrompt],
+      },
+      {
+        type: 'permission',
+        requestId: 'permission-request-rollout',
+        tool: 'Write',
+        description: 'Update the rollout configuration.',
+      },
+      {
+        type: 'todo',
+        seq: 25,
+        title: 'Check the alert destination',
+        detail: null,
+        completed: false,
+        resolution: null,
+        comment: null,
+      },
+    ]
+    const answeredMessages = messages.map((message) =>
+      message.type === 'proposal' && message.seq === 21
+        ? { ...message, answer: { choice: 0, comment: null } }
+        : message,
+    )
+    renderConversationMessages(messages, 0, isMobile)
 
-  const getTimelineSnapshot = () => [
-    ...pendingOrder,
-    'Resolved state',
-    ...getTimeline(),
-  ]
-  expect(getTimelineSnapshot()).toEqual([
-    'The rollout plan is ready.',
-    'Proposal: Keep the saved plan',
-    'One alert detail remains.',
-    'Question: Previous retry preference',
-    'The session continues working.',
-    'The final summary is ready.',
-    'Proposal: Choose the rollout interval',
-    'Question: Alert channel',
-    'Proposal: Choose the fallback mode',
-    'Resolved state',
-    'The rollout plan is ready.',
-    'Proposal: Choose the rollout interval',
-    'Proposal: Keep the saved plan',
-    'One alert detail remains.',
-    'Question: Previous retry preference',
-    'Question: Alert channel',
-    'The session continues working.',
-    'Proposal: Choose the fallback mode',
-    'The final summary is ready.',
-  ])
-})
+    const summarizeCards = (root: ParentNode) =>
+      Array.from(
+        root.querySelectorAll<HTMLElement>(
+          '.chat-assistant-message, .chat-question-card, .chat-proposal-card, .chat-permission-card, .chat-todo-card',
+        ),
+        (element) => {
+          if (element.classList.contains('chat-assistant-message')) {
+            return `assistant:${element.textContent.trim()}`
+          }
+          if (element.classList.contains('chat-question-card')) {
+            return `question:${element.querySelector('.chat-question-text')?.textContent ?? ''}`
+          }
+          if (element.classList.contains('chat-proposal-card')) {
+            return `proposal:${element.querySelector('h3')?.textContent ?? ''}`
+          }
+          if (element.classList.contains('chat-permission-card')) {
+            return `permission:${element.querySelector('h2')?.textContent ?? ''}`
+          }
+          return `todo:${element.querySelector('h2')?.textContent ?? ''}:${element.querySelector('h3')?.textContent ?? ''}`
+        },
+      )
+    const pendingActions = container.querySelector(
+      '.conversation-pending-actions',
+    )
+    const composer = container.querySelector('.conversation-composer')
+    const timeline = container.querySelector('.conversation-scroll')
+
+    const getPaneSnapshot = () => [
+      timeline === null ? [] : summarizeCards(timeline),
+      pendingActions === null ? [] : summarizeCards(pendingActions),
+      pendingActions?.nextElementSibling === composer,
+      composer?.getAttribute('data-mobile') ?? null,
+      pendingActions?.getAttribute('aria-live') ?? null,
+    ]
+    const initialSnapshot = getPaneSnapshot()
+    renderConversationMessages(answeredMessages, 0, isMobile)
+    const resolvedSnapshot = getPaneSnapshot()
+    const expectedSnapshots = [
+      [
+        [
+          'assistant:The rollout plan is ready.',
+          'proposal:Keep the saved plan',
+          'question:Which retry preference was selected?',
+          'todo:To-do · done:Confirm the fallback mode',
+          'assistant:The final summary is ready.',
+        ],
+        [
+          'proposal:Choose the rollout interval',
+          'question:Which alert channel should be enabled?',
+          'permission:Permission required',
+          'todo:To-do · pending:Check the alert destination',
+        ],
+        true,
+        isMobile ? 'true' : null,
+        'polite',
+      ],
+      [
+        [
+          'assistant:The rollout plan is ready.',
+          'proposal:Keep the saved plan',
+          'question:Which retry preference was selected?',
+          'todo:To-do · done:Confirm the fallback mode',
+          'assistant:The final summary is ready.',
+          'proposal:Choose the rollout interval',
+        ],
+        [
+          'question:Which alert channel should be enabled?',
+          'permission:Permission required',
+          'todo:To-do · pending:Check the alert destination',
+        ],
+        true,
+        isMobile ? 'true' : null,
+        'polite',
+      ],
+    ]
+    const getSnapshots = () => [initialSnapshot, resolvedSnapshot]
+    expect(getSnapshots()).toEqual(expectedSnapshots)
+  },
+)
+
+it.each([
+  { formFactor: 'desktop', isMobile: false },
+  { formFactor: 'mobile', isMobile: true },
+])(
+  'scrolls to the newest pending card when no keyboard-answerable card exists on $formFactor',
+  ({ isMobile }) => {
+    const existingMessages: ChatItem[] = [
+      {
+        type: 'todo',
+        seq: 50,
+        title: 'Check the first alert channel',
+        detail: null,
+        completed: false,
+        resolution: null,
+        comment: null,
+      },
+    ]
+    renderConversationMessages(existingMessages, 0, isMobile)
+
+    const pendingActions = requireElement(
+      container.querySelector<HTMLDivElement>('.conversation-pending-actions'),
+    )
+    Object.defineProperties(pendingActions, {
+      scrollHeight: { configurable: true, value: 520 },
+      clientHeight: { configurable: true, value: 280 },
+      scrollTop: { configurable: true, writable: true, value: 0 },
+    })
+
+    renderConversationMessages(
+      [
+        ...existingMessages,
+        {
+          type: 'todo',
+          seq: 51,
+          title: 'Review the selected alert channel',
+          detail: null,
+          completed: false,
+          resolution: null,
+          comment: null,
+        },
+      ],
+      0,
+      isMobile,
+    )
+
+    const snapshot = () => [
+      pendingActions.scrollTop,
+      pendingActions.lastElementChild?.className,
+      pendingActions.nextElementSibling?.classList.contains(
+        'conversation-composer',
+      ),
+    ]
+    expect(snapshot()).toEqual([240, 'chat-todo-card', true])
+  },
+)
+
+it.each([
+  { cardType: 'proposal', formFactor: 'desktop', isMobile: false },
+  { cardType: 'proposal', formFactor: 'mobile', isMobile: true },
+  { cardType: 'question', formFactor: 'desktop', isMobile: false },
+])(
+  'keeps the latest keyboard-answerable $cardType choices visible before a todo on $formFactor',
+  ({ cardType, isMobile }) => {
+    const answerableMessage: ChatItem =
+      cardType === 'proposal'
+        ? {
+            ...proposal,
+            seq: 52,
+            title: 'Choose the alert rollout schedule',
+          }
+        : {
+            type: 'question',
+            requestId: 'request-alert-channel',
+            questions: [
+              {
+                ...questionPrompt,
+                header: 'Alert channel',
+                question: 'Which alert channel should be enabled?',
+              },
+            ],
+          }
+    renderConversationMessages([answerableMessage], 0, isMobile)
+
+    const pendingActions = requireElement(
+      container.querySelector<HTMLElement>('.conversation-pending-actions'),
+    )
+    pendingActions.style.maxHeight = cardType === 'proposal' ? '180px' : '120px'
+    pendingActions.scrollTop =
+      pendingActions.scrollHeight - pendingActions.clientHeight
+    const answerableCardSelector =
+      cardType === 'proposal' ? '.chat-proposal-card' : '.chat-question-card'
+    const choicesSelector =
+      cardType === 'proposal'
+        ? '.chat-proposal-options'
+        : '.chat-question-choices'
+    const answerableCard = requireElement(
+      pendingActions.querySelector<HTMLElement>(answerableCardSelector),
+    )
+    const choiceGroup = requireElement(
+      answerableCard.querySelector<HTMLElement>(choicesSelector),
+    )
+    const nativeScrollIntoView = choiceGroup.scrollIntoView.bind(choiceGroup)
+    const scrollIntoView = vi
+      .spyOn(choiceGroup, 'scrollIntoView')
+      .mockImplementation((options) => {
+        nativeScrollIntoView(options)
+      })
+    const isChoiceGroupVisible = () => {
+      const choiceGroupBounds = choiceGroup.getBoundingClientRect()
+      const pendingActionsBounds = pendingActions.getBoundingClientRect()
+      return (
+        choiceGroupBounds.top >= pendingActionsBounds.top - 1 &&
+        choiceGroupBounds.bottom <= pendingActionsBounds.bottom + 1
+      )
+    }
+    const choiceGroupWasVisible = isChoiceGroupVisible()
+
+    renderConversationMessages(
+      [
+        answerableMessage,
+        {
+          type: 'todo',
+          seq: 53,
+          title: 'Confirm the alert rollout schedule',
+          detail: null,
+          completed: false,
+          resolution: null,
+          comment: null,
+        },
+      ],
+      0,
+      isMobile,
+    )
+
+    const snapshot = () => ({
+      choiceGroupWasVisible,
+      scrollCalls: scrollIntoView.mock.calls,
+      choiceGroupIsVisible: isChoiceGroupVisible(),
+      latestCard: pendingActions.lastElementChild?.className,
+    })
+    expect(snapshot()).toEqual({
+      choiceGroupWasVisible: false,
+      scrollCalls: [[{ block: 'nearest' }]],
+      choiceGroupIsVisible: true,
+      latestCard: 'chat-todo-card',
+    })
+  },
+)
 
 it('keeps repeated tool summaries attached to their batch when older rows arrive', () => {
   const earlierSummary: ChatItem = {

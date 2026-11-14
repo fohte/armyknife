@@ -1,21 +1,60 @@
 use std::collections::HashSet;
+use std::fs;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use serde::Deserialize;
 
 use super::super::crit;
 use super::super::store;
 
 pub(super) fn clear_stale_links(sessions_dir: &Path, dry_run: bool) -> Result<usize> {
-    clear_stale_links_with_port_probe(sessions_dir, dry_run, is_crit_port_live)
+    let live_crit_ports = crit_sessions_dir().and_then(|crit_sessions_dir| {
+        read_live_crit_ports(&crit_sessions_dir, crate::infra::process::is_process_alive)
+    });
+    let live_crit_ports = live_crit_ports_or_unknown(live_crit_ports);
+    clear_stale_links_with_port_probe_and_live_crit_ports(
+        sessions_dir,
+        dry_run,
+        is_crit_port_live,
+        live_crit_ports.as_ref(),
+    )
 }
 
+fn live_crit_ports_or_unknown(ports: Result<HashSet<u16>>) -> Option<HashSet<u16>> {
+    match ports {
+        Ok(ports) => Some(ports),
+        Err(error) => {
+            tracing::warn!(
+                event = "agent.sweep.crit_daemon_sessions_read_failed",
+                error = %error,
+            );
+            None
+        }
+    }
+}
+
+#[cfg(test)]
 fn clear_stale_links_with_port_probe(
     sessions_dir: &Path,
     dry_run: bool,
     is_endpoint_live: impl FnMut(SocketAddr) -> bool,
+) -> Result<usize> {
+    clear_stale_links_with_port_probe_and_live_crit_ports(
+        sessions_dir,
+        dry_run,
+        is_endpoint_live,
+        Some(&HashSet::new()),
+    )
+}
+
+fn clear_stale_links_with_port_probe_and_live_crit_ports(
+    sessions_dir: &Path,
+    dry_run: bool,
+    is_endpoint_live: impl FnMut(SocketAddr) -> bool,
+    live_crit_ports: Option<&HashSet<u16>>,
 ) -> Result<usize> {
     let mut is_endpoint_live = is_endpoint_live;
     let candidates = store::list_all_sessions_from(sessions_dir)?
@@ -50,9 +89,13 @@ fn clear_stale_links_with_port_probe(
         let stale_count = listed_session
             .crit_urls
             .iter()
-            .chain(listed_session.web_uis.iter().map(|web_ui| &web_ui.url))
-            .filter(|url| is_stale_local_crit_url(url, &live_ports))
-            .count();
+            .filter(|url| is_stale_crit_url(url, &live_ports, live_crit_ports))
+            .count()
+            + listed_session
+                .web_uis
+                .iter()
+                .filter(|web_ui| is_stale_web_ui(web_ui, &live_ports, live_crit_ports))
+                .count();
         if stale_count == 0 {
             continue;
         }
@@ -72,11 +115,11 @@ fn clear_stale_links_with_port_probe(
             let previous_len = session.crit_urls.len();
             session
                 .crit_urls
-                .retain(|url| !is_stale_local_crit_url(url, &live_ports));
+                .retain(|url| !is_stale_crit_url(url, &live_ports, live_crit_ports));
             let previous_web_ui_len = session.web_uis.len();
             session
                 .web_uis
-                .retain(|web_ui| !is_stale_local_crit_url(&web_ui.url, &live_ports));
+                .retain(|web_ui| !is_stale_web_ui(web_ui, &live_ports, live_crit_ports));
             removed = previous_len - session.crit_urls.len() + previous_web_ui_len
                 - session.web_uis.len();
             removed > 0
@@ -93,6 +136,78 @@ fn is_crit_port_live(endpoint: SocketAddr) -> bool {
 
 fn is_stale_local_crit_url(url: &str, live_endpoints: &HashSet<SocketAddr>) -> bool {
     local_crit_address(url).is_some_and(|endpoint| !live_endpoints.contains(&endpoint))
+}
+
+fn is_stale_crit_url(
+    url: &str,
+    live_endpoints: &HashSet<SocketAddr>,
+    live_crit_ports: Option<&HashSet<u16>>,
+) -> bool {
+    local_crit_address(url).is_some_and(|endpoint| {
+        live_crit_ports.is_some_and(|ports| {
+            !ports.contains(&endpoint.port()) && !live_endpoints.contains(&endpoint)
+        })
+    })
+}
+
+fn is_stale_web_ui(
+    web_ui: &super::super::types::WebUiRegistration,
+    live_endpoints: &HashSet<SocketAddr>,
+    live_crit_ports: Option<&HashSet<u16>>,
+) -> bool {
+    if web_ui.name.eq_ignore_ascii_case("crit") {
+        is_stale_crit_url(&web_ui.url, live_endpoints, live_crit_ports)
+    } else {
+        is_stale_local_crit_url(&web_ui.url, live_endpoints)
+    }
+}
+
+#[derive(Deserialize)]
+struct CritDaemonSession {
+    pid: u32,
+    port: u16,
+}
+
+fn crit_sessions_dir() -> Result<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join(".crit/sessions"))
+        .context("HOME is not set while locating crit daemon sessions")
+}
+
+fn read_live_crit_ports(
+    sessions_dir: &Path,
+    mut is_process_alive: impl FnMut(u32) -> bool,
+) -> Result<HashSet<u16>> {
+    let entries = match fs::read_dir(sessions_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(HashSet::new()),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to read {}", sessions_dir.display()));
+        }
+    };
+
+    let mut live_ports = HashSet::new();
+    for entry in entries {
+        let entry = entry.with_context(|| format!("failed to read {}", sessions_dir.display()))?;
+        if entry
+            .path()
+            .extension()
+            .is_none_or(|extension| extension != "json")
+        {
+            continue;
+        }
+        let path = entry.path();
+        let contents = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read crit daemon session {}", path.display()))?;
+        let session: CritDaemonSession = serde_json::from_str(&contents)
+            .with_context(|| format!("failed to parse crit daemon session {}", path.display()))?;
+        if is_process_alive(session.pid) {
+            live_ports.insert(session.port);
+        }
+    }
+    Ok(live_ports)
 }
 
 fn local_crit_address(url: &str) -> Option<SocketAddr> {
@@ -117,6 +232,7 @@ fn local_crit_address(url: &str) -> Option<SocketAddr> {
 mod tests {
     use std::cell::Cell;
     use std::collections::{BTreeMap, BTreeSet, HashSet};
+    use std::fs;
     use std::net::TcpListener;
     use std::path::PathBuf;
 
@@ -173,6 +289,14 @@ mod tests {
         let dir = TempDir::new().expect("temporary directory should be created");
         store::save_session_to(dir.path(), session).expect("session should be saved");
         dir
+    }
+
+    fn write_crit_daemon_session(dir: &Path, name: &str, pid: u32, port: u16) {
+        fs::write(
+            dir.join(name),
+            serde_json::json!({ "pid": pid, "port": port }).to_string(),
+        )
+        .expect("crit daemon session should be written");
     }
 
     fn load_session(sessions_dir: &Path, session_id: &str) -> Session {
@@ -289,6 +413,85 @@ mod tests {
     }
 
     #[test]
+    fn keeps_crit_links_for_live_daemons_even_when_tcp_probe_fails() {
+        let before = session(&[
+            "http://localhost:44001/review",
+            "http://localhost:44002/review",
+        ]);
+        let mut before = before;
+        before.web_uis = vec![
+            WebUiRegistration {
+                name: "crit".to_owned(),
+                url: "http://localhost:44003/review".to_owned(),
+                exposed_url: None,
+            },
+            WebUiRegistration {
+                name: "Editor".to_owned(),
+                url: "http://localhost:44004/design/sample/".to_owned(),
+                exposed_url: None,
+            },
+        ];
+        let dir = sessions_dir(&before);
+        let crit_sessions_dir = TempDir::new().expect("crit session directory should be created");
+        write_crit_daemon_session(crit_sessions_dir.path(), "live.json", 51001, 44001);
+        write_crit_daemon_session(crit_sessions_dir.path(), "dead.json", 51002, 44002);
+        write_crit_daemon_session(crit_sessions_dir.path(), "live-web-ui.json", 51001, 44003);
+        let live_crit_ports = read_live_crit_ports(crit_sessions_dir.path(), |pid| pid == 51001)
+            .expect("crit daemon sessions should be read");
+
+        let actual = clear_stale_links_with_port_probe_and_live_crit_ports(
+            dir.path(),
+            false,
+            |_| false,
+            Some(&live_crit_ports),
+        )
+        .expect("crit cleanup pass should succeed");
+
+        let after = load_session(dir.path(), &before.session_id);
+        assert_eq!(
+            (actual, after.crit_urls, after.web_uis),
+            (
+                2,
+                vec!["http://localhost:44001/review".to_owned()],
+                vec![WebUiRegistration {
+                    name: "crit".to_owned(),
+                    url: "http://localhost:44003/review".to_owned(),
+                    exposed_url: None,
+                }],
+            ),
+        );
+    }
+
+    #[test]
+    fn keeps_crit_links_when_daemon_records_cannot_be_read_and_cleans_other_web_uis() {
+        let mut before = session(&["http://localhost:44501/review"]);
+        before.web_uis = vec![WebUiRegistration {
+            name: "Editor".to_owned(),
+            url: "http://localhost:44502/design/sample/".to_owned(),
+            exposed_url: None,
+        }];
+        let dir = sessions_dir(&before);
+
+        let actual = clear_stale_links_with_port_probe_and_live_crit_ports(
+            dir.path(),
+            false,
+            |_| false,
+            live_crit_ports_or_unknown(Err(anyhow::anyhow!("fixture read failure"))).as_ref(),
+        )
+        .expect("crit cleanup pass should succeed");
+
+        let after = load_session(dir.path(), &before.session_id);
+        assert_eq!(
+            (actual, after.crit_urls, after.web_uis),
+            (
+                1,
+                vec!["http://localhost:44501/review".to_owned()],
+                Vec::new(),
+            ),
+        );
+    }
+
+    #[test]
     fn probes_each_local_crit_port_once() {
         let before = session(&[
             "http://localhost:43001/review",
@@ -325,17 +528,12 @@ mod tests {
     fn keeps_a_link_when_its_loopback_port_accepts_tcp_connections() {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
             .expect("test listener should bind to an ephemeral loopback port");
-        let live_url = format!(
-            "http://127.0.0.1:{}/review",
-            listener
-                .local_addr()
-                .expect("listener has a local address")
-                .port()
-        );
+        let endpoint = listener.local_addr().expect("listener has a local address");
+        let live_url = format!("http://127.0.0.1:{}/review", endpoint.port());
         let before = session(&[&live_url]);
         let dir = sessions_dir(&before);
 
-        let actual = clear_stale_links(dir.path(), false)
+        let actual = clear_stale_links_with_port_probe(dir.path(), false, is_crit_port_live)
             .expect("crit cleanup pass should succeed while the port accepts connections");
 
         assert_eq!(

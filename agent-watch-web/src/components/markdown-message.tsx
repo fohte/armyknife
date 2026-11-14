@@ -40,6 +40,20 @@ type MarkdownFile = {
 
 const CodeBlockContext = createContext(false)
 
+type MarkdownComponentContextValue = {
+  sessionsById: ReadonlyMap<string, SessionLinkTarget>
+  onSelectSession?: (id: string) => void
+  commandContext?: {
+    messageText: string
+    sessionId: string
+    onCommandExecuted?: () => void
+  }
+}
+
+const MarkdownComponentContext = createContext<MarkdownComponentContextValue>({
+  sessionsById: new Map(),
+})
+
 type SessionLinkTextPart = {
   session: SessionLinkTarget | null
   text: string
@@ -241,167 +255,179 @@ function unwrapTaggedMessage(value: string): string {
     : `## ${tag}\n\n${body.trim()}`
 }
 
-function createMarkdownComponents(
+function renderSessionLink(
+  href: string | undefined,
+  children: ReactNode,
   sessionsById: ReadonlyMap<string, SessionLinkTarget>,
   onSelectSession?: (id: string) => void,
-  commandContext?: {
-    messageText: string
-    sessionId: string
-    onCommandExecuted?: () => void
-  },
-): { markdown: Components; inline: Components } {
-  const renderLink = (href: string | undefined, children: ReactNode) => {
-    const sessionId = href?.match(
-      /^https:\/\/watch-session\.invalid\/([0-9a-f-]+)$/i,
-    )?.[1]
-    if (sessionId !== undefined) {
-      const session = sessionsById.get(sessionId.toLowerCase())
-      return session === undefined ? (
-        children
-      ) : (
-        <SessionLink onSelectSession={onSelectSession} session={session}>
-          {children}
-        </SessionLink>
-      )
-    }
-    return null
-  }
+) {
+  const sessionId = href?.match(
+    /^https:\/\/watch-session\.invalid\/([0-9a-f-]+)$/i,
+  )?.[1]
+  if (sessionId === undefined) return null
+  const session = sessionsById.get(sessionId.toLowerCase())
+  return session === undefined ? (
+    children
+  ) : (
+    <SessionLink onSelectSession={onSelectSession} session={session}>
+      {children}
+    </SessionLink>
+  )
+}
 
-  const renderCode: NonNullable<Components['code']> = ({ node, ...props }) => {
-    const isCodeBlock = useContext(CodeBlockContext)
-    if (node?.tagName !== 'code') return props.children
-    const { className, children, ...codeProps } = props
-    const text = typeof children === 'string' ? children : null
-    const language = className?.match(/(?:^|\s)language-([\w-]+)/)?.[1]
-    const parts = text === null ? [] : splitSessionIds(text, sessionsById)
-    const codeChildren =
-      parts.length === 0
-        ? children
-        : parts.map((part, index) =>
-            part.session === null ? (
-              part.text
-            ) : (
-              <SessionLink
-                key={String(index)}
-                onSelectSession={onSelectSession}
-                session={part.session}
-              >
-                {part.text}
-              </SessionLink>
-            ),
-          )
-    let offset = 0
-    const links = parts.flatMap((part, index): SyntaxCodeBlockLink[] => {
-      const start = offset
-      offset += part.text.length
-      if (part.session === null) return []
-      const session = part.session
-      return [
-        {
-          start,
-          end: offset,
-          render: (linkChildren) => (
+const MarkdownAnchor: NonNullable<Components['a']> = ({
+  node,
+  href,
+  children,
+  ...props
+}) => {
+  const { sessionsById, onSelectSession } = useContext(MarkdownComponentContext)
+  if (node?.tagName !== 'a') return null
+  const sessionLink = renderSessionLink(
+    href,
+    children,
+    sessionsById,
+    onSelectSession,
+  )
+  return (
+    sessionLink ?? (
+      <a {...props} href={href} target="_blank" rel="noopener noreferrer">
+        {children}
+      </a>
+    )
+  )
+}
+
+const InlineMarkdownAnchor: NonNullable<Components['a']> = ({
+  node,
+  href,
+  children,
+}) => {
+  const { sessionsById, onSelectSession } = useContext(MarkdownComponentContext)
+  if (node?.tagName !== 'a') return null
+  return (
+    renderSessionLink(href, children, sessionsById, onSelectSession) ?? (
+      <span className="markdown-link-text">{href ?? children}</span>
+    )
+  )
+}
+
+const MarkdownCode: NonNullable<Components['code']> = ({ node, ...props }) => {
+  const isCodeBlock = useContext(CodeBlockContext)
+  const { sessionsById, onSelectSession, commandContext } = useContext(
+    MarkdownComponentContext,
+  )
+  if (node?.tagName !== 'code') return props.children
+  const { className, children, ...codeProps } = props
+  const text = typeof children === 'string' ? children : null
+  const language = className?.match(/(?:^|\s)language-([\w-]+)/)?.[1]
+  const parts = text === null ? [] : splitSessionIds(text, sessionsById)
+  const codeChildren =
+    parts.length === 0
+      ? children
+      : parts.map((part, index) =>
+          part.session === null ? (
+            part.text
+          ) : (
             <SessionLink
               key={String(index)}
               onSelectSession={onSelectSession}
-              session={session}
+              session={part.session}
             >
-              {linkChildren}
+              {part.text}
             </SessionLink>
           ),
-        },
-      ]
-    })
-    const code =
-      isCodeBlock && text !== null ? (
-        <SyntaxCodeBlock
-          code={text}
-          language={language ?? 'text'}
-          links={links}
-        >
-          <>{codeChildren}</>
-        </SyntaxCodeBlock>
-      ) : (
-        <code className={className} {...codeProps}>
-          {codeChildren}
-        </code>
-      )
-    if (commandContext === undefined || text === null || isCodeBlock) {
-      return code
-    }
-    const command = inlineBangCommand(text)
-    if (command === null) return code
-    return (
-      <span className="bang-command-inline">
-        {code}
-        <BangCommandActions
-          commands={[command]}
-          messageText={commandContext.messageText}
-          {...(commandContext.onCommandExecuted === undefined
-            ? {}
-            : { onCommandExecuted: commandContext.onCommandExecuted })}
-          sessionId={commandContext.sessionId}
-        />
-      </span>
-    )
-  }
-
-  const renderPre: NonNullable<Components['pre']> = ({ children }) => {
-    const codeText = Children.toArray(children).flatMap((child) => {
-      if (!isValidElement<{ children?: ReactNode }>(child)) return []
-      return [textContent(child.props.children)]
-    })[0]
-    const commands = codeText === undefined ? [] : blockBangCommands(codeText)
-    const codeBlock = (
-      <CodeBlockContext.Provider value>{children}</CodeBlockContext.Provider>
-    )
-    if (commandContext === undefined || commands.length === 0) return codeBlock
-    return (
-      <div className="markdown-code-block">
-        {codeBlock}
-        <BangCommandActions
-          commands={commands}
-          messageText={commandContext.messageText}
-          {...(commandContext.onCommandExecuted === undefined
-            ? {}
-            : { onCommandExecuted: commandContext.onCommandExecuted })}
-          sessionId={commandContext.sessionId}
-        />
-      </div>
-    )
-  }
-
-  const markdown: Components = {
-    a: ({ node, href, children, ...props }) => {
-      if (node?.tagName !== 'a') return null
-      const sessionLink = renderLink(href, children)
-      return (
-        sessionLink ?? (
-          <a {...props} href={href} target="_blank" rel="noopener noreferrer">
-            {children}
-          </a>
         )
-      )
-    },
-    code: renderCode,
-    pre: renderPre,
-  }
-
-  return {
-    markdown,
-    inline: {
-      ...markdown,
-      p: ({ children }) => <span>{children}</span>,
-      a: ({ node, href, children }) => {
-        if (node?.tagName !== 'a') return null
-        return (
-          renderLink(href, children) ?? (
-            <span className="markdown-link-text">{href ?? children}</span>
-          )
-        )
+  let offset = 0
+  const links = parts.flatMap((part, index): SyntaxCodeBlockLink[] => {
+    const start = offset
+    offset += part.text.length
+    if (part.session === null) return []
+    const session = part.session
+    return [
+      {
+        start,
+        end: offset,
+        render: (linkChildren) => (
+          <SessionLink
+            key={String(index)}
+            onSelectSession={onSelectSession}
+            session={session}
+          >
+            {linkChildren}
+          </SessionLink>
+        ),
       },
-    },
-  }
+    ]
+  })
+  const code =
+    isCodeBlock && text !== null ? (
+      <SyntaxCodeBlock code={text} language={language ?? 'text'} links={links}>
+        <>{codeChildren}</>
+      </SyntaxCodeBlock>
+    ) : (
+      <code className={className} {...codeProps}>
+        {codeChildren}
+      </code>
+    )
+  if (commandContext === undefined || text === null || isCodeBlock) return code
+  const command = inlineBangCommand(text)
+  if (command === null) return code
+  return (
+    <span className="bang-command-inline">
+      {code}
+      <BangCommandActions
+        commands={[command]}
+        messageText={commandContext.messageText}
+        {...(commandContext.onCommandExecuted === undefined
+          ? {}
+          : { onCommandExecuted: commandContext.onCommandExecuted })}
+        sessionId={commandContext.sessionId}
+      />
+    </span>
+  )
+}
+
+const MarkdownPre: NonNullable<Components['pre']> = ({ children }) => {
+  const { commandContext } = useContext(MarkdownComponentContext)
+  const codeText = Children.toArray(children).flatMap((child) => {
+    if (!isValidElement<{ children?: ReactNode }>(child)) return []
+    return [textContent(child.props.children)]
+  })[0]
+  const commands = codeText === undefined ? [] : blockBangCommands(codeText)
+  const codeBlock = (
+    <CodeBlockContext.Provider value>{children}</CodeBlockContext.Provider>
+  )
+  if (commandContext === undefined || commands.length === 0) return codeBlock
+  return (
+    <div className="markdown-code-block">
+      {codeBlock}
+      <BangCommandActions
+        commands={commands}
+        messageText={commandContext.messageText}
+        {...(commandContext.onCommandExecuted === undefined
+          ? {}
+          : { onCommandExecuted: commandContext.onCommandExecuted })}
+        sessionId={commandContext.sessionId}
+      />
+    </div>
+  )
+}
+
+const MarkdownParagraph: NonNullable<Components['p']> = ({ children }) => (
+  <span>{children}</span>
+)
+
+const markdownComponents: Components = {
+  a: MarkdownAnchor,
+  code: MarkdownCode,
+  pre: MarkdownPre,
+}
+
+const inlineMarkdownComponents: Components = {
+  ...markdownComponents,
+  p: MarkdownParagraph,
+  a: InlineMarkdownAnchor,
 }
 
 export const MarkdownMessage = memo(function MarkdownMessage({
@@ -422,29 +448,33 @@ export const MarkdownMessage = memo(function MarkdownMessage({
     sessions.map((session) => [session.id.toLowerCase(), session]),
   )
   const markdownSource = inline ? children : unwrapTaggedMessage(children)
-  const components = createMarkdownComponents(
+  const componentContext: MarkdownComponentContextValue = {
     sessionsById,
-    onSelectSession,
-    sessionId === undefined
-      ? undefined
+    ...(onSelectSession === undefined ? {} : { onSelectSession }),
+    ...(sessionId === undefined
+      ? {}
       : {
-          messageText: children,
-          sessionId,
-          ...(onCommandExecuted === undefined ? {} : { onCommandExecuted }),
-        },
-  )
+          commandContext: {
+            messageText: children,
+            sessionId,
+            ...(onCommandExecuted === undefined ? {} : { onCommandExecuted }),
+          },
+        }),
+  }
   const message = (
-    <ReactMarkdown
-      components={inline ? components.inline : components.markdown}
-      remarkPlugins={[
-        remarkGfm,
-        remarkHtmlBreaks,
-        () => remarkLinkSessionIds(sessionsById),
-        remarkTrimNonAsciiAutolinks,
-      ]}
-    >
-      {markdownSource}
-    </ReactMarkdown>
+    <MarkdownComponentContext.Provider value={componentContext}>
+      <ReactMarkdown
+        components={inline ? inlineMarkdownComponents : markdownComponents}
+        remarkPlugins={[
+          remarkGfm,
+          remarkHtmlBreaks,
+          () => remarkLinkSessionIds(sessionsById),
+          remarkTrimNonAsciiAutolinks,
+        ]}
+      >
+        {markdownSource}
+      </ReactMarkdown>
+    </MarkdownComponentContext.Provider>
   )
 
   return inline ? (

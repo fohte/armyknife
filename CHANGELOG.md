@@ -1,5 +1,103 @@
 # Changelog
 
+## [0.1.711](https://github.com/fohte/armyknife/compare/v0.1.710...v0.1.711) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** show sent messages only once ([#1802](https://github.com/fohte/armyknife/issues/1802)) ([3b17ade](https://github.com/fohte/armyknife/commit/3b17adef9ab7d6bdcd3e27a1f2e34a6303d6e93d))
+
+## [0.1.710](https://github.com/fohte/armyknife/compare/v0.1.709...v0.1.710) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** keep recent sessions in cache ([#1800](https://github.com/fohte/armyknife/issues/1800)) ([ff85189](https://github.com/fohte/armyknife/commit/ff8518910ce371a908ef7cd65bee64e3fdc92665))
+
+## [0.1.709](https://github.com/fohte/armyknife/compare/v0.1.708...v0.1.709) (2026-11-14)
+
+
+### Bug Fixes
+
+* **agent:** allow Stop with pending requests ([#1797](https://github.com/fohte/armyknife/issues/1797)) ([4da439e](https://github.com/fohte/armyknife/commit/4da439e9ebba9c261199793aba80a4c577e6ceb9))
+
+## [0.1.708](https://github.com/fohte/armyknife/compare/v0.1.707...v0.1.708) (2026-11-14)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show permission actions ([#1795](https://github.com/fohte/armyknife/issues/1795)) ([e262fe3](https://github.com/fohte/armyknife/commit/e262fe3a4e65fb66afc9fb0945940a02db2e6239))
+
+## [0.1.707](https://github.com/fohte/armyknife/compare/v0.1.706...v0.1.707) (2026-11-14)
+
+
+### Bug Fixes
+
+* **agent/sweep:** keep live Crit links ([#1793](https://github.com/fohte/armyknife/issues/1793)) ([385d6c1](https://github.com/fohte/armyknife/commit/385d6c1c1efae95f1443789c177b7142db9f22b0))
+
+## [0.1.706](https://github.com/fohte/armyknife/compare/v0.1.705...v0.1.706) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** keep waiting subagents visible ([#1791](https://github.com/fohte/armyknife/issues/1791)) ([1b4bad3](https://github.com/fohte/armyknife/commit/1b4bad348c52e3707f3bd5691c344528156b04c8))
+
+## [0.1.705](https://github.com/fohte/armyknife/compare/v0.1.704...v0.1.705) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** show Inbox and Starred kind icons ([#1789](https://github.com/fohte/armyknife/issues/1789)) ([e237a98](https://github.com/fohte/armyknife/commit/e237a98cd9086aa508cceaa96b3aa2f58f62690b))
+
+## [0.1.704](https://github.com/fohte/armyknife/compare/v0.1.703...v0.1.704) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** avoid reparsing after tool results ([#1787](https://github.com/fohte/armyknife/issues/1787)) ([ef13816](https://github.com/fohte/armyknife/commit/ef13816522b90ea987b0f11850e84830a092d119))
+
+## [0.1.703](https://github.com/fohte/armyknife/compare/v0.1.702...v0.1.703) (2026-11-14)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align card and status colors ([#1785](https://github.com/fohte/armyknife/issues/1785)) ([6bc0263](https://github.com/fohte/armyknife/commit/6bc02638582f997455e420d9371a341a1ca540ed))
+
+## [0.1.702](https://github.com/fohte/armyknife/compare/v0.1.701...v0.1.702) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** keep crit visible across rounds ([#1783](https://github.com/fohte/armyknife/issues/1783)) ([325994f](https://github.com/fohte/armyknife/commit/325994f709ee5f0fa224be62a04755e4ff32e9fa))
+
+## [0.1.701](https://github.com/fohte/armyknife/compare/v0.1.700...v0.1.701) (2026-11-14)
+
+
+### Features
+
+* **agent-watch-web:** render text as markdown ([#1781](https://github.com/fohte/armyknife/issues/1781)) ([8b84cbe](https://github.com/fohte/armyknife/commit/8b84cbe5e1e4360629f3f59b8f313862bd877f3f))
+
+## [0.1.700](https://github.com/fohte/armyknife/compare/v0.1.699...v0.1.700) (2026-11-14)
+
+
+### Bug Fixes
+
+* **agent:** skip task notifications in Recent ([#1779](https://github.com/fohte/armyknife/issues/1779)) ([403eddb](https://github.com/fohte/armyknife/commit/403eddb7388a38ce700ba8443316b88fbf64b05b))
+
+## [0.1.699](https://github.com/fohte/armyknife/compare/v0.1.698...v0.1.699) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** jump to your messages instantly ([#1777](https://github.com/fohte/armyknife/issues/1777)) ([27c00ba](https://github.com/fohte/armyknife/commit/27c00ba9c651bf9b147c35422066b2b51bd05bcb))
+
+## [0.1.698](https://github.com/fohte/armyknife/compare/v0.1.697...v0.1.698) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** keep command dialogs mounted ([#1774](https://github.com/fohte/armyknife/issues/1774)) ([7d6149d](https://github.com/fohte/armyknife/commit/7d6149d2fe4c54d7f2289bfeec45eda07ba990d7))
+
 ## [0.1.697](https://github.com/fohte/armyknife/compare/v0.1.696...v0.1.697) (2026-11-14)
 
 

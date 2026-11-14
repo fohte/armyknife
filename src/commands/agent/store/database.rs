@@ -168,6 +168,20 @@ impl SessionLock {
         read_session_strict(&self.connection, &self.session_id)
     }
 
+    pub(crate) fn has_pending_agent_requests(&self) -> Result<bool> {
+        Ok(self.connection.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM agent_proposal
+                 WHERE session_id = ?1 AND resolved_at IS NULL
+             ) OR EXISTS(
+                 SELECT 1 FROM agent_todo
+                 WHERE session_id = ?1 AND completed_at IS NULL
+             )",
+            [&self.session_id],
+            |row| row.get(0),
+        )?)
+    }
+
     pub(crate) fn ensure_watch_web_user_marker(&self) -> Result<String> {
         self.ensure_transaction()?;
         let marker = web_state::ensure_watch_web_user_marker_in_transaction(

@@ -1009,9 +1009,13 @@ mod tests {
                 call["content"] = Value::String(content.to_owned());
             }
         }
+        let mut body = serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null);
+        if let Some(queued_prompt_id) = body.get_mut("queuedPromptId") {
+            *queued_prompt_id = Value::String("<message-id>".to_string());
+        }
         json!({
             "status": status,
-            "body": serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null),
+            "body": body,
             "calls": calls,
         })
     }

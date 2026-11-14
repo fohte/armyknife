@@ -69,6 +69,8 @@ function isPendingProposal(
 
 function isPendingInteraction(message: ChatItem): boolean {
   if (message.type === 'proposal') return isPendingProposal(message)
+  if (message.type === 'todo') return message.resolution === null
+  if (message.type === 'permission') return true
   return (
     message.type === 'question' &&
     message.requestId !== undefined &&
@@ -186,12 +188,6 @@ export function useConversationMessageElements({
         message.type !== 'tool_in_progress' ||
         (sessionCategory !== 'in_progress' && !isCompacting),
     )
-    const orderedConversationMessages = [
-      ...conversationMessages.filter(
-        (message) => !isPendingInteraction(message),
-      ),
-      ...conversationMessages.filter(isPendingInteraction),
-    ]
     const decisions =
       allDecisions ??
       conversationMessages.filter(
@@ -207,7 +203,7 @@ export function useConversationMessageElements({
         (message) => message.type === 'proposal' && isPendingProposal(message),
       )
     const keyOccurrences = new Map<string, number>()
-    const elements = orderedConversationMessages.map((message) => {
+    const rows = conversationMessages.map((message) => {
       const messagePendingAction: PendingPermissionActionState =
         message.type === 'permission' && message.requestId !== undefined
           ? (pendingActions[message.requestId] ?? null)
@@ -219,37 +215,45 @@ export function useConversationMessageElements({
       const occurrence = keyOccurrences.get(identity) ?? 0
       keyOccurrences.set(identity, occurrence + 1)
 
-      return createElement(ConversationMessageRow, {
-        key: `${identity}:${String(occurrence)}`,
-        actions,
-        actionsReady,
-        isMobile,
-        selected:
-          message.type === 'decision' && message.seq === selectedDecisionSeq,
-        decisionPosition:
-          message.type === 'decision'
-            ? `${String(decisionPositions.get(message.seq))} of ${String(decisions.length)}`
-            : undefined,
-        onSelectDecision,
+      return {
         message,
-        onAction,
-        ...(onCommandExecuted === undefined ? {} : { onCommandExecuted }),
-        onOpenInTerminal,
-        onSelectSession,
-        ...(onRewind === undefined ? {} : { onRewind }),
-        pendingAction: messagePendingAction,
-        openInTerminalStatus,
-        sessionEngine,
-        ...(sessionId === undefined ? {} : { sessionId }),
-        sessions,
-        now,
-      })
+        element: createElement(ConversationMessageRow, {
+          key: `${identity}:${String(occurrence)}`,
+          actions,
+          actionsReady,
+          isMobile,
+          selected:
+            message.type === 'decision' && message.seq === selectedDecisionSeq,
+          decisionPosition:
+            message.type === 'decision'
+              ? `${String(decisionPositions.get(message.seq))} of ${String(decisions.length)}`
+              : undefined,
+          onSelectDecision,
+          message,
+          onAction,
+          ...(onCommandExecuted === undefined ? {} : { onCommandExecuted }),
+          onOpenInTerminal,
+          onSelectSession,
+          ...(onRewind === undefined ? {} : { onRewind }),
+          pendingAction: messagePendingAction,
+          openInTerminalStatus,
+          sessionEngine,
+          ...(sessionId === undefined ? {} : { sessionId }),
+          sessions,
+          now,
+        }),
+      }
     })
 
     return {
       activeTool,
       conversationMessageCount: conversationMessages.length,
-      elements,
+      elements: rows
+        .filter(({ message }) => !isPendingInteraction(message))
+        .map(({ element }) => element),
+      pendingInteractionElements: rows
+        .filter(({ message }) => isPendingInteraction(message))
+        .map(({ element }) => element),
       hasUnansweredProposal,
     }
   }, [

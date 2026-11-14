@@ -104,6 +104,37 @@ const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
     "#},
     IncrementalAppend::Applied,
 )]
+#[case::tool_result_after_an_appended_hook_attachment(
+    indoc! {r#"
+        {"type":"assistant","uuid":"tool-call","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"call-a","name":"Bash","input":{"command":"echo fixture"}}]}}
+    "#},
+    indoc! {r#"
+        {"type":"attachment","uuid":"hook-attachment","parentUuid":"tool-call","timestamp":"2026-01-01T00:00:02Z","attachment":{"type":"hook_success"}}
+        {"type":"user","uuid":"tool-result","parentUuid":"tool-call","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-a","content":"fixture output"}]}}
+    "#},
+    IncrementalAppend::Applied,
+)]
+#[case::tool_result_appended_after_a_hook_attachment_in_the_initial_transcript(
+    indoc! {r#"
+        {"type":"assistant","uuid":"tool-call","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"call-a","name":"Bash","input":{"command":"echo fixture"}}]}}
+        {"type":"attachment","uuid":"hook-attachment","parentUuid":"tool-call","timestamp":"2026-01-01T00:00:02Z","attachment":{"type":"hook_success"}}
+    "#},
+    indoc! {r#"
+        {"type":"user","uuid":"tool-result","parentUuid":"tool-call","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-a","content":"fixture output"}]}}
+    "#},
+    IncrementalAppend::Applied,
+)]
+#[case::parallel_tool_result_continues_after_an_attachment_preserves_its_parent(
+    indoc! {r#"
+        {"type":"assistant","uuid":"parallel-calls","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"call-a","name":"Read","input":{"file_path":"/fixture/a"}},{"type":"tool_use","id":"call-b","name":"Read","input":{"file_path":"/fixture/b"}}]}}
+        {"type":"user","uuid":"result-a","parentUuid":"parallel-calls","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-a","content":"first result"}]}}
+    "#},
+    indoc! {r#"
+        {"type":"attachment","uuid":"hook-attachment","parentUuid":"result-a","timestamp":"2026-01-01T00:00:03Z","attachment":{"type":"hook_success"}}
+        {"type":"user","uuid":"result-b","parentUuid":"parallel-calls","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"tool_result","tool_use_id":"call-b","content":"second result"}]}}
+    "#},
+    IncrementalAppend::Applied,
+)]
 #[case::partial_json_at_delta_end(
     indoc! {r#"
         {"type":"user","uuid":"message-one","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"A question."}}
@@ -266,6 +297,7 @@ fn pending_sibling_renders_only_the_active_branch() {
                 text: "The original request.".to_owned(),
                 timestamp: None,
                 from: None,
+                queued_prompt_id: None,
             },
             ChatItem::Assistant {
                 text: "The replacement response.".to_owned(),
@@ -351,6 +383,7 @@ fn appended_peer_delivery_resolves_queued_prompt_after_branch_reparse(
                         text: "Initial request.".to_owned(),
                         timestamp: None,
                         from: None,
+                        queued_prompt_id: None,
                     },
                     ChatItem::Assistant {
                         text: "Current response.".to_owned(),
@@ -360,6 +393,7 @@ fn appended_peer_delivery_resolves_queued_prompt_after_branch_reparse(
                         text: "Engine-formatted delivery.\n<!-- armyknife-queued-prompt-id:fixture-message-cyan -->".to_owned(),
                         timestamp: Some("2026-01-01T00:00:03+00:00".to_owned()),
                         from: None,
+                        queued_prompt_id: None,
                     },
                     ChatItem::Assistant {
                         text: "Final response.".to_owned(),
@@ -409,6 +443,7 @@ fn inactive_peer_delivery_does_not_resolve_queued_prompt(
                         text: "Initial request.".to_owned(),
                         timestamp: None,
                         from: None,
+                        queued_prompt_id: None,
                     },
                     ChatItem::Assistant {
                         text: "Current response.".to_owned(),
@@ -420,6 +455,7 @@ fn inactive_peer_delivery_does_not_resolve_queued_prompt(
                         content: vec![super::super::super::super::UserContentPart::Text {
                             text: "Delivered request.".to_owned(),
                         }],
+                        queued_prompt_id: Some("fixture-message-cyan".to_owned()),
                         from: None,
                         timestamp: Some("2026-01-01T00:00:00+00:00".to_owned()),
                     },

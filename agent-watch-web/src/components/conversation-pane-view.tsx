@@ -6,6 +6,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   useCallback,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -126,6 +127,7 @@ export function ConversationPaneView({
   onToggleToday,
 }: ConversationPaneViewProps) {
   const interruptInFlight = useRef(false)
+  const pendingActionsRef = useRef<HTMLElement | null>(null)
   const [isInterrupting, setIsInterrupting] = useState(false)
   const currentDate = new Date()
   const currentYear = currentDate.getFullYear()
@@ -154,7 +156,7 @@ export function ConversationPaneView({
   } = useComposerMessage({
     sessionId: session.id,
     draft,
-    messageEnabled: actions?.message === true,
+    messageEnabled: actions?.message !== false,
     externalSending: sending,
     clearDraftIfUnchanged,
     onAction,
@@ -206,6 +208,7 @@ export function ConversationPaneView({
     conversationMessageCount,
     elements: conversationMessageElements,
     hasUnansweredProposal,
+    pendingInteractionElements,
   } = useConversationMessageElements({
     messages,
     ...(decisions === undefined ? {} : { decisions }),
@@ -231,6 +234,33 @@ export function ConversationPaneView({
     sessions: sessionLinkTargets,
     now,
   })
+  const latestPendingInteractionKey =
+    pendingInteractionElements.at(-1)?.key ?? null
+  useLayoutEffect(() => {
+    const pendingActions = pendingActionsRef.current
+    if (pendingActions === null) return
+    const answerableCards = pendingActions.querySelectorAll<HTMLElement>(
+      '[data-answerable="true"], [data-answerable-single-choice="true"]',
+    )
+    if (answerableCards.length === 0) {
+      pendingActions.scrollTop =
+        pendingActions.scrollHeight - pendingActions.clientHeight
+      return
+    }
+    const latestAnswerableCard = answerableCards.item(
+      answerableCards.length - 1,
+    )
+    const answerControlGroups =
+      latestAnswerableCard.querySelectorAll<HTMLElement>(
+        '.chat-proposal-options, .chat-question-choices',
+      )
+    // The card can exceed the panel height; keep its keyboard choices visible.
+    const scrollTarget =
+      answerControlGroups.length === 0
+        ? latestAnswerableCard
+        : answerControlGroups.item(answerControlGroups.length - 1)
+    scrollTarget.scrollIntoView({ block: 'nearest' })
+  }, [latestPendingInteractionKey])
   const handlePasteFiles = (files: File[]) => {
     onPasteFiles(files)
     onClearError()
@@ -393,6 +423,17 @@ export function ConversationPaneView({
           Browser storage is unavailable. Drafts may not survive a page reload.
         </p>
       ) : null}
+      {pendingInteractionElements.length > 0 ? (
+        <section
+          className="conversation-pending-actions"
+          aria-label="Items needing your response"
+          aria-live="polite"
+          data-mobile={isMobile ? 'true' : undefined}
+          ref={pendingActionsRef}
+        >
+          {pendingInteractionElements}
+        </section>
+      ) : null}
       <MessageComposer
         draft={draft}
         focusDraft={focusDraft}
@@ -405,7 +446,7 @@ export function ConversationPaneView({
               ? `Message PR ${String(session.pullRequest.number)}`
               : 'Message session'
         }
-        disabled={actions?.message !== true}
+        disabled={actions?.message === false}
         isSending={isSending}
         isProcessingAttachments={isProcessingAttachments}
         isMobile={isMobile}

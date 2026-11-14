@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
@@ -6,18 +5,25 @@ use anyhow::Result;
 use crate::commands::agent::store::PermissionRequestData;
 use crate::commands::agent::types::Session;
 
-use super::cache::{TranscriptFingerprint, insert_with_eviction, transcript_fingerprint};
+use super::cache::{LruCache, TranscriptFingerprint, transcript_fingerprint};
 use super::questions::question_item_from_input;
 use super::{ChatItem, QuestionPrompt, RouteLoaders, TranscriptInput, incremental, parser};
 
 const MAX_CACHED_QUESTION_PREVIEWS: usize = 256;
 
 type QuestionPreviewCacheEntry = (Option<TranscriptFingerprint>, Option<String>);
-type QuestionPreviewCacheEntries = HashMap<String, QuestionPreviewCacheEntry>;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(super) struct QuestionPreviewCache {
-    entries: Arc<Mutex<QuestionPreviewCacheEntries>>,
+    entries: Arc<Mutex<LruCache<String, QuestionPreviewCacheEntry>>>,
+}
+
+impl Default for QuestionPreviewCache {
+    fn default() -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(LruCache::new(MAX_CACHED_QUESTION_PREVIEWS))),
+        }
+    }
 }
 
 impl QuestionPreviewCache {
@@ -26,11 +32,11 @@ impl QuestionPreviewCache {
         session_id: &str,
         fingerprint: &Option<TranscriptFingerprint>,
     ) -> Option<Option<String>> {
-        let entries = self
+        let mut entries = self
             .entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (cached_fingerprint, preview) = entries.get(session_id)?;
+        let (cached_fingerprint, preview) = entries.get(&session_id.to_owned())?;
         (cached_fingerprint == fingerprint).then(|| preview.clone())
     }
 
@@ -44,12 +50,7 @@ impl QuestionPreviewCache {
             .entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        insert_with_eviction(
-            &mut entries,
-            session_id.to_owned(),
-            (fingerprint, preview),
-            MAX_CACHED_QUESTION_PREVIEWS,
-        );
+        entries.insert(session_id.to_owned(), (fingerprint, preview));
     }
 }
 
@@ -111,19 +112,19 @@ fn transcript_question_preview(session: &Session, cache: &QuestionPreviewCache) 
     };
     match incremental::parse_session_transcript(input) {
         Ok((conversation, _)) => {
-            let questions = conversation.messages.iter().rev().find_map(|message| {
-                let ChatItem::Question { questions, .. } = message else {
-                    return None;
-                };
-                Some(questions)
-            });
-            let preview = questions.and_then(|questions| {
-                if questions.iter().any(|question| question.answer.is_none()) {
+            let latest_question = conversation
+                .messages
+                .iter()
+                .rev()
+                .find(|message| matches!(message, ChatItem::Question { .. }));
+            let preview = match latest_question {
+                Some(ChatItem::Question { questions, .. })
+                    if questions.iter().any(|question| question.answer.is_none()) =>
+                {
                     format_question_preview(questions)
-                } else {
-                    None
                 }
-            });
+                _ => None,
+            };
             cache.insert(&session.session_id, fingerprint, preview.clone());
             preview
         }
