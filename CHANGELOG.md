@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.693](https://github.com/fohte/armyknife/compare/v0.1.692...v0.1.693) (2026-11-14)
+
+
+### Features
+
+* **watch-web:** support agent-requested commands ([#1721](https://github.com/fohte/armyknife/issues/1721)) ([8b7ba7b](https://github.com/fohte/armyknife/commit/8b7ba7b79805796ade396fad751799334b3f511c))
+
 ## [0.1.692](https://github.com/fohte/armyknife/compare/v0.1.691...v0.1.692) (2026-11-14)
 
 
