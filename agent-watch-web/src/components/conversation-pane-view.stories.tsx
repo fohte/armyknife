@@ -108,6 +108,100 @@ export const QuestionWaitsForAnAnswer: Story = {
   },
 }
 
+export const PendingRequestsWaitAfterTheConversation: Story = {
+  name: 'Answered cards keep their place while pending cards wait below',
+  args: {
+    messages: [
+      {
+        type: 'assistant',
+        text: 'The configuration review is complete.',
+      },
+      {
+        type: 'proposal',
+        seq: 31,
+        title: 'Use a staged rollout',
+        summary: 'The selected plan is recorded in the original position.',
+        options: [
+          {
+            label: 'Staged rollout',
+            description: null,
+            pros: [],
+            cons: [],
+            recommended: false,
+          },
+          {
+            label: 'Immediate rollout',
+            description: null,
+            pros: [],
+            cons: [],
+            recommended: false,
+          },
+        ],
+        answer: { choice: 0, comment: null },
+        resolved: false,
+        resolution: null,
+        comment: null,
+      },
+      {
+        type: 'question',
+        requestId: 'request-retry-policy',
+        questions: [
+          {
+            header: 'Retry policy',
+            question: 'Which retry policy should be used?',
+            choices: [{ label: 'Retry once' }, { label: 'Do not retry' }],
+            multi_select: false,
+            answer: 'Retry once',
+          },
+        ],
+      },
+      {
+        type: 'assistant',
+        text: 'I am preparing the final change.',
+      },
+      {
+        type: 'proposal',
+        seq: 32,
+        title: 'Choose the alert destination',
+        summary: 'Select where operational updates should appear.',
+        options: [
+          {
+            label: 'Dashboard',
+            description: null,
+            pros: [],
+            cons: [],
+            recommended: true,
+          },
+          {
+            label: 'Email',
+            description: null,
+            pros: [],
+            cons: [],
+            recommended: false,
+          },
+        ],
+        answer: null,
+        resolved: false,
+        resolution: null,
+        comment: null,
+      },
+      {
+        type: 'question',
+        requestId: 'request-notification-detail',
+        questions: [
+          {
+            header: 'Notification detail',
+            question: 'Should the alert include a short summary?',
+            choices: [{ label: 'Yes' }, { label: 'No' }],
+            multi_select: false,
+            answer: null,
+          },
+        ],
+      },
+    ],
+  },
+}
+
 export const QueuedPromptAppearsAfterConversation: Story = {
   name: 'A queued prompt appears below the delivered conversation',
   args: {
