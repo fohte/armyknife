@@ -4,6 +4,7 @@ import { Button } from '@fohte/ui/button'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { numberShortcutChoice } from '#components/conversation-keyboard'
+import { MarkdownMessage } from '#components/markdown-message'
 import type { ProposalAnswer, ProposalOption } from '#types'
 
 type ProposalCardProps = {
@@ -147,10 +148,14 @@ export function ProposalCard({
       <h2>Proposal · {status}</h2>
       <h3>{title}</h3>
       {summary !== null ? (
-        <p className="chat-proposal-summary">{summary}</p>
+        <MarkdownMessage className="chat-proposal-summary">
+          {summary}
+        </MarkdownMessage>
       ) : null}
       {isWithdrawn && withdrawalComment !== null ? (
-        <p className="chat-proposal-withdrawal-comment">{withdrawalComment}</p>
+        <MarkdownMessage className="chat-proposal-withdrawal-comment">
+          {withdrawalComment}
+        </MarkdownMessage>
       ) : null}
       <div
         className="chat-proposal-options"
@@ -158,12 +163,24 @@ export function ProposalCard({
         aria-label="Proposal options"
       >
         {options.map((option, index) => (
-          <label
+          <div
             className="chat-proposal-option"
             data-selected={selectedChoice === index ? 'true' : undefined}
             key={`${String(index)}-${option.label}`}
+            role="presentation"
+            onClick={(event) => {
+              if (
+                isDisabled ||
+                (event.target instanceof Element &&
+                  event.target.closest('a') !== null)
+              ) {
+                return
+              }
+              setSelectedChoice(index)
+            }}
           >
             <input
+              id={`proposal-${String(seq)}-option-${String(index)}`}
               type="radio"
               name={`proposal-${String(seq)}`}
               value={String(index)}
@@ -173,19 +190,22 @@ export function ProposalCard({
                 setSelectedChoice(index)
               }}
             />
-            <span className="chat-proposal-option-content">
-              <span className="chat-proposal-option-heading">
-                <span className="chat-proposal-option-label">
+            <div className="chat-proposal-option-content">
+              <div className="chat-proposal-option-heading">
+                <label
+                  className="chat-proposal-option-label"
+                  htmlFor={`proposal-${String(seq)}-option-${String(index)}`}
+                >
                   {choiceLabel(index)} · {option.label}
-                </span>
+                </label>
                 {option.recommended ? (
                   <span className="chat-proposal-recommended">Recommended</span>
                 ) : null}
-              </span>
+              </div>
               {option.description !== null ? (
-                <span className="chat-proposal-option-description">
+                <MarkdownMessage className="chat-proposal-option-description">
                   {option.description}
-                </span>
+                </MarkdownMessage>
               ) : null}
               {option.pros.length > 0 || option.cons.length > 0 ? (
                 <span className="chat-proposal-option-details">
@@ -201,8 +221,8 @@ export function ProposalCard({
                   ))}
                 </span>
               ) : null}
-            </span>
-          </label>
+            </div>
+          </div>
         ))}
       </div>
       <label

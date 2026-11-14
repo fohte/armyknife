@@ -1,9 +1,9 @@
 import '#components/collapsible-text.css'
 
-import { useId, useLayoutEffect, useRef, useState } from 'react'
+import { type ReactNode, useId, useLayoutEffect, useRef, useState } from 'react'
 
 type CollapsibleTextProps = {
-  text: string
+  children: ReactNode
   expanded: boolean
   collapsedLines?: number
   className?: string
@@ -11,14 +11,14 @@ type CollapsibleTextProps = {
 }
 
 export function CollapsibleText({
-  text,
+  children,
   expanded,
   collapsedLines = 2,
   className,
   onExpandedChange,
 }: CollapsibleTextProps) {
   const contentId = useId()
-  const contentRef = useRef<HTMLParagraphElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
   const [overflows, setOverflows] = useState(false)
 
   useLayoutEffect(() => {
@@ -51,20 +51,20 @@ export function CollapsibleText({
       fonts.removeEventListener('loadingdone', measure)
       resizeObserver.disconnect()
     }
-  }, [collapsedLines, expanded, text])
+  }, [children, collapsedLines, expanded])
 
   return (
     <div
       className={`collapsible-text${className === undefined ? '' : ` ${className}`}`}
     >
-      <p
+      <div
         ref={contentRef}
         id={contentId}
         className="collapsible-text__content"
         data-expanded={expanded}
       >
-        {text}
-      </p>
+        {children}
+      </div>
       {overflows ? (
         <button
           className="collapsible-text__toggle"
