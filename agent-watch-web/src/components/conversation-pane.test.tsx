@@ -5415,6 +5415,49 @@ it('clears the message draft after a successful send', async () => {
   })
 })
 
+it('sends a message while session actions are still loading', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [], null)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const sendButton = requireElement(
+    container.querySelector<HTMLButtonElement>('[aria-label="Send message"]'),
+  )
+  const beforeTyping = {
+    composerDisabled: textarea.disabled,
+    sendDisabled: sendButton.disabled,
+  }
+  setTextareaValue(textarea, 'Send while actions load')
+  const beforeSending = {
+    composerDisabled: textarea.disabled,
+    sendDisabled: sendButton.disabled,
+  }
+  act(() => {
+    dispatchKey(textarea, 'Enter')
+  })
+  await act(async () => {
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    beforeTyping,
+    beforeSending,
+    afterSending: {
+      draft: textarea.value,
+      actionCalls: onAction.mock.calls,
+    },
+  })
+  expect(snapshot()).toEqual({
+    beforeTyping: { composerDisabled: false, sendDisabled: true },
+    beforeSending: { composerDisabled: false, sendDisabled: false },
+    afterSending: {
+      draft: '',
+      actionCalls: [['messages', { content: 'Send while actions load' }]],
+    },
+  })
+})
+
 it('keeps text added after a send starts', async () => {
   let completeSend: ((succeeded: boolean) => void) | undefined
   const onAction = vi.fn(
@@ -7139,6 +7182,91 @@ it('shows cached permission actions while the messages refresh is pending', asyn
     },
   }
   expect(snapshot()).toEqual(expected)
+})
+
+it('keeps a cleared actions request error from returning after messages load', async () => {
+  const failedSession = { ...session, id: 'actions-error-session' }
+  let resolveMessages: ((response: Response) => void) | undefined
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return new Promise<Response>((resolve) => {
+        resolveMessages = resolve
+      })
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(
+        jsonResponse({ error: 'Actions unavailable' }, 503),
+      )
+    }
+    if (url.endsWith('/tree')) {
+      return Promise.resolve(jsonResponse({ revision: 1, sessions: [] }))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  root ??= createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionConversationCacheProvider>
+        <ConversationPane
+          session={failedSession}
+          sessionTreeRefreshKey={0}
+          refreshKey={0}
+          onSelectSession={() => undefined}
+        />
+      </SessionConversationCacheProvider>,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'Actions unavailable',
+  )
+  await waitForState(() => resolveMessages !== undefined)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const afterActionsFailure = {
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+    composerDisabled: textarea.disabled,
+  }
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(pasteEvent, 'clipboardData', {
+    value: {
+      files: [
+        new File(['contents'], 'clipboard.bin', {
+          type: 'application/octet-stream',
+        }),
+      ],
+    },
+  })
+  act(() => {
+    void textarea.dispatchEvent(pasteEvent)
+  })
+  await waitForState(() => container.querySelector('[role="alert"]') === null)
+  const afterClear =
+    container.querySelector('[role="alert"]')?.textContent ?? null
+  await act(async () => {
+    resolveMessages?.(jsonResponse(messagesResponse([])))
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    afterActionsFailure,
+    afterClear,
+    afterMessagesLoad:
+      container.querySelector('[role="alert"]')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    afterActionsFailure: {
+      alert: 'Actions unavailable',
+      composerDisabled: false,
+    },
+    afterClear: null,
+    afterMessagesLoad: null,
+  })
 })
 
 it('prepends an older page without moving existing messages in the viewport', async () => {

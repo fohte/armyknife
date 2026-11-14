@@ -154,7 +154,7 @@ export function ConversationPaneView({
   } = useComposerMessage({
     sessionId: session.id,
     draft,
-    messageEnabled: actions?.message === true,
+    messageEnabled: actions?.message !== false,
     externalSending: sending,
     clearDraftIfUnchanged,
     onAction,
