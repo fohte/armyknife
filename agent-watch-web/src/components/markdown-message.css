@@ -116,6 +116,14 @@
   border-collapse: collapse;
 }
 
+.markdown-message .chat-user-image {
+  display: block;
+  max-width: min(100%, 560px);
+  max-height: 480px;
+  border-radius: var(--aw-radius);
+  object-fit: contain;
+}
+
 .markdown-message :is(th, td) {
   padding: 0.35rem 0.6rem;
   border: 1px solid var(--aw-border-control);

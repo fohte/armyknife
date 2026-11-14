@@ -24,6 +24,7 @@ fn empty_additions() -> ParserAdditions<'static> {
         peer_out_messages: &[],
         proposals: &[],
         todos: &[],
+        additional_cards: &[],
     }
 }
 

@@ -48,6 +48,14 @@ const maxPreviewItems = 7;
   expect(html).toBe(expected)
 })
 
+it('renders markdown images with the shared conversation image treatment', () => {
+  expect(
+    renderMessage('![Sample screenshot](/api/images/fixture-image.png)'),
+  ).toBe(
+    '<div class="markdown-message"><p><img class="chat-user-image" src="/api/images/fixture-image.png" alt="Sample screenshot" loading="lazy" decoding="async"/></p></div>',
+  )
+})
+
 it('keeps untagged fenced code in a preformatted block', () => {
   const html = renderMessage(`~~~
 set VALUE=preview

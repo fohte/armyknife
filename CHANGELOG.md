@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.1.714](https://github.com/fohte/armyknife/compare/v0.1.713...v0.1.714) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** align question preview with parser ([#1809](https://github.com/fohte/armyknife/issues/1809)) ([40f9486](https://github.com/fohte/armyknife/commit/40f94868c26b5b491e6f4bae55559a3681cbd733))
+
+## [0.1.713](https://github.com/fohte/armyknife/compare/v0.1.712...v0.1.713) (2026-11-14)
+
+
+### Features
+
+* **watch-web:** support Inbox question previews ([#1806](https://github.com/fohte/armyknife/issues/1806)) ([13b6b3f](https://github.com/fohte/armyknife/commit/13b6b3f31bd4b9b00b896e8946b9d09ceb437fc1))
+
+## [0.1.712](https://github.com/fohte/armyknife/compare/v0.1.711...v0.1.712) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** pin pending cards to the bottom ([#1804](https://github.com/fohte/armyknife/issues/1804)) ([be53e47](https://github.com/fohte/armyknife/commit/be53e4736f0986c2943fb5394263397f3436f52d))
+
 ## [0.1.711](https://github.com/fohte/armyknife/compare/v0.1.710...v0.1.711) (2026-11-14)
 
 

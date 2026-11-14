@@ -65,6 +65,94 @@ async fn chosen_option_is_notified_before_the_answer_is_stored(action_context: A
 
 #[rstest]
 #[tokio::test]
+async fn answering_a_proposal_saves_and_forwards_image_attachments(action_context: ActionContext) {
+    action_context.save_session(&session("sample-session"));
+    add_proposal(&action_context, "sample-session");
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            "/sessions/sample-session/proposals/1/answer",
+            json!({
+                "choice": 0,
+                "comment": "Keep the simpler format.",
+                "attachments": [{
+                    "name": "screen.gif",
+                    "mimeType": "image/gif",
+                    "size": 6,
+                    "data": "R0lGODlh",
+                }],
+            }),
+        ))
+        .await
+        .unwrap();
+    let path = std::fs::read_dir(action_context.temp_dir.path().join("attachments"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path()
+        .canonicalize()
+        .unwrap();
+    let path_string = path.display().to_string();
+    let image_source = format!(
+        "/api/images/{}",
+        path.file_name().unwrap().to_string_lossy()
+    );
+    let proposals = store::agent_proposals_from(
+        &action_context.temp_dir.path().join("sessions"),
+        "sample-session",
+    )
+    .unwrap();
+    let mut answer: serde_json::Value =
+        serde_json::from_str(proposals[0].answer.as_deref().unwrap()).unwrap();
+    answer["comment"] = answer["comment"]
+        .as_str()
+        .unwrap()
+        .replace(&image_source, "<attachment-source>")
+        .into();
+    let mut response = response_snapshot(response, &action_context).await;
+    response["calls"][0]["content"] = response["calls"][0]["content"]
+        .as_str()
+        .unwrap()
+        .replace(&path_string, "<attachment-path>")
+        .into();
+
+    assert_eq!(
+        (response, std::fs::read(path).unwrap(), answer,),
+        (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "message",
+                    "sessionId": "sample-session",
+                    "content": indoc! {"
+                        Proposal 1 \"Pick a format\": chose A (Format A).
+
+                        Keep the simpler format.
+
+                        Attached file(s):
+                        - <attachment-path>
+                    "}.trim_end(),
+                }],
+            }),
+            vec![71, 73, 70, 56, 57, 97],
+            json!({
+                "choice": 0,
+                "comment": indoc! {"
+                    Keep the simpler format.
+
+                    ![screen.gif](<attachment-source>)
+                "}
+                .trim_end(),
+            }),
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn consecutive_proposals_remain_individually_answerable(action_context: ActionContext) {
     action_context.save_session(&session("sample-session"));
     add_proposal(&action_context, "sample-session");
@@ -350,7 +438,16 @@ async fn failed_peer_notification_does_not_store_the_answer(action_context: Acti
         .router()
         .oneshot(post(
             "/sessions/sample-session/proposals/1/answer",
-            json!({ "choice": 0, "comment": null }),
+            json!({
+                "choice": 0,
+                "comment": null,
+                "attachments": [{
+                    "name": "screen.gif",
+                    "mimeType": "image/gif",
+                    "size": 6,
+                    "data": "R0lGODlh",
+                }],
+            }),
         ))
         .await
         .unwrap();
@@ -359,12 +456,20 @@ async fn failed_peer_notification_does_not_store_the_answer(action_context: Acti
         "sample-session",
     )
     .unwrap();
+    let mut response = response_snapshot(response, &action_context).await;
+    let message = response["calls"][0]["content"].as_str().unwrap();
+    let path = message
+        .lines()
+        .rev()
+        .find_map(|line| line.strip_prefix("- "))
+        .unwrap_or_default();
+    response["calls"][0]["content"] = message.replace(path, "<attachment-path>").into();
+    let files_left = std::fs::read_dir(action_context.temp_dir.path().join("attachments"))
+        .map(|entries| entries.count())
+        .unwrap_or_default();
 
     assert_eq!(
-        (
-            response_snapshot(response, &action_context).await,
-            proposals[0].answer.clone(),
-        ),
+        (response, proposals[0].answer.clone(), files_left,),
         (
             json!({
                 "status": StatusCode::BAD_GATEWAY.as_u16(),
@@ -372,10 +477,16 @@ async fn failed_peer_notification_does_not_store_the_answer(action_context: Acti
                 "calls": [{
                     "kind": "message",
                     "sessionId": "sample-session",
-                    "content": "Proposal 1 \"Pick a format\": chose A (Format A).",
+                    "content": indoc! {"
+                        Proposal 1 \"Pick a format\": chose A (Format A).
+
+                        Attached file(s):
+                        - <attachment-path>
+                    "}.trim_end(),
                 }],
             }),
             None,
+            0,
         ),
     );
 }

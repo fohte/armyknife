@@ -8,8 +8,10 @@ use super::super::super::{
     store,
     types::{Engine, SessionStatus},
 };
+use super::super::attachments;
 use super::{
-    ActionState, ApiError, Success, load_session, messages::watch_web_message_content,
+    ActionState, ApiError, Success, load_session,
+    messages::{remove_attachments, watch_web_message_content},
     resolve_sessions_dir, run_blocking,
 };
 
@@ -18,6 +20,8 @@ use super::{
 pub(super) struct AnswerRequest {
     choice: serde_json::Value,
     comment: Option<String>,
+    #[serde(default)]
+    attachments: Vec<attachments::Request>,
 }
 
 pub(super) async fn answer_proposal(
@@ -55,6 +59,8 @@ pub(super) async fn answer_proposal(
     if proposal.resolved_at.is_some() {
         return Err(ApiError::conflict("proposal is not awaiting an answer"));
     }
+    let attachments = attachments::validate(request.attachments, vec![])
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let body: ProposalBody = serde_json::from_str(&proposal.body)
         .context("parsing stored proposal body")
         .map_err(ApiError::internal)?;
@@ -98,14 +104,26 @@ pub(super) async fn answer_proposal(
     } else {
         None
     };
+    let saved_attachments =
+        run_blocking(move || attachments::save(attachments, state.attachment_dir)).await?;
+    let attachment_paths = saved_attachments
+        .iter()
+        .map(|attachment| attachment.path.clone())
+        .collect::<Vec<_>>();
+    let stored_comment =
+        attachments::append_image_previews_to_comment(request.comment, &saved_attachments);
+    let content = attachments::append_paths_to_message(content, &attachment_paths);
     let content = watch_web_message_content(&session, marker.as_deref(), &content);
     let runtime = state.runtime;
     let send_session = session.clone();
-    run_blocking(move || runtime.send_message(&send_session, &content)).await?;
+    if let Err(error) = run_blocking(move || runtime.send_message(&send_session, &content)).await {
+        remove_attachments(attachment_paths).await;
+        return Err(error);
+    }
 
     let answer = serde_json::to_string(&ProposalAnswer {
         choice,
-        comment: request.comment,
+        comment: stored_comment,
     })
     .map_err(ApiError::internal)?;
     let session_id = session.session_id;
