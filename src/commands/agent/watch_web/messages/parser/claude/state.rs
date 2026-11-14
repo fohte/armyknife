@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashSet};
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 
+use crate::commands::agent::peer_message::task_notification_envelope;
 use crate::commands::agent::store::PermissionRequestData;
 
 use super::super::super::SkillSuggestion;
@@ -116,7 +117,7 @@ impl ClaudeParserState {
                         effects.push(ClaudeEffect::Inbound {
                             record: classifier_record(record),
                             text: task_notification
-                                .and_then(super::background_tasks::task_notification_envelope)
+                                .and_then(task_notification_envelope)
                                 .unwrap_or(&text)
                                 .to_owned(),
                             images,
@@ -177,7 +178,7 @@ impl ClaudeParserState {
                         effects.push(ClaudeEffect::Inbound {
                             record: classifier_record(record),
                             text: task_notification
-                                .and_then(super::background_tasks::task_notification_envelope)
+                                .and_then(task_notification_envelope)
                                 .unwrap_or(&text)
                                 .to_owned(),
                             images,

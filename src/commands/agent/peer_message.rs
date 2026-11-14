@@ -15,6 +15,28 @@ pub(super) fn is_peer_message(prompt: Option<&str>) -> bool {
     })
 }
 
+pub(super) fn task_notification_envelope(text: &str) -> Option<&str> {
+    let text = text.trim();
+    let envelope = if text.starts_with("<task-notification>") {
+        text
+    } else {
+        let (preamble, remainder) = text.split_once('\n')?;
+        let preamble = preamble.trim();
+        let is_notification_preamble = preamble
+            .strip_prefix('[')
+            .and_then(|preamble| preamble.strip_suffix(']'))
+            .is_some_and(|preamble| preamble.to_ascii_lowercase().contains("notification"));
+        if !is_notification_preamble {
+            return None;
+        }
+        remainder.trim_start()
+    };
+    envelope
+        .strip_prefix("<task-notification>")?
+        .strip_suffix("</task-notification>")?;
+    Some(envelope)
+}
+
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
