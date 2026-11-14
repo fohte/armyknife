@@ -197,7 +197,7 @@ async fn actions(
             && session.engine == Engine::Claude
             && session.has_pending_permission_requests(),
         permission: (has_live_session
-            && session.engine == Engine::Claude
+            && matches!(session.engine, Engine::Claude | Engine::Codex)
             && session.has_pending_permission_requests())
         .then_some(PermissionCapabilities {
             approve: true,
@@ -249,7 +249,7 @@ async fn resolve_permission_action(
     approved: bool,
 ) -> Result<Json<Success>, ApiError> {
     let session = load_session(state.clone(), id).await?;
-    if session.engine != Engine::Claude {
+    if !matches!(session.engine, Engine::Claude | Engine::Codex) {
         return Err(ApiError::conflict(
             "permission approval is unavailable for this session",
         ));
@@ -517,6 +517,7 @@ mod tests {
     struct FakeRuntime {
         calls: Mutex<Vec<Value>>,
         message_error: Mutex<Option<String>>,
+        rewind_not_available: Mutex<bool>,
         after_message: Mutex<Option<Box<dyn FnOnce() + Send>>>,
         message_gate: Mutex<
             Option<(
@@ -551,6 +552,7 @@ mod tests {
             Self {
                 calls: Mutex::new(Vec::new()),
                 message_error: Mutex::new(None),
+                rewind_not_available: Mutex::new(false),
                 after_message: Mutex::new(None),
                 message_gate: Mutex::new(None),
                 command_gate: Mutex::new(None),
@@ -623,6 +625,9 @@ mod tests {
                 "messageId": message_id,
                 "mode": format!("{mode:?}"),
             }));
+            if *self.rewind_not_available.lock().unwrap() {
+                return Err(super::super::rewind::SessionNotRewindableError.into());
+            }
             Ok("fixture-fork-session".to_string())
         }
         fn pane_current_command(&self, tmux_info: &TmuxInfo) -> Option<String> {
@@ -860,6 +865,10 @@ mod tests {
             *self.runtime.command_result.lock().unwrap() = Some(result);
         }
 
+        fn set_rewind_not_available(&self) {
+            *self.runtime.rewind_not_available.lock().unwrap() = true;
+        }
+
         fn set_close_unmerged_worktree(&self, value: bool) {
             *self.runtime.close_unmerged_worktree.lock().unwrap() = value;
         }
@@ -1085,9 +1094,16 @@ mod tests {
     }
 
     #[rstest]
+    #[case::stopped(SessionStatus::Stopped)]
+    #[case::paused(SessionStatus::Paused)]
     #[tokio::test]
-    async fn rewind_dispatches_the_selected_user_message(action_context: ActionContext) {
-        action_context.save_session(&session("sample-session"));
+    async fn rewind_dispatches_the_selected_user_message(
+        #[case] status: SessionStatus,
+        action_context: ActionContext,
+    ) {
+        let mut session = session("sample-session");
+        session.status = status;
+        action_context.save_session(&session);
 
         let response = action_context
             .router()
@@ -1117,10 +1133,26 @@ mod tests {
     }
 
     #[rstest]
+    #[case::running(SessionStatus::Running, false, false)]
+    #[case::waiting_input(SessionStatus::WaitingInput, false, false)]
+    #[case::ended(SessionStatus::Ended, false, false)]
+    #[case::stopped_during_sweep(SessionStatus::Stopped, true, false)]
+    #[case::stopped_with_pending_task(SessionStatus::Stopped, false, true)]
     #[tokio::test]
-    async fn rewind_rejects_a_session_that_is_not_waiting_for_input(action_context: ActionContext) {
+    async fn rewind_rejects_a_non_rewindable_session(
+        #[case] status: SessionStatus,
+        #[case] sweep_signaled: bool,
+        #[case] has_pending_bg_task: bool,
+        action_context: ActionContext,
+    ) {
         let mut session = session("sample-session");
-        session.status = SessionStatus::Running;
+        session.status = status;
+        session.sweep_signaled = sweep_signaled;
+        if has_pending_bg_task {
+            session
+                .pending_bg_task_ids
+                .insert("fixture-task".to_string());
+        }
         action_context.save_session(&session);
 
         let response = action_context
@@ -1139,8 +1171,45 @@ mod tests {
             response_snapshot(response, &action_context).await,
             json!({
                 "status": StatusCode::CONFLICT.as_u16(),
-                "body": { "error": "session is not waiting for input" },
+                "body": { "error": "session cannot be rewound" },
                 "calls": [],
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn rewind_returns_conflict_when_session_becomes_unavailable(
+        action_context: ActionContext,
+    ) {
+        let mut session = session("sample-session");
+        session.status = SessionStatus::Stopped;
+        action_context.save_session(&session);
+        action_context.set_rewind_not_available();
+
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/rewind",
+                json!({
+                    "messageId": "fixture-user-message",
+                    "mode": "conversation"
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::CONFLICT.as_u16(),
+                "body": { "error": "session cannot be rewound" },
+                "calls": [{
+                    "kind": "rewind",
+                    "sessionId": "sample-session",
+                    "messageId": "fixture-user-message",
+                    "mode": "Conversation",
+                }],
             }),
         );
     }
@@ -1150,6 +1219,7 @@ mod tests {
     async fn codex_rewind_rejects_code_modes(action_context: ActionContext) {
         let mut session = session("sample-session");
         session.engine = Engine::Codex;
+        session.status = SessionStatus::Stopped;
         action_context.save_session(&session);
 
         let response = action_context
@@ -1794,18 +1864,28 @@ mod tests {
     }
 
     #[rstest]
+    #[case::approve("approve", store::PermissionRequestDecision::Allow)]
+    #[case::reject(
+        "reject",
+        store::PermissionRequestDecision::Deny {
+            message: "Rejected from watch-web.".to_string(),
+            interrupt: false,
+        }
+    )]
     #[tokio::test]
-    async fn codex_permission_capability_is_disabled_and_approval_is_rejected(
+    async fn codex_permission_capability_allows_web_decisions(
+        #[case] action: &str,
+        #[case] expected_decision: store::PermissionRequestDecision,
         action_context: ActionContext,
     ) {
         let mut session = session("sample-session");
         session.engine = Engine::Codex;
-        session.current_tool = Some("AskUserQuestion".to_string());
-        session.current_tool_name = Some("AskUserQuestion".to_string());
-        session
-            .pending_permission_agent_ids
-            .insert("main".to_string());
-        action_context.save_session(&session);
+        action_context.save_pending_permission_request(
+            &mut session,
+            MAIN_THREAD_AGENT_KEY,
+            "permission-request-main",
+            "Bash",
+        );
         let app = action_context.router();
 
         let capabilities = app
@@ -1818,27 +1898,28 @@ mod tests {
             )
             .await
             .unwrap();
-        let approval = app
-            .clone()
+        let decision = app
             .oneshot(post(
-                "/sessions/sample-session/permission/approve",
-                json!({ "requestId": "missing-request" }),
+                &format!("/sessions/sample-session/permission/{action}"),
+                json!({ "requestId": "permission-request-main" }),
             ))
             .await
             .unwrap();
-        let answer = app
-            .oneshot(post(
-                "/sessions/sample-session/answer",
-                json!({ "requestId": "question-request-main", "skip": true }),
-            ))
-            .await
-            .unwrap();
+        let mut waiter =
+            store::PermissionRequestWaiter::open(&action_context.temp_dir.path().join("sessions"))
+                .unwrap();
 
         assert_eq!(
             (
                 response_snapshot(capabilities, &action_context).await,
-                response_snapshot(approval, &action_context).await,
-                response_snapshot(answer, &action_context).await,
+                response_snapshot(decision, &action_context).await,
+                waiter
+                    .poll(
+                        "sample-session",
+                        MAIN_THREAD_AGENT_KEY,
+                        "permission-request-main",
+                    )
+                    .unwrap(),
             ),
             (
                 json!({
@@ -1846,22 +1927,23 @@ mod tests {
                     "body": {
                         "message": true,
                         "answerQuestion": false,
+                        "permission": { "approve": true, "reject": true },
                         "interrupt": false,
                         "openInTerminal": true,
-                        "rewind": true,
+                        "rewind": false,
                     },
                     "calls": [],
                 }),
                 json!({
-                    "status": StatusCode::CONFLICT.as_u16(),
-                    "body": { "error": "permission approval is unavailable for this session" },
+                    "status": StatusCode::OK.as_u16(),
+                    "body": { "ok": true },
                     "calls": [],
                 }),
-                json!({
-                    "status": StatusCode::CONFLICT.as_u16(),
-                    "body": { "error": "session is not waiting for a question answer" },
-                    "calls": [],
-                }),
+                store::PermissionRequestWait::Decision {
+                    decision: expected_decision,
+                    tool_input: json!({}),
+                    answers: None,
+                },
             ),
         );
     }
@@ -1900,7 +1982,7 @@ mod tests {
                     "answerQuestion": false,
                     "interrupt": enabled,
                     "openInTerminal": true,
-                    "rewind": status == SessionStatus::WaitingInput,
+                    "rewind": matches!(status, SessionStatus::Stopped | SessionStatus::Paused),
                 },
                 "calls": [],
             }),
@@ -1908,19 +1990,33 @@ mod tests {
     }
 
     #[rstest]
-    #[case::running_with_pane(SessionStatus::Running, true, false)]
-    #[case::waiting_input_with_pane(SessionStatus::WaitingInput, true, true)]
-    #[case::stopped_with_pane(SessionStatus::Stopped, true, false)]
-    #[case::waiting_input_without_pane(SessionStatus::WaitingInput, false, false)]
+    #[case::running_with_pane(SessionStatus::Running, true, false, false, false)]
+    #[case::waiting_input_with_pane(SessionStatus::WaitingInput, true, false, false, false)]
+    #[case::stopped_with_pane(SessionStatus::Stopped, true, true, false, false)]
+    #[case::paused_with_pane(SessionStatus::Paused, true, true, false, false)]
+    #[case::ended_with_pane(SessionStatus::Ended, true, false, false, false)]
+    #[case::stopped_without_pane(SessionStatus::Stopped, false, false, false, false)]
+    #[case::paused_without_pane(SessionStatus::Paused, false, false, false, false)]
+    #[case::waiting_input_without_pane(SessionStatus::WaitingInput, false, false, false, false)]
+    #[case::stopped_with_pending_task(SessionStatus::Stopped, true, false, true, false)]
+    #[case::stopped_during_sweep(SessionStatus::Stopped, true, false, false, true)]
     #[tokio::test]
-    async fn rewind_capability_requires_a_waiting_session_with_a_pane(
+    async fn rewind_capability_requires_a_stopped_or_paused_session_with_a_pane(
         #[case] status: SessionStatus,
         #[case] has_pane: bool,
         #[case] rewind_available: bool,
+        #[case] has_pending_bg_task: bool,
+        #[case] sweep_signaled: bool,
         action_context: ActionContext,
     ) {
         let mut session = session("sample-session");
         session.status = status;
+        if has_pending_bg_task {
+            session
+                .pending_bg_task_ids
+                .insert("fixture-task".to_string());
+        }
+        session.sweep_signaled = sweep_signaled;
         if !has_pane {
             session.tmux_info = None;
         }
@@ -1942,7 +2038,7 @@ mod tests {
             json!({
                 "status": StatusCode::OK.as_u16(),
                 "body": {
-                    "message": true,
+                    "message": status != SessionStatus::Ended,
                     "answerQuestion": false,
                     "interrupt": status == SessionStatus::Running,
                     "openInTerminal": has_pane,

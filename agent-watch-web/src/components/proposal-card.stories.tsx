@@ -33,6 +33,8 @@ const meta = {
     options,
     answer: null,
     resolved: false,
+    resolution: null,
+    withdrawalComment: null,
     isMobile: false,
     ...callbacks,
   },
@@ -82,4 +84,13 @@ export const ProposalShowsAnotherOptionWasRequested: Story = {
 export const ProposalShowsItWasAnsweredElsewhere: Story = {
   name: 'A proposal shows that it was answered elsewhere',
   args: { resolved: true },
+}
+
+export const ProposalShowsItWasWithdrawn: Story = {
+  name: 'A proposal shows that it was withdrawn with a reason',
+  args: {
+    resolved: true,
+    resolution: 'withdrawn',
+    withdrawalComment: 'The direction changed.',
+  },
 }

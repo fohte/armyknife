@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.1.685](https://github.com/fohte/armyknife/compare/v0.1.684...v0.1.685) (2026-11-14)
+
+
+### Features
+
+* **watch-web:** allow Codex permission decisions ([#1747](https://github.com/fohte/armyknife/issues/1747)) ([ffaef52](https://github.com/fohte/armyknife/commit/ffaef52c9cff395f74650b9d18d0609abbd9e478))
+
+## [0.1.684](https://github.com/fohte/armyknife/compare/v0.1.683...v0.1.684) (2026-11-14)
+
+
+### Features
+
+* **watch-web:** collapse long to-do details ([#1745](https://github.com/fohte/armyknife/issues/1745)) ([7ef6bd3](https://github.com/fohte/armyknife/commit/7ef6bd30a3bc4c985b1f49809c37da0e5c9b6755))
+
+## [0.1.683](https://github.com/fohte/armyknife/compare/v0.1.682...v0.1.683) (2026-11-14)
+
+
+### Bug Fixes
+
+* **agent/web-ui:** replace URL by name ([#1743](https://github.com/fohte/armyknife/issues/1743)) ([c5adfb7](https://github.com/fohte/armyknife/commit/c5adfb794f2023eb13d8e1a2da1aabe209c0404d))
+
+## [0.1.682](https://github.com/fohte/armyknife/compare/v0.1.681...v0.1.682) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** preserve upstream redirects ([#1741](https://github.com/fohte/armyknife/issues/1741)) ([f0e2733](https://github.com/fohte/armyknife/commit/f0e273360b659c8a4d2a2a24856e7e9709e469b5))
+
 ## [0.1.681](https://github.com/fohte/armyknife/compare/v0.1.680...v0.1.681) (2026-11-13)
 
 

@@ -5,7 +5,7 @@ use axum::Router;
 use axum::body::{Body, Bytes, to_bytes};
 use axum::extract::ws::{Message as ClientMessage, WebSocket, WebSocketUpgrade};
 use axum::extract::{FromRequestParts, Request, State};
-use axum::http::header::{ACCEPT, CONTENT_TYPE, COOKIE, HOST, SET_COOKIE};
+use axum::http::header::{ACCEPT, CONTENT_TYPE, COOKIE, HOST, LOCATION, SET_COOKIE};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::middleware::from_fn;
 use axum::response::{IntoResponse, Response};
@@ -29,7 +29,7 @@ const FORWARDED_REQUEST_HEADERS: [HeaderName; 6] = [
     HeaderName::from_static("last-event-id"),
     HeaderName::from_static("range"),
 ];
-const FORWARDED_RESPONSE_HEADERS: [HeaderName; 8] = [
+const FORWARDED_RESPONSE_HEADERS: [HeaderName; 9] = [
     CONTENT_TYPE,
     HeaderName::from_static("cache-control"),
     HeaderName::from_static("content-encoding"),
@@ -37,6 +37,7 @@ const FORWARDED_RESPONSE_HEADERS: [HeaderName; 8] = [
     HeaderName::from_static("etag"),
     HeaderName::from_static("expires"),
     HeaderName::from_static("last-modified"),
+    LOCATION,
     HeaderName::from_static("retry-after"),
 ];
 const WEBSOCKET_PROTOCOL_HEADER: HeaderName = HeaderName::from_static("sec-websocket-protocol");
@@ -86,12 +87,7 @@ impl WebUiTransport for Client {
             let response = upstream_request.send().await?;
             let status =
                 StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-            let mut headers = HeaderMap::new();
-            for header in FORWARDED_RESPONSE_HEADERS {
-                for value in response.headers().get_all(&header) {
-                    headers.append(header.clone(), value.clone());
-                }
-            }
+            let headers = forwarded_response_headers(response.headers());
             Ok(WebUiResponse {
                 status,
                 headers,
@@ -99,6 +95,16 @@ impl WebUiTransport for Client {
             })
         }
     }
+}
+
+fn forwarded_response_headers(source: &HeaderMap) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    for header in FORWARDED_RESPONSE_HEADERS {
+        for value in source.get_all(&header) {
+            headers.append(header.clone(), value.clone());
+        }
+    }
+    headers
 }
 
 pub(super) fn router<T: WebUiTransport>(
@@ -317,10 +323,48 @@ async fn proxy_request<T: WebUiTransport>(
             return StatusCode::BAD_GATEWAY.into_response();
         }
     };
+    let mut headers = upstream_response.headers;
+    for (name, value) in headers.iter_mut() {
+        if name == LOCATION {
+            rewrite_same_origin_location(value, port);
+        }
+    }
     let mut response = Response::new(upstream_response.body);
     *response.status_mut() = upstream_response.status;
-    *response.headers_mut() = upstream_response.headers;
+    *response.headers_mut() = headers;
     response
+}
+
+fn rewrite_same_origin_location(location: &mut HeaderValue, port: u16) {
+    let Ok(location_text) = location.to_str() else {
+        return;
+    };
+    let Ok(location_url) = reqwest::Url::parse(location_text) else {
+        return;
+    };
+    if location_url.scheme() != "http"
+        || !matches!(location_url.host_str(), Some("127.0.0.1" | "localhost"))
+        || location_url.port_or_known_default() != Some(port)
+    {
+        return;
+    }
+
+    let mut path_and_query = location_url.path().to_owned();
+    if let Some(query) = location_url.query() {
+        path_and_query.push('?');
+        path_and_query.push_str(query);
+    }
+    if path_and_query.starts_with("//") {
+        // Browsers interpret a leading double slash as a new authority.
+        path_and_query.insert_str(1, "./");
+    }
+    if let Some(fragment) = location_url.fragment() {
+        path_and_query.push('#');
+        path_and_query.push_str(fragment);
+    }
+    if let Ok(value) = HeaderValue::from_str(&path_and_query) {
+        *location = value;
+    }
 }
 
 fn cookie_port(cookies: &str) -> Option<u16> {
@@ -456,13 +500,15 @@ mod tests {
 
     use super::{
         WEBSOCKET_PROTOCOL_HEADER, WebUiRequest, WebUiResponse, WebUiTransport,
-        router_with_url_loader,
+        forwarded_response_headers, router_with_url_loader,
     };
 
     #[derive(Clone)]
     struct FakeTransport {
         sent_request: Arc<Mutex<Option<WebUiRequest>>>,
         response_body: Arc<Mutex<Option<Body>>>,
+        response_status: StatusCode,
+        response_headers: HeaderMap,
     }
 
     impl WebUiTransport for FakeTransport {
@@ -472,14 +518,17 @@ mod tests {
         ) -> impl std::future::Future<Output = anyhow::Result<WebUiResponse>> + Send {
             let sent_request = self.sent_request.clone();
             let response_body = self.response_body.clone();
+            let response_status = self.response_status;
+            let response_headers = self.response_headers.clone();
             async move {
                 *sent_request.lock().unwrap() = Some(request);
                 let body = response_body.lock().unwrap().take().unwrap();
                 let mut headers = axum::http::HeaderMap::new();
                 headers.insert(CONTENT_TYPE, "text/event-stream".parse().unwrap());
                 headers.insert(CACHE_CONTROL, "no-cache".parse().unwrap());
+                headers.extend(response_headers);
                 Ok(WebUiResponse {
-                    status: StatusCode::OK,
+                    status: response_status,
                     headers,
                     body,
                 })
@@ -488,6 +537,13 @@ mod tests {
     }
 
     fn fake_transport() -> (FakeTransport, Arc<Mutex<Option<WebUiRequest>>>) {
+        fake_transport_with_response(StatusCode::OK, HeaderMap::new())
+    }
+
+    fn fake_transport_with_response(
+        response_status: StatusCode,
+        response_headers: HeaderMap,
+    ) -> (FakeTransport, Arc<Mutex<Option<WebUiRequest>>>) {
         let sent_request = Arc::new(Mutex::new(None));
         let response_body = Body::from_stream(stream::iter([
             Ok::<_, Infallible>(Bytes::from_static(
@@ -508,6 +564,8 @@ mod tests {
             FakeTransport {
                 sent_request: sent_request.clone(),
                 response_body: Arc::new(Mutex::new(Some(response_body))),
+                response_status,
+                response_headers,
             },
             sent_request,
         )
@@ -827,6 +885,75 @@ mod tests {
                 ),
             ),
         );
+    }
+
+    #[rstest]
+    #[case::loopback_ipv4(
+        "http://127.0.0.1:48761/design/sample/?mode=edit#canvas",
+        "/design/sample/?mode=edit#canvas"
+    )]
+    #[case::localhost(
+        "http://localhost:48761/design/sample/?mode=edit#canvas",
+        "/design/sample/?mode=edit#canvas"
+    )]
+    #[case::relative("/next?step=2#preview", "/next?step=2#preview")]
+    #[case::different_port(
+        "http://localhost:48762/design/sample/?mode=edit#canvas",
+        "http://localhost:48762/design/sample/?mode=edit#canvas"
+    )]
+    #[case::different_host(
+        "http://editor.example.invalid:48761/design/sample/?mode=edit#canvas",
+        "http://editor.example.invalid:48761/design/sample/?mode=edit#canvas"
+    )]
+    #[case::different_scheme(
+        "https://localhost:48761/design/sample/?mode=edit#canvas",
+        "https://localhost:48761/design/sample/?mode=edit#canvas"
+    )]
+    #[case::double_slash_path(
+        "http://localhost:48761//external.example/path?mode=edit#canvas",
+        "/.//external.example/path?mode=edit#canvas"
+    )]
+    #[tokio::test]
+    async fn proxy_response_rewrites_only_matching_upstream_locations(
+        #[case] upstream_location: &str,
+        #[case] expected_location: &str,
+    ) {
+        let mut response_headers = HeaderMap::new();
+        response_headers.insert(LOCATION, upstream_location.parse().unwrap());
+        let app = router_with_url_loader(
+            || Ok(vec!["http://127.0.0.1:48761/design/sample/".to_owned()]),
+            fake_transport_with_response(StatusCode::FOUND, response_headers).0,
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/design/sample/?mode=edit")
+                    .header(HOST, "localhost:4318")
+                    .header(COOKIE, "armyknife_web_ui_port=48761")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (response.status(), response.headers().get(LOCATION).cloned()),
+            (StatusCode::FOUND, Some(expected_location.parse().unwrap()),),
+        );
+    }
+
+    #[test]
+    fn forwarded_response_headers_include_location() {
+        let mut source = HeaderMap::new();
+        source.insert(LOCATION, "/next?mode=edit#canvas".parse().unwrap());
+        source.insert(CONTENT_TYPE, "text/html".parse().unwrap());
+        source.insert(SET_COOKIE, "session=ignored".parse().unwrap());
+
+        let mut expected = HeaderMap::new();
+        expected.insert(LOCATION, "/next?mode=edit#canvas".parse().unwrap());
+        expected.insert(CONTENT_TYPE, "text/html".parse().unwrap());
+
+        assert_eq!(forwarded_response_headers(&source), expected);
     }
 
     #[tokio::test]

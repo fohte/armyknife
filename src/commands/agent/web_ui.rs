@@ -80,11 +80,10 @@ fn record_url_in(
 }
 
 pub(super) fn register(web_uis: &mut Vec<WebUiRegistration>, name: &str, url: &str) {
-    if let Some(position) = web_uis.iter().position(|web_ui| web_ui.url == url) {
-        web_uis.remove(position);
-    }
+    let name = name.trim();
+    web_uis.retain(|web_ui| web_ui.url != url && web_ui.name.trim() != name);
     web_uis.push(WebUiRegistration {
-        name: name.trim().to_owned(),
+        name: name.to_owned(),
         url: url.to_owned(),
     });
 }
@@ -142,6 +141,26 @@ mod tests {
         dir
     }
 
+    #[fixture]
+    fn sessions_dir_with_web_uis(sessions_dir: tempfile::TempDir) -> tempfile::TempDir {
+        let mut session = store::load_session_from(sessions_dir.path(), "fixture-session")
+            .expect("session should load")
+            .expect("session should exist");
+        session.web_uis = vec![
+            WebUiRegistration {
+                name: "Design editor".to_owned(),
+                url: "http://localhost:48761/old".to_owned(),
+            },
+            WebUiRegistration {
+                name: "Preview".to_owned(),
+                url: "http://localhost:48761/preview".to_owned(),
+            },
+        ];
+        store::save_session_to(sessions_dir.path(), &session)
+            .expect("session with web UIs should be saved");
+        sessions_dir
+    }
+
     #[rstest]
     #[case::loopback_ipv4("http://127.0.0.1:48761/design/sample/", Some(48761))]
     #[case::localhost("http://localhost:48761/design/sample/", Some(48761))]
@@ -189,6 +208,38 @@ mod tests {
                     url: "http://localhost:48761/first".to_owned(),
                 },
             ],
+        );
+    }
+
+    #[rstest]
+    fn recording_a_web_ui_replaces_the_same_trimmed_name_with_a_new_url(
+        sessions_dir_with_web_uis: tempfile::TempDir,
+    ) {
+        let session = record_url_in(
+            sessions_dir_with_web_uis.path(),
+            "fixture-session",
+            " Design editor ",
+            "http://localhost:48761/new",
+            false,
+        )
+        .expect("registered web UI should be saved");
+        let stored = store::load_session_from(sessions_dir_with_web_uis.path(), "fixture-session")
+            .expect("session should load")
+            .expect("session should exist");
+        let expected = vec![
+            WebUiRegistration {
+                name: "Preview".to_owned(),
+                url: "http://localhost:48761/preview".to_owned(),
+            },
+            WebUiRegistration {
+                name: "Design editor".to_owned(),
+                url: "http://localhost:48761/new".to_owned(),
+            },
+        ];
+
+        assert_eq!(
+            (session.web_uis, stored.web_uis),
+            (expected.clone(), expected)
         );
     }
 

@@ -2,6 +2,7 @@ import type { ComponentProps } from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { userEvent } from 'vitest/browser'
 
 import { TodoCard } from '#components/todo-card'
 
@@ -86,6 +87,83 @@ it('shows a pending task with optional detail and a completion action', () => {
       { text: 'Mark done', disabled: false },
       { text: 'Reject', disabled: false },
     ],
+  })
+})
+
+it('does not offer to expand detail that fits in two lines', () => {
+  renderCard(props({ detail: 'First line.\nSecond line.' }))
+
+  const snapshot = () => ({
+    detail: container.querySelector('.chat-todo-detail p')?.textContent,
+    toggle: container.querySelector('.collapsible-text__toggle')?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    detail: 'First line.\nSecond line.',
+    toggle: undefined,
+  })
+})
+
+it('expands and collapses long detail', async () => {
+  container.style.width = '240px'
+  renderCard(
+    props({
+      detail: Array.from(
+        { length: 10 },
+        () => 'Keep each section readable when the screen is narrow.',
+      ).join(' '),
+    }),
+  )
+
+  const detail = requireElement(
+    container.querySelector<HTMLParagraphElement>('.chat-todo-detail p'),
+  )
+  const toggle = requireElement(
+    container.querySelector<HTMLButtonElement>('.collapsible-text__toggle'),
+  )
+  const collapsedHeight = detail.getBoundingClientRect().height
+  const firstToggle = {
+    label: toggle.textContent,
+    expanded: toggle.getAttribute('aria-expanded'),
+  }
+  await act(async () => {
+    await userEvent.click(toggle)
+  })
+  const expandedHeight = detail.getBoundingClientRect().height
+  const expandedToggle = {
+    label: toggle.textContent,
+    expanded: toggle.getAttribute('aria-expanded'),
+  }
+  await act(async () => {
+    await userEvent.click(toggle)
+  })
+
+  const snapshot = () => ({
+    collapsedHeightAfterClose: detail.getBoundingClientRect().height,
+    expandedHeightGreaterThanCollapsed: expandedHeight > collapsedHeight,
+    firstToggle,
+    expandedToggle,
+    finalToggle: {
+      label: toggle.textContent,
+      expanded: toggle.getAttribute('aria-expanded'),
+    },
+  })
+
+  expect(snapshot()).toEqual({
+    collapsedHeightAfterClose: collapsedHeight,
+    expandedHeightGreaterThanCollapsed: true,
+    firstToggle: {
+      label: 'Show more',
+      expanded: 'false',
+    },
+    expandedToggle: {
+      label: 'Show less',
+      expanded: 'true',
+    },
+    finalToggle: {
+      label: 'Show more',
+      expanded: 'false',
+    },
   })
 })
 

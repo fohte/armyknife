@@ -34,6 +34,12 @@ pub(super) async fn answer_proposal(
     let configured_sessions_dir = state.sessions_dir.clone();
     let sessions_dir =
         resolve_sessions_dir(configured_sessions_dir.clone()).map_err(ApiError::internal)?;
+    let lock_session_id = session.session_id.clone();
+    let lock_sessions_dir = sessions_dir.clone();
+    let _proposal_resolution_guard = run_blocking(move || {
+        store::lock_agent_proposal_resolution_from(&lock_sessions_dir, &lock_session_id, seq)
+    })
+    .await?;
     let proposals = run_blocking({
         let session_id = session.session_id.clone();
         move || match configured_sessions_dir {

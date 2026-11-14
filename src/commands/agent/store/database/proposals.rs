@@ -1,10 +1,11 @@
+use std::fs::File;
 use std::path::Path;
 
+use super::resolution_lock::lock_resolution_file;
+use super::{increment_revision, open_connection, validate_session_id};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{TransactionBehavior, params, params_from_iter};
-
-use super::{increment_revision, open_connection, validate_session_id};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentProposal {
@@ -14,6 +15,40 @@ pub(crate) struct AgentProposal {
     pub(crate) created_at: DateTime<Utc>,
     pub(crate) answer: Option<String>,
     pub(crate) resolved_at: Option<DateTime<Utc>>,
+    pub(crate) resolution: Option<ProposalResolution>,
+    pub(crate) comment: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ProposalResolution {
+    Withdrawn,
+}
+
+impl ProposalResolution {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Withdrawn => "withdrawn",
+        }
+    }
+
+    fn parse(value: Option<String>) -> Result<Option<Self>> {
+        match value.as_deref() {
+            Some("withdrawn") => Ok(Some(Self::Withdrawn)),
+            Some(value) => anyhow::bail!("unknown proposal resolution: {value}"),
+            None => Ok(None),
+        }
+    }
+}
+
+pub(crate) fn lock_agent_proposal_resolution(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+) -> Result<File> {
+    validate_session_id(session_id)?;
+    let lock_key = format!("{session_id}:{seq}");
+    lock_resolution_file(sessions_dir, "proposal-resolution-locks", &lock_key)
 }
 
 pub(crate) fn add_agent_proposal(sessions_dir: &Path, session_id: &str, body: &str) -> Result<i64> {
@@ -69,7 +104,7 @@ pub(crate) fn agent_proposals(sessions_dir: &Path, session_id: &str) -> Result<V
 
     let connection = open_connection(sessions_dir)?;
     let mut statement = connection.prepare(
-        "SELECT session_id, seq, body, created_at, answer, resolved_at
+        "SELECT session_id, seq, body, created_at, answer, resolved_at, resolution, comment
          FROM agent_proposal WHERE session_id = ?1 ORDER BY seq",
     )?;
     let rows = statement.query_map([session_id], |row| {
@@ -80,10 +115,12 @@ pub(crate) fn agent_proposals(sessions_dir: &Path, session_id: &str) -> Result<V
             row.get::<_, String>(3)?,
             row.get::<_, Option<String>>(4)?,
             row.get::<_, Option<String>>(5)?,
+            row.get::<_, Option<String>>(6)?,
+            row.get::<_, Option<String>>(7)?,
         ))
     })?;
     rows.map(|row| {
-        let (session_id, seq, body, created_at, answer, resolved_at) = row?;
+        let (session_id, seq, body, created_at, answer, resolved_at, resolution, comment) = row?;
         Ok(AgentProposal {
             session_id,
             seq,
@@ -99,9 +136,39 @@ pub(crate) fn agent_proposals(sessions_dir: &Path, session_id: &str) -> Result<V
                         .map(|parsed| parsed.with_timezone(&Utc))
                 })
                 .transpose()?,
+            resolution: ProposalResolution::parse(resolution)?,
+            comment,
         })
     })
     .collect()
+}
+
+pub(crate) fn resolve_agent_proposal(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    comment: Option<&str>,
+) -> Result<bool> {
+    validate_session_id(session_id)?;
+    let mut connection = open_connection(sessions_dir)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let changed = transaction.execute(
+        "UPDATE agent_proposal
+         SET resolution = ?1, comment = ?2, resolved_at = ?3
+         WHERE session_id = ?4 AND seq = ?5 AND answer IS NULL AND resolved_at IS NULL",
+        params![
+            ProposalResolution::Withdrawn.as_str(),
+            comment,
+            Utc::now().to_rfc3339(),
+            session_id,
+            seq
+        ],
+    )?;
+    if changed > 0 {
+        increment_revision(&transaction)?;
+    }
+    transaction.commit()?;
+    Ok(changed > 0)
 }
 
 pub(crate) fn write_agent_proposal_answer(
@@ -115,7 +182,7 @@ pub(crate) fn write_agent_proposal_answer(
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let changed = transaction.execute(
         "UPDATE agent_proposal SET answer = ?1, resolved_at = COALESCE(resolved_at, ?2)
-         WHERE session_id = ?3 AND seq = ?4 AND answer IS NULL",
+         WHERE session_id = ?3 AND seq = ?4 AND answer IS NULL AND resolved_at IS NULL",
         params![answer, Utc::now().to_rfc3339(), session_id, seq],
     )?;
     if changed > 0 {
@@ -133,7 +200,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        AgentProposal, add_agent_proposal, agent_proposals, unanswered_agent_proposal_bodies,
+        AgentProposal, add_agent_proposal, agent_proposals, lock_agent_proposal_resolution,
+        unanswered_agent_proposal_bodies,
     };
     #[fixture]
     fn sessions_dir() -> TempDir {
@@ -150,6 +218,27 @@ mod tests {
             proposal.resolved_at = proposal.resolved_at.map(|_| epoch);
         });
         proposals
+    }
+
+    #[rstest]
+    fn proposal_resolution_lock_keeps_its_existing_file_name(sessions_dir: TempDir) {
+        let _lock = lock_agent_proposal_resolution(sessions_dir.path(), "session-a", 4)
+            .expect("proposal resolution lock should be acquired");
+        let lock_files = std::fs::read_dir(sessions_dir.path().join("proposal-resolution-locks"))
+            .expect("proposal resolution lock directory should exist")
+            .map(|entry| {
+                entry
+                    .expect("proposal resolution lock should be readable")
+                    .file_name()
+                    .into_string()
+                    .expect("proposal resolution lock name should be valid UTF-8")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            lock_files,
+            vec!["43f4638657d0f42f33cbdddeacffa1745da54c6f9c6c7390cdbb72234d0e4623.lock"],
+        );
     }
 
     #[rstest]
@@ -188,6 +277,8 @@ mod tests {
                         created_at: epoch,
                         answer: None,
                         resolved_at: None,
+                        resolution: None,
+                        comment: None,
                     },
                     AgentProposal {
                         session_id: "session-a".to_string(),
@@ -196,6 +287,8 @@ mod tests {
                         created_at: epoch,
                         answer: None,
                         resolved_at: None,
+                        resolution: None,
+                        comment: None,
                     },
                 ],
                 vec![

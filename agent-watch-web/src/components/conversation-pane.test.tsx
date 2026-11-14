@@ -140,6 +140,8 @@ const proposal: ChatItem = {
   ],
   answer: null,
   resolved: false,
+  resolution: null,
+  comment: null,
 }
 
 function messagesResponse(

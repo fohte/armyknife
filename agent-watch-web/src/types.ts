@@ -191,6 +191,8 @@ export type ChatItem =
       options: ProposalOption[]
       answer: ProposalAnswer | null
       resolved: boolean
+      resolution: 'withdrawn' | null
+      comment: string | null
     }
   | {
       type: 'todo'

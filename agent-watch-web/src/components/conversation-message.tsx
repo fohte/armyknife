@@ -220,6 +220,8 @@ export function renderConversationMessage({
         options={message.options}
         answer={message.answer}
         resolved={message.resolved}
+        resolution={message.resolution}
+        withdrawalComment={message.comment}
         isMobile={isMobile}
         onAnswer={(answer) =>
           onAction(`proposals/${String(message.seq)}/answer`, {

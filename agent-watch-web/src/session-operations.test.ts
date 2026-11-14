@@ -69,6 +69,8 @@ const proposalMessage: Extract<ChatItem, { type: 'proposal' }> = {
   options: [],
   answer: null,
   resolved: false,
+  resolution: null,
+  comment: null,
 }
 const todoMessage: Extract<ChatItem, { type: 'todo' }> = {
   type: 'todo',

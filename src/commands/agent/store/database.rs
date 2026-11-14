@@ -20,6 +20,7 @@ mod permission_requests;
 mod proposals;
 mod queued_prompts;
 mod replacements;
+mod resolution_lock;
 mod todos;
 mod wake;
 mod web_state;
@@ -44,10 +45,10 @@ pub(crate) use permission_requests::{
     PermissionRequestWait, PermissionRequestWaiter, permission_request_data,
     resolve_permission_request, resolve_permission_request_with_answers,
 };
-pub(crate) use proposals::AgentProposal;
+pub(crate) use proposals::{AgentProposal, ProposalResolution};
 pub(crate) use proposals::{
-    add_agent_proposal, agent_proposals, unanswered_agent_proposal_bodies,
-    write_agent_proposal_answer,
+    add_agent_proposal, agent_proposals, lock_agent_proposal_resolution, resolve_agent_proposal,
+    unanswered_agent_proposal_bodies, write_agent_proposal_answer,
 };
 pub(crate) use queued_prompts::{WatchWebQueuedAttachment, WatchWebQueuedPrompt};
 pub(crate) use queued_prompts::{

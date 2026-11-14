@@ -20,7 +20,8 @@ use serde_json::Value;
 use crate::commands::agent::proposal::{ProposalAnswer, ProposalOption};
 use crate::commands::agent::store::{
     AgentDecision, AgentFile, AgentProposal, AgentTodo, PermissionDeniedOperation,
-    PermissionRequestData, TodoResolution, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
+    PermissionRequestData, ProposalResolution, TodoResolution, WatchWebPeerOutMessage,
+    WatchWebQueuedPrompt,
 };
 use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 use crate::commands::agent::user_turn::is_ask_user_question;
@@ -810,6 +811,8 @@ enum ChatItem {
         options: Vec<ProposalOption>,
         answer: Option<ProposalAnswer>,
         resolved: bool,
+        resolution: Option<ProposalResolution>,
+        comment: Option<String>,
     },
     Todo {
         seq: i64,
@@ -980,7 +983,8 @@ mod tests {
     };
     use crate::commands::agent::store::{
         AgentDecision, AgentFile, AgentProposal, AgentTodo, PermissionDeniedOperation,
-        PermissionRequestData, TodoResolution, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
+        PermissionRequestData, ProposalResolution, TodoResolution, WatchWebPeerOutMessage,
+        WatchWebQueuedPrompt,
     };
     use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 
@@ -1736,6 +1740,8 @@ mod tests {
             created_at,
             answer: None,
             resolved_at: None,
+            resolution: None,
+            comment: None,
         }));
         let proposal_loader = Arc::clone(&proposal);
         let router = routes_with_proposals_and_peer_out_messages(
@@ -1757,19 +1763,31 @@ mod tests {
             proposal.resolved_at = Some(created_at);
         }
         let resolved = message_response(&router).await;
+        {
+            let mut proposal = proposal.lock().unwrap();
+            proposal.answer = None;
+            proposal.resolution = Some(ProposalResolution::Withdrawn);
+            proposal.comment = Some("The decision changed.".to_string());
+        }
+        let withdrawn = message_response(&router).await;
 
         assert_eq!(
-            (unanswered, resolved),
+            (unanswered, resolved, withdrawn),
             (
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
-                    json!({"messages":[{"type":"proposal","seq":1,"title":"Sample proposal","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}],"answer":null,"resolved":false}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":true,"activeQuestionIndex":null})
+                    json!({"messages":[{"type":"proposal","seq":1,"title":"Sample proposal","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}],"answer":null,"resolved":false,"resolution":null,"comment":null}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":true,"activeQuestionIndex":null})
                 ),
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
-                    json!({"messages":[{"type":"proposal","seq":1,"title":"Sample proposal","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}],"answer":{"choice":0,"comment":"Keep option A."},"resolved":true}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
+                    json!({"messages":[{"type":"proposal","seq":1,"title":"Sample proposal","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}],"answer":{"choice":0,"comment":"Keep option A."},"resolved":true,"resolution":null,"comment":null}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({"messages":[{"type":"proposal","seq":1,"title":"Sample proposal","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}],"answer":null,"resolved":true,"resolution":"withdrawn","comment":"The decision changed."}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
                 ),
             ),
         );
@@ -1847,6 +1865,8 @@ mod tests {
             created_at,
             answer: resolved.then(|| r#"{"choice":0,"comment":"Keep option A."}"#.to_string()),
             resolved_at: resolved.then_some(created_at),
+            resolution: None,
+            comment: None,
         };
 
         let proposals = vec![proposal];
@@ -1895,6 +1915,8 @@ mod tests {
                     serde_json::Value::Null
                 },
                 "resolved": resolved,
+                "resolution": null,
+                "comment": null,
             }]),
         );
     }
@@ -2383,6 +2405,8 @@ mod tests {
                 .with_timezone(&chrono::Utc),
             answer: None,
             resolved_at: None,
+            resolution: None,
+            comment: None,
         };
         let router = routes_with_proposals_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
@@ -2461,6 +2485,8 @@ mod tests {
                             ],
                             "answer": null,
                             "resolved": false,
+                            "resolution": null,
+                            "comment": null,
                         },
                         {
                             "type": "tool_summary",

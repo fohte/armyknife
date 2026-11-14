@@ -563,6 +563,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `status set <kind> <note>`                                                                            |         | Set the calling session's reason for stopping                                               |
 | `decision add <TITLE> --why <WHY> --considered <ALT> [--considered <ALT>...] --easy-to-change <TEXT>` |         | Record a provisional decision for later review                                              |
 | `proposal add`                                                                                        |         | Record a structured proposal from JSON read from stdin                                      |
+| `proposal withdraw <seq> [--comment <reason>]`                                                        |         | Withdraw a pending proposal from the calling session                                        |
 | `todo add`                                                                                            |         | Record one task the user needs to do from JSON read from stdin                              |
 | `todo withdraw <seq> [--comment <reason>]`                                                            |         | Withdraw a pending task from the calling session                                            |
 | `title set <TITLE>`                                                                                   |         | Set the calling session's title; an empty title restores the automatic title                |
@@ -622,6 +623,13 @@ $ cat <<'JSON' | a agent proposal add
 }
 JSON
 Recorded proposal 1
+```
+
+Run `a agent proposal withdraw <seq> [--comment <reason>]` from the session that recorded a proposal to withdraw it before it is answered. The proposal remains in the watch-web conversation with its withdrawn state and optional comment, and can no longer be answered.
+
+```console
+$ a agent proposal withdraw 1 --comment "The decision is no longer needed."
+Withdrew proposal 1
 ```
 
 Run `a agent todo add` from a tracked Claude Code or Codex session and pipe a JSON object to stdin. The required field is `title`; `detail` is optional. A todo stays in the watch-web conversation after it is completed, rejected, or withdrawn, with its final state and optional comment. Use a proposal when the user should choose from options. The command prints `Recorded todo <seq>` after saving the todo. The user can complete or reject a todo in watch-web; an agent can withdraw a pending todo from its own session with `a agent todo withdraw <seq> [--comment <reason>]`. Withdrawal does not send a message to the session.
@@ -707,6 +715,8 @@ To refer to it in another session or task, describe its contents; this sequence 
 Tracked, hook-processed Claude Code sessions receive the instruction on `SessionStart` to record choices that are cheap to reverse and continue working. They should stop and ask about choices that are hard to reverse. Internal and headless invocations do not receive this instruction.
 
 `a agent web-ui add <url> --name <name>` registers a named local HTTP interface with the calling session. The URL must use `localhost` or `127.0.0.1` and include an explicit port. Registered interfaces appear in the watch-web conversation's right panel and share the same HTTP and WebSocket relay. Ports without a registered URL are rejected. Run the command from the session that owns the interface:
+
+Within a session, registering an interface with an existing trimmed name replaces its previous URL. Registering an existing URL also replaces that entry.
 
 ```console
 $ a agent web-ui add http://127.0.0.1:48761/design/sample/ --name "Design editor"
@@ -932,7 +942,7 @@ The pane is normally found by walking the hook process's ancestry up to it. A Co
 
 `a agent hook <event> --engine <claude|codex>` (default: `claude`) records which coding agent CLI fired the hook; this is the engine `a agent resume` reads back to pick which binary to relaunch (see `--engine` on `new` above). Event names and JSON payload shape are the same regardless of engine: an allowed `stop` resolves to `Stopped` ("waiting for the next prompt"), while an unclassified stop remains `Running` until the agent reports its status. Both `permission-request` and `notification` with `notification_type: "permission_prompt"` resolve to `WaitingInput` ("waiting for tool-call approval") -- so a Codex hook configuration that maps Codex's own hook events onto these same `--event` values and payload fields gets the same approval-wait/input-wait distinction in `a agent list` for free.
 
-Claude Code's `PermissionRequest` hook lets watch-web approve, reject, or answer requests from the main thread and subagents. The hook waits up to 590 seconds for a watch-web or terminal decision. If neither responds in time, it removes the pending request and returns a deny decision with `interrupt: false`, including for `AskUserQuestion`; this closes the terminal permission dialog while allowing the turn to continue. If the terminal resolves a request first, the hook exits without a decision. Approve returns an allow decision; reject returns a deny decision with `interrupt: false`. Question answers return an allow decision with the original `tool_input` plus an `answers` object. Skipping a question returns a deny decision with `interrupt: false` and tells Claude that the user skipped it.
+Claude Code and Codex `PermissionRequest` hooks let watch-web approve or reject requests from the main thread and subagents. Claude Code also supports answering `AskUserQuestion`; Codex's hook schema does not accept the `updatedInput` needed for question answers. The hook waits up to 590 seconds for a watch-web or terminal decision. If neither responds in time, it removes the pending request and returns a deny decision with `interrupt: false`. If the terminal resolves a request first, the hook exits without a decision. Approve returns an allow decision; reject returns a deny decision with `interrupt: false`. Skipping a Claude Code question returns a deny decision with `interrupt: false` and tells Claude that the user skipped it.
 
 Register these in Codex's `hooks.json` (each command with `--engine codex`) to track Codex sessions the same way as Claude Code sessions:
 
@@ -1205,7 +1215,7 @@ Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` on
 - `POST /api/sessions/{id}/messages` with `{"content":"..."}`
 - `POST /api/sessions/{id}/commands/preview` with `{"messageText":"Run ! printf safe now.","commands":["printf safe"]}` to verify the command is in the assistant transcript and return the session working directory for confirmation
 - `POST /api/sessions/{id}/commands/execute` with the same request to revalidate and run the command in the session working directory. The response includes `{"exitCode":0,"succeeded":true,"timedOut":false}`; stdout and stderr are returned to the session, capped to the last 8 KiB each, and execution stops after 30 seconds
-- `POST /api/sessions/{id}/rewind` rewinds a session waiting for input. Send `{"messageId":"fixture-user-message-id","mode":"conversation_and_code"}`; `mode` accepts `conversation_and_code`, `conversation`, or `code` for Claude Code and only `conversation` for Codex. Returns `{"sessionId":"fixture-fork-session-id"}`.
+- `POST /api/sessions/{id}/rewind` rewinds a stopped or paused session with a tmux pane, no pending background tasks, and no active sweep. Send `{"messageId":"fixture-user-message-id","mode":"conversation_and_code"}`; `mode` accepts `conversation_and_code`, `conversation`, or `code` for Claude Code and only `conversation` for Codex. Returns `{"sessionId":"fixture-fork-session-id"}`.
 - `POST /api/sessions/{id}/answer` with `{"requestId":"...","answers":{"Which formats?":"Markdown, Plain text","Include examples?":"Yes"}}`, or `{"requestId":"...","skip":true}`
 - `POST /api/sessions/{id}/proposals/{seq}/answer` with `{"choice":0,"comment":"..."}`; `choice` is a zero-based option index or `null` to request another proposal, and `comment` may be `null`
 - `POST /api/sessions/{id}/todos/{seq}/resolve` with `{"resolution":"completed","comment":"..."}` or `{"resolution":"rejected","comment":"..."}`; the comment may be `null`, and a live session receives the selected outcome as a user action before it is saved

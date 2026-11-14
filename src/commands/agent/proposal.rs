@@ -37,10 +37,21 @@ and at most one option may be recommended. Optional fields are summary,
 description, pros, cons, and recommended."#
     )]
     Add(AddArgs),
+    /// Withdraw one of this session's pending proposals
+    Withdraw(WithdrawArgs),
 }
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct AddArgs {}
+
+#[derive(Args, Clone, PartialEq, Eq)]
+pub struct WithdrawArgs {
+    /// Sequence number printed when the proposal was recorded
+    seq: i64,
+    /// Optional reason for withdrawing the proposal
+    #[arg(long)]
+    comment: Option<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -73,7 +84,38 @@ pub(crate) struct ProposalAnswer {
 pub fn run(command: &ProposalCommands) -> Result<()> {
     match command {
         ProposalCommands::Add(_) => add(),
+        ProposalCommands::Withdraw(args) => withdraw(args),
     }
+}
+
+fn withdraw(args: &WithdrawArgs) -> Result<()> {
+    let session_id = EnvVars::load()
+        .own_session_id()
+        .ok_or(CcError::SelfSessionUnknown)?;
+    let sessions_dir = store::sessions_dir()?;
+    withdraw_proposal(
+        &sessions_dir,
+        &session_id,
+        args.seq,
+        args.comment.as_deref(),
+    )?;
+    println!("Withdrew proposal {}", args.seq);
+    Ok(())
+}
+
+fn withdraw_proposal(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    comment: Option<&str>,
+) -> Result<()> {
+    let comment = comment.map(str::trim).filter(|comment| !comment.is_empty());
+    let _proposal_lock = store::lock_agent_proposal_resolution_from(sessions_dir, session_id, seq)?;
+    ensure!(
+        store::resolve_agent_proposal_from(sessions_dir, session_id, seq, comment)?,
+        "proposal is already resolved or does not exist"
+    );
+    Ok(())
 }
 
 fn add() -> Result<()> {
@@ -128,11 +170,19 @@ fn validate_body(body: &ProposalBody) -> Result<()> {
 mod tests {
     use std::path::Path;
 
+    use clap::Parser;
     use rstest::{fixture, rstest};
     use serde_json::Value;
     use tempfile::TempDir;
 
-    use super::record_proposal;
+    use super::{ProposalCommands, record_proposal, withdraw_proposal};
+    use crate::commands::agent::store::{self, ProposalResolution};
+
+    #[derive(Parser)]
+    struct ProposalCli {
+        #[command(subcommand)]
+        command: ProposalCommands,
+    }
 
     #[fixture]
     fn sessions_dir() -> TempDir {
@@ -152,6 +202,100 @@ mod tests {
             .expect("proposals should query")
             .collect::<rusqlite::Result<Vec<_>>>()
             .expect("proposal bodies should load")
+    }
+
+    #[rstest]
+    fn withdraws_a_pending_proposal_with_a_trimmed_comment(sessions_dir: TempDir) {
+        let seq = store::add_agent_proposal_in(sessions_dir.path(), "session-a", "{}")
+            .expect("proposal should save");
+        withdraw_proposal(
+            sessions_dir.path(),
+            "session-a",
+            seq,
+            Some("  The decision changed.  "),
+        )
+        .expect("proposal should be withdrawn");
+
+        let actual = store::agent_proposals_from(sessions_dir.path(), "session-a")
+            .expect("proposal should load")
+            .into_iter()
+            .map(|proposal| (proposal.resolution, proposal.comment))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            vec![(
+                Some(ProposalResolution::Withdrawn),
+                Some("The decision changed.".to_string()),
+            )],
+        );
+    }
+
+    #[rstest]
+    fn rejects_withdrawing_another_sessions_proposal(sessions_dir: TempDir) {
+        let seq = store::add_agent_proposal_in(sessions_dir.path(), "session-b", "{}")
+            .expect("other session proposal should save");
+        let error = withdraw_proposal(sessions_dir.path(), "session-a", seq, None)
+            .expect_err("another session proposal should not be addressable");
+
+        assert_eq!(
+            error.to_string(),
+            "proposal is already resolved or does not exist"
+        );
+    }
+
+    #[rstest]
+    fn rejects_withdrawing_an_answered_or_withdrawn_proposal(sessions_dir: TempDir) {
+        let answered = store::add_agent_proposal_in(sessions_dir.path(), "session-a", "{}")
+            .expect("proposal should save");
+        store::write_agent_proposal_answer_from(sessions_dir.path(), "session-a", answered, "{}")
+            .expect("answer should save");
+        let withdrawn = store::add_agent_proposal_in(sessions_dir.path(), "session-a", "{}")
+            .expect("proposal should save");
+        withdraw_proposal(sessions_dir.path(), "session-a", withdrawn, None)
+            .expect("proposal should be withdrawn");
+
+        let results = [answered, withdrawn].map(|seq| {
+            withdraw_proposal(sessions_dir.path(), "session-a", seq, None)
+                .err()
+                .map(|error| error.to_string())
+        });
+        assert_eq!(
+            results,
+            [
+                Some("proposal is already resolved or does not exist".to_string()),
+                Some("proposal is already resolved or does not exist".to_string()),
+            ],
+        );
+    }
+
+    #[rstest]
+    fn rejects_answering_a_withdrawn_proposal(sessions_dir: TempDir) {
+        let seq = store::add_agent_proposal_in(sessions_dir.path(), "session-a", "{}")
+            .expect("proposal should save");
+        withdraw_proposal(sessions_dir.path(), "session-a", seq, None)
+            .expect("proposal should be withdrawn");
+
+        let answer_after_withdrawal =
+            store::write_agent_proposal_answer_from(sessions_dir.path(), "session-a", seq, "{}")
+                .expect("withdrawn proposal answer should be rejected");
+        assert!(!answer_after_withdrawal);
+    }
+
+    #[rstest]
+    fn parses_the_withdraw_command_and_optional_comment() {
+        let cli = ProposalCli::try_parse_from([
+            "proposal",
+            "withdraw",
+            "3",
+            "--comment",
+            "No longer needed.",
+        ])
+        .expect("withdraw arguments should parse");
+        let actual = match cli.command {
+            ProposalCommands::Withdraw(args) => (args.seq, args.comment),
+            ProposalCommands::Add(_) => (0, None),
+        };
+        assert_eq!(actual, (3, Some("No longer needed.".to_string())));
     }
 
     #[rstest]

@@ -1,13 +1,12 @@
-use std::fs::{self, File, OpenOptions};
+use std::fs::File;
 use std::path::Path;
 
+use super::resolution_lock::lock_resolution_file;
+use super::{increment_revision, open_connection, validate_session_id};
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use rusqlite::{TransactionBehavior, params, params_from_iter};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-
-use super::{increment_revision, open_connection, validate_session_id};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentTodo {
@@ -52,35 +51,8 @@ impl TodoResolution {
 }
 
 pub(crate) fn lock_agent_todo_resolution(sessions_dir: &Path, session_id: &str) -> Result<File> {
-    let lock_file = open_agent_todo_resolution_lock_file(sessions_dir, session_id)?;
-    lock_file
-        .lock()
-        .context("locking todo resolutions for session")?;
-    Ok(lock_file)
-}
-
-fn open_agent_todo_resolution_lock_file(sessions_dir: &Path, session_id: &str) -> Result<File> {
     validate_session_id(session_id)?;
-    let lock_dir = sessions_dir.join("todo-resolution-locks");
-    fs::create_dir_all(&lock_dir).with_context(|| {
-        format!(
-            "creating todo resolution lock directory {}",
-            lock_dir.display()
-        )
-    })?;
-    let session_hash = Sha256::digest(session_id.as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<Vec<_>>()
-        .join("");
-    // Stable lock files avoid a deletion race between waiting clients.
-    let lock_path = lock_dir.join(format!("{session_hash}.lock"));
-    OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&lock_path)
-        .with_context(|| format!("opening todo resolution lock {}", lock_path.display()))
+    lock_resolution_file(sessions_dir, "todo-resolution-locks", session_id)
 }
 
 pub(crate) fn add_agent_todo(
@@ -244,6 +216,27 @@ mod tests {
                 [session_id],
             )
             .expect("session row should be stored");
+    }
+
+    #[rstest]
+    fn todo_resolution_lock_keeps_its_existing_file_name(sessions_dir: TempDir) {
+        let _lock = lock_agent_todo_resolution(sessions_dir.path(), "session-a")
+            .expect("todo resolution lock should be acquired");
+        let lock_files = std::fs::read_dir(sessions_dir.path().join("todo-resolution-locks"))
+            .expect("todo resolution lock directory should exist")
+            .map(|entry| {
+                entry
+                    .expect("todo resolution lock should be readable")
+                    .file_name()
+                    .into_string()
+                    .expect("todo resolution lock name should be valid UTF-8")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            lock_files,
+            vec!["fa57a52dbf08190218529730a3e99db6946c6c29220fb6e0551e21598b0b05db.lock"],
+        );
     }
 
     #[rstest]
