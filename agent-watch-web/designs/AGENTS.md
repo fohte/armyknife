@@ -32,10 +32,11 @@ Implement the decision in a separate PR.
 
 ## Keep the design system in step with the app
 
-The design system is written by hand from `agent-watch-web/src`. When the app's CSS changes a token or a built component, update `design-system/`, then copy it into each canvas under `screens/` and `explore/`:
+The design system is written by hand from `agent-watch-web/src`. When the app's CSS changes a token or a built component, update `design-system/`, then copy it into `screens/` and each canvas under `explore/`:
 
 ```sh
-node .claude/skills/claude-design/scripts/artifact.mjs ds-sync agent-watch-web/designs/<canvas> agentwatch
+node .claude/skills/claude-design/scripts/artifact.mjs ds-sync agent-watch-web/designs/screens agentwatch
+node .claude/skills/claude-design/scripts/artifact.mjs ds-sync agent-watch-web/designs/explore/topbar agentwatch
 ```
 
 Canvases under `decisions/` keep the copy they were decided with.

@@ -7,7 +7,7 @@ Design files for agent-watch-web, edited with the [baoyu-design](https://github.
 | `design-system/`   | `claude-design-system` | Tokens, type, and static renditions of five components, written from the app's CSS |
 | `screens/`         | `claude-design`        | Canvas of the screens and parts the app should have                                |
 | `explore/<theme>/` | `claude-design`        | One canvas per design theme being decided                                          |
-| `decisions/`       | -                      | Decided themes, each with its record and its canvas as decided                     |
+| `decisions/`       | -                      | Decided themes with their record and canvas; created with the first decision       |
 
 ## Install the skills
 
