@@ -238,10 +238,28 @@ export function ConversationPaneView({
     pendingInteractionElements.at(-1)?.key ?? null
   useLayoutEffect(() => {
     const pendingActions = pendingActionsRef.current
-    if (pendingActions !== null) {
+    if (pendingActions === null) return
+    const answerableCards = pendingActions.querySelectorAll<HTMLElement>(
+      '[data-answerable="true"], [data-answerable-single-choice="true"]',
+    )
+    if (answerableCards.length === 0) {
       pendingActions.scrollTop =
         pendingActions.scrollHeight - pendingActions.clientHeight
+      return
     }
+    const latestAnswerableCard = answerableCards.item(
+      answerableCards.length - 1,
+    )
+    const answerControlGroups =
+      latestAnswerableCard.querySelectorAll<HTMLElement>(
+        '.chat-proposal-options, .chat-question-choices',
+      )
+    // The card can exceed the panel height; keep its keyboard choices visible.
+    const scrollTarget =
+      answerControlGroups.length === 0
+        ? latestAnswerableCard
+        : answerControlGroups.item(answerControlGroups.length - 1)
+    scrollTarget.scrollIntoView({ block: 'nearest' })
   }, [latestPendingInteractionKey])
   const handlePasteFiles = (files: File[]) => {
     onPasteFiles(files)

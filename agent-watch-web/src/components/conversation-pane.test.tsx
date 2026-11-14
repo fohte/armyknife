@@ -8236,13 +8236,17 @@ it.each([
   { formFactor: 'desktop', isMobile: false },
   { formFactor: 'mobile', isMobile: true },
 ])(
-  'scrolls the newest pending card into view when another card arrives on $formFactor',
+  'scrolls to the newest pending card when no keyboard-answerable card exists on $formFactor',
   ({ isMobile }) => {
     const existingMessages: ChatItem[] = [
       {
-        type: 'question',
-        requestId: 'request-existing-choice',
-        questions: [questionPrompt],
+        type: 'todo',
+        seq: 50,
+        title: 'Check the first alert channel',
+        detail: null,
+        completed: false,
+        resolution: null,
+        comment: null,
       },
     ]
     renderConversationMessages(existingMessages, 0, isMobile)
@@ -8281,6 +8285,80 @@ it.each([
       ),
     ]
     expect(snapshot()).toEqual([240, 'chat-todo-card', true])
+  },
+)
+
+it.each([
+  { formFactor: 'desktop', isMobile: false },
+  { formFactor: 'mobile', isMobile: true },
+])(
+  'keeps the latest keyboard-answerable proposal choices visible before a todo on $formFactor',
+  ({ isMobile }) => {
+    const proposalMessage: ChatItem = {
+      ...proposal,
+      seq: 52,
+      title: 'Choose the alert rollout schedule',
+    }
+    renderConversationMessages([proposalMessage], 0, isMobile)
+
+    const pendingActions = requireElement(
+      container.querySelector<HTMLElement>('.conversation-pending-actions'),
+    )
+    pendingActions.style.maxHeight = '180px'
+    pendingActions.scrollTop =
+      pendingActions.scrollHeight - pendingActions.clientHeight
+    const proposalCard = requireElement(
+      pendingActions.querySelector<HTMLElement>('.chat-proposal-card'),
+    )
+    const proposalOptions = requireElement(
+      proposalCard.querySelector<HTMLElement>('.chat-proposal-options'),
+    )
+    const nativeScrollIntoView =
+      proposalOptions.scrollIntoView.bind(proposalOptions)
+    const scrollIntoView = vi
+      .spyOn(proposalOptions, 'scrollIntoView')
+      .mockImplementation((options) => {
+        nativeScrollIntoView(options)
+      })
+    const isProposalOptionsVisible = () => {
+      const optionsBounds = proposalOptions.getBoundingClientRect()
+      const pendingActionsBounds = pendingActions.getBoundingClientRect()
+      return (
+        optionsBounds.top >= pendingActionsBounds.top - 1 &&
+        optionsBounds.bottom <= pendingActionsBounds.bottom + 1
+      )
+    }
+    const proposalOptionsWereVisible = isProposalOptionsVisible()
+
+    renderConversationMessages(
+      [
+        proposalMessage,
+        {
+          type: 'todo',
+          seq: 53,
+          title: 'Confirm the alert rollout schedule',
+          detail: null,
+          completed: false,
+          resolution: null,
+          comment: null,
+        },
+      ],
+      0,
+      isMobile,
+    )
+
+    const snapshot = () => ({
+      proposalOptionsWereVisible,
+      scrollCalls: scrollIntoView.mock.calls,
+      proposalOptionsAreVisible: isProposalOptionsVisible(),
+      latestCard: pendingActions.lastElementChild?.className,
+    })
+    expect(snapshot()).toEqual({
+      proposalOptionsWereVisible: false,
+      scrollCalls: [[{ block: 'nearest' }]],
+      proposalOptionsAreVisible: true,
+      latestCard: 'chat-todo-card',
+    })
   },
 )
 
