@@ -29,7 +29,7 @@ export function PermissionDeniedCard({
       <h2>{message.resolved ? 'Retry approved' : 'Operation denied'}</h2>
       <p className="permission-tool">{message.tool}</p>
       {message.command === undefined ? (
-        <pre className="syntax-code-block permission-command permission-denied-input">
+        <pre className="syntax-code-block permission-command permission-denied-input permission-denied-summary">
           {message.inputSummary}
         </pre>
       ) : (

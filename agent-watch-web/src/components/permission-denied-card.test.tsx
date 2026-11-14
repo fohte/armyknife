@@ -1,3 +1,5 @@
+import '#index.css'
+
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -59,23 +61,52 @@ afterEach(() => {
 it('renders the denied operation and offers a one-time retry', () => {
   renderCard()
 
-  const snapshot = () => ({
-    cardClassName: container.querySelector('article')?.className,
-    heading: container.querySelector('h2')?.textContent,
-    tool: container.querySelector('.permission-tool')?.textContent,
-    input: container.querySelector('.permission-denied-input')?.textContent,
-    reason: container.querySelector('.permission-denied-reason')?.textContent,
-    button: Array.from(container.querySelectorAll('button'), (button) => ({
-      text: button.textContent,
-      disabled: button.disabled,
-    })),
-  })
+  const snapshot = () => {
+    const card = container.querySelector<HTMLElement>('article')
+    const heading = container.querySelector<HTMLElement>('h2')
+    const input = container.querySelector<HTMLElement>(
+      '.permission-denied-input',
+    )
+    const cardStyle = card === null ? null : getComputedStyle(card)
+    const headingStyle = heading === null ? null : getComputedStyle(heading)
+    const inputStyle = input === null ? null : getComputedStyle(input)
+    return {
+      cardClassName: card?.className,
+      cardBorderColor: cardStyle?.borderTopColor ?? null,
+      cardBorderRadius: cardStyle?.borderTopLeftRadius ?? null,
+      heading: heading?.textContent,
+      headingColor: headingStyle?.color ?? null,
+      tool: container.querySelector('.permission-tool')?.textContent,
+      input: input?.textContent,
+      inputStyles:
+        inputStyle === null
+          ? null
+          : {
+              backgroundColor: inputStyle.backgroundColor,
+              whiteSpace: inputStyle.whiteSpace,
+              overflowWrap: inputStyle.overflowWrap,
+            },
+      reason: container.querySelector('.permission-denied-reason')?.textContent,
+      button: Array.from(container.querySelectorAll('button'), (button) => ({
+        text: button.textContent,
+        disabled: button.disabled,
+      })),
+    }
+  }
 
   expect(snapshot()).toEqual({
     cardClassName: 'chat-permission-card chat-permission-denied-card',
+    cardBorderColor: 'rgb(251, 191, 36)',
+    cardBorderRadius: '0px',
     heading: 'Operation denied',
+    headingColor: 'rgb(251, 191, 36)',
     tool: 'Bash',
     input: 'A shell operation was denied.',
+    inputStyles: {
+      backgroundColor: 'rgb(19, 19, 19)',
+      whiteSpace: 'pre-wrap',
+      overflowWrap: 'anywhere',
+    },
     reason: '[Sensitive Operation]',
     button: [{ text: 'Allow and retry', disabled: false }],
   })

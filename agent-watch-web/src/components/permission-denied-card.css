@@ -4,3 +4,8 @@
 .permission-denied-sent {
   color: var(--aw-text-muted);
 }
+
+.chat-permission-denied-card .permission-denied-summary {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
