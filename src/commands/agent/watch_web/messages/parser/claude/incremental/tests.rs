@@ -424,6 +424,7 @@ fn inactive_peer_delivery_does_not_resolve_queued_prompt(
                         content: vec![super::super::super::super::UserContentPart::Text {
                             text: "Delivered request.".to_owned(),
                         }],
+                        queued_prompt_id: Some("fixture-message-cyan".to_owned()),
                         from: None,
                         timestamp: Some("2026-01-01T00:00:00+00:00".to_owned()),
                     },

@@ -328,7 +328,9 @@ function isServerMessageForOperation(
 ) {
   if (operation.queuedPromptId !== undefined) {
     return (
-      (message.type === 'user' || message.type === 'user_with_content') &&
+      (message.type === 'user' ||
+        message.type === 'queued_user' ||
+        message.type === 'user_with_content') &&
       message.queuedPromptId === operation.queuedPromptId
     )
   }

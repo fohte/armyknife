@@ -8,9 +8,10 @@ import {
 } from '#session-operation-context'
 import {
   applySessionOperation,
+  isConversationOperationConfirmed,
   type SessionOperation,
 } from '#session-operations'
-import type { Session } from '#types'
+import type { ConversationResponse, Session } from '#types'
 
 const session: Session = {
   id: 'optimistic-session',
@@ -44,6 +45,9 @@ let confirmServerState: (() => void) | null = null
 let operationRequest: Promise<void> | null = null
 let resolveMessagePosts: ((response: Response) => void)[] = []
 let messageRequests: Promise<unknown>[] = []
+let resolveMessageRefresh: (() => void) | null = null
+let refreshedMessageOperationId: string | null = null
+let refreshedMessageOperationConfirmed: boolean | null = null
 
 function OperationHarness() {
   const [sessions, setSessions] = useState([session])
@@ -102,16 +106,73 @@ function OperationHarness() {
 }
 
 function MessageOperationHarness() {
-  const { pendingOperations, run } = useSessionOperations()
+  const { pendingOperations, run, confirm } = useSessionOperations()
   const send = (messageCountBefore: number) => {
     messageRequests.push(
-      run({
-        type: 'message',
-        sessionId: session.id,
-        operationId: messageCountBefore === 0 ? 'first' : 'second',
-        content: 'Repeated message',
-        messageCountBefore,
-      }),
+      run(
+        {
+          type: 'message',
+          sessionId: session.id,
+          operationId: messageCountBefore === 0 ? 'first' : 'second',
+          content: 'Repeated message',
+          messageCountBefore,
+        },
+        {
+          refresh: (_result, refreshedOperation) =>
+            new Promise<void>((resolve) => {
+              if (refreshedOperation.type === 'message') {
+                refreshedMessageOperationId =
+                  refreshedOperation.queuedPromptId ?? null
+                const refreshedConversation: ConversationResponse = {
+                  messages: [
+                    {
+                      type: 'user',
+                      text: refreshedOperation.content,
+                      ...(refreshedOperation.queuedPromptId === undefined
+                        ? {}
+                        : {
+                            queuedPromptId: refreshedOperation.queuedPromptId,
+                          }),
+                    },
+                    {
+                      type: 'todo',
+                      seq: 1,
+                      title: 'Trailing todo',
+                      detail: null,
+                      completed: false,
+                      resolution: null,
+                      comment: null,
+                    },
+                    {
+                      type: 'permission',
+                      requestId: 'fixture-permission-request',
+                      tool: 'Shell',
+                      description: 'Run the fixture command.',
+                    },
+                  ],
+                  backgroundTasks: [],
+                  start: 0,
+                  total: 3,
+                  decisions: [],
+                  hasUnansweredProposal: false,
+                  activeQuestionIndex: null,
+                }
+                refreshedMessageOperationConfirmed =
+                  isConversationOperationConfirmed(
+                    refreshedConversation,
+                    refreshedOperation,
+                    null,
+                  )
+              }
+              resolveMessageRefresh = () => {
+                if (refreshedMessageOperationConfirmed === true) {
+                  confirm(refreshedOperation)
+                }
+                resolve()
+              }
+            }),
+        },
+      ),
     )
   }
   const pendingMessages = pendingOperations.filter(
@@ -224,6 +285,9 @@ beforeEach(() => {
   operationRequest = null
   resolveMessagePosts = []
   messageRequests = []
+  resolveMessageRefresh = null
+  refreshedMessageOperationId = null
+  refreshedMessageOperationConfirmed = null
 })
 
 afterEach(() => {
@@ -471,10 +535,32 @@ it('renumbers later sends when an earlier message POST fails', async () => {
     )?.textContent,
   }
 
+  const finishRefresh = resolveMessageRefresh
+  if (finishRefresh === null)
+    throw new Error('Expected the message conversation refresh')
+  await act(async () => {
+    finishRefresh()
+    await Promise.resolve()
+  })
+  const afterRefresh = {
+    messageCounts: container.querySelector('[data-testid="message-counts"]')
+      ?.textContent,
+    messageStatuses: container.querySelector('[data-testid="message-statuses"]')
+      ?.textContent,
+    queuedPromptIds: container.querySelector(
+      '[data-testid="queued-prompt-ids"]',
+    )?.textContent,
+  }
+
   const failureSnapshots = () => ({
     beforeFailure,
     afterFailure,
     afterSecondPost,
+    afterRefresh,
+    refreshConfirmation: {
+      queuedPromptId: refreshedMessageOperationId,
+      isConfirmed: refreshedMessageOperationConfirmed,
+    },
   })
   expect(failureSnapshots()).toEqual({
     beforeFailure: {
@@ -486,6 +572,15 @@ it('renumbers later sends when an earlier message POST fails', async () => {
       messageCounts: '0',
       messageStatuses: 'sent',
       queuedPromptIds: 'fixture-message-id',
+    },
+    afterRefresh: {
+      messageCounts: '',
+      messageStatuses: '',
+      queuedPromptIds: '',
+    },
+    refreshConfirmation: {
+      queuedPromptId: 'fixture-message-id',
+      isConfirmed: true,
     },
   })
 })

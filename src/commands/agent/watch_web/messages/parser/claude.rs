@@ -1257,6 +1257,7 @@ mod tests {
                 content: vec![UserContentPart::Text {
                     text: content.to_owned(),
                 },],
+                queued_prompt_id: None,
                 timestamp: None,
                 from: None,
             }],

@@ -116,6 +116,7 @@ export type ChatItem =
   | {
       type: 'queued_user'
       content: UserContentPart[]
+      queuedPromptId?: string
       from?: string
       timestamp?: string
     }

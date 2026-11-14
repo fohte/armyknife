@@ -160,6 +160,7 @@ pub(super) fn append_unresolved_prompts(
             .filter(|prompt| !prompt.resolved && !resolved_prompt_ids.contains(&prompt.id))
             .map(|prompt| ChatItem::QueuedUser {
                 content: user_content(prompt),
+                queued_prompt_id: prompt.message_id.clone(),
                 from: None,
                 timestamp: Some(prompt.sent_at.to_rfc3339()),
             }),
