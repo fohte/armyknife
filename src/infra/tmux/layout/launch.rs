@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use super::AgentLaunchRoute;
+use super::InitialPromptMarker;
 use super::claude::{Launch as ClaudeLaunch, RecoverySpec as ClaudeRecoverySpec};
 use super::codex::{Launch as CodexLaunch, RecoverySpec as CodexRecoverySpec};
 use crate::commands::agent::types::{Engine, ReasoningEffort};
@@ -19,6 +20,7 @@ pub(super) struct RecoverySpec<'a> {
     pub effort: Option<ReasoningEffort>,
     pub prompt_file: Option<&'a Path>,
     pub pane_id: Option<&'a str>,
+    pub initial_prompt_marker: Option<InitialPromptMarker<'a>>,
 }
 
 impl Launch {
@@ -65,12 +67,14 @@ impl Launch {
             LaunchState::Claude(launch) => launch.finish_and_recover(ClaudeRecoverySpec {
                 prompt_file: spec.prompt_file,
                 pane_id: spec.pane_id,
+                initial_prompt_marker: spec.initial_prompt_marker,
             }),
             LaunchState::Codex(launch) => launch.finish_and_recover(CodexRecoverySpec {
                 cwd: spec.cwd,
                 effort: spec.effort,
                 prompt_file: spec.prompt_file,
                 pane_id: spec.pane_id,
+                initial_prompt_marker: spec.initial_prompt_marker,
             }),
         }
     }

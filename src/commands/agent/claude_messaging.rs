@@ -31,6 +31,15 @@ use serde::{Deserialize, Serialize};
 /// armyknife has no listening socket of its own to receive a delivery
 /// receipt on.
 pub fn send_message(socket_path: &str, pid: u32, content: &str) -> Result<()> {
+    send_message_with_before_send(socket_path, pid, content, || Ok(()))
+}
+
+pub(crate) fn send_message_with_before_send(
+    socket_path: &str,
+    pid: u32,
+    content: &str,
+    before_send: impl FnOnce() -> Result<()>,
+) -> Result<()> {
     let mut stream = UnixStream::connect(socket_path)
         .with_context(|| format!("failed to connect to messaging socket {socket_path}"))?;
 
@@ -40,6 +49,7 @@ pub fn send_message(socket_path: &str, pid: u32, content: &str) -> Result<()> {
     }
 
     let user_line = build_user_line(content)?;
+    before_send()?;
     writeln!(stream, "{user_line}").context("failed to write user frame")?;
 
     stream.flush().context("failed to flush messaging socket")?;
@@ -175,6 +185,20 @@ mod tests {
             build_user_line("hello there").unwrap(),
             r#"{"type":"user","message":{"role":"user","content":"hello there"}}"#
         );
+    }
+
+    #[test]
+    fn initial_prompt_marker_is_not_written_when_the_messaging_socket_cannot_be_opened() {
+        let dir = TempDir::new().unwrap();
+        let socket_path = dir.path().join("missing.sock").display().to_string();
+        let before_send_called = std::cell::Cell::new(false);
+
+        let result = send_message_with_before_send(&socket_path, 123, "Example prompt", || {
+            before_send_called.set(true);
+            Ok(())
+        });
+
+        assert_eq!((result.is_err(), before_send_called.get()), (true, false));
     }
 
     #[rstest]

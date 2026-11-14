@@ -20,6 +20,7 @@ use crate::commands::agent::claude_messaging;
 use crate::commands::agent::claude_registry;
 use crate::commands::agent::codex_steer;
 use crate::commands::agent::error::CcError;
+use crate::commands::agent::peer_message::{PEER_MESSAGE_END_TAG, PEER_MESSAGE_START_TAG};
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, Session, SessionStatus};
 use crate::infra::notification::{self, Notification};
@@ -561,11 +562,11 @@ fn build_content(message: &str, from: Option<&str>, from_engine: Option<Engine>)
                 .map(|e| format!("\n- Sender engine: {}", e.process_name()))
                 .unwrap_or_default();
             indoc::formatdoc! {"
-                <peer-message>
+                {PEER_MESSAGE_START_TAG}
                 - From session_id: {from}{engine_line}
 
                 {message}
-                </peer-message>"}
+                {PEER_MESSAGE_END_TAG}"}
         }
     }
 }
@@ -638,6 +639,7 @@ mod tests {
             status,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            last_prompted_at: None,
             last_message: None,
             current_tool: None,
             current_tool_name: None,
@@ -702,6 +704,7 @@ mod tests {
             status: SessionStatus::Running,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            last_prompted_at: None,
             last_message: None,
             current_tool: None,
             current_tool_name: None,

@@ -28,6 +28,7 @@ type AgentWatchNavProps = {
   onSelectSavedView: (id: string) => void
   onDeleteSavedView: (id: string) => void
   todaySessions: readonly Session[]
+  sessions?: readonly Session[]
   onSelectToday: (id: string) => void
   onSelectSession: (id: string) => void
   onOpenPalette: () => void
@@ -47,6 +48,7 @@ export function AgentWatchNav({
   onSelectSavedView,
   onDeleteSavedView,
   todaySessions,
+  sessions = [],
   onSelectToday,
   onSelectSession,
   onOpenPalette,
@@ -54,6 +56,17 @@ export function AgentWatchNav({
   inboxCollapsed = false,
   onToggleInbox = () => undefined,
 }: AgentWatchNavProps) {
+  const recentSessions = isMobile
+    ? []
+    : sessions
+        .filter((session) => session.lastPromptedAt != null)
+        .toSorted(
+          (left, right) =>
+            Date.parse(right.lastPromptedAt ?? '') -
+            Date.parse(left.lastPromptedAt ?? ''),
+        )
+        .slice(0, 10)
+
   return (
     <nav className="agent-watch-nav" aria-label="Main navigation">
       <div className="brand-row">
@@ -220,6 +233,29 @@ export function AgentWatchNav({
           )
         })}
       </section>
+      {recentSessions.length > 0 ? (
+        <section className="recent-nav" aria-labelledby="recent-nav-title">
+          <h2 id="recent-nav-title">Recent</h2>
+          <ul>
+            {recentSessions.map((session) => (
+              <li key={session.id}>
+                <Button
+                  type="button"
+                  variant="plain"
+                  className="recent-nav-link cursor-pointer"
+                  aria-label={`Open ${session.title} recent session`}
+                  onClick={() => {
+                    onSelectSession(session.id)
+                  }}
+                >
+                  <span className="recent-session-title">{session.title}</span>
+                  <span className="recent-session-repo">{session.repo}</span>
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       {workTypeNavGroups.map((group, index) => (
         <section
           key={group.label}

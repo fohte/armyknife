@@ -56,6 +56,13 @@ pub struct SplitResult {
 /// `--worktree` uses it to keep a handoff session visually attached to the
 /// pane it continues, instead of opening in a separate window.
 pub fn split_pane(spec: SplitSpec) -> anyhow::Result<SplitResult> {
+    split_pane_with_initial_prompt_marker(spec, None)
+}
+
+pub(crate) fn split_pane_with_initial_prompt_marker<'a>(
+    spec: SplitSpec<'a>,
+    initial_prompt_marker: Option<super::InitialPromptMarker<'a>>,
+) -> anyhow::Result<SplitResult> {
     let SplitSpec {
         common:
             TmuxSessionSpec {
@@ -126,6 +133,7 @@ pub fn split_pane(spec: SplitSpec) -> anyhow::Result<SplitResult> {
         effort: reasoning_effort,
         prompt_file: prompt_file.as_deref(),
         pane_id: Some(&new_pane_id),
+        initial_prompt_marker,
     })?;
 
     Ok(SplitResult {

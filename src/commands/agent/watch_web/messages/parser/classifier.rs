@@ -1,5 +1,9 @@
 use serde_json::Value;
 
+use crate::commands::agent::peer_message::{
+    ANOTHER_PEER_SESSION_MESSAGE_PREFIX, PEER_MESSAGE_END_MARKER, PEER_MESSAGE_START_TAG,
+};
+
 mod system_record;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,7 +193,7 @@ fn origin(record: &Value) -> Option<&Value> {
 
 fn peer_transport_body(text: &str) -> &str {
     let body = text
-        .strip_prefix("Another peer session sent a message:\n")
+        .strip_prefix(ANOTHER_PEER_SESSION_MESSAGE_PREFIX)
         .unwrap_or(text);
     without_peer_transport_notice(body)
 }
@@ -409,9 +413,8 @@ fn without_peer_transport_notice(body: &str) -> &str {
 }
 
 fn peer_message_parts(message: &str) -> Option<(&str, &str)> {
-    const END: &str = "\n</peer-message>";
-    let envelope = message.split_once("<peer-message>")?.1;
-    let end = envelope.rfind(END)?;
+    let envelope = message.split_once(PEER_MESSAGE_START_TAG)?.1;
+    let end = envelope.rfind(PEER_MESSAGE_END_MARKER)?;
     let envelope = envelope[..end].strip_prefix('\n')?;
     let (header, body) = envelope.split_once(concat!("\n", "\n"))?;
     let mut header_lines = header.lines();

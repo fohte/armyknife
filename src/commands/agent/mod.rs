@@ -32,6 +32,7 @@ pub(crate) mod new;
 pub(crate) mod pane;
 mod pane_options;
 pub(crate) mod peer;
+mod peer_message;
 mod profile;
 mod proposal;
 mod resume;

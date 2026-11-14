@@ -305,6 +305,7 @@ fn new_session_record(
         status,
         created_at: now,
         updated_at: now,
+        last_prompted_at: None,
         last_message: None,
         current_tool: None,
         current_tool_name: None,
@@ -675,6 +676,13 @@ fn process_hook_event_impl_with_settings(
         )
     });
     session.restore_from_archive();
+    if event == HookEvent::UserPromptSubmit
+        && input.agent_id.is_none()
+        && !super::peer_message::is_peer_message(input.prompt.as_deref())
+        && !session_lock.consume_pending_initial_prompt()?
+    {
+        session.last_prompted_at = Some(now);
+    }
     if let Some(startup_metadata) = &startup_metadata {
         if session.model.is_none() {
             session.model.clone_from(&startup_metadata.model);
@@ -2856,6 +2864,7 @@ mod tests {
             status: SessionStatus::Paused,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            last_prompted_at: None,
             last_message: None,
             current_tool: None,
             current_tool_name: None,
@@ -3348,6 +3357,7 @@ mod tests {
             status: initial_status,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            last_prompted_at: None,
             last_message: None,
             current_tool: None,
             current_tool_name: None,
@@ -4037,6 +4047,7 @@ mod tests {
             status: SessionStatus::Running,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            last_prompted_at: None,
             last_message: None,
             current_tool: None,
             current_tool_name: None,
@@ -5502,6 +5513,122 @@ mod tests {
                 ProcessResult::SessionSaved,
                 "user-prompt-submit should create the session"
             );
+            let session = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("session should load")
+                .expect("session should exist");
+            assert_eq!(session.last_prompted_at, Some(session.updated_at));
+        }
+
+        #[rstest]
+        #[case::claude(Engine::Claude)]
+        #[case::codex(Engine::Codex)]
+        fn agent_new_initial_prompt_is_skipped_but_the_next_human_prompt_is_recorded(
+            #[case] engine: Engine,
+        ) {
+            let temp_dir = create_temp_sessions_dir();
+            store::mark_pending_initial_prompt_from(temp_dir.path(), "test-123")
+                .expect("initial prompt marker should be saved");
+
+            let mut initial_prompt = create_test_input(None);
+            initial_prompt.engine = engine;
+            initial_prompt.prompt = Some("Example launch prompt".to_string());
+            let initial_result = process_hook_event_impl(
+                HookEvent::UserPromptSubmit,
+                initial_prompt,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("initial prompt should succeed");
+            let initial_session = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("session should load")
+                .expect("session should exist");
+            let initial_snapshot = (
+                initial_result,
+                initial_session.last_prompted_at.map(|_| "<timestamp>"),
+            );
+
+            let mut human_prompt = create_test_input(None);
+            human_prompt.engine = engine;
+            human_prompt.prompt = Some("Example follow-up prompt".to_string());
+            let human_result = process_hook_event_impl(
+                HookEvent::UserPromptSubmit,
+                human_prompt,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("follow-up prompt should succeed");
+            let human_session = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("session should load")
+                .expect("session should exist");
+            let human_snapshot = (
+                human_result,
+                human_session.last_prompted_at == Some(human_session.updated_at),
+            );
+
+            assert_eq!(
+                (initial_snapshot, human_snapshot),
+                (
+                    (ProcessResult::SessionSaved, None),
+                    (ProcessResult::SessionSaved, true),
+                ),
+            );
+        }
+
+        #[rstest]
+        #[case::peer(
+            None,
+            indoc::indoc! {"
+                Another Claude session sent a message:
+                Continue the review.
+            "}
+        )]
+        #[case::armyknife_peer(
+            None,
+            indoc::indoc! {"
+                <peer-message>
+                - From session_id: fixture-peer-id
+
+                Continue the review.
+                </peer-message>
+            "}
+        )]
+        #[case::subagent(Some("subagent-id"), "Continue the review.")]
+        fn non_human_prompt_does_not_update_the_human_prompt_timestamp(
+            #[case] agent_id: Option<&str>,
+            #[case] prompt: &str,
+        ) {
+            let temp_dir = create_temp_sessions_dir();
+            let initial_result = process_hook_event_impl(
+                HookEvent::UserPromptSubmit,
+                create_test_input(None),
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("initial user prompt should succeed");
+            assert_eq!(initial_result, ProcessResult::SessionSaved);
+
+            let previous_prompt_at = Utc::now() - chrono::Duration::hours(1);
+            let mut session = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("session should load")
+                .expect("session should exist");
+            session.last_prompted_at = Some(previous_prompt_at);
+            store::save_session_to(temp_dir.path(), &session).expect("session should save");
+
+            let mut input = create_test_input(None);
+            input.agent_id = agent_id.map(str::to_owned);
+            input.prompt = Some(prompt.to_string());
+            process_hook_event_impl(
+                HookEvent::UserPromptSubmit,
+                input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("peer prompt should succeed");
+
+            let session = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("session should load")
+                .expect("session should exist");
+            assert_eq!(session.last_prompted_at, Some(previous_prompt_at));
         }
 
         #[rstest]
@@ -5569,6 +5696,7 @@ mod tests {
                         serde_json::to_value(session).expect("session should serialize");
                     actual["created_at"] = serde_json::json!("<timestamp>");
                     actual["updated_at"] = serde_json::json!("<timestamp>");
+                    actual["last_prompted_at"] = serde_json::json!("<timestamp>");
                     actual
                 },
             );
@@ -5590,6 +5718,7 @@ mod tests {
                     "status": "running",
                     "created_at": "<timestamp>",
                     "updated_at": "<timestamp>",
+                    "last_prompted_at": "<timestamp>",
                     "last_message": null,
                     "current_tool": null,
                     "label": null,
@@ -6068,6 +6197,7 @@ mod tests {
             let mut actual = serde_json::to_value(session).expect("session should serialize");
             actual["created_at"] = serde_json::json!("<timestamp>");
             actual["updated_at"] = serde_json::json!("<timestamp>");
+            actual["last_prompted_at"] = serde_json::json!("<timestamp>");
             let mut expected = serde_json::json!({
                 "session_id": "test-123",
                 "work_type": expected_work_type,
@@ -6078,6 +6208,7 @@ mod tests {
                 "status": "running",
                 "created_at": "<timestamp>",
                 "updated_at": "<timestamp>",
+                "last_prompted_at": "<timestamp>",
                 "last_message": null,
                 "current_tool": null,
                 "label": null,
@@ -6272,6 +6403,7 @@ mod tests {
                 status: SessionStatus::Paused,
                 created_at: now,
                 updated_at: now,
+                last_prompted_at: None,
                 last_message: None,
                 current_tool: None,
                 current_tool_name: None,

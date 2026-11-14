@@ -125,6 +125,41 @@ export const TodaySessionStatusesUseTheirCategoryColors: Story = {
   },
 }
 
+export const RecentSessionsAppearNewestFirst: Story = {
+  name: 'Recent sessions appear in order of the latest human prompt',
+  args: {
+    sessions: [
+      {
+        ...todaySession,
+        id: 'recent-session-one',
+        title: 'Review the retry policy',
+        repo: 'example/service',
+        lastPromptedAt: '2026-01-01T10:00:00.000Z',
+      },
+      {
+        ...todaySession,
+        id: 'recent-session-two',
+        title: 'Update the delivery monitor',
+        repo: 'example/observability',
+        lastPromptedAt: '2026-01-01T11:00:00.000Z',
+      },
+    ],
+  },
+}
+
+export const RecentSessionsAreHiddenOnMobile: Story = {
+  name: 'Mobile navigation does not show the Recent section',
+  args: {
+    isMobile: true,
+    sessions: [
+      {
+        ...todaySession,
+        lastPromptedAt: '2026-01-01T11:00:00.000Z',
+      },
+    ],
+  },
+}
+
 export const InboxIsCollapsed: Story = {
   name: 'The Inbox toggle is highlighted while the Inbox is collapsed',
   args: { inboxCollapsed: true },

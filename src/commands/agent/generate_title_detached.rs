@@ -142,6 +142,7 @@ mod tests {
             status: SessionStatus::Running,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
+            last_prompted_at: None,
             last_message: None,
             current_tool: None,
             current_tool_name: None,

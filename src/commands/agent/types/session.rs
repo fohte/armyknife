@@ -102,6 +102,9 @@ pub struct Session {
     pub agent_status_clear_pending: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// When a human last submitted a prompt to this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_prompted_at: Option<DateTime<Utc>>,
     pub last_message: Option<String>,
     /// Display text for the currently executing tool.
     #[serde(default)]
@@ -264,6 +267,7 @@ mod tests {
                 (
                     session.archived_at,
                     session.read_at,
+                    session.last_prompted_at,
                     session.work_type,
                     session.vibe_enabled,
                     session.launched_with_vibe,
@@ -283,6 +287,7 @@ mod tests {
             ),
             (
                 (
+                    None,
                     None,
                     None,
                     None,

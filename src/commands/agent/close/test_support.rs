@@ -37,6 +37,7 @@ pub(super) fn session() -> Session {
         status: SessionStatus::Stopped,
         created_at: Utc::now(),
         updated_at: Utc::now(),
+        last_prompted_at: None,
         last_message: None,
         current_tool: None,
         current_tool_name: None,

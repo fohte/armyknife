@@ -180,6 +180,7 @@ mod tests {
             status: SessionStatus::Running,
             created_at: now - TimeDelta::seconds(offset),
             updated_at: now - TimeDelta::seconds(offset),
+            last_prompted_at: None,
             last_message: None,
             current_tool: None,
             current_tool_name: None,

@@ -22,6 +22,7 @@ use prompt::{
     retarget_agent_command, scope_session_launch_env,
 };
 pub use route::AgentLaunchRoute;
+pub(crate) use split::split_pane_with_initial_prompt_marker;
 #[cfg(test)]
 use split::{SplitPaneSetupSpec, build_split_pane_setup_commands};
 pub use split::{SplitResult, SplitSpec, split_pane};
@@ -417,6 +418,12 @@ pub struct TmuxSessionSpec<'a> {
     pub background: bool,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct InitialPromptMarker<'a> {
+    pub(crate) mark_pending: &'a dyn Fn(&str) -> anyhow::Result<()>,
+    pub(crate) clear_pending: &'a dyn Fn(&str) -> anyhow::Result<()>,
+}
+
 /// Inputs for `build_layout`, grouped to keep its argument count in check.
 pub struct LayoutSpec<'a> {
     pub common: TmuxSessionSpec<'a>,
@@ -430,6 +437,13 @@ pub struct LayoutSpec<'a> {
 ///
 /// Creates a new tmux window and returns the route used for the initial prompt.
 pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<AgentLaunchRoute> {
+    build_layout_with_initial_prompt_marker(spec, None)
+}
+
+pub(crate) fn build_layout_with_initial_prompt_marker<'a>(
+    spec: LayoutSpec<'a>,
+    initial_prompt_marker: Option<InitialPromptMarker<'a>>,
+) -> anyhow::Result<AgentLaunchRoute> {
     let LayoutSpec {
         common,
         window_name,
@@ -515,6 +529,7 @@ pub fn build_layout(spec: LayoutSpec) -> anyhow::Result<AgentLaunchRoute> {
         effort: reasoning_effort,
         prompt_file: prompt_path,
         pane_id: agent_pane_id.as_deref(),
+        initial_prompt_marker,
     })
 }
 

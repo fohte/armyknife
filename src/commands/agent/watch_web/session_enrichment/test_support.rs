@@ -71,6 +71,7 @@ pub(super) fn session(session_id: &str, pr_context: Option<SessionPrContext>) ->
         agent_status_clear_pending: false,
         created_at: timestamp,
         updated_at: timestamp,
+        last_prompted_at: None,
         last_message: None,
         current_tool: None,
         current_tool_name: None,

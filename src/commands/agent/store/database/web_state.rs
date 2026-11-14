@@ -489,6 +489,7 @@ pub(super) mod test_support {
             agent_status_clear_pending: false,
             created_at: Utc.timestamp_opt(1_000, 0).unwrap(),
             updated_at: Utc.timestamp_opt(1_000, 0).unwrap(),
+            last_prompted_at: None,
             last_message: None,
             current_tool: None,
             current_tool_name: None,

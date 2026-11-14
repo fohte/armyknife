@@ -112,6 +112,7 @@ fn load_name_map_in(home: &Path) -> HashMap<String, String> {
 /// that as "cannot notify", not silently skip it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerConnection {
+    pub session_id: String,
     pub pid: u32,
     pub messaging_socket_path: Option<String>,
 }
@@ -137,6 +138,7 @@ fn load_peer_connection_by_tmux_in(home: &Path, tmux: &str) -> Option<PeerConnec
         .filter(|entry| entry.tmux.as_deref() == Some(tmux))
         .max_by_key(|entry| entry.started_at)
         .map(|entry| PeerConnection {
+            session_id: entry.session_id,
             pid: entry.pid,
             messaging_socket_path: entry.messaging_socket_path,
         })
@@ -178,6 +180,7 @@ fn load_peer_connection_in(home: &Path, session_id: &str) -> Option<PeerConnecti
     load_registry_entries_in(home)
         .remove(session_id)
         .map(|entry| PeerConnection {
+            session_id: entry.session_id,
             pid: entry.pid,
             messaging_socket_path: entry.messaging_socket_path,
         })
@@ -276,6 +279,7 @@ mod tests {
         ],
         "aaa",
         Some(PeerConnection {
+            session_id: "aaa".to_string(),
             pid: 111,
             messaging_socket_path: Some("/tmp/cc-socks/111.sock".to_string()),
         })
@@ -284,6 +288,7 @@ mod tests {
         &[("111.json", r#"{"pid":111,"sessionId":"aaa"}"#)],
         "aaa",
         Some(PeerConnection {
+            session_id: "aaa".to_string(),
             pid: 111,
             messaging_socket_path: None,
         })
@@ -306,6 +311,7 @@ mod tests {
         ],
         "aaa",
         Some(PeerConnection {
+            session_id: "aaa".to_string(),
             pid: 222,
             messaging_socket_path: Some("/tmp/cc-socks/222.sock".to_string()),
         })
@@ -317,6 +323,7 @@ mod tests {
         )],
         "aaa",
         Some(PeerConnection {
+            session_id: "aaa".to_string(),
             pid: 111,
             messaging_socket_path: Some("/tmp/cc-socks/111.sock".to_string()),
         })
@@ -357,6 +364,7 @@ mod tests {
         ],
         "example/repo:@1.%2",
         Some(PeerConnection {
+            session_id: "aaa".to_string(),
             pid: 111,
             messaging_socket_path: Some("/tmp/cc-socks/111.sock".to_string()),
         })
@@ -390,6 +398,7 @@ mod tests {
         ],
         "example/repo:@1.%2",
         Some(PeerConnection {
+            session_id: "bbb".to_string(),
             pid: 222,
             messaging_socket_path: Some("/tmp/cc-socks/222.sock".to_string()),
         })

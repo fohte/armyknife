@@ -254,6 +254,27 @@ async fn send_queued_prompt_with_policy(
         }
         return Err(error);
     }
+    let session_id = session.session_id.clone();
+    if let Err(error) = run_blocking(move || {
+        store::update_session_in(&sessions_dir, &session_id, |session| {
+            if session
+                .last_prompted_at
+                .is_some_and(|last_prompted_at| last_prompted_at > sent_at)
+            {
+                return false;
+            }
+            session.last_prompted_at = Some(sent_at);
+            true
+        })
+    })
+    .await
+    {
+        tracing::warn!(
+            session_id = %session.session_id,
+            error = %error.message,
+            "failed to save the prompt timestamp after delivering a watch-web message"
+        );
+    }
     Ok(())
 }
 
