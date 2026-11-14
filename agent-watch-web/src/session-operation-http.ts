@@ -116,7 +116,13 @@ function requestFor(operation: SessionOperation) {
     case 'proposal_answer':
       return {
         path: `proposals/${String(operation.seq)}/answer`,
-        body: { choice: operation.choice, comment: operation.comment },
+        body: {
+          choice: operation.choice,
+          comment: operation.comment,
+          ...(operation.attachments === undefined
+            ? {}
+            : { attachments: operation.attachments }),
+        },
       }
     case 'todo_resolve':
       return {
@@ -124,6 +130,9 @@ function requestFor(operation: SessionOperation) {
         body: {
           resolution: operation.resolution,
           comment: operation.comment,
+          ...(operation.attachments === undefined
+            ? {}
+            : { attachments: operation.attachments }),
         },
       }
     case 'permission':
@@ -369,6 +378,9 @@ export function createSessionOperation(
           seq: proposal,
           choice: payload['choice'],
           comment: payload['comment'],
+          ...(Array.isArray(payload['attachments'])
+            ? { attachments: payload['attachments'] }
+            : {}),
         })
       }
       const todo = sequenceFromPath('todos', 'resolve')
@@ -387,6 +399,9 @@ export function createSessionOperation(
           resolution: payload['resolution'],
           comment:
             typeof payload['comment'] === 'string' ? payload['comment'] : null,
+          ...(Array.isArray(payload['attachments'])
+            ? { attachments: payload['attachments'] }
+            : {}),
         })
       }
       const retry = sequenceFromPath('permission-denials', 'retry')

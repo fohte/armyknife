@@ -1,8 +1,8 @@
 import { useRef, useState } from 'react'
 
-import { useImageAttachments } from '#components/use-image-attachments'
+import { useAttachments } from '#components/use-attachments'
 
-export { clearSessionAttachments } from '#components/use-image-attachments'
+export { clearSessionAttachments } from '#components/use-attachments'
 
 type ComposerMessageOptions = {
   sessionId: string
@@ -24,7 +24,7 @@ export function useComposerMessage({
   clearDraftIfUnchanged,
   onAction,
 }: ComposerMessageOptions) {
-  const attachmentState = useImageAttachments(sessionId)
+  const attachmentState = useAttachments(sessionId)
   const [sendPending, setSendPending] = useState(false)
   const sendingRef = useRef(false)
   const isSending = externalSending || sendPending
@@ -49,30 +49,25 @@ export function useComposerMessage({
       sendingRef.current = false
       setSendPending(false)
     }
-    if (attachments.length === 0) {
-      const succeeded = await onAction('messages', { content: sentDraft })
-      if (succeeded) clearDraftIfUnchanged(sentDraft)
-      finishSending()
-      return
-    }
-    await attachmentState.encodeAttachments().match(
-      async (encodedAttachments) => {
+    try {
+      await attachmentState.sendWithAttachments(async (encodedAttachments) => {
         const succeeded = await onAction('messages', {
           content: sentDraft,
-          attachments: encodedAttachments,
+          ...(encodedAttachments.length === 0
+            ? {}
+            : { attachments: encodedAttachments }),
         })
         if (succeeded) {
           clearDraftIfUnchanged(sentDraft)
-          attachmentState.removeAttachments(attachments.map(({ id }) => id))
-          attachmentState.setError(null)
+          if (encodedAttachments.length > 0) {
+            attachmentState.removeAttachments(attachments.map(({ id }) => id))
+          }
         }
-        finishSending()
-      },
-      (requestError) => {
-        attachmentState.setError(requestError.message)
-        finishSending()
-      },
-    )
+        return succeeded
+      })
+    } finally {
+      finishSending()
+    }
   }
 
   return {

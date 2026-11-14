@@ -92,13 +92,6 @@ pub(super) async fn answer_proposal(
     };
     let content =
         proposal_answer_message(seq, &body.title, choice_label, request.comment.as_deref());
-    let saved_attachments =
-        run_blocking(move || attachments::save(attachments, state.attachment_dir)).await?;
-    let attachment_paths = saved_attachments
-        .iter()
-        .map(|attachment| attachment.path.clone())
-        .collect::<Vec<_>>();
-    let content = attachments::append_paths_to_message(content, &attachment_paths);
     let marker = if session.engine == Engine::Claude {
         let session_id = session.session_id.clone();
         let sessions_dir = sessions_dir.clone();
@@ -111,6 +104,15 @@ pub(super) async fn answer_proposal(
     } else {
         None
     };
+    let saved_attachments =
+        run_blocking(move || attachments::save(attachments, state.attachment_dir)).await?;
+    let attachment_paths = saved_attachments
+        .iter()
+        .map(|attachment| attachment.path.clone())
+        .collect::<Vec<_>>();
+    let stored_comment =
+        attachments::append_image_previews_to_comment(request.comment, &saved_attachments);
+    let content = attachments::append_paths_to_message(content, &attachment_paths);
     let content = watch_web_message_content(&session, marker.as_deref(), &content);
     let runtime = state.runtime;
     let send_session = session.clone();
@@ -121,7 +123,7 @@ pub(super) async fn answer_proposal(
 
     let answer = serde_json::to_string(&ProposalAnswer {
         choice,
-        comment: request.comment,
+        comment: stored_comment,
     })
     .map_err(ApiError::internal)?;
     let session_id = session.session_id;

@@ -10,8 +10,8 @@ import {
 } from '#components/attachment-preview-list'
 import { CollapsibleText } from '#components/collapsible-text'
 import { MarkdownMessage } from '#components/markdown-message'
-import type { EncodedAttachment } from '#components/use-image-attachments'
-import { useImageAttachments } from '#components/use-image-attachments'
+import type { EncodedAttachment } from '#components/use-attachments'
+import { useAttachments } from '#components/use-attachments'
 
 type TodoCardProps = {
   seq?: number
@@ -37,9 +37,7 @@ export function TodoCard({
   onResolve,
 }: TodoCardProps) {
   const commentId = useId()
-  const attachmentState = useImageAttachments(
-    `${sessionId}:todo:${String(seq)}`,
-  )
+  const attachmentState = useAttachments(`${sessionId}:todo:${String(seq)}`)
   const detailContent = useMemo(
     () =>
       detail === null ? null : <MarkdownMessage>{detail}</MarkdownMessage>,
@@ -69,31 +67,24 @@ export function TodoCard({
     }
     const normalizedComment = comment.trim()
     setIsSubmitting(true)
-    const finish = () => {
-      setIsSubmitting(false)
-    }
-    const send = async (attachments: readonly EncodedAttachment[]) => {
-      const succeeded =
-        attachments.length === 0
-          ? await onResolve(
-              nextResolution,
-              normalizedComment === '' ? null : normalizedComment,
-            )
-          : await onResolve(
-              nextResolution,
-              normalizedComment === '' ? null : normalizedComment,
-              attachments,
-            )
-      if (succeeded) setResolutionLocally(nextResolution)
-      finish()
-    }
-    if (attachmentState.attachments.length === 0) {
-      await send([])
-    } else {
-      await attachmentState.encodeAttachments().match(send, (error) => {
-        attachmentState.setError(error.message)
-        finish()
+    try {
+      await attachmentState.sendWithAttachments(async (attachments) => {
+        const succeeded =
+          attachments.length === 0
+            ? await onResolve(
+                nextResolution,
+                normalizedComment === '' ? null : normalizedComment,
+              )
+            : await onResolve(
+                nextResolution,
+                normalizedComment === '' ? null : normalizedComment,
+                attachments,
+              )
+        if (succeeded) setResolutionLocally(nextResolution)
+        return succeeded
       })
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
@@ -120,7 +111,9 @@ export function TodoCard({
             {completionComment}
           </MarkdownMessage>
         ) : null}
-        <AttachmentPreviewList attachments={attachmentState.attachments} />
+        {resolution === null ? (
+          <AttachmentPreviewList attachments={attachmentState.attachments} />
+        ) : null}
       </article>
     )
   }

@@ -159,6 +159,21 @@ it('renders task detail and completion comments as markdown', () => {
   })
 })
 
+it('shows a saved image in the completed comment', () => {
+  renderCard(
+    props({
+      resolution: 'completed',
+      defaultComment: '![Sample screenshot](/api/images/fixture-image.png)',
+    }),
+  )
+
+  expect(
+    container.querySelector('.chat-todo-completed-comment')?.innerHTML,
+  ).toBe(
+    '<p><img class="chat-user-image" alt="Sample screenshot" loading="lazy" decoding="async" src="/api/images/fixture-image.png"></p>',
+  )
+})
+
 it('expands and collapses long detail', async () => {
   container.style.width = '240px'
   renderCard(

@@ -1241,7 +1241,7 @@ Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` on
 - `POST /api/sessions/{id}/decisions/{seq}/ok` to mark a decision reviewed
 - `POST /api/sessions/{id}/decisions/{seq}/change` with `{"comment":"Revise the fixture choice."}` to request a change
 
-Messages may include up to 16 file attachments with a combined size of 50 MiB. Each attachment has a sanitized file name, MIME type, byte size, and base64-encoded data. PNG, JPEG, GIF, and WebP attachments with matching file signatures keep their conversation previews; other files appear by name:
+Messages, proposal answers, and todo resolutions may include up to 16 file attachments with a combined size of 50 MiB. Each attachment has a sanitized file name, MIME type, byte size, and base64-encoded data. PNG, JPEG, GIF, and WebP attachments with matching file signatures keep their conversation previews; other files appear by name:
 
 ```json
 {
@@ -1257,7 +1257,7 @@ Messages may include up to 16 file attachments with a combined size of 50 MiB. E
 }
 ```
 
-The server stores attachments for 30 days, subject to a 1 GiB storage cap, and appends their absolute paths to the message sent to the session.
+The server stores attachments for 30 days, subject to a 1 GiB storage cap, and appends their absolute paths to the message sent to the session. Image attachments in todo resolutions and proposal answers also appear in the saved card comment.
 
 For example, send a message with:
 

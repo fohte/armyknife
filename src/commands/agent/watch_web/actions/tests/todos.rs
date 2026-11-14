@@ -108,6 +108,20 @@ async fn resolving_a_todo_saves_and_forwards_image_attachments(action_context: A
         .canonicalize()
         .unwrap();
     let path_string = path.display().to_string();
+    let image_source = format!(
+        "/api/images/{}",
+        path.file_name().unwrap().to_string_lossy()
+    );
+    let todos = store::agent_todos_from(
+        &action_context.temp_dir.path().join("sessions"),
+        "sample-session",
+    )
+    .unwrap();
+    let stored_comment = todos[0]
+        .comment
+        .as_deref()
+        .unwrap_or_default()
+        .replace(&image_source, "<attachment-source>");
     let mut response = response_snapshot(response, &action_context).await;
     response["calls"][0]["content"] = response["calls"][0]["content"]
         .as_str()
@@ -116,7 +130,7 @@ async fn resolving_a_todo_saves_and_forwards_image_attachments(action_context: A
         .into();
 
     assert_eq!(
-        (response, std::fs::read(path).unwrap(),),
+        (response, std::fs::read(path).unwrap(), stored_comment,),
         (
             json!({
                 "status": StatusCode::OK.as_u16(),
@@ -135,6 +149,13 @@ async fn resolving_a_todo_saves_and_forwards_image_attachments(action_context: A
                 }],
             }),
             vec![71, 73, 70, 56, 57, 97],
+            indoc! {"
+                The header fits.
+
+                ![screen.gif](<attachment-source>)
+            "}
+            .trim_end()
+            .to_string(),
         ),
     );
 }
@@ -181,6 +202,62 @@ async fn completing_a_todo_for_an_ended_session_skips_notification(action_contex
                 Some(store::TodoResolution::Completed),
                 Some("The header fits."),
             )],
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn ended_session_rejects_todo_attachments(action_context: ActionContext) {
+    let mut ended_session = session("sample-session");
+    ended_session.status = SessionStatus::Ended;
+    action_context.save_session(&ended_session);
+    let sessions_dir = action_context.temp_dir.path().join("sessions");
+    store::add_agent_todo_in(&sessions_dir, "sample-session", "Check the page", None).unwrap();
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            "/sessions/sample-session/todos/1/resolve",
+            json!({
+                "resolution": "completed",
+                "comment": "The header fits.",
+                "attachments": [{
+                    "name": "screen.gif",
+                    "mimeType": "image/gif",
+                    "size": 6,
+                    "data": "R0lGODlh",
+                }],
+            }),
+        ))
+        .await
+        .unwrap();
+    let todos = store::agent_todos_from(&sessions_dir, "sample-session").unwrap();
+    let files_left = std::fs::read_dir(action_context.temp_dir.path().join("attachments"))
+        .map(|entries| entries.count())
+        .unwrap_or_default();
+
+    assert_eq!(
+        (
+            response_snapshot(response, &action_context).await,
+            todos
+                .iter()
+                .map(|todo| (
+                    todo.title.as_str(),
+                    todo.resolution,
+                    todo.comment.as_deref(),
+                ))
+                .collect::<Vec<_>>(),
+            files_left,
+        ),
+        (
+            json!({
+                "status": StatusCode::CONFLICT.as_u16(),
+                "body": { "error": "session has ended" },
+                "calls": [],
+            }),
+            vec![("Check the page", None, None)],
+            0,
         ),
     );
 }
@@ -246,15 +323,35 @@ async fn failed_session_notification_does_not_complete_the_todo(action_context: 
         .router()
         .oneshot(post(
             "/sessions/sample-session/todos/1/resolve",
-            json!({ "resolution": "completed", "comment": "The header fits." }),
+            json!({
+                "resolution": "completed",
+                "comment": "The header fits.",
+                "attachments": [{
+                    "name": "screen.gif",
+                    "mimeType": "image/gif",
+                    "size": 6,
+                    "data": "R0lGODlh",
+                }],
+            }),
         ))
         .await
         .unwrap();
     let todos = store::agent_todos_from(&sessions_dir, "sample-session").unwrap();
+    let mut response = response_snapshot(response, &action_context).await;
+    let message = response["calls"][0]["content"].as_str().unwrap();
+    let path = message
+        .lines()
+        .rev()
+        .find_map(|line| line.strip_prefix("- "))
+        .unwrap_or_default();
+    response["calls"][0]["content"] = message.replace(path, "<attachment-path>").into();
+    let files_left = std::fs::read_dir(action_context.temp_dir.path().join("attachments"))
+        .map(|entries| entries.count())
+        .unwrap_or_default();
 
     assert_eq!(
         (
-            response_snapshot(response, &action_context).await,
+            response,
             todos
                 .iter()
                 .map(|todo| (
@@ -263,6 +360,7 @@ async fn failed_session_notification_does_not_complete_the_todo(action_context: 
                     todo.comment.as_deref(),
                 ))
                 .collect::<Vec<_>>(),
+            files_left,
         ),
         (
             json!({
@@ -275,10 +373,14 @@ async fn failed_session_notification_does_not_complete_the_todo(action_context: 
                         <armyknife-todo-completed>The user marked the to-do as done: Check the page.
 
                         The header fits.</armyknife-todo-completed>
+
+                        Attached file(s):
+                        - <attachment-path>
                     "}.trim_end(),
                 }],
             }),
             vec![("Check the page", None, None)],
+            0,
         ),
     );
 }

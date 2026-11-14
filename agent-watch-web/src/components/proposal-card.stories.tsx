@@ -91,6 +91,17 @@ export const ProposalShowsAChosenAnswer: Story = {
   },
 }
 
+export const ProposalShowsAnAttachedImage: Story = {
+  name: 'A proposal shows its attached image with the saved answer',
+  args: {
+    answer: {
+      choice: 0,
+      comment: '![Sample screenshot](/card-comment-attachment.svg)',
+    },
+    resolved: true,
+  },
+}
+
 export const ProposalShowsAnotherOptionWasRequested: Story = {
   name: 'A proposal shows that another option was requested',
   args: {

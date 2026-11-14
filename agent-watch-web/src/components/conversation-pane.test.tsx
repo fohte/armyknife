@@ -3188,6 +3188,7 @@ it('renders file attachments returned by the messages endpoint', async () => {
   })
 })
 it('posts a proposal answer to its sequence route and refreshes the conversation', async () => {
+  vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:proposal-action-image')
   const jsonResponse = (body: unknown) =>
     new Response(JSON.stringify(body), {
       headers: { 'Content-Type': 'application/json' },
@@ -3234,21 +3235,42 @@ it('posts a proposal answer to its sequence route and refreshes the conversation
     for (let index = 0; index < 6; index += 1) await Promise.resolve()
   })
 
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+  )
+  const paste = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(paste, 'clipboardData', {
+    value: {
+      files: [new File(['image'], 'screen.png', { type: 'image/png' })],
+    },
+  })
+  await act(async () => {
+    comment.dispatchEvent(paste)
+    await new Promise((resolve) => window.setTimeout(resolve, 10))
+  })
+  const chooseButton = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.chat-proposal-actions .aw-button--primary',
+    ),
+  )
+  await waitForState(
+    () => container.querySelector('.attachment-preview-item img') !== null,
+  )
+
   act(() => {
     requireElement(
       container.querySelectorAll<HTMLInputElement>(
         '.chat-proposal-option input',
       )[1] ?? null,
     ).click()
-    requireElement(
-      container.querySelector<HTMLButtonElement>(
-        '.chat-proposal-actions .aw-button--primary',
-      ),
-    ).click()
   })
-  await act(async () => {
-    for (let index = 0; index < 8; index += 1) await Promise.resolve()
+  await waitForState(() => !chooseButton.disabled)
+  act(() => {
+    chooseButton.click()
   })
+  await waitForState(() =>
+    requests.some((request) => request.method === 'POST'),
+  )
 
   const snapshot = () => ({
     post: requests.find((request) => request.method === 'POST') ?? null,
@@ -3261,7 +3283,7 @@ it('posts a proposal answer to its sequence route and refreshes the conversation
     post: {
       url: '/api/sessions/sample-session/proposals/3/answer',
       method: 'POST',
-      body: '{"choice":1,"comment":null}',
+      body: '{"choice":1,"comment":null,"attachments":[{"name":"screen.png","mimeType":"image/png","size":5,"data":"aW1hZ2U="}]}',
     },
     placeholder: 'Message session',
     status: 'Proposal · chose B',
@@ -3269,6 +3291,7 @@ it('posts a proposal answer to its sequence route and refreshes the conversation
 })
 
 it('posts a todo rejection to its resolution route with the comment', async () => {
+  vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:todo-action-image')
   const todo: ChatItem = {
     type: 'todo',
     seq: 4,
@@ -3331,6 +3354,22 @@ it('posts a todo rejection to its resolution route with the comment', async () =
     ),
     'The page is readable.',
   )
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+  const paste = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(paste, 'clipboardData', {
+    value: {
+      files: [new File(['image'], 'screen.png', { type: 'image/png' })],
+    },
+  })
+  await act(async () => {
+    comment.dispatchEvent(paste)
+    await new Promise((resolve) => window.setTimeout(resolve, 10))
+  })
+  await waitForState(
+    () => container.querySelector('.attachment-preview-item img') !== null,
+  )
   act(() => {
     requireElement(
       container
@@ -3351,7 +3390,7 @@ it('posts a todo rejection to its resolution route with the comment', async () =
     {
       url: '/api/sessions/sample-session/todos/4/resolve',
       method: 'POST',
-      body: '{"resolution":"rejected","comment":"The page is readable."}',
+      body: '{"resolution":"rejected","comment":"The page is readable.","attachments":[{"name":"screen.png","mimeType":"image/png","size":5,"data":"aW1hZ2U="}]}',
     },
   ])
 })

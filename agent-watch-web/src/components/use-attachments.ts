@@ -135,7 +135,7 @@ export function clearSessionAttachments(sessionId: string) {
   }
 }
 
-export function useImageAttachments(scopeId: string) {
+export function useAttachments(scopeId: string) {
   const subscribeToScope = useCallback(
     (listener: () => void) => subscribe(scopeId, listener),
     [scopeId],
@@ -237,24 +237,25 @@ export function useImageAttachments(scopeId: string) {
     removeAttachments([id])
   }
 
-  const clearAttachments = () => {
-    const current = getState(scopeId)
-    current.attachments.forEach(({ previewUrl }) => {
-      if (previewUrl !== null) URL.revokeObjectURL(previewUrl)
-    })
-    updateState(scopeId, (state) => ({
-      ...state,
-      attachments: [],
-      pendingFileCount: 0,
-      generation: state.generation + 1,
-    }))
-  }
-
   const encodeAttachments = () =>
     ResultAsync.fromPromise(
       Promise.all(state.attachments.map(({ file }) => encodeAttachment(file))),
       toError,
     )
+
+  const sendWithAttachments = async (
+    send: (attachments: readonly EncodedAttachment[]) => Promise<boolean>,
+  ) => {
+    const succeeded =
+      state.attachments.length === 0
+        ? await send([])
+        : await encodeAttachments().match(send, (requestError) => {
+            setError(requestError.message)
+            return false
+          })
+    if (succeeded) setError(null)
+    return succeeded
+  }
 
   return {
     attachments: state.attachments,
@@ -264,8 +265,6 @@ export function useImageAttachments(scopeId: string) {
     onPasteFiles,
     removeAttachment,
     removeAttachments,
-    clearAttachments,
-    encodeAttachments,
-    setError,
+    sendWithAttachments,
   }
 }

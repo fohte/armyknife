@@ -10,8 +10,8 @@ import {
 } from '#components/attachment-preview-list'
 import { numberShortcutChoice } from '#components/conversation-keyboard'
 import { MarkdownMessage } from '#components/markdown-message'
-import type { EncodedAttachment } from '#components/use-image-attachments'
-import { useImageAttachments } from '#components/use-image-attachments'
+import type { EncodedAttachment } from '#components/use-attachments'
+import { useAttachments } from '#components/use-attachments'
 import type { ProposalAnswer, ProposalOption } from '#types'
 
 type ProposalCardProps = {
@@ -52,9 +52,7 @@ export function ProposalCard({
   defaultComment = '',
   onAnswer,
 }: ProposalCardProps) {
-  const attachmentState = useImageAttachments(
-    `${sessionId}:proposal:${String(seq)}`,
-  )
+  const attachmentState = useAttachments(`${sessionId}:proposal:${String(seq)}`)
   const [selectedChoice, setSelectedChoice] = useState<number | null>(
     answer?.choice ?? defaultChoice,
   )
@@ -91,21 +89,17 @@ export function ProposalCard({
         comment: comment.trim() === '' ? null : comment.trim(),
       }
       setIsSubmitting(true)
-      const send = async (attachments: readonly EncodedAttachment[]) => {
-        const succeeded =
-          attachments.length === 0
-            ? await onAnswer(response)
-            : await onAnswer(response, attachments)
-        setIsSubmitting(false)
-        if (succeeded) setSubmittedAnswer(response)
-      }
-      if (attachmentState.attachments.length === 0) {
-        await send([])
-      } else {
-        await attachmentState.encodeAttachments().match(send, (error) => {
-          attachmentState.setError(error.message)
-          setIsSubmitting(false)
+      try {
+        await attachmentState.sendWithAttachments(async (attachments) => {
+          const succeeded =
+            attachments.length === 0
+              ? await onAnswer(response)
+              : await onAnswer(response, attachments)
+          if (succeeded) setSubmittedAnswer(response)
+          return succeeded
         })
+      } finally {
+        setIsSubmitting(false)
       }
     },
     [attachmentState, comment, isDisabled, onAnswer, options],
@@ -261,31 +255,41 @@ export function ProposalCard({
           </div>
         ))}
       </div>
-      <label
-        className="chat-proposal-comment-label"
-        htmlFor={`proposal-comment-${String(seq)}`}
-      >
-        Comment (optional)
-      </label>
-      <textarea
-        id={`proposal-comment-${String(seq)}`}
-        className="chat-proposal-comment"
-        rows={2}
-        value={comment}
-        disabled={isAnswered || isSubmitting}
-        onPaste={(event: ClipboardEvent<HTMLTextAreaElement>) => {
-          handleAttachmentPaste(event, attachmentState.onPasteFiles)
-        }}
-        onChange={(event) => {
-          setComment(event.currentTarget.value)
-        }}
-      />
-      <AttachmentPreviewList
-        attachments={attachmentState.attachments}
-        {...(isSubmitting || isAnswered
-          ? {}
-          : { onRemove: attachmentState.removeAttachment })}
-      />
+      {latestAnswer?.comment != null ? (
+        <MarkdownMessage className="chat-proposal-answer-comment">
+          {latestAnswer.comment}
+        </MarkdownMessage>
+      ) : (
+        <>
+          <label
+            className="chat-proposal-comment-label"
+            htmlFor={`proposal-comment-${String(seq)}`}
+          >
+            Comment (optional)
+          </label>
+          <textarea
+            id={`proposal-comment-${String(seq)}`}
+            className="chat-proposal-comment"
+            rows={2}
+            value={comment}
+            disabled={isAnswered || isSubmitting}
+            onPaste={(event: ClipboardEvent<HTMLTextAreaElement>) => {
+              handleAttachmentPaste(event, attachmentState.onPasteFiles)
+            }}
+            onChange={(event) => {
+              setComment(event.currentTarget.value)
+            }}
+          />
+        </>
+      )}
+      {answer === null && !resolved ? (
+        <AttachmentPreviewList
+          attachments={attachmentState.attachments}
+          {...(isSubmitting || isAnswered
+            ? {}
+            : { onRemove: attachmentState.removeAttachment })}
+        />
+      ) : null}
       {attachmentState.error === null ? null : (
         <p role="alert">{attachmentState.error}</p>
       )}

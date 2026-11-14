@@ -258,6 +258,39 @@ pub(super) fn append_paths_to_message(content: String, attachment_paths: &[PathB
     }
 }
 
+pub(super) fn append_image_previews_to_comment(
+    comment: Option<String>,
+    attachments: &[SavedAttachment],
+) -> Option<String> {
+    let previews = attachments
+        .iter()
+        .filter_map(|attachment| {
+            attachment
+                .image_source
+                .as_deref()
+                .map(|source| format!("![{}]({source})", attachment.name))
+        })
+        .collect::<Vec<_>>();
+    if previews.is_empty() {
+        return comment;
+    }
+
+    let previews = previews.join("\n");
+    Some(match comment.filter(|comment| !comment.is_empty()) {
+        Some(comment) => format!(
+            indoc::indoc! {"
+                {}
+
+                {}
+            "},
+            comment, previews
+        )
+        .trim_end()
+        .to_string(),
+        None => previews,
+    })
+}
+
 fn prune_expired(directory: &Path) -> std::io::Result<()> {
     let now = SystemTime::now();
     for entry in fs::read_dir(directory)? {

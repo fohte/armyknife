@@ -222,6 +222,35 @@ it('renders proposal summaries, descriptions, and withdrawal comments as markdow
   })
 })
 
+it('shows a saved image in an answered proposal comment', () => {
+  renderCard(
+    props({
+      answer: {
+        choice: 0,
+        comment: '![Sample screenshot](/api/images/fixture-image.png)',
+      },
+      resolved: true,
+    }),
+  )
+
+  const snapshot = () => ({
+    status: container.querySelector('h2')?.textContent,
+    comment: container.querySelector('.chat-proposal-answer-comment')
+      ?.innerHTML,
+    commentInput: container.querySelector('.chat-proposal-comment') !== null,
+    attachmentPreview:
+      container.querySelector('.attachment-preview-list') !== null,
+  })
+
+  expect(snapshot()).toEqual({
+    status: 'Proposal · chose A',
+    comment:
+      '<p><img class="chat-user-image" alt="Sample screenshot" loading="lazy" decoding="async" src="/api/images/fixture-image.png"></p>',
+    commentInput: false,
+    attachmentPreview: false,
+  })
+})
+
 it('keeps option labels phrasing-only and links associated with their radios', () => {
   renderCard(
     props({
