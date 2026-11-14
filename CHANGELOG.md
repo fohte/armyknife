@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.685](https://github.com/fohte/armyknife/compare/v0.1.684...v0.1.685) (2026-11-14)
+
+
+### Features
+
+* **watch-web:** allow Codex permission decisions ([#1747](https://github.com/fohte/armyknife/issues/1747)) ([ffaef52](https://github.com/fohte/armyknife/commit/ffaef52c9cff395f74650b9d18d0609abbd9e478))
+
 ## [0.1.684](https://github.com/fohte/armyknife/compare/v0.1.683...v0.1.684) (2026-11-14)
 
 
