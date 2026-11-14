@@ -51,15 +51,23 @@ export function useOwnMessageKeyboardNavigation({
 
       const viewportTop =
         scrollContainer.getBoundingClientRect().top + scrollContainer.clientTop
-      const firstVisibleIndex = ownMessages.findIndex(
-        (message) => message.getBoundingClientRect().bottom > viewportTop,
+      const viewportBottom = viewportTop + scrollContainer.clientHeight
+      const messageBounds = ownMessages.map((message) =>
+        message.getBoundingClientRect(),
+      )
+      const firstVisibleIndex = messageBounds.findIndex(
+        (bounds) => bounds.bottom > viewportTop && bounds.top < viewportBottom,
       )
       const targetIndex =
-        event.key === 'ArrowUp'
-          ? (firstVisibleIndex === -1
-              ? ownMessages.length
-              : firstVisibleIndex) - 1
-          : firstVisibleIndex + 1
+        firstVisibleIndex !== -1
+          ? event.key === 'ArrowUp'
+            ? firstVisibleIndex - 1
+            : firstVisibleIndex + 1
+          : event.key === 'ArrowUp'
+            ? messageBounds.findLastIndex(
+                (bounds) => bounds.bottom <= viewportTop,
+              )
+            : messageBounds.findIndex((bounds) => bounds.top >= viewportBottom)
       const message = ownMessages[targetIndex]
       if (message === undefined) return
 
