@@ -8289,50 +8289,69 @@ it.each([
 )
 
 it.each([
-  { formFactor: 'desktop', isMobile: false },
-  { formFactor: 'mobile', isMobile: true },
+  { cardType: 'proposal', formFactor: 'desktop', isMobile: false },
+  { cardType: 'proposal', formFactor: 'mobile', isMobile: true },
+  { cardType: 'question', formFactor: 'desktop', isMobile: false },
 ])(
-  'keeps the latest keyboard-answerable proposal choices visible before a todo on $formFactor',
-  ({ isMobile }) => {
-    const proposalMessage: ChatItem = {
-      ...proposal,
-      seq: 52,
-      title: 'Choose the alert rollout schedule',
-    }
-    renderConversationMessages([proposalMessage], 0, isMobile)
+  'keeps the latest keyboard-answerable $cardType choices visible before a todo on $formFactor',
+  ({ cardType, isMobile }) => {
+    const answerableMessage: ChatItem =
+      cardType === 'proposal'
+        ? {
+            ...proposal,
+            seq: 52,
+            title: 'Choose the alert rollout schedule',
+          }
+        : {
+            type: 'question',
+            requestId: 'request-alert-channel',
+            questions: [
+              {
+                ...questionPrompt,
+                header: 'Alert channel',
+                question: 'Which alert channel should be enabled?',
+              },
+            ],
+          }
+    renderConversationMessages([answerableMessage], 0, isMobile)
 
     const pendingActions = requireElement(
       container.querySelector<HTMLElement>('.conversation-pending-actions'),
     )
-    pendingActions.style.maxHeight = '180px'
+    pendingActions.style.maxHeight = cardType === 'proposal' ? '180px' : '120px'
     pendingActions.scrollTop =
       pendingActions.scrollHeight - pendingActions.clientHeight
-    const proposalCard = requireElement(
-      pendingActions.querySelector<HTMLElement>('.chat-proposal-card'),
+    const answerableCardSelector =
+      cardType === 'proposal' ? '.chat-proposal-card' : '.chat-question-card'
+    const choicesSelector =
+      cardType === 'proposal'
+        ? '.chat-proposal-options'
+        : '.chat-question-choices'
+    const answerableCard = requireElement(
+      pendingActions.querySelector<HTMLElement>(answerableCardSelector),
     )
-    const proposalOptions = requireElement(
-      proposalCard.querySelector<HTMLElement>('.chat-proposal-options'),
+    const choiceGroup = requireElement(
+      answerableCard.querySelector<HTMLElement>(choicesSelector),
     )
-    const nativeScrollIntoView =
-      proposalOptions.scrollIntoView.bind(proposalOptions)
+    const nativeScrollIntoView = choiceGroup.scrollIntoView.bind(choiceGroup)
     const scrollIntoView = vi
-      .spyOn(proposalOptions, 'scrollIntoView')
+      .spyOn(choiceGroup, 'scrollIntoView')
       .mockImplementation((options) => {
         nativeScrollIntoView(options)
       })
-    const isProposalOptionsVisible = () => {
-      const optionsBounds = proposalOptions.getBoundingClientRect()
+    const isChoiceGroupVisible = () => {
+      const choiceGroupBounds = choiceGroup.getBoundingClientRect()
       const pendingActionsBounds = pendingActions.getBoundingClientRect()
       return (
-        optionsBounds.top >= pendingActionsBounds.top - 1 &&
-        optionsBounds.bottom <= pendingActionsBounds.bottom + 1
+        choiceGroupBounds.top >= pendingActionsBounds.top - 1 &&
+        choiceGroupBounds.bottom <= pendingActionsBounds.bottom + 1
       )
     }
-    const proposalOptionsWereVisible = isProposalOptionsVisible()
+    const choiceGroupWasVisible = isChoiceGroupVisible()
 
     renderConversationMessages(
       [
-        proposalMessage,
+        answerableMessage,
         {
           type: 'todo',
           seq: 53,
@@ -8348,15 +8367,15 @@ it.each([
     )
 
     const snapshot = () => ({
-      proposalOptionsWereVisible,
+      choiceGroupWasVisible,
       scrollCalls: scrollIntoView.mock.calls,
-      proposalOptionsAreVisible: isProposalOptionsVisible(),
+      choiceGroupIsVisible: isChoiceGroupVisible(),
       latestCard: pendingActions.lastElementChild?.className,
     })
     expect(snapshot()).toEqual({
-      proposalOptionsWereVisible: false,
+      choiceGroupWasVisible: false,
       scrollCalls: [[{ block: 'nearest' }]],
-      proposalOptionsAreVisible: true,
+      choiceGroupIsVisible: true,
       latestCard: 'chat-todo-card',
     })
   },
