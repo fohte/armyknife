@@ -66,9 +66,7 @@ impl ClaudeParserState {
             };
         }
 
-        if let Some(mut queue_event) = QueueReplayEvent::from_record(&record) {
-            queue_event.active_branch_delivery = active_record
-                && queued_prompt_delivery_is_on_active_branch(&record, &mut self.transcript_nodes);
+        if let Some(queue_event) = QueueReplayEvent::from_record(&record) {
             self.queue_events.push(queue_event);
         }
         if !active_record {
@@ -325,27 +323,6 @@ fn classifier_record(record: &Value) -> Value {
         }
     }
     Value::Object(projected)
-}
-
-fn queued_prompt_delivery_is_on_active_branch(
-    record: &Value,
-    transcript_nodes: &mut BTreeMap<String, TranscriptNode>,
-) -> bool {
-    if let Some(uuid) = record.get("uuid").and_then(Value::as_str) {
-        return transcript_nodes
-            .get(uuid)
-            .is_some_and(|node| node.membership == BranchMembership::Active);
-    }
-    let Some(parent_uuid) = record
-        .get("parentUuid")
-        .and_then(Value::as_str)
-        .or_else(|| record.get("logicalParentUuid").and_then(Value::as_str))
-    else {
-        return true;
-    };
-    transcript_nodes
-        .get(parent_uuid)
-        .is_some_and(|node| node.membership == BranchMembership::Active)
 }
 
 fn tool_result_blocks(message: &Value) -> impl Iterator<Item = &Value> {
