@@ -827,12 +827,15 @@ fn process_hook_event_impl_with_settings(
         status = Some(SessionStatus::WaitingInput);
     }
 
+    let has_pending_agent_requests =
+        event == HookEvent::Stop && session_lock.has_pending_agent_requests()?;
     let should_infer_status = event == HookEvent::Stop
         && stop::should_infer_status_for_hook(
             &input,
             &session,
             was_waiting_for_input,
             was_asking_user,
+            has_pending_agent_requests,
             status_inference_prompt,
             codex_status_inference.is_some(),
         );
@@ -843,6 +846,7 @@ fn process_hook_event_impl_with_settings(
                 &session,
                 was_waiting_for_input,
                 was_asking_user,
+                has_pending_agent_requests,
                 if should_infer_status {
                     None
                 } else {
@@ -922,6 +926,7 @@ fn process_hook_event_impl_with_settings(
             &session,
             was_waiting_for_input,
             was_asking_user,
+            has_pending_agent_requests,
             codex_status_inference.is_some(),
         )
         && let Some(codex_config) = codex_status_inference
@@ -4148,6 +4153,8 @@ mod tests {
         StatusSet,
         BackgroundTask,
         SessionCron,
+        UnansweredProposal,
+        IncompleteTodo,
         PermissionPrompt,
         AskUserQuestion,
         StopHookActive,
@@ -4187,6 +4194,8 @@ mod tests {
     #[case::status_set(StopReason::StatusSet, false, false)]
     #[case::background_task(StopReason::BackgroundTask, false, false)]
     #[case::session_cron(StopReason::SessionCron, false, false)]
+    #[case::unanswered_proposal(StopReason::UnansweredProposal, true, false)]
+    #[case::incomplete_todo(StopReason::IncompleteTodo, true, false)]
     #[case::permission_prompt(StopReason::PermissionPrompt, false, false)]
     #[case::ask_user_question(StopReason::AskUserQuestion, false, false)]
     #[case::stop_hook_active(StopReason::StopHookActive, false, false)]
@@ -4243,7 +4252,20 @@ mod tests {
                 session.current_tool_name = Some("AskUserQuestion".to_string());
             }
             StopReason::Paused => session.status = SessionStatus::Paused,
+            StopReason::UnansweredProposal | StopReason::IncompleteTodo => {}
         });
+
+        match reason {
+            StopReason::UnansweredProposal => {
+                store::add_agent_proposal_in(sessions_dir, "test-123", "Review this choice.")
+                    .expect("proposal should save");
+            }
+            StopReason::IncompleteTodo => {
+                store::add_agent_todo_in(sessions_dir, "test-123", "Check the deployment", None)
+                    .expect("todo should save");
+            }
+            _ => {}
+        }
 
         let instruction = has_instruction.then_some(TEST_STOP_HOOK_INSTRUCTION);
         let result = process_hook_event_impl_with_instruction(
@@ -4482,7 +4504,9 @@ mod tests {
             | StopReason::AskUserQuestion
             | StopReason::StopHookActive
             | StopReason::Paused
-            | StopReason::Unknown => None,
+            | StopReason::Unknown
+            | StopReason::UnansweredProposal
+            | StopReason::IncompleteTodo => None,
         };
         save_test_session(sessions_dir, "test-codex", |session| {
             session.engine = Engine::Codex;
@@ -4497,7 +4521,9 @@ mod tests {
                 StopReason::BackgroundTask
                 | StopReason::SessionCron
                 | StopReason::StopHookActive
-                | StopReason::Unknown => {}
+                | StopReason::Unknown
+                | StopReason::UnansweredProposal
+                | StopReason::IncompleteTodo => {}
             }
         });
         let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
