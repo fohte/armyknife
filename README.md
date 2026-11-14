@@ -708,6 +708,8 @@ Tracked, hook-processed Claude Code sessions receive the instruction on `Session
 
 `a agent web-ui add <url> --name <name>` registers a named local HTTP interface with the calling session. The URL must use `localhost` or `127.0.0.1` and include an explicit port. Registered interfaces appear in the watch-web conversation's right panel and share the same HTTP and WebSocket relay. Ports without a registered URL are rejected. Run the command from the session that owns the interface:
 
+Within a session, registering an interface with an existing trimmed name replaces its previous URL. Registering an existing URL also replaces that entry.
+
 ```console
 $ a agent web-ui add http://127.0.0.1:48761/design/sample/ --name "Design editor"
 Recorded web UI 'Design editor'
