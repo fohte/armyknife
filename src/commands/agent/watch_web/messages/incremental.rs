@@ -350,6 +350,7 @@ mod tests {
                 text: "Old message.".to_owned(),
                 from: None,
                 timestamp: None,
+                queued_prompt_id: None,
             },
             ChatItem::UserWithContent {
                 rewind_id: None,
@@ -363,6 +364,7 @@ mod tests {
                 ],
                 from: None,
                 timestamp: None,
+                queued_prompt_id: Some("fixture-message-cyan".to_owned()),
             },
             ChatItem::UserWithContent {
                 rewind_id: None,
@@ -376,6 +378,7 @@ mod tests {
                 ],
                 from: None,
                 timestamp: None,
+                queued_prompt_id: Some("fixture-message-amber".to_owned()),
             },
         ];
 

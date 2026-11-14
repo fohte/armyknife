@@ -315,6 +315,7 @@ function renderView(
 function renderConversationMessages(
   messages: readonly ChatItem[],
   start: number,
+  isMobile = false,
 ) {
   root ??= createRoot(container)
   act(() => {
@@ -328,6 +329,7 @@ function renderConversationMessages(
         error={null}
         onAction={() => Promise.resolve(true)}
         onSelectSession={() => undefined}
+        isMobile={isMobile}
       />,
     )
   })
@@ -4785,8 +4787,8 @@ it('directs Codex questions and permissions to the terminal', () => {
   expect(snapshot()).toEqual({
     disabledChoices: [true, true],
     guidance: [
-      'Review this permission in terminal.',
       'Answer in terminal to continue.',
+      'Review this permission in terminal.',
     ],
     terminalButtons: [
       {
@@ -8419,139 +8421,309 @@ it('keeps a question answer draft when a preceding conversation row arrives', ()
   )
 })
 
-it('moves pending proposals and questions to the end until they are resolved', () => {
-  const pendingProposal: ChatItem = {
-    ...proposal,
-    seq: 21,
-    title: 'Choose the rollout interval',
-  }
-  const pendingQuestionPrompt = {
-    header: 'Alert channel',
-    question: 'Which alert channel should be enabled?',
-    choices: [{ label: 'Email' }, { label: 'Dashboard' }],
-    multi_select: false,
-    answer: null,
-  }
-  const pendingQuestion: ChatItem = {
-    type: 'question',
-    requestId: 'request-rollout-window',
-    questions: [pendingQuestionPrompt],
-  }
-  const historicalQuestion: ChatItem = {
-    type: 'question',
-    questions: [
+it.each([
+  { formFactor: 'desktop', isMobile: false },
+  { formFactor: 'mobile', isMobile: true },
+])(
+  'pins pending cards above the composer and returns resolved cards to the timeline on $formFactor',
+  ({ isMobile }) => {
+    const pendingQuestionPrompt = {
+      header: 'Alert channel',
+      question: 'Which alert channel should be enabled?',
+      choices: [{ label: 'Email' }, { label: 'Dashboard' }],
+      multi_select: false,
+      answer: null,
+    }
+    const messages: ChatItem[] = [
+      { type: 'assistant', text: 'The rollout plan is ready.' },
       {
-        ...pendingQuestionPrompt,
-        header: 'Previous retry preference',
-        question: 'Which retry preference was selected?',
-      },
-    ],
-  }
-  const withdrawableProposal: ChatItem = {
-    ...proposal,
-    seq: 22,
-    title: 'Choose the fallback mode',
-  }
-  const resolvedElsewhereProposal: ChatItem = {
-    ...proposal,
-    seq: 23,
-    title: 'Keep the saved plan',
-    resolved: true,
-  }
-  const firstMessage: ChatItem = {
-    type: 'assistant',
-    text: 'The rollout plan is ready.',
-  }
-  const secondMessage: ChatItem = {
-    type: 'assistant',
-    text: 'One alert detail remains.',
-  }
-  const thirdMessage: ChatItem = {
-    type: 'assistant',
-    text: 'The session continues working.',
-  }
-  const fourthMessage: ChatItem = {
-    type: 'assistant',
-    text: 'The final summary is ready.',
-  }
-  const messages: ChatItem[] = [
-    firstMessage,
-    pendingProposal,
-    resolvedElsewhereProposal,
-    secondMessage,
-    historicalQuestion,
-    pendingQuestion,
-    thirdMessage,
-    withdrawableProposal,
-    fourthMessage,
-  ]
-  renderConversationMessages(messages, 0)
-
-  const getTimeline = () =>
-    Array.from(
-      container.querySelectorAll<HTMLElement>(
-        '.chat-assistant-message, .chat-question-card, .chat-proposal-card',
-      ),
-      (element) =>
-        element.classList.contains('chat-assistant-message')
-          ? element.textContent
-          : `${element.classList.contains('chat-question-card') ? 'Question' : 'Proposal'}: ${element.querySelector('h3')?.textContent ?? ''}`,
-    )
-
-  const pendingOrder = getTimeline()
-  renderConversationMessages(
-    [
-      firstMessage,
-      {
-        ...pendingProposal,
+        ...proposal,
+        seq: 23,
+        title: 'Keep the saved plan',
         answer: { choice: 0, comment: null },
       },
-      resolvedElsewhereProposal,
-      secondMessage,
-      historicalQuestion,
       {
-        ...pendingQuestion,
+        type: 'question',
         questions: [
           {
             ...pendingQuestionPrompt,
-            answer: 'Dashboard',
+            header: 'Previous retry preference',
+            question: 'Which retry preference was selected?',
+            answer: 'Email',
           },
         ],
       },
-      thirdMessage,
-      { ...withdrawableProposal, resolution: 'withdrawn' },
-      fourthMessage,
-    ],
-    0,
-  )
+      {
+        type: 'todo',
+        seq: 24,
+        title: 'Confirm the fallback mode',
+        detail: null,
+        completed: true,
+        resolution: 'completed',
+        comment: null,
+      },
+      { type: 'assistant', text: 'The final summary is ready.' },
+      {
+        ...proposal,
+        seq: 21,
+        title: 'Choose the rollout interval',
+      },
+      {
+        type: 'question',
+        requestId: 'request-rollout-window',
+        questions: [pendingQuestionPrompt],
+      },
+      {
+        type: 'permission',
+        requestId: 'permission-request-rollout',
+        tool: 'Write',
+        description: 'Update the rollout configuration.',
+      },
+      {
+        type: 'todo',
+        seq: 25,
+        title: 'Check the alert destination',
+        detail: null,
+        completed: false,
+        resolution: null,
+        comment: null,
+      },
+    ]
+    const answeredMessages = messages.map((message) =>
+      message.type === 'proposal' && message.seq === 21
+        ? { ...message, answer: { choice: 0, comment: null } }
+        : message,
+    )
+    renderConversationMessages(messages, 0, isMobile)
 
-  const getTimelineSnapshot = () => [
-    ...pendingOrder,
-    'Resolved state',
-    ...getTimeline(),
-  ]
-  expect(getTimelineSnapshot()).toEqual([
-    'The rollout plan is ready.',
-    'Proposal: Keep the saved plan',
-    'One alert detail remains.',
-    'Question: Previous retry preference',
-    'The session continues working.',
-    'The final summary is ready.',
-    'Proposal: Choose the rollout interval',
-    'Question: Alert channel',
-    'Proposal: Choose the fallback mode',
-    'Resolved state',
-    'The rollout plan is ready.',
-    'Proposal: Choose the rollout interval',
-    'Proposal: Keep the saved plan',
-    'One alert detail remains.',
-    'Question: Previous retry preference',
-    'Question: Alert channel',
-    'The session continues working.',
-    'Proposal: Choose the fallback mode',
-    'The final summary is ready.',
-  ])
-})
+    const summarizeCards = (root: ParentNode) =>
+      Array.from(
+        root.querySelectorAll<HTMLElement>(
+          '.chat-assistant-message, .chat-question-card, .chat-proposal-card, .chat-permission-card, .chat-todo-card',
+        ),
+        (element) => {
+          if (element.classList.contains('chat-assistant-message')) {
+            return `assistant:${element.textContent.trim()}`
+          }
+          if (element.classList.contains('chat-question-card')) {
+            return `question:${element.querySelector('.chat-question-text')?.textContent ?? ''}`
+          }
+          if (element.classList.contains('chat-proposal-card')) {
+            return `proposal:${element.querySelector('h3')?.textContent ?? ''}`
+          }
+          if (element.classList.contains('chat-permission-card')) {
+            return `permission:${element.querySelector('h2')?.textContent ?? ''}`
+          }
+          return `todo:${element.querySelector('h2')?.textContent ?? ''}:${element.querySelector('h3')?.textContent ?? ''}`
+        },
+      )
+    const pendingActions = container.querySelector(
+      '.conversation-pending-actions',
+    )
+    const composer = container.querySelector('.conversation-composer')
+    const timeline = container.querySelector('.conversation-scroll')
+
+    const getPaneSnapshot = () => [
+      timeline === null ? [] : summarizeCards(timeline),
+      pendingActions === null ? [] : summarizeCards(pendingActions),
+      pendingActions?.nextElementSibling === composer,
+      composer?.getAttribute('data-mobile') ?? null,
+      pendingActions?.getAttribute('aria-live') ?? null,
+    ]
+    const initialSnapshot = getPaneSnapshot()
+    renderConversationMessages(answeredMessages, 0, isMobile)
+    const resolvedSnapshot = getPaneSnapshot()
+    const expectedSnapshots = [
+      [
+        [
+          'assistant:The rollout plan is ready.',
+          'proposal:Keep the saved plan',
+          'question:Which retry preference was selected?',
+          'todo:To-do · done:Confirm the fallback mode',
+          'assistant:The final summary is ready.',
+        ],
+        [
+          'proposal:Choose the rollout interval',
+          'question:Which alert channel should be enabled?',
+          'permission:Permission required',
+          'todo:To-do · pending:Check the alert destination',
+        ],
+        true,
+        isMobile ? 'true' : null,
+        'polite',
+      ],
+      [
+        [
+          'assistant:The rollout plan is ready.',
+          'proposal:Keep the saved plan',
+          'question:Which retry preference was selected?',
+          'todo:To-do · done:Confirm the fallback mode',
+          'assistant:The final summary is ready.',
+          'proposal:Choose the rollout interval',
+        ],
+        [
+          'question:Which alert channel should be enabled?',
+          'permission:Permission required',
+          'todo:To-do · pending:Check the alert destination',
+        ],
+        true,
+        isMobile ? 'true' : null,
+        'polite',
+      ],
+    ]
+    const getSnapshots = () => [initialSnapshot, resolvedSnapshot]
+    expect(getSnapshots()).toEqual(expectedSnapshots)
+  },
+)
+
+it.each([
+  { formFactor: 'desktop', isMobile: false },
+  { formFactor: 'mobile', isMobile: true },
+])(
+  'scrolls to the newest pending card when no keyboard-answerable card exists on $formFactor',
+  ({ isMobile }) => {
+    const existingMessages: ChatItem[] = [
+      {
+        type: 'todo',
+        seq: 50,
+        title: 'Check the first alert channel',
+        detail: null,
+        completed: false,
+        resolution: null,
+        comment: null,
+      },
+    ]
+    renderConversationMessages(existingMessages, 0, isMobile)
+
+    const pendingActions = requireElement(
+      container.querySelector<HTMLDivElement>('.conversation-pending-actions'),
+    )
+    Object.defineProperties(pendingActions, {
+      scrollHeight: { configurable: true, value: 520 },
+      clientHeight: { configurable: true, value: 280 },
+      scrollTop: { configurable: true, writable: true, value: 0 },
+    })
+
+    renderConversationMessages(
+      [
+        ...existingMessages,
+        {
+          type: 'todo',
+          seq: 51,
+          title: 'Review the selected alert channel',
+          detail: null,
+          completed: false,
+          resolution: null,
+          comment: null,
+        },
+      ],
+      0,
+      isMobile,
+    )
+
+    const snapshot = () => [
+      pendingActions.scrollTop,
+      pendingActions.lastElementChild?.className,
+      pendingActions.nextElementSibling?.classList.contains(
+        'conversation-composer',
+      ),
+    ]
+    expect(snapshot()).toEqual([240, 'chat-todo-card', true])
+  },
+)
+
+it.each([
+  { cardType: 'proposal', formFactor: 'desktop', isMobile: false },
+  { cardType: 'proposal', formFactor: 'mobile', isMobile: true },
+  { cardType: 'question', formFactor: 'desktop', isMobile: false },
+])(
+  'keeps the latest keyboard-answerable $cardType choices visible before a todo on $formFactor',
+  ({ cardType, isMobile }) => {
+    const answerableMessage: ChatItem =
+      cardType === 'proposal'
+        ? {
+            ...proposal,
+            seq: 52,
+            title: 'Choose the alert rollout schedule',
+          }
+        : {
+            type: 'question',
+            requestId: 'request-alert-channel',
+            questions: [
+              {
+                ...questionPrompt,
+                header: 'Alert channel',
+                question: 'Which alert channel should be enabled?',
+              },
+            ],
+          }
+    renderConversationMessages([answerableMessage], 0, isMobile)
+
+    const pendingActions = requireElement(
+      container.querySelector<HTMLElement>('.conversation-pending-actions'),
+    )
+    pendingActions.style.maxHeight = cardType === 'proposal' ? '180px' : '120px'
+    pendingActions.scrollTop =
+      pendingActions.scrollHeight - pendingActions.clientHeight
+    const answerableCardSelector =
+      cardType === 'proposal' ? '.chat-proposal-card' : '.chat-question-card'
+    const choicesSelector =
+      cardType === 'proposal'
+        ? '.chat-proposal-options'
+        : '.chat-question-choices'
+    const answerableCard = requireElement(
+      pendingActions.querySelector<HTMLElement>(answerableCardSelector),
+    )
+    const choiceGroup = requireElement(
+      answerableCard.querySelector<HTMLElement>(choicesSelector),
+    )
+    const nativeScrollIntoView = choiceGroup.scrollIntoView.bind(choiceGroup)
+    const scrollIntoView = vi
+      .spyOn(choiceGroup, 'scrollIntoView')
+      .mockImplementation((options) => {
+        nativeScrollIntoView(options)
+      })
+    const isChoiceGroupVisible = () => {
+      const choiceGroupBounds = choiceGroup.getBoundingClientRect()
+      const pendingActionsBounds = pendingActions.getBoundingClientRect()
+      return (
+        choiceGroupBounds.top >= pendingActionsBounds.top - 1 &&
+        choiceGroupBounds.bottom <= pendingActionsBounds.bottom + 1
+      )
+    }
+    const choiceGroupWasVisible = isChoiceGroupVisible()
+
+    renderConversationMessages(
+      [
+        answerableMessage,
+        {
+          type: 'todo',
+          seq: 53,
+          title: 'Confirm the alert rollout schedule',
+          detail: null,
+          completed: false,
+          resolution: null,
+          comment: null,
+        },
+      ],
+      0,
+      isMobile,
+    )
+
+    const snapshot = () => ({
+      choiceGroupWasVisible,
+      scrollCalls: scrollIntoView.mock.calls,
+      choiceGroupIsVisible: isChoiceGroupVisible(),
+      latestCard: pendingActions.lastElementChild?.className,
+    })
+    expect(snapshot()).toEqual({
+      choiceGroupWasVisible: false,
+      scrollCalls: [[{ block: 'nearest' }]],
+      choiceGroupIsVisible: true,
+      latestCard: 'chat-todo-card',
+    })
+  },
+)
 
 it('keeps repeated tool summaries attached to their batch when older rows arrive', () => {
   const earlierSummary: ChatItem = {

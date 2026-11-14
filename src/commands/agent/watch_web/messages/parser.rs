@@ -483,12 +483,14 @@ fn user_item_with_image_directory(
             rewind_id,
             from,
             timestamp: timestamp.map(|timestamp| timestamp.to_rfc3339()),
+            queued_prompt_id: None,
         },
         None => ChatItem::User {
             text,
             rewind_id,
             from,
             timestamp: timestamp.map(|timestamp| timestamp.to_rfc3339()),
+            queued_prompt_id: None,
         },
     }
 }
@@ -659,6 +661,7 @@ mod tests {
                 text,
                 from: None,
                 timestamp: None,
+                queued_prompt_id: None,
             }]
         );
     }
@@ -682,6 +685,7 @@ mod tests {
                 text,
                 from: None,
                 timestamp: None,
+                queued_prompt_id: None,
             }],
         );
     }
