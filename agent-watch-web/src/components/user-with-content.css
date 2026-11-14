@@ -42,7 +42,7 @@
   border: 1px solid var(--aw-border);
   border-radius: var(--aw-radius);
   background: var(--aw-bg-popover);
-  box-shadow: var(--aw-shadow-popover);
+  box-shadow: var(--aw-shadow);
 }
 
 .chat-rewind-menu-options button {
@@ -57,7 +57,7 @@
 
 .chat-rewind-menu-options button:hover,
 .chat-rewind-menu-options button:focus-visible {
-  background: var(--aw-bg-subtle);
+  background: var(--aw-bg-pressed);
 }
 
 .chat-user-message {

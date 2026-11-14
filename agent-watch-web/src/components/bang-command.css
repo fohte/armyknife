@@ -41,11 +41,11 @@
 }
 
 .bang-command-status[data-state='succeeded'] {
-  color: var(--aw-color-success, #218838);
+  color: var(--aw-color-success);
 }
 
 .bang-command-status[data-state='failed'] {
-  color: var(--aw-color-danger, #c53030);
+  color: var(--aw-color-error);
 }
 
 .bang-command-dialog-backdrop {

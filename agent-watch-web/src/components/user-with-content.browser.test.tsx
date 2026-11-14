@@ -1,6 +1,9 @@
+import '#index.css'
+
 import { act, type ComponentProps } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { userEvent } from 'vitest/browser'
 
 import { formatMessageTime } from '#components/message-time'
 import { UserWithContent } from '#components/user-with-content'
@@ -279,4 +282,40 @@ it('offers only conversation rewind for Codex messages', () => {
       (button) => button.textContent,
     ),
   ).toEqual(['Conversation only'])
+})
+
+it('shows the defined popover and hover surfaces in the rewind menu', async () => {
+  render(
+    {
+      type: 'user',
+      text: 'Review this request again.',
+      rewindId: 'fixture-user-message',
+    },
+    {
+      canRewind: true,
+      sessionEngine: 'claude',
+      rewindMenuOpen: true,
+    },
+  )
+
+  const menu = container.querySelector<HTMLElement>('.chat-rewind-menu-options')
+  const button = container.querySelector<HTMLButtonElement>(
+    '.chat-rewind-menu-options button',
+  )
+  if (menu === null || button === null) {
+    throw new Error('Expected rewind menu and option to render')
+  }
+
+  await userEvent.hover(button)
+
+  const menuStyles = () => ({
+    backgroundColor: getComputedStyle(menu).backgroundColor,
+    boxShadow: getComputedStyle(menu).boxShadow,
+    hoverBackgroundColor: getComputedStyle(button).backgroundColor,
+  })
+  expect(menuStyles()).toEqual({
+    backgroundColor: 'rgb(31, 31, 31)',
+    boxShadow: 'none',
+    hoverBackgroundColor: 'rgb(38, 38, 38)',
+  })
 })
