@@ -992,6 +992,7 @@ mod tests {
             agent_status_clear_pending: false,
             created_at: updated_at,
             updated_at,
+            last_prompted_at: None,
             last_message: None,
             current_tool: None,
             current_tool_name: None,

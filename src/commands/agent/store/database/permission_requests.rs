@@ -390,6 +390,7 @@ mod tests {
             agent_status_clear_pending: false,
             created_at: Utc.timestamp_opt(1, 0).single().unwrap(),
             updated_at: Utc.timestamp_opt(1, 0).single().unwrap(),
+            last_prompted_at: None,
             last_message: None,
             current_tool: Some("Bash".to_string()),
             current_tool_name: None,

@@ -195,6 +195,48 @@ it('shows Starred status labels with their category colors', () => {
   })
 })
 
+it('shows only the ten most recently prompted sessions in newest-first order', () => {
+  const promptedSessions = Array.from({ length: 12 }, (_, index) => ({
+    ...baseTodaySession,
+    id: `recent-${String(index + 1)}`,
+    title: `Prompt ${String(index + 1)}`,
+    lastPromptedAt: new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString(),
+  }))
+  renderNav([], {
+    sessions: [
+      ...promptedSessions,
+      { ...baseTodaySession, id: 'not-prompted', lastPromptedAt: null },
+    ],
+  })
+
+  expect(
+    Array.from(
+      container.querySelectorAll<HTMLElement>('.recent-session-title'),
+      (title) => title.textContent,
+    ),
+  ).toEqual([
+    'Prompt 12',
+    'Prompt 11',
+    'Prompt 10',
+    'Prompt 9',
+    'Prompt 8',
+    'Prompt 7',
+    'Prompt 6',
+    'Prompt 5',
+    'Prompt 4',
+    'Prompt 3',
+  ])
+})
+
+it('keeps the Recent section off the mobile navigation', () => {
+  renderNav([], {
+    isMobile: true,
+    sessions: [{ ...baseTodaySession, lastPromptedAt: '2026-01-01T00:00:00Z' }],
+  })
+
+  expect(container.querySelector('#recent-nav-title')).toBeNull()
+})
+
 it.each([
   {
     platform: 'macOS',

@@ -99,6 +99,8 @@ struct SessionView {
     title: String,
     preview: Option<String>,
     updated_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_prompted_at: Option<DateTime<Utc>>,
     elapsed_seconds: u64,
     unread: bool,
     task: Option<TqTaskView>,
@@ -532,6 +534,7 @@ async fn list_sessions<S: SessionSource>(
                     .or_else(|| todo_title.cloned())
                     .or_else(|| session.last_message.clone()),
                 updated_at: session.updated_at,
+                last_prompted_at: session.last_prompted_at,
                 elapsed_seconds: now
                     .signed_duration_since(session.updated_at)
                     .num_seconds()
@@ -695,6 +698,7 @@ mod tests {
             agent_status_clear_pending: false,
             created_at: Utc.timestamp_opt(1_000, 0).unwrap(),
             updated_at: Utc.timestamp_opt(1_000, 0).unwrap(),
+            last_prompted_at: None,
             last_message: None,
             current_tool: None,
             current_tool_name: None,
@@ -1435,6 +1439,8 @@ mod tests {
         source.web_states[0].later_until = None;
         source.web_states[0].is_today = false;
         source.sessions[0].status = SessionStatus::WaitingInput;
+        source.sessions[0].last_prompted_at =
+            Some(Utc.timestamp_opt(900, 0).single().expect("valid timestamp"));
         source.sessions[0].crit_urls = vec!["http://127.0.0.1:6000".to_string()];
         source.sessions[0].web_uis = vec![WebUiRegistration {
             name: "Editor".to_owned(),
@@ -1485,6 +1491,7 @@ mod tests {
             }
         ]);
         expected["sessions"][0]["reviewDocumentId"] = serde_json::json!("fixture-review");
+        expected["sessions"][0]["lastPromptedAt"] = serde_json::json!("1970-01-01T00:15:00Z");
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }

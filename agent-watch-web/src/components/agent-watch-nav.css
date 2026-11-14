@@ -2,6 +2,50 @@
   margin-top: 12px;
 }
 
+.recent-nav {
+  margin-top: 12px;
+}
+
+.recent-nav ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.recent-nav-link {
+  display: grid;
+  width: 100%;
+  min-height: 32px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: var(--aw-radius);
+  padding: 3px 8px;
+  color: var(--aw-text-body);
+  font-size: 12px;
+  text-align: left;
+}
+
+.recent-nav-link:not(:disabled):hover {
+  background: var(--aw-bg-pressed);
+}
+
+.recent-session-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-session-repo {
+  overflow: hidden;
+  color: var(--aw-text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .agent-watch-nav h2 {
   display: flex;
   height: 26px;

@@ -598,6 +598,7 @@ function AppContent() {
       savedViews={savedViews.savedViewsForNav}
       selectedSavedViewId={savedViews.activeSavedViewId}
       todaySessions={todaySessions}
+      sessions={sessionsWithElapsedTime}
       workTypeNavGroups={workTypeNavGroups}
       onViewChange={(nextView) => {
         navigate((current) => ({ ...current, view: nextView }))

@@ -37,6 +37,19 @@ async fn send_message_forwards_nonempty_content_unchanged(action_context: Action
         .await
         .unwrap();
 
+    let sessions_dir = action_context.temp_dir.path().join("sessions");
+    let sent_at = store::watch_web_queued_prompts_from(&sessions_dir, "sample-session")
+        .unwrap()
+        .first()
+        .unwrap()
+        .sent_at;
+    assert_eq!(
+        action_context
+            .load_session("sample-session")
+            .last_prompted_at,
+        Some(sent_at),
+    );
+
     assert_eq!(
         (
             response_snapshot(response, &action_context).await,

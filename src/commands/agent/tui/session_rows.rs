@@ -343,6 +343,7 @@ mod tests {
             status,
             created_at: at_minute(0),
             updated_at: at_minute(0),
+            last_prompted_at: None,
             last_message: None,
             current_tool: None,
             current_tool_name: None,

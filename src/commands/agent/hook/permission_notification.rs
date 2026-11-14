@@ -250,6 +250,7 @@ mod tests {
             status: SessionStatus::WaitingInput,
             created_at: now,
             updated_at: now,
+            last_prompted_at: None,
             last_message: None,
             current_tool: None,
             current_tool_name: None,

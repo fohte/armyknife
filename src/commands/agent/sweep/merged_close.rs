@@ -269,6 +269,7 @@ mod tests {
             status,
             created_at: timestamp,
             updated_at: timestamp,
+            last_prompted_at: None,
             last_message: None,
             current_tool: None,
             current_tool_name: None,

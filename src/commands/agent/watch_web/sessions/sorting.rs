@@ -63,6 +63,7 @@ mod tests {
             title: id.to_string(),
             preview: None,
             updated_at: chrono::Utc.timestamp_opt(updated_at, 0).unwrap(),
+            last_prompted_at: None,
             elapsed_seconds: 0,
             unread: false,
             task: task.clone(),

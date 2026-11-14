@@ -66,6 +66,7 @@ export type Session = {
   title: string
   preview: string | null
   elapsedSeconds: number
+  lastPromptedAt?: string | null
   unread: boolean
   task: SessionTask | null
   tasks?: SessionTask[]
