@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.686](https://github.com/fohte/armyknife/compare/v0.1.685...v0.1.686) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** rewind stopped or paused sessions ([#1750](https://github.com/fohte/armyknife/issues/1750)) ([95d5abc](https://github.com/fohte/armyknife/commit/95d5abc54a1043cd7ded772e4053bf5b2227e50d))
+
 ## [0.1.685](https://github.com/fohte/armyknife/compare/v0.1.684...v0.1.685) (2026-11-14)
 
 
