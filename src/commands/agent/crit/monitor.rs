@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 
 use super::super::store;
-use super::super::types::{Session, WebUiRegistration};
+use super::super::types::Session;
 use super::url::parse_port;
 use crate::commands::agent::review_queue::{self, CRIT_KEY, LiveQueueRuntime};
 use crate::infra::external_tool::ExternalTool;
@@ -425,15 +425,6 @@ fn drop_port_from_session_in(
     port: u16,
     session_id: &str,
 ) -> Result<Option<Session>> {
-    drop_port_from_session_with_unexpose(sessions_dir, port, session_id, unexpose_removed_web_ui)
-}
-
-fn drop_port_from_session_with_unexpose(
-    sessions_dir: &Path,
-    port: u16,
-    session_id: &str,
-    mut unexpose_web_ui: impl FnMut(&WebUiRegistration),
-) -> Result<Option<Session>> {
     let lock = store::lock_session_for_update(sessions_dir, session_id)?;
     let Some(mut session) = lock.load()? else {
         return Ok(None);
@@ -443,12 +434,6 @@ fn drop_port_from_session_with_unexpose(
     session
         .crit_urls
         .retain(|url| parse_port(url).ok() != Some(port));
-    let removed_web_uis = session
-        .web_uis
-        .iter()
-        .filter(|web_ui| web_ui.name == "crit" && parse_port(&web_ui.url).ok() == Some(port))
-        .cloned()
-        .collect::<Vec<_>>();
     let previous_web_ui_len = session.web_uis.len();
     session
         .web_uis
@@ -457,17 +442,7 @@ fn drop_port_from_session_with_unexpose(
         lock.save(&session)?;
     }
     drop(lock);
-    for web_ui in &removed_web_uis {
-        unexpose_web_ui(web_ui);
-    }
     Ok(Some(session))
-}
-
-fn unexpose_removed_web_ui(web_ui: &WebUiRegistration) {
-    #[cfg(not(test))]
-    crate::commands::agent::web_ui::unexpose_web_ui(web_ui);
-    #[cfg(test)]
-    let _ = web_ui;
 }
 
 fn crit_status() -> Result<serde_json::Value> {
@@ -525,9 +500,10 @@ mod tests {
     use std::cell::Cell;
 
     use super::*;
+    use crate::commands::agent::types::WebUiRegistration;
 
     #[test]
-    fn dropping_a_crit_port_unexposes_only_its_removed_registration() {
+    fn dropping_a_crit_port_only_removes_its_registration() {
         let sessions_dir = tempfile::TempDir::new().expect("session directory should be created");
         let session: Session = serde_json::from_value(serde_json::json!({
             "session_id": "fixture-session",
@@ -550,30 +526,18 @@ mod tests {
         }))
         .expect("session should deserialize");
         store::save_session_to(sessions_dir.path(), &session).expect("session should save");
-        let mut unexposed = Vec::new();
-
-        let updated = drop_port_from_session_with_unexpose(
-            sessions_dir.path(),
-            48761,
-            &session.session_id,
-            |web_ui| unexposed.push(web_ui.clone()),
-        )
-        .expect("crit registration should be removed")
-        .expect("session should remain available");
+        let updated = drop_port_from_session_in(sessions_dir.path(), 48761, &session.session_id)
+            .expect("crit registration should be removed")
+            .expect("session should remain available");
 
         assert_eq!(
-            (updated.crit_urls, updated.web_uis, unexposed),
+            (updated.crit_urls, updated.web_uis),
             (
                 Vec::<String>::new(),
                 vec![WebUiRegistration {
                     name: "Editor".to_owned(),
                     url: "http://localhost:48761/design/sample/".to_owned(),
                     exposed_url: None,
-                }],
-                vec![WebUiRegistration {
-                    name: "crit".to_owned(),
-                    url: "http://localhost:48761/crit/review".to_owned(),
-                    exposed_url: Some("https://review.example.test/crit/review".to_owned()),
                 }],
             ),
         );

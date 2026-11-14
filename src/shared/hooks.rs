@@ -1,6 +1,7 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
+use std::time::Duration;
 
 use crate::infra::process;
 use crate::shared::{command, dirs, env_var::EnvVars};
@@ -70,6 +71,21 @@ pub fn run_hook_capture_stdout(
             cmd.env(key, value);
         }
         cmd.output().map_err(anyhow::Error::from)
+    })
+}
+
+/// Runs a hook and returns its trimmed stdout, stopping it if it exceeds `timeout`.
+pub fn run_hook_capture_stdout_with_timeout(
+    hook_name: &str,
+    env_vars: &[(&str, &str)],
+    timeout: Duration,
+) -> anyhow::Result<Option<String>> {
+    run_hook_capture_stdout_with(hook_name, env_vars, existing_hook_path, |path, env_vars| {
+        let mut cmd = command::new(path);
+        for (key, value) in env_vars {
+            cmd.env(key, value);
+        }
+        process::run_with_timeout(cmd, timeout).map_err(anyhow::Error::from)
     })
 }
 

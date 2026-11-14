@@ -14,6 +14,8 @@ mod security;
 mod session_enrichment;
 mod session_state;
 mod sessions;
+mod web_ui_proxy;
+mod web_ui_relays;
 
 use std::ffi::OsString;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -103,15 +105,31 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
 
     let mut listener = listener;
     let mut restart_retry_interval = restart::POLL_INTERVAL;
+    let sessions_dir = store::sessions_dir()?;
     loop {
         let (restart_sender, restart_receiver) = watch::channel(false);
         let mut shutdown_receiver = restart_sender.subscribe();
+        let relay_sessions_dir = sessions_dir.clone();
         let watch_web_server = async move {
-            axum::serve(listener, app(restart_receiver))
+            let (relay_shutdown_sender, relay_shutdown_receiver) = watch::channel(false);
+            let relay_task = web_ui_relays::WebUiRelays::new(relay_sessions_dir)
+                .start(relay_shutdown_receiver)
+                .await;
+            let shutdown_signal_sender = relay_shutdown_sender.clone();
+            let result = axum::serve(listener, app(restart_receiver))
                 .with_graceful_shutdown(async move {
-                    let _ = shutdown_receiver.changed().await;
+                    tokio::select! {
+                        _ = shutdown_receiver.changed() => {}
+                        _ = process_shutdown_signal() => {}
+                    }
+                    shutdown_signal_sender.send_replace(true);
                 })
-                .await
+                .await;
+            relay_shutdown_sender.send_replace(true);
+            if let Err(error) = relay_task.await {
+                tracing::warn!(%error, "web UI relay manager failed to stop");
+            }
+            result
         };
         let server = watch_web_server;
         match restart::wait_for_server_or_restart(
@@ -137,6 +155,26 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
                 listener = TcpListener::bind(address).await?;
             }
         }
+    }
+}
+
+async fn process_shutdown_signal() {
+    let mut terminate =
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(signal) => signal,
+            Err(error) => {
+                tracing::warn!(%error, "failed to listen for termination signal");
+                return std::future::pending().await;
+            }
+        };
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => {
+            if let Err(error) = result {
+                tracing::warn!(%error, "failed to listen for interrupt signal");
+                std::future::pending().await
+            }
+        }
+        _ = terminate.recv() => {}
     }
 }
 

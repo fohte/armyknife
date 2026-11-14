@@ -63,7 +63,6 @@ fn finish_ended_session(
     sessions_dir: &Path,
     side_effects: &SideEffects,
 ) {
-    side_effects.unexpose_web_uis(session);
     side_effects.remove_notification_group(session_id);
     side_effects.archive_tq_session(session_id);
     let work_type_config = session
@@ -223,14 +222,11 @@ mod tests {
             )>,
         >,
     >;
-    type RecordedWebUiUnexposes = Arc<Mutex<Vec<crate::commands::agent::types::WebUiRegistration>>>;
-
     struct RecordingSideEffects {
         side_effects: SideEffects,
         removed: RecordedIds,
         archived: RecordedIds,
         synced: RecordedSyncs,
-        unexposed: RecordedWebUiUnexposes,
     }
 
     struct LifecycleTestContext {
@@ -298,19 +294,16 @@ mod tests {
         let removed = Arc::new(Mutex::new(Vec::new()));
         let archived = Arc::new(Mutex::new(Vec::new()));
         let synced = Arc::new(Mutex::new(Vec::new()));
-        let unexposed = Arc::new(Mutex::new(Vec::new()));
         let mut side_effects = SideEffects::none();
         side_effects.removed_notification_groups = Some(removed.clone());
         side_effects.tq_archive = true;
         side_effects.tq_archive_calls = Some(archived.clone());
         side_effects.tmux_sync_calls = Some(synced.clone());
-        side_effects.web_ui_unexpose_calls = Some(unexposed.clone());
         RecordingSideEffects {
             side_effects,
             removed,
             archived,
             synced,
-            unexposed,
         }
     }
 
@@ -424,7 +417,7 @@ mod tests {
                 updated.status,
                 sinks.removed.lock().expect("removed lock").clone(),
                 sinks.archived.lock().expect("archive lock").clone(),
-                sinks.unexposed.lock().expect("unexposed lock").clone(),
+                updated.web_uis,
             ),
             (
                 SessionStatus::Ended,

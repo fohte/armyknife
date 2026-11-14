@@ -449,7 +449,6 @@ fn process_hook_event_impl_with_settings(
                         session.updated_at = Utc::now();
                         session.restore_from_archive();
                         store::save_session_to(sessions_dir, &session)?;
-                        side_effects.unexpose_web_uis(&session);
                         side_effects.remove_notification_group(&input.session_id);
                         side_effects.archive_tq_session(&input.session_id);
                     }
@@ -3410,7 +3409,7 @@ mod tests {
     }
 
     #[test]
-    fn claude_session_end_unexposes_registered_web_uis() {
+    fn claude_session_end_keeps_web_ui_registrations_for_watch_web_cleanup() {
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let sessions_dir = temp_dir.path();
         let mut session = create_test_session(None);
@@ -3421,9 +3420,7 @@ mod tests {
             exposed_url: Some("https://public.example.test/design/sample/".to_owned()),
         }];
         store::save_session_to(sessions_dir, &session).expect("save session");
-        let mut side_effects = SideEffects::none();
-        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        side_effects.web_ui_unexpose_calls = Some(calls.clone());
+        let side_effects = SideEffects::none();
         let input: HookInput = serde_json::from_value(serde_json::json!({
             "session_id": "end-sess",
             "cwd": "/tmp/test"
@@ -3438,9 +3435,12 @@ mod tests {
         )
         .expect("SessionEnd should succeed");
 
+        let updated = store::load_session_from(sessions_dir, "end-sess")
+            .expect("session should load")
+            .expect("session should remain available");
         assert_eq!(
-            calls.lock().expect("unexpose calls lock").clone(),
-            session.web_uis,
+            (updated.status, updated.web_uis),
+            (SessionStatus::Ended, session.web_uis)
         );
     }
 
@@ -3520,7 +3520,6 @@ mod tests {
             status_inference_calls: None,
             status_inference_spawn_error: None,
             redelivery_calls: None,
-            web_ui_unexpose_calls: None,
         };
 
         let input: HookInput =
@@ -3987,7 +3986,6 @@ mod tests {
             status_inference_calls: None,
             status_inference_spawn_error: None,
             redelivery_calls: None,
-            web_ui_unexpose_calls: None,
         };
 
         let payload = format!(
@@ -4900,7 +4898,6 @@ mod tests {
             status_inference_calls: None,
             status_inference_spawn_error: None,
             redelivery_calls: None,
-            web_ui_unexpose_calls: None,
         };
         let input: HookInput = serde_json::from_value(serde_json::json!({
             "session_id": "test-123",

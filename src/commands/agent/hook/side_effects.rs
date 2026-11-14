@@ -7,8 +7,6 @@ use super::super::status_inference::StatusInferenceSpawnRequest;
 use super::super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
 #[cfg(test)]
 use super::super::types::HookEvent;
-#[cfg(test)]
-use super::super::types::WebUiRegistration;
 use super::super::types::{Session, SessionPrContext, SessionStatus};
 #[cfg(not(test))]
 use super::super::{archive_tq_session_detached, bg};
@@ -67,10 +65,6 @@ pub(super) struct SideEffects {
     /// Test-only sink that records sessions passed to the redelivery worker.
     #[cfg(test)]
     pub(super) redelivery_calls: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
-    /// Test-only sink that records web UI registrations passed to the unexpose hook.
-    #[cfg(test)]
-    pub(super) web_ui_unexpose_calls:
-        Option<std::sync::Arc<std::sync::Mutex<Vec<WebUiRegistration>>>>,
 }
 
 #[cfg(test)]
@@ -112,8 +106,6 @@ impl SideEffects {
             status_inference_spawn_error: None,
             #[cfg(test)]
             redelivery_calls: None,
-            #[cfg(test)]
-            web_ui_unexpose_calls: None,
         }
     }
 
@@ -136,7 +128,6 @@ impl SideEffects {
             status_inference_calls: None,
             status_inference_spawn_error: None,
             redelivery_calls: None,
-            web_ui_unexpose_calls: None,
         }
     }
 
@@ -252,20 +243,5 @@ impl SideEffects {
         }
         #[cfg(not(test))]
         archive_tq_session_detached::spawn_in_background(session_id);
-    }
-
-    pub(super) fn unexpose_web_uis(&self, session: &Session) {
-        #[cfg(test)]
-        if let Some(calls) = &self.web_ui_unexpose_calls {
-            calls
-                .lock()
-                .expect("web_ui_unexpose_calls mutex poisoned")
-                .extend(session.web_uis.iter().cloned());
-            return;
-        }
-        #[cfg(not(test))]
-        crate::commands::agent::web_ui::unexpose_session_web_uis(session);
-        #[cfg(test)]
-        let _ = session;
     }
 }
