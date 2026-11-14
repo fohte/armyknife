@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.683](https://github.com/fohte/armyknife/compare/v0.1.682...v0.1.683) (2026-11-14)
+
+
+### Bug Fixes
+
+* **agent/web-ui:** replace URL by name ([#1743](https://github.com/fohte/armyknife/issues/1743)) ([c5adfb7](https://github.com/fohte/armyknife/commit/c5adfb794f2023eb13d8e1a2da1aabe209c0404d))
+
 ## [0.1.682](https://github.com/fohte/armyknife/compare/v0.1.681...v0.1.682) (2026-11-14)
 
 
