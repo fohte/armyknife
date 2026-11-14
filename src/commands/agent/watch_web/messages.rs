@@ -983,7 +983,8 @@ mod tests {
     };
     use crate::commands::agent::store::{
         AgentDecision, AgentFile, AgentProposal, AgentTodo, PermissionDeniedOperation,
-        PermissionRequestData, TodoResolution, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
+        PermissionRequestData, ProposalResolution, TodoResolution, WatchWebPeerOutMessage,
+        WatchWebQueuedPrompt,
     };
     use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 
@@ -1762,9 +1763,16 @@ mod tests {
             proposal.resolved_at = Some(created_at);
         }
         let resolved = message_response(&router).await;
+        {
+            let mut proposal = proposal.lock().unwrap();
+            proposal.answer = None;
+            proposal.resolution = Some(ProposalResolution::Withdrawn);
+            proposal.comment = Some("The decision changed.".to_string());
+        }
+        let withdrawn = message_response(&router).await;
 
         assert_eq!(
-            (unanswered, resolved),
+            (unanswered, resolved, withdrawn),
             (
                 (
                     StatusCode::OK,
@@ -1775,6 +1783,11 @@ mod tests {
                     StatusCode::OK,
                     Some("application/json".to_string()),
                     json!({"messages":[{"type":"proposal","seq":1,"title":"Sample proposal","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}],"answer":{"choice":0,"comment":"Keep option A."},"resolved":true,"resolution":null,"comment":null}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({"messages":[{"type":"proposal","seq":1,"title":"Sample proposal","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}],"answer":null,"resolved":true,"resolution":"withdrawn","comment":"The decision changed."}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
                 ),
             ),
         );

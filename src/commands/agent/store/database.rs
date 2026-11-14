@@ -46,8 +46,8 @@ pub(crate) use permission_requests::{
 };
 pub(crate) use proposals::{AgentProposal, ProposalResolution};
 pub(crate) use proposals::{
-    add_agent_proposal, agent_proposals, resolve_agent_proposal, unanswered_agent_proposal_bodies,
-    write_agent_proposal_answer,
+    add_agent_proposal, agent_proposals, lock_agent_proposal_resolution, resolve_agent_proposal,
+    unanswered_agent_proposal_bodies, write_agent_proposal_answer,
 };
 pub(crate) use queued_prompts::{WatchWebQueuedAttachment, WatchWebQueuedPrompt};
 pub(crate) use queued_prompts::{

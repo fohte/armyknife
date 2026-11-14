@@ -537,6 +537,14 @@ pub(crate) fn resolve_agent_proposal_from(
     database::resolve_agent_proposal(sessions_dir, session_id, seq, comment)
 }
 
+pub(crate) fn lock_agent_proposal_resolution_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+) -> Result<std::fs::File> {
+    database::lock_agent_proposal_resolution(sessions_dir, session_id, seq)
+}
+
 pub(crate) fn add_agent_todo_in(
     sessions_dir: &Path,
     session_id: &str,

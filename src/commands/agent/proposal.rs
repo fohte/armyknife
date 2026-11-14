@@ -110,6 +110,7 @@ fn withdraw_proposal(
     comment: Option<&str>,
 ) -> Result<()> {
     let comment = comment.map(str::trim).filter(|comment| !comment.is_empty());
+    let _proposal_lock = store::lock_agent_proposal_resolution_from(sessions_dir, session_id, seq)?;
     ensure!(
         store::resolve_agent_proposal_from(sessions_dir, session_id, seq, comment)?,
         "proposal is already resolved or does not exist"
@@ -252,13 +253,6 @@ mod tests {
             .expect("proposal should save");
         withdraw_proposal(sessions_dir.path(), "session-a", withdrawn, None)
             .expect("proposal should be withdrawn");
-        let answer_after_withdrawal = store::write_agent_proposal_answer_from(
-            sessions_dir.path(),
-            "session-a",
-            withdrawn,
-            "{}",
-        )
-        .expect("withdrawn proposal answer should be rejected");
 
         let results = [answered, withdrawn].map(|seq| {
             withdraw_proposal(sessions_dir.path(), "session-a", seq, None)
@@ -266,15 +260,25 @@ mod tests {
                 .map(|error| error.to_string())
         });
         assert_eq!(
-            (results, answer_after_withdrawal),
-            (
-                [
-                    Some("proposal is already resolved or does not exist".to_string()),
-                    Some("proposal is already resolved or does not exist".to_string()),
-                ],
-                false,
-            ),
+            results,
+            [
+                Some("proposal is already resolved or does not exist".to_string()),
+                Some("proposal is already resolved or does not exist".to_string()),
+            ],
         );
+    }
+
+    #[rstest]
+    fn rejects_answering_a_withdrawn_proposal(sessions_dir: TempDir) {
+        let seq = store::add_agent_proposal_in(sessions_dir.path(), "session-a", "{}")
+            .expect("proposal should save");
+        withdraw_proposal(sessions_dir.path(), "session-a", seq, None)
+            .expect("proposal should be withdrawn");
+
+        let answer_after_withdrawal =
+            store::write_agent_proposal_answer_from(sessions_dir.path(), "session-a", seq, "{}")
+                .expect("withdrawn proposal answer should be rejected");
+        assert!(!answer_after_withdrawal);
     }
 
     #[rstest]
