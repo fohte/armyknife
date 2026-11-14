@@ -398,6 +398,7 @@ export function ConversationPaneView({
         <section
           className="conversation-pending-actions"
           aria-label="Items needing your response"
+          aria-live="polite"
           data-mobile={isMobile ? 'true' : undefined}
         >
           {pendingInteractionElements}
