@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.710](https://github.com/fohte/armyknife/compare/v0.1.709...v0.1.710) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** keep recent sessions in cache ([#1800](https://github.com/fohte/armyknife/issues/1800)) ([ff85189](https://github.com/fohte/armyknife/commit/ff8518910ce371a908ef7cd65bee64e3fdc92665))
+
 ## [0.1.709](https://github.com/fohte/armyknife/compare/v0.1.708...v0.1.709) (2026-11-14)
 
 
