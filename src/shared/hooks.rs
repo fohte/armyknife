@@ -1,5 +1,6 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::Output;
 
 use crate::infra::process;
 use crate::shared::{command, dirs, env_var::EnvVars};
@@ -56,6 +57,50 @@ pub fn run_hook(hook_name: &str, env_vars: &[(&str, &str)]) -> anyhow::Result<()
     }
 
     Ok(())
+}
+
+/// Runs a hook and returns its trimmed stdout when it produces a non-empty value.
+pub fn run_hook_capture_stdout(
+    hook_name: &str,
+    env_vars: &[(&str, &str)],
+) -> anyhow::Result<Option<String>> {
+    run_hook_capture_stdout_with(hook_name, env_vars, existing_hook_path, |path, env_vars| {
+        let mut cmd = command::new(path);
+        for (key, value) in env_vars {
+            cmd.env(key, value);
+        }
+        cmd.output().map_err(anyhow::Error::from)
+    })
+}
+
+fn run_hook_capture_stdout_with(
+    hook_name: &str,
+    env_vars: &[(&str, &str)],
+    resolve_hook: impl FnOnce(&str) -> Option<PathBuf>,
+    run: impl FnOnce(&Path, &[(&str, &str)]) -> anyhow::Result<Output>,
+) -> anyhow::Result<Option<String>> {
+    let Some(path) = resolve_hook(hook_name) else {
+        return Ok(None);
+    };
+
+    let metadata = std::fs::metadata(&path)?;
+    if metadata.permissions().mode() & 0o111 == 0 {
+        anyhow::bail!("hook '{}' exists but is not executable", path.display());
+    }
+
+    let output = run(&path, env_vars)?;
+    if !output.status.success() {
+        let code = output
+            .status
+            .code()
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "signal".to_string());
+        anyhow::bail!("hook '{}' exited with status {}", path.display(), code);
+    }
+
+    let stdout = String::from_utf8(output.stdout)?;
+    let value = stdout.trim();
+    Ok((!value.is_empty()).then(|| value.to_owned()))
 }
 
 /// Starts a hook in a detached session and returns without waiting for it.
@@ -154,6 +199,8 @@ mod tests {
     use rstest::rstest;
     use std::cell::RefCell;
     use std::fs;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::ExitStatus;
     use tempfile::TempDir;
 
     fn setup_hook(dir: &TempDir, hook_name: &str, script: &str, executable: bool) -> PathBuf {
@@ -248,6 +295,95 @@ mod tests {
                 );
             },
         );
+    }
+
+    #[test]
+    fn run_hook_capture_stdout_trims_output_without_running_a_process() {
+        let dir = TempDir::new().unwrap();
+        let hook_file = setup_hook(&dir, "web-ui-expose", "", true);
+        let env_vars = [("ARMYKNIFE_WEB_UI_URL", "http://localhost:48761/")];
+        let call = RefCell::new(None::<(PathBuf, Vec<(String, String)>)>);
+
+        let result = run_hook_capture_stdout_with(
+            "web-ui-expose",
+            &env_vars,
+            |_| Some(hook_file.clone()),
+            |path, env_vars| {
+                *call.borrow_mut() = Some((
+                    path.to_path_buf(),
+                    env_vars
+                        .iter()
+                        .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                        .collect(),
+                ));
+                Ok(Output {
+                    status: ExitStatus::from_raw(0),
+                    stdout: b"  https://public.example.test/review  \n".to_vec(),
+                    stderr: Vec::new(),
+                })
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            (result, call.into_inner()),
+            (
+                Some("https://public.example.test/review".to_owned()),
+                Some((
+                    hook_file,
+                    vec![(
+                        "ARMYKNIFE_WEB_UI_URL".to_owned(),
+                        "http://localhost:48761/".to_owned(),
+                    )],
+                ))
+            )
+        );
+    }
+
+    #[rstest]
+    #[case::empty(Vec::new(), Ok(None))]
+    #[case::failure(
+        vec![1, 0],
+        Err("hook '<path>' exited with status 1".to_owned())
+    )]
+    fn captured_hook_output_handles_missing_empty_and_failure(
+        #[case] output: Vec<u8>,
+        #[case] expected: Result<Option<String>, String>,
+    ) {
+        let dir = TempDir::new().unwrap();
+        let hook_file = setup_hook(&dir, "web-ui-expose", "", true);
+        let result = run_hook_capture_stdout_with(
+            "web-ui-expose",
+            &[],
+            |_| Some(hook_file.clone()),
+            |_, _| {
+                let (status, stdout) = if output.first() == Some(&1) {
+                    (ExitStatus::from_raw(1 << 8), Vec::new())
+                } else {
+                    (ExitStatus::from_raw(0), output)
+                };
+                Ok(Output {
+                    status,
+                    stdout,
+                    stderr: Vec::new(),
+                })
+            },
+        );
+        let expected =
+            expected.map_err(|message| message.replace("<path>", &hook_file.display().to_string()));
+        assert_eq!(result.map_err(|error| error.to_string()), expected);
+    }
+
+    #[test]
+    fn captured_hook_output_skips_a_missing_hook() {
+        let result = run_hook_capture_stdout_with(
+            "web-ui-expose",
+            &[],
+            |_| None,
+            |_, _| anyhow::bail!("runner should not be called"),
+        );
+
+        assert_eq!(result.unwrap(), None);
     }
 
     #[rstest]

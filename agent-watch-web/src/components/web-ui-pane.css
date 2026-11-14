@@ -33,7 +33,8 @@
   font-weight: 700;
 }
 
-.web-ui-pane-header a {
+.web-ui-pane-header a,
+.web-ui-pane-header span {
   overflow: hidden;
   flex: 1;
   color: var(--aw-text-muted);
@@ -41,6 +42,14 @@
   font-size: 10.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.web-ui-pane-unavailable {
+  margin: auto;
+  padding: 24px;
+  color: var(--aw-text-muted);
+  font-size: 13px;
+  text-align: center;
 }
 
 .web-ui-pane-header [data-slot='button'] {

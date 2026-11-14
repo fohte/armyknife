@@ -410,6 +410,7 @@ export function useConversationStatusPanel({
         <WebUiPane
           name={webUi.name}
           url={webUi.url}
+          exposedUrl={webUi.exposedUrl ?? null}
           onClose={onCloseStatusPanel}
         />
       ),

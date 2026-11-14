@@ -467,6 +467,13 @@ async fn list_sessions<S: SessionSource>(
                 } else {
                     None
                 };
+            let crit_exposed_url = crit_url.as_ref().and_then(|url| {
+                session
+                    .web_uis
+                    .iter()
+                    .find(|web_ui| web_ui.name == "crit" && web_ui.url == *url)
+                    .and_then(|web_ui| web_ui.exposed_url.clone())
+            });
             let web_uis = session
                 .web_uis
                 .iter()
@@ -475,6 +482,7 @@ async fn list_sessions<S: SessionSource>(
                 .chain(crit_url.as_ref().map(|url| WebUiRegistration {
                     name: "crit".to_owned(),
                     url: url.clone(),
+                    exposed_url: crit_exposed_url,
                 }))
                 .collect();
             SessionView {
@@ -1327,10 +1335,18 @@ mod tests {
         source.sessions[0].last_prompted_at =
             Some(Utc.timestamp_opt(900, 0).single().expect("valid timestamp"));
         source.sessions[0].crit_urls = vec!["http://127.0.0.1:6000".to_string()];
-        source.sessions[0].web_uis = vec![WebUiRegistration {
-            name: "Editor".to_owned(),
-            url: "http://127.0.0.1:6001/design/sample/".to_owned(),
-        }];
+        source.sessions[0].web_uis = vec![
+            WebUiRegistration {
+                name: "Editor".to_owned(),
+                url: "http://127.0.0.1:6001/design/sample/".to_owned(),
+                exposed_url: Some("https://public.example.test/design/sample/".to_owned()),
+            },
+            WebUiRegistration {
+                name: "crit".to_owned(),
+                url: "http://127.0.0.1:6000".to_owned(),
+                exposed_url: Some("https://review.example.test/crit".to_owned()),
+            },
+        ];
         let review_document_dir = tempfile::TempDir::new().unwrap();
         let review_document_path = review_document_dir.path().join("fixture-draft.md");
         std::fs::write(&review_document_path, "fixture").unwrap();
@@ -1368,11 +1384,13 @@ mod tests {
         expected["sessions"][0]["webUis"] = serde_json::json!([
             {
                 "name": "Editor",
-                "url": "http://127.0.0.1:6001/design/sample/"
+                "url": "http://127.0.0.1:6001/design/sample/",
+                "exposedUrl": "https://public.example.test/design/sample/"
             },
             {
                 "name": "crit",
-                "url": "http://127.0.0.1:6000"
+                "url": "http://127.0.0.1:6000",
+                "exposedUrl": "https://review.example.test/crit"
             }
         ]);
         expected["sessions"][0]["reviewDocumentId"] = serde_json::json!("fixture-review");

@@ -14,7 +14,6 @@ mod security;
 mod session_enrichment;
 mod session_state;
 mod sessions;
-mod web_ui_proxy;
 
 use std::ffi::OsString;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -44,7 +43,6 @@ pub struct WatchWebArgs {
 }
 
 const LISTEN_PORT: u16 = 4317;
-const WEB_UI_PROXY_PORT: u16 = 4318;
 pub(super) static SERVER_INSTANCE_ID: LazyLock<String> =
     LazyLock::new(|| uuid::Uuid::new_v4().to_string());
 
@@ -93,13 +91,7 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
     let mut executable_identity = restart::ExecutableIdentity::read(&executable)?;
     let restart_args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let address = SocketAddr::from((Ipv4Addr::LOCALHOST, LISTEN_PORT));
-    let web_ui_proxy_address = SocketAddr::from((Ipv4Addr::LOCALHOST, WEB_UI_PROXY_PORT));
     let listener = TcpListener::bind(address).await?;
-    let web_ui_proxy_listener = TcpListener::bind(web_ui_proxy_address).await?;
-    let web_ui_proxy_client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .no_proxy()
-        .build()?;
     let url = format!("http://{address}");
     println!("Agent Watch Web UI: {url}");
     open_browser_on_startup(
@@ -110,24 +102,10 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
     );
 
     let mut listener = listener;
-    let mut web_ui_proxy_listener = web_ui_proxy_listener;
     let mut restart_retry_interval = restart::POLL_INTERVAL;
     loop {
         let (restart_sender, restart_receiver) = watch::channel(false);
         let mut shutdown_receiver = restart_sender.subscribe();
-        let web_ui_proxy_restart_receiver = restart_receiver.clone();
-        let web_ui_proxy_client = web_ui_proxy_client.clone();
-        let web_ui_proxy_server = async move {
-            axum::serve(
-                web_ui_proxy_listener,
-                web_ui_proxy::router(store::list_all_sessions, web_ui_proxy_client),
-            )
-            .with_graceful_shutdown(async move {
-                let mut shutdown_receiver = web_ui_proxy_restart_receiver;
-                let _ = shutdown_receiver.changed().await;
-            })
-            .await
-        };
         let watch_web_server = async move {
             axum::serve(listener, app(restart_receiver))
                 .with_graceful_shutdown(async move {
@@ -135,8 +113,7 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
                 })
                 .await
         };
-        let server =
-            async move { tokio::try_join!(watch_web_server, web_ui_proxy_server).map(|_| ()) };
+        let server = watch_web_server;
         match restart::wait_for_server_or_restart(
             server,
             restart::wait_for_replacement(&executable, executable_identity, restart_retry_interval),
@@ -158,7 +135,6 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
                     }
                 }
                 listener = TcpListener::bind(address).await?;
-                web_ui_proxy_listener = TcpListener::bind(web_ui_proxy_address).await?;
             }
         }
     }
@@ -402,7 +378,7 @@ mod tests {
     #[case::untrusted_host_get(
         "GET",
         "/",
-        "localhost.evil.com",
+        "localhost..evil.com",
         None,
         StatusCode::FORBIDDEN,
         None,

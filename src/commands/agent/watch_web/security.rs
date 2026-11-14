@@ -5,15 +5,18 @@ use axum::http::{HeaderMap, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
+const ALLOWED_HOSTS_ENV: &str = "ARMYKNIFE_WATCH_WEB_ALLOWED_HOSTS";
+
 pub(super) async fn validate_request(request: Request, next: Next) -> Response {
-    if request_is_allowed(request.method(), request.headers()) {
+    let allowed_hosts = std::env::var(ALLOWED_HOSTS_ENV).unwrap_or_default();
+    if request_is_allowed(request.method(), request.headers(), &allowed_hosts) {
         next.run(request).await
     } else {
         StatusCode::FORBIDDEN.into_response()
     }
 }
 
-fn request_is_allowed(method: &Method, headers: &HeaderMap) -> bool {
+fn request_is_allowed(method: &Method, headers: &HeaderMap, allowed_hosts: &str) -> bool {
     let Some(host) = headers
         .get(HOST)
         .and_then(|value| value.to_str().ok())
@@ -22,7 +25,7 @@ fn request_is_allowed(method: &Method, headers: &HeaderMap) -> bool {
         return false;
     };
 
-    if host.as_str().contains('@') || !allowed_host(host.host()) {
+    if host.as_str().contains('@') || !allowed_host(host.host(), allowed_hosts) {
         return false;
     }
 
@@ -53,9 +56,35 @@ pub(super) fn is_websocket_upgrade(headers: &HeaderMap) -> bool {
         .is_some_and(|value| value.eq_ignore_ascii_case("websocket"))
 }
 
-fn allowed_host(host: &str) -> bool {
-    let host = host.to_ascii_lowercase();
-    host == "localhost" || host == "127.0.0.1" || (host.ends_with(".ts.net") && host.len() > 7)
+fn allowed_host(host: &str, allowed_hosts: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return ip.is_loopback();
+    }
+
+    let is_valid_domain = host.len() <= 253
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+                && label
+                    .as_bytes()
+                    .last()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        });
+
+    is_valid_domain
+        && allowed_hosts
+            .split(',')
+            .any(|allowed_host| allowed_host.trim().eq_ignore_ascii_case(host))
 }
 
 #[cfg(test)]
@@ -67,50 +96,56 @@ mod tests {
     use super::request_is_allowed;
 
     #[rstest]
-    #[case::localhost("localhost:4317", true)]
-    #[case::loopback("127.0.0.1:4317", true)]
-    #[case::tailscale_host("device.example.ts.net", true)]
-    #[case::userinfo_host("user@localhost", false)]
-    #[case::evil_ts_net("evil-ts.net", false)]
-    #[case::localhost_with_evil_suffix("localhost.evil.com", false)]
-    #[case::tailscale_host_with_evil_suffix("foo.ts.net.evil.com", false)]
-    #[case::bare_tailscale_suffix(".ts.net", false)]
-    #[case::tailscale_suffix_is_not_a_host("example.ts.net.attacker.invalid", false)]
-    #[case::remote_ip("192.0.2.10:4317", false)]
-    #[case::missing_host("", false)]
-    fn only_loopback_and_tailscale_hosts_are_allowed(#[case] host: &str, #[case] expected: bool) {
+    #[case::localhost("localhost:4317", "", true)]
+    #[case::loopback("127.0.0.1:4317", "", true)]
+    #[case::unconfigured_domain("watch.example.test", "", false)]
+    #[case::configured_domain("watch.example.test", "watch.example.test", true)]
+    #[case::wrong_configured_domain("watch.evil.test", "watch.example.test", false)]
+    #[case::userinfo_host("user@localhost", "", false)]
+    #[case::domain_with_empty_label("watch..example.test", "watch..example.test", false)]
+    #[case::domain_with_leading_hyphen("-watch.example.test", "-watch.example.test", false)]
+    #[case::remote_ip("192.0.2.10:4317", "192.0.2.10", false)]
+    #[case::missing_host("", "", false)]
+    fn loopback_and_configured_hosts_are_allowed(
+        #[case] host: &str,
+        #[case] allowed_hosts: &str,
+        #[case] expected: bool,
+    ) {
         let mut headers = HeaderMap::new();
         if !host.is_empty() {
             headers.insert("host", HeaderValue::from_str(host).unwrap());
         }
 
         assert_eq!(
-            request_is_allowed(&axum::http::Method::GET, &headers),
+            request_is_allowed(&axum::http::Method::GET, &headers, allowed_hosts),
             expected
         );
     }
 
     #[rstest]
-    #[case::matching_origin("localhost:4317", "http://localhost:4317", true)]
-    #[case::matching_tailscale_origin(
-        "device.example.ts.net",
-        "https://device.example.ts.net",
+    #[case::matching_origin("localhost:4317", "http://localhost:4317", "", true)]
+    #[case::matching_external_origin(
+        "watch.example.test",
+        "https://watch.example.test",
+        "watch.example.test",
         true
     )]
     #[case::origin_with_userinfo(
-        "device.example.ts.net",
-        "https://user@device.example.ts.net",
+        "watch.example.test",
+        "https://user@watch.example.test",
+        "watch.example.test",
         false
     )]
-    #[case::different_host("localhost:4317", "http://attacker.invalid:4317", false)]
-    #[case::different_port("localhost:4317", "http://localhost:4318", false)]
-    #[case::origin_with_path("localhost:4317", "http://localhost:4317/path", false)]
-    #[case::relative_origin("localhost:4317", "//localhost:4317", false)]
-    #[case::null_origin("localhost:4317", "null", false)]
-    #[case::missing_origin("localhost:4317", "", false)]
+    #[case::different_host("localhost:4317", "http://attacker.invalid:4317", "", false)]
+    #[case::different_port("localhost:4317", "http://localhost:4320", "", false)]
+    #[case::origin_with_path("localhost:4317", "http://localhost:4317/path", "", false)]
+    #[case::relative_origin("localhost:4317", "//localhost:4317", "", false)]
+    #[case::null_origin("localhost:4317", "null", "", false)]
+    #[case::missing_origin("localhost:4317", "", "", false)]
     fn writes_require_an_origin_matching_host(
         #[case] host: &str,
         #[case] origin: &str,
+        #[case] allowed_hosts: &str,
         #[case] expected: bool,
     ) {
         let mut headers = HeaderMap::new();
@@ -120,14 +155,14 @@ mod tests {
         }
 
         assert_eq!(
-            request_is_allowed(&axum::http::Method::POST, &headers),
+            request_is_allowed(&axum::http::Method::POST, &headers, allowed_hosts),
             expected
         );
     }
 
     #[rstest]
     #[case::missing_origin(None, false)]
-    #[case::different_port(Some("http://localhost:4318"), false)]
+    #[case::different_port(Some("http://localhost:4320"), false)]
     #[case::matching_origin(Some("http://localhost:4317"), true)]
     fn websocket_upgrades_require_an_origin_matching_host(
         #[case] origin: Option<&str>,
@@ -140,7 +175,7 @@ mod tests {
             headers.insert(ORIGIN, HeaderValue::from_str(origin).unwrap());
         }
 
-        assert_eq!(request_is_allowed(&Method::GET, &headers), expected);
+        assert_eq!(request_is_allowed(&Method::GET, &headers, ""), expected);
     }
 
     #[rstest]
@@ -150,6 +185,6 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("host", HeaderValue::from_static("localhost"));
 
-        assert_eq!(request_is_allowed(&method, &headers), expected);
+        assert_eq!(request_is_allowed(&method, &headers, ""), expected);
     }
 }

@@ -449,6 +449,7 @@ fn process_hook_event_impl_with_settings(
                         session.updated_at = Utc::now();
                         session.restore_from_archive();
                         store::save_session_to(sessions_dir, &session)?;
+                        side_effects.unexpose_web_uis(&session);
                         side_effects.remove_notification_group(&input.session_id);
                         side_effects.archive_tq_session(&input.session_id);
                     }
@@ -1688,7 +1689,7 @@ fn build_subtitle(session: &Session) -> Option<String> {
 mod tests {
     use super::*;
     use crate::commands::agent::session_pr_context::fixed_context_capture;
-    use crate::commands::agent::types::AgentStatus;
+    use crate::commands::agent::types::{AgentStatus, WebUiRegistration};
     use rstest::{fixture, rstest};
 
     fn process_hook_event_without_instruction(
@@ -3408,6 +3409,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn claude_session_end_unexposes_registered_web_uis() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+        let mut session = create_test_session(None);
+        session.session_id = "end-sess".to_owned();
+        session.web_uis = vec![WebUiRegistration {
+            name: "Editor".to_owned(),
+            url: "http://127.0.0.1:48761/design/sample/".to_owned(),
+            exposed_url: Some("https://public.example.test/design/sample/".to_owned()),
+        }];
+        store::save_session_to(sessions_dir, &session).expect("save session");
+        let mut side_effects = SideEffects::none();
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        side_effects.web_ui_unexpose_calls = Some(calls.clone());
+        let input: HookInput = serde_json::from_value(serde_json::json!({
+            "session_id": "end-sess",
+            "cwd": "/tmp/test"
+        }))
+        .expect("input should deserialize");
+
+        process_hook_event_without_instruction(
+            HookEvent::SessionEnd,
+            input,
+            sessions_dir,
+            &side_effects,
+        )
+        .expect("SessionEnd should succeed");
+
+        assert_eq!(
+            calls.lock().expect("unexpose calls lock").clone(),
+            session.web_uis,
+        );
+    }
+
     #[rstest]
     #[case::claude_sweep_paused_keeps_one(
         Engine::Claude,
@@ -3484,6 +3520,7 @@ mod tests {
             status_inference_calls: None,
             status_inference_spawn_error: None,
             redelivery_calls: None,
+            web_ui_unexpose_calls: None,
         };
 
         let input: HookInput =
@@ -3950,6 +3987,7 @@ mod tests {
             status_inference_calls: None,
             status_inference_spawn_error: None,
             redelivery_calls: None,
+            web_ui_unexpose_calls: None,
         };
 
         let payload = format!(
@@ -4862,6 +4900,7 @@ mod tests {
             status_inference_calls: None,
             status_inference_spawn_error: None,
             redelivery_calls: None,
+            web_ui_unexpose_calls: None,
         };
         let input: HookInput = serde_json::from_value(serde_json::json!({
             "session_id": "test-123",

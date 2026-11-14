@@ -218,6 +218,8 @@ pub struct Session {
 pub struct WebUiRegistration {
     pub name: String,
     pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposed_url: Option<String>,
 }
 
 impl Session {
@@ -325,6 +327,7 @@ mod tests {
             vec![WebUiRegistration {
                 name: "Design editor".to_owned(),
                 url: "http://127.0.0.1:4721/design/sample/".to_owned(),
+                exposed_url: None,
             }],
         );
     }

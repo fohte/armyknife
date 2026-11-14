@@ -31,3 +31,18 @@ export const CritReviewFillsTheScreen: Story = {
     defaultFullscreen: true,
   },
 }
+
+export const RemotePaneOpensTheExposedUrl: Story = {
+  name: 'A remote pane opens the exposed URL',
+  args: {
+    exposedUrl: 'https://review.example.invalid/review/sample',
+    hostname: 'watch.example.invalid',
+  },
+}
+
+export const RemotePaneShowsTheLocalUrlWithoutExposure: Story = {
+  name: 'A remote pane shows the local URL when exposure is unavailable',
+  args: {
+    hostname: 'watch.example.invalid',
+  },
+}

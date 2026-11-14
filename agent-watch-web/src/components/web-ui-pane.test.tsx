@@ -16,6 +16,17 @@ function relayTargets() {
   }
 }
 
+function unavailablePaneState() {
+  return {
+    iframe: container.querySelector('iframe')?.getAttribute('src') ?? null,
+    link: container.querySelector('a')?.getAttribute('href') ?? null,
+    status: container.querySelector('[role="status"]')?.textContent,
+    localUrl: container.querySelector(
+      '.web-ui-pane-header span:not(.web-ui-pane-title)',
+    )?.textContent,
+  }
+}
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
@@ -85,20 +96,64 @@ it('toggles the review between its column and fullscreen layouts', () => {
   })
 })
 
-it('opens the iframe and external link through the crit relay', () => {
+it('opens the local web UI directly in the iframe and external link', () => {
   root = createRoot(container)
   act(() => {
     root?.render(
       <WebUiPane
         name="crit"
         url="http://127.0.0.1:48761/review/sample"
+        exposedUrl="https://public.example.test/review/sample"
+        hostname="localhost"
         onClose={() => undefined}
       />,
     )
   })
 
   expect(relayTargets()).toEqual({
-    iframe: `${window.location.protocol}//localhost:4318/_web-ui/48761/review/sample`,
-    link: `${window.location.protocol}//localhost:4318/_web-ui/48761/review/sample`,
+    iframe: 'http://127.0.0.1:48761/review/sample',
+    link: 'http://127.0.0.1:48761/review/sample',
+  })
+})
+
+it('opens the exposed web UI when watch-web is opened remotely', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <WebUiPane
+        name="Editor"
+        url="http://127.0.0.1:48761/design/sample/"
+        exposedUrl="https://public.example.test/design/sample/"
+        hostname="watch.example.test"
+        onClose={() => undefined}
+      />,
+    )
+  })
+
+  expect(relayTargets()).toEqual({
+    iframe: 'https://public.example.test/design/sample/',
+    link: 'https://public.example.test/design/sample/',
+  })
+})
+
+it('shows the local URL when no remote URL is available', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <WebUiPane
+        name="Editor"
+        url="http://127.0.0.1:48761/design/sample/"
+        hostname="watch.example.test"
+        onClose={() => undefined}
+      />,
+    )
+  })
+
+  expect(unavailablePaneState()).toEqual({
+    iframe: null,
+    link: null,
+    status:
+      'This interface is unavailable outside this machine. Local URL: http://127.0.0.1:48761/design/sample/',
+    localUrl: 'http://127.0.0.1:48761/design/sample/',
   })
 })
