@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.711](https://github.com/fohte/armyknife/compare/v0.1.710...v0.1.711) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** show sent messages only once ([#1802](https://github.com/fohte/armyknife/issues/1802)) ([3b17ade](https://github.com/fohte/armyknife/commit/3b17adef9ab7d6bdcd3e27a1f2e34a6303d6e93d))
+
 ## [0.1.710](https://github.com/fohte/armyknife/compare/v0.1.709...v0.1.710) (2026-11-14)
 
 
