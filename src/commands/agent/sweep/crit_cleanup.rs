@@ -14,7 +14,17 @@ pub(super) fn clear_stale_links(sessions_dir: &Path, dry_run: bool) -> Result<us
     let live_crit_ports = crit_sessions_dir().and_then(|crit_sessions_dir| {
         read_live_crit_ports(&crit_sessions_dir, crate::infra::process::is_process_alive)
     });
-    let live_crit_ports = match live_crit_ports {
+    let live_crit_ports = live_crit_ports_or_unknown(live_crit_ports);
+    clear_stale_links_with_port_probe_and_live_crit_ports(
+        sessions_dir,
+        dry_run,
+        is_crit_port_live,
+        live_crit_ports.as_ref(),
+    )
+}
+
+fn live_crit_ports_or_unknown(ports: Result<HashSet<u16>>) -> Option<HashSet<u16>> {
+    match ports {
         Ok(ports) => Some(ports),
         Err(error) => {
             tracing::warn!(
@@ -23,13 +33,7 @@ pub(super) fn clear_stale_links(sessions_dir: &Path, dry_run: bool) -> Result<us
             );
             None
         }
-    };
-    clear_stale_links_with_port_probe_and_live_crit_ports(
-        sessions_dir,
-        dry_run,
-        is_crit_port_live,
-        live_crit_ports.as_ref(),
-    )
+    }
 }
 
 #[cfg(test)]
@@ -472,7 +476,7 @@ mod tests {
             dir.path(),
             false,
             |_| false,
-            None,
+            live_crit_ports_or_unknown(Err(anyhow::anyhow!("fixture read failure"))).as_ref(),
         )
         .expect("crit cleanup pass should succeed");
 
