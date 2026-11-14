@@ -6,6 +6,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   useCallback,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -126,6 +127,7 @@ export function ConversationPaneView({
   onToggleToday,
 }: ConversationPaneViewProps) {
   const interruptInFlight = useRef(false)
+  const pendingActionsRef = useRef<HTMLElement | null>(null)
   const [isInterrupting, setIsInterrupting] = useState(false)
   const currentDate = new Date()
   const currentYear = currentDate.getFullYear()
@@ -232,6 +234,15 @@ export function ConversationPaneView({
     sessions: sessionLinkTargets,
     now,
   })
+  const latestPendingInteractionKey =
+    pendingInteractionElements.at(-1)?.key ?? null
+  useLayoutEffect(() => {
+    const pendingActions = pendingActionsRef.current
+    if (pendingActions !== null) {
+      pendingActions.scrollTop =
+        pendingActions.scrollHeight - pendingActions.clientHeight
+    }
+  }, [latestPendingInteractionKey])
   const handlePasteFiles = (files: File[]) => {
     onPasteFiles(files)
     onClearError()
@@ -400,6 +411,7 @@ export function ConversationPaneView({
           aria-label="Items needing your response"
           aria-live="polite"
           data-mobile={isMobile ? 'true' : undefined}
+          ref={pendingActionsRef}
         >
           {pendingInteractionElements}
         </section>

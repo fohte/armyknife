@@ -228,7 +228,7 @@
 .conversation-pane[data-mobile='true'] .conversation-pending-actions {
   box-sizing: border-box;
   width: 100%;
-  max-height: min(40dvh, 280px);
+  max-height: min(50dvh, 400px);
   margin: 0;
   padding: 8px 12px;
   border-top: 1px solid var(--aw-border-row);

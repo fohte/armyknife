@@ -8232,6 +8232,58 @@ it.each([
   },
 )
 
+it.each([
+  { formFactor: 'desktop', isMobile: false },
+  { formFactor: 'mobile', isMobile: true },
+])(
+  'scrolls the newest pending card into view when another card arrives on $formFactor',
+  ({ isMobile }) => {
+    const existingMessages: ChatItem[] = [
+      {
+        type: 'question',
+        requestId: 'request-existing-choice',
+        questions: [questionPrompt],
+      },
+    ]
+    renderConversationMessages(existingMessages, 0, isMobile)
+
+    const pendingActions = requireElement(
+      container.querySelector<HTMLDivElement>('.conversation-pending-actions'),
+    )
+    Object.defineProperties(pendingActions, {
+      scrollHeight: { configurable: true, value: 520 },
+      clientHeight: { configurable: true, value: 280 },
+      scrollTop: { configurable: true, writable: true, value: 0 },
+    })
+
+    renderConversationMessages(
+      [
+        ...existingMessages,
+        {
+          type: 'todo',
+          seq: 51,
+          title: 'Review the selected alert channel',
+          detail: null,
+          completed: false,
+          resolution: null,
+          comment: null,
+        },
+      ],
+      0,
+      isMobile,
+    )
+
+    const snapshot = () => [
+      pendingActions.scrollTop,
+      pendingActions.lastElementChild?.className,
+      pendingActions.nextElementSibling?.classList.contains(
+        'conversation-composer',
+      ),
+    ]
+    expect(snapshot()).toEqual([240, 'chat-todo-card', true])
+  },
+)
+
 it('keeps repeated tool summaries attached to their batch when older rows arrive', () => {
   const earlierSummary: ChatItem = {
     type: 'tool_summary',
