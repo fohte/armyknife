@@ -77,3 +77,20 @@ export const EditingTheSessionTitleOnMobile: Story = {
     titleEditing: true,
   },
 }
+
+export const SessionPullRequestCanBeMerged: Story = {
+  name: 'The header offers to merge the session pull request',
+  args: {
+    session: {
+      ...session,
+      pullRequest: {
+        number: 42,
+        state: 'Open',
+        owner: 'example',
+        repo: 'service',
+        url: 'https://github.com/example/service/pull/42',
+        headSha: 'sample-head-sha',
+      },
+    },
+  },
+}

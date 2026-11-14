@@ -61,6 +61,13 @@ pub struct PrProgressInfo {
     pub head_sha: Option<String>,
 }
 
+/// Pull request details and head commit SHA used by the watch-web header.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrHeadInfo {
+    pub pull_request: PrInfo,
+    pub head_sha: Option<String>,
+}
+
 /// Parameters for updating a pull request.
 #[derive(Debug, Clone)]
 pub struct UpdatePrParams {
@@ -282,6 +289,23 @@ impl PrBodyClient for GitHubClient {
 const BATCH_SIZE: usize = 50;
 pub(super) const PR_PROGRESS_FIELDS: &str = "number title state url mergedAt headRefOid commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }";
 
+#[derive(Clone, Copy)]
+enum BranchPrQueryFields {
+    Basic,
+    Head,
+    Progress,
+}
+
+impl BranchPrQueryFields {
+    fn selection(self) -> &'static str {
+        match self {
+            Self::Basic => "number title state url mergedAt",
+            Self::Head => "number title state url mergedAt headRefOid",
+            Self::Progress => PR_PROGRESS_FIELDS,
+        }
+    }
+}
+
 impl GitHubClient {
     /// Fetch PR status for multiple repo/branch combinations in a single GraphQL call.
     ///
@@ -292,10 +316,34 @@ impl GitHubClient {
         &self,
         queries: &[BranchPrQuery],
     ) -> Result<HashMap<(String, String, String), Option<PrInfo>>> {
-        let progress = self.query_prs_batch(queries, false).await?;
+        let progress = self
+            .query_prs_batch(queries, BranchPrQueryFields::Basic)
+            .await?;
         Ok(progress
             .into_iter()
             .map(|(key, info)| (key, info.map(|info| info.pull_request)))
+            .collect())
+    }
+
+    /// Fetch PR details and head commit SHA for multiple repo/branch pairs.
+    pub async fn get_prs_with_head_sha_for_branches_batch(
+        &self,
+        queries: &[BranchPrQuery],
+    ) -> Result<HashMap<(String, String, String), Option<PrHeadInfo>>> {
+        let progress = self
+            .query_prs_batch(queries, BranchPrQueryFields::Head)
+            .await?;
+        Ok(progress
+            .into_iter()
+            .map(|(key, info)| {
+                (
+                    key,
+                    info.map(|info| PrHeadInfo {
+                        pull_request: info.pull_request,
+                        head_sha: info.head_sha,
+                    }),
+                )
+            })
             .collect())
     }
 
@@ -304,13 +352,14 @@ impl GitHubClient {
         &self,
         queries: &[BranchPrQuery],
     ) -> Result<HashMap<(String, String, String), Option<PrProgressInfo>>> {
-        self.query_prs_batch(queries, true).await
+        self.query_prs_batch(queries, BranchPrQueryFields::Progress)
+            .await
     }
 
     async fn query_prs_batch(
         &self,
         queries: &[BranchPrQuery],
-        include_ci_state: bool,
+        fields: BranchPrQueryFields,
     ) -> Result<HashMap<(String, String, String), Option<PrProgressInfo>>> {
         if queries.is_empty() {
             return Ok(HashMap::new());
@@ -321,7 +370,7 @@ impl GitHubClient {
 
         // Split into chunks to stay within GraphQL complexity limits
         for chunk in queries.chunks(BATCH_SIZE) {
-            let chunk_results = self.execute_batch_query(chunk, include_ci_state).await?;
+            let chunk_results = self.execute_batch_query(chunk, fields).await?;
             all_results.extend(chunk_results);
         }
 
@@ -335,7 +384,7 @@ impl GitHubClient {
     async fn execute_batch_query(
         &self,
         queries: &[BranchPrQuery],
-        include_ci_state: bool,
+        fields: BranchPrQueryFields,
     ) -> Result<HashMap<(String, String, String), Option<PrProgressInfo>>> {
         // Group queries by (owner, repo) so each repo appears once in the GraphQL query
         let mut repo_branches: HashMap<(String, String), Vec<(usize, String)>> = HashMap::new();
@@ -366,11 +415,7 @@ impl GitHubClient {
 
             let mut branch_parts = Vec::new();
             let mut branch_alias_map = HashMap::new();
-            let pr_fields = if include_ci_state {
-                PR_PROGRESS_FIELDS
-            } else {
-                "number title state url mergedAt"
-            };
+            let pr_fields = fields.selection();
 
             for (branch_idx, (_, branch)) in branches.iter().enumerate() {
                 let branch_alias = format!("branch{branch_idx}");
@@ -496,7 +541,7 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        BranchPrQuery, PrBodyClient, PrCiState, PrInfo, PrProgressInfo, PrState,
+        BranchPrQuery, PrBodyClient, PrCiState, PrHeadInfo, PrInfo, PrProgressInfo, PrState,
         UpdatePrBodyParams, parse_pr_node, parse_pr_progress_node,
     };
 
@@ -583,6 +628,60 @@ mod tests {
                     head_sha: Some("head-sha".to_string()),
                 }),
             )]),
+        );
+    }
+
+    #[tokio::test]
+    async fn batch_head_lookup_returns_head_sha_without_ci_query() {
+        let mock = crate::infra::github::mock::GitHubMockServer::start().await;
+        mock.graphql_batch_pull_request(json!({
+            "number": 31,
+            "title": "Sample change",
+            "state": "OPEN",
+            "url": "https://github.com/sample-owner/sample-repo/pull/31",
+            "mergedAt": null,
+            "headRefOid": "sample-head-sha",
+        }))
+        .await;
+
+        let client = mock.client();
+        let query = BranchPrQuery {
+            owner: "sample-owner".to_string(),
+            repo: "sample-repo".to_string(),
+            branch: "sample-branch".to_string(),
+        };
+        let actual = client
+            .get_prs_with_head_sha_for_branches_batch(std::slice::from_ref(&query))
+            .await
+            .expect("batch head lookup");
+        let requests = mock.received_requests().await;
+        let request_body = serde_json::from_slice::<serde_json::Value>(&requests[0].body)
+            .expect("request body should be valid JSON");
+
+        assert_eq!(
+            (actual, request_body),
+            (
+                HashMap::from([(
+                    query.key(),
+                    Some(PrHeadInfo {
+                        pull_request: PrInfo {
+                            number: 31,
+                            title: "Sample change".to_string(),
+                            state: PrState::Open,
+                            url: "https://github.com/sample-owner/sample-repo/pull/31".to_string(),
+                        },
+                        head_sha: Some("sample-head-sha".to_string()),
+                    }),
+                )]),
+                json!({
+                    "query": "query($owner_0: String!, $repoName_0: String!, $branch0_0: String!) {\n  repo0: repository(owner: $owner_0, name: $repoName_0) {\n    branch0: pullRequests(headRefName: $branch0_0, states: [OPEN, CLOSED, MERGED], first: 1, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { number title state url mergedAt headRefOid } }\n  }\n}",
+                    "variables": {
+                        "owner_0": "sample-owner",
+                        "repoName_0": "sample-repo",
+                        "branch0_0": "sample-branch",
+                    },
+                }),
+            ),
         );
     }
 

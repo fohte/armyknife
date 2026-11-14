@@ -10,15 +10,36 @@ import {
 import { type SubmitEvent, useState } from 'react'
 
 import { OpenInTerminalAction } from '#components/open-in-terminal-action'
+import { PullRequestMergeConfirmation } from '#components/pull-request-merge-confirmation'
 import { SessionHeading } from '#components/session-heading'
 import { SessionTaskLinks } from '#components/session-task-links'
 import { StarredSessionToggle } from '#components/starred-session-toggle'
+import { useSessionOperations } from '#session-operation-context'
 import type {
   BackgroundTask,
   OpenInTerminalStatus,
   Session,
   SessionActions,
 } from '#types'
+
+type MergeResponse =
+  | { result: 'merged' }
+  | { result: 'alreadyMerged' }
+  | { result: 'enqueued'; message: string }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function isMergeResponse(value: unknown): value is MergeResponse {
+  if (!isRecord(value)) return false
+  const result = value['result']
+  return (
+    result === 'merged' ||
+    result === 'alreadyMerged' ||
+    (result === 'enqueued' && typeof value['message'] === 'string')
+  )
+}
 
 type ConversationPaneHeaderProps = {
   session: Session
@@ -65,9 +86,77 @@ export function ConversationPaneHeader({
   const [isEditingTitle, setIsEditingTitle] = useState(titleEditing)
   const [titleDraft, setTitleDraft] = useState(session.title)
   const [isSavingTitle, setIsSavingTitle] = useState(false)
+  const [mergeConfirmationOpen, setMergeConfirmationOpen] = useState(false)
+  const [mergeFeedback, setMergeFeedback] = useState<{
+    number: number
+    kind: 'success' | 'queued' | 'error'
+    message: string
+  } | null>(null)
+  const { pendingOperations, run } = useSessionOperations()
   const parent = session.parent
+  const pullRequest = session.pullRequest
+  const mergeOperation =
+    pullRequest?.state === 'Open' &&
+    pullRequest.owner !== undefined &&
+    pullRequest.repo !== undefined &&
+    pullRequest.headSha !== null &&
+    pullRequest.headSha !== undefined
+      ? {
+          type: 'merge' as const,
+          sessionId: session.id,
+          number: pullRequest.number,
+          owner: pullRequest.owner,
+          repo: pullRequest.repo,
+          expectedHeadSha: pullRequest.headSha,
+        }
+      : null
+  const merging =
+    mergeOperation !== null &&
+    pendingOperations.some(
+      ({ operation }) =>
+        operation.type === 'merge' &&
+        operation.sessionId === session.id &&
+        operation.number === mergeOperation.number,
+    )
   const linkedTasks =
     session.tasks ?? (session.task === null ? [] : [session.task])
+
+  const confirmMerge = async () => {
+    if (mergeOperation === null || merging) return
+    setMergeFeedback(null)
+    const result = await run(mergeOperation)
+    result.match(
+      (response) => {
+        if (!isMergeResponse(response)) {
+          setMergeFeedback({
+            number: mergeOperation.number,
+            kind: 'error',
+            message: 'The server returned an invalid merge response.',
+          })
+          return
+        }
+        const message =
+          response.result === 'merged'
+            ? `PR #${String(mergeOperation.number)} merged.`
+            : response.result === 'alreadyMerged'
+              ? `PR #${String(mergeOperation.number)} was already merged.`
+              : `PR #${String(mergeOperation.number)} was added to the merge queue: ${response.message}`
+        setMergeFeedback({
+          number: mergeOperation.number,
+          kind: response.result === 'enqueued' ? 'queued' : 'success',
+          message,
+        })
+      },
+      (error) => {
+        setMergeFeedback({
+          number: mergeOperation.number,
+          kind: 'error',
+          message: error.message,
+        })
+      },
+    )
+    setMergeConfirmationOpen(false)
+  }
 
   const saveTitle = async (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -288,16 +377,44 @@ export function ConversationPaneHeader({
                   isStarred={isToday}
                   onToggleToday={onToggleToday}
                 />
-                {session.pullRequest ? (
+                {pullRequest ? (
                   <a
                     className="conversation-pr-link"
-                    href={`https://github.com/${session.repo}/pull/${String(session.pullRequest.number)}`}
+                    href={
+                      pullRequest.url ??
+                      `https://github.com/${session.repo}/pull/${String(pullRequest.number)}`
+                    }
                     target="_blank"
                     rel="noreferrer"
                   >
-                    #{session.pullRequest.number} PR
+                    #{pullRequest.number} PR
                   </a>
                 ) : null}
+                {mergeOperation === null ||
+                (mergeFeedback?.kind === 'success' &&
+                  mergeFeedback.number === mergeOperation.number) ? null : (
+                  <Button
+                    className="conversation-pr-merge-button"
+                    type="button"
+                    variant="plain"
+                    disabled={merging}
+                    onClick={() => {
+                      setMergeFeedback(null)
+                      setMergeConfirmationOpen(true)
+                    }}
+                  >
+                    Merge
+                  </Button>
+                )}
+                {mergeFeedback === null ||
+                mergeFeedback.number !== pullRequest?.number ? null : (
+                  <span
+                    className={`conversation-pr-merge-feedback conversation-pr-merge-feedback--${mergeFeedback.kind}`}
+                    role={mergeFeedback.kind === 'error' ? 'alert' : 'status'}
+                  >
+                    {mergeFeedback.message}
+                  </span>
+                )}
                 {session.category === 'done' && onClose !== undefined ? (
                   <Button
                     className="conversation-close cursor-pointer"
@@ -320,6 +437,19 @@ export function ConversationPaneHeader({
           </div>
         </>
       )}
+      {mergeConfirmationOpen && mergeOperation !== null ? (
+        <PullRequestMergeConfirmation
+          number={mergeOperation.number}
+          headSha={mergeOperation.expectedHeadSha}
+          merging={merging}
+          onCancel={() => {
+            setMergeConfirmationOpen(false)
+          }}
+          onConfirm={() => {
+            void confirmMerge()
+          }}
+        />
+      ) : null}
     </header>
   )
 }

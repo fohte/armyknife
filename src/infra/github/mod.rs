@@ -18,8 +18,8 @@ pub use error::GitHubError;
 #[cfg(test)]
 pub use mock::{GitHubMockServer, RemoteComment, RemoteTimelineEvent};
 pub use pr::{
-    BranchPrQuery, CreatePrParams, CreatedPullRequest, PrBodyClient, PrCiState, PrClient, PrInfo,
-    PrProgressInfo, PrState, UpdatePrBodyParams, UpdatePrParams,
+    BranchPrQuery, CreatePrParams, CreatedPullRequest, PrBodyClient, PrCiState, PrClient,
+    PrHeadInfo, PrInfo, PrProgressInfo, PrState, UpdatePrBodyParams, UpdatePrParams,
 };
 pub use pr_merge::{AsyncMergeFallback, AsyncMergeResult, MergeResult};
 pub use pr_number::PrNumberQuery;

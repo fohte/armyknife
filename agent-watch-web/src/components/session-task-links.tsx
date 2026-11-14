@@ -298,7 +298,6 @@ export function SessionTaskLinks({
                       )
                     }
                   }}
-                  placement="linked-task-menu"
                 />
               ) : null}
             </div>,

@@ -48,16 +48,6 @@ pub(super) enum ProgressMark {
 }
 
 impl ProgressMark {
-    pub(super) fn label(self) -> &'static str {
-        match self {
-            Self::Done => "done",
-            Self::User => "user",
-            Self::Working => "working",
-            Self::Waiting => "waiting",
-            Self::NotStarted => "not_started",
-        }
-    }
-
     pub(super) fn symbol(self) -> &'static str {
         match self {
             Self::Done => "✓",

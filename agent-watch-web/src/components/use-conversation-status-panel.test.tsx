@@ -112,6 +112,32 @@ it('shows the Review tab only for sessions with an active review document', () =
   expect(states).toBe('|\nReview|Review\n|')
 })
 
+it('does not show a PRs tab when the session belongs to a task tree', () => {
+  act(() => {
+    root?.render(
+      <StatusPanelHarness
+        currentSession={{
+          ...session,
+          task: {
+            id: 'fixture-task',
+            number: 17,
+            title: 'Fixture task',
+            priority: null,
+          },
+          pullRequest: { number: 42, state: 'Open' },
+        }}
+      />,
+    )
+  })
+
+  expect(
+    Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+      (tab) => tab.textContent,
+    ),
+  ).toEqual([])
+})
+
 it('fetches and renders the review document when the status panel opens', async () => {
   const fetcher = vi.fn<typeof fetch>(() =>
     Promise.resolve(
