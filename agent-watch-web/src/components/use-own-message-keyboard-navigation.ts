@@ -91,6 +91,7 @@ export function useOwnMessageKeyboardNavigation({
       message.setAttribute('data-own-message-highlighted', 'true')
       highlightedMessage = message
       highlightTimeout = window.setTimeout(() => {
+        if (highlightedMessage !== message) return
         message.removeAttribute('data-own-message-highlighted')
         highlightedMessage = null
         highlightTimeout = undefined
