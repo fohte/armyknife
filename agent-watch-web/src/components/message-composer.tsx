@@ -289,23 +289,26 @@ export function MessageComposer({
       ) : null}
       <div className="composer-footer">
         {!isMobile ? (
-          <span
-            role={
-              isSending || isProcessingAttachments || isInterrupting
-                ? 'status'
-                : undefined
-            }
-          >
-            {isSending
-              ? 'Sending…'
-              : isProcessingAttachments
-                ? 'Preparing attachments…'
-                : isInterrupting
-                  ? 'Interrupting…'
-                  : canInterrupt
-                    ? '↵ Send · ⇧↵ / ⌥↵ New line · Esc Interrupt'
-                    : '↵ Send · ⇧↵ / ⌥↵ New line'}
-          </span>
+          <>
+            <span
+              role={
+                isSending || isProcessingAttachments || isInterrupting
+                  ? 'status'
+                  : undefined
+              }
+            >
+              {isSending
+                ? 'Sending…'
+                : isProcessingAttachments
+                  ? 'Preparing attachments…'
+                  : isInterrupting
+                    ? 'Interrupting…'
+                    : canInterrupt
+                      ? '↵ Send · ⇧↵ / ⌥↵ New line · Esc Interrupt'
+                      : '↵ Send · ⇧↵ / ⌥↵ New line'}
+            </span>
+            <span>⌥↑ / ⌥↓ My messages</span>
+          </>
         ) : isProcessingAttachments ? (
           <span role="status">Preparing attachments…</span>
         ) : null}

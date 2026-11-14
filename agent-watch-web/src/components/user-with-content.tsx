@@ -76,6 +76,7 @@ export function UserWithContent({
       ? [{ type: 'text', text: message.text }]
       : message.content
   const queued = message.type === 'queued_user'
+  const isOwnMessage = queued || message.from == null || message.from === ''
   const time = formatMessageTime(message.timestamp, now)
   const label = queued
     ? 'You · Queued'
@@ -95,7 +96,10 @@ export function UserWithContent({
     .join('\n')
 
   return (
-    <article className="chat-user-group">
+    <article
+      className="chat-user-group"
+      data-own-message={isOwnMessage ? 'true' : undefined}
+    >
       <div className="chat-from">
         {label}
         {time !== null && (
