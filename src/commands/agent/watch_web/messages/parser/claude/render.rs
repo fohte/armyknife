@@ -64,7 +64,7 @@ pub(super) fn render(
                 )
             })
         });
-        if on_active_branch {
+        if event.rendered_in_transcript && on_active_branch {
             queue.observe_queued_prompt_delivery(event, additions.user_marker);
         }
     }

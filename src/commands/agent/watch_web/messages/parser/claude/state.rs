@@ -66,7 +66,8 @@ impl ClaudeParserState {
             };
         }
 
-        if let Some(queue_event) = QueueReplayEvent::from_record(&record) {
+        if let Some(mut queue_event) = QueueReplayEvent::from_record(&record) {
+            queue_event.rendered_in_transcript = active_record;
             self.queue_events.push(queue_event);
         }
         if !active_record {

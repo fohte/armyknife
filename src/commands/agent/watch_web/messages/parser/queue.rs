@@ -17,6 +17,7 @@ pub(super) struct QueueReplayEvent {
     source_tool_assistant_uuid_present: bool,
     has_tool_use_result: bool,
     pub(super) delivery_branch_uuid: Option<String>,
+    pub(super) rendered_in_transcript: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -75,6 +76,7 @@ impl QueueReplayEvent {
                 source_tool_assistant_uuid_present: false,
                 has_tool_use_result: false,
                 delivery_branch_uuid,
+                rendered_in_transcript: false,
             });
         }
 
@@ -89,6 +91,7 @@ impl QueueReplayEvent {
                 source_tool_assistant_uuid_present: false,
                 has_tool_use_result: false,
                 delivery_branch_uuid,
+                rendered_in_transcript: false,
             });
         }
 
@@ -102,6 +105,7 @@ impl QueueReplayEvent {
                     .get("toolUseResult")
                     .is_some_and(|result| !result.is_null()),
                 delivery_branch_uuid,
+                rendered_in_transcript: false,
             });
         }
 
