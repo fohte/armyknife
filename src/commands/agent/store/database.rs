@@ -20,6 +20,7 @@ mod permission_requests;
 mod proposals;
 mod queued_prompts;
 mod replacements;
+mod resolution_lock;
 mod todos;
 mod wake;
 mod web_state;

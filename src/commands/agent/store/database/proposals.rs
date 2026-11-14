@@ -1,12 +1,11 @@
-use std::fs::{self, File, OpenOptions};
+use std::fs::File;
 use std::path::Path;
 
+use super::resolution_lock::lock_resolution_file;
+use super::{increment_revision, open_connection, validate_session_id};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{TransactionBehavior, params, params_from_iter};
-use sha2::{Digest, Sha256};
-
-use super::{increment_revision, open_connection, validate_session_id};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentProposal {
@@ -48,28 +47,8 @@ pub(crate) fn lock_agent_proposal_resolution(
     seq: i64,
 ) -> Result<File> {
     validate_session_id(session_id)?;
-    let lock_dir = sessions_dir.join("proposal-resolution-locks");
-    fs::create_dir_all(&lock_dir).with_context(|| {
-        format!(
-            "creating proposal resolution lock directory {}",
-            lock_dir.display()
-        )
-    })?;
     let lock_key = format!("{session_id}:{seq}");
-    let lock_hash = Sha256::digest(lock_key.as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<Vec<_>>()
-        .join("");
-    let lock_path = lock_dir.join(format!("{lock_hash}.lock"));
-    let lock_file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&lock_path)
-        .with_context(|| format!("opening proposal resolution lock {}", lock_path.display()))?;
-    lock_file.lock().context("locking proposal resolution")?;
-    Ok(lock_file)
+    lock_resolution_file(sessions_dir, "proposal-resolution-locks", &lock_key)
 }
 
 pub(crate) fn add_agent_proposal(sessions_dir: &Path, session_id: &str, body: &str) -> Result<i64> {
