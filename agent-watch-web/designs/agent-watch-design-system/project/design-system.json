@@ -12,8 +12,8 @@
   "docs": { "readme": "project/README.md", "sections": [] },
   "lastChange": {
     "by": "fohte",
-    "at": "2026-11-13T11:33:28Z",
-    "via": "GitHub · fohte/armyknife@b91f248",
-    "note": "First sync from agent-watch-web: tokens, type, five static component renditions, cover."
+    "at": "2026-11-14T03:00:00Z",
+    "via": "Claude Code",
+    "note": "Load JetBrains Mono from Google Fonts instead of a copied font file."
   }
 }
