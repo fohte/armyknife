@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - master
   pull_request:
 
 concurrency:
@@ -82,7 +83,7 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: agent-watch-web
           packageManager: pnpm
-          command: pages project create armyknife-agent-watch-web-storybook --production-branch=main
+          command: pages project create armyknife-agent-watch-web-storybook --production-branch=${{ github.event.repository.default_branch }}
         continue-on-error: true
 
       - name: Deploy to Cloudflare Pages
@@ -94,7 +95,7 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: agent-watch-web
           packageManager: pnpm
-          command: pages deploy storybook-static --project-name=armyknife-agent-watch-web-storybook --branch=${{ github.head_ref || 'main' }} --commit-dirty=true
+          command: pages deploy storybook-static --project-name=armyknife-agent-watch-web-storybook --branch=${{ github.head_ref || github.ref_name }} --commit-dirty=true
 
       - name: Comment preview URL on PR
         if: >-
