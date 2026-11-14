@@ -334,6 +334,10 @@ export function ConversationPane({
     setLoading(false)
   }, [confirm, markMessagesLoaded, session.id, updateConversation])
 
+  const onCommandExecuted = useCallback(() => {
+    void refresh()
+  }, [refresh])
+
   const refreshForOperation = useCallback(
     async (operation: SessionOperation) => {
       await refresh()
@@ -613,7 +617,7 @@ export function ConversationPane({
         setError(null)
       }}
       onAction={onAction}
-      onCommandExecuted={() => void refresh()}
+      onCommandExecuted={onCommandExecuted}
       onRewind={onRewind}
       onOpenInTerminal={onOpenInTerminal}
       onSelectSession={onSelectSession}
