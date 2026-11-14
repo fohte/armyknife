@@ -405,7 +405,7 @@ export function ConversationPaneView({
               ? `Message PR ${String(session.pullRequest.number)}`
               : 'Message session'
         }
-        disabled={actions?.message !== true}
+        disabled={actions?.message === false}
         isSending={isSending}
         isProcessingAttachments={isProcessingAttachments}
         isMobile={isMobile}

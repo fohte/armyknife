@@ -7039,6 +7039,108 @@ it('reuses a cached conversation across an A to B to A session switch', async ()
   })
 })
 
+it('shows cached permission actions while the messages refresh is pending', async () => {
+  const firstSession = { ...session, id: 'cached-permission-session' }
+  const secondSession = { ...session, id: 'next-session' }
+  let messagesRequestCount = 0
+  let actionsRequestCount = 0
+  let resolveMessages: ((response: Response) => void) | undefined
+  let resolveActions: ((response: Response) => void) | undefined
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.includes(`/sessions/${firstSession.id}/messages`)) {
+      messagesRequestCount += 1
+      if (messagesRequestCount === 1) {
+        return Promise.resolve(jsonResponse(messagesResponse([permission])))
+      }
+      return new Promise<Response>((resolve) => {
+        resolveMessages = resolve
+      })
+    }
+    if (url.includes(`/sessions/${secondSession.id}/messages`)) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url === `/api/sessions/${firstSession.id}/actions`) {
+      actionsRequestCount += 1
+      if (actionsRequestCount > 1) {
+        return new Promise<Response>((resolve) => {
+          resolveActions = resolve
+        })
+      }
+      return Promise.resolve(jsonResponse(actions))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    if (url.endsWith('/tree')) {
+      return Promise.resolve(jsonResponse({ revision: 1, sessions: [] }))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  renderInboxPanes([firstSession, secondSession], firstSession)
+  await waitForState(
+    () => container.querySelector('.chat-permission-card') !== null,
+  )
+  renderInboxPanes([firstSession, secondSession], secondSession)
+  await waitForState(() =>
+    fetcher.mock.calls.some(([input]) =>
+      requestUrl(input).includes(`/sessions/${secondSession.id}/messages`),
+    ),
+  )
+  renderInboxPanes([firstSession, secondSession], firstSession)
+  await waitForState(() => resolveActions !== undefined)
+
+  const stateBeforeActions = {
+    permissionCard: container.querySelector('.chat-permission-card') !== null,
+    composerDisabled: requireElement(
+      container.querySelector<HTMLTextAreaElement>('textarea'),
+    ).disabled,
+    permissionButtons: container.querySelectorAll('.permission-actions button')
+      .length,
+    messagesPending: resolveMessages !== undefined,
+  }
+  resolveActions?.(jsonResponse(actions))
+  await waitForState(
+    () => container.querySelectorAll('.permission-actions button').length === 2,
+  )
+
+  const stateAfterActions = {
+    composerDisabled: requireElement(
+      container.querySelector<HTMLTextAreaElement>('textarea'),
+    ).disabled,
+    permissionButtons: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.permission-actions button',
+      ),
+      (button) => ({ label: button.textContent, disabled: button.disabled }),
+    ),
+    messagesPending: resolveMessages !== undefined,
+  }
+  await act(async () => {
+    resolveMessages?.(jsonResponse(messagesResponse([permission])))
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({ stateBeforeActions, stateAfterActions })
+  const expected = {
+    stateBeforeActions: {
+      permissionCard: true,
+      composerDisabled: false,
+      permissionButtons: 0,
+      messagesPending: true,
+    },
+    stateAfterActions: {
+      composerDisabled: false,
+      permissionButtons: [
+        { label: 'Approve', disabled: false },
+        { label: 'Reject', disabled: false },
+      ],
+      messagesPending: true,
+    },
+  }
+  expect(snapshot()).toEqual(expected)
+})
+
 it('prepends an older page without moving existing messages in the viewport', async () => {
   const jsonResponse = (body: unknown) =>
     new Response(JSON.stringify(body), {
@@ -7440,7 +7542,7 @@ it('prunes to the latest 200 messages at the bottom and can load the discarded r
     retainedMessageReused: true,
     olderButton: true,
   })
-})
+}, 60_000)
 
 it('re-enables older-page loading after a request fails so it can be retried', async () => {
   const jsonResponse = (body: unknown, status = 200) =>

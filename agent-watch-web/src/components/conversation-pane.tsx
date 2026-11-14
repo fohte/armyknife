@@ -185,7 +185,10 @@ export function ConversationPane({
   currentSessionId.current = session.id
   const openInTerminalTimer = useRef<number | null>(null)
   const requestGeneration = useRef(0)
+  const actionsRequestGeneration = useRef(0)
   const olderRequestGeneration = useRef(0)
+  const messagesError = useRef<string | null>(null)
+  const actionsError = useRef<string | null>(null)
   const updateConversation = useCallback(
     (next: ConversationResponse) => {
       conversationRef.current = next
@@ -230,6 +233,46 @@ export function ConversationPane({
     }
   }, [])
 
+  const refreshActions = useCallback(async () => {
+    const generation = actionsRequestGeneration.current + 1
+    actionsRequestGeneration.current = generation
+    const result = await requestJson(
+      `/api/sessions/${encodeURIComponent(session.id)}/actions`,
+      isSessionActions,
+    ).match(
+      (value) => ok(value),
+      (requestError) => err(requestError),
+    )
+    if (
+      actionsRequestGeneration.current !== generation ||
+      currentSessionId.current !== session.id
+    ) {
+      return
+    }
+    if (result.isOk()) {
+      actionsRef.current = result.value
+      setActions((previous) => reuseEqualValue(previous, result.value))
+      setActionsReady(true)
+      actionsError.current = null
+      for (const pending of pendingOperationsRef.current) {
+        if (
+          pending.status === 'sent' &&
+          pending.operation.sessionId === session.id &&
+          isConversationOperationConfirmed(
+            conversationRef.current,
+            pending.operation,
+            result.value,
+          )
+        ) {
+          confirm(pending.operation)
+        }
+      }
+    } else {
+      actionsError.current = result.error.message
+    }
+    setError(messagesError.current ?? actionsError.current)
+  }, [confirm, session.id])
+
   const refresh = useCallback(async () => {
     const generation = requestGeneration.current + 1
     requestGeneration.current = generation
@@ -254,17 +297,8 @@ export function ConversationPane({
       (value) => ok(value),
       (requestError) => err(requestError),
     )
-    const actionsRequest = requestJson(
-      `${sessionPath}/actions`,
-      isSessionActions,
-    ).match(
-      (value) => ok(value),
-      (requestError) => err(requestError),
-    )
-    const [messagesResult, actionsResult] = await Promise.all([
-      messagesRequest,
-      actionsRequest,
-    ])
+    void refreshActions()
+    const messagesResult = await messagesRequest
     if (requestGeneration.current !== generation) return
     let refreshedConversation: ConversationResponse | null = null
     if (messagesResult.isOk()) {
@@ -300,23 +334,13 @@ export function ConversationPane({
       markMessagesLoaded()
       updateConversation(refreshedConversation)
     }
-    if (actionsResult.isOk()) {
-      actionsRef.current = actionsResult.value
-      setActions((previous) => reuseEqualValue(previous, actionsResult.value))
-    }
-    const firstError = messagesResult.isErr()
-      ? messagesResult.error
-      : actionsResult.isErr()
-        ? actionsResult.error
-        : null
-    if (messagesResult.isOk() && actionsResult.isOk()) {
-      setActionsReady(true)
-    }
+    messagesError.current = messagesResult.isErr()
+      ? messagesResult.error.message
+      : null
+    setError(messagesError.current ?? actionsError.current)
     const confirmedConversation =
       refreshedConversation ?? conversationRef.current
-    const confirmedActions = actionsResult.isOk()
-      ? actionsResult.value
-      : actionsRef.current
+    const confirmedActions = actionsRef.current
     for (const pending of pendingOperationsRef.current) {
       if (
         pending.status === 'sent' &&
@@ -330,9 +354,14 @@ export function ConversationPane({
         confirm(pending.operation)
       }
     }
-    setError(firstError?.message ?? null)
     setLoading(false)
-  }, [confirm, markMessagesLoaded, session.id, updateConversation])
+  }, [
+    confirm,
+    markMessagesLoaded,
+    refreshActions,
+    session.id,
+    updateConversation,
+  ])
 
   const refreshForOperation = useCallback(
     async (operation: SessionOperation) => {
@@ -354,6 +383,7 @@ export function ConversationPane({
     void refresh()
     return () => {
       requestGeneration.current += 1
+      actionsRequestGeneration.current += 1
     }
   }, [refresh, refreshKey])
 
