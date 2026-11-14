@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.682](https://github.com/fohte/armyknife/compare/v0.1.681...v0.1.682) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** preserve upstream redirects ([#1741](https://github.com/fohte/armyknife/issues/1741)) ([f0e2733](https://github.com/fohte/armyknife/commit/f0e273360b659c8a4d2a2a24856e7e9709e469b5))
+
 ## [0.1.681](https://github.com/fohte/armyknife/compare/v0.1.680...v0.1.681) (2026-11-13)
 
 
