@@ -163,6 +163,7 @@ it('shows Starred kind icons with accessible names and category colors', () => {
         className: status.className,
         color: getComputedStyle(status).color,
         iconClass: status.querySelector('svg')?.getAttribute('class') ?? null,
+        role: status.getAttribute('role'),
         title: status.getAttribute('title'),
       }),
     ),
@@ -179,6 +180,7 @@ it('shows Starred kind icons with accessible names and category colors', () => {
         className: 'today-session-status is-needs-action',
         color: 'rgb(251, 191, 36)',
         iconClass: 'lucide lucide-message-circle-question-mark',
+        role: 'img',
         title: 'Question',
       },
       {
@@ -187,6 +189,7 @@ it('shows Starred kind icons with accessible names and category colors', () => {
         className: 'today-session-status is-working',
         color: 'rgb(96, 165, 250)',
         iconClass: null,
+        role: null,
         title: 'Working',
       },
       {
@@ -195,6 +198,7 @@ it('shows Starred kind icons with accessible names and category colors', () => {
         className: 'today-session-status is-error',
         color: 'rgb(248, 113, 113)',
         iconClass: 'lucide lucide-triangle-alert',
+        role: 'img',
         title: 'Error',
       },
       {
@@ -203,6 +207,7 @@ it('shows Starred kind icons with accessible names and category colors', () => {
         className: 'today-session-status is-working',
         color: 'rgb(96, 165, 250)',
         iconClass: 'lucide lucide-circle-pause',
+        role: 'img',
         title: 'Stopped',
       },
     ],
