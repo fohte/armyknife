@@ -30,6 +30,7 @@ mod background_task_outputs;
 mod background_tasks;
 mod incremental;
 mod parser;
+mod pending_permissions;
 mod proposals;
 mod questions;
 pub(in crate::commands::agent::watch_web) mod queued_prompt;
@@ -37,6 +38,12 @@ mod range;
 mod subagent_reports;
 
 use self::incremental::parse_session_transcript_incrementally;
+#[cfg(test)]
+pub(super) use self::pending_permissions::MAX_PERMISSION_COMMAND_BYTES;
+use self::pending_permissions::collect_pending_permission_cards;
+pub(super) use self::pending_permissions::{
+    permission_request_command, permission_request_command_summary, permission_request_description,
+};
 use self::proposals::proposal_chat_item;
 #[cfg(test)]
 use self::questions::QuestionChoice;
@@ -300,6 +307,7 @@ fn load_conversation_with_queued_prompts(
     let todos = (loaders.todos)(session_id)?;
     let agent_files = (loaders.agent_files)(session_id)?;
     let permission_denials = (loaders.permission_denials)(session_id)?;
+    let mut additional_cards = pending_permissions::permission_denied_cards(&permission_denials);
     let parent = parent_session(&session, &mut load_session)?;
     let main_permission_pending = session
         .pending_permission_agent_ids
@@ -360,6 +368,17 @@ fn load_conversation_with_queued_prompts(
         );
         return Ok(Some(cached.conversation));
     }
+
+    let pending_permissions = collect_pending_permission_cards(
+        session_id,
+        &session,
+        main_permission_is_question,
+        main_permission_request_id.as_deref(),
+        main_permission_data.as_ref(),
+        loaders,
+    )?;
+    additional_cards.extend(pending_permissions.cards);
+
     let transcript_input = TranscriptInput {
         path: session.transcript_path.as_deref(),
         engine: session.engine,
@@ -373,6 +392,7 @@ fn load_conversation_with_queued_prompts(
             peer_out_messages: &peer_out_messages,
             proposals: &proposal_items,
             todos: &todos,
+            additional_cards: &additional_cards,
         },
     };
     let (mut conversation, resolved_queued_prompt_ids) = parse_session_transcript_incrementally(
@@ -392,149 +412,14 @@ fn load_conversation_with_queued_prompts(
     );
 
     for message in &mut conversation.messages {
-        if let ChatItem::Permission { request_id, .. } = message {
+        if let ChatItem::Permission { request_id, .. } = message
+            && request_id.is_none()
+        {
             *request_id = main_permission_request_id.clone();
         }
     }
 
-    let messages = &mut conversation.messages;
-    if main_permission_pending
-        && !main_permission_is_question
-        && !messages
-            .iter()
-            .any(|message| matches!(message, ChatItem::Permission { .. }))
-    {
-        let command = main_permission_data.as_ref().and_then(|data| {
-            permission_request_command(data.tool_name.as_deref(), Some(&data.tool_input))
-        });
-        let tool = main_permission_data
-            .as_ref()
-            .and_then(|data| {
-                if data.tool_name.as_deref() == Some("Bash") {
-                    data.tool_name.clone()
-                } else {
-                    permission_request_pending_tool(data)
-                }
-            })
-            .or_else(|| session.current_tool.clone())
-            .unwrap_or_else(|| "Permission required".to_string());
-        let description = main_permission_data
-            .as_ref()
-            .map(|data| {
-                permission_request_description(
-                    data.tool_name.as_deref(),
-                    Some(&data.tool_input),
-                    command.as_deref(),
-                    "Waiting for permission",
-                )
-            })
-            .unwrap_or_else(|| "Waiting for permission".to_string());
-        messages.push(ChatItem::Permission {
-            request_id: main_permission_request_id.clone(),
-            tool,
-            description,
-            command,
-        });
-    }
-
-    for proposal in &proposal_items {
-        if !messages
-            .iter()
-            .any(|message| matches!(message, ChatItem::Proposal { seq: existing, .. } if existing == &proposal.seq))
-        {
-            messages.push(proposal.item.clone());
-        }
-    }
-
-    for operation in permission_denials {
-        if !messages.iter().any(|message| {
-            matches!(message, ChatItem::PermissionDenied { seq, .. } if *seq == operation.seq)
-        }) {
-            let retryable = operation.has_classifier_verdict();
-            messages.push(ChatItem::PermissionDenied {
-                seq: operation.seq,
-                tool_use_id: operation.tool_use_id,
-                tool: operation.tool_name.clone(),
-                input_summary: permission_denied_input_summary(
-                    &operation.tool_name,
-                    &operation.tool_input,
-                ),
-                command: permission_request_command(
-                    Some(&operation.tool_name),
-                    Some(&operation.tool_input),
-                ),
-                reason: operation.reason.clone(),
-                retryable,
-                resolved: operation.resolved_at.is_some(),
-            });
-        }
-    }
-
-    for agent_id in session
-        .pending_permission_agent_ids
-        .iter()
-        .filter(|agent_id| agent_id.as_str() != MAIN_THREAD_AGENT_KEY)
-    {
-        let Some(request_id) = session
-            .pending_permission_request_ids
-            .get(agent_id)
-            .cloned()
-        else {
-            continue;
-        };
-        let permission_data = (loaders.permission_request_data)(session_id, &request_id)?;
-        if permission_data
-            .as_ref()
-            .is_some_and(|data| data.tool_name.as_deref() == Some("AskUserQuestion"))
-        {
-            let Some(data) = permission_data.as_ref() else {
-                continue;
-            };
-            if let Some(question) = question_item_from_input(Some(request_id), &data.tool_input) {
-                messages.push(question);
-            }
-            continue;
-        }
-        let mut matched_tool = false;
-        if session.engine == Engine::Claude
-            && let Some(data) = permission_data.as_ref()
-            && data.tool_name.is_some()
-            && let Some(parent_transcript_path) = session.transcript_path.as_deref()
-        {
-            matched_tool =
-                matching_subagent_permission_tool_use(parent_transcript_path, agent_id, data);
-        }
-        let tool = if matched_tool {
-            permission_data
-                .as_ref()
-                .and_then(permission_request_pending_tool)
-        } else {
-            permission_data
-                .as_ref()
-                .and_then(|data| data.tool_name.clone())
-        }
-        .unwrap_or_else(|| "Permission required".to_string());
-        let command = permission_data.as_ref().and_then(|data| {
-            permission_request_command(data.tool_name.as_deref(), Some(&data.tool_input))
-        });
-        let description = permission_data
-            .as_ref()
-            .map(|data| {
-                permission_request_description(
-                    data.tool_name.as_deref(),
-                    Some(&data.tool_input),
-                    command.as_deref(),
-                    "Waiting for permission approval.",
-                )
-            })
-            .unwrap_or_else(|| "Waiting for permission approval.".to_string());
-        messages.push(ChatItem::Permission {
-            request_id: Some(request_id),
-            tool: format!("Subagent {agent_id}: {tool}"),
-            description,
-            command,
-        });
-    }
+    conversation.messages.extend(pending_permissions.questions);
 
     conversation.update_metadata();
 
@@ -546,111 +431,6 @@ fn load_conversation_with_queued_prompts(
         resolved_queued_prompt_ids,
     );
     Ok(Some(conversation))
-}
-
-const MAX_PERMISSION_COMMAND_BYTES: usize = 16 * 1024;
-
-fn permission_request_pending_tool(data: &PermissionRequestData) -> Option<String> {
-    let tool_name = data.tool_name.as_deref()?;
-    let detail = tool_input_detail(&data.tool_input);
-    Some(match detail {
-        Some(detail) => format!("{tool_name}({detail})"),
-        None => tool_name.to_string(),
-    })
-}
-
-fn matching_subagent_permission_tool_use(
-    parent_transcript_path: &Path,
-    agent_id: &str,
-    permission: &PermissionRequestData,
-) -> bool {
-    let Some(path) = subagent_reports::transcript_path_for_agent(parent_transcript_path, agent_id)
-    else {
-        return false;
-    };
-    let reader = match open_seekable_transcript(&path) {
-        Ok(Some(reader)) => reader,
-        Ok(None) => return false,
-        Err(error) => {
-            tracing::warn!(
-                path = %path.display(),
-                %error,
-                "failed to open subagent permission transcript"
-            );
-            return false;
-        }
-    };
-    match parser::claude::matching_pending_tool_use_exists(reader, permission) {
-        Ok(matched) => matched,
-        Err(error) => {
-            tracing::warn!(
-                path = %path.display(),
-                %error,
-                "failed to match subagent permission transcript"
-            );
-            false
-        }
-    }
-}
-
-fn permission_request_command(
-    tool_name: Option<&str>,
-    tool_input: Option<&Value>,
-) -> Option<String> {
-    if tool_name != Some("Bash") {
-        return None;
-    }
-    let command = tool_input
-        .and_then(|input| input.get("command"))
-        .and_then(Value::as_str)?;
-    (command.len() <= MAX_PERMISSION_COMMAND_BYTES).then(|| command.to_string())
-}
-
-fn permission_request_command_summary(tool_input: Option<&Value>) -> Option<String> {
-    let command = tool_input
-        .and_then(|input| input.get("command"))
-        .and_then(Value::as_str)?;
-    let mut chars = command.chars();
-    let preview = chars.by_ref().take(200).collect::<String>();
-    Some(if chars.next().is_some() {
-        format!("{preview}…")
-    } else {
-        preview
-    })
-}
-
-fn permission_request_description(
-    tool_name: Option<&str>,
-    tool_input: Option<&Value>,
-    command: Option<&str>,
-    waiting_message: &str,
-) -> String {
-    if tool_name == Some("Bash")
-        && command.is_none()
-        && let Some(preview) = permission_request_command_summary(tool_input)
-    {
-        return format!("Command preview: {preview}");
-    }
-    waiting_message.to_string()
-}
-
-fn permission_denied_input_summary(tool_name: &str, input: &Value) -> String {
-    let detail = match tool_name {
-        "Bash" => input.get("command"),
-        "Read" | "Write" | "Edit" | "NotebookEdit" => input.get("file_path"),
-        "Grep" | "Glob" => input.get("pattern"),
-        _ => None,
-    }
-    .and_then(Value::as_str)
-    .map(str::to_string)
-    .unwrap_or_else(|| serde_json::to_string(input).unwrap_or_else(|_| "{}".to_string()));
-    detail.chars().take(200).collect()
-}
-
-fn tool_input_detail(tool_input: &Value) -> Option<&str> {
-    ["command", "file_path", "pattern"]
-        .into_iter()
-        .find_map(|key| tool_input.get(key).and_then(Value::as_str))
 }
 
 pub(in crate::commands::agent::watch_web::messages) struct TranscriptInput<'a> {
@@ -1162,8 +942,8 @@ mod tests {
             considered: Vec::new(),
             easy_to_change: "Change the fixture timestamp.".to_string(),
             created_at: "2026-01-01T00:00:04.500Z".to_string(),
-            review: None,
-            reviewed_at: None,
+            review: Some("accepted".to_string()),
+            reviewed_at: Some("2026-01-01T00:00:04.500Z".to_string()),
         };
         let decision_item = json!({
             "type": "decision",
@@ -1172,7 +952,7 @@ mod tests {
             "why": "The fixture places a decision between the file and later message.",
             "considered": [],
             "easyToChange": "Change the fixture timestamp.",
-            "review": null,
+            "review": "accepted",
             "createdAt": "2026-01-01T00:00:04.500Z",
         });
         let loaders = RouteLoaders::new(
@@ -1394,6 +1174,215 @@ mod tests {
                     "hasUnansweredProposal": false,
                     "activeQuestionIndex": null,
                 }),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn messages_route_places_resolved_permission_denials_in_time_and_pins_pending_denials() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("fixture-session.jsonl");
+        std::fs::write(
+            &transcript_path,
+            indoc::indoc! {r#"
+                {"type":"assistant","timestamp":"2026-06-01T12:00:00Z","message":{"content":[{"type":"text","text":"Before the denials."}]}}
+                {"type":"assistant","timestamp":"2026-06-01T12:03:00Z","message":{"content":[{"type":"text","text":"After the denials."}]}}
+            "#},
+        )
+        .unwrap();
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path);
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-06-01T12:01:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let permission_denials = vec![
+            PermissionDeniedOperation {
+                session_id: "fixture-session".to_string(),
+                seq: 1,
+                tool_use_id: Some("fixture-resolved-denial".to_string()),
+                tool_name: "Bash".to_string(),
+                tool_input: json!({"command": "echo fixture"}),
+                reason: Some("Fixture denial".to_string()),
+                created_at,
+                resolved_at: Some(created_at),
+            },
+            PermissionDeniedOperation {
+                session_id: "fixture-session".to_string(),
+                seq: 2,
+                tool_use_id: Some("fixture-pending-denial".to_string()),
+                tool_name: "Bash".to_string(),
+                tool_input: json!({"command": "echo fixture"}),
+                reason: Some("Fixture denial".to_string()),
+                created_at: created_at + chrono::Duration::seconds(1),
+                resolved_at: None,
+            },
+        ];
+        let loaders = RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
+        .with_permission_denied_loader(move |_| Ok(permission_denials.clone()));
+        let router = routes_with_proposals_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            loaders,
+        );
+
+        assert_eq!(
+            message_response(&router).await,
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                json!({
+                    "messages": [
+                        {"type": "assistant", "text": "Before the denials."},
+                        {
+                            "type": "permission_denied",
+                            "seq": 1,
+                            "toolUseId": "fixture-resolved-denial",
+                            "tool": "Bash",
+                            "inputSummary": "echo fixture",
+                            "command": "echo fixture",
+                            "reason": "Fixture denial",
+                            "retryable": true,
+                            "resolved": true,
+                        },
+                        {"type": "assistant", "text": "After the denials."},
+                        {
+                            "type": "permission_denied",
+                            "seq": 2,
+                            "toolUseId": "fixture-pending-denial",
+                            "tool": "Bash",
+                            "inputSummary": "echo fixture",
+                            "command": "echo fixture",
+                            "reason": "Fixture denial",
+                            "retryable": true,
+                            "resolved": false,
+                        },
+                    ],
+                    "backgroundTasks": [],
+                    "start": 0,
+                    "total": 4,
+                    "decisions": [],
+                    "hasUnansweredProposal": false,
+                    "activeQuestionIndex": null,
+                }),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn messages_route_orders_subagent_permissions_by_tool_start_time_and_refreshes_cache() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("fixture-session.jsonl");
+        std::fs::write(&transcript_path, "").unwrap();
+        let subagent_directory = directory.path().join("fixture-session/subagents");
+        std::fs::create_dir_all(&subagent_directory).unwrap();
+        let first_agent_path = subagent_directory.join("agent-agent-fixture-a.jsonl");
+        let second_agent_path = subagent_directory.join("agent-agent-fixture-b.jsonl");
+        let write_subagent_transcript = |path: &Path, timestamp: &str, call_id: &str| {
+            std::fs::write(
+                path,
+                format!(
+                    "{{\"type\":\"assistant\",\"timestamp\":\"{timestamp}\",\"message\":{{\"content\":[{{\"type\":\"tool_use\",\"id\":\"{call_id}\",\"name\":\"Bash\",\"input\":{{\"command\":\"run fixture\"}}}}]}}}}\n"
+                ),
+            )
+            .unwrap();
+        };
+        write_subagent_transcript(
+            &first_agent_path,
+            "2026-06-01T12:02:00Z",
+            "fixture-first-agent-call",
+        );
+        write_subagent_transcript(
+            &second_agent_path,
+            "2026-06-01T12:01:00Z",
+            "fixture-second-agent-call",
+        );
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path);
+        session.pending_permission_agent_ids =
+            BTreeSet::from(["agent-fixture-a".to_string(), "agent-fixture-b".to_string()]);
+        session.pending_permission_request_ids = BTreeMap::from([
+            (
+                "agent-fixture-a".to_string(),
+                "permission-request-a".to_string(),
+            ),
+            (
+                "agent-fixture-b".to_string(),
+                "permission-request-b".to_string(),
+            ),
+        ]);
+        let loaders = RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
+        .with_permission_request_data_loader(|_, request_id| {
+            Ok(Some(PermissionRequestData {
+                tool_name: Some("Bash".to_string()),
+                tool_input: json!({"command": "run fixture"}),
+                pending: request_id.starts_with("permission-request-"),
+            }))
+        });
+        let router = routes_with_proposals_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            loaders,
+        );
+
+        let first = message_response(&router).await;
+        write_subagent_transcript(
+            &second_agent_path,
+            "2026-06-01T12:03:00Z",
+            "fixture-second-agent-call",
+        );
+        let refreshed = message_response(&router).await;
+
+        let permission = |request_id: &str, agent: &str| {
+            json!({
+                "type": "permission",
+                "requestId": request_id,
+                "tool": format!("Subagent {agent}: Bash(run fixture)"),
+                "description": "Waiting for permission approval.",
+                "command": "run fixture",
+            })
+        };
+        let response = |messages| {
+            json!({
+                "messages": messages,
+                "backgroundTasks": [],
+                "start": 0,
+                "total": 2,
+                "decisions": [],
+                "hasUnansweredProposal": false,
+                "activeQuestionIndex": null,
+            })
+        };
+        assert_eq!(
+            (first, refreshed),
+            (
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    response([
+                        permission("permission-request-b", "agent-fixture-b"),
+                        permission("permission-request-a", "agent-fixture-a"),
+                    ]),
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    response([
+                        permission("permission-request-a", "agent-fixture-a"),
+                        permission("permission-request-b", "agent-fixture-b"),
+                    ]),
+                ),
             ),
         );
     }
@@ -2399,8 +2388,8 @@ mod tests {
             considered: vec!["Choose the other fixture path".to_string()],
             easy_to_change: "Change one fixture value.".to_string(),
             created_at: "2026-06-01T11:59:00Z".to_string(),
-            review: None,
-            reviewed_at: None,
+            review: Some("accepted".to_string()),
+            reviewed_at: Some("2026-06-01T12:04:00Z".to_string()),
         };
         let proposal = AgentProposal {
             session_id: "fixture-session".to_string(),
@@ -2455,7 +2444,7 @@ mod tests {
                             "why": "The fixture remains reversible.",
                             "considered": ["Choose the other fixture path"],
                             "easyToChange": "Change one fixture value.",
-                            "review": null,
+                            "review": "accepted",
                             "createdAt": "2026-06-01T11:59:00Z",
                         },
                         {
@@ -2468,6 +2457,16 @@ mod tests {
                             }],
                         },
                         {"type": "assistant", "text": "Between the records."},
+                        {
+                            "type": "tool_summary",
+                            "summary": "Bash ×1",
+                            "operations": [{
+                                "tool": "Bash",
+                                "target": "a agent proposal add '<fixture-json>'",
+                                "failed": false,
+                            }],
+                        },
+                        {"type": "assistant", "text": "After the records."},
                         {
                             "type": "proposal",
                             "seq": 7,
@@ -2494,16 +2493,6 @@ mod tests {
                             "resolution": null,
                             "comment": null,
                         },
-                        {
-                            "type": "tool_summary",
-                            "summary": "Bash ×1",
-                            "operations": [{
-                                "tool": "Bash",
-                                "target": "a agent proposal add '<fixture-json>'",
-                                "failed": false,
-                            }],
-                        },
-                        {"type": "assistant", "text": "After the records."},
                     ],
                     "backgroundTasks": [],
                     "start": 0,
@@ -2515,7 +2504,7 @@ mod tests {
                         "why": "The fixture remains reversible.",
                         "considered": ["Choose the other fixture path"],
                         "easyToChange": "Change one fixture value.",
-                        "review": null,
+                        "review": "accepted",
                         "createdAt": "2026-06-01T11:59:00Z",
                     }],
                     "hasUnansweredProposal": true,
@@ -2552,8 +2541,8 @@ mod tests {
                     considered: vec!["Choose the other fixture path".to_string()],
                     easy_to_change: "Change one fixture value.".to_string(),
                     created_at: "2026-06-01T11:59:00Z".to_string(),
-                    review: None,
-                    reviewed_at: None,
+                    review: Some("accepted".to_string()),
+                    reviewed_at: Some("2026-06-01T12:04:00Z".to_string()),
                 }])
             },
             |_| Ok(Vec::new()),
@@ -2598,7 +2587,7 @@ mod tests {
                             "why": "The fixture remains reversible.",
                             "considered": ["Choose the other fixture path"],
                             "easyToChange": "Change one fixture value.",
-                            "review": null,
+                            "review": "accepted",
                             "createdAt": "2026-06-01T11:59:00Z",
                         },
                         {
@@ -2631,7 +2620,7 @@ mod tests {
                         "why": "The fixture remains reversible.",
                         "considered": ["Choose the other fixture path"],
                         "easyToChange": "Change one fixture value.",
-                        "review": null,
+                        "review": "accepted",
                         "createdAt": "2026-06-01T11:59:00Z",
                     }],
                     "hasUnansweredProposal": false,
@@ -2668,8 +2657,8 @@ mod tests {
                     considered: vec!["Choose the other fixture path".to_string()],
                     easy_to_change: "Change one fixture value.".to_string(),
                     created_at: "2026-11-11T12:00:00Z".to_string(),
-                    review: None,
-                    reviewed_at: None,
+                    review: Some("accepted".to_string()),
+                    reviewed_at: Some("2026-11-11T12:01:00Z".to_string()),
                 }])
             },
             |_| Ok(Vec::new()),
@@ -2691,7 +2680,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"{"messages":[{"type":"assistant","text":"Before the decision."},{"type":"decision","seq":1,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":null,"createdAt":"2026-11-11T12:00:00Z"},{"type":"assistant","text":"After the decision."}],"backgroundTasks":[],"start":0,"total":3,"decisions":[{"type":"decision","seq":1,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":null,"createdAt":"2026-11-11T12:00:00Z"}],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
+                r#"{"messages":[{"type":"assistant","text":"Before the decision."},{"type":"decision","seq":1,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":"accepted","createdAt":"2026-11-11T12:00:00Z"},{"type":"assistant","text":"After the decision."}],"backgroundTasks":[],"start":0,"total":3,"decisions":[{"type":"decision","seq":1,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":"accepted","createdAt":"2026-11-11T12:00:00Z"}],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
             ),
         );
     }
