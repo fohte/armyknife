@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.701](https://github.com/fohte/armyknife/compare/v0.1.700...v0.1.701) (2026-11-14)
+
+
+### Features
+
+* **agent-watch-web:** render text as markdown ([#1781](https://github.com/fohte/armyknife/issues/1781)) ([8b84cbe](https://github.com/fohte/armyknife/commit/8b84cbe5e1e4360629f3f59b8f313862bd877f3f))
+
 ## [0.1.700](https://github.com/fohte/armyknife/compare/v0.1.699...v0.1.700) (2026-11-14)
 
 
