@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.691](https://github.com/fohte/armyknife/compare/v0.1.690...v0.1.691) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** merge session PRs from the header ([#1760](https://github.com/fohte/armyknife/issues/1760)) ([fa352e4](https://github.com/fohte/armyknife/commit/fa352e4dd90fc1acde445f60d696786162374a96))
+
 ## [0.1.690](https://github.com/fohte/armyknife/compare/v0.1.689...v0.1.690) (2026-11-14)
 
 
