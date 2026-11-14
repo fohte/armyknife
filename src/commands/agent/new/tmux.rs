@@ -3,6 +3,7 @@ use anyhow::{Context, Result};
 use crate::commands::agent::types::{Engine, ReasoningEffort};
 use crate::infra::tmux;
 use crate::infra::tmux::layout::AgentLaunchRoute;
+use crate::infra::tmux::layout::InitialPromptMarker;
 use crate::shared::config::{Config, LayoutNode};
 
 use super::session_metadata::record_codex_daemon_metadata;
@@ -37,21 +38,30 @@ pub(super) fn setup_tmux_window(spec: TmuxWindowSpec, config: &Config) -> Result
     tmux::ensure_session(&target_session, spec.repo_root)
         .context("Failed to ensure tmux session")?;
 
-    let route = tmux::layout::build_layout(tmux::layout::LayoutSpec {
-        common: tmux::layout::TmuxSessionSpec {
-            session: &target_session,
-            cwd: spec.cwd,
-            model: spec.model,
-            reasoning_effort: spec.reasoning_effort,
-            prompt: spec.prompt,
-            engine: spec.engine,
-            env_vars: spec.env_vars,
-            background: spec.background,
+    let mark_pending = crate::commands::agent::store::mark_pending_initial_prompt;
+    let clear_pending = crate::commands::agent::store::clear_pending_initial_prompt;
+    let initial_prompt_marker = spec.prompt.map(|_| InitialPromptMarker {
+        mark_pending: &mark_pending,
+        clear_pending: &clear_pending,
+    });
+    let route = tmux::layout::build_layout_with_initial_prompt_marker(
+        tmux::layout::LayoutSpec {
+            common: tmux::layout::TmuxSessionSpec {
+                session: &target_session,
+                cwd: spec.cwd,
+                model: spec.model,
+                reasoning_effort: spec.reasoning_effort,
+                prompt: spec.prompt,
+                engine: spec.engine,
+                env_vars: spec.env_vars,
+                background: spec.background,
+            },
+            window_name: spec.window_name,
+            layout: spec.layout,
+            restore_automatic_rename: spec.restore_automatic_rename,
         },
-        window_name: spec.window_name,
-        layout: spec.layout,
-        restore_automatic_rename: spec.restore_automatic_rename,
-    })
+        initial_prompt_marker,
+    )
     .context("Failed to create tmux layout")?;
 
     record_codex_daemon_metadata(&route, spec.cwd, spec.env_vars);
@@ -86,20 +96,29 @@ pub(super) fn setup_split_pane(spec: TmuxSplitPaneSpec) -> Result<AgentLaunchRou
         )
     })?;
 
-    let result = tmux::layout::split_pane(tmux::layout::SplitSpec {
-        common: tmux::layout::TmuxSessionSpec {
-            session: &session,
-            cwd: spec.cwd,
-            model: spec.model,
-            reasoning_effort: spec.reasoning_effort,
-            prompt: spec.prompt,
-            engine: spec.engine,
-            env_vars: spec.env_vars,
-            background: spec.background,
+    let mark_pending = crate::commands::agent::store::mark_pending_initial_prompt;
+    let clear_pending = crate::commands::agent::store::clear_pending_initial_prompt;
+    let initial_prompt_marker = spec.prompt.map(|_| InitialPromptMarker {
+        mark_pending: &mark_pending,
+        clear_pending: &clear_pending,
+    });
+    let result = tmux::layout::split_pane_with_initial_prompt_marker(
+        tmux::layout::SplitSpec {
+            common: tmux::layout::TmuxSessionSpec {
+                session: &session,
+                cwd: spec.cwd,
+                model: spec.model,
+                reasoning_effort: spec.reasoning_effort,
+                prompt: spec.prompt,
+                engine: spec.engine,
+                env_vars: spec.env_vars,
+                background: spec.background,
+            },
+            target_pane: spec.target_pane,
+            command: spec.engine.process_name(),
         },
-        target_pane: spec.target_pane,
-        command: spec.engine.process_name(),
-    })
+        initial_prompt_marker,
+    )
     .context("Failed to split tmux pane")?;
 
     record_codex_daemon_metadata(&result.route, spec.cwd, spec.env_vars);

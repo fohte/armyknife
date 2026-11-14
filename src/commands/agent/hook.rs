@@ -679,6 +679,7 @@ fn process_hook_event_impl_with_settings(
     if event == HookEvent::UserPromptSubmit
         && input.agent_id.is_none()
         && !super::peer_message::is_peer_message(input.prompt.as_deref())
+        && !session_lock.consume_pending_initial_prompt()?
     {
         session.last_prompted_at = Some(now);
     }
@@ -5516,6 +5517,61 @@ mod tests {
                 .expect("session should load")
                 .expect("session should exist");
             assert_eq!(session.last_prompted_at, Some(session.updated_at));
+        }
+
+        #[rstest]
+        #[case::claude(Engine::Claude)]
+        #[case::codex(Engine::Codex)]
+        fn agent_new_initial_prompt_is_skipped_but_the_next_human_prompt_is_recorded(
+            #[case] engine: Engine,
+        ) {
+            let temp_dir = create_temp_sessions_dir();
+            store::mark_pending_initial_prompt_from(temp_dir.path(), "test-123")
+                .expect("initial prompt marker should be saved");
+
+            let mut initial_prompt = create_test_input(None);
+            initial_prompt.engine = engine;
+            initial_prompt.prompt = Some("Example launch prompt".to_string());
+            let initial_result = process_hook_event_impl(
+                HookEvent::UserPromptSubmit,
+                initial_prompt,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("initial prompt should succeed");
+            let initial_session = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("session should load")
+                .expect("session should exist");
+            let initial_snapshot = (
+                initial_result,
+                initial_session.last_prompted_at.map(|_| "<timestamp>"),
+            );
+
+            let mut human_prompt = create_test_input(None);
+            human_prompt.engine = engine;
+            human_prompt.prompt = Some("Example follow-up prompt".to_string());
+            let human_result = process_hook_event_impl(
+                HookEvent::UserPromptSubmit,
+                human_prompt,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("follow-up prompt should succeed");
+            let human_session = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("session should load")
+                .expect("session should exist");
+            let human_snapshot = (
+                human_result,
+                human_session.last_prompted_at == Some(human_session.updated_at),
+            );
+
+            assert_eq!(
+                (initial_snapshot, human_snapshot),
+                (
+                    (ProcessResult::SessionSaved, None),
+                    (ProcessResult::SessionSaved, true),
+                ),
+            );
         }
 
         #[rstest]

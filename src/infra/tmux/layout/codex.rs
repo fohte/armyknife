@@ -51,6 +51,7 @@ pub(super) struct RecoverySpec<'a> {
     pub effort: Option<ReasoningEffort>,
     pub prompt_file: Option<&'a Path>,
     pub pane_id: Option<&'a str>,
+    pub initial_prompt_marker: Option<super::InitialPromptMarker<'a>>,
 }
 
 impl Launch {
@@ -120,14 +121,16 @@ impl Launch {
         spec: RecoverySpec<'_>,
         bind_pane: impl FnOnce(&str, &str) -> anyhow::Result<()>,
     ) -> anyhow::Result<AgentLaunchRoute> {
-        let route = self.finish(spec.cwd, spec.effort).with_context(|| {
-            spec.pane_id.map_or_else(
+        let route =
+            self.finish_with_marker(spec.cwd, spec.effort, spec.initial_prompt_marker)
+                .with_context(|| {
+                    spec.pane_id.map_or_else(
                 || "Codex initial prompt delivery failed after creating a pane".to_string(),
                 |pane_id| {
                     format!("Codex pane {pane_id} was created, but initial prompt delivery failed")
                 },
             )
-        })?;
+                })?;
         let Some(thread_id) = route.codex_thread_id() else {
             return Ok(route);
         };
@@ -144,10 +147,20 @@ impl Launch {
         Ok(route)
     }
 
+    #[cfg(test)]
     fn finish(
         self,
         cwd: &Path,
         effort: Option<ReasoningEffort>,
+    ) -> anyhow::Result<AgentLaunchRoute> {
+        self.finish_with_marker(cwd, effort, None)
+    }
+
+    fn finish_with_marker(
+        self,
+        cwd: &Path,
+        effort: Option<ReasoningEffort>,
+        initial_prompt_marker: Option<super::InitialPromptMarker<'_>>,
     ) -> anyhow::Result<AgentLaunchRoute> {
         match self.state {
             LaunchState::Standard => Ok(AgentLaunchRoute::Standard),
@@ -159,6 +172,9 @@ impl Launch {
                 let thread_id = client
                     .wait_for_thread_started(cwd)
                     .context("Failed to wait for Codex app-server thread/start")?;
+                if let Some(marker) = initial_prompt_marker {
+                    (marker.mark_pending)(&thread_id)?;
+                }
                 match client.start_turn(&thread_id, &prompt, effort) {
                     Ok(()) => Ok(AgentLaunchRoute::CodexDaemon { thread_id }),
                     Err(codex_steer::DeliveryError::Unconfirmed(error)) => {
@@ -167,8 +183,19 @@ impl Launch {
                             reason: error.to_string(),
                         })
                     }
-                    Err(codex_steer::DeliveryError::NotDelivered(error)) => Err(error)
-                        .context("Codex app-server rejected the initial turn/start request"),
+                    Err(codex_steer::DeliveryError::NotDelivered(error)) => {
+                        if let Some(marker) = initial_prompt_marker
+                            && let Err(clear_error) = (marker.clear_pending)(&thread_id)
+                        {
+                            tracing::warn!(
+                                event = "agent.new.initial_prompt_marker_cleanup_failed",
+                                session_id = %thread_id,
+                                error = %clear_error,
+                            );
+                        }
+                        Err(error)
+                            .context("Codex app-server rejected the initial turn/start request")
+                    }
                 }
             }
         }
@@ -178,6 +205,7 @@ impl Launch {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
 
     use super::*;
     use rstest::{fixture, rstest};
@@ -208,6 +236,91 @@ mod tests {
         ) -> codex_steer::Result<()> {
             self.turn.take().unwrap_or(Ok(()))
         }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum Call {
+        Wait,
+        Mark(String),
+        StartTurn(String, String),
+    }
+
+    struct OrderedClient {
+        calls: Arc<Mutex<Vec<Call>>>,
+    }
+
+    impl AppServerClient for OrderedClient {
+        fn wait_for_thread_started(&mut self, _cwd: &Path) -> anyhow::Result<String> {
+            self.calls.lock().unwrap().push(Call::Wait);
+            Ok("thread-example".to_string())
+        }
+
+        fn start_turn(
+            &mut self,
+            thread_id: &str,
+            prompt: &str,
+            _effort: Option<ReasoningEffort>,
+        ) -> codex_steer::Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(Call::StartTurn(thread_id.to_string(), prompt.to_string()));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn marks_initial_prompt_before_starting_the_turn() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mark_calls = calls.clone();
+        let mark_pending = move |session_id: &str| {
+            mark_calls
+                .lock()
+                .unwrap()
+                .push(Call::Mark(session_id.to_string()));
+            Ok(())
+        };
+        let clear_pending = |_session_id: &str| Ok(());
+        let launch = Launch::prepare_with(Engine::Codex, Some("prompt"), 1, || {
+            Ok((
+                Box::new(OrderedClient {
+                    calls: calls.clone(),
+                }),
+                None,
+            ))
+        })
+        .expect("app-server client should be created");
+
+        let route = launch.finish_and_recover_with(
+            RecoverySpec {
+                cwd: Path::new("/workspace/project-a"),
+                effort: None,
+                prompt_file: None,
+                pane_id: Some("%42"),
+                initial_prompt_marker: Some(super::super::InitialPromptMarker {
+                    mark_pending: &mark_pending,
+                    clear_pending: &clear_pending,
+                }),
+            },
+            |_, _| Ok(()),
+        );
+
+        assert_eq!(
+            (
+                route.map_err(|error| error.to_string()),
+                calls.lock().unwrap().clone(),
+            ),
+            (
+                Ok(AgentLaunchRoute::CodexDaemon {
+                    thread_id: "thread-example".to_string(),
+                }),
+                vec![
+                    Call::Wait,
+                    Call::Mark("thread-example".to_string()),
+                    Call::StartTurn("thread-example".to_string(), "prompt".to_string()),
+                ],
+            ),
+        );
     }
 
     #[rstest]
@@ -326,6 +439,7 @@ mod tests {
                 effort: None,
                 prompt_file: None,
                 pane_id: Some("%42"),
+                initial_prompt_marker: None,
             },
             |pane_id, thread_id| {
                 binding = Some((pane_id.to_string(), thread_id.to_string()));
@@ -368,6 +482,7 @@ mod tests {
                 effort: None,
                 prompt_file: Some(&prompt_path),
                 pane_id: Some("%42"),
+                initial_prompt_marker: None,
             },
             |pane_id, thread_id| {
                 binding = Some((pane_id.to_string(), thread_id.to_string()));
@@ -411,6 +526,7 @@ mod tests {
                 effort: None,
                 prompt_file: None,
                 pane_id: None,
+                initial_prompt_marker: None,
             },
             |pane_id, thread_id| {
                 binding = Some((pane_id.to_string(), thread_id.to_string()));
@@ -448,6 +564,7 @@ mod tests {
                 effort: None,
                 prompt_file: None,
                 pane_id: Some("%42"),
+                initial_prompt_marker: None,
             },
             |_, _| panic!("a rejected turn must not bind the pane"),
         );

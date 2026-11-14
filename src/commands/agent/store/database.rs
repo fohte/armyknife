@@ -12,6 +12,7 @@ use crate::commands::agent::types::Session;
 
 mod agent_files;
 mod decisions;
+mod initial_prompt;
 mod migration;
 mod migrations;
 mod peer_out_messages;
@@ -31,6 +32,7 @@ pub(crate) use decisions::{
     AgentDecision, AgentDecisionCounts, agent_decision_counts_by_session, agent_decisions,
     insert_agent_decision, set_agent_decision_review,
 };
+pub(crate) use initial_prompt::{clear_pending_initial_prompt, mark_pending_initial_prompt};
 pub(crate) use peer_out_messages::WatchWebPeerOutMessage;
 pub(crate) use peer_out_messages::{
     insert_watch_web_peer_out_message, mark_watch_web_peer_out_message_delivered,
@@ -175,6 +177,11 @@ impl SessionLock {
         self.connection.execute_batch("COMMIT")?;
         self.transaction_active.set(false);
         Ok(marker)
+    }
+
+    pub(crate) fn consume_pending_initial_prompt(&self) -> Result<bool> {
+        self.ensure_transaction()?;
+        initial_prompt::consume_pending_initial_prompt(&self.connection, &self.session_id)
     }
 
     pub(crate) fn register_permission_request(

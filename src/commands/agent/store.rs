@@ -135,6 +135,21 @@ pub(crate) fn save_session_to(sessions_dir: &Path, session: &Session) -> Result<
     database::save_session(sessions_dir, session)
 }
 
+pub(crate) fn mark_pending_initial_prompt(session_id: &str) -> Result<()> {
+    mark_pending_initial_prompt_from(&sessions_dir()?, session_id)
+}
+
+pub(crate) fn clear_pending_initial_prompt(session_id: &str) -> Result<()> {
+    database::clear_pending_initial_prompt(&sessions_dir()?, session_id)
+}
+
+pub(crate) fn mark_pending_initial_prompt_from(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<()> {
+    database::mark_pending_initial_prompt(sessions_dir, session_id)
+}
+
 pub(crate) fn save_rewind_sessions(
     sessions_dir: &Path,
     previous: &Session,
