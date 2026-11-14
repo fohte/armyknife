@@ -206,6 +206,7 @@ export function ConversationPaneView({
     conversationMessageCount,
     elements: conversationMessageElements,
     hasUnansweredProposal,
+    pendingInteractionElements,
   } = useConversationMessageElements({
     messages,
     ...(decisions === undefined ? {} : { decisions }),
@@ -392,6 +393,15 @@ export function ConversationPaneView({
         <p className="conversation-error" role="status">
           Browser storage is unavailable. Drafts may not survive a page reload.
         </p>
+      ) : null}
+      {pendingInteractionElements.length > 0 ? (
+        <section
+          className="conversation-pending-actions"
+          aria-label="Items needing your response"
+          data-mobile={isMobile ? 'true' : undefined}
+        >
+          {pendingInteractionElements}
+        </section>
       ) : null}
       <MessageComposer
         draft={draft}

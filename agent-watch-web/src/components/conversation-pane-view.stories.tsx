@@ -108,8 +108,8 @@ export const QuestionWaitsForAnAnswer: Story = {
   },
 }
 
-export const PendingRequestsWaitAfterTheConversation: Story = {
-  name: 'Answered cards keep their place while pending cards wait below',
+export const PendingActionsAppearAboveComposer: Story = {
+  name: 'Pending cards sit above the composer while answered cards stay in the conversation',
   args: {
     messages: [
       {
@@ -197,6 +197,21 @@ export const PendingRequestsWaitAfterTheConversation: Story = {
             answer: null,
           },
         ],
+      },
+      {
+        type: 'permission',
+        requestId: 'permission-request-notification',
+        tool: 'Write',
+        description: 'Update the notification settings.',
+      },
+      {
+        type: 'todo',
+        seq: 33,
+        title: 'Review the alert destination',
+        detail: 'Confirm that the selected destination is available.',
+        completed: false,
+        resolution: null,
+        comment: null,
       },
     ],
   },

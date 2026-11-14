@@ -315,6 +315,7 @@ function renderView(
 function renderConversationMessages(
   messages: readonly ChatItem[],
   start: number,
+  isMobile = false,
 ) {
   root ??= createRoot(container)
   act(() => {
@@ -328,6 +329,7 @@ function renderConversationMessages(
         error={null}
         onAction={() => Promise.resolve(true)}
         onSelectSession={() => undefined}
+        isMobile={isMobile}
       />,
     )
   })
@@ -8075,12 +8077,10 @@ it('keeps a question answer draft when a preceding conversation row arrives', ()
   )
 })
 
-it('moves pending proposals and questions to the end until they are resolved', () => {
-  const pendingProposal: ChatItem = {
-    ...proposal,
-    seq: 21,
-    title: 'Choose the rollout interval',
-  }
+it.each([
+  { formFactor: 'desktop', isMobile: false },
+  { formFactor: 'mobile', isMobile: true },
+])('pins pending cards above the composer on $formFactor', ({ isMobile }) => {
   const pendingQuestionPrompt = {
     header: 'Alert channel',
     question: 'Which alert channel should be enabled?',
@@ -8088,125 +8088,114 @@ it('moves pending proposals and questions to the end until they are resolved', (
     multi_select: false,
     answer: null,
   }
-  const pendingQuestion: ChatItem = {
-    type: 'question',
-    requestId: 'request-rollout-window',
-    questions: [pendingQuestionPrompt],
-  }
-  const historicalQuestion: ChatItem = {
-    type: 'question',
-    questions: [
-      {
-        ...pendingQuestionPrompt,
-        header: 'Previous retry preference',
-        question: 'Which retry preference was selected?',
-      },
-    ],
-  }
-  const withdrawableProposal: ChatItem = {
-    ...proposal,
-    seq: 22,
-    title: 'Choose the fallback mode',
-  }
-  const resolvedElsewhereProposal: ChatItem = {
-    ...proposal,
-    seq: 23,
-    title: 'Keep the saved plan',
-    resolved: true,
-  }
-  const firstMessage: ChatItem = {
-    type: 'assistant',
-    text: 'The rollout plan is ready.',
-  }
-  const secondMessage: ChatItem = {
-    type: 'assistant',
-    text: 'One alert detail remains.',
-  }
-  const thirdMessage: ChatItem = {
-    type: 'assistant',
-    text: 'The session continues working.',
-  }
-  const fourthMessage: ChatItem = {
-    type: 'assistant',
-    text: 'The final summary is ready.',
-  }
   const messages: ChatItem[] = [
-    firstMessage,
-    pendingProposal,
-    resolvedElsewhereProposal,
-    secondMessage,
-    historicalQuestion,
-    pendingQuestion,
-    thirdMessage,
-    withdrawableProposal,
-    fourthMessage,
+    { type: 'assistant', text: 'The rollout plan is ready.' },
+    {
+      ...proposal,
+      seq: 23,
+      title: 'Keep the saved plan',
+      answer: { choice: 0, comment: null },
+    },
+    {
+      type: 'question',
+      questions: [
+        {
+          ...pendingQuestionPrompt,
+          header: 'Previous retry preference',
+          question: 'Which retry preference was selected?',
+          answer: 'Email',
+        },
+      ],
+    },
+    {
+      type: 'todo',
+      seq: 24,
+      title: 'Confirm the fallback mode',
+      detail: null,
+      completed: true,
+      resolution: 'completed',
+      comment: null,
+    },
+    { type: 'assistant', text: 'The final summary is ready.' },
+    {
+      ...proposal,
+      seq: 21,
+      title: 'Choose the rollout interval',
+    },
+    {
+      type: 'question',
+      requestId: 'request-rollout-window',
+      questions: [pendingQuestionPrompt],
+    },
+    {
+      type: 'permission',
+      requestId: 'permission-request-rollout',
+      tool: 'Write',
+      description: 'Update the rollout configuration.',
+    },
+    {
+      type: 'todo',
+      seq: 25,
+      title: 'Check the alert destination',
+      detail: null,
+      completed: false,
+      resolution: null,
+      comment: null,
+    },
   ]
-  renderConversationMessages(messages, 0)
+  renderConversationMessages(messages, 0, isMobile)
 
-  const getTimeline = () =>
+  const summarizeCards = (root: ParentNode) =>
     Array.from(
-      container.querySelectorAll<HTMLElement>(
-        '.chat-assistant-message, .chat-question-card, .chat-proposal-card',
+      root.querySelectorAll<HTMLElement>(
+        '.chat-assistant-message, .chat-question-card, .chat-proposal-card, .chat-permission-card, .chat-todo-card',
       ),
-      (element) =>
-        element.classList.contains('chat-assistant-message')
-          ? element.textContent
-          : `${element.classList.contains('chat-question-card') ? 'Question' : 'Proposal'}: ${element.querySelector('h3')?.textContent ?? ''}`,
+      (element) => {
+        if (element.classList.contains('chat-assistant-message')) {
+          return `assistant:${element.textContent.trim()}`
+        }
+        if (element.classList.contains('chat-question-card')) {
+          return `question:${element.querySelector('.chat-question-text')?.textContent ?? ''}`
+        }
+        if (element.classList.contains('chat-proposal-card')) {
+          return `proposal:${element.querySelector('h3')?.textContent ?? ''}`
+        }
+        if (element.classList.contains('chat-permission-card')) {
+          return `permission:${element.querySelector('h2')?.textContent ?? ''}`
+        }
+        return `todo:${element.querySelector('h2')?.textContent ?? ''}:${element.querySelector('h3')?.textContent ?? ''}`
+      },
     )
-
-  const pendingOrder = getTimeline()
-  renderConversationMessages(
-    [
-      firstMessage,
-      {
-        ...pendingProposal,
-        answer: { choice: 0, comment: null },
-      },
-      resolvedElsewhereProposal,
-      secondMessage,
-      historicalQuestion,
-      {
-        ...pendingQuestion,
-        questions: [
-          {
-            ...pendingQuestionPrompt,
-            answer: 'Dashboard',
-          },
-        ],
-      },
-      thirdMessage,
-      { ...withdrawableProposal, resolution: 'withdrawn' },
-      fourthMessage,
-    ],
-    0,
+  const pendingActions = container.querySelector(
+    '.conversation-pending-actions',
   )
+  const composer = container.querySelector('.conversation-composer')
+  const timeline = container.querySelector('.conversation-scroll')
 
-  const getTimelineSnapshot = () => [
-    ...pendingOrder,
-    'Resolved state',
-    ...getTimeline(),
+  const getPaneSnapshot = () => [
+    timeline === null ? [] : summarizeCards(timeline),
+    pendingActions === null ? [] : summarizeCards(pendingActions),
+    pendingActions?.nextElementSibling === composer,
+    composer?.getAttribute('data-mobile') ?? null,
   ]
-  expect(getTimelineSnapshot()).toEqual([
-    'The rollout plan is ready.',
-    'Proposal: Keep the saved plan',
-    'One alert detail remains.',
-    'Question: Previous retry preference',
-    'The session continues working.',
-    'The final summary is ready.',
-    'Proposal: Choose the rollout interval',
-    'Question: Alert channel',
-    'Proposal: Choose the fallback mode',
-    'Resolved state',
-    'The rollout plan is ready.',
-    'Proposal: Choose the rollout interval',
-    'Proposal: Keep the saved plan',
-    'One alert detail remains.',
-    'Question: Previous retry preference',
-    'Question: Alert channel',
-    'The session continues working.',
-    'Proposal: Choose the fallback mode',
-    'The final summary is ready.',
-  ])
+  const expectedSnapshot = [
+    [
+      'assistant:The rollout plan is ready.',
+      'proposal:Keep the saved plan',
+      'question:Which retry preference was selected?',
+      'todo:To-do · done:Confirm the fallback mode',
+      'assistant:The final summary is ready.',
+    ],
+    [
+      'proposal:Choose the rollout interval',
+      'question:Which alert channel should be enabled?',
+      'permission:Permission required',
+      'todo:To-do · pending:Check the alert destination',
+    ],
+    true,
+    isMobile ? 'true' : null,
+  ]
+  expect(getPaneSnapshot()).toEqual(expectedSnapshot)
 })
 
 it('keeps repeated tool summaries attached to their batch when older rows arrive', () => {
