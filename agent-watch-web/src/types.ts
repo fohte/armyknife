@@ -277,6 +277,9 @@ export type ConversationResponse = {
   messages: ChatItem[]
   backgroundTasks: BackgroundTask[]
   skills?: SkillSuggestion[]
+  epoch?: string
+  olderCursor?: string
+  epochReset?: boolean
   start: number
   total: number
   stableStart?: number | undefined

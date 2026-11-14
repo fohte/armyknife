@@ -186,10 +186,14 @@ export function useConversationPaneData({
       loadedConversation.stableDigest !== undefined
         ? `&stableStart=${String(loadedConversation.stableStart)}&stableEnd=${String(loadedConversation.stableEnd)}&stableDigest=${loadedConversation.stableDigest}`
         : ''
+    const epochQuery =
+      loadedConversation?.epoch === undefined
+        ? ''
+        : `&epoch=${encodeURIComponent(loadedConversation.epoch)}${loadedConversation.olderCursor == null ? '' : `&olderCursor=${encodeURIComponent(loadedConversation.olderCursor)}`}`
     const messagesRequest = requestJson(
       loadedConversation === null
         ? `${sessionPath}/messages?limit=${String(INITIAL_MESSAGE_LIMIT)}`
-        : `${sessionPath}/messages?from=${String(loadedConversation.start)}${stableDigestQuery}`,
+        : `${sessionPath}/messages?from=${String(loadedConversation.start)}${epochQuery}${stableDigestQuery}`,
       isConversationResponse,
     )
     void refreshActions()
@@ -201,8 +205,11 @@ export function useConversationPaneData({
       const previous = alreadyLoaded
         ? conversationRef.current
         : EMPTY_CONVERSATION
+      const sameEpoch = previous.epoch === messagesResult.value.epoch
       const preserveLoadedPrefix =
-        alreadyLoaded && previous.start < messagesResult.value.start
+        alreadyLoaded &&
+        sameEpoch &&
+        previous.start < messagesResult.value.start
       const start = preserveLoadedPrefix
         ? previous.start
         : messagesResult.value.start
@@ -218,12 +225,15 @@ export function useConversationPaneData({
       refreshedConversation = {
         ...messagesResult.value,
         start,
-        messages: shareUnchangedMessages(
-          previous.messages,
-          messages,
-          previous.start,
-          start,
-        ),
+        messages:
+          alreadyLoaded && !sameEpoch
+            ? messagesResult.value.messages
+            : shareUnchangedMessages(
+                previous.messages,
+                messages,
+                previous.start,
+                start,
+              ),
       }
       conversationSessionId.current = sessionId
       markMessagesLoaded()
@@ -264,9 +274,11 @@ export function useConversationPaneData({
 
   const loadOlder = useCallback(() => {
     const current = conversationRef.current
+    const hasEpochCursor =
+      current.epoch !== undefined && current.olderCursor != null
     if (
       conversationSessionId.current !== sessionId ||
-      current.start <= 0 ||
+      (current.start <= 0 && !hasEpochCursor) ||
       loadingOlderRef.current
     ) {
       return
@@ -275,27 +287,62 @@ export function useConversationPaneData({
     const generation = olderRequestGeneration.current + 1
     olderRequestGeneration.current = generation
     setLoadingOlder(true)
+    const paginationQuery =
+      current.epoch === undefined
+        ? `before=${String(current.start)}&limit=${String(INITIAL_MESSAGE_LIMIT)}`
+        : current.start > 0
+          ? `before=${String(current.start)}&limit=${String(INITIAL_MESSAGE_LIMIT)}&epoch=${encodeURIComponent(current.epoch)}${current.olderCursor == null ? '' : `&olderCursor=${encodeURIComponent(current.olderCursor)}`}`
+          : `olderCursor=${encodeURIComponent(current.olderCursor ?? '')}&limit=${String(INITIAL_MESSAGE_LIMIT)}&epoch=${encodeURIComponent(current.epoch)}`
     void requestJson(
-      `/api/sessions/${encodeURIComponent(sessionId)}/messages?before=${String(current.start)}&limit=${String(INITIAL_MESSAGE_LIMIT)}`,
+      `/api/sessions/${encodeURIComponent(sessionId)}/messages?${paginationQuery}`,
       isConversationResponse,
     ).match(
       (response) => {
         if (olderRequestGeneration.current !== generation) return
         if (conversationSessionId.current !== sessionId) return
         const latest = conversationRef.current
-        const messages = [...response.messages, ...latest.messages]
+        const noMoreOlderPages =
+          latest.epoch !== undefined &&
+          response.epoch === latest.epoch &&
+          response.messages.length === 0 &&
+          response.olderCursor === undefined
+        if (noMoreOlderPages) {
+          const latestWithoutCursor = { ...latest }
+          delete latestWithoutCursor.olderCursor
+          updateConversation({
+            ...latestWithoutCursor,
+            stableStart: undefined,
+            stableEnd: undefined,
+            stableDigest: undefined,
+          })
+          clearErrors()
+          loadingOlderRef.current = false
+          setLoadingOlder(false)
+          return
+        }
+        const epochReset = response.epochReset === true
+        const messages = epochReset
+          ? response.messages
+          : [...response.messages, ...latest.messages]
+        const epochChanged = response.epoch !== latest.epoch
+        const start = epochChanged ? 0 : response.start
         markMessagesLoaded()
         updateConversation({
           ...response,
+          start,
+          total: response.total,
           stableStart: undefined,
           stableEnd: undefined,
           stableDigest: undefined,
-          messages: shareUnchangedMessages(
-            latest.messages,
-            messages,
-            latest.start,
-            response.start,
-          ),
+          messages:
+            epochReset || epochChanged
+              ? messages
+              : shareUnchangedMessages(
+                  latest.messages,
+                  messages,
+                  latest.start,
+                  start,
+                ),
         })
         clearErrors()
         loadingOlderRef.current = false

@@ -9,6 +9,8 @@ type UseConversationScrollOptions = {
   onPruneOldMessages: () => void
   sessionId: string
   start: number
+  epoch?: string | undefined
+  olderCursor?: string | undefined
 }
 
 export function useConversationScroll({
@@ -18,12 +20,15 @@ export function useConversationScroll({
   onPruneOldMessages,
   sessionId,
   start,
+  epoch,
+  olderCursor,
 }: UseConversationScrollOptions) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const pendingScrollAnchorRef = useRef<{
     scrollHeight: number
     scrollTop: number
     start: number
+    epoch: string | undefined
   } | null>(null)
   const followLatestRef = useRef(true)
 
@@ -36,29 +41,36 @@ export function useConversationScroll({
     const scrollContainer = scrollRef.current
     if (scrollContainer === null) return
     const anchor = pendingScrollAnchorRef.current
-    if (anchor !== null && start < anchor.start) {
+    if (anchor !== null && (start < anchor.start || epoch !== anchor.epoch)) {
       scrollContainer.scrollTop =
         anchor.scrollTop + scrollContainer.scrollHeight - anchor.scrollHeight
       pendingScrollAnchorRef.current = null
-    } else if (followLatestRef.current) {
-      scrollContainer.scrollTop =
-        scrollContainer.scrollHeight - scrollContainer.clientHeight
-      onPruneOldMessages()
+    } else {
+      if (anchor !== null && !loadingOlder) {
+        pendingScrollAnchorRef.current = null
+      }
+      if (followLatestRef.current && !loadingOlder) {
+        scrollContainer.scrollTop =
+          scrollContainer.scrollHeight - scrollContainer.clientHeight
+        onPruneOldMessages()
+      }
     }
-  }, [messages, onPruneOldMessages, start])
+  }, [epoch, loadingOlder, messages, onPruneOldMessages, start])
 
   const loadOlder = useCallback(() => {
-    if (start <= 0 || loadingOlder) return
+    const hasEpochCursor = epoch !== undefined && olderCursor != null
+    if ((start <= 0 && !hasEpochCursor) || loadingOlder) return
     const scrollContainer = scrollRef.current
     if (scrollContainer !== null) {
       pendingScrollAnchorRef.current = {
         scrollHeight: scrollContainer.scrollHeight,
         scrollTop: scrollContainer.scrollTop,
         start,
+        epoch,
       }
     }
     onLoadOlder()
-  }, [loadingOlder, onLoadOlder, start])
+  }, [epoch, loadingOlder, onLoadOlder, olderCursor, start])
 
   const onScroll = useCallback(() => {
     const scrollContainer = scrollRef.current
@@ -69,6 +81,7 @@ export function useConversationScroll({
         scrollHeight: scrollContainer.scrollHeight,
         scrollTop: scrollContainer.scrollTop,
         start: pendingAnchor.start,
+        epoch: pendingAnchor.epoch,
       }
     }
     followLatestRef.current =

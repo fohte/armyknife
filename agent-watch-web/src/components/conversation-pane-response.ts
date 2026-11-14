@@ -283,6 +283,11 @@ export function isConversationResponse(
     (value['skills'] === undefined ||
       (Array.isArray(value['skills']) &&
         value['skills'].every(isSkillSuggestion))) &&
+    (value['epoch'] === undefined || typeof value['epoch'] === 'string') &&
+    (value['olderCursor'] === undefined ||
+      typeof value['olderCursor'] === 'string') &&
+    (value['epochReset'] === undefined ||
+      typeof value['epochReset'] === 'boolean') &&
     typeof value['start'] === 'number' &&
     Number.isInteger(value['start']) &&
     value['start'] >= 0 &&

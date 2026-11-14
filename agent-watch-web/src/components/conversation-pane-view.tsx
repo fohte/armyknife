@@ -44,6 +44,8 @@ type ConversationPaneViewProps = {
   sessions?: readonly Session[]
   messages: readonly ChatItem[]
   start?: number
+  epoch?: string | undefined
+  olderCursor?: string | undefined
   decisions?: readonly Extract<ChatItem, { type: 'decision' }>[]
   hasUnansweredProposal?: boolean
   loadingOlder?: boolean
@@ -92,6 +94,8 @@ export function ConversationPaneView({
   sessions = [],
   messages,
   start = 0,
+  epoch,
+  olderCursor,
   decisions,
   hasUnansweredProposal: responseHasUnansweredProposal,
   loadingOlder = false,
@@ -172,6 +176,8 @@ export function ConversationPaneView({
     onPruneOldMessages,
     sessionId: session.id,
     start,
+    epoch,
+    olderCursor,
   })
   useOwnMessageKeyboardNavigation({
     isMobile,
@@ -368,7 +374,7 @@ export function ConversationPaneView({
           onScroll()
         }}
       >
-        {start > 0 ? (
+        {start > 0 || (epoch !== undefined && olderCursor != null) ? (
           <Button
             className="conversation-load-older"
             type="button"

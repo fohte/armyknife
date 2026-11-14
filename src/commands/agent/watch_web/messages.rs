@@ -383,6 +383,8 @@ fn load_conversation_with_tail_window(
         },
     )?;
     if let Some(mut cached) = loaders.message_cache.get(session_id, &cache_key)? {
+        cached.conversation.initial_epoch =
+            tail_window_limit.is_some() && session.engine == Engine::Claude;
         let elapsed = cached.cached_at.elapsed().as_secs();
         for task in &mut cached.conversation.background_tasks {
             task.elapsed_seconds = task.elapsed_seconds.saturating_add(elapsed);
@@ -475,6 +477,7 @@ fn load_conversation_with_tail_window(
             .iter()
             .any(|proposal| proposal.answer.is_none() && proposal.resolved_at.is_none());
     }
+    conversation.initial_epoch = tail_window_limit.is_some() && session.engine == Engine::Claude;
 
     cache::mark_resolved_queued_prompts(loaders, session_id, &resolved_queued_prompt_ids);
     if !used_tail_window {
@@ -749,8 +752,16 @@ struct ConversationResponse {
     stable_end: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stable_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    epoch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    older_cursor: Option<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    epoch_reset: bool,
     #[serde(skip)]
     tail_window_start: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(skip)]
+    initial_epoch: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -2106,11 +2117,18 @@ mod tests {
     async fn message_response(
         router: &axum::Router,
     ) -> (StatusCode, Option<String>, serde_json::Value) {
+        message_response_with_query(router, "").await
+    }
+
+    async fn message_response_with_query(
+        router: &axum::Router,
+        query: &str,
+    ) -> (StatusCode, Option<String>, serde_json::Value) {
         let response = router
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/sessions/fixture-session/messages")
+                    .uri(format!("/sessions/fixture-session/messages{query}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -3724,9 +3742,9 @@ mod tests {
     }
 
     #[rstest]
-    #[case::active_delivery(true, 0, 101)]
-    #[case::abandoned_delivery(false, 0, 101)]
-    #[case::rewound_history(false, 100, 1)]
+    #[case::active_delivery(true, 0, 205)]
+    #[case::abandoned_delivery(false, 0, 205)]
+    #[case::rewound_history(false, 205, 205)]
     #[tokio::test]
     async fn initial_tail_window_matches_full_parse_for_queued_prompt_branches(
         #[case] delivery_is_active: bool,
@@ -3800,9 +3818,14 @@ mod tests {
             .map(serde_json::Value::to_string)
             .collect::<Vec<_>>()
             .join("\n");
-        std::fs::write(&transcript_path, transcript).unwrap();
-        let mut session = stored_session();
-        session.transcript_path = Some(transcript_path);
+        std::fs::write(&transcript_path, &transcript).unwrap();
+        let compressed_path = directory.path().join("full-transcript.jsonl.zst");
+        std::fs::write(
+            &compressed_path,
+            zstd::stream::encode_all(transcript.as_bytes(), 0).unwrap(),
+        )
+        .unwrap();
+        let base_session = stored_session();
         let queued = saved_prompt(7, "Delivered fixture request.");
         let old_created_at = chrono::DateTime::parse_from_rfc3339("2025-12-31T23:59:00Z")
             .unwrap()
@@ -3850,8 +3873,9 @@ mod tests {
         };
         let full_marked_ids = Arc::new(Mutex::new(Vec::new()));
         let tail_marked_ids = Arc::new(Mutex::new(Vec::new()));
-        let make_router = |marked_ids: Arc<Mutex<Vec<i64>>>| {
-            let session = session.clone();
+        let make_router = |marked_ids: Arc<Mutex<Vec<i64>>>, transcript_path: &Path| {
+            let mut session = base_session.clone();
+            session.transcript_path = Some(transcript_path.to_path_buf());
             let queued = queued.clone();
             let pending_decision = pending_decision.clone();
             let pending_proposal = pending_proposal.clone();
@@ -3875,41 +3899,48 @@ mod tests {
                 loaders,
             )
         };
-        let full_response = make_router(Arc::clone(&full_marked_ids))
-            .oneshot(
-                Request::builder()
-                    .uri("/sessions/fixture-session/messages")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let full_messages = response_json_snapshot(full_response).await.2["messages"]
-            .as_array()
-            .unwrap()
-            .clone();
-        let tail_response = make_router(Arc::clone(&tail_marked_ids))
-            .oneshot(
-                Request::builder()
-                    .uri("/sessions/fixture-session/messages?limit=100")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let tail_messages = response_json_snapshot(tail_response).await.2["messages"]
-            .as_array()
-            .unwrap()
-            .clone();
-        let expected_messages = full_messages
-            .iter()
-            .skip(full_messages.len().saturating_sub(100))
-            .cloned()
-            .collect::<Vec<_>>();
+        let full_router = make_router(Arc::clone(&full_marked_ids), &compressed_path);
+        let tail_router = make_router(Arc::clone(&tail_marked_ids), &transcript_path);
+        let full_initial = message_response_with_query(&full_router, "?limit=100").await;
+        let tail_initial = message_response_with_query(&tail_router, "?limit=100").await;
+        let mut full_responses = vec![full_initial];
+        let mut tail_responses = vec![tail_initial.clone()];
+        if let Some(epoch) = tail_initial.2["epoch"].as_str() {
+            let start = tail_initial.2["start"].as_u64().unwrap();
+            let mut refresh_query = format!("?from={start}&epoch={epoch}");
+            if let Some(older_cursor) = tail_initial.2["olderCursor"].as_str() {
+                refresh_query.push_str(&format!("&olderCursor={older_cursor}"));
+            }
+            if let (Some(stable_start), Some(stable_end), Some(stable_digest)) = (
+                tail_initial.2["stableStart"].as_u64(),
+                tail_initial.2["stableEnd"].as_u64(),
+                tail_initial.2["stableDigest"].as_str(),
+            ) {
+                refresh_query.push_str(&format!(
+                    "&stableStart={stable_start}&stableEnd={stable_end}&stableDigest={stable_digest}"
+                ));
+            }
+            full_responses.push(message_response_with_query(&full_router, &refresh_query).await);
+            tail_responses.push(message_response_with_query(&tail_router, &refresh_query).await);
+
+            if let Some(older_cursor) = tail_initial.2["olderCursor"].as_str() {
+                let older_query = format!("?limit=100&epoch={epoch}&olderCursor={older_cursor}");
+                full_responses.push(message_response_with_query(&full_router, &older_query).await);
+                tail_responses.push(message_response_with_query(&tail_router, &older_query).await);
+            }
+        }
+
+        let full_output = (full_responses, full_marked_ids.lock().unwrap().clone());
+        let tail_output = (tail_responses, tail_marked_ids.lock().unwrap().clone());
+        let older_message_count = full_output
+            .0
+            .get(2)
+            .and_then(|response| response.2["messages"].as_array())
+            .map(Vec::len);
 
         assert_eq!(
-            (tail_messages, tail_marked_ids.lock().unwrap().clone(),),
-            (expected_messages, full_marked_ids.lock().unwrap().clone(),),
+            (full_output, tail_output.clone(), older_message_count),
+            (tail_output.clone(), tail_output, Some(100)),
         );
     }
 
