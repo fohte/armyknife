@@ -163,12 +163,13 @@ export function ProposalCard({
         aria-label="Proposal options"
       >
         {options.map((option, index) => (
-          <label
+          <div
             className="chat-proposal-option"
             data-selected={selectedChoice === index ? 'true' : undefined}
             key={`${String(index)}-${option.label}`}
           >
             <input
+              id={`proposal-${String(seq)}-option-${String(index)}`}
               type="radio"
               name={`proposal-${String(seq)}`}
               value={String(index)}
@@ -179,14 +180,17 @@ export function ProposalCard({
               }}
             />
             <div className="chat-proposal-option-content">
-              <span className="chat-proposal-option-heading">
-                <span className="chat-proposal-option-label">
+              <div className="chat-proposal-option-heading">
+                <label
+                  className="chat-proposal-option-label"
+                  htmlFor={`proposal-${String(seq)}-option-${String(index)}`}
+                >
                   {choiceLabel(index)} · {option.label}
-                </span>
+                </label>
                 {option.recommended ? (
                   <span className="chat-proposal-recommended">Recommended</span>
                 ) : null}
-              </span>
+              </div>
               {option.description !== null ? (
                 <MarkdownMessage className="chat-proposal-option-description">
                   {option.description}
@@ -207,7 +211,7 @@ export function ProposalCard({
                 </span>
               ) : null}
             </div>
-          </label>
+          </div>
         ))}
       </div>
       <label

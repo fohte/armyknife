@@ -117,7 +117,7 @@ it('renders the proposal heading, recommended option, and pros and cons', () => 
       .querySelector('.chat-proposal-options')
       ?.getAttribute('role'),
     options: Array.from(
-      container.querySelectorAll<HTMLLabelElement>('.chat-proposal-option'),
+      container.querySelectorAll<HTMLDivElement>('.chat-proposal-option'),
       (option) => ({
         text: option.textContent,
         checked: option.querySelector<HTMLInputElement>('input')?.checked,
@@ -196,6 +196,51 @@ it('renders proposal summaries, descriptions, and withdrawal comments as markdow
       '<p>Keep <strong>the current flow</strong> and <a href="https://example.test" target="_blank" rel="noopener noreferrer">review details</a>.</p>',
     withdrawalComment:
       '<p>See <a href="https://example.test" target="_blank" rel="noopener noreferrer">the update</a> for <strong>context</strong>.</p>',
+  })
+})
+
+it('keeps option labels phrasing-only and links associated with their radios', () => {
+  renderCard(
+    props({
+      options: [
+        {
+          label: 'Use the existing flow',
+          description: 'Read [the guide](https://example.test).',
+          pros: [],
+          cons: [],
+          recommended: false,
+        },
+      ],
+    }),
+  )
+
+  const snapshot = () => {
+    const option = container.querySelector('.chat-proposal-option')
+    const input = option?.querySelector<HTMLInputElement>('input')
+    const label = option?.querySelector<HTMLLabelElement>('label')
+    const description = option?.querySelector(
+      '.chat-proposal-option-description',
+    )
+
+    return {
+      optionTag: option?.tagName,
+      inputId: input?.id,
+      labelFor: label?.htmlFor,
+      labelText: label?.textContent,
+      labelLinkCount: label?.querySelectorAll('a').length,
+      descriptionTag: description?.tagName,
+      descriptionLink: description?.querySelector('a')?.getAttribute('href'),
+    }
+  }
+
+  expect(snapshot()).toEqual({
+    optionTag: 'DIV',
+    inputId: 'proposal-7-option-0',
+    labelFor: 'proposal-7-option-0',
+    labelText: 'A · Use the existing flow',
+    labelLinkCount: 0,
+    descriptionTag: 'DIV',
+    descriptionLink: 'https://example.test',
   })
 })
 

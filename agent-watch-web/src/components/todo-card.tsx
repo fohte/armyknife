@@ -1,7 +1,7 @@
 import '#components/todo-card.css'
 
 import { Button } from '@fohte/ui/button'
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 
 import { CollapsibleText } from '#components/collapsible-text'
 import { MarkdownMessage } from '#components/markdown-message'
@@ -25,6 +25,11 @@ export function TodoCard({
   onResolve,
 }: TodoCardProps) {
   const commentId = useId()
+  const detailContent = useMemo(
+    () =>
+      detail === null ? null : <MarkdownMessage>{detail}</MarkdownMessage>,
+    [detail],
+  )
   const [comment, setComment] = useState(defaultComment)
   const [detailExpanded, setDetailExpanded] = useState(false)
   const [resolutionLocally, setResolutionLocally] = useState<
@@ -90,13 +95,13 @@ export function TodoCard({
     >
       <h2>To-do · pending</h2>
       <h3>{title}</h3>
-      {detail !== null ? (
+      {detailContent !== null ? (
         <CollapsibleText
           className="chat-todo-detail"
           expanded={detailExpanded}
           onExpandedChange={setDetailExpanded}
         >
-          <MarkdownMessage>{detail}</MarkdownMessage>
+          {detailContent}
         </CollapsibleText>
       ) : null}
       <label className="chat-todo-comment-label" htmlFor={commentId}>
