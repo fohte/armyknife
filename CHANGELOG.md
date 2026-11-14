@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.697](https://github.com/fohte/armyknife/compare/v0.1.696...v0.1.697) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** close merge dialog while merging ([#1771](https://github.com/fohte/armyknife/issues/1771)) ([e90bac9](https://github.com/fohte/armyknife/commit/e90bac9cd41d999ce62def243e392ae9193b5c1c))
+
 ## [0.1.696](https://github.com/fohte/armyknife/compare/v0.1.695...v0.1.696) (2026-11-14)
 
 
