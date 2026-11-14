@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.704](https://github.com/fohte/armyknife/compare/v0.1.703...v0.1.704) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** avoid reparsing after tool results ([#1787](https://github.com/fohte/armyknife/issues/1787)) ([ef13816](https://github.com/fohte/armyknife/commit/ef13816522b90ea987b0f11850e84830a092d119))
+
 ## [0.1.703](https://github.com/fohte/armyknife/compare/v0.1.702...v0.1.703) (2026-11-14)
 
 
