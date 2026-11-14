@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.694](https://github.com/fohte/armyknife/compare/v0.1.693...v0.1.694) (2026-11-14)
+
+
+### Features
+
+* **watch-web:** show recently prompted sessions ([#1766](https://github.com/fohte/armyknife/issues/1766)) ([b1e8773](https://github.com/fohte/armyknife/commit/b1e8773a75a0c0c2d307247d243d10164b71da44))
+
 ## [0.1.693](https://github.com/fohte/armyknife/compare/v0.1.692...v0.1.693) (2026-11-14)
 
 
