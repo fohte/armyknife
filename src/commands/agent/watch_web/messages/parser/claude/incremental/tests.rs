@@ -7,7 +7,7 @@ use rstest::rstest;
 use super::super::super::super::ChatItem;
 use super::super::ParserAdditions;
 use super::{IncrementalAppend, IncrementalClaudeParser};
-use crate::commands::agent::store::{AgentDecision, AgentTodo};
+use crate::commands::agent::store::{AgentDecision, AgentTodo, WatchWebQueuedPrompt};
 
 fn fixed_time() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).single().unwrap()
@@ -26,6 +26,31 @@ fn empty_additions() -> ParserAdditions<'static> {
         todos: &[],
     }
 }
+
+#[rstest::fixture]
+fn saved_queued_prompt() -> WatchWebQueuedPrompt {
+    WatchWebQueuedPrompt {
+        id: 7,
+        message_id: Some("fixture-message-cyan".to_owned()),
+        content: "Delivered request.".to_owned(),
+        attachments: Vec::new(),
+        resolved: false,
+        sent_at: fixed_time(),
+    }
+}
+
+fn queued_prompt_additions<'a>(queued_prompt: &'a WatchWebQueuedPrompt) -> ParserAdditions<'a> {
+    ParserAdditions {
+        user_marker: Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
+        queued_prompts: std::slice::from_ref(queued_prompt),
+        ..empty_additions()
+    }
+}
+
+const ROOT_AND_CURRENT: &str = indoc! {r#"
+    {"type":"user","uuid":"fixture-root","parentUuid":null,"message":{"content":"Initial request."}}
+    {"type":"assistant","uuid":"fixture-current","parentUuid":"fixture-root","message":{"content":[{"type":"text","text":"Current response."}]}}
+"#};
 
 fn incremental_parser(bytes: &[u8]) -> IncrementalClaudeParser {
     IncrementalClaudeParser::new(Cursor::new(bytes), None).unwrap()
@@ -285,6 +310,124 @@ fn pending_json_completed_after_a_second_append_matches_a_full_parse() {
             IncrementalAppend::Applied,
             IncrementalAppend::Applied,
             parse_all(&transcript, empty_additions()),
+        ),
+    );
+}
+
+#[rstest]
+fn appended_peer_delivery_resolves_queued_prompt_after_branch_reparse(
+    saved_queued_prompt: WatchWebQueuedPrompt,
+) {
+    let suffix = indoc! {r#"
+        {"type":"assistant","uuid":"fixture-delivery-child","parentUuid":"fixture-delivery","message":{"content":[{"type":"text","text":"A child record arrived first."}]}}
+        {"type":"user","uuid":"fixture-delivery","parentUuid":"fixture-root","timestamp":"2026-01-01T00:00:03Z","isMeta":true,"origin":{"kind":"peer","from":"unknown"},"message":{"content":"⟦armyknife-user:fixture-marker-cobalt⟧\nThis message was typed by the human user in armyknife watch-web.\nEngine-formatted delivery.\n<!-- armyknife-queued-prompt-id:fixture-message-cyan -->"}}
+        {"type":"assistant","uuid":"fixture-final","parentUuid":"fixture-current","message":{"content":[{"type":"text","text":"Final response."}]}}
+    "#};
+    let mut transcript = ROOT_AND_CURRENT.as_bytes().to_vec();
+    transcript.extend_from_slice(suffix.as_bytes());
+    let mut parser = incremental_parser(ROOT_AND_CURRENT.as_bytes());
+    let append = parser
+        .append_bytes(suffix.as_bytes(), fixed_time())
+        .unwrap();
+    let parser = match append {
+        IncrementalAppend::Applied => parser,
+        IncrementalAppend::RestartRequired => incremental_parser(&transcript),
+    };
+    let actual = (
+        append,
+        parser
+            .render_with(fixed_time(), queued_prompt_additions(&saved_queued_prompt))
+            .unwrap(),
+    );
+
+    assert_eq!(
+        actual,
+        (
+            IncrementalAppend::RestartRequired,
+            (
+                vec![
+                    ChatItem::User {
+                        rewind_id: Some("fixture-root".to_owned()),
+                        text: "Initial request.".to_owned(),
+                        timestamp: None,
+                        from: None,
+                    },
+                    ChatItem::Assistant {
+                        text: "Current response.".to_owned(),
+                    },
+                    ChatItem::User {
+                        rewind_id: Some("fixture-delivery".to_owned()),
+                        text: "Engine-formatted delivery.\n<!-- armyknife-queued-prompt-id:fixture-message-cyan -->".to_owned(),
+                        timestamp: Some("2026-01-01T00:00:03+00:00".to_owned()),
+                        from: None,
+                    },
+                    ChatItem::Assistant {
+                        text: "Final response.".to_owned(),
+                    },
+                ],
+                Vec::new(),
+                vec![7],
+                Vec::new(),
+            ),
+        ),
+    );
+}
+
+#[rstest]
+fn inactive_peer_delivery_does_not_resolve_queued_prompt(
+    saved_queued_prompt: WatchWebQueuedPrompt,
+) {
+    let suffix = indoc! {r#"
+        {"type":"user","uuid":"fixture-delivery","parentUuid":"fixture-root","timestamp":"2026-01-01T00:00:03Z","isMeta":true,"origin":{"kind":"peer","from":"unknown"},"message":{"content":"⟦armyknife-user:fixture-marker-cobalt⟧\nThis message was typed by the human user in armyknife watch-web.\nEngine-formatted delivery.\n<!-- armyknife-queued-prompt-id:fixture-message-cyan -->"}}
+        {"type":"assistant","uuid":"fixture-final","parentUuid":"fixture-current","message":{"content":[{"type":"text","text":"Final response."}]}}
+    "#};
+    let mut transcript = ROOT_AND_CURRENT.as_bytes().to_vec();
+    transcript.extend_from_slice(suffix.as_bytes());
+    let mut parser = incremental_parser(ROOT_AND_CURRENT.as_bytes());
+    let append = parser
+        .append_bytes(suffix.as_bytes(), fixed_time())
+        .unwrap();
+    let parser = match append {
+        IncrementalAppend::Applied => parser,
+        IncrementalAppend::RestartRequired => incremental_parser(&transcript),
+    };
+    let actual = (
+        append,
+        parser
+            .render_with(fixed_time(), queued_prompt_additions(&saved_queued_prompt))
+            .unwrap(),
+    );
+
+    assert_eq!(
+        actual,
+        (
+            IncrementalAppend::RestartRequired,
+            (
+                vec![
+                    ChatItem::User {
+                        rewind_id: Some("fixture-root".to_owned()),
+                        text: "Initial request.".to_owned(),
+                        timestamp: None,
+                        from: None,
+                    },
+                    ChatItem::Assistant {
+                        text: "Current response.".to_owned(),
+                    },
+                    ChatItem::Assistant {
+                        text: "Final response.".to_owned(),
+                    },
+                    ChatItem::QueuedUser {
+                        content: vec![super::super::super::super::UserContentPart::Text {
+                            text: "Delivered request.".to_owned(),
+                        }],
+                        from: None,
+                        timestamp: Some("2026-01-01T00:00:00+00:00".to_owned()),
+                    },
+                ],
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            ),
         ),
     );
 }
