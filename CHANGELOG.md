@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.695](https://github.com/fohte/armyknife/compare/v0.1.694...v0.1.695) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** open multiple Web UIs directly ([#1765](https://github.com/fohte/armyknife/issues/1765)) ([629f314](https://github.com/fohte/armyknife/commit/629f314a7ada513d6a2d32ad8b6c4304638b3529))
+
 ## [0.1.694](https://github.com/fohte/armyknife/compare/v0.1.693...v0.1.694) (2026-11-14)
 
 
