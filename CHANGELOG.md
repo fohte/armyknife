@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.708](https://github.com/fohte/armyknife/compare/v0.1.707...v0.1.708) (2026-11-14)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show permission actions ([#1795](https://github.com/fohte/armyknife/issues/1795)) ([e262fe3](https://github.com/fohte/armyknife/commit/e262fe3a4e65fb66afc9fb0945940a02db2e6239))
+
 ## [0.1.707](https://github.com/fohte/armyknife/compare/v0.1.706...v0.1.707) (2026-11-14)
 
 
