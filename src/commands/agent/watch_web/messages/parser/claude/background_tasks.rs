@@ -755,9 +755,15 @@ mod tests {
     }
 
     #[rstest]
-    #[case::summary("summary")]
-    #[case::note("note")]
-    fn keeps_subagent_until_its_own_background_work_finishes(#[case] retained_reason_tag: &str) {
+    #[case::summary(
+        "summary",
+        "Agent \"Fixture agent\" is waiting on its own background work"
+    )]
+    #[case::note("note", "Agent \"Fixture agent\" has interim work")]
+    fn keeps_subagent_until_its_own_background_work_finishes(
+        #[case] retained_reason_tag: &str,
+        #[case] expected_interim_event_text: &str,
+    ) {
         let mut transcript = indoc! {r#"
             {"uuid":"fixture-agent-prompt-row","parentUuid":null,"type":"user","message":{"content":"Review the synthetic change."}}
             {"uuid":"fixture-agent-call-row","parentUuid":"fixture-agent-prompt-row","type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-agent-tool-use-id","name":"Agent","input":{"subagent_type":"FixtureExplorer","description":"Review the synthetic change","prompt":"Review a fictional change."}}]}}
@@ -814,7 +820,7 @@ mod tests {
                     },
                     ChatItem::Event {
                         kind: super::super::super::super::EventKind::System,
-                        text: "Background task fixture-agent-id completed".to_string(),
+                        text: expected_interim_event_text.to_string(),
                         timestamp: None,
                         failed: false,
                     },
@@ -862,13 +868,13 @@ mod tests {
                     },
                     ChatItem::Event {
                         kind: super::super::super::super::EventKind::System,
-                        text: "Background task fixture-agent-id completed".to_string(),
+                        text: expected_interim_event_text.to_string(),
                         timestamp: None,
                         failed: false,
                     },
                     ChatItem::Event {
                         kind: super::super::super::super::EventKind::System,
-                        text: "Background task fixture-agent-id completed".to_string(),
+                        text: "Agent \"Fixture agent\" completed its work".to_string(),
                         timestamp: None,
                         failed: false,
                     },
