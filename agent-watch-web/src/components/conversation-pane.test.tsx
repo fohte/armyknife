@@ -867,6 +867,29 @@ function dispatchKeyInAct(
   return event
 }
 
+function mockConversationMessageBounds(
+  scrollContainer: HTMLElement,
+  messages: readonly HTMLElement[],
+  bounds: readonly { top: number; height: number }[],
+) {
+  vi.spyOn(scrollContainer, 'getBoundingClientRect').mockReturnValue(
+    DOMRect.fromRect({ x: 0, y: 100, width: 400, height: 300 }),
+  )
+  vi.spyOn(scrollContainer, 'clientHeight', 'get').mockReturnValue(300)
+  messages.forEach((message, index) => {
+    const position = bounds[index]
+    if (position === undefined) return
+    vi.spyOn(message, 'getBoundingClientRect').mockReturnValue(
+      DOMRect.fromRect({
+        x: 0,
+        y: position.top,
+        width: 300,
+        height: position.height,
+      }),
+    )
+  })
+}
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   optimizeImageAttachmentMock.mockReset()
@@ -2791,6 +2814,207 @@ it('inserts Alt-Enter at the cursor without sending the message', async () => {
   })
 })
 
+it('jumps between own messages with Alt-arrow shortcuts', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [
+    { type: 'user', text: 'An earlier message.' },
+    {
+      type: 'user_with_content',
+      from: 'A linked session',
+      content: [{ type: 'text', text: 'A message from another session.' }],
+    },
+    {
+      type: 'queued_user',
+      content: [{ type: 'text', text: 'A queued message.' }],
+    },
+    {
+      type: 'user_with_content',
+      content: [{ type: 'text', text: 'A later message.' }],
+    },
+  ])
+
+  const scrollContainer = requireElement(
+    container.querySelector<HTMLElement>('.conversation-scroll'),
+  )
+  const ownMessages = Array.from(
+    container.querySelectorAll<HTMLElement>('[data-own-message="true"]'),
+  )
+  const earlierMessage = requireElement(ownMessages[0] ?? null)
+  const laterMessage = requireElement(ownMessages[2] ?? null)
+  const scrollIntoView = vi
+    .spyOn(HTMLElement.prototype, 'scrollIntoView')
+    .mockImplementation(() => undefined)
+  mockConversationMessageBounds(scrollContainer, ownMessages, [
+    { top: 40, height: 30 },
+    { top: 120, height: 30 },
+    { top: 500, height: 30 },
+  ])
+
+  const previousEvent = dispatchKeyInAct(window, 'ArrowUp', { altKey: true })
+  const nextEvent = dispatchKeyInAct(window, 'ArrowDown', { altKey: true })
+
+  const actual = () => ({
+    ownMessageTexts: ownMessages.map(
+      (message) => message.querySelector('.markdown-message')?.textContent,
+    ),
+    scrollTargets: scrollIntoView.mock.contexts,
+    scrollOptions: scrollIntoView.mock.calls.map(([options]) => options),
+    defaultPrevented: [
+      previousEvent.defaultPrevented,
+      nextEvent.defaultPrevented,
+    ],
+  })
+  expect(actual()).toEqual({
+    ownMessageTexts: [
+      'An earlier message.',
+      'A queued message.',
+      'A later message.',
+    ],
+    scrollTargets: [earlierMessage, laterMessage],
+    scrollOptions: [
+      { block: 'center', behavior: 'smooth' },
+      { block: 'center', behavior: 'smooth' },
+    ],
+    defaultPrevented: [true, true],
+  })
+})
+
+it('starts with the first own message when the viewport is above the conversation', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [
+    { type: 'user', text: 'An earlier message.' },
+    {
+      type: 'queued_user',
+      content: [{ type: 'text', text: 'A queued message.' }],
+    },
+  ])
+
+  const scrollContainer = requireElement(
+    container.querySelector<HTMLElement>('.conversation-scroll'),
+  )
+  const ownMessages = Array.from(
+    container.querySelectorAll<HTMLElement>('[data-own-message="true"]'),
+  )
+  const firstMessage = requireElement(ownMessages[0] ?? null)
+  const scrollIntoView = vi
+    .spyOn(HTMLElement.prototype, 'scrollIntoView')
+    .mockImplementation(() => undefined)
+  mockConversationMessageBounds(scrollContainer, ownMessages, [
+    { top: 500, height: 30 },
+    { top: 600, height: 30 },
+  ])
+
+  const previousEvent = dispatchKeyInAct(window, 'ArrowUp', { altKey: true })
+  const nextEvent = dispatchKeyInAct(window, 'ArrowDown', { altKey: true })
+
+  const actual = () => ({
+    scrollTargets: scrollIntoView.mock.contexts,
+    defaultPrevented: [
+      previousEvent.defaultPrevented,
+      nextEvent.defaultPrevented,
+    ],
+  })
+  expect(actual()).toEqual({
+    scrollTargets: [firstMessage],
+    defaultPrevented: [false, true],
+  })
+})
+
+it('leaves populated text fields alone and allows empty or unfocused shortcuts', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [
+    { type: 'user', text: 'An earlier message.' },
+    {
+      type: 'queued_user',
+      content: [{ type: 'text', text: 'A queued message.' }],
+    },
+    {
+      type: 'user',
+      text: 'A later message.',
+    },
+  ])
+
+  const scrollContainer = requireElement(
+    container.querySelector<HTMLElement>('.conversation-scroll'),
+  )
+  const ownMessages = Array.from(
+    container.querySelectorAll<HTMLElement>('[data-own-message="true"]'),
+  )
+  const earlierMessage = requireElement(ownMessages[0] ?? null)
+  const laterMessage = requireElement(ownMessages[2] ?? null)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const input = document.createElement('input')
+  requireElement(container.querySelector('.conversation-pane')).append(input)
+  const scrollIntoView = vi
+    .spyOn(HTMLElement.prototype, 'scrollIntoView')
+    .mockImplementation(() => undefined)
+  mockConversationMessageBounds(scrollContainer, ownMessages, [
+    { top: 40, height: 30 },
+    { top: 120, height: 30 },
+    { top: 500, height: 30 },
+  ])
+
+  setTextareaValue(textarea, 'Keep editing this draft')
+  input.value = 'Keep editing this field'
+  const populatedInputEvent = dispatchKeyInAct(input, 'ArrowDown', {
+    altKey: true,
+  })
+  const populatedEvent = dispatchKeyInAct(textarea, 'ArrowUp', {
+    altKey: true,
+  })
+  setTextareaValue(textarea, '')
+  const emptyEvent = dispatchKeyInAct(textarea, 'ArrowUp', { altKey: true })
+  const unfocusedEvent = dispatchKeyInAct(window, 'ArrowDown', {
+    altKey: true,
+  })
+
+  const actual = () => ({
+    scrollTargets: scrollIntoView.mock.contexts,
+    defaultPrevented: [
+      populatedInputEvent.defaultPrevented,
+      populatedEvent.defaultPrevented,
+      emptyEvent.defaultPrevented,
+      unfocusedEvent.defaultPrevented,
+    ],
+  })
+  expect(actual()).toEqual({
+    scrollTargets: [earlierMessage, laterMessage],
+    defaultPrevented: [false, false, true, true],
+  })
+})
+
+it('ignores Alt-arrow shortcuts on mobile', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(
+    onAction,
+    session,
+    undefined,
+    [{ type: 'user', text: 'A message.' }],
+    actions,
+    true,
+  )
+  const scrollIntoView = vi
+    .spyOn(HTMLElement.prototype, 'scrollIntoView')
+    .mockImplementation(() => undefined)
+
+  const previousEvent = dispatchKeyInAct(window, 'ArrowUp', { altKey: true })
+  const nextEvent = dispatchKeyInAct(window, 'ArrowDown', { altKey: true })
+
+  const actual = () => ({
+    scrollTargets: scrollIntoView.mock.contexts,
+    defaultPrevented: [
+      previousEvent.defaultPrevented,
+      nextEvent.defaultPrevented,
+    ],
+  })
+  expect(actual()).toEqual({
+    scrollTargets: [],
+    defaultPrevented: [false, false],
+  })
+})
+
 it('shows desktop newline shortcuts with the applicable interrupt hint', () => {
   const onAction = () => Promise.resolve(true)
   renderView(onAction)
@@ -2801,11 +3025,19 @@ it('shows desktop newline shortcuts with the applicable interrupt hint', () => {
   const nonInterruptibleHint = container.querySelector(
     '.composer-footer > span',
   )?.textContent
+  const ownMessageHint = container.querySelectorAll(
+    '.composer-footer > span',
+  )[1]?.textContent
 
-  const snapshot = () => ({ interruptibleHint, nonInterruptibleHint })
+  const snapshot = () => ({
+    interruptibleHint,
+    nonInterruptibleHint,
+    ownMessageHint,
+  })
   expect(snapshot()).toEqual({
     interruptibleHint: '↵ Send · ⇧↵ / ⌥↵ New line · Esc Interrupt',
     nonInterruptibleHint: '↵ Send · ⇧↵ / ⌥↵ New line',
+    ownMessageHint: '⌥↑ / ⌥↓ My messages',
   })
 })
 
