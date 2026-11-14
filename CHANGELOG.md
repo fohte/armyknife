@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.689](https://github.com/fohte/armyknife/compare/v0.1.688...v0.1.689) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** prevent duplicate queued messages ([#1756](https://github.com/fohte/armyknife/issues/1756)) ([67b68e0](https://github.com/fohte/armyknife/commit/67b68e04536caf837e4b2fac66fbeba26e19bb61))
+
 ## [0.1.688](https://github.com/fohte/armyknife/compare/v0.1.687...v0.1.688) (2026-11-14)
 
 
