@@ -1012,9 +1012,16 @@ mod tests {
     }
 
     #[rstest]
+    #[case::stopped(SessionStatus::Stopped)]
+    #[case::paused(SessionStatus::Paused)]
     #[tokio::test]
-    async fn rewind_dispatches_the_selected_user_message(action_context: ActionContext) {
-        action_context.save_session(&session("sample-session"));
+    async fn rewind_dispatches_the_selected_user_message(
+        #[case] status: SessionStatus,
+        action_context: ActionContext,
+    ) {
+        let mut session = session("sample-session");
+        session.status = status;
+        action_context.save_session(&session);
 
         let response = action_context
             .router()
@@ -1044,10 +1051,16 @@ mod tests {
     }
 
     #[rstest]
+    #[case::running(SessionStatus::Running)]
+    #[case::waiting_input(SessionStatus::WaitingInput)]
+    #[case::ended(SessionStatus::Ended)]
     #[tokio::test]
-    async fn rewind_rejects_a_session_that_is_not_waiting_for_input(action_context: ActionContext) {
+    async fn rewind_rejects_a_non_rewindable_session(
+        #[case] status: SessionStatus,
+        action_context: ActionContext,
+    ) {
         let mut session = session("sample-session");
-        session.status = SessionStatus::Running;
+        session.status = status;
         action_context.save_session(&session);
 
         let response = action_context
@@ -1066,7 +1079,7 @@ mod tests {
             response_snapshot(response, &action_context).await,
             json!({
                 "status": StatusCode::CONFLICT.as_u16(),
-                "body": { "error": "session is not waiting for input" },
+                "body": { "error": "session cannot be rewound" },
                 "calls": [],
             }),
         );
@@ -1077,6 +1090,7 @@ mod tests {
     async fn codex_rewind_rejects_code_modes(action_context: ActionContext) {
         let mut session = session("sample-session");
         session.engine = Engine::Codex;
+        session.status = SessionStatus::Stopped;
         action_context.save_session(&session);
 
         let response = action_context
@@ -1775,7 +1789,7 @@ mod tests {
                         "answerQuestion": false,
                         "interrupt": false,
                         "openInTerminal": true,
-                        "rewind": true,
+                        "rewind": false,
                     },
                     "calls": [],
                 }),
@@ -1827,7 +1841,7 @@ mod tests {
                     "answerQuestion": false,
                     "interrupt": enabled,
                     "openInTerminal": true,
-                    "rewind": status == SessionStatus::WaitingInput,
+                    "rewind": matches!(status, SessionStatus::Stopped | SessionStatus::Paused),
                 },
                 "calls": [],
             }),
@@ -1836,11 +1850,15 @@ mod tests {
 
     #[rstest]
     #[case::running_with_pane(SessionStatus::Running, true, false)]
-    #[case::waiting_input_with_pane(SessionStatus::WaitingInput, true, true)]
-    #[case::stopped_with_pane(SessionStatus::Stopped, true, false)]
+    #[case::waiting_input_with_pane(SessionStatus::WaitingInput, true, false)]
+    #[case::stopped_with_pane(SessionStatus::Stopped, true, true)]
+    #[case::paused_with_pane(SessionStatus::Paused, true, true)]
+    #[case::ended_with_pane(SessionStatus::Ended, true, false)]
+    #[case::stopped_without_pane(SessionStatus::Stopped, false, false)]
+    #[case::paused_without_pane(SessionStatus::Paused, false, false)]
     #[case::waiting_input_without_pane(SessionStatus::WaitingInput, false, false)]
     #[tokio::test]
-    async fn rewind_capability_requires_a_waiting_session_with_a_pane(
+    async fn rewind_capability_requires_a_stopped_or_paused_session_with_a_pane(
         #[case] status: SessionStatus,
         #[case] has_pane: bool,
         #[case] rewind_available: bool,
@@ -1869,7 +1887,7 @@ mod tests {
             json!({
                 "status": StatusCode::OK.as_u16(),
                 "body": {
-                    "message": true,
+                    "message": status != SessionStatus::Ended,
                     "answerQuestion": false,
                     "interrupt": status == SessionStatus::Running,
                     "openInTerminal": has_pane,

@@ -27,7 +27,7 @@ pub(super) async fn rewind(
     let _session_action_guard = super::messages::lock_session_action(&id).await;
     let session = load_session(state.clone(), id).await?;
     if !super::super::rewind::can_rewind(&session) {
-        return Err(ApiError::conflict("session is not waiting for input"));
+        return Err(ApiError::conflict("session cannot be rewound"));
     }
     if session.engine == crate::commands::agent::types::Engine::Codex
         && request.mode != RewindMode::Conversation
