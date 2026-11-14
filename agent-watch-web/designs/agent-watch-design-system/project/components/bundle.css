@@ -1,6 +1,8 @@
 /* Static renditions of agent-watch-web components. Values follow the app's
    CSS; where the app hard-codes a value that a token holds, the token is used. */
 
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap');
+
 body {
   margin: 0;
   background: var(--aw-bg-app);
