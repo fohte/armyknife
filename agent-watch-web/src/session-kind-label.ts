@@ -1,5 +1,6 @@
 import type { LucideIcon } from 'lucide-react'
 import {
+  CircleHelp,
   CirclePause,
   Eye,
   List,
@@ -50,7 +51,8 @@ export function sessionKindIcon(kind: string): LucideIcon {
     case 'Review':
       return Eye
     case 'Stopped':
-    default:
       return CirclePause
+    default:
+      return CircleHelp
   }
 }
