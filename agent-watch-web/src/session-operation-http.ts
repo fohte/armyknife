@@ -413,6 +413,7 @@ export function submitSessionOperation(operation: SessionOperation) {
       if (!response.ok)
         return errorFromResponse(response).andThen((error) => err(error))
       if (
+        operation.type !== 'message' &&
         operation.type !== 'merge' &&
         operation.type !== 'rewind' &&
         operation.type !== 'command_preview' &&

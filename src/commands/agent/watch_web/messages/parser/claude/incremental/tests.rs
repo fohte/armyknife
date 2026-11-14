@@ -297,6 +297,7 @@ fn pending_sibling_renders_only_the_active_branch() {
                 text: "The original request.".to_owned(),
                 timestamp: None,
                 from: None,
+                queued_prompt_id: None,
             },
             ChatItem::Assistant {
                 text: "The replacement response.".to_owned(),
@@ -527,6 +528,7 @@ fn appended_peer_delivery_resolves_queued_prompt_after_branch_reparse(
                         text: "Initial request.".to_owned(),
                         timestamp: None,
                         from: None,
+                        queued_prompt_id: None,
                     },
                     ChatItem::Assistant {
                         text: "Current response.".to_owned(),
@@ -536,6 +538,7 @@ fn appended_peer_delivery_resolves_queued_prompt_after_branch_reparse(
                         text: "Engine-formatted delivery.\n<!-- armyknife-queued-prompt-id:fixture-message-cyan -->".to_owned(),
                         timestamp: Some("2026-01-01T00:00:03+00:00".to_owned()),
                         from: None,
+                        queued_prompt_id: None,
                     },
                     ChatItem::Assistant {
                         text: "Final response.".to_owned(),
@@ -585,6 +588,7 @@ fn inactive_peer_delivery_does_not_resolve_queued_prompt(
                         text: "Initial request.".to_owned(),
                         timestamp: None,
                         from: None,
+                        queued_prompt_id: None,
                     },
                     ChatItem::Assistant {
                         text: "Current response.".to_owned(),
@@ -596,6 +600,7 @@ fn inactive_peer_delivery_does_not_resolve_queued_prompt(
                         content: vec![super::super::super::super::UserContentPart::Text {
                             text: "Delivered request.".to_owned(),
                         }],
+                        queued_prompt_id: Some("fixture-message-cyan".to_owned()),
                         from: None,
                         timestamp: Some("2026-01-01T00:00:00+00:00".to_owned()),
                     },

@@ -321,6 +321,7 @@ impl Queue {
                         ..
                     } => ChatItem::QueuedUser {
                         content: vec![UserContentPart::Text { text }],
+                        queued_prompt_id: None,
                         from,
                         timestamp,
                     },
@@ -331,6 +332,7 @@ impl Queue {
                         ..
                     } => ChatItem::QueuedUser {
                         content,
+                        queued_prompt_id: None,
                         from,
                         timestamp,
                     },
@@ -344,6 +346,7 @@ impl Queue {
         {
             items.push(ChatItem::QueuedUser {
                 content: super::super::queued_prompt::user_content(&queued),
+                queued_prompt_id: queued.message_id.clone(),
                 from: None,
                 timestamp: Some(queued.sent_at.to_rfc3339()),
             });
@@ -447,6 +450,7 @@ mod tests {
                 content: vec![UserContentPart::Text {
                     text: "Queued request.".to_string(),
                 }],
+                queued_prompt_id: Some("fixture-message-7".to_string()),
                 from: None,
                 timestamp: Some("2026-01-01T00:00:00+00:00".to_string()),
             }],
@@ -473,6 +477,7 @@ mod tests {
                 content: vec![UserContentPart::Text {
                     text: "Queued user request.".to_string(),
                 }],
+                queued_prompt_id: None,
                 timestamp: None,
                 from: None,
             }],
@@ -496,6 +501,7 @@ mod tests {
                     text: "Repeated prompt.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
                 queued_user("Repeated prompt."),
             ],
@@ -518,6 +524,7 @@ mod tests {
                     text: "Earlier delivered message.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
                 queued_user("First queued prompt."),
                 queued_user("Second queued prompt."),
@@ -567,6 +574,7 @@ mod tests {
                         name: "fixture-notes.txt".to_owned(),
                     },
                 ],
+                queued_prompt_id: Some("fixture-message-7".to_owned()),
                 from: None,
                 timestamp: Some("2026-01-01T00:00:00+00:00".to_owned()),
             }],
@@ -592,6 +600,7 @@ mod tests {
                     text: "Delivered request.".to_string(),
                     timestamp: Some("2026-01-01T00:00:01+00:00".to_string()),
                     from: None,
+                    queued_prompt_id: Some("fixture-message-7".to_string()),
                 }],
                 Vec::<BackgroundTask>::new(),
                 vec![7],
@@ -634,6 +643,7 @@ mod tests {
                     ],
                     timestamp: Some("2026-01-01T00:00:01+00:00".to_owned()),
                     from: None,
+                    queued_prompt_id: Some("fixture-message-7".to_owned()),
                 }],
                 Vec::<BackgroundTask>::new(),
                 vec![7],
@@ -708,6 +718,7 @@ mod tests {
                     text: "Delivered request.".to_string(),
                     timestamp: Some("2026-01-01T00:00:01+00:00".to_string()),
                     from: None,
+                    queued_prompt_id: Some("fixture-message-7".to_string()),
                 }],
                 Vec::<BackgroundTask>::new(),
                 vec![7],
@@ -792,6 +803,7 @@ mod tests {
                     text: "Repeated request.".to_string(),
                     timestamp: Some("2025-12-31T23:59:59+00:00".to_string()),
                     from: None,
+                    queued_prompt_id: Some("fixture-message-7".to_string()),
                 }],
                 Vec::<BackgroundTask>::new(),
                 vec![7],
@@ -822,6 +834,7 @@ mod tests {
                         text: "Delivered request.".to_string(),
                         timestamp: None,
                         from: None,
+                        queued_prompt_id: None,
                     },
                     queued_user_at("Delivered request.", "2026-01-01T00:00:00+00:00",),
                 ],
@@ -836,6 +849,7 @@ mod tests {
             content: vec![UserContentPart::Text {
                 text: text.to_owned(),
             }],
+            queued_prompt_id: None,
             timestamp: None,
             from: None,
         }
@@ -846,6 +860,7 @@ mod tests {
             content: vec![UserContentPart::Text {
                 text: text.to_owned(),
             }],
+            queued_prompt_id: Some("fixture-message-7".to_owned()),
             timestamp: Some(timestamp.to_owned()),
             from: None,
         }

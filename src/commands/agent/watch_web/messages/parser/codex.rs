@@ -688,6 +688,7 @@ mod tests {
                 text: "Selected request.".to_string(),
                 timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
                 from: None,
+                queued_prompt_id: None,
             }],
         );
     }
@@ -785,6 +786,7 @@ mod tests {
                             text: "After the todo.".to_string(),
                             timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
                             from: None,
+                            queued_prompt_id: None,
                         },
                     ],
                     Vec::new(),
@@ -807,6 +809,7 @@ mod tests {
                             text: "After the todo.".to_string(),
                             timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
                             from: None,
+                            queued_prompt_id: None,
                         },
                     ],
                     Vec::new(),
@@ -923,6 +926,7 @@ mod tests {
                         text: "after".to_string(),
                         timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
                         from: None,
+                        queued_prompt_id: None,
                     },
                 ],
                 Vec::new(),
@@ -958,6 +962,7 @@ mod tests {
                         text: "after".to_string(),
                         timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
                         from: None,
+                        queued_prompt_id: None,
                     },
                     ChatItem::Todo {
                         seq: 2,
@@ -1043,6 +1048,7 @@ mod tests {
                     text: "Summarize these settings.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
                 ChatItem::ToolSummary {
                     summary: "exec ×1".to_string(),
@@ -1080,6 +1086,7 @@ mod tests {
                     text: "Human request.".to_string(),
                     from: None,
                     timestamp: Some("2026-11-11T10:00:00+00:00".to_string()),
+                    queued_prompt_id: None,
                 },
                 ChatItem::Assistant {
                     text: "Assistant response.".to_string(),

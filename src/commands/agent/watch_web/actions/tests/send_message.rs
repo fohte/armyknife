@@ -56,7 +56,7 @@ async fn send_message_forwards_nonempty_content_unchanged(action_context: Action
         (
             json!({
                 "status": StatusCode::OK.as_u16(),
-                "body": { "ok": true },
+                "body": { "ok": true, "queuedPromptId": "<message-id>" },
                 "calls": [{
                     "kind": "message",
                     "sessionId": "sample-session",
@@ -109,7 +109,7 @@ async fn send_message_keeps_a_newer_prompt_timestamp(action_context: ActionConte
         (
             json!({
                 "status": StatusCode::OK.as_u16(),
-                "body": { "ok": true },
+                "body": { "ok": true, "queuedPromptId": "<message-id>" },
                 "calls": [{
                     "kind": "message",
                     "sessionId": "sample-session",
@@ -152,7 +152,7 @@ async fn send_message_stays_successful_when_prompt_timestamp_cannot_be_saved(
         response_snapshot(response, &action_context).await,
         json!({
             "status": StatusCode::OK.as_u16(),
-            "body": { "ok": true },
+            "body": { "ok": true, "queuedPromptId": "<message-id>" },
             "calls": [{
                 "kind": "message",
                 "sessionId": "sample-session",
@@ -281,7 +281,7 @@ async fn send_message_ensures_markers_for_claude_sessions(
         (
             json!({
                 "status": StatusCode::OK.as_u16(),
-                "body": { "ok": true },
+                "body": { "ok": true, "queuedPromptId": "<message-id>" },
                 "calls": [{
                     "kind": "message",
                     "sessionId": "sample-session",
@@ -478,7 +478,7 @@ async fn send_message_stores_file_and_forwards_its_absolute_path(
         json!({
             "response": {
                 "status": StatusCode::OK.as_u16(),
-                "body": { "ok": true },
+                "body": { "ok": true, "queuedPromptId": "<message-id>" },
                 "calls": [{
                     "kind": "message",
                     "sessionId": "sample-session",
@@ -576,7 +576,7 @@ async fn send_message_accepts_legacy_image_payloads_during_page_restarts(
         json!({
             "response": {
                 "status": StatusCode::OK.as_u16(),
-                "body": { "ok": true },
+                "body": { "ok": true, "queuedPromptId": "<message-id>" },
                 "calls": [{
                     "kind": "message",
                     "sessionId": "sample-session",

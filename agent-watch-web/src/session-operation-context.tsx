@@ -19,7 +19,7 @@ import {
 
 type RunOptions = {
   optimisticDispatchers?: readonly ((operation: SessionOperation) => void)[]
-  refresh?: (result: unknown) => Promise<void>
+  refresh?: (result: unknown, operation: SessionOperation) => Promise<void>
 }
 
 type PendingSessionOperation = {
@@ -141,29 +141,59 @@ function useOperationRunner(): SessionOperationContextValue {
         )
         return result
       }
+      const confirmedOperation =
+        operation.type === 'message' &&
+        isRecord(result.value) &&
+        typeof result.value['queuedPromptId'] === 'string'
+          ? {
+              ...operation,
+              queuedPromptId: result.value['queuedPromptId'],
+            }
+          : operation
       setPendingOperations((current) =>
         current.map((pending) =>
-          pending.id === pendingOperationId
-            ? { ...pending, status: 'sent' }
-            : pending,
+          pending.id !== pendingOperationId
+            ? pending
+            : {
+                ...pending,
+                operation:
+                  pending.operation.type === 'message' &&
+                  confirmedOperation.type === 'message'
+                    ? confirmedOperation.queuedPromptId === undefined
+                      ? pending.operation
+                      : {
+                          ...pending.operation,
+                          queuedPromptId: confirmedOperation.queuedPromptId,
+                        }
+                    : confirmedOperation,
+                status: 'sent',
+              },
         ),
       )
-      if (requiresStateConfirmation(operation)) {
-        expireUnconfirmedOperation(operation, pendingOperationId)
+      if (requiresStateConfirmation(confirmedOperation)) {
+        expireUnconfirmedOperation(confirmedOperation, pendingOperationId)
       }
       if (options.refresh !== undefined) {
         const clearPending = () => {
-          if (!requiresStateConfirmation(operation)) confirm(operation)
+          if (!requiresStateConfirmation(confirmedOperation)) {
+            confirm(confirmedOperation)
+          }
         }
-        void options.refresh(result.value).then(clearPending, clearPending)
-      } else if (!requiresStateConfirmation(operation)) {
-        confirm(operation)
+        void options
+          .refresh(result.value, confirmedOperation)
+          .then(clearPending, clearPending)
+      } else if (!requiresStateConfirmation(confirmedOperation)) {
+        confirm(confirmedOperation)
       }
       return result
     },
     [clearConfirmationTimeout, confirm, expireUnconfirmedOperation],
   )
   return { pendingOperations, run, confirm }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
 }
 
 export function SessionOperationProvider({

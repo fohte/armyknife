@@ -17,7 +17,7 @@ use super::super::super::{
 };
 use super::super::attachments;
 use super::keyed_mutex_registry::KeyedMutexRegistry;
-use super::{ActionState, ApiError, Success, load_session, resolve_sessions_dir, run_blocking};
+use super::{ActionState, ApiError, load_session, resolve_sessions_dir, run_blocking};
 
 pub(super) const MAX_MESSAGE_BODY_BYTES: usize = 72 * 1024 * 1024;
 
@@ -51,7 +51,7 @@ pub(super) async fn send_message(
     State(state): State<ActionState>,
     RoutePath(id): RoutePath<String>,
     Json(request): Json<MessageRequest>,
-) -> Result<Json<Success>, ApiError> {
+) -> Result<Json<MessageSuccess>, ApiError> {
     let _session_action_guard = lock_session_action(&id).await;
     let session = load_session(state.clone(), id).await?;
     if session.sweep_signaled {
@@ -102,7 +102,7 @@ pub(super) async fn send_message(
             },
         })
         .collect::<Vec<_>>();
-    send_queued_prompt(QueuedPromptDelivery {
+    let queued_prompt_id = send_queued_prompt(QueuedPromptDelivery {
         runtime: state.runtime,
         sessions_dir,
         session,
@@ -113,7 +113,17 @@ pub(super) async fn send_message(
         attachment_paths,
     })
     .await?;
-    Ok(Json(Success::new()))
+    Ok(Json(MessageSuccess {
+        ok: true,
+        queued_prompt_id,
+    }))
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct MessageSuccess {
+    ok: bool,
+    queued_prompt_id: String,
 }
 
 pub(super) struct QueuedPromptDelivery {
@@ -133,20 +143,22 @@ enum QueueStoreFailurePolicy {
     DeliverWithoutQueue,
 }
 
-pub(super) async fn send_queued_prompt(delivery: QueuedPromptDelivery) -> Result<(), ApiError> {
-    send_queued_prompt_with_policy(delivery, QueueStoreFailurePolicy::RejectDelivery).await
+pub(super) async fn send_queued_prompt(delivery: QueuedPromptDelivery) -> Result<String, ApiError> {
+    send_queued_prompt_with_policy(delivery, QueueStoreFailurePolicy::RejectDelivery)
+        .await?
+        .ok_or_else(|| ApiError::internal("queued prompt ID is missing after delivery"))
 }
 
 pub(super) async fn send_queued_prompt_best_effort(
     delivery: QueuedPromptDelivery,
-) -> Result<(), ApiError> {
+) -> Result<Option<String>, ApiError> {
     send_queued_prompt_with_policy(delivery, QueueStoreFailurePolicy::DeliverWithoutQueue).await
 }
 
 async fn send_queued_prompt_with_policy(
     delivery: QueuedPromptDelivery,
     queue_store_failure_policy: QueueStoreFailurePolicy,
-) -> Result<(), ApiError> {
+) -> Result<Option<String>, ApiError> {
     let QueuedPromptDelivery {
         runtime,
         sessions_dir,
@@ -195,7 +207,7 @@ async fn send_queued_prompt_with_policy(
                 remove_attachments(attachment_paths).await;
                 return Err(delivery_error);
             }
-            return Ok(());
+            return Ok(None);
         }
     };
 
@@ -275,7 +287,7 @@ async fn send_queued_prompt_with_policy(
             "failed to save the prompt timestamp after delivering a watch-web message"
         );
     }
-    Ok(())
+    Ok(Some(message_id))
 }
 
 async fn remove_attachments(paths: Vec<PathBuf>) {

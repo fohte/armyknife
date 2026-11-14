@@ -109,12 +109,14 @@ export type ChatItem =
       type: 'user'
       text: string
       rewindId?: string
+      queuedPromptId?: string
       from?: string
       timestamp?: string
     }
   | {
       type: 'queued_user'
       content: UserContentPart[]
+      queuedPromptId?: string
       from?: string
       timestamp?: string
     }
@@ -122,6 +124,7 @@ export type ChatItem =
       type: 'user_with_content'
       content: UserContentPart[]
       rewindId?: string
+      queuedPromptId?: string
       from?: string
       timestamp?: string
     }

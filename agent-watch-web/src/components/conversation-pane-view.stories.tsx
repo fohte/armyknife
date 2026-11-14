@@ -108,8 +108,8 @@ export const QuestionWaitsForAnAnswer: Story = {
   },
 }
 
-export const PendingRequestsWaitAfterTheConversation: Story = {
-  name: 'Answered cards keep their place while pending cards wait below',
+export const PendingActionsAppearAboveComposer: Story = {
+  name: 'Pending cards sit above the composer while answered cards stay in the conversation',
   args: {
     messages: [
       {
@@ -197,6 +197,21 @@ export const PendingRequestsWaitAfterTheConversation: Story = {
             answer: null,
           },
         ],
+      },
+      {
+        type: 'permission',
+        requestId: 'permission-request-notification',
+        tool: 'Write',
+        description: 'Update the notification settings.',
+      },
+      {
+        type: 'todo',
+        seq: 33,
+        title: 'Review the alert destination',
+        detail: 'Confirm that the selected destination is available.',
+        completed: false,
+        resolution: null,
+        comment: null,
       },
     ],
   },
@@ -394,6 +409,94 @@ export const IPhoneConversationShowsAQuestion: Story = {
               { label: 'Yes, use the default window' },
               { label: 'No, choose another window' },
             ],
+            multi_select: false,
+            answer: null,
+          },
+        ],
+      },
+    ],
+  },
+  decorators: [iPhoneViewportDecorator],
+}
+
+export const IPhoneConversationShowsMultiplePendingCards: Story = {
+  name: 'The iPhone composer keeps multiple pending cards within reach',
+  args: {
+    isMobile: true,
+    actions: { ...actions, interrupt: false },
+    messages: [
+      {
+        type: 'assistant',
+        text: 'Choose a rollout plan and confirm the alert details.',
+      },
+      {
+        type: 'proposal',
+        seq: 41,
+        title: 'Choose how to roll out the retry policy',
+        summary:
+          'The selected plan determines how quickly the updated retry behavior reaches users.',
+        options: [
+          {
+            label: 'Gradual rollout',
+            description: 'Increase traffic in measured steps.',
+            pros: ['Limits the impact of an unexpected regression.'],
+            cons: ['Takes longer to reach all users.'],
+            recommended: true,
+          },
+          {
+            label: 'Immediate rollout',
+            description: 'Enable the policy for everyone at once.',
+            pros: ['Makes the improvement available sooner.'],
+            cons: ['A regression would affect more users.'],
+            recommended: false,
+          },
+          {
+            label: 'Preview group',
+            description: 'Enable the policy for a small group first.',
+            pros: ['Provides early feedback from real traffic.'],
+            cons: ['Requires a separate follow-up rollout.'],
+            recommended: false,
+          },
+        ],
+        answer: null,
+        resolved: false,
+        resolution: null,
+        comment: null,
+      },
+      {
+        type: 'todo',
+        seq: 42,
+        title: 'Confirm the rollout window',
+        detail: 'Check that the staged rollout fits the release schedule.',
+        completed: false,
+        resolution: null,
+        comment: null,
+      },
+      {
+        type: 'question',
+        requestId: 'request-mobile-alert-details',
+        questions: [
+          {
+            header: 'Alert destination',
+            question: 'Where should rollout alerts be sent?',
+            choices: [{ label: 'Dashboard' }, { label: 'Email' }],
+            multi_select: false,
+            answer: null,
+          },
+          {
+            header: 'Alert detail',
+            question: 'What detail should each alert include?',
+            choices: [
+              { label: 'A short summary' },
+              { label: 'The full change details' },
+            ],
+            multi_select: false,
+            answer: null,
+          },
+          {
+            header: 'Alert frequency',
+            question: 'How often should progress updates be sent?',
+            choices: [{ label: 'At each stage' }, { label: 'At completion' }],
             multi_select: false,
             answer: null,
           },

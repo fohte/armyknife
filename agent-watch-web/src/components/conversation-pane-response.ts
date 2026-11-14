@@ -70,6 +70,8 @@ function isChatItem(value: unknown): value is ChatItem {
         typeof value['text'] === 'string' &&
         (value['rewindId'] === undefined ||
           typeof value['rewindId'] === 'string') &&
+        (value['queuedPromptId'] === undefined ||
+          typeof value['queuedPromptId'] === 'string') &&
         hasValidOptionalTimestamp(value)
       )
     case 'queued_user':
@@ -80,6 +82,8 @@ function isChatItem(value: unknown): value is ChatItem {
         (value['type'] !== 'user_with_content' ||
           value['rewindId'] === undefined ||
           typeof value['rewindId'] === 'string') &&
+        (value['queuedPromptId'] === undefined ||
+          typeof value['queuedPromptId'] === 'string') &&
         (value['from'] === undefined || typeof value['from'] === 'string') &&
         hasValidOptionalTimestamp(value)
       )

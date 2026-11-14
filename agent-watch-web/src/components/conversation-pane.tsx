@@ -245,7 +245,8 @@ export function ConversationPane({
       }
       return run(operation, {
         optimisticDispatchers: dispatchers,
-        refresh: () => refreshForOperation(operation),
+        refresh: (_result, confirmedOperation) =>
+          refreshForOperation(confirmedOperation),
       }).then((result) =>
         result.match(
           () => {

@@ -169,6 +169,7 @@ mod tests {
                     ],
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
                 ChatItem::UserWithContent {
                     rewind_id: None,
@@ -186,6 +187,7 @@ mod tests {
                     ],
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
             ],
         );
