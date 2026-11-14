@@ -53,6 +53,7 @@ pub(super) fn running_background_task_session_ids(
                         peer_out_messages: &peer_out_messages,
                         proposals: &proposals,
                         todos: &[],
+                        additional_cards: &[],
                     },
                 }) {
                     Ok((conversation, _)) => {

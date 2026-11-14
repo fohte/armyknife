@@ -219,11 +219,16 @@ fn render_parser(
             ))
         }
         IncrementalTranscriptParser::Codex(parser) => {
-            let (mut messages, skills) = parser.render_with_permission_request(
-                input.additions.parent,
+            let placement_cards = parser::cards::cards_from_sources(
                 input.additions.decisions,
+                input.additions.proposals,
                 input.additions.todos,
                 input.additions.peer_out_messages,
+                input.additions.additional_cards,
+            );
+            let (mut messages, skills) = parser.render_with_placement_cards(
+                input.additions.parent,
+                &placement_cards,
                 input.additions.pending_tool,
             )?;
             let resolved_ids = super::queued_prompt::resolve_transcript_messages(
@@ -328,6 +333,7 @@ mod tests {
                     peer_out_messages: &[],
                     proposals: &[],
                     todos: &[],
+                    additional_cards: &[],
                 },
             })
             .unwrap()
@@ -426,6 +432,7 @@ mod tests {
                     peer_out_messages: &[],
                     proposals: &[],
                     todos: &[],
+                    additional_cards: &[],
                 },
             },
             Some(fingerprint),

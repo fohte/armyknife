@@ -120,6 +120,7 @@ fn output_path_for_task(session: &Session, task_id: &str) -> Result<Option<PathB
                 peer_out_messages: &peer_out_messages,
                 proposals: &proposals,
                 todos: &[],
+                additional_cards: &[],
             },
         )?;
     let paths = tasks
