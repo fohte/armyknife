@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.699](https://github.com/fohte/armyknife/compare/v0.1.698...v0.1.699) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** jump to your messages instantly ([#1777](https://github.com/fohte/armyknife/issues/1777)) ([27c00ba](https://github.com/fohte/armyknife/commit/27c00ba9c651bf9b147c35422066b2b51bd05bcb))
+
 ## [0.1.698](https://github.com/fohte/armyknife/compare/v0.1.697...v0.1.698) (2026-11-14)
 
 
