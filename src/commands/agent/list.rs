@@ -708,7 +708,6 @@ mod tests {
             kind.to_string(),
             crate::shared::config::AgentStatusConfig {
                 state: crate::shared::config::AgentStatusState::User,
-                watch_web_kind: crate::shared::config::AgentStatusWebKind::Stopped,
             },
         );
         let mut session = create_test_session();

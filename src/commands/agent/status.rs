@@ -3,7 +3,7 @@ use clap::{Args, Subcommand};
 
 use super::error::CcError;
 use super::store;
-use super::types::{AgentStatus, Session};
+use super::types::AgentStatus;
 use crate::shared::config::{self, AgentConfig};
 use crate::shared::env_var::EnvVars;
 
@@ -96,62 +96,6 @@ fn set_status_in(
     lock.save(&session)
 }
 
-pub(super) fn set_inferred_status_if_unchanged(
-    sessions_dir: &std::path::Path,
-    session_id: &str,
-    stop_updated_at: chrono::DateTime<chrono::Utc>,
-    agent_config: &AgentConfig,
-    status: AgentStatus,
-) -> Result<bool> {
-    ensure!(
-        agent_config.statuses.contains_key(&status.kind),
-        "unknown agent status kind `{}`; configured kinds: {}",
-        status.kind,
-        configured_kind_names(agent_config),
-    );
-
-    with_unchanged_inference_session(
-        sessions_dir,
-        session_id,
-        stop_updated_at,
-        |session, lock| {
-            session.agent_status = Some(status);
-            session.agent_status_clear_pending = false;
-            lock.save(session)
-        },
-    )
-}
-
-pub(super) fn with_inference_candidate_if_unchanged(
-    sessions_dir: &std::path::Path,
-    session_id: &str,
-    stop_updated_at: chrono::DateTime<chrono::Utc>,
-    record_candidate: impl FnOnce(),
-) -> Result<bool> {
-    with_unchanged_inference_session(sessions_dir, session_id, stop_updated_at, |_, _| {
-        record_candidate();
-        Ok(())
-    })
-}
-
-fn with_unchanged_inference_session(
-    sessions_dir: &std::path::Path,
-    session_id: &str,
-    stop_updated_at: chrono::DateTime<chrono::Utc>,
-    action: impl FnOnce(&mut Session, &store::SessionLock) -> Result<()>,
-) -> Result<bool> {
-    let lock = store::lock_session_for_update(sessions_dir, session_id)?;
-    let Some(mut session) = lock.load()? else {
-        return Ok(false);
-    };
-    if session.agent_status.is_some() || session.updated_at != stop_updated_at {
-        return Ok(false);
-    }
-
-    action(&mut session, &lock)?;
-    Ok(true)
-}
-
 fn ensure_single_line(note: &str) -> Result<()> {
     ensure!(
         !note.contains('\n') && !note.contains('\r'),
@@ -236,65 +180,6 @@ mod tests {
         home
     }
 
-    struct InferenceSessionStore {
-        _temp_dir: TempDir,
-        sessions_dir: PathBuf,
-        session: Session,
-    }
-
-    struct InferenceWriteSnapshot {
-        store: InferenceSessionStore,
-        stop_updated_at: chrono::DateTime<Utc>,
-    }
-
-    impl InferenceWriteSnapshot {
-        fn with_guard(mut self, guard: InferenceWriteGuard) -> Self {
-            match guard {
-                InferenceWriteGuard::Clear => {}
-                InferenceWriteGuard::StatusAlreadySet => {
-                    self.store.session.agent_status = Some(AgentStatus {
-                        kind: "needs_attention".to_string(),
-                        note: "existing note".to_string(),
-                    });
-                }
-                InferenceWriteGuard::SessionUpdated => {
-                    self.store.session.updated_at += chrono::TimeDelta::seconds(1);
-                }
-            }
-            store::save_session_to(&self.store.sessions_dir, &self.store.session)
-                .expect("session should save");
-            self
-        }
-    }
-
-    #[fixture]
-    fn inference_session_store() -> InferenceSessionStore {
-        let temp_dir = TempDir::new().expect("temp dir creation should succeed");
-        let sessions_dir = temp_dir.path().join("armyknife/cc/sessions");
-        let session = session("inference-session", Engine::Claude);
-        store::save_session_to(&sessions_dir, &session).expect("session should save");
-        InferenceSessionStore {
-            _temp_dir: temp_dir,
-            sessions_dir,
-            session,
-        }
-    }
-
-    #[fixture]
-    fn inference_write_snapshot(
-        mut inference_session_store: InferenceSessionStore,
-    ) -> InferenceWriteSnapshot {
-        inference_session_store.session.updated_at =
-            chrono::DateTime::parse_from_rfc3339("2026-05-11T00:00:00Z")
-                .expect("fixed timestamp should parse")
-                .with_timezone(&Utc);
-        let stop_updated_at = inference_session_store.session.updated_at;
-        InferenceWriteSnapshot {
-            store: inference_session_store,
-            stop_updated_at,
-        }
-    }
-
     #[test]
     fn set_command_parses_kind_and_note() {
         let cli = TestCli::try_parse_from([
@@ -344,133 +229,6 @@ mod tests {
     #[case::carriage_return("first\rsecond", false)]
     fn status_note_is_one_line(#[case] note: &str, #[case] expected: bool) {
         assert_eq!(ensure_single_line(note).is_ok(), expected);
-    }
-
-    #[derive(Debug, Clone, Copy)]
-    enum InferenceWriteGuard {
-        Clear,
-        StatusAlreadySet,
-        SessionUpdated,
-    }
-
-    #[rstest]
-    #[case::clear(InferenceWriteGuard::Clear, true)]
-    #[case::status_already_set(InferenceWriteGuard::StatusAlreadySet, false)]
-    #[case::session_updated(InferenceWriteGuard::SessionUpdated, false)]
-    fn inferred_status_write_checks_stop_snapshot(
-        #[case] guard: InferenceWriteGuard,
-        #[case] expected_written: bool,
-        inference_write_snapshot: InferenceWriteSnapshot,
-    ) {
-        let snapshot = inference_write_snapshot.with_guard(guard);
-        let sessions_dir = &snapshot.store.sessions_dir;
-        let original = &snapshot.store.session;
-
-        let expected_status = AgentStatus {
-            kind: "awaiting_build".to_string(),
-            note: "wait for the build".to_string(),
-        };
-        let written = set_inferred_status_if_unchanged(
-            sessions_dir,
-            &original.session_id,
-            snapshot.stop_updated_at,
-            &crate::shared::config::test_support::agent_config(),
-            expected_status.clone(),
-        )
-        .expect("inference write should succeed");
-        let actual = store::load_session_from(sessions_dir, &original.session_id)
-            .expect("session should load")
-            .expect("session should exist");
-
-        let mut expected_session = original.clone();
-        if expected_written {
-            expected_session.agent_status = Some(expected_status);
-            expected_session.agent_status_clear_pending = false;
-        }
-        assert_eq!(
-            (
-                written,
-                serde_json::to_value(&actual).expect("session should serialize"),
-            ),
-            (
-                expected_written,
-                serde_json::to_value(&expected_session).expect("session should serialize"),
-            ),
-        );
-    }
-
-    #[rstest]
-    #[case::clear(InferenceWriteGuard::Clear, true)]
-    #[case::status_already_set(InferenceWriteGuard::StatusAlreadySet, false)]
-    #[case::session_updated(InferenceWriteGuard::SessionUpdated, false)]
-    fn inference_candidate_checks_stop_snapshot(
-        #[case] guard: InferenceWriteGuard,
-        #[case] expected_candidate: bool,
-        inference_write_snapshot: InferenceWriteSnapshot,
-    ) {
-        let snapshot = inference_write_snapshot.with_guard(guard);
-        let sessions_dir = &snapshot.store.sessions_dir;
-        let original = &snapshot.store.session;
-
-        let mut candidate_recorded = false;
-        let eligible = with_inference_candidate_if_unchanged(
-            sessions_dir,
-            &original.session_id,
-            snapshot.stop_updated_at,
-            || candidate_recorded = true,
-        )
-        .expect("candidate check should succeed");
-        let actual = store::load_session_from(sessions_dir, &original.session_id)
-            .expect("session should load")
-            .expect("session should exist");
-
-        assert_eq!(
-            (
-                eligible,
-                candidate_recorded,
-                serde_json::to_value(&actual).expect("session should serialize"),
-            ),
-            (
-                expected_candidate,
-                expected_candidate,
-                serde_json::to_value(original).expect("session should serialize"),
-            ),
-        );
-    }
-
-    #[rstest]
-    fn inferred_status_write_rejects_unconfigured_kind(
-        inference_session_store: InferenceSessionStore,
-    ) {
-        let sessions_dir = &inference_session_store.sessions_dir;
-        let original = inference_session_store.session.clone();
-        let original_updated_at = original.updated_at;
-
-        let error = set_inferred_status_if_unchanged(
-            sessions_dir,
-            &original.session_id,
-            original_updated_at,
-            &crate::shared::config::test_support::agent_config(),
-            AgentStatus {
-                kind: "removed_name".to_string(),
-                note: "valid note".to_string(),
-            },
-        )
-        .expect_err("invalid inference should be rejected");
-        let actual = store::load_session_from(sessions_dir, &original.session_id)
-            .expect("session should load")
-            .expect("session should exist");
-
-        assert_eq!(
-            (
-                error.to_string(),
-                serde_json::to_value(&actual).expect("session should serialize"),
-            ),
-            (
-                "unknown agent status kind `removed_name`; configured kinds: awaiting_build, finished_work, needs_attention".to_string(),
-                serde_json::to_value(&original).expect("session should serialize"),
-            ),
-        );
     }
 
     #[rstest]

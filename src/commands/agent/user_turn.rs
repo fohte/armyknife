@@ -358,13 +358,9 @@ mod tests {
     ) {
         let mut agent_config = AgentConfig::default();
         if let Some(state) = state {
-            agent_config.statuses.insert(
-                kind.to_string(),
-                AgentStatusConfig {
-                    state,
-                    watch_web_kind: Default::default(),
-                },
-            );
+            agent_config
+                .statuses
+                .insert(kind.to_string(), AgentStatusConfig { state });
         }
         let mut session = session("status", timestamp(1));
         session.agent_status = Some(AgentStatus {
