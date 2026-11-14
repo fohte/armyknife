@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.687](https://github.com/fohte/armyknife/compare/v0.1.686...v0.1.687) (2026-11-14)
+
+
+### Features
+
+* **watch-web:** support jumping to own messages ([#1752](https://github.com/fohte/armyknife/issues/1752)) ([e077b8c](https://github.com/fohte/armyknife/commit/e077b8ccc5cac5512df5277ec9e490b950dbae9b))
+
 ## [0.1.686](https://github.com/fohte/armyknife/compare/v0.1.685...v0.1.686) (2026-11-14)
 
 
