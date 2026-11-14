@@ -1,4 +1,3 @@
-import { err, ok } from 'neverthrow'
 import {
   useCallback,
   useEffect,
@@ -8,21 +7,12 @@ import {
   useState,
 } from 'react'
 
-import {
-  reuseEqualValue,
-  shareUnchangedMessages,
-} from '#components/conversation-message-sharing'
-import {
-  isConversationResponse,
-  isSessionActions,
-} from '#components/conversation-pane-response'
 import { ConversationPaneView } from '#components/conversation-pane-view'
-import { requestJson } from '#components/conversation-requests'
 import type { PendingPermissionActions } from '#components/permission-card'
 import { ResizableColumns } from '#components/resizable-columns'
-import { useSessionConversationCache } from '#components/session-conversation-cache'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationPaneActions } from '#components/use-conversation-pane-actions'
+import { useConversationPaneData } from '#components/use-conversation-pane-data'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import {
   type SessionTreeCallbacks,
@@ -32,32 +22,12 @@ import { useSessionOperations } from '#session-operation-context'
 import {
   applyConversationOperation,
   createSessionOperation,
-  isConversationOperationConfirmed,
   type SessionOperation,
 } from '#session-operations'
 import type { SessionTreeViewState } from '#session-tree-model'
-import type {
-  ConversationResponse,
-  OpenInTerminalStatus,
-  Session,
-  SessionActions,
-  SessionTreeNode,
-} from '#types'
+import type { OpenInTerminalStatus, Session, SessionTreeNode } from '#types'
 
 const EMPTY_SESSIONS: readonly Session[] = []
-const EMPTY_CONVERSATION: ConversationResponse = {
-  messages: [],
-  backgroundTasks: [],
-  skills: [],
-  start: 0,
-  total: 0,
-  decisions: [],
-  hasUnansweredProposal: false,
-  activeQuestionIndex: null,
-}
-const INITIAL_MESSAGE_LIMIT = 100
-const MAX_LOADED_MESSAGES = 300
-const RETAINED_MESSAGE_COUNT = 200
 
 type ConversationPaneProps = {
   session: Session
@@ -110,21 +80,43 @@ export function ConversationPane({
   isToday = false,
   onToggleToday = () => undefined,
 }: ConversationPaneProps) {
-  const sessionConversationCache = useSessionConversationCache()
-  const setCachedConversation = sessionConversationCache?.setCachedConversation
-  const [initialCachedConversation] = useState(() =>
-    sessionConversationCache?.getCachedConversation(session.id),
-  )
-  const [conversation, setConversation] = useState<ConversationResponse>(
-    initialCachedConversation?.conversation ?? EMPTY_CONVERSATION,
-  )
+  const { pendingOperations, run, confirm } = useSessionOperations()
+  const { sessionTree, sessionTreeError } = useSessionTree({
+    session,
+    initialSessionTree,
+    initialSessionTreeError,
+    shouldSkipSessionTreeFetch,
+    refreshKey: sessionTreeRefreshKey,
+    onSessionTreeLoaded,
+    onSessionTreeRequestStarted,
+    onSessionTreeRequestFailed,
+  })
+  const {
+    actions,
+    actionsReady,
+    clearErrors,
+    conversation,
+    conversationRef,
+    currentSessionId,
+    error,
+    loadOlder,
+    loading,
+    loadingOlder,
+    messagesLoadedAt,
+    pruneOldMessages,
+    refresh,
+    refreshForOperation,
+    setError,
+  } = useConversationPaneData({
+    sessionId: session.id,
+    refreshKey,
+    pendingOperations,
+    confirm,
+  })
   const [optimisticConversation, dispatchConversationOperation] = useOptimistic(
     conversation,
     applyConversationOperation,
   )
-  const { pendingOperations, run, confirm } = useSessionOperations()
-  const pendingOperationsRef = useRef(pendingOperations)
-  pendingOperationsRef.current = pendingOperations
   const pendingConversationOperations = useMemo(
     () =>
       pendingOperations.filter(
@@ -152,278 +144,36 @@ export function ConversationPane({
       ),
     [optimisticConversation, pendingConversationOperations],
   )
-  const conversationRef = useRef(conversation)
-  const actionsRef = useRef<SessionActions | null>(null)
-  const conversationSessionId = useRef<string | null>(
-    initialCachedConversation === undefined ? null : session.id,
-  )
-  const [loadingOlder, setLoadingOlder] = useState(false)
-  const loadingOlderRef = useRef(false)
-  const [messagesLoadedAt, setMessagesLoadedAt] = useState<number | null>(
-    initialCachedConversation?.messagesLoadedAt ?? null,
-  )
-  const messagesLoadedAtRef = useRef(messagesLoadedAt)
-  const [actions, setActions] = useState<SessionActions | null>(null)
-  const { sessionTree, sessionTreeError } = useSessionTree({
-    session,
-    initialSessionTree,
-    initialSessionTreeError,
-    shouldSkipSessionTreeFetch,
-    refreshKey: sessionTreeRefreshKey,
-    onSessionTreeLoaded,
-    onSessionTreeRequestStarted,
-    onSessionTreeRequestFailed,
-  })
-  const [actionsReady, setActionsReady] = useState(false)
-  const [loading, setLoading] = useState(
-    initialCachedConversation === undefined,
-  )
-  const [error, setError] = useState<string | null>(null)
   const [openInTerminalStatus, setOpenInTerminalStatus] =
     useState<OpenInTerminalStatus>(null)
-  const currentSessionId = useRef(session.id)
-  currentSessionId.current = session.id
   const openInTerminalTimer = useRef<number | null>(null)
-  const requestGeneration = useRef(0)
-  const olderRequestGeneration = useRef(0)
-  const updateConversation = useCallback(
-    (next: ConversationResponse) => {
-      conversationRef.current = next
-      setConversation(next)
-      if (
-        setCachedConversation &&
-        conversationSessionId.current === session.id
-      ) {
-        const loadedAt = messagesLoadedAtRef.current
-        if (loadedAt !== null) {
-          setCachedConversation(session.id, {
-            conversation: next,
-            messagesLoadedAt: loadedAt,
-          })
-        }
-      }
-    },
-    [session.id, setCachedConversation],
-  )
-  const markMessagesLoaded = useCallback(() => {
-    const loadedAt = Date.now()
-    messagesLoadedAtRef.current = loadedAt
-    setMessagesLoadedAt(loadedAt)
-  }, [])
-  const pruneOldMessages = useCallback(() => {
-    const current = conversationRef.current
-    if (current.messages.length <= MAX_LOADED_MESSAGES) return
-    const dropCount = current.messages.length - RETAINED_MESSAGE_COUNT
-    updateConversation({
-      ...current,
-      start: current.start + dropCount,
-      stableStart: undefined,
-      stableEnd: undefined,
-      stableDigest: undefined,
-      messages: current.messages.slice(dropCount),
-    })
-  }, [updateConversation])
   const clearOpenInTerminalTimer = useCallback(() => {
     if (openInTerminalTimer.current !== null) {
       window.clearTimeout(openInTerminalTimer.current)
       openInTerminalTimer.current = null
     }
   }, [])
-
-  const refresh = useCallback(async () => {
-    const generation = requestGeneration.current + 1
-    requestGeneration.current = generation
-    const sessionPath = `/api/sessions/${encodeURIComponent(session.id)}`
-    const loadedConversation =
-      conversationSessionId.current === session.id
-        ? conversationRef.current
-        : null
-    const stableDigestQuery =
-      loadedConversation !== null &&
-      loadedConversation.stableStart === loadedConversation.start &&
-      loadedConversation.stableEnd !== undefined &&
-      loadedConversation.stableDigest !== undefined
-        ? `&stableStart=${String(loadedConversation.stableStart)}&stableEnd=${String(loadedConversation.stableEnd)}&stableDigest=${loadedConversation.stableDigest}`
-        : ''
-    const messagesRequest = requestJson(
-      loadedConversation === null
-        ? `${sessionPath}/messages?limit=${String(INITIAL_MESSAGE_LIMIT)}`
-        : `${sessionPath}/messages?from=${String(loadedConversation.start)}${stableDigestQuery}`,
-      isConversationResponse,
-    ).match(
-      (value) => ok(value),
-      (requestError) => err(requestError),
-    )
-    const actionsRequest = requestJson(
-      `${sessionPath}/actions`,
-      isSessionActions,
-    ).match(
-      (value) => ok(value),
-      (requestError) => err(requestError),
-    )
-    const [messagesResult, actionsResult] = await Promise.all([
-      messagesRequest,
-      actionsRequest,
-    ])
-    if (requestGeneration.current !== generation) return
-    let refreshedConversation: ConversationResponse | null = null
-    if (messagesResult.isOk()) {
-      const alreadyLoaded = conversationSessionId.current === session.id
-      const previous = alreadyLoaded
-        ? conversationRef.current
-        : EMPTY_CONVERSATION
-      const preserveLoadedPrefix =
-        alreadyLoaded && previous.start < messagesResult.value.start
-      const start = preserveLoadedPrefix
-        ? previous.start
-        : messagesResult.value.start
-      const messages = preserveLoadedPrefix
-        ? [
-            ...previous.messages.slice(
-              0,
-              messagesResult.value.start - previous.start,
-            ),
-            ...messagesResult.value.messages,
-          ]
-        : messagesResult.value.messages
-      refreshedConversation = {
-        ...messagesResult.value,
-        start,
-        messages: shareUnchangedMessages(
-          previous.messages,
-          messages,
-          previous.start,
-          start,
-        ),
+  const setPaneError = useCallback(
+    (nextError: string | null) => {
+      if (nextError === null) {
+        clearErrors()
+      } else {
+        setError(nextError)
       }
-      conversationSessionId.current = session.id
-      markMessagesLoaded()
-      updateConversation(refreshedConversation)
-    }
-    if (actionsResult.isOk()) {
-      actionsRef.current = actionsResult.value
-      setActions((previous) => reuseEqualValue(previous, actionsResult.value))
-    }
-    const firstError = messagesResult.isErr()
-      ? messagesResult.error
-      : actionsResult.isErr()
-        ? actionsResult.error
-        : null
-    if (messagesResult.isOk() && actionsResult.isOk()) {
-      setActionsReady(true)
-    }
-    const confirmedConversation =
-      refreshedConversation ?? conversationRef.current
-    const confirmedActions = actionsResult.isOk()
-      ? actionsResult.value
-      : actionsRef.current
-    for (const pending of pendingOperationsRef.current) {
-      if (
-        pending.status === 'sent' &&
-        pending.operation.sessionId === session.id &&
-        isConversationOperationConfirmed(
-          confirmedConversation,
-          pending.operation,
-          confirmedActions,
-        )
-      ) {
-        confirm(pending.operation)
-      }
-    }
-    setError(firstError?.message ?? null)
-    setLoading(false)
-  }, [confirm, markMessagesLoaded, session.id, updateConversation])
-
+    },
+    [clearErrors, setError],
+  )
   const onCommandExecuted = useCallback(() => {
     void refresh()
   }, [refresh])
 
-  const refreshForOperation = useCallback(
-    async (operation: SessionOperation) => {
-      await refresh()
-      if (
-        isConversationOperationConfirmed(
-          conversationRef.current,
-          operation,
-          actionsRef.current,
-        )
-      ) {
-        confirm(operation)
-      }
-    },
-    [confirm, refresh],
-  )
-
-  useEffect(() => {
-    void refresh()
-    return () => {
-      requestGeneration.current += 1
-    }
-  }, [refresh, refreshKey])
-
   useEffect(() => {
     setOpenInTerminalStatus(null)
-    if (conversationSessionId.current !== session.id) {
-      updateConversation(EMPTY_CONVERSATION)
-      messagesLoadedAtRef.current = null
-      setMessagesLoadedAt(null)
-      setLoadingOlder(false)
-      loadingOlderRef.current = false
-    }
     clearOpenInTerminalTimer()
     return () => {
-      olderRequestGeneration.current += 1
       clearOpenInTerminalTimer()
     }
-  }, [clearOpenInTerminalTimer, session.id, updateConversation])
-
-  const loadOlder = useCallback(() => {
-    const current = conversationRef.current
-    if (
-      conversationSessionId.current !== session.id ||
-      current.start <= 0 ||
-      loadingOlderRef.current
-    ) {
-      return
-    }
-    loadingOlderRef.current = true
-    const generation = olderRequestGeneration.current + 1
-    olderRequestGeneration.current = generation
-    setLoadingOlder(true)
-    void requestJson(
-      `/api/sessions/${encodeURIComponent(session.id)}/messages?before=${String(current.start)}&limit=${String(INITIAL_MESSAGE_LIMIT)}`,
-      isConversationResponse,
-    ).match(
-      (response) => {
-        if (olderRequestGeneration.current !== generation) return
-        if (conversationSessionId.current !== session.id) return
-        const latest = conversationRef.current
-        const messages = [...response.messages, ...latest.messages]
-        markMessagesLoaded()
-        updateConversation({
-          ...response,
-          stableStart: undefined,
-          stableEnd: undefined,
-          stableDigest: undefined,
-          messages: shareUnchangedMessages(
-            latest.messages,
-            messages,
-            latest.start,
-            response.start,
-          ),
-        })
-        setError(null)
-        loadingOlderRef.current = false
-        setLoadingOlder(false)
-      },
-      (requestError) => {
-        if (olderRequestGeneration.current !== generation) return
-        setError(requestError.message)
-        loadingOlderRef.current = false
-        setLoadingOlder(false)
-      },
-    )
-  }, [loadingOlder, markMessagesLoaded, session.id, updateConversation])
+  }, [clearOpenInTerminalTimer, session.id])
 
   const onOpenInTerminal = useCallback(() => {
     const requestedSessionId = session.id
@@ -459,7 +209,7 @@ export function ConversationPane({
     refresh: () => {
       void refresh()
     },
-    setError,
+    setError: setPaneError,
     onSelectSession,
   })
   const onAction = useCallback(
@@ -499,7 +249,7 @@ export function ConversationPane({
       }).then((result) =>
         result.match(
           () => {
-            setError(null)
+            clearErrors()
             return true
           },
           (requestError) => {
@@ -510,6 +260,7 @@ export function ConversationPane({
       )
     },
     [
+      clearErrors,
       dispatchConversationOperation,
       onOptimisticSessionOperation,
       refreshForOperation,
@@ -614,7 +365,7 @@ export function ConversationPane({
       loading={loading}
       error={error}
       onClearError={() => {
-        setError(null)
+        clearErrors()
       }}
       onAction={onAction}
       onCommandExecuted={onCommandExecuted}
