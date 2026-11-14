@@ -71,6 +71,76 @@ async fn completing_a_todo_notifies_the_session_before_persisting(action_context
 
 #[rstest]
 #[tokio::test]
+async fn resolving_a_todo_saves_and_forwards_image_attachments(action_context: ActionContext) {
+    action_context.save_session(&session("sample-session"));
+    store::add_agent_todo_in(
+        &action_context.temp_dir.path().join("sessions"),
+        "sample-session",
+        "Check the page",
+        None,
+    )
+    .unwrap();
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            "/sessions/sample-session/todos/1/resolve",
+            json!({
+                "resolution": "completed",
+                "comment": "The header fits.",
+                "attachments": [{
+                    "name": "screen.gif",
+                    "mimeType": "image/gif",
+                    "size": 6,
+                    "data": "R0lGODlh",
+                }],
+            }),
+        ))
+        .await
+        .unwrap();
+    let directory = action_context.temp_dir.path().join("attachments");
+    let path = std::fs::read_dir(&directory)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path()
+        .canonicalize()
+        .unwrap();
+    let path_string = path.display().to_string();
+    let mut response = response_snapshot(response, &action_context).await;
+    response["calls"][0]["content"] = response["calls"][0]["content"]
+        .as_str()
+        .unwrap()
+        .replace(&path_string, "<attachment-path>")
+        .into();
+
+    assert_eq!(
+        (response, std::fs::read(path).unwrap(),),
+        (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "message",
+                    "sessionId": "sample-session",
+                    "content": indoc! {"
+                        <armyknife-todo-completed>The user marked the to-do as done: Check the page.
+
+                        The header fits.</armyknife-todo-completed>
+
+                        Attached file(s):
+                        - <attachment-path>
+                    "}.trim_end(),
+                }],
+            }),
+            vec![71, 73, 70, 56, 57, 97],
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn completing_a_todo_for_an_ended_session_skips_notification(action_context: ActionContext) {
     let mut ended_session = session("sample-session");
     ended_session.status = SessionStatus::Ended;

@@ -65,6 +65,69 @@ async fn chosen_option_is_notified_before_the_answer_is_stored(action_context: A
 
 #[rstest]
 #[tokio::test]
+async fn answering_a_proposal_saves_and_forwards_image_attachments(action_context: ActionContext) {
+    action_context.save_session(&session("sample-session"));
+    add_proposal(&action_context, "sample-session");
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            "/sessions/sample-session/proposals/1/answer",
+            json!({
+                "choice": 0,
+                "comment": "Keep the simpler format.",
+                "attachments": [{
+                    "name": "screen.gif",
+                    "mimeType": "image/gif",
+                    "size": 6,
+                    "data": "R0lGODlh",
+                }],
+            }),
+        ))
+        .await
+        .unwrap();
+    let path = std::fs::read_dir(action_context.temp_dir.path().join("attachments"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path()
+        .canonicalize()
+        .unwrap();
+    let path_string = path.display().to_string();
+    let mut response = response_snapshot(response, &action_context).await;
+    response["calls"][0]["content"] = response["calls"][0]["content"]
+        .as_str()
+        .unwrap()
+        .replace(&path_string, "<attachment-path>")
+        .into();
+
+    assert_eq!(
+        (response, std::fs::read(path).unwrap(),),
+        (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "message",
+                    "sessionId": "sample-session",
+                    "content": indoc! {"
+                        Proposal 1 \"Pick a format\": chose A (Format A).
+
+                        Keep the simpler format.
+
+                        Attached file(s):
+                        - <attachment-path>
+                    "}.trim_end(),
+                }],
+            }),
+            vec![71, 73, 70, 56, 57, 97],
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn consecutive_proposals_remain_individually_answerable(action_context: ActionContext) {
     action_context.save_session(&session("sample-session"));
     add_proposal(&action_context, "sample-session");

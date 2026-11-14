@@ -6,6 +6,14 @@ import { userEvent } from 'vitest/browser'
 
 import { TodoCard } from '#components/todo-card'
 
+const { optimizeImageAttachmentMock } = vi.hoisted(() => ({
+  optimizeImageAttachmentMock: vi.fn<(file: File) => Promise<File>>(),
+}))
+
+vi.mock('#lib/image-attachment', () => ({
+  optimizeImageAttachment: optimizeImageAttachmentMock,
+}))
+
 type Props = ComponentProps<typeof TodoCard>
 
 let container: HTMLDivElement
@@ -13,6 +21,7 @@ let root: Root | null = null
 
 function props(overrides: Partial<Props> = {}): Props {
   return {
+    sessionId: crypto.randomUUID(),
     title: 'Check the updated layout on a phone',
     detail: 'Confirm the action stays visible on a small screen.',
     resolution: null,
@@ -46,8 +55,22 @@ function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
   })
 }
 
+async function pasteImage(textarea: HTMLTextAreaElement, file: File) {
+  const event = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(event, 'clipboardData', { value: { files: [file] } })
+  await act(async () => {
+    textarea.dispatchEvent(event)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  })
+}
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  optimizeImageAttachmentMock.mockReset()
+  optimizeImageAttachmentMock.mockImplementation((file) =>
+    Promise.resolve(file),
+  )
+  vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:todo-image')
   container = document.createElement('div')
   document.body.append(container)
 })
@@ -202,7 +225,7 @@ it('expands and collapses long detail', async () => {
 })
 
 it('sends a trimmed optional comment and keeps the task as completed', async () => {
-  const onResolve = vi.fn(() => Promise.resolve(true))
+  const onResolve = vi.fn<Props['onResolve']>(() => Promise.resolve(true))
   renderCard(props({ onResolve }))
   const comment = requireElement(
     container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
@@ -212,7 +235,7 @@ it('sends a trimmed optional comment and keeps the task as completed', async () 
     requireElement(
       container.querySelector<HTMLButtonElement>('.chat-todo-footer button'),
     ).click()
-    await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 100))
   })
 
   const snapshot = () => ({
@@ -232,6 +255,88 @@ it('sends a trimmed optional comment and keeps the task as completed', async () 
     completionComment: 'The layout looks good.',
     commentInput: false,
     buttonCount: 0,
+  })
+})
+
+it('previews and sends an image pasted into the task comment', async () => {
+  let resolveTodo: (succeeded: boolean) => void = () => undefined
+  const todoResult = new Promise<boolean>((resolve) => {
+    resolveTodo = resolve
+  })
+  let notifyTodoCalled: () => void = () => undefined
+  const todoCalled = new Promise<void>((resolve) => {
+    notifyTodoCalled = resolve
+  })
+  const onResolve = vi.fn<Props['onResolve']>(() => {
+    notifyTodoCalled()
+    return todoResult
+  })
+  const sessionId = crypto.randomUUID()
+  renderCard(props({ sessionId, seq: 38, onResolve }))
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+  await pasteImage(
+    comment,
+    new File(['image'], 'screen.png', { type: 'image/png' }),
+  )
+
+  const previewBeforeSend = container
+    .querySelector<HTMLImageElement>('.attachment-preview-item img')
+    ?.getAttribute('src')
+  const resolveButton = requireElement(
+    container.querySelector<HTMLButtonElement>('.chat-todo-footer button'),
+  )
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  })
+  expect(resolveButton.disabled).toBe(false)
+  await act(async () => {
+    resolveButton.click()
+    await todoCalled
+  })
+  const canRemoveWhileSending =
+    container.querySelector('[aria-label="Remove screen.png"]') !== null
+  await act(async () => {
+    resolveTodo(true)
+    await todoResult
+  })
+
+  const snapshot = () => ({
+    previewBeforeSend,
+    canRemoveWhileSending,
+    resolveCalls: onResolve.mock.calls,
+    sentAttachments: onResolve.mock.calls[0]?.[2],
+    completedPreview: container
+      .querySelector<HTMLImageElement>('.attachment-preview-item img')
+      ?.getAttribute('src'),
+  })
+  expect(snapshot()).toEqual({
+    previewBeforeSend: 'blob:todo-image',
+    canRemoveWhileSending: false,
+    resolveCalls: [
+      [
+        'completed',
+        null,
+        [
+          {
+            name: 'screen.png',
+            mimeType: 'image/png',
+            size: 5,
+            data: 'aW1hZ2U=',
+          },
+        ],
+      ],
+    ],
+    sentAttachments: [
+      {
+        name: 'screen.png',
+        mimeType: 'image/png',
+        size: 5,
+        data: 'aW1hZ2U=',
+      },
+    ],
+    completedPreview: 'blob:todo-image',
   })
 })
 

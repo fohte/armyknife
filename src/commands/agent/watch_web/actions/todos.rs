@@ -3,13 +3,19 @@ use axum::extract::{Path as RoutePath, State};
 use serde::Deserialize;
 
 use super::super::super::{store, types::SessionStatus};
-use super::{ActionState, ApiError, Success, load_session, resolve_sessions_dir, run_blocking};
+use super::super::attachments;
+use super::{
+    ActionState, ApiError, Success, load_session, messages::remove_attachments,
+    resolve_sessions_dir, run_blocking,
+};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ResolveRequest {
     resolution: UserTodoResolution,
     comment: Option<String>,
+    #[serde(default)]
+    attachments: Vec<attachments::Request>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -48,6 +54,8 @@ pub(super) async fn resolve_todo(
     if todo.completed_at.is_some() {
         return Err(ApiError::conflict("todo is not pending"));
     }
+    let attachments = attachments::validate(request.attachments, vec![])
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let resolution = match request.resolution {
         UserTodoResolution::Completed => store::TodoResolution::Completed,
         UserTodoResolution::Rejected => store::TodoResolution::Rejected,
@@ -70,11 +78,23 @@ pub(super) async fn resolve_todo(
         } else {
             None
         };
+        let saved_attachments =
+            run_blocking(move || attachments::save(attachments, state.attachment_dir)).await?;
+        let attachment_paths = saved_attachments
+            .iter()
+            .map(|attachment| attachment.path.clone())
+            .collect::<Vec<_>>();
+        let content = attachments::append_paths_to_message(content, &attachment_paths);
         let content =
             super::messages::watch_web_message_content(&session, marker.as_deref(), &content);
         let runtime = state.runtime;
         let send_session = session.clone();
-        run_blocking(move || runtime.send_message(&send_session, &content)).await?;
+        if let Err(error) =
+            run_blocking(move || runtime.send_message(&send_session, &content)).await
+        {
+            remove_attachments(attachment_paths).await;
+            return Err(error);
+        }
     }
 
     let session_id = session.session_id;
