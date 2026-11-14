@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.706](https://github.com/fohte/armyknife/compare/v0.1.705...v0.1.706) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** keep waiting subagents visible ([#1791](https://github.com/fohte/armyknife/issues/1791)) ([1b4bad3](https://github.com/fohte/armyknife/commit/1b4bad348c52e3707f3bd5691c344528156b04c8))
+
 ## [0.1.705](https://github.com/fohte/armyknife/compare/v0.1.704...v0.1.705) (2026-11-14)
 
 
