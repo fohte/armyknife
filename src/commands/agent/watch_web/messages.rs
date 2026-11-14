@@ -14,6 +14,7 @@ use axum::http::StatusCode;
 use axum::http::header::CONTENT_TYPE;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -37,6 +38,7 @@ mod range;
 mod subagent_reports;
 
 use self::incremental::parse_session_transcript_incrementally;
+use self::parser::cards::{CardKind, TimedCard};
 use self::proposals::proposal_chat_item;
 #[cfg(test)]
 use self::questions::QuestionChoice;
@@ -300,6 +302,33 @@ fn load_conversation_with_queued_prompts(
     let todos = (loaders.todos)(session_id)?;
     let agent_files = (loaders.agent_files)(session_id)?;
     let permission_denials = (loaders.permission_denials)(session_id)?;
+    let mut additional_cards = permission_denials
+        .iter()
+        .map(|operation| {
+            TimedCard::new(
+                CardKind::PermissionDenied,
+                Some(operation.created_at),
+                operation.seq,
+                operation.resolved_at.is_none(),
+                ChatItem::PermissionDenied {
+                    seq: operation.seq,
+                    tool_use_id: operation.tool_use_id.clone(),
+                    tool: operation.tool_name.clone(),
+                    input_summary: permission_denied_input_summary(
+                        &operation.tool_name,
+                        &operation.tool_input,
+                    ),
+                    command: permission_request_command(
+                        Some(&operation.tool_name),
+                        Some(&operation.tool_input),
+                    ),
+                    reason: operation.reason.clone(),
+                    retryable: operation.has_classifier_verdict(),
+                    resolved: operation.resolved_at.is_some(),
+                },
+            )
+        })
+        .collect::<Vec<_>>();
     let parent = parent_session(&session, &mut load_session)?;
     let main_permission_pending = session
         .pending_permission_agent_ids
@@ -360,50 +389,9 @@ fn load_conversation_with_queued_prompts(
         );
         return Ok(Some(cached.conversation));
     }
-    let transcript_input = TranscriptInput {
-        path: session.transcript_path.as_deref(),
-        engine: session.engine,
-        additions: parser::claude::ParserAdditions {
-            session_id,
-            parent: parent.as_ref(),
-            pending_tool,
-            user_marker: user_marker.as_deref(),
-            decisions: &decisions,
-            queued_prompts: &queued_prompts,
-            peer_out_messages: &peer_out_messages,
-            proposals: &proposal_items,
-            todos: &todos,
-        },
-    };
-    let (mut conversation, resolved_queued_prompt_ids) = parse_session_transcript_incrementally(
-        session_id,
-        transcript_input,
-        cache_key.transcript_fingerprint.clone(),
-        &loaders.message_cache,
-    )?;
-    cache::refresh_image_availability(&mut conversation);
-    resolve_peer_session_titles(&mut conversation.messages, &mut load_session)?;
-    merge_stored_files(session_id, &agent_files, &mut conversation.messages);
 
-    attach_question_request_if_present(
-        &mut conversation.messages,
-        main_permission_request_id.as_deref(),
-        main_permission_data.as_ref(),
-    );
-
-    for message in &mut conversation.messages {
-        if let ChatItem::Permission { request_id, .. } = message {
-            *request_id = main_permission_request_id.clone();
-        }
-    }
-
-    let messages = &mut conversation.messages;
-    if main_permission_pending
-        && !main_permission_is_question
-        && !messages
-            .iter()
-            .any(|message| matches!(message, ChatItem::Permission { .. }))
-    {
+    let mut next_permission_seq = 0;
+    if main_permission_pending && !main_permission_is_question {
         let command = main_permission_data.as_ref().and_then(|data| {
             permission_request_command(data.tool_name.as_deref(), Some(&data.tool_input))
         });
@@ -429,47 +417,22 @@ fn load_conversation_with_queued_prompts(
                 )
             })
             .unwrap_or_else(|| "Waiting for permission".to_string());
-        messages.push(ChatItem::Permission {
-            request_id: main_permission_request_id.clone(),
-            tool,
-            description,
-            command,
-        });
+        additional_cards.push(TimedCard::new(
+            CardKind::Permission,
+            None,
+            next_permission_seq,
+            true,
+            ChatItem::Permission {
+                request_id: main_permission_request_id.clone(),
+                tool,
+                description,
+                command,
+            },
+        ));
+        next_permission_seq = next_permission_seq.saturating_add(1);
     }
 
-    for proposal in &proposal_items {
-        if !messages
-            .iter()
-            .any(|message| matches!(message, ChatItem::Proposal { seq: existing, .. } if existing == &proposal.seq))
-        {
-            messages.push(proposal.item.clone());
-        }
-    }
-
-    for operation in permission_denials {
-        if !messages.iter().any(|message| {
-            matches!(message, ChatItem::PermissionDenied { seq, .. } if *seq == operation.seq)
-        }) {
-            let retryable = operation.has_classifier_verdict();
-            messages.push(ChatItem::PermissionDenied {
-                seq: operation.seq,
-                tool_use_id: operation.tool_use_id,
-                tool: operation.tool_name.clone(),
-                input_summary: permission_denied_input_summary(
-                    &operation.tool_name,
-                    &operation.tool_input,
-                ),
-                command: permission_request_command(
-                    Some(&operation.tool_name),
-                    Some(&operation.tool_input),
-                ),
-                reason: operation.reason.clone(),
-                retryable,
-                resolved: operation.resolved_at.is_some(),
-            });
-        }
-    }
-
+    let mut trailing_questions = Vec::new();
     for agent_id in session
         .pending_permission_agent_ids
         .iter()
@@ -491,19 +454,19 @@ fn load_conversation_with_queued_prompts(
                 continue;
             };
             if let Some(question) = question_item_from_input(Some(request_id), &data.tool_input) {
-                messages.push(question);
+                trailing_questions.push(question);
             }
             continue;
         }
-        let mut matched_tool = false;
-        if session.engine == Engine::Claude
+        let (matched_tool, created_at) = if session.engine == Engine::Claude
             && let Some(data) = permission_data.as_ref()
             && data.tool_name.is_some()
             && let Some(parent_transcript_path) = session.transcript_path.as_deref()
         {
-            matched_tool =
-                matching_subagent_permission_tool_use(parent_transcript_path, agent_id, data);
-        }
+            matching_subagent_permission_tool_use(parent_transcript_path, agent_id, data)
+        } else {
+            (false, None)
+        };
         let tool = if matched_tool {
             permission_data
                 .as_ref()
@@ -528,13 +491,62 @@ fn load_conversation_with_queued_prompts(
                 )
             })
             .unwrap_or_else(|| "Waiting for permission approval.".to_string());
-        messages.push(ChatItem::Permission {
-            request_id: Some(request_id),
-            tool: format!("Subagent {agent_id}: {tool}"),
-            description,
-            command,
-        });
+        additional_cards.push(TimedCard::new(
+            CardKind::Permission,
+            created_at,
+            next_permission_seq,
+            true,
+            ChatItem::Permission {
+                request_id: Some(request_id),
+                tool: format!("Subagent {agent_id}: {tool}"),
+                description,
+                command,
+            },
+        ));
+        next_permission_seq = next_permission_seq.saturating_add(1);
     }
+
+    let transcript_input = TranscriptInput {
+        path: session.transcript_path.as_deref(),
+        engine: session.engine,
+        additions: parser::claude::ParserAdditions {
+            session_id,
+            parent: parent.as_ref(),
+            pending_tool,
+            user_marker: user_marker.as_deref(),
+            decisions: &decisions,
+            queued_prompts: &queued_prompts,
+            peer_out_messages: &peer_out_messages,
+            proposals: &proposal_items,
+            todos: &todos,
+            additional_cards: &additional_cards,
+        },
+    };
+    let (mut conversation, resolved_queued_prompt_ids) = parse_session_transcript_incrementally(
+        session_id,
+        transcript_input,
+        cache_key.transcript_fingerprint.clone(),
+        &loaders.message_cache,
+    )?;
+    cache::refresh_image_availability(&mut conversation);
+    resolve_peer_session_titles(&mut conversation.messages, &mut load_session)?;
+    merge_stored_files(session_id, &agent_files, &mut conversation.messages);
+
+    attach_question_request_if_present(
+        &mut conversation.messages,
+        main_permission_request_id.as_deref(),
+        main_permission_data.as_ref(),
+    );
+
+    for message in &mut conversation.messages {
+        if let ChatItem::Permission { request_id, .. } = message
+            && request_id.is_none()
+        {
+            *request_id = main_permission_request_id.clone();
+        }
+    }
+
+    conversation.messages.extend(trailing_questions);
 
     conversation.update_metadata();
 
@@ -563,32 +575,33 @@ fn matching_subagent_permission_tool_use(
     parent_transcript_path: &Path,
     agent_id: &str,
     permission: &PermissionRequestData,
-) -> bool {
+) -> (bool, Option<DateTime<Utc>>) {
     let Some(path) = subagent_reports::transcript_path_for_agent(parent_transcript_path, agent_id)
     else {
-        return false;
+        return (false, None);
     };
     let reader = match open_seekable_transcript(&path) {
         Ok(Some(reader)) => reader,
-        Ok(None) => return false,
+        Ok(None) => return (false, None),
         Err(error) => {
             tracing::warn!(
                 path = %path.display(),
                 %error,
                 "failed to open subagent permission transcript"
             );
-            return false;
+            return (false, None);
         }
     };
-    match parser::claude::matching_pending_tool_use_exists(reader, permission) {
-        Ok(matched) => matched,
+    match parser::claude::matching_pending_tool_use(reader, permission) {
+        Ok(Some(matched)) => (true, matched.started_at),
+        Ok(None) => (false, None),
         Err(error) => {
             tracing::warn!(
                 path = %path.display(),
                 %error,
                 "failed to match subagent permission transcript"
             );
-            false
+            (false, None)
         }
     }
 }
@@ -1156,8 +1169,8 @@ mod tests {
             considered: Vec::new(),
             easy_to_change: "Change the fixture timestamp.".to_string(),
             created_at: "2026-01-01T00:00:04.500Z".to_string(),
-            review: None,
-            reviewed_at: None,
+            review: Some("accepted".to_string()),
+            reviewed_at: Some("2026-01-01T00:00:04.500Z".to_string()),
         };
         let decision_item = json!({
             "type": "decision",
@@ -1166,7 +1179,7 @@ mod tests {
             "why": "The fixture places a decision between the file and later message.",
             "considered": [],
             "easyToChange": "Change the fixture timestamp.",
-            "review": null,
+            "review": "accepted",
             "createdAt": "2026-01-01T00:00:04.500Z",
         });
         let loaders = RouteLoaders::new(
@@ -2393,8 +2406,8 @@ mod tests {
             considered: vec!["Choose the other fixture path".to_string()],
             easy_to_change: "Change one fixture value.".to_string(),
             created_at: "2026-06-01T11:59:00Z".to_string(),
-            review: None,
-            reviewed_at: None,
+            review: Some("accepted".to_string()),
+            reviewed_at: Some("2026-06-01T12:04:00Z".to_string()),
         };
         let proposal = AgentProposal {
             session_id: "fixture-session".to_string(),
@@ -2449,7 +2462,7 @@ mod tests {
                             "why": "The fixture remains reversible.",
                             "considered": ["Choose the other fixture path"],
                             "easyToChange": "Change one fixture value.",
-                            "review": null,
+                            "review": "accepted",
                             "createdAt": "2026-06-01T11:59:00Z",
                         },
                         {
@@ -2462,6 +2475,16 @@ mod tests {
                             }],
                         },
                         {"type": "assistant", "text": "Between the records."},
+                        {
+                            "type": "tool_summary",
+                            "summary": "Bash ×1",
+                            "operations": [{
+                                "tool": "Bash",
+                                "target": "a agent proposal add '<fixture-json>'",
+                                "failed": false,
+                            }],
+                        },
+                        {"type": "assistant", "text": "After the records."},
                         {
                             "type": "proposal",
                             "seq": 7,
@@ -2488,16 +2511,6 @@ mod tests {
                             "resolution": null,
                             "comment": null,
                         },
-                        {
-                            "type": "tool_summary",
-                            "summary": "Bash ×1",
-                            "operations": [{
-                                "tool": "Bash",
-                                "target": "a agent proposal add '<fixture-json>'",
-                                "failed": false,
-                            }],
-                        },
-                        {"type": "assistant", "text": "After the records."},
                     ],
                     "backgroundTasks": [],
                     "start": 0,
@@ -2509,7 +2522,7 @@ mod tests {
                         "why": "The fixture remains reversible.",
                         "considered": ["Choose the other fixture path"],
                         "easyToChange": "Change one fixture value.",
-                        "review": null,
+                        "review": "accepted",
                         "createdAt": "2026-06-01T11:59:00Z",
                     }],
                     "hasUnansweredProposal": true,
@@ -2546,8 +2559,8 @@ mod tests {
                     considered: vec!["Choose the other fixture path".to_string()],
                     easy_to_change: "Change one fixture value.".to_string(),
                     created_at: "2026-06-01T11:59:00Z".to_string(),
-                    review: None,
-                    reviewed_at: None,
+                    review: Some("accepted".to_string()),
+                    reviewed_at: Some("2026-06-01T12:04:00Z".to_string()),
                 }])
             },
             |_| Ok(Vec::new()),
@@ -2592,7 +2605,7 @@ mod tests {
                             "why": "The fixture remains reversible.",
                             "considered": ["Choose the other fixture path"],
                             "easyToChange": "Change one fixture value.",
-                            "review": null,
+                            "review": "accepted",
                             "createdAt": "2026-06-01T11:59:00Z",
                         },
                         {
@@ -2625,7 +2638,7 @@ mod tests {
                         "why": "The fixture remains reversible.",
                         "considered": ["Choose the other fixture path"],
                         "easyToChange": "Change one fixture value.",
-                        "review": null,
+                        "review": "accepted",
                         "createdAt": "2026-06-01T11:59:00Z",
                     }],
                     "hasUnansweredProposal": false,
@@ -2662,8 +2675,8 @@ mod tests {
                     considered: vec!["Choose the other fixture path".to_string()],
                     easy_to_change: "Change one fixture value.".to_string(),
                     created_at: "2026-11-11T12:00:00Z".to_string(),
-                    review: None,
-                    reviewed_at: None,
+                    review: Some("accepted".to_string()),
+                    reviewed_at: Some("2026-11-11T12:01:00Z".to_string()),
                 }])
             },
             |_| Ok(Vec::new()),
@@ -2685,7 +2698,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"{"messages":[{"type":"assistant","text":"Before the decision."},{"type":"decision","seq":1,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":null,"createdAt":"2026-11-11T12:00:00Z"},{"type":"assistant","text":"After the decision."}],"backgroundTasks":[],"start":0,"total":3,"decisions":[{"type":"decision","seq":1,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":null,"createdAt":"2026-11-11T12:00:00Z"}],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
+                r#"{"messages":[{"type":"assistant","text":"Before the decision."},{"type":"decision","seq":1,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":"accepted","createdAt":"2026-11-11T12:00:00Z"},{"type":"assistant","text":"After the decision."}],"backgroundTasks":[],"start":0,"total":3,"decisions":[{"type":"decision","seq":1,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":"accepted","createdAt":"2026-11-11T12:00:00Z"}],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
             ),
         );
     }

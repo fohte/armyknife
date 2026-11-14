@@ -6,7 +6,6 @@ use chrono::{DateTime, Utc};
 mod background_tasks;
 mod events;
 mod incremental;
-mod proposals;
 mod questions;
 mod render;
 mod state;
@@ -22,16 +21,21 @@ use super::super::ChatItem;
 use super::super::ParentSession;
 use super::super::SkillSuggestion;
 use super::super::proposals::ProposalItem;
+use super::cards::TimedCard;
 use crate::commands::agent::store::{
     AgentDecision, AgentTodo, PermissionRequestData, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
 };
 
-pub(in crate::commands::agent::watch_web::messages) fn matching_pending_tool_use_exists(
+pub(in crate::commands::agent::watch_web::messages) struct MatchingPermissionToolUse {
+    pub(in crate::commands::agent::watch_web::messages) started_at: Option<DateTime<Utc>>,
+}
+
+pub(in crate::commands::agent::watch_web::messages) fn matching_pending_tool_use(
     reader: impl BufRead,
     permission: &PermissionRequestData,
-) -> io::Result<bool> {
+) -> io::Result<Option<MatchingPermissionToolUse>> {
     if permission.tool_name.is_none() {
-        return Ok(false);
+        return Ok(None);
     }
     let mut state = state::ClaudeParserState::new();
     for line in reader.lines() {
@@ -48,7 +52,10 @@ pub(in crate::commands::agent::watch_web::messages) fn matching_pending_tool_use
         .tool_uses
         .iter()
         .rev()
-        .any(|tool_use| tool_use.matches_permission_request(permission)))
+        .find(|tool_use| tool_use.matches_permission_request(permission))
+        .map(|tool_use| MatchingPermissionToolUse {
+            started_at: tool_use.started_at,
+        }))
 }
 
 pub(in crate::commands::agent::watch_web::messages) type ParsedTranscript = (
@@ -72,6 +79,7 @@ pub(in crate::commands::agent::watch_web::messages) struct ParserAdditions<'a> {
         &'a [WatchWebPeerOutMessage],
     pub(in crate::commands::agent::watch_web::messages) proposals: &'a [ProposalItem],
     pub(in crate::commands::agent::watch_web::messages) todos: &'a [AgentTodo],
+    pub(in crate::commands::agent::watch_web::messages) additional_cards: &'a [TimedCard],
 }
 
 #[cfg(test)]
@@ -113,6 +121,7 @@ fn parse_with_image_directory(
             decisions: &[],
             proposals: &[],
             todos: &[],
+            additional_cards: &[],
         },
     )
     .map(|(messages, _, _, _)| messages)
@@ -141,6 +150,7 @@ fn parse_with_decisions_and_queued_prompts(
             peer_out_messages: &[],
             proposals: &[],
             todos: &[],
+            additional_cards: &[],
         },
     )
 }
@@ -167,6 +177,7 @@ fn parse_with_background_tasks_and_peer_out_messages(
             peer_out_messages,
             proposals: &[],
             todos: &[],
+            additional_cards: &[],
         },
     )
     .map(|(messages, background_tasks, _)| (messages, background_tasks))
@@ -195,6 +206,7 @@ fn parse_with_queued_prompts_and_proposals(
             peer_out_messages: &[],
             proposals,
             todos: &[],
+            additional_cards: &[],
         },
     )
 }
@@ -374,6 +386,7 @@ mod tests {
                     peer_out_messages: &[],
                     proposals: &[],
                     todos: &[todo],
+                    additional_cards: &[],
                 },
             )
             .unwrap();
@@ -431,6 +444,7 @@ mod tests {
                     peer_out_messages: &[],
                     proposals: &[],
                     todos: &[],
+                    additional_cards: &[],
                 },
             )
             .unwrap();
@@ -463,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn places_a_proposal_by_creation_time_and_keeps_its_bash_summary() {
+    fn places_a_resolved_proposal_by_creation_time_and_keeps_its_bash_summary() {
         let transcript = [
             json!({
                 "uuid": "fixture-assistant-before",
@@ -511,7 +525,7 @@ mod tests {
                 recommended: false,
             }],
             answer: None,
-            resolved: false,
+            resolved: true,
             resolution: None,
             comment: None,
         };
@@ -561,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn unplaced_proposals_are_inserted_by_creation_time_before_later_recorded_proposals() {
+    fn resolved_proposal_keeps_its_timeline_position_while_pending_proposal_is_pinned() {
         let transcript = [
             json!({
                 "uuid": "fixture-assistant-before",
@@ -685,7 +699,6 @@ mod tests {
                     ChatItem::Assistant {
                         text: "middle".to_string(),
                     },
-                    recorded_proposal,
                     ChatItem::ToolSummary {
                         summary: "Bash ×1".to_string(),
                         operations: vec![ToolOperation {
@@ -697,6 +710,7 @@ mod tests {
                     ChatItem::Assistant {
                         text: "after".to_string(),
                     },
+                    recorded_proposal,
                 ],
                 Vec::new(),
                 Vec::new(),
@@ -705,7 +719,7 @@ mod tests {
     }
 
     #[test]
-    fn keeps_timed_proposals_in_creation_order_and_answers_later_questions() {
+    fn pins_pending_proposal_after_answered_questions() {
         let transcript = indoc! {r#"
             {"uuid":"fixture-before","parentUuid":null,"timestamp":"2026-06-01T12:00:00Z","type":"assistant","message":{"content":[{"type":"text","text":"before"}]}}
             {"uuid":"fixture-question","parentUuid":"fixture-before","timestamp":"2026-06-01T12:02:00Z","type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-call","name":"AskUserQuestion","input":{"questions":[{"question":"Which display mode?","header":"Display","multiSelect":false,"options":[{"label":"Option A"},{"label":"Option B"}]}]}}]}}
@@ -757,7 +771,6 @@ mod tests {
                     ChatItem::Assistant {
                         text: "before".to_string(),
                     },
-                    proposal,
                     question_group(vec![super::super::super::QuestionPrompt {
                         header: Some("Display".to_string()),
                         question: "Which display mode?".to_string(),
@@ -776,6 +789,7 @@ mod tests {
                     ChatItem::Assistant {
                         text: "after".to_string(),
                     },
+                    proposal,
                 ],
                 Vec::new(),
                 Vec::new(),
@@ -805,8 +819,8 @@ mod tests {
             considered: vec!["The other fixture option".to_string()],
             easy_to_change: "Change one fixture value.".to_string(),
             created_at: created_at.to_string(),
-            review: None,
-            reviewed_at: None,
+            review: Some("ok".to_string()),
+            reviewed_at: Some("2026-11-11T00:00:00Z".to_string()),
         }
     }
 
@@ -821,7 +835,7 @@ mod tests {
             why: "The fixture keeps the example reversible.".to_string(),
             considered: vec!["The other fixture option".to_string()],
             easy_to_change: "Change one fixture value.".to_string(),
-            review: None,
+            review: Some("ok".to_string()),
             created_at: created_at.to_string(),
         }
     }
@@ -1159,7 +1173,7 @@ mod tests {
                 "why": "The fixture keeps the example reversible.",
                 "considered": ["The other fixture option"],
                 "easyToChange": "Change one fixture value.",
-                "review": null,
+                "review": "ok",
                 "createdAt": "2026-11-11T00:00:00Z",
             }),
         );

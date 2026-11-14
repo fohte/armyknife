@@ -6,18 +6,18 @@ use serde_json::Value;
 use super::super::ChatItem;
 use super::super::ParentSession;
 use super::super::SkillSuggestion;
+#[cfg(test)]
+use super::super::parser::cards::cards_from_sources;
+use super::super::parser::cards::{CardKind, CardTimeline, TimedCard};
 use super::super::parser::classifier;
 use super::super::parser::jsonl::JsonlLineBuffer;
-use super::super::parser::todos::TodoTimeline;
 use super::super::parser::{
     CodexToolSummaryRecord, ToolSummary, append_text, append_user_text_with_rewind_id,
     codex_edited_file_paths, codex_tool_summary_record, operation_target, record_timestamp,
 };
-use super::decision_position::{DecisionTimeline, insert_time_placed_decisions};
-use super::time_placed::TimePlacedTimeline;
-use crate::commands::agent::store::{
-    AgentDecision, AgentTodo, PermissionRequestData, WatchWebPeerOutMessage,
-};
+use crate::commands::agent::store::PermissionRequestData;
+#[cfg(test)]
+use crate::commands::agent::store::{AgentDecision, AgentTodo, WatchWebPeerOutMessage};
 use crate::commands::agent::watch_web::messages::EventKind;
 
 #[cfg(test)]
@@ -152,25 +152,18 @@ impl CodexParserState {
         todos: &[AgentTodo],
         peer_out_messages: &[WatchWebPeerOutMessage],
     ) -> io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
-        self.render_with_permission_request(parent, decisions, todos, peer_out_messages, None)
+        let cards = cards_from_sources(decisions, &[], todos, peer_out_messages, &[]);
+        self.render_with_placement_cards(parent, &cards, None)
     }
 
-    pub(in crate::commands::agent::watch_web::messages) fn render_with_permission_request(
+    pub(in crate::commands::agent::watch_web::messages) fn render_with_placement_cards(
         &self,
         parent: Option<&ParentSession>,
-        decisions: &[AgentDecision],
-        todos: &[AgentTodo],
-        peer_out_messages: &[WatchWebPeerOutMessage],
+        cards: &[TimedCard],
         pending_permission: Option<&PermissionRequestData>,
     ) -> io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
         if self.lines.pending().is_empty() {
-            return self.render_events(
-                parent,
-                decisions,
-                todos,
-                peer_out_messages,
-                pending_permission,
-            );
+            return self.render_events(parent, cards, pending_permission);
         }
         let mut parser = self.clone();
         let mut lines = std::mem::take(&mut parser.lines);
@@ -186,13 +179,7 @@ impl CodexParserState {
         if let Some(error) = parser_error {
             return Err(error);
         }
-        parser.render_events(
-            parent,
-            decisions,
-            todos,
-            peer_out_messages,
-            pending_permission,
-        )
+        parser.render_events(parent, cards, pending_permission)
     }
 
     fn process_line(&mut self, line: &[u8]) -> io::Result<()> {
@@ -250,6 +237,7 @@ impl CodexParserState {
                                 call_id: call_id.to_owned(),
                                 name: name.to_owned(),
                                 input,
+                                started_at: timestamp,
                             });
                         } else {
                             effects.push(CodexEffect::ToolAction(codex_tool_summary_record(
@@ -364,25 +352,14 @@ impl CodexParserState {
     fn render_events(
         &self,
         parent: Option<&ParentSession>,
-        decisions: &[AgentDecision],
-        todos: &[AgentTodo],
-        peer_out_messages: &[WatchWebPeerOutMessage],
+        cards: &[TimedCard],
         pending_permission: Option<&PermissionRequestData>,
     ) -> io::Result<(Vec<ChatItem>, Vec<SkillSuggestion>)> {
         let mut items = Vec::new();
         let mut tools = ToolSummary::default();
-        let mut decision_timeline = DecisionTimeline::new(decisions);
-        let mut todo_timeline = TodoTimeline::new(todos);
-        let mut peer_out_timeline = TimePlacedTimeline::new(peer_out_messages);
+        let mut card_timeline = CardTimeline::new(cards);
         for event in &self.events {
-            insert_time_placed_decisions(
-                event.timestamp,
-                &mut decision_timeline,
-                &mut tools,
-                &mut items,
-            );
-            todo_timeline.insert_before_record(event.timestamp, &mut items, &mut tools);
-            peer_out_timeline.insert_before_record(event.timestamp, &mut items, &mut tools);
+            card_timeline.insert_before_record(event.timestamp, &mut items, &mut tools);
             for effect in &event.effects {
                 match effect {
                     CodexEffect::AssistantMessage { text, timestamp } => {
@@ -447,28 +424,44 @@ impl CodexParserState {
                         &waiting_message,
                     )
                 };
-                ChatItem::Permission {
-                    request_id: None,
-                    tool: pending.name.clone(),
-                    description,
-                    command,
-                }
+                (
+                    ChatItem::Permission {
+                        request_id: None,
+                        tool: pending.name.clone(),
+                        description,
+                        command,
+                    },
+                    pending.started_at,
+                )
             })
             .or_else(|| {
-                self.pending_tool_calls
-                    .last()
-                    .map(|pending| ChatItem::ToolInProgress {
-                        tool: pending.name.clone(),
-                        target: operation_target(&pending.name, pending.input.as_ref()),
-                    })
+                self.pending_tool_calls.last().map(|pending| {
+                    (
+                        ChatItem::ToolInProgress {
+                            tool: pending.name.clone(),
+                            target: operation_target(&pending.name, pending.input.as_ref()),
+                        },
+                        pending.started_at,
+                    )
+                })
             });
         tools.flush_into(&mut items);
-        peer_out_timeline.append_remaining(&mut items);
-        if let Some(active_tool) = active_tool {
-            items.push(active_tool);
+        if let Some((item, timestamp)) = active_tool {
+            if matches!(item, ChatItem::Permission { .. }) {
+                if !card_timeline.update_pending(CardKind::Permission, 0, timestamp, item.clone()) {
+                    card_timeline.push(TimedCard::new(
+                        CardKind::Permission,
+                        timestamp,
+                        i64::MAX,
+                        true,
+                        item,
+                    ));
+                }
+            } else {
+                items.push(item);
+            }
         }
-        decision_timeline.append_remaining(&mut items);
-        todo_timeline.append_remaining(&mut items);
+        card_timeline.append_remaining(&mut items);
         Ok((items, self.skills.clone()))
     }
 }
@@ -478,6 +471,7 @@ struct PendingTool {
     call_id: String,
     name: String,
     input: Option<Value>,
+    started_at: Option<DateTime<Utc>>,
 }
 
 fn codex_tool_failed(result: &Value) -> bool {
@@ -548,6 +542,7 @@ mod tests {
     use rstest::{fixture, rstest};
     use serde_json::json;
 
+    use super::super::cards::cards_from_sources;
     use super::{CodexParserState, parse, parse_with_skills};
     use crate::commands::agent::store::{AgentTodo, PermissionRequestData, TodoResolution};
     use crate::commands::agent::watch_web::messages::{
@@ -568,10 +563,11 @@ mod tests {
             tool_input: json!({"command": "run fixture"}),
             pending: true,
         };
+        let cards = cards_from_sources(&[], &[], &[], &[], &[]);
 
         assert_eq!(
             parser
-                .render_with_permission_request(None, &[], &[], &[], Some(&permission))
+                .render_with_placement_cards(None, &cards, Some(&permission))
                 .unwrap()
                 .0,
             vec![ChatItem::Permission {
@@ -706,8 +702,8 @@ mod tests {
             considered: Vec::new(),
             easy_to_change: "Change the fixture value.".to_string(),
             created_at: "2026-11-12T10:00:03Z".to_string(),
-            review: None,
-            reviewed_at: None,
+            review: Some("ok".to_string()),
+            reviewed_at: Some("2026-11-12T10:00:03Z".to_string()),
         };
         let mut parser = CodexParserState::new();
         parser.append(Cursor::new(transcript)).unwrap();
@@ -742,7 +738,7 @@ mod tests {
                             why: "The fixture remains isolated.".to_string(),
                             considered: Vec::new(),
                             easy_to_change: "Change the fixture value.".to_string(),
-                            review: None,
+                            review: Some("ok".to_string()),
                             created_at: "2026-11-12T10:00:03Z".to_string(),
                         },
                         ChatItem::Assistant {

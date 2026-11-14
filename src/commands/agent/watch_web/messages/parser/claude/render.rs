@@ -5,12 +5,9 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use super::super::super::ChatItem;
-use super::super::decision_position::{DecisionTimeline, insert_time_placed_decisions};
-use super::super::time_placed::TimePlacedTimeline;
-use super::super::todos::TodoTimeline;
+use super::super::cards::{CardKind, CardTimeline, TimedCard, cards_from_sources};
 use super::super::{ToolSummary, append_text_with_image_directory, classifier, tool_target};
 use super::events::{ClaudeEffect, TimedClaudeEvent};
-use super::proposals::ProposalTimeline;
 use super::questions::apply_question_answers;
 use super::state::{ClaudeParserState, ToolUse};
 use super::transcript_branch::BranchMembership;
@@ -25,10 +22,14 @@ pub(super) fn render(
 ) -> ParsedTranscript {
     let mut items = Vec::new();
     let mut tools = ToolSummary::default();
-    let mut decision_timeline = DecisionTimeline::new(additions.decisions);
-    let mut proposal_timeline = ProposalTimeline::new(additions.proposals);
-    let mut todo_timeline = TodoTimeline::new(additions.todos);
-    let mut peer_out_timeline = TimePlacedTimeline::new(additions.peer_out_messages);
+    let source_cards = cards_from_sources(
+        additions.decisions,
+        additions.proposals,
+        additions.todos,
+        additions.peer_out_messages,
+        additions.additional_cards,
+    );
+    let mut card_timeline = CardTimeline::new(&source_cards);
     let mut question_indices = HashMap::<String, Vec<usize>>::new();
 
     for event in &state.events {
@@ -36,10 +37,7 @@ pub(super) fn render(
             event,
             image_directory,
             additions,
-            &mut decision_timeline,
-            &mut proposal_timeline,
-            &mut todo_timeline,
-            &mut peer_out_timeline,
+            &mut card_timeline,
             &mut tools,
             &mut items,
             &mut question_indices,
@@ -48,9 +46,20 @@ pub(super) fn render(
 
     let active_tool = active_tool_item(&state.tool_uses, additions.pending_tool);
     tools.flush_into(&mut items);
-    peer_out_timeline.append_remaining(&mut items);
-    if let Some(active_tool) = active_tool {
-        items.push(active_tool);
+    if let Some((item, timestamp)) = active_tool {
+        if matches!(item, ChatItem::Permission { .. }) {
+            if !card_timeline.update_pending(CardKind::Permission, 0, timestamp, item.clone()) {
+                card_timeline.push(TimedCard::new(
+                    CardKind::Permission,
+                    timestamp,
+                    i64::MAX,
+                    true,
+                    item,
+                ));
+            }
+        } else {
+            items.push(item);
+        }
     }
 
     let mut queue = super::super::queue::Queue::new(additions.queued_prompts);
@@ -70,9 +79,7 @@ pub(super) fn render(
     }
     let resolved_queued_prompt_ids = queue.resolved_queued_prompt_ids();
     items.extend(queue.pending_items(additions.parent, additions.user_marker, image_directory));
-    decision_timeline.append_remaining(&mut items);
-    proposal_timeline.append_remaining(&mut items);
-    todo_timeline.append_remaining(&mut items);
+    card_timeline.append_remaining(&mut items);
 
     (
         items,
@@ -82,28 +89,16 @@ pub(super) fn render(
     )
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "timed events update several render timelines"
-)]
 fn render_timed_event(
     event: &TimedClaudeEvent,
     image_directory: Option<&Path>,
     additions: ParserAdditions<'_>,
-    decision_timeline: &mut DecisionTimeline,
-    proposal_timeline: &mut ProposalTimeline,
-    todo_timeline: &mut TodoTimeline,
-    peer_out_timeline: &mut TimePlacedTimeline<
-        crate::commands::agent::store::WatchWebPeerOutMessage,
-    >,
+    card_timeline: &mut CardTimeline,
     tools: &mut ToolSummary,
     items: &mut Vec<ChatItem>,
     question_indices: &mut HashMap<String, Vec<usize>>,
 ) {
-    insert_time_placed_decisions(event.timestamp, decision_timeline, tools, items);
-    proposal_timeline.insert_before_record(event.timestamp, items, tools);
-    todo_timeline.insert_before_record(event.timestamp, items, tools);
-    peer_out_timeline.insert_before_record(event.timestamp, items, tools);
+    card_timeline.insert_before_record(event.timestamp, items, tools);
 
     for effect in &event.effects {
         match effect {
@@ -218,7 +213,7 @@ fn send_user_file_item(
 fn active_tool_item(
     tool_uses: &[ToolUse],
     pending_tool: Option<&PermissionRequestData>,
-) -> Option<ChatItem> {
+) -> Option<(ChatItem, Option<DateTime<Utc>>)> {
     let pending_tool_use =
         pending_tool.and_then(|pending| latest_matching_pending_tool_use(tool_uses, pending));
     let tool_use = pending_tool_use.or_else(|| tool_uses.last())?;
@@ -236,17 +231,23 @@ fn active_tool_item(
         } else {
             tool_detail(&tool_use.name, tool_use.input.as_ref())
         };
-        Some(ChatItem::Permission {
-            request_id: None,
-            tool: tool_use.name.clone(),
-            description,
-            command,
-        })
+        Some((
+            ChatItem::Permission {
+                request_id: None,
+                tool: tool_use.name.clone(),
+                description,
+                command,
+            },
+            tool_use.started_at,
+        ))
     } else {
-        Some(ChatItem::ToolInProgress {
-            tool: tool_use.name.clone(),
-            target: tool_target(&tool_use.name, tool_use.input.as_ref()),
-        })
+        Some((
+            ChatItem::ToolInProgress {
+                tool: tool_use.name.clone(),
+                target: tool_target(&tool_use.name, tool_use.input.as_ref()),
+            },
+            tool_use.started_at,
+        ))
     }
 }
 
