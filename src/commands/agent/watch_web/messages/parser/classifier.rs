@@ -62,6 +62,10 @@ pub(super) fn classify_inbound(
         };
     }
 
+    if let Some(message) = task_notification_reminder(record, text) {
+        return message;
+    }
+
     if let Some((tag, body)) = tagged {
         if let Some((session_id, peer_body)) = peer_message_parts(text) {
             if let Some(message) = marked_user_message(peer_body, user_marker) {
@@ -222,6 +226,49 @@ fn event(tag: &str, body: &str, record: &Value) -> MessageKind {
         failed: is_failure(record, tag, &text),
         text,
     }
+}
+
+fn task_notification_reminder(record: &Value, text: &str) -> Option<MessageKind> {
+    let origin_kind = origin(record)
+        .and_then(|origin| origin.get("kind"))
+        .and_then(Value::as_str);
+    if origin_kind != Some("task-notification") {
+        return None;
+    }
+
+    let (notification_body, reminder_body) = task_notification_and_reminder(text)?;
+    let summary = nested_tag_value(notification_body, "summary")?.trim();
+    if summary.is_empty() {
+        return None;
+    }
+
+    let reminder_body = strip_stop_hook_error_prefix(reminder_body);
+    let text = one_line(&format!("{summary}: {reminder_body}"));
+    Some(MessageKind::Event {
+        kind: EventKind::System,
+        text,
+        failed: false,
+    })
+}
+
+fn task_notification_and_reminder(text: &str) -> Option<(&str, &str)> {
+    let text = text.trim();
+    let notification_body = text
+        .strip_prefix("<task-notification>")?
+        .split_once("</task-notification>")?;
+    let (notification_body, reminder) = notification_body;
+    let (reminder_tag, reminder_body) = tagged_body(reminder.trim())?;
+    (reminder_tag == "system-reminder").then_some((notification_body, reminder_body))
+}
+
+fn strip_stop_hook_error_prefix(text: &str) -> &str {
+    const PREFIX: &str = "Stop hook blocking error from command \"";
+    let Some(after_prefix) = text.strip_prefix(PREFIX) else {
+        return text;
+    };
+    after_prefix
+        .split_once("\": ")
+        .map_or(text, |(_, message)| message)
 }
 
 fn is_failure(record: &Value, label: &str, text: &str) -> bool {
@@ -463,6 +510,23 @@ mod tests {
     #[case::compact_boundary_has_a_distinct_kind(json!({"type":"system","subtype":"compact_boundary"}), "", None, MessageKind::Event { kind: EventKind::CompactBoundary, text: "Context compacted".to_owned(), failed: false })]
     #[case::background_task_uses_summary(json!({"type":"user"}), "<task-notification><task-id>fixture-task-id</task-id><status>completed</status><summary>Background command \"Check the fictional build\" completed (exit code 0)</summary></task-notification>", None, MessageKind::Event { kind: EventKind::System, text: "Background command \"Check the fictional build\" completed (exit code 0)".to_owned(), failed: false })]
     #[case::background_task_without_summary_uses_id_and_status(json!({"type":"user"}), "<task-notification><task-id>fixture-task-id</task-id><status>completed</status></task-notification>", None, MessageKind::Event { kind: EventKind::System, text: "Background task fixture-task-id completed".to_owned(), failed: false })]
+    #[case::task_reminder_combines_summary_and_reminder_without_failure(
+        json!({"type":"user","origin":{"kind":"task-notification","producer":"session-task"},"promptSource":"system","turnOrigin":"task_notification"}),
+        indoc! {r#"
+            <task-notification>
+            <summary>Long-running command reminder</summary>
+            </task-notification>
+            <system-reminder>
+            Stop hook blocking error from command "SyntheticHook:Shell": This is a reminder, not an error: inspect the process output.
+            </system-reminder>
+        "#},
+        None,
+        MessageKind::Event {
+            kind: EventKind::System,
+            text: "Long-running command reminder: This is a reminder, not an error: inspect the process output.".to_owned(),
+            failed: false,
+        }
+    )]
     #[case::away_summary_uses_record_content(json!({"type":"system","subtype":"away_summary","content":"The fictional task finished while the user was away."}), "", None, MessageKind::Event { kind: EventKind::System, text: "recap: The fictional task finished while the user was away.".to_owned(), failed: false })]
     #[case::away_summary_uses_raw_text_when_content_is_empty(json!({"type":"system","subtype":"away_summary","content":"  "}), "The fictional task finished while the user was away.", None, MessageKind::Event { kind: EventKind::System, text: "recap: The fictional task finished while the user was away.".to_owned(), failed: false })]
     #[case::empty_stop_hook_summary_is_hidden(json!({"type":"system","subtype":"stop_hook_summary","hookErrors":[],"preventedContinuation":false}), "", None, MessageKind::Hidden)]
