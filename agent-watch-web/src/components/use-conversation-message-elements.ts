@@ -20,6 +20,7 @@ type UseConversationMessageElementsOptions = {
   decisions?: readonly Extract<ChatItem, { type: 'decision' }>[]
   hasUnansweredProposal?: boolean
   sessionCategory: Session['category']
+  sessionId?: string
   isCompacting: boolean
   sessionEngine: Session['engine']
   actions: SessionActions | null
@@ -31,6 +32,7 @@ type UseConversationMessageElementsOptions = {
     action: string,
     payload?: Record<string, unknown>,
   ) => Promise<boolean>
+  onCommandExecuted?: () => void
   onOpenInTerminal: () => void
   openInTerminalStatus: OpenInTerminalStatus
   onSelectSession: (id: string) => void
@@ -157,6 +159,7 @@ export function useConversationMessageElements({
   decisions: allDecisions,
   hasUnansweredProposal: proposalPending,
   sessionCategory,
+  sessionId,
   isCompacting,
   sessionEngine,
   actions,
@@ -165,6 +168,7 @@ export function useConversationMessageElements({
   selectedDecisionSeq,
   onSelectDecision,
   onAction,
+  onCommandExecuted,
   onOpenInTerminal,
   openInTerminalStatus,
   onSelectSession,
@@ -229,12 +233,14 @@ export function useConversationMessageElements({
         onSelectDecision,
         message,
         onAction,
+        ...(onCommandExecuted === undefined ? {} : { onCommandExecuted }),
         onOpenInTerminal,
         onSelectSession,
         ...(onRewind === undefined ? {} : { onRewind }),
         pendingAction: messagePendingAction,
         openInTerminalStatus,
         sessionEngine,
+        ...(sessionId === undefined ? {} : { sessionId }),
         sessions,
         now,
       })
@@ -255,6 +261,7 @@ export function useConversationMessageElements({
     messages,
     now,
     onAction,
+    onCommandExecuted,
     onOpenInTerminal,
     onSelectDecision,
     onSelectSession,
@@ -265,6 +272,7 @@ export function useConversationMessageElements({
     selectedDecisionSeq,
     sessionCategory,
     sessionEngine,
+    sessionId,
     sessions,
   ])
 }

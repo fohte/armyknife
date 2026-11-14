@@ -1,6 +1,4 @@
-use std::collections::VecDeque;
 use std::io;
-use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -8,7 +6,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::{INITIAL_POLL_INTERVAL, MAX_POLL_INTERVAL};
+use super::{
+    DrainDeadlineCheck, INITIAL_POLL_INTERVAL, MAX_POLL_INTERVAL, OutputTailOptions,
+    read_output_tail, set_nonblocking,
+};
 
 const PROCESS_GROUP_TERMINATION_GRACE: Duration = Duration::from_millis(250);
 const STDERR_READER_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -131,8 +132,20 @@ fn run_in_process_group(
         let thread_cancel = cancel_reader.clone();
         match thread::Builder::new()
             .name("armyknife-process-stderr-reader".to_string())
-            .spawn(move || read_stderr_tail(stderr, max_stderr_bytes, thread_cancel))
-        {
+            .spawn(move || {
+                read_output_tail(
+                    stderr,
+                    thread_cancel,
+                    OutputTailOptions {
+                        max_bytes: max_stderr_bytes,
+                        poll_interval: STDERR_READER_POLL_INTERVAL,
+                        drain_timeout: STDERR_DRAIN_TIMEOUT,
+                        drain_deadline_check: DrainDeadlineCheck::BeforeRead,
+                        retry_interrupted: true,
+                    },
+                )
+                .map(|tail| tail.bytes)
+            }) {
             Ok(reader) => (Some(reader), Some(cancel_reader)),
             Err(error) => {
                 process_group.terminate();
@@ -196,62 +209,6 @@ fn run_in_process_group(
         status,
         stderr: stderr.unwrap_or_default(),
     })
-}
-
-fn set_nonblocking(reader: &impl AsRawFd) -> io::Result<()> {
-    let descriptor = reader.as_raw_fd();
-    // SAFETY: `descriptor` is the valid stderr pipe owned by the child handle.
-    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
-    if flags == -1 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: F_SETFL updates only the status flags of the valid stderr pipe.
-    let result = unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) };
-    if result == -1 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
-}
-
-fn read_stderr_tail(
-    mut reader: impl io::Read,
-    max_bytes: usize,
-    cancelled: Arc<AtomicBool>,
-) -> io::Result<Vec<u8>> {
-    let mut tail = VecDeque::with_capacity(max_bytes);
-    let mut chunk = [0; 4096];
-    let mut drain_deadline = None;
-    loop {
-        if cancelled.load(Ordering::Relaxed)
-            && Instant::now()
-                >= *drain_deadline.get_or_insert_with(|| Instant::now() + STDERR_DRAIN_TIMEOUT)
-        {
-            break;
-        }
-        match reader.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(read) => {
-                if max_bytes == 0 {
-                    continue;
-                }
-                for byte in &chunk[..read] {
-                    if tail.len() == max_bytes {
-                        tail.pop_front();
-                    }
-                    tail.push_back(*byte);
-                }
-            }
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                if cancelled.load(Ordering::Relaxed) {
-                    break;
-                }
-                thread::sleep(STDERR_READER_POLL_INTERVAL);
-            }
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(tail.into_iter().collect())
 }
 
 fn install_group_runner_signal_handlers() -> io::Result<SignalHandlerGuard> {
@@ -462,34 +419,6 @@ mod tests {
             (result.err().map(|error| error.kind()), alive),
             (Some(io::ErrorKind::Interrupted), vec![false, false]),
         );
-    }
-
-    #[test]
-    fn stderr_tail_reader_keeps_only_the_configured_suffix() {
-        let actual = read_stderr_tail(
-            &b"discard this; keep this suffix"[..],
-            16,
-            Arc::new(AtomicBool::new(false)),
-        )
-        .expect("fixture stderr should be readable");
-
-        assert_eq!(actual, b"keep this suffix");
-    }
-
-    #[test]
-    fn stderr_tail_reader_stops_after_cancellation_without_pipe_eof() {
-        struct OpenPipe;
-
-        impl io::Read for OpenPipe {
-            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
-                Err(io::ErrorKind::WouldBlock.into())
-            }
-        }
-
-        let actual = read_stderr_tail(OpenPipe, 16, Arc::new(AtomicBool::new(true)))
-            .expect("cancelled stderr reader should stop without EOF");
-
-        assert_eq!(actual, Vec::<u8>::new());
     }
 
     #[test]

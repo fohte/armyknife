@@ -25,6 +25,12 @@ export type SessionOperation =
       messageCountBefore?: number
     }
   | {
+      type: 'command_preview' | 'command_execute'
+      sessionId: string
+      messageText: string
+      commands: string[]
+    }
+  | {
       type: 'answer'
       sessionId: string
       requestId: string
@@ -116,6 +122,12 @@ function operationKey(operation: SessionOperation) {
   }
   if (operation.type === 'message') {
     return `${operation.sessionId}:message:${operation.operationId ?? String(operation.messageCountBefore ?? 'unknown')}`
+  }
+  if (
+    operation.type === 'command_preview' ||
+    operation.type === 'command_execute'
+  ) {
+    return `${operation.sessionId}:${operation.type}:${JSON.stringify([operation.messageText, operation.commands])}`
   }
   if (operation.type === 'proposal_answer') {
     return `${operation.sessionId}:proposal_answer:${String(operation.seq)}:${String(operation.choice)}:${operation.comment ?? ''}`

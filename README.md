@@ -1215,6 +1215,8 @@ Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` on
 - `GET /api/images/{name}` for saved conversation images
 - `GET /api/sessions/later-options` for server-calculated return times
 - `POST /api/sessions/{id}/messages` with `{"content":"..."}`
+- `POST /api/sessions/{id}/commands/preview` with `{"messageText":"Run ! printf safe now.","commands":["printf safe"]}` to verify the command is in the assistant transcript and return the session working directory for confirmation
+- `POST /api/sessions/{id}/commands/execute` with the same request to revalidate and run the command in the session working directory. The response includes `{"exitCode":0,"succeeded":true,"timedOut":false}`; stdout and stderr are returned to the session, capped to the last 8 KiB each, and execution stops after 30 seconds
 - `POST /api/sessions/{id}/rewind` rewinds a stopped or paused session with a tmux pane, no pending background tasks, and no active sweep. Send `{"messageId":"fixture-user-message-id","mode":"conversation_and_code"}`; `mode` accepts `conversation_and_code`, `conversation`, or `code` for Claude Code and only `conversation` for Codex. Returns `{"sessionId":"fixture-fork-session-id"}`.
 - `POST /api/sessions/{id}/answer` with `{"requestId":"...","answers":{"Which formats?":"Markdown, Plain text","Include examples?":"Yes"}}`, or `{"requestId":"...","skip":true}`
 - `POST /api/sessions/{id}/proposals/{seq}/answer` with `{"choice":0,"comment":"..."}`; `choice` is a zero-based option index or `null` to request another proposal, and `comment` may be `null`

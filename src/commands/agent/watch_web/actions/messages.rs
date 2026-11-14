@@ -127,7 +127,26 @@ pub(super) struct QueuedPromptDelivery {
     pub(super) attachment_paths: Vec<PathBuf>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum QueueStoreFailurePolicy {
+    RejectDelivery,
+    DeliverWithoutQueue,
+}
+
 pub(super) async fn send_queued_prompt(delivery: QueuedPromptDelivery) -> Result<(), ApiError> {
+    send_queued_prompt_with_policy(delivery, QueueStoreFailurePolicy::RejectDelivery).await
+}
+
+pub(super) async fn send_queued_prompt_best_effort(
+    delivery: QueuedPromptDelivery,
+) -> Result<(), ApiError> {
+    send_queued_prompt_with_policy(delivery, QueueStoreFailurePolicy::DeliverWithoutQueue).await
+}
+
+async fn send_queued_prompt_with_policy(
+    delivery: QueuedPromptDelivery,
+    queue_store_failure_policy: QueueStoreFailurePolicy,
+) -> Result<(), ApiError> {
     let QueuedPromptDelivery {
         runtime,
         sessions_dir,
@@ -159,8 +178,24 @@ pub(super) async fn send_queued_prompt(delivery: QueuedPromptDelivery) -> Result
     let queued_prompt_id = match queued_prompt_id {
         Ok(id) => id,
         Err(error) => {
-            remove_attachments(attachment_paths).await;
-            return Err(error);
+            if queue_store_failure_policy == QueueStoreFailurePolicy::RejectDelivery {
+                remove_attachments(attachment_paths).await;
+                return Err(error);
+            }
+            tracing::warn!(
+                session_id = %session.session_id,
+                error = %error.message,
+                "failed to save sent watch-web queued prompt; delivering without queue metadata"
+            );
+            let content = watch_web_message_content(&session, marker.as_deref(), &message_content);
+            let send_session = session.clone();
+            if let Err(delivery_error) =
+                run_blocking(move || runtime.send_message(&send_session, &content)).await
+            {
+                remove_attachments(attachment_paths).await;
+                return Err(delivery_error);
+            }
+            return Ok(());
         }
     };
 

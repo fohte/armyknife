@@ -613,6 +613,7 @@ export function ConversationPane({
         setError(null)
       }}
       onAction={onAction}
+      onCommandExecuted={() => void refresh()}
       onRewind={onRewind}
       onOpenInTerminal={onOpenInTerminal}
       onSelectSession={onSelectSession}

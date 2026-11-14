@@ -180,6 +180,36 @@ const requests: {
     body: { content: 'A message' },
   },
   {
+    name: 'preview agent commands',
+    operation: {
+      type: 'command_preview',
+      sessionId: 'test-session',
+      messageText: 'Run `! printf safe`.',
+      commands: ['printf safe'],
+    },
+    path: 'commands/preview',
+    body: {
+      messageText: 'Run `! printf safe`.',
+      commands: ['printf safe'],
+    },
+    response: { cwd: '/workspace/example' },
+  },
+  {
+    name: 'execute agent commands',
+    operation: {
+      type: 'command_execute',
+      sessionId: 'test-session',
+      messageText: 'Run `! printf safe`.',
+      commands: ['printf safe'],
+    },
+    path: 'commands/execute',
+    body: {
+      messageText: 'Run `! printf safe`.',
+      commands: ['printf safe'],
+    },
+    response: { exitCode: 0, succeeded: true, timedOut: false },
+  },
+  {
     name: 'answer question',
     operation: {
       type: 'answer',
@@ -421,6 +451,28 @@ const operationFactories: [
     },
   ],
   [
+    'command preview',
+    'commands/preview',
+    { messageText: 'Run `! printf safe`.', commands: ['printf safe'] },
+    {
+      type: 'command_preview',
+      sessionId: session.id,
+      messageText: 'Run `! printf safe`.',
+      commands: ['printf safe'],
+    },
+  ],
+  [
+    'command execution',
+    'commands/execute',
+    { messageText: 'Run `! printf safe`.', commands: ['printf safe'] },
+    {
+      type: 'command_execute',
+      sessionId: session.id,
+      messageText: 'Run `! printf safe`.',
+      commands: ['printf safe'],
+    },
+  ],
+  [
     'question answer',
     'answer',
     {
@@ -612,6 +664,16 @@ it('keeps confirmation waiters distinct for different target values', () => {
     ...completedTodo,
     resolution: 'rejected',
   }
+  const previewA: SessionOperation = {
+    type: 'command_preview',
+    sessionId: session.id,
+    messageText: 'Run `! printf a`.',
+    commands: ['printf a'],
+  }
+  const previewB: SessionOperation = {
+    ...previewA,
+    commands: ['printf b'],
+  }
   const keys = () => [
     sessionOperationKey(taskA),
     sessionOperationKey(taskB),
@@ -619,6 +681,8 @@ it('keeps confirmation waiters distinct for different target values', () => {
     sessionOperationKey(titleB),
     sessionOperationKey(completedTodo),
     sessionOperationKey(rejectedTodo),
+    sessionOperationKey(previewA),
+    sessionOperationKey(previewB),
   ]
 
   expect(keys()).toEqual([
@@ -628,6 +692,8 @@ it('keeps confirmation waiters distinct for different target values', () => {
     'test-session:title:Title B',
     'test-session:todo_resolve:4:completed:',
     'test-session:todo_resolve:4:rejected:',
+    'test-session:command_preview:["Run `! printf a`.",["printf a"]]',
+    'test-session:command_preview:["Run `! printf a`.",["printf b"]]',
   ])
 })
 
@@ -652,8 +718,15 @@ it.each(requests)(
             body: JSON.stringify(testCase.body),
           }
 
-    if (result.isErr()) throw result.error
-    expect(fetchMock.mock.calls).toEqual([[requestUrl, requestInit]])
+    const actual = result.match(
+      (value) => ({ type: 'success' as const, value }),
+      (error) => ({ type: 'error' as const, message: error.message }),
+    )
+    const getSnapshot = () => ({ calls: fetchMock.mock.calls, result: actual })
+    expect(getSnapshot()).toEqual({
+      calls: [[requestUrl, requestInit]],
+      result: { type: 'success', value: testCase.response },
+    })
   },
 )
 
@@ -1143,6 +1216,24 @@ it('does not wait for state confirmation when clearing a manual title', () => {
 
 it.each([
   {
+    action: 'preview',
+    operation: {
+      type: 'command_preview',
+      sessionId: session.id,
+      messageText: 'Run `! printf safe`.',
+      commands: ['printf safe'],
+    },
+  },
+  {
+    action: 'execute',
+    operation: {
+      type: 'command_execute',
+      sessionId: session.id,
+      messageText: 'Run `! printf safe`.',
+      commands: ['printf safe'],
+    },
+  },
+  {
     action: 'save',
     operation: {
       type: 'review_document_save',
@@ -1163,7 +1254,7 @@ it.each([
     },
   },
 ] satisfies { action: string; operation: SessionOperation }[])(
-  'does not wait for server state after review document $action',
+  'does not wait for state confirmation for $action',
   ({ operation }) => {
     expect(requiresStateConfirmation(operation)).toEqual(false)
   },

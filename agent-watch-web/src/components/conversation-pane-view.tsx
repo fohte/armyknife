@@ -64,6 +64,7 @@ type ConversationPaneViewProps = {
     payload?: Record<string, unknown>,
     permissionIdentity?: PermissionRequestIdentity,
   ) => Promise<boolean>
+  onCommandExecuted?: () => void
   onRewind?: (
     messageId: string,
     mode: RewindMode,
@@ -107,6 +108,7 @@ export function ConversationPaneView({
   error,
   onClearError = () => undefined,
   onAction,
+  onCommandExecuted,
   onRewind,
   onOpenInTerminal,
   onSelectSession,
@@ -211,6 +213,7 @@ export function ConversationPaneView({
       ? {}
       : { hasUnansweredProposal: responseHasUnansweredProposal }),
     sessionCategory: session.category,
+    sessionId: session.id,
     isCompacting: session.isCompacting === true,
     sessionEngine: session.engine,
     actions,
@@ -219,6 +222,7 @@ export function ConversationPaneView({
     selectedDecisionSeq,
     onSelectDecision,
     onAction,
+    ...(onCommandExecuted === undefined ? {} : { onCommandExecuted }),
     onOpenInTerminal: openInTerminal,
     openInTerminalStatus,
     onSelectSession: selectLinkedSession,

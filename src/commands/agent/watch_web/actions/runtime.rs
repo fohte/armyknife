@@ -4,11 +4,15 @@ use std::pin::Pin;
 use anyhow::Result;
 
 use super::super::super::types::{Engine, Session, TmuxInfo};
-use super::ActionRuntime;
+use super::{ActionRuntime, CommandResult};
 
 pub(super) struct LiveActionRuntime;
 
 impl ActionRuntime for LiveActionRuntime {
+    fn execute_command(&self, cwd: &std::path::Path, command: &str) -> Result<CommandResult> {
+        super::bang_commands::execute_command(cwd, command)
+    }
+
     fn send_message(&self, session: &Session, content: &str) -> Result<()> {
         super::messages::send_live_message(session, content)
     }

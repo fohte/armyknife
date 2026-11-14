@@ -32,6 +32,8 @@ function areConversationMessagePropsEqual(
     case 'assistant':
       return (
         previous.onSelectSession === next.onSelectSession &&
+        previous.onCommandExecuted === next.onCommandExecuted &&
+        previous.sessionId === next.sessionId &&
         previous.onRewind === next.onRewind &&
         previous.sessions === next.sessions
       )

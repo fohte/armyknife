@@ -100,3 +100,43 @@ it('trims non-ASCII text from automatic links and preserves explicit links', () 
     '<div class="markdown-message"><p><a href="http://localhost:43127" target="_blank" rel="noopener noreferrer">http://localhost:43127</a>。承認後に処理する <a href="http://localhost:43127%E3%80%82%E6%89%BF%E8%AA%8D%E5%BE%8C%E3%81%AB%E5%87%A6%E7%90%86%E3%81%99%E3%82%8B" target="_blank" rel="noopener noreferrer">http://localhost:43127。承認後に処理する</a> and <a href="http://example.com" target="_blank" rel="noopener noreferrer">http://example.com</a> and <a href="http://example.com/" target="_blank" rel="noopener noreferrer">http://example.com/</a>日本語</p></div>',
   )
 })
+
+it('adds a confirmation button to agent inline bang commands', () => {
+  const html = renderToStaticMarkup(
+    <MarkdownMessage sessionId="sample-session">
+      {'Run `! printf safe`.'}
+    </MarkdownMessage>,
+  )
+
+  expect(html).toBe(
+    '<div class="markdown-message"><p>Run <span class="bang-command-inline"><code>! printf safe</code><span class="bang-command-actions"><span class="bang-command-control"><button aria-label="Run command 1" class="bang-command-button" type="button">Run command 1</button></span></span></span>.</p></div>',
+  )
+})
+
+it('adds per-line and run-all buttons to fenced bang commands', () => {
+  const html = renderToStaticMarkup(
+    <MarkdownMessage sessionId="sample-session">
+      {'```sh\n! printf first\n! printf second\n```'}
+    </MarkdownMessage>,
+  )
+
+  expect(html).toBe(
+    [
+      '<div class="markdown-message"><div class="markdown-code-block"><pre class="syntax-code-block" data-language="sh"><code class="language-sh">! printf first',
+      '! printf second',
+      '</code></pre><span class="bang-command-actions"><span class="bang-command-control"><button aria-label="Run command 1" class="bang-command-button" type="button">Run command 1</button></span><span class="bang-command-control"><button aria-label="Run command 2" class="bang-command-button" type="button">Run command 2</button></span><span class="bang-command-control"><button aria-label="Run all" class="bang-command-button" type="button">Run all</button></span></span></div></div>',
+    ].join(String.fromCharCode(10)),
+  )
+})
+
+it('adds a confirmation button to an indented bang command block', () => {
+  const html = renderToStaticMarkup(
+    <MarkdownMessage sessionId="sample-session">
+      {'    ! printf safe'}
+    </MarkdownMessage>,
+  )
+
+  expect(html).toBe(
+    '<div class="markdown-message"><div class="markdown-code-block"><pre class="syntax-code-block" data-language="text"><code class="language-text">! printf safe\n</code></pre><span class="bang-command-actions"><span class="bang-command-control"><button aria-label="Run command 1" class="bang-command-button" type="button">Run command 1</button></span></span></div></div>',
+  )
+})

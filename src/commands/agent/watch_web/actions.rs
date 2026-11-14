@@ -18,6 +18,7 @@ use super::messages::RouteLoaders;
 
 mod answer_question;
 mod api_error;
+mod bang_commands;
 mod close;
 mod decisions;
 mod interrupt_locks;
@@ -35,6 +36,7 @@ mod todos;
 
 pub(super) use api_error::ApiError;
 use interrupt_locks::InterruptLocks;
+use keyed_mutex_registry::KeyedMutexRegistry;
 use permission_denied_locks::PermissionDeniedRetryLocks;
 use proposal_answer_locks::ProposalAnswerLocks;
 use runtime::LiveActionRuntime;
@@ -46,6 +48,7 @@ pub(super) fn router(message_loaders: RouteLoaders) -> Router {
         runtime: Arc::new(LiveActionRuntime),
         proposal_answer_locks: ProposalAnswerLocks::default(),
         permission_denied_retry_locks: PermissionDeniedRetryLocks::default(),
+        bang_command_locks: KeyedMutexRegistry::default(),
         interrupt_locks: InterruptLocks::default(),
         message_loaders,
     })
@@ -60,6 +63,14 @@ fn router_with_state(state: ActionState) -> Router {
                 .layer(DefaultBodyLimit::max(messages::MAX_MESSAGE_BODY_BYTES)),
         )
         .route("/sessions/{id}/rewind", post(rewind::rewind))
+        .route(
+            "/sessions/{id}/commands/preview",
+            post(bang_commands::preview),
+        )
+        .route(
+            "/sessions/{id}/commands/execute",
+            post(bang_commands::execute),
+        )
         .route(
             "/sessions/{id}/decisions/{seq}/ok",
             post(decisions::mark_ok),
@@ -111,11 +122,21 @@ struct ActionState {
     // Delivery precedes persistence, so repeated answers for one proposal must serialize.
     proposal_answer_locks: ProposalAnswerLocks,
     permission_denied_retry_locks: PermissionDeniedRetryLocks,
+    bang_command_locks: KeyedMutexRegistry<(String, String, Vec<String>)>,
     interrupt_locks: InterruptLocks,
+}
+
+#[derive(Clone)]
+struct CommandResult {
+    exit_code: i32,
+    stdout: String,
+    stderr: String,
+    timed_out: bool,
 }
 
 trait ActionRuntime: Send + Sync {
     fn send_message(&self, session: &Session, content: &str) -> Result<()>;
+    fn execute_command(&self, cwd: &std::path::Path, command: &str) -> Result<CommandResult>;
     fn rewind_session(
         &self,
         sessions_dir: &Path,
@@ -472,6 +493,9 @@ mod tests {
     #[path = "send_message.rs"]
     mod send_message;
 
+    #[path = "bang_commands.rs"]
+    mod bang_commands;
+
     #[path = "decisions.rs"]
     mod decisions;
 
@@ -501,11 +525,18 @@ mod tests {
                 tokio::sync::oneshot::Receiver<()>,
             )>,
         >,
+        command_gate: Mutex<
+            Option<(
+                tokio::sync::oneshot::Sender<()>,
+                tokio::sync::oneshot::Receiver<()>,
+            )>,
+        >,
         pane_command: Mutex<Option<String>>,
         pane_has_agent_process: Mutex<bool>,
         pane_command_matches: Mutex<bool>,
         close_unmerged_worktree: Mutex<bool>,
         sessions_dir: Mutex<Option<PathBuf>>,
+        command_result: Mutex<Option<CommandResult>>,
         merge_error: Mutex<Option<String>>,
         merge_result: Mutex<crate::commands::gh::WatchWebPrMergeResult>,
         interrupt_gate: Mutex<
@@ -524,11 +555,13 @@ mod tests {
                 rewind_not_available: Mutex::new(false),
                 after_message: Mutex::new(None),
                 message_gate: Mutex::new(None),
+                command_gate: Mutex::new(None),
                 pane_command: Mutex::new(Some("claude".to_string())),
                 pane_has_agent_process: Mutex::new(true),
                 pane_command_matches: Mutex::new(true),
                 close_unmerged_worktree: Mutex::new(false),
                 sessions_dir: Mutex::new(None),
+                command_result: Mutex::new(None),
                 merge_error: Mutex::new(None),
                 merge_result: Mutex::new(crate::commands::gh::WatchWebPrMergeResult::Merged),
                 interrupt_gate: Mutex::new(None),
@@ -556,6 +589,29 @@ mod tests {
             Ok(())
         }
 
+        fn execute_command(&self, cwd: &std::path::Path, command: &str) -> Result<CommandResult> {
+            self.calls.lock().unwrap().push(json!({
+                "kind": "execute-command",
+                "cwd": cwd,
+                "command": command,
+            }));
+            if let Some((started, release)) = self.command_gate.lock().unwrap().take() {
+                let _ = started.send(());
+                let _ = release.blocking_recv();
+            }
+            Ok(self
+                .command_result
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or(CommandResult {
+                    exit_code: 0,
+                    stdout: "fixture output".to_string(),
+                    stderr: String::new(),
+                    timed_out: false,
+                }))
+        }
+
         fn rewind_session(
             &self,
             _sessions_dir: &Path,
@@ -574,7 +630,6 @@ mod tests {
             }
             Ok("fixture-fork-session".to_string())
         }
-
         fn pane_current_command(&self, tmux_info: &TmuxInfo) -> Option<String> {
             self.calls.lock().unwrap().push(json!({
                 "kind": "pane-command",
@@ -718,6 +773,7 @@ mod tests {
                 runtime: self.runtime.clone(),
                 proposal_answer_locks: ProposalAnswerLocks::default(),
                 permission_denied_retry_locks: permission_denied_retry_locks.clone(),
+                bang_command_locks: KeyedMutexRegistry::default(),
                 interrupt_locks: InterruptLocks::default(),
                 message_loaders: empty_message_loaders(),
             });
@@ -735,6 +791,7 @@ mod tests {
                 runtime: self.runtime.clone(),
                 proposal_answer_locks: proposal_answer_locks.clone(),
                 permission_denied_retry_locks: PermissionDeniedRetryLocks::default(),
+                bang_command_locks: KeyedMutexRegistry::default(),
                 interrupt_locks: InterruptLocks::default(),
                 message_loaders,
             });
@@ -804,6 +861,10 @@ mod tests {
             *self.runtime.message_error.lock().unwrap() = Some(message.to_string());
         }
 
+        fn set_command_result(&self, result: CommandResult) {
+            *self.runtime.command_result.lock().unwrap() = Some(result);
+        }
+
         fn set_rewind_not_available(&self) {
             *self.runtime.rewind_not_available.lock().unwrap() = true;
         }
@@ -825,6 +886,18 @@ mod tests {
             let (started, started_receiver) = tokio::sync::oneshot::channel();
             let (release, release_receiver) = tokio::sync::oneshot::channel();
             *self.runtime.message_gate.lock().unwrap() = Some((started, release_receiver));
+            (started_receiver, release)
+        }
+
+        fn block_next_command(
+            &self,
+        ) -> (
+            tokio::sync::oneshot::Receiver<()>,
+            tokio::sync::oneshot::Sender<()>,
+        ) {
+            let (started, started_receiver) = tokio::sync::oneshot::channel();
+            let (release, release_receiver) = tokio::sync::oneshot::channel();
+            *self.runtime.command_gate.lock().unwrap() = Some((started, release_receiver));
             (started_receiver, release)
         }
 

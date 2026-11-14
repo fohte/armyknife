@@ -17,6 +17,11 @@ use crate::shared::command;
 
 mod caller;
 mod group;
+mod output_tail;
+
+pub(crate) use output_tail::{
+    DrainDeadlineCheck, OutputTail, OutputTailOptions, read_output_tail, set_nonblocking,
+};
 
 pub use caller::find_caller_pids_in_path;
 pub use group::{

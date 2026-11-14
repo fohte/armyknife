@@ -1,3 +1,4 @@
+import { err, type Result } from 'neverthrow'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -5,12 +6,42 @@ import { userEvent } from 'vitest/browser'
 
 import { MarkdownMessage } from '#components/markdown-message'
 import { PeerMessage } from '#components/peer-message'
+import type {
+  SessionOperation,
+  SessionOperationError,
+} from '#session-operations'
+import { submitSessionOperation } from '#session-operations'
 import type { Session } from '#types'
+
+const { runSessionOperationMock } = vi.hoisted(() => ({
+  runSessionOperationMock:
+    vi.fn<
+      (
+        operation: SessionOperation,
+      ) => Promise<Result<unknown, SessionOperationError>>
+    >(),
+}))
+
+vi.mock('#session-operation-context', async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import('#session-operation-context')>()
+  return {
+    ...original,
+    useSessionOperations: () => ({
+      ...original.useSessionOperations(),
+      run: runSessionOperationMock,
+    }),
+  }
+})
 
 let container: HTMLDivElement
 let root: Root | null = null
 
 beforeEach(() => {
+  runSessionOperationMock.mockReset()
+  runSessionOperationMock.mockImplementation(async (operation) => {
+    return await submitSessionOperation(operation)
+  })
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
   document.body.append(container)
@@ -336,4 +367,208 @@ ${fencedCode}~~~`}
     selectedIds: [linkedId, linkedId],
   }
   expect(getActual()).toEqual(expected)
+})
+
+it('confirms the cwd before execution and shows the returned status', async () => {
+  const requests: { url: string; body: unknown }[] = []
+  const onCommandExecuted = vi.fn()
+  const execution: { resolve?: (response: Response) => void } = {}
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url =
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.href
+            : input.url
+      const bodyText = init?.body
+      const body = JSON.parse(
+        typeof bodyText === 'string' ? bodyText : '{}',
+      ) as unknown
+      requests.push({ url, body })
+      if (url.endsWith('/commands/execute')) {
+        return new Promise<Response>((resolve) => {
+          execution.resolve = resolve
+        })
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ cwd: '/workspace/example' }), {
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+    }),
+  )
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <MarkdownMessage
+        onCommandExecuted={onCommandExecuted}
+        sessionId="sample-session"
+      >
+        {'Run `! printf safe`.'}
+      </MarkdownMessage>,
+    )
+  })
+
+  const runButton = container.querySelector('button')
+  if (!(runButton instanceof HTMLButtonElement)) {
+    throw new Error('Expected a command button')
+  }
+  await act(async () => userEvent.click(runButton))
+  const dialog = document.body.querySelector('[role="dialog"]')
+  if (!(dialog instanceof HTMLElement)) {
+    throw new Error('Expected a confirmation dialog')
+  }
+  const confirmButton = Array.from(dialog.querySelectorAll('button')).find(
+    (button) => button.textContent === 'Run command',
+  )
+  if (!(confirmButton instanceof HTMLButtonElement)) {
+    throw new Error('Expected the confirmation button')
+  }
+  const confirmation = {
+    cwd: Array.from(
+      dialog.querySelectorAll('dd code'),
+      (node) => node.textContent,
+    ),
+    commands: Array.from(
+      dialog.querySelectorAll('dd pre'),
+      (node) => node.textContent,
+    ),
+  }
+  await act(async () => userEvent.click(confirmButton))
+  const disabledWhileRunning = runButton.disabled
+  const completeExecution = execution.resolve
+  if (completeExecution === undefined) {
+    throw new Error('Expected the execution request to start')
+  }
+  await act(async () => {
+    completeExecution(
+      new Response(
+        JSON.stringify({ exitCode: 0, succeeded: true, timedOut: false }),
+        { headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+  })
+
+  const getSnapshot = () => ({
+    confirmation,
+    dialog: document.body.querySelector('[role="dialog"]')?.textContent ?? null,
+    status: container.querySelector('[role="status"]')?.textContent ?? null,
+    disabledWhileRunning,
+    refreshCalls: onCommandExecuted.mock.calls.length,
+    requests,
+    operations: runSessionOperationMock.mock.calls.map(
+      ([operation]) => operation,
+    ),
+  })
+  expect(getSnapshot()).toEqual({
+    confirmation: {
+      cwd: ['/workspace/example'],
+      commands: ['printf safe'],
+    },
+    dialog: null,
+    status: 'Completed',
+    disabledWhileRunning: true,
+    refreshCalls: 1,
+    requests: [
+      {
+        url: '/api/sessions/sample-session/commands/preview',
+        body: {
+          messageText: 'Run `! printf safe`.',
+          commands: ['printf safe'],
+        },
+      },
+      {
+        url: '/api/sessions/sample-session/commands/execute',
+        body: {
+          messageText: 'Run `! printf safe`.',
+          commands: ['printf safe'],
+        },
+      },
+    ],
+    operations: [
+      {
+        type: 'command_preview',
+        sessionId: 'sample-session',
+        messageText: 'Run `! printf safe`.',
+        commands: ['printf safe'],
+      },
+      {
+        type: 'command_execute',
+        sessionId: 'sample-session',
+        messageText: 'Run `! printf safe`.',
+        commands: ['printf safe'],
+      },
+    ],
+  })
+})
+
+it('shows a preview error and allows the command to be retried', async () => {
+  runSessionOperationMock.mockImplementationOnce(() =>
+    Promise.resolve(err(new Error('Preview failed'))),
+  )
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(() => Promise.resolve(Response.json({ cwd: '/workspace/example' }))),
+  )
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <MarkdownMessage sessionId="sample-session">
+        {'Run `! printf safe`.'}
+      </MarkdownMessage>,
+    )
+  })
+
+  const runButton = container.querySelector('button')
+  if (!(runButton instanceof HTMLButtonElement)) {
+    throw new Error('Expected a command button')
+  }
+  await act(async () => userEvent.click(runButton))
+  const failure = {
+    dialog: document.body.querySelector('[role="dialog"]')?.textContent ?? null,
+    status: container.querySelector('[role="status"]')?.textContent ?? null,
+    buttonLabel: runButton.textContent,
+    buttonDisabled: runButton.disabled,
+  }
+
+  await act(async () => userEvent.click(runButton))
+  const retry = {
+    dialog: document.body.querySelector('[role="dialog"]')?.textContent ?? null,
+    buttonLabel: runButton.textContent,
+    runOperations: runSessionOperationMock.mock.calls.map(
+      ([operation]) => operation,
+    ),
+  }
+
+  const getSnapshot = () => ({ failure, retry })
+  expect(getSnapshot()).toEqual({
+    failure: {
+      dialog: null,
+      status: 'Preview failed',
+      buttonLabel: 'Failed',
+      buttonDisabled: false,
+    },
+    retry: {
+      dialog:
+        'Run agent command?Review the command and working directory before it runs.Working directory/workspace/exampleCommandprintf safeCancelRun command',
+      buttonLabel: 'Run command 1',
+      runOperations: [
+        {
+          type: 'command_preview',
+          sessionId: 'sample-session',
+          messageText: 'Run `! printf safe`.',
+          commands: ['printf safe'],
+        },
+        {
+          type: 'command_preview',
+          sessionId: 'sample-session',
+          messageText: 'Run `! printf safe`.',
+          commands: ['printf safe'],
+        },
+      ],
+    },
+  })
 })

@@ -1,9 +1,17 @@
 import '#components/markdown-message.css'
 
-import { createContext, memo, type ReactNode, useContext } from 'react'
+import {
+  Children,
+  createContext,
+  isValidElement,
+  memo,
+  type ReactNode,
+  useContext,
+} from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
+import { BangCommandActions } from '#components/bang-command'
 import { SessionLink } from '#components/session-link'
 import {
   SyntaxCodeBlock,
@@ -30,12 +38,12 @@ type MarkdownFile = {
   value: string | Uint8Array
 }
 
+const CodeBlockContext = createContext(false)
+
 type SessionLinkTextPart = {
   session: SessionLinkTarget | null
   text: string
 }
-
-const MarkdownCodeBlockContext = createContext(false)
 
 function remarkHtmlBreaks() {
   return (tree: MarkdownRoot) => {
@@ -193,6 +201,33 @@ type MarkdownMessageProps = {
   inline?: boolean
   onSelectSession?: (id: string) => void
   sessions?: readonly SessionLinkTarget[]
+  sessionId?: string
+  onCommandExecuted?: () => void
+}
+
+function textContent(value: ReactNode): string | undefined {
+  if (typeof value === 'string') return value
+  const parts = Children.toArray(value).map((child) => {
+    if (typeof child === 'string' || typeof child === 'number')
+      return String(child)
+    if (isValidElement<{ children?: ReactNode }>(child)) {
+      return textContent(child.props.children) ?? ''
+    }
+    return ''
+  })
+  return parts.length === 0 ? undefined : parts.join('')
+}
+
+function inlineBangCommand(code: string): string | null {
+  const command = code.startsWith('! ') ? code.slice(2).trim() : ''
+  return command.length === 0 ? null : command
+}
+
+function blockBangCommands(code: string): string[] {
+  return code.split(/\r?\n/).flatMap((line) => {
+    const command = line.startsWith('! ') ? line.slice(2).trim() : ''
+    return command.length === 0 ? [] : [command]
+  })
 }
 
 function unwrapTaggedMessage(value: string): string {
@@ -209,6 +244,11 @@ function unwrapTaggedMessage(value: string): string {
 function createMarkdownComponents(
   sessionsById: ReadonlyMap<string, SessionLinkTarget>,
   onSelectSession?: (id: string) => void,
+  commandContext?: {
+    messageText: string
+    sessionId: string
+    onCommandExecuted?: () => void
+  },
 ): { markdown: Components; inline: Components } {
   const renderLink = (href: string | undefined, children: ReactNode) => {
     const sessionId = href?.match(
@@ -227,11 +267,8 @@ function createMarkdownComponents(
     return null
   }
 
-  const MarkdownCodeRenderer: NonNullable<Components['code']> = ({
-    node,
-    ...props
-  }) => {
-    const isCodeBlock = useContext(MarkdownCodeBlockContext)
+  const renderCode: NonNullable<Components['code']> = ({ node, ...props }) => {
+    const isCodeBlock = useContext(CodeBlockContext)
     if (node?.tagName !== 'code') return props.children
     const { className, children, ...codeProps } = props
     const text = typeof children === 'string' ? children : null
@@ -263,20 +300,20 @@ function createMarkdownComponents(
         {
           start,
           end: offset,
-          render: (children) => (
+          render: (linkChildren) => (
             <SessionLink
               key={String(index)}
               onSelectSession={onSelectSession}
               session={session}
             >
-              {children}
+              {linkChildren}
             </SessionLink>
           ),
         },
       ]
     })
-    if (isCodeBlock && text !== null) {
-      return (
+    const code =
+      isCodeBlock && text !== null ? (
         <SyntaxCodeBlock
           code={text}
           language={language ?? 'text'}
@@ -284,12 +321,53 @@ function createMarkdownComponents(
         >
           <>{codeChildren}</>
         </SyntaxCodeBlock>
+      ) : (
+        <code className={className} {...codeProps}>
+          {codeChildren}
+        </code>
       )
+    if (commandContext === undefined || text === null || isCodeBlock) {
+      return code
     }
+    const command = inlineBangCommand(text)
+    if (command === null) return code
     return (
-      <code className={className} {...codeProps}>
-        {codeChildren}
-      </code>
+      <span className="bang-command-inline">
+        {code}
+        <BangCommandActions
+          commands={[command]}
+          messageText={commandContext.messageText}
+          {...(commandContext.onCommandExecuted === undefined
+            ? {}
+            : { onCommandExecuted: commandContext.onCommandExecuted })}
+          sessionId={commandContext.sessionId}
+        />
+      </span>
+    )
+  }
+
+  const renderPre: NonNullable<Components['pre']> = ({ children }) => {
+    const codeText = Children.toArray(children).flatMap((child) => {
+      if (!isValidElement<{ children?: ReactNode }>(child)) return []
+      return [textContent(child.props.children)]
+    })[0]
+    const commands = codeText === undefined ? [] : blockBangCommands(codeText)
+    const codeBlock = (
+      <CodeBlockContext.Provider value>{children}</CodeBlockContext.Provider>
+    )
+    if (commandContext === undefined || commands.length === 0) return codeBlock
+    return (
+      <div className="markdown-code-block">
+        {codeBlock}
+        <BangCommandActions
+          commands={commands}
+          messageText={commandContext.messageText}
+          {...(commandContext.onCommandExecuted === undefined
+            ? {}
+            : { onCommandExecuted: commandContext.onCommandExecuted })}
+          sessionId={commandContext.sessionId}
+        />
+      </div>
     )
   }
 
@@ -305,12 +383,8 @@ function createMarkdownComponents(
         )
       )
     },
-    code: MarkdownCodeRenderer,
-    pre: ({ children }) => (
-      <MarkdownCodeBlockContext.Provider value={true}>
-        {children}
-      </MarkdownCodeBlockContext.Provider>
-    ),
+    code: renderCode,
+    pre: renderPre,
   }
 
   return {
@@ -336,6 +410,8 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   inline = false,
   onSelectSession,
   sessions = [],
+  sessionId,
+  onCommandExecuted,
 }: MarkdownMessageProps) {
   const rootClassName =
     className === undefined
@@ -345,8 +421,18 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   const sessionsById = new Map(
     sessions.map((session) => [session.id.toLowerCase(), session]),
   )
-  const components = createMarkdownComponents(sessionsById, onSelectSession)
   const markdownSource = inline ? children : unwrapTaggedMessage(children)
+  const components = createMarkdownComponents(
+    sessionsById,
+    onSelectSession,
+    sessionId === undefined
+      ? undefined
+      : {
+          messageText: children,
+          sessionId,
+          ...(onCommandExecuted === undefined ? {} : { onCommandExecuted }),
+        },
+  )
   const message = (
     <ReactMarkdown
       components={inline ? components.inline : components.markdown}
