@@ -2,7 +2,10 @@ use anyhow::Result;
 
 use super::super::cache::{IncrementalTranscriptParser, MessageCache, TranscriptFingerprint};
 use super::super::parser;
-use super::super::{ConversationResponse, Engine, TranscriptInput, open_seekable_transcript};
+use super::super::parser::cards::filter_additional_cards_after_tail_window;
+use super::super::{
+    ChatItem, ConversationResponse, Engine, TranscriptInput, open_seekable_transcript,
+};
 use super::render_parser;
 
 pub(in crate::commands::agent::watch_web::messages) fn parse_initial_or_full<'a>(
@@ -91,8 +94,9 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript_
         .decisions
         .iter()
         .filter(|decision| {
-            chrono::DateTime::parse_from_rfc3339(&decision.created_at)
-                .is_ok_and(|created_at| created_at.with_timezone(&chrono::Utc) >= cutoff)
+            decision.review.is_none()
+                || chrono::DateTime::parse_from_rfc3339(&decision.created_at)
+                    .is_ok_and(|created_at| created_at.with_timezone(&chrono::Utc) >= cutoff)
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -100,14 +104,22 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript_
         .additions
         .proposals
         .iter()
-        .filter(|proposal| proposal.created_at >= cutoff)
+        .filter(|proposal| {
+            matches!(
+                &proposal.item,
+                ChatItem::Proposal {
+                    resolved: false,
+                    ..
+                }
+            ) || proposal.created_at >= cutoff
+        })
         .cloned()
         .collect::<Vec<_>>();
     let todos = input
         .additions
         .todos
         .iter()
-        .filter(|todo| todo.created_at >= cutoff)
+        .filter(|todo| todo.completed_at.is_none() || todo.created_at >= cutoff)
         .cloned()
         .collect::<Vec<_>>();
     let peer_out_messages = input
@@ -117,6 +129,8 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript_
         .filter(|message| message.sent_at >= cutoff)
         .cloned()
         .collect::<Vec<_>>();
+    let additional_cards =
+        filter_additional_cards_after_tail_window(input.additions.additional_cards, cutoff);
     let tail_input = TranscriptInput {
         path: input.path,
         engine: input.engine,
@@ -125,6 +139,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript_
             proposals: &proposals,
             todos: &todos,
             peer_out_messages: &peer_out_messages,
+            additional_cards: &additional_cards,
             queued_prompts: &queued_prompts,
             ..input.additions
         },

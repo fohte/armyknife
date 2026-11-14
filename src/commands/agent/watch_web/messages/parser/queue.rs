@@ -884,6 +884,7 @@ mod tests {
                 peer_out_messages: &[],
                 proposals: &[],
                 todos: &[],
+                additional_cards: &[],
             },
         )
         .unwrap()
@@ -909,6 +910,7 @@ mod tests {
                     peer_out_messages: &[],
                     proposals: &[],
                     todos: &[],
+                    additional_cards: &[],
                 },
             )
             .unwrap();
