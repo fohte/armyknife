@@ -60,8 +60,9 @@ it('renders the denied operation and offers a one-time retry', () => {
   renderCard()
 
   const snapshot = () => ({
+    cardClassName: container.querySelector('article')?.className,
     heading: container.querySelector('h2')?.textContent,
-    tool: container.querySelector('.permission-denied-tool')?.textContent,
+    tool: container.querySelector('.permission-tool')?.textContent,
     input: container.querySelector('.permission-denied-input')?.textContent,
     reason: container.querySelector('.permission-denied-reason')?.textContent,
     button: Array.from(container.querySelectorAll('button'), (button) => ({
@@ -71,6 +72,7 @@ it('renders the denied operation and offers a one-time retry', () => {
   })
 
   expect(snapshot()).toEqual({
+    cardClassName: 'chat-permission-card chat-permission-denied-card',
     heading: 'Operation denied',
     tool: 'Bash',
     input: 'A shell operation was denied.',

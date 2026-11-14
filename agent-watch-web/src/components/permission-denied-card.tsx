@@ -1,3 +1,5 @@
+import '#components/conversation-card.css'
+import '#components/permission-card.css'
 import '#components/permission-denied-card.css'
 
 import { Button } from '@fohte/ui/button'
@@ -23,14 +25,16 @@ export function PermissionDeniedCard({
 }: PermissionDeniedCardProps) {
   const retryAction = pendingAction?.action === 'retry' ? pendingAction : null
   return (
-    <article className="chat-permission-denied-card">
+    <article className="chat-permission-card chat-permission-denied-card">
       <h2>{message.resolved ? 'Retry approved' : 'Operation denied'}</h2>
-      <p className="permission-denied-tool">{message.tool}</p>
+      <p className="permission-tool">{message.tool}</p>
       {message.command === undefined ? (
-        <pre className="permission-denied-input">{message.inputSummary}</pre>
+        <pre className="syntax-code-block permission-command permission-denied-input">
+          {message.inputSummary}
+        </pre>
       ) : (
         <SyntaxCodeBlock
-          className="permission-denied-input"
+          className="permission-command permission-denied-input"
           code={message.command}
           language="bash"
         />
@@ -47,7 +51,7 @@ export function PermissionDeniedCard({
           The one-time retry instruction was sent.
         </p>
       ) : canRetry ? (
-        <div className="permission-denied-actions">
+        <div className="permission-actions">
           <Button
             type="button"
             variant="plain"
