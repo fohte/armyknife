@@ -83,12 +83,22 @@ impl MessageCacheKey {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(super) struct RunningBackgroundTaskCache {
     entries: Arc<Mutex<RunningBackgroundTaskEntries>>,
 }
 
-type RunningBackgroundTaskEntries = HashMap<String, (Option<TranscriptFingerprint>, bool)>;
+type RunningBackgroundTaskEntries = LruCache<String, (Option<TranscriptFingerprint>, bool)>;
+
+impl Default for RunningBackgroundTaskCache {
+    fn default() -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(LruCache::new(
+                MAX_CACHED_BACKGROUND_TASK_SESSIONS,
+            ))),
+        }
+    }
+}
 
 impl RunningBackgroundTaskCache {
     pub(super) fn fingerprint(session: &Session) -> anyhow::Result<Option<TranscriptFingerprint>> {
@@ -100,11 +110,11 @@ impl RunningBackgroundTaskCache {
         session_id: &str,
         fingerprint: &Option<TranscriptFingerprint>,
     ) -> Option<bool> {
-        let entries = self
+        let mut entries = self
             .entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (cached_fingerprint, has_running_task) = entries.get(session_id)?;
+        let (cached_fingerprint, has_running_task) = entries.get(&session_id.to_string())?;
         (cached_fingerprint == fingerprint).then_some(*has_running_task)
     }
 
@@ -118,12 +128,7 @@ impl RunningBackgroundTaskCache {
             .entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        insert_with_eviction(
-            &mut entries,
-            session_id.to_string(),
-            (fingerprint, has_running_task),
-            MAX_CACHED_BACKGROUND_TASK_SESSIONS,
-        );
+        entries.insert(session_id.to_string(), (fingerprint, has_running_task));
     }
 }
 
@@ -174,10 +179,19 @@ pub(super) struct CachedConversation {
     pub(super) cached_at: Instant,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(super) struct MessageCache {
     entries: Arc<Mutex<LruCache<String, (MessageCacheKey, CachedConversation)>>>,
     transcript_parsers: TranscriptParserCache,
+}
+
+impl Default for MessageCache {
+    fn default() -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(LruCache::new(MAX_CACHED_SESSIONS))),
+            transcript_parsers: TranscriptParserCache::default(),
+        }
+    }
 }
 
 impl MessageCache {
@@ -239,12 +253,20 @@ impl MessageCache {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(super) struct TranscriptParserCache {
     entries: Arc<Mutex<LruCache<String, TranscriptParserSlot>>>,
 }
 
 type TranscriptParserSlot = Arc<Mutex<Option<CachedTranscriptParser>>>;
+
+impl Default for TranscriptParserCache {
+    fn default() -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(LruCache::new(MAX_CACHED_SESSIONS))),
+        }
+    }
+}
 
 pub(super) struct CachedTranscriptParser {
     pub(super) fingerprint: TranscriptFingerprint,
@@ -285,13 +307,15 @@ struct LruEntry<V> {
 struct LruCache<K, V> {
     entries: HashMap<K, LruEntry<V>>,
     access_counter: u64,
+    capacity: usize,
 }
 
-impl<K, V> Default for LruCache<K, V> {
-    fn default() -> Self {
+impl<K, V> LruCache<K, V> {
+    fn new(capacity: usize) -> Self {
         Self {
             entries: HashMap::new(),
             access_counter: 0,
+            capacity,
         }
     }
 }
@@ -310,7 +334,7 @@ where
     fn insert(&mut self, key: K, value: V) {
         self.access_counter += 1;
         if !self.entries.contains_key(&key)
-            && self.entries.len() >= MAX_CACHED_SESSIONS
+            && self.entries.len() >= self.capacity
             && let Some(evicted_key) = self
                 .entries
                 .iter()
@@ -329,27 +353,15 @@ where
     }
 }
 
-fn insert_with_eviction<K, V>(entries: &mut HashMap<K, V>, key: K, value: V, capacity: usize)
-where
-    K: Clone + Eq + std::hash::Hash,
-{
-    if !entries.contains_key(&key)
-        && entries.len() >= capacity
-        && let Some(evicted_key) = entries.keys().next().cloned()
-    {
-        entries.remove(&evicted_key);
-    }
-    entries.insert(key, value);
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
     use std::sync::Arc;
 
     use super::{
-        ConversationResponse, MAX_CACHED_SESSIONS, MessageCache, MessageCacheKey,
-        MessageCacheRecords, TranscriptParserCache, refresh_image_availability_with,
+        ConversationResponse, MAX_CACHED_BACKGROUND_TASK_SESSIONS, MAX_CACHED_SESSIONS,
+        MessageCache, MessageCacheKey, MessageCacheRecords, RunningBackgroundTaskCache,
+        TranscriptParserCache, refresh_image_availability_with,
     };
     use crate::commands::agent::types::{MAIN_THREAD_AGENT_KEY, Session};
     use crate::commands::agent::watch_web::messages::{ChatItem, UserContentPart};
@@ -438,6 +450,32 @@ mod tests {
             Arc::ptr_eq(&slots[1], &evicted),
         );
         assert_eq!(result, (true, false));
+    }
+
+    #[test]
+    fn running_background_task_cache_evicts_the_least_recently_used_session() {
+        let cache = RunningBackgroundTaskCache::default();
+        for index in 0..MAX_CACHED_BACKGROUND_TASK_SESSIONS {
+            cache.insert(&format!("fixture-session-{index}"), None, false);
+        }
+
+        let was_read = cache.get("fixture-session-0", &None) == Some(false);
+        cache.insert("fixture-session-256", None, false);
+        cache.insert("fixture-session-3", None, true);
+        cache.insert("fixture-session-257", None, false);
+
+        let result = (
+            was_read,
+            [
+                cache.get("fixture-session-0", &None),
+                cache.get("fixture-session-3", &None),
+            ],
+            [
+                cache.get("fixture-session-1", &None),
+                cache.get("fixture-session-2", &None),
+            ],
+        );
+        assert_eq!(result, (true, [Some(false), Some(true)], [None, None]));
     }
 
     #[test]
