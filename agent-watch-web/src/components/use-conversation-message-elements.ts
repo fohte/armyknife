@@ -57,6 +57,20 @@ function contentIdentity(content: readonly UserContentPart[]): string[] {
   })
 }
 
+function isPendingInteraction(message: ChatItem): boolean {
+  if (message.type === 'proposal') {
+    return (
+      message.answer === null &&
+      !message.resolved &&
+      message.resolution === null
+    )
+  }
+  return (
+    message.type === 'question' &&
+    message.questions.every((question) => question.answer === null)
+  )
+}
+
 function getConversationMessageIdentity(message: ChatItem): string {
   switch (message.type) {
     case 'proposal':
@@ -165,6 +179,12 @@ export function useConversationMessageElements({
         message.type !== 'tool_in_progress' ||
         (sessionCategory !== 'in_progress' && !isCompacting),
     )
+    const orderedConversationMessages = [
+      ...conversationMessages.filter(
+        (message) => !isPendingInteraction(message),
+      ),
+      ...conversationMessages.filter(isPendingInteraction),
+    ]
     const decisions =
       allDecisions ??
       conversationMessages.filter(
@@ -180,10 +200,11 @@ export function useConversationMessageElements({
         (message) =>
           message.type === 'proposal' &&
           message.answer === null &&
-          !message.resolved,
+          !message.resolved &&
+          message.resolution === null,
       )
     const keyOccurrences = new Map<string, number>()
-    const elements = conversationMessages.map((message) => {
+    const elements = orderedConversationMessages.map((message) => {
       const messagePendingAction: PendingPermissionActionState =
         message.type === 'permission' && message.requestId !== undefined
           ? (pendingActions[message.requestId] ?? null)

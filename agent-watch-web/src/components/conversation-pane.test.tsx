@@ -5026,8 +5026,8 @@ it('directs Codex questions and permissions to the terminal', () => {
   expect(snapshot()).toEqual({
     disabledChoices: [true, true],
     guidance: [
-      'Answer in terminal to continue.',
       'Review this permission in terminal.',
+      'Answer in terminal to continue.',
     ],
     terminalButtons: [
       {
@@ -8122,7 +8122,7 @@ it('uses full conversation metadata for questions, proposals, and decisions', as
       '/api/sessions/sample-session/messages?limit=100',
       '/api/sessions/sample-session/actions',
     ],
-    questionChoicesDisabled: [false, false, true, true],
+    questionChoicesDisabled: [true, true, false, false],
     conversationDecisionPosition: '2 of 3',
     statusPanelDecisionCount: 3,
     composerPlaceholder: 'Choose an option above, or message the session',
@@ -8428,6 +8428,108 @@ it('keeps a question answer draft when a preceding conversation row arrives', ()
     '.chat-question-prompt textarea',
     'Use the bounded option',
   )
+})
+
+it('moves pending proposals and questions to the end until they are resolved', () => {
+  const pendingProposal: ChatItem = {
+    ...proposal,
+    seq: 21,
+    title: 'Choose the rollout interval',
+  }
+  const pendingQuestionPrompt = {
+    header: 'Alert channel',
+    question: 'Which alert channel should be enabled?',
+    choices: [{ label: 'Email' }, { label: 'Dashboard' }],
+    multi_select: false,
+    answer: null,
+  }
+  const pendingQuestion: ChatItem = {
+    type: 'question',
+    requestId: 'request-rollout-window',
+    questions: [pendingQuestionPrompt],
+  }
+  const withdrawableProposal: ChatItem = {
+    ...proposal,
+    seq: 22,
+    title: 'Choose the fallback mode',
+  }
+  const firstMessage: ChatItem = {
+    type: 'assistant',
+    text: 'The rollout plan is ready.',
+  }
+  const secondMessage: ChatItem = {
+    type: 'assistant',
+    text: 'One alert detail remains.',
+  }
+  const thirdMessage: ChatItem = {
+    type: 'assistant',
+    text: 'The session continues working.',
+  }
+  const messages: ChatItem[] = [
+    firstMessage,
+    pendingProposal,
+    secondMessage,
+    pendingQuestion,
+    thirdMessage,
+    withdrawableProposal,
+  ]
+  renderConversationMessages(messages, 0)
+
+  const getTimeline = () =>
+    Array.from(
+      container.querySelectorAll<HTMLElement>(
+        '.chat-assistant-message, .chat-question-card, .chat-proposal-card',
+      ),
+      (element) =>
+        element.classList.contains('chat-assistant-message')
+          ? element.textContent
+          : `${element.classList.contains('chat-question-card') ? 'Question' : 'Proposal'}: ${element.querySelector('h3')?.textContent ?? ''}`,
+    )
+
+  const pendingOrder = getTimeline()
+  renderConversationMessages(
+    [
+      firstMessage,
+      {
+        ...pendingProposal,
+        answer: { choice: 0, comment: null },
+      },
+      secondMessage,
+      {
+        ...pendingQuestion,
+        questions: [
+          {
+            ...pendingQuestionPrompt,
+            answer: 'Dashboard',
+          },
+        ],
+      },
+      thirdMessage,
+      { ...withdrawableProposal, resolution: 'withdrawn' },
+    ],
+    0,
+  )
+
+  const getTimelineSnapshot = () => [
+    ...pendingOrder,
+    'Resolved state',
+    ...getTimeline(),
+  ]
+  expect(getTimelineSnapshot()).toEqual([
+    'The rollout plan is ready.',
+    'One alert detail remains.',
+    'The session continues working.',
+    'Proposal: Choose the rollout interval',
+    'Question: Alert channel',
+    'Proposal: Choose the fallback mode',
+    'Resolved state',
+    'The rollout plan is ready.',
+    'Proposal: Choose the rollout interval',
+    'One alert detail remains.',
+    'Question: Alert channel',
+    'The session continues working.',
+    'Proposal: Choose the fallback mode',
+  ])
 })
 
 it('keeps repeated tool summaries attached to their batch when older rows arrive', () => {
