@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.690](https://github.com/fohte/armyknife/compare/v0.1.689...v0.1.690) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** render task reminders in one line ([#1758](https://github.com/fohte/armyknife/issues/1758)) ([be190a1](https://github.com/fohte/armyknife/commit/be190a1aeb5ddb7ec2c1c0503d862e049c7a12d8))
+
 ## [0.1.689](https://github.com/fohte/armyknife/compare/v0.1.688...v0.1.689) (2026-11-14)
 
 
