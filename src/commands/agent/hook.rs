@@ -4286,44 +4286,83 @@ mod tests {
     }
 
     #[derive(Debug, Clone, Copy)]
-    enum ResolvedAgentRequest {
-        Proposal,
-        Todo,
+    enum NonPendingAgentRequest {
+        ResolvedProposal,
+        CompletedTodo,
+        OtherSessionProposal,
+        OtherSessionTodo,
     }
 
     #[rstest]
-    #[case::resolved_proposal(ResolvedAgentRequest::Proposal)]
-    #[case::completed_todo(ResolvedAgentRequest::Todo)]
-    fn resolved_agent_requests_do_not_suppress_status_inference(
-        #[case] request: ResolvedAgentRequest,
+    #[case::resolved_proposal(NonPendingAgentRequest::ResolvedProposal)]
+    #[case::completed_todo(NonPendingAgentRequest::CompletedTodo)]
+    #[case::other_session_proposal(NonPendingAgentRequest::OtherSessionProposal)]
+    #[case::other_session_todo(NonPendingAgentRequest::OtherSessionTodo)]
+    fn non_pending_agent_requests_do_not_suppress_status_inference(
+        #[case] request: NonPendingAgentRequest,
     ) {
         let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
         let sessions_dir = temp_dir.path();
         save_test_session(sessions_dir, "test-123", |_| {});
-        match request {
-            ResolvedAgentRequest::Proposal => {
-                let sequence =
-                    store::add_agent_proposal_in(sessions_dir, "test-123", "Review this choice.")
-                        .expect("proposal should save");
-                store::resolve_agent_proposal_from(sessions_dir, "test-123", sequence, None)
-                    .expect("proposal should resolve");
+        let request_session_id = match request {
+            NonPendingAgentRequest::ResolvedProposal | NonPendingAgentRequest::CompletedTodo => {
+                "test-123"
             }
-            ResolvedAgentRequest::Todo => {
+            NonPendingAgentRequest::OtherSessionProposal
+            | NonPendingAgentRequest::OtherSessionTodo => {
+                save_test_session(sessions_dir, "test-456", |_| {});
+                "test-456"
+            }
+        };
+        match request {
+            NonPendingAgentRequest::ResolvedProposal => {
+                let sequence = store::add_agent_proposal_in(
+                    sessions_dir,
+                    request_session_id,
+                    "Review this choice.",
+                )
+                .expect("proposal should save");
+                store::resolve_agent_proposal_from(
+                    sessions_dir,
+                    request_session_id,
+                    sequence,
+                    None,
+                )
+                .expect("proposal should resolve");
+            }
+            NonPendingAgentRequest::CompletedTodo => {
                 let sequence = store::add_agent_todo_in(
                     sessions_dir,
-                    "test-123",
+                    request_session_id,
                     "Check the deployment",
                     None,
                 )
                 .expect("todo should save");
                 store::resolve_agent_todo_from(
                     sessions_dir,
-                    "test-123",
+                    request_session_id,
                     sequence,
                     store::TodoResolution::Completed,
                     None,
                 )
                 .expect("todo should complete");
+            }
+            NonPendingAgentRequest::OtherSessionProposal => {
+                store::add_agent_proposal_in(
+                    sessions_dir,
+                    request_session_id,
+                    "Review this choice.",
+                )
+                .expect("proposal should save");
+            }
+            NonPendingAgentRequest::OtherSessionTodo => {
+                store::add_agent_todo_in(
+                    sessions_dir,
+                    request_session_id,
+                    "Check the deployment",
+                    None,
+                )
+                .expect("todo should save");
             }
         }
 
