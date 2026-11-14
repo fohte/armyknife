@@ -6,6 +6,12 @@
   gap: 4px;
 }
 
+.chat-user-group[data-own-message-highlighted='true'] {
+  outline: 2px solid var(--aw-color-working);
+  outline-offset: 4px;
+  border-radius: var(--aw-radius);
+}
+
 .chat-from {
   display: flex;
   align-items: center;
