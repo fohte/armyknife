@@ -200,7 +200,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        AgentProposal, add_agent_proposal, agent_proposals, unanswered_agent_proposal_bodies,
+        AgentProposal, add_agent_proposal, agent_proposals, lock_agent_proposal_resolution,
+        unanswered_agent_proposal_bodies,
     };
     #[fixture]
     fn sessions_dir() -> TempDir {
@@ -217,6 +218,27 @@ mod tests {
             proposal.resolved_at = proposal.resolved_at.map(|_| epoch);
         });
         proposals
+    }
+
+    #[rstest]
+    fn proposal_resolution_lock_keeps_its_existing_file_name(sessions_dir: TempDir) {
+        let _lock = lock_agent_proposal_resolution(sessions_dir.path(), "session-a", 4)
+            .expect("proposal resolution lock should be acquired");
+        let lock_files = std::fs::read_dir(sessions_dir.path().join("proposal-resolution-locks"))
+            .expect("proposal resolution lock directory should exist")
+            .map(|entry| {
+                entry
+                    .expect("proposal resolution lock should be readable")
+                    .file_name()
+                    .into_string()
+                    .expect("proposal resolution lock name should be valid UTF-8")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            lock_files,
+            vec!["43f4638657d0f42f33cbdddeacffa1745da54c6f9c6c7390cdbb72234d0e4623.lock"],
+        );
     }
 
     #[rstest]
