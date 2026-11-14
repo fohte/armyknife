@@ -57,6 +57,7 @@ export function UserWithContent({
   sessionEngine,
   onRewind = () => Promise.resolve(false),
   rewindMenuOpen = false,
+  navigationHighlighted = false,
 }: {
   message: UserMessage
   onSelectSession?: (id: string) => void
@@ -70,6 +71,7 @@ export function UserWithContent({
     draft: string,
   ) => Promise<boolean>
   rewindMenuOpen?: boolean
+  navigationHighlighted?: boolean
 }) {
   const content: UserContentPart[] =
     message.type === 'user'
@@ -99,6 +101,7 @@ export function UserWithContent({
     <article
       className="chat-user-group"
       data-own-message={isOwnMessage ? 'true' : undefined}
+      data-own-message-highlighted={navigationHighlighted ? 'true' : undefined}
     >
       <div className="chat-from">
         {label}

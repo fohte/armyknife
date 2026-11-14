@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashSet};
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 
+use crate::commands::agent::peer_message::task_notification_envelope;
 use crate::commands::agent::store::PermissionRequestData;
 
 use super::super::super::SkillSuggestion;
@@ -13,6 +14,10 @@ use super::events::{ClaudeEffect, TimedClaudeEvent};
 use super::questions::{append_questions, parse_question_answers, tool_use_result_answers};
 use super::transcript_branch::{BranchMembership, TranscriptNode, is_inactive_branch};
 use super::user_input::{content_blocks, is_tool_result_only_user_record, user_content, user_text};
+
+pub(super) fn is_attachment_record(record: &Value) -> bool {
+    record.get("type").and_then(Value::as_str) == Some("attachment")
+}
 
 #[derive(Clone)]
 pub(super) struct ClaudeParserState {
@@ -91,7 +96,7 @@ impl ClaudeParserState {
 
         if is_tool_result_only {
             self.tool_result_parent = record_parent_uuid(&record);
-        } else if uuid.is_some() {
+        } else if uuid.is_some() && !is_attachment_record(&record) {
             self.tool_result_parent = None;
         }
 
@@ -131,7 +136,7 @@ impl ClaudeParserState {
                         effects.push(ClaudeEffect::Inbound {
                             record: classifier_record(record),
                             text: task_notification
-                                .and_then(super::background_tasks::task_notification_envelope)
+                                .and_then(task_notification_envelope)
                                 .unwrap_or(&text)
                                 .to_owned(),
                             images,
@@ -192,7 +197,7 @@ impl ClaudeParserState {
                         effects.push(ClaudeEffect::Inbound {
                             record: classifier_record(record),
                             text: task_notification
-                                .and_then(super::background_tasks::task_notification_envelope)
+                                .and_then(task_notification_envelope)
                                 .unwrap_or(&text)
                                 .to_owned(),
                             images,

@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
+use crate::commands::agent::peer_message::task_notification_envelope;
+
 use super::super::super::claude_content_text;
 use super::super::super::{BackgroundTask, BackgroundTaskKind};
 use super::state::ToolUse;
@@ -126,28 +128,6 @@ fn notification_text(record: &Value) -> Option<String> {
     let attachment = record.get("attachment")?;
     (attachment.get("type").and_then(Value::as_str) == Some("queued_command"))
         .then(|| claude_content_text(attachment.get("prompt")))
-}
-
-pub(super) fn task_notification_envelope(text: &str) -> Option<&str> {
-    let text = text.trim();
-    let envelope = if text.starts_with("<task-notification>") {
-        text
-    } else {
-        let (preamble, remainder) = text.split_once('\n')?;
-        let preamble = preamble.trim();
-        let is_notification_preamble = preamble
-            .strip_prefix('[')
-            .and_then(|preamble| preamble.strip_suffix(']'))
-            .is_some_and(|preamble| preamble.to_ascii_lowercase().contains("notification"));
-        if !is_notification_preamble {
-            return None;
-        }
-        remainder.trim_start()
-    };
-    envelope
-        .strip_prefix("<task-notification>")?
-        .strip_suffix("</task-notification>")?;
-    Some(envelope)
 }
 
 fn task_notification_body(text: &str) -> Option<&str> {

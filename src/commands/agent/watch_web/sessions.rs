@@ -21,7 +21,7 @@ use crate::commands::agent::store;
 #[cfg(test)]
 use crate::commands::agent::tq_session_tasks::SessionTask as LinkedSessionTask;
 use crate::commands::agent::types::{Engine, Session, SessionStatus, WebUiRegistration};
-use crate::commands::agent::user_turn::{UserTurnKind, user_turns};
+use crate::commands::agent::user_turn::user_turns;
 use crate::infra::github::{PrHeadInfo, PrState};
 use crate::shared::config::{self, AgentConfig};
 
@@ -461,12 +461,7 @@ async fn list_sessions<S: SessionSource>(
                     now,
                 )
             };
-            let crit_url =
-                if turn_kinds.get(session.session_id.as_str()) == Some(&UserTurnKind::Crit) {
-                    session.crit_urls.last().cloned()
-                } else {
-                    None
-                };
+            let crit_url = session.crit_urls.last().cloned();
             let crit_exposed_url = crit_url.as_ref().and_then(|url| {
                 session
                     .web_uis
@@ -1395,6 +1390,63 @@ mod tests {
         ]);
         expected["sessions"][0]["reviewDocumentId"] = serde_json::json!("fixture-review");
         expected["sessions"][0]["lastPromptedAt"] = serde_json::json!("1970-01-01T00:15:00Z");
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[case::daemon_running(true)]
+    #[case::daemon_stopped(false)]
+    #[tokio::test]
+    async fn sessions_route_exposes_crit_web_ui_only_while_crit_url_is_registered(
+        mut source: TestSessionSource,
+        #[case] crit_daemon_running: bool,
+    ) {
+        const CRIT_URL: &str = "http://127.0.0.1:6000";
+
+        source.web_states[0].later_until = None;
+        source.web_states[0].is_today = false;
+        source.sessions[0].status = SessionStatus::Running;
+        source.sessions[0].crit_urls = if crit_daemon_running {
+            vec![CRIT_URL.to_string()]
+        } else {
+            Vec::new()
+        };
+        source.sessions[0].web_uis = vec![WebUiRegistration {
+            name: "crit".to_owned(),
+            url: CRIT_URL.to_owned(),
+            exposed_url: Some("https://review.example.test/crit".to_owned()),
+        }];
+
+        let mut expected = expected_response(
+            "in_progress",
+            None,
+            false,
+            ExpectedSessionDetails {
+                kind: None,
+                category_when_not_later: "in_progress",
+                is_paused: false,
+                unread: false,
+                crit_url: crit_daemon_running.then_some(CRIT_URL),
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        if crit_daemon_running {
+            expected["sessions"][0]["webUis"] = serde_json::json!([
+                {
+                    "name": "crit",
+                    "url": CRIT_URL,
+                    "exposedUrl": "https://review.example.test/crit"
+                }
+            ]);
+        }
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }

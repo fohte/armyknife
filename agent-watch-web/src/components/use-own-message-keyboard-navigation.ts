@@ -1,5 +1,7 @@
 import { useEffect } from 'react'
 
+const highlightDurationMs = 1_500
+
 type UseOwnMessageKeyboardNavigationOptions = {
   isMobile: boolean
   scrollRef: { current: HTMLDivElement | null }
@@ -11,6 +13,18 @@ export function useOwnMessageKeyboardNavigation({
 }: UseOwnMessageKeyboardNavigationOptions) {
   useEffect(() => {
     if (isMobile) return
+
+    let highlightedMessage: HTMLElement | null = null
+    let highlightTimeout: number | undefined
+
+    const clearHighlight = () => {
+      if (highlightTimeout !== undefined) {
+        window.clearTimeout(highlightTimeout)
+        highlightTimeout = undefined
+      }
+      highlightedMessage?.removeAttribute('data-own-message-highlighted')
+      highlightedMessage = null
+    }
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (
@@ -72,12 +86,22 @@ export function useOwnMessageKeyboardNavigation({
       if (message === undefined) return
 
       event.preventDefault()
-      message.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      message.scrollIntoView({ block: 'center', behavior: 'instant' })
+      clearHighlight()
+      message.setAttribute('data-own-message-highlighted', 'true')
+      highlightedMessage = message
+      highlightTimeout = window.setTimeout(() => {
+        if (highlightedMessage !== message) return
+        message.removeAttribute('data-own-message-highlighted')
+        highlightedMessage = null
+        highlightTimeout = undefined
+      }, highlightDurationMs)
     }
 
     window.addEventListener('keydown', onKeyDown)
     return () => {
       window.removeEventListener('keydown', onKeyDown)
+      clearHighlight()
     }
   }, [isMobile, scrollRef])
 }

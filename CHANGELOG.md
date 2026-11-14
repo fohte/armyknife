@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.1.704](https://github.com/fohte/armyknife/compare/v0.1.703...v0.1.704) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** avoid reparsing after tool results ([#1787](https://github.com/fohte/armyknife/issues/1787)) ([ef13816](https://github.com/fohte/armyknife/commit/ef13816522b90ea987b0f11850e84830a092d119))
+
+## [0.1.703](https://github.com/fohte/armyknife/compare/v0.1.702...v0.1.703) (2026-11-14)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align card and status colors ([#1785](https://github.com/fohte/armyknife/issues/1785)) ([6bc0263](https://github.com/fohte/armyknife/commit/6bc02638582f997455e420d9371a341a1ca540ed))
+
+## [0.1.702](https://github.com/fohte/armyknife/compare/v0.1.701...v0.1.702) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** keep crit visible across rounds ([#1783](https://github.com/fohte/armyknife/issues/1783)) ([325994f](https://github.com/fohte/armyknife/commit/325994f709ee5f0fa224be62a04755e4ff32e9fa))
+
+## [0.1.701](https://github.com/fohte/armyknife/compare/v0.1.700...v0.1.701) (2026-11-14)
+
+
+### Features
+
+* **agent-watch-web:** render text as markdown ([#1781](https://github.com/fohte/armyknife/issues/1781)) ([8b84cbe](https://github.com/fohte/armyknife/commit/8b84cbe5e1e4360629f3f59b8f313862bd877f3f))
+
+## [0.1.700](https://github.com/fohte/armyknife/compare/v0.1.699...v0.1.700) (2026-11-14)
+
+
+### Bug Fixes
+
+* **agent:** skip task notifications in Recent ([#1779](https://github.com/fohte/armyknife/issues/1779)) ([403eddb](https://github.com/fohte/armyknife/commit/403eddb7388a38ce700ba8443316b88fbf64b05b))
+
+## [0.1.699](https://github.com/fohte/armyknife/compare/v0.1.698...v0.1.699) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** jump to your messages instantly ([#1777](https://github.com/fohte/armyknife/issues/1777)) ([27c00ba](https://github.com/fohte/armyknife/commit/27c00ba9c651bf9b147c35422066b2b51bd05bcb))
+
 ## [0.1.698](https://github.com/fohte/armyknife/compare/v0.1.697...v0.1.698) (2026-11-14)
 
 
