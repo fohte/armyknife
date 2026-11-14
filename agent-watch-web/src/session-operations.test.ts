@@ -105,6 +105,18 @@ const conversation: ConversationResponse = {
   hasUnansweredProposal: true,
   activeQuestionIndex: 0,
 }
+const messageBeforeTrailingItems: Extract<ChatItem, { type: 'assistant' }> = {
+  type: 'assistant',
+  text: 'Before the user message.',
+}
+const conversationWithTrailingItems: ConversationResponse = {
+  ...conversation,
+  messages: [messageBeforeTrailingItems, todoMessage, deniedMessage],
+  total: 3,
+  decisions: [],
+  hasUnansweredProposal: false,
+  activeQuestionIndex: null,
+}
 
 const requests: {
   name: string
@@ -178,6 +190,7 @@ const requests: {
     },
     path: 'messages',
     body: { content: 'A message' },
+    response: { ok: true, queuedPromptId: 'fixture-message-id' },
   },
   {
     name: 'preview agent commands',
@@ -1083,6 +1096,96 @@ it('confirms a message after it appears in the server response', () => {
   expect(
     isConversationOperationConfirmed(serverConversation, operation, null),
   ).toBe(true)
+})
+
+it('reconciles a queued message ID before trailing todo and permission items', () => {
+  const operation: SessionOperation = {
+    type: 'message',
+    sessionId: session.id,
+    content: 'A message',
+    queuedPromptId: 'fixture-message-id',
+    messageCountBefore: conversationWithTrailingItems.total,
+  }
+  const serverConversation: ConversationResponse = {
+    ...conversationWithTrailingItems,
+    messages: [
+      messageBeforeTrailingItems,
+      { type: 'user', text: 'A message', queuedPromptId: 'fixture-message-id' },
+      ...conversationWithTrailingItems.messages.slice(1),
+    ],
+    total: conversationWithTrailingItems.total + 1,
+  }
+
+  expect(applyConversationOperation(serverConversation, operation)).toEqual(
+    serverConversation,
+  )
+  expect(
+    isConversationOperationConfirmed(serverConversation, operation, null),
+  ).toBe(true)
+})
+
+it('reconciles an unresolved queued user by its prompt ID', () => {
+  const operation: SessionOperation = {
+    type: 'message',
+    sessionId: session.id,
+    content: 'A message',
+    queuedPromptId: 'fixture-message-id',
+    messageCountBefore: conversationWithTrailingItems.total,
+  }
+  const serverConversation: ConversationResponse = {
+    ...conversationWithTrailingItems,
+    messages: [
+      messageBeforeTrailingItems,
+      {
+        type: 'queued_user',
+        content: [{ type: 'text', text: 'A message' }],
+        queuedPromptId: 'fixture-message-id',
+      },
+      ...conversationWithTrailingItems.messages.slice(1),
+    ],
+    total: conversationWithTrailingItems.total + 1,
+  }
+
+  expect(applyConversationOperation(serverConversation, operation)).toEqual(
+    serverConversation,
+  )
+  expect(
+    isConversationOperationConfirmed(serverConversation, operation, null),
+  ).toBe(true)
+})
+
+it('keeps a same-text message with a different queued ID unconfirmed', () => {
+  const operation: SessionOperation = {
+    type: 'message',
+    sessionId: session.id,
+    content: 'A message',
+    queuedPromptId: 'fixture-message-id',
+    messageCountBefore: conversationWithTrailingItems.total,
+  }
+  const serverConversation: ConversationResponse = {
+    ...conversationWithTrailingItems,
+    messages: [
+      messageBeforeTrailingItems,
+      { type: 'user', text: 'A message', queuedPromptId: 'other-message-id' },
+      ...conversationWithTrailingItems.messages.slice(1),
+    ],
+    total: conversationWithTrailingItems.total + 1,
+  }
+  const optimisticConversation: ConversationResponse = {
+    ...serverConversation,
+    messages: [
+      ...serverConversation.messages,
+      { type: 'queued_user', content: [{ type: 'text', text: 'A message' }] },
+    ],
+    total: serverConversation.total + 1,
+  }
+
+  expect(applyConversationOperation(serverConversation, operation)).toEqual(
+    optimisticConversation,
+  )
+  expect(
+    isConversationOperationConfirmed(serverConversation, operation, null),
+  ).toBe(false)
 })
 
 const sessionListConfirmationCases: [
