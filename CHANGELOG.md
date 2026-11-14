@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.692](https://github.com/fohte/armyknife/compare/v0.1.691...v0.1.692) (2026-11-14)
+
+
+### Bug Fixes
+
+* **agent:** configure status call kinds ([#1762](https://github.com/fohte/armyknife/issues/1762)) ([710be64](https://github.com/fohte/armyknife/commit/710be6402bb6de432ee8b38a9524b4eaf149fc3f))
+
 ## [0.1.691](https://github.com/fohte/armyknife/compare/v0.1.690...v0.1.691) (2026-11-14)
 
 
