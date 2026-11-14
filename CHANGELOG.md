@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.700](https://github.com/fohte/armyknife/compare/v0.1.699...v0.1.700) (2026-11-14)
+
+
+### Bug Fixes
+
+* **agent:** skip task notifications in Recent ([#1779](https://github.com/fohte/armyknife/issues/1779)) ([403eddb](https://github.com/fohte/armyknife/commit/403eddb7388a38ce700ba8443316b88fbf64b05b))
+
 ## [0.1.699](https://github.com/fohte/armyknife/compare/v0.1.698...v0.1.699) (2026-11-14)
 
 
