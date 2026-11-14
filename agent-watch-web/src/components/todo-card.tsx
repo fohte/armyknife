@@ -3,6 +3,8 @@ import '#components/todo-card.css'
 import { Button } from '@fohte/ui/button'
 import { useEffect, useId, useState } from 'react'
 
+import { CollapsibleText } from '#components/collapsible-text'
+
 type TodoCardProps = {
   title: string
   detail: string | null
@@ -23,6 +25,7 @@ export function TodoCard({
 }: TodoCardProps) {
   const commentId = useId()
   const [comment, setComment] = useState(defaultComment)
+  const [detailExpanded, setDetailExpanded] = useState(false)
   const [resolutionLocally, setResolutionLocally] = useState<
     'completed' | 'rejected' | null
   >(null)
@@ -84,7 +87,14 @@ export function TodoCard({
     >
       <h2>To-do · pending</h2>
       <h3>{title}</h3>
-      {detail !== null ? <p className="chat-todo-detail">{detail}</p> : null}
+      {detail !== null ? (
+        <CollapsibleText
+          className="chat-todo-detail"
+          text={detail}
+          expanded={detailExpanded}
+          onExpandedChange={setDetailExpanded}
+        />
+      ) : null}
       <label className="chat-todo-comment-label" htmlFor={commentId}>
         Comment (optional)
       </label>
