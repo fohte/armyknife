@@ -111,24 +111,18 @@ pub fn run(args: &HookArgs) -> Result<()> {
 
     input.engine = args.engine;
     let session_id = input.session_id.clone();
-    let permission_agent_key =
-        permission_request_agent_key(event, args.engine, input.agent_id.as_deref());
+    let agent_id = input.agent_id.clone();
     let result = process_hook_event(event, input)?;
-    if let Some(agent_key) = permission_agent_key {
+    if event == HookEvent::PermissionRequest {
         let sessions_dir = store::sessions_dir()?;
-        let Some(session) = store::load_session_from(&sessions_dir, &session_id)? else {
-            return Ok(());
-        };
-        let Some(request_id) = session.pending_permission_request_ids.get(&agent_key) else {
-            return Ok(());
-        };
-        return permission_request::wait_and_write(
+        permission_request::wait_for_request(
+            args.engine,
+            agent_id.as_deref(),
             &sessions_dir,
             &session_id,
-            &agent_key,
-            request_id,
             io::stdout().lock(),
-        );
+        )?;
+        return Ok(());
     }
     let block_reason = match result {
         ProcessResult::StopBlocked(reason) => Some(reason),
@@ -341,15 +335,6 @@ fn ensure_watch_web_user_marker(
         session_lock.ensure_watch_web_user_marker()?;
     }
     Ok(())
-}
-
-fn permission_request_agent_key(
-    event: HookEvent,
-    engine: Engine,
-    agent_id: Option<&str>,
-) -> Option<String> {
-    (event == HookEvent::PermissionRequest && engine == Engine::Claude)
-        .then(|| agent_id.unwrap_or(MAIN_THREAD_AGENT_KEY).to_string())
 }
 
 fn startup_metadata_for_resume(sessions_dir: &Path, input: &HookInput) -> Result<Option<Session>> {
@@ -1947,11 +1932,11 @@ mod tests {
         )
         .expect("tool resolution should save");
         let mut output = Vec::new();
-        permission_request::wait_and_write(
+        permission_request::wait_for_request(
+            Engine::Claude,
+            None,
             sessions_dir,
             "test-123",
-            MAIN_THREAD_AGENT_KEY,
-            &request_id,
             &mut output,
         )
         .expect("resolved question should not emit a decision");
@@ -2283,33 +2268,6 @@ mod tests {
                     false,
                 )],
             ),
-        );
-    }
-
-    #[rstest]
-    #[case::main_claude(
-        HookEvent::PermissionRequest,
-        Engine::Claude,
-        None,
-        Some(MAIN_THREAD_AGENT_KEY)
-    )]
-    #[case::subagent_claude(
-        HookEvent::PermissionRequest,
-        Engine::Claude,
-        Some("agent-fixture"),
-        Some("agent-fixture")
-    )]
-    #[case::main_codex(HookEvent::PermissionRequest, Engine::Codex, None, None)]
-    #[case::other_claude_event(HookEvent::PostToolUse, Engine::Claude, None, None)]
-    fn permission_request_waits_for_all_claude_agents(
-        #[case] event: HookEvent,
-        #[case] engine: Engine,
-        #[case] agent_id: Option<&str>,
-        #[case] expected_agent_key: Option<&str>,
-    ) {
-        assert_eq!(
-            permission_request_agent_key(event, engine, agent_id).as_deref(),
-            expected_agent_key
         );
     }
 
