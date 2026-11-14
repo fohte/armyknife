@@ -167,7 +167,7 @@ it.each([
   { kind: 'Error', iconClass: 'lucide-triangle-alert' },
   { kind: 'Stopped', iconClass: 'lucide-circle-pause' },
   { kind: 'Review', iconClass: 'lucide-eye' },
-  { kind: 'FutureKind', iconClass: 'lucide-circle-question-mark' },
+  { kind: 'UnmappedKind', iconClass: 'lucide-circle-question-mark' },
 ])(
   'renders $kind as a named icon and keeps the preview text',
   ({ kind, iconClass }) => {
@@ -189,7 +189,7 @@ it.each([
         classMatches: true,
         title: kind,
       },
-      preview: ' · Review the mockup',
+      preview: ' Review the mockup',
     })
   },
 )

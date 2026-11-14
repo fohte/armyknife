@@ -129,7 +129,7 @@ export function SessionRow({
                   <KindIcon aria-hidden="true" size={14} />
                 </span>
                 {session.preview !== null && session.preview.length > 0 ? (
-                  <span> · {session.preview}</span>
+                  <span> {session.preview}</span>
                 ) : null}
               </span>
             ) : null}

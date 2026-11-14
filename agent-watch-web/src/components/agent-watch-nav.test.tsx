@@ -132,7 +132,7 @@ it('renders no work type sections without configured groups', () => {
   ).toEqual([])
 })
 
-it('shows Starred status labels with their category colors', () => {
+it('shows Starred kind icons with accessible names and category colors', () => {
   renderNav([], {
     todaySessions: [
       baseTodaySession,
@@ -159,8 +159,11 @@ it('shows Starred status labels with their category colors', () => {
       container.querySelectorAll<HTMLElement>('.today-session-status'),
       (status) => ({
         text: status.textContent,
+        ariaLabel: status.getAttribute('aria-label'),
         className: status.className,
         color: getComputedStyle(status).color,
+        iconClass: status.querySelector('svg')?.getAttribute('class') ?? null,
+        title: status.getAttribute('title'),
       }),
     ),
     oldIndicators: container.querySelectorAll('.today-start, .today-indicator')
@@ -171,24 +174,36 @@ it('shows Starred status labels with their category colors', () => {
     heading: 'Starred',
     statuses: [
       {
-        text: 'Question',
+        text: '',
+        ariaLabel: 'Question',
         className: 'today-session-status is-needs-action',
         color: 'rgb(251, 191, 36)',
+        iconClass: 'lucide lucide-message-circle-question-mark',
+        title: 'Question',
       },
       {
         text: 'Working',
+        ariaLabel: null,
         className: 'today-session-status is-working',
         color: 'rgb(96, 165, 250)',
+        iconClass: null,
+        title: 'Working',
       },
       {
-        text: 'Error',
+        text: '',
+        ariaLabel: 'Error',
         className: 'today-session-status is-error',
         color: 'rgb(248, 113, 113)',
+        iconClass: 'lucide lucide-triangle-alert',
+        title: 'Error',
       },
       {
-        text: 'Stopped',
+        text: '',
+        ariaLabel: 'Stopped',
         className: 'today-session-status is-working',
         color: 'rgb(96, 165, 250)',
+        iconClass: 'lucide lucide-circle-pause',
+        title: 'Stopped',
       },
     ],
     oldIndicators: 0,
