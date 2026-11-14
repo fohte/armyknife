@@ -57,14 +57,16 @@ function contentIdentity(content: readonly UserContentPart[]): string[] {
   })
 }
 
+function isPendingProposal(
+  message: Extract<ChatItem, { type: 'proposal' }>,
+): boolean {
+  return (
+    message.answer === null && !message.resolved && message.resolution === null
+  )
+}
+
 function isPendingInteraction(message: ChatItem): boolean {
-  if (message.type === 'proposal') {
-    return (
-      message.answer === null &&
-      !message.resolved &&
-      message.resolution === null
-    )
-  }
+  if (message.type === 'proposal') return isPendingProposal(message)
   return (
     message.type === 'question' &&
     message.questions.every((question) => question.answer === null)
@@ -197,11 +199,7 @@ export function useConversationMessageElements({
     const hasUnansweredProposal =
       proposalPending ??
       messages.some(
-        (message) =>
-          message.type === 'proposal' &&
-          message.answer === null &&
-          !message.resolved &&
-          message.resolution === null,
+        (message) => message.type === 'proposal' && isPendingProposal(message),
       )
     const keyOccurrences = new Map<string, number>()
     const elements = orderedConversationMessages.map((message) => {

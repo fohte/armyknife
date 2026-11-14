@@ -8453,6 +8453,12 @@ it('moves pending proposals and questions to the end until they are resolved', (
     seq: 22,
     title: 'Choose the fallback mode',
   }
+  const resolvedElsewhereProposal: ChatItem = {
+    ...proposal,
+    seq: 23,
+    title: 'Keep the saved plan',
+    resolved: true,
+  }
   const firstMessage: ChatItem = {
     type: 'assistant',
     text: 'The rollout plan is ready.',
@@ -8465,13 +8471,19 @@ it('moves pending proposals and questions to the end until they are resolved', (
     type: 'assistant',
     text: 'The session continues working.',
   }
+  const fourthMessage: ChatItem = {
+    type: 'assistant',
+    text: 'The final summary is ready.',
+  }
   const messages: ChatItem[] = [
     firstMessage,
     pendingProposal,
+    resolvedElsewhereProposal,
     secondMessage,
     pendingQuestion,
     thirdMessage,
     withdrawableProposal,
+    fourthMessage,
   ]
   renderConversationMessages(messages, 0)
 
@@ -8494,6 +8506,7 @@ it('moves pending proposals and questions to the end until they are resolved', (
         ...pendingProposal,
         answer: { choice: 0, comment: null },
       },
+      resolvedElsewhereProposal,
       secondMessage,
       {
         ...pendingQuestion,
@@ -8506,6 +8519,7 @@ it('moves pending proposals and questions to the end until they are resolved', (
       },
       thirdMessage,
       { ...withdrawableProposal, resolution: 'withdrawn' },
+      fourthMessage,
     ],
     0,
   )
@@ -8517,18 +8531,22 @@ it('moves pending proposals and questions to the end until they are resolved', (
   ]
   expect(getTimelineSnapshot()).toEqual([
     'The rollout plan is ready.',
+    'Proposal: Keep the saved plan',
     'One alert detail remains.',
     'The session continues working.',
+    'The final summary is ready.',
     'Proposal: Choose the rollout interval',
     'Question: Alert channel',
     'Proposal: Choose the fallback mode',
     'Resolved state',
     'The rollout plan is ready.',
     'Proposal: Choose the rollout interval',
+    'Proposal: Keep the saved plan',
     'One alert detail remains.',
     'Question: Alert channel',
     'The session continues working.',
     'Proposal: Choose the fallback mode',
+    'The final summary is ready.',
   ])
 })
 
