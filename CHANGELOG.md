@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.703](https://github.com/fohte/armyknife/compare/v0.1.702...v0.1.703) (2026-11-14)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align card and status colors ([#1785](https://github.com/fohte/armyknife/issues/1785)) ([6bc0263](https://github.com/fohte/armyknife/commit/6bc02638582f997455e420d9371a341a1ca540ed))
+
 ## [0.1.702](https://github.com/fohte/armyknife/compare/v0.1.701...v0.1.702) (2026-11-14)
 
 
