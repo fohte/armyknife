@@ -24,6 +24,8 @@ export function CollapsibleText({
   useLayoutEffect(() => {
     const content = contentRef.current
     if (content === null) return
+    const fonts = document.fonts
+    let isActive = true
 
     content.style.setProperty(
       '--collapsible-text-lines',
@@ -31,6 +33,7 @@ export function CollapsibleText({
     )
 
     const measure = () => {
+      if (!isActive) return
       const lineHeight = Number.parseFloat(getComputedStyle(content).lineHeight)
       if (!Number.isFinite(lineHeight)) return
 
@@ -38,11 +41,14 @@ export function CollapsibleText({
     }
 
     measure()
+    fonts.addEventListener('loadingdone', measure)
     const resizeObserver = new ResizeObserver(() => {
       measure()
     })
     resizeObserver.observe(content)
     return () => {
+      isActive = false
+      fonts.removeEventListener('loadingdone', measure)
       resizeObserver.disconnect()
     }
   }, [collapsedLines, expanded, text])

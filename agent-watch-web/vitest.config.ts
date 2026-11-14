@@ -24,6 +24,7 @@ function chromiumBrowser() {
 }
 
 const appTestFiles = [
+  'src/components/collapsible-text.test.tsx',
   'src/App.test.tsx',
   'src/components/mobile-nav-drawer.test.tsx',
   'src/components/agent-watch-nav.test.tsx',
