@@ -4285,6 +4285,86 @@ mod tests {
         assert_eq!(result, expected);
     }
 
+    #[derive(Debug, Clone, Copy)]
+    enum ResolvedAgentRequest {
+        Proposal,
+        Todo,
+    }
+
+    #[rstest]
+    #[case::resolved_proposal(ResolvedAgentRequest::Proposal)]
+    #[case::completed_todo(ResolvedAgentRequest::Todo)]
+    fn resolved_agent_requests_do_not_suppress_status_inference(
+        #[case] request: ResolvedAgentRequest,
+    ) {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path();
+        save_test_session(sessions_dir, "test-123", |_| {});
+        match request {
+            ResolvedAgentRequest::Proposal => {
+                let sequence =
+                    store::add_agent_proposal_in(sessions_dir, "test-123", "Review this choice.")
+                        .expect("proposal should save");
+                store::resolve_agent_proposal_from(sessions_dir, "test-123", sequence, None)
+                    .expect("proposal should resolve");
+            }
+            ResolvedAgentRequest::Todo => {
+                let sequence = store::add_agent_todo_in(
+                    sessions_dir,
+                    "test-123",
+                    "Check the deployment",
+                    None,
+                )
+                .expect("todo should save");
+                store::resolve_agent_todo_from(
+                    sessions_dir,
+                    "test-123",
+                    sequence,
+                    store::TodoResolution::Completed,
+                    None,
+                )
+                .expect("todo should complete");
+            }
+        }
+
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut side_effects = SideEffects::none();
+        side_effects.status_inference = true;
+        side_effects.status_inference_calls = Some(calls.clone());
+        let result = process_hook_event_impl_with_settings(
+            HookEvent::Stop,
+            create_test_input(None),
+            sessions_dir,
+            &side_effects,
+            Some(TEST_STOP_HOOK_INSTRUCTION),
+            Some("Infer the configured status from the session."),
+            None,
+        )
+        .expect("stop hook should succeed");
+        let session = store::load_session_from(sessions_dir, "test-123")
+            .expect("session should load")
+            .expect("session should exist");
+
+        assert_eq!(
+            (
+                result,
+                session.status,
+                session.agent_status,
+                calls.lock().expect("lock").clone()
+            ),
+            (
+                ProcessResult::SessionSaved,
+                SessionStatus::Stopped,
+                None,
+                vec![StatusInferenceSpawnRequest {
+                    session_id: "test-123".to_string(),
+                    stop_updated_at: session.updated_at,
+                    codex_snapshot: None,
+                }],
+            ),
+        );
+    }
+
     #[test]
     fn configured_status_inference_schedules_worker_without_blocking() {
         let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
@@ -4490,6 +4570,8 @@ mod tests {
     #[case::asking_user(StopReason::AskUserQuestion)]
     #[case::paused(StopReason::Paused)]
     #[case::stop_hook_active(StopReason::StopHookActive)]
+    #[case::pending_proposal(StopReason::UnansweredProposal)]
+    #[case::pending_todo(StopReason::IncompleteTodo)]
     fn codex_background_status_preserves_higher_priority_reasons(#[case] reason: StopReason) {
         let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
         let sessions_dir = temp_dir.path();
@@ -4526,6 +4608,17 @@ mod tests {
                 | StopReason::IncompleteTodo => {}
             }
         });
+        match reason {
+            StopReason::UnansweredProposal => {
+                store::add_agent_proposal_in(sessions_dir, "test-codex", "Review this choice.")
+                    .expect("proposal should save");
+            }
+            StopReason::IncompleteTodo => {
+                store::add_agent_todo_in(sessions_dir, "test-codex", "Check the deployment", None)
+                    .expect("todo should save");
+            }
+            _ => {}
+        }
         let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut side_effects = SideEffects::none();
         side_effects.status_inference = true;
