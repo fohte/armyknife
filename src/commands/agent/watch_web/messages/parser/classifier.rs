@@ -244,7 +244,7 @@ fn task_notification_reminder(record: &Value, text: &str) -> Option<MessageKind>
 
     let reminder_body = strip_stop_hook_error_prefix(reminder_body);
     let text = one_line(&format!("{summary}: {reminder_body}"));
-    let failed = is_failure(record, "task-notification", &text);
+    let failed = has_explicit_failure(record);
     Some(MessageKind::Event {
         kind: EventKind::System,
         text,
@@ -273,13 +273,7 @@ fn strip_stop_hook_error_prefix(text: &str) -> &str {
 }
 
 fn is_failure(record: &Value, label: &str, text: &str) -> bool {
-    ["is_error", "isError", "failed", "blocked"]
-        .into_iter()
-        .any(|key| record.get(key).and_then(Value::as_bool) == Some(true))
-        || record
-            .get("exit_code")
-            .and_then(Value::as_i64)
-            .is_some_and(|exit_code| exit_code != 0)
+    has_explicit_failure(record)
         || [label, text].into_iter().any(|value| {
             value
                 .split(|character: char| !character.is_ascii_alphanumeric())
@@ -290,6 +284,16 @@ fn is_failure(record: &Value, label: &str, text: &str) -> bool {
                     )
                 })
         })
+}
+
+fn has_explicit_failure(record: &Value) -> bool {
+    ["is_error", "isError", "failed", "blocked"]
+        .into_iter()
+        .any(|key| record.get(key).and_then(Value::as_bool) == Some(true))
+        || record
+            .get("exit_code")
+            .and_then(Value::as_i64)
+            .is_some_and(|exit_code| exit_code != 0)
 }
 
 pub(super) fn one_line(text: &str) -> String {
@@ -444,7 +448,7 @@ mod tests {
         <summary>Long-running command reminder</summary>
         </task-notification>
         <system-reminder>
-        Stop hook blocking error from command "SyntheticHook:Shell": This is a reminder, not an error: inspect the process output.
+        Stop hook blocking error from command "SyntheticHook:Shell": Reminder for the synthetic worker: it is blocked while waiting for the fixture.
         </system-reminder>
     "#};
 
@@ -526,7 +530,7 @@ mod tests {
         None,
         MessageKind::Event {
             kind: EventKind::System,
-            text: "Long-running command reminder: This is a reminder, not an error: inspect the process output.".to_owned(),
+            text: "Long-running command reminder: Reminder for the synthetic worker: it is blocked while waiting for the fixture.".to_owned(),
             failed: false,
         }
     )]
@@ -536,7 +540,7 @@ mod tests {
         None,
         MessageKind::Event {
             kind: EventKind::System,
-            text: "Long-running command reminder: This is a reminder, not an error: inspect the process output.".to_owned(),
+            text: "Long-running command reminder: Reminder for the synthetic worker: it is blocked while waiting for the fixture.".to_owned(),
             failed: true,
         }
     )]
