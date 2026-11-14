@@ -276,6 +276,37 @@ const requests: {
     body: { choice: 0, comment: null },
   },
   {
+    name: 'answer proposal with an attachment',
+    operation: {
+      type: 'proposal_answer',
+      sessionId: 'test-session',
+      seq: 3,
+      choice: 0,
+      comment: null,
+      attachments: [
+        {
+          name: 'sample.png',
+          mimeType: 'image/png',
+          size: 5,
+          data: 'aW1hZ2U=',
+        },
+      ],
+    },
+    path: 'proposals/3/answer',
+    body: {
+      choice: 0,
+      comment: null,
+      attachments: [
+        {
+          name: 'sample.png',
+          mimeType: 'image/png',
+          size: 5,
+          data: 'aW1hZ2U=',
+        },
+      ],
+    },
+  },
+  {
     name: 'complete todo',
     operation: {
       type: 'todo_resolve',
@@ -286,6 +317,37 @@ const requests: {
     },
     path: 'todos/4/resolve',
     body: { resolution: 'completed', comment: 'Done' },
+  },
+  {
+    name: 'resolve todo with an attachment',
+    operation: {
+      type: 'todo_resolve',
+      sessionId: 'test-session',
+      seq: 4,
+      resolution: 'completed',
+      comment: 'Done',
+      attachments: [
+        {
+          name: 'sample.png',
+          mimeType: 'image/png',
+          size: 5,
+          data: 'aW1hZ2U=',
+        },
+      ],
+    },
+    path: 'todos/4/resolve',
+    body: {
+      resolution: 'completed',
+      comment: 'Done',
+      attachments: [
+        {
+          name: 'sample.png',
+          mimeType: 'image/png',
+          size: 5,
+          data: 'aW1hZ2U=',
+        },
+      ],
+    },
   },
   {
     name: 'reject todo',

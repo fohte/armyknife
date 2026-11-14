@@ -78,54 +78,6 @@
   color: var(--aw-text-muted);
 }
 
-.composer-attachments {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 0;
-  padding: 0 12px 8px;
-  list-style: none;
-}
-
-.composer-attachment {
-  display: flex;
-  max-width: 100%;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 6px;
-  border: 1px solid var(--aw-border-control);
-  border-radius: var(--aw-radius);
-  color: var(--aw-text-body);
-  font-size: 12px;
-}
-
-.composer-attachment img {
-  width: 44px;
-  height: 36px;
-  border-radius: var(--aw-radius);
-  object-fit: cover;
-}
-
-.composer-attachment span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.composer-attachment small {
-  flex: 0 0 auto;
-  color: var(--aw-text-muted);
-}
-
-.composer-attachment [data-slot='button'] {
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  background: transparent;
-  color: var(--aw-text-body);
-  font-size: 16px;
-}
-
 .composer-footer {
   display: flex;
   align-items: center;
@@ -177,7 +129,7 @@
   grid-template-columns: minmax(0, 1fr) 44px 44px;
 }
 
-.conversation-composer[data-mobile='true'] .composer-attachments {
+.conversation-composer[data-mobile='true'] .attachment-preview-list {
   grid-column: 1 / -1;
   grid-row: 2;
 }

@@ -5,6 +5,11 @@ import { ArrowUp, CircleStop } from 'lucide-react'
 import type { ClipboardEvent, KeyboardEvent, SubmitEvent } from 'react'
 import { useId, useLayoutEffect, useRef, useState } from 'react'
 
+import {
+  type AttachmentPreview,
+  AttachmentPreviewList,
+  handleAttachmentPaste,
+} from '#components/attachment-preview-list'
 import type { Session, SkillSuggestion } from '#types'
 
 type MessageComposerProps = {
@@ -28,22 +33,7 @@ type MessageComposerProps = {
   onInterrupt: () => void
 }
 
-export type ComposerAttachment = {
-  id: string
-  name: string
-  size: number
-  previewUrl: string | null
-}
-
-function formatFileSize(bytes: number) {
-  if (bytes < 1024) return `${String(bytes)} B`
-  const kibibytes = bytes / 1024
-  const formatted = new Intl.NumberFormat(undefined, {
-    maximumFractionDigits: 1,
-  })
-  if (kibibytes < 1024) return `${formatted.format(kibibytes)} KiB`
-  return `${formatted.format(kibibytes / 1024)} MiB`
-}
+type ComposerAttachment = AttachmentPreview
 
 export function MessageComposer({
   draft,
@@ -129,10 +119,7 @@ export function MessageComposer({
   }
 
   const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = Array.from(event.clipboardData.files)
-    if (files.length === 0) return
-    event.preventDefault()
-    onPasteFiles(files)
+    handleAttachmentPaste(event, onPasteFiles)
   }
 
   const selectSkill = (skill: SkillSuggestion) => {
@@ -262,31 +249,10 @@ export function MessageComposer({
           ))}
         </ul>
       ) : null}
-      {attachments.length > 0 ? (
-        <ul className="composer-attachments" aria-label="Attachments">
-          {attachments.map((attachment) => (
-            <li className="composer-attachment" key={attachment.id}>
-              {attachment.previewUrl === null ? null : (
-                <img src={attachment.previewUrl} alt="" />
-              )}
-              <span>{attachment.name}</span>
-              {attachment.previewUrl === null ? (
-                <small>{formatFileSize(attachment.size)}</small>
-              ) : null}
-              <Button
-                type="button"
-                variant="plain"
-                aria-label={`Remove ${attachment.name}`}
-                onClick={() => {
-                  onRemoveAttachment(attachment.id)
-                }}
-              >
-                ×
-              </Button>
-            </li>
-          ))}
-        </ul>
-      ) : null}
+      <AttachmentPreviewList
+        attachments={attachments}
+        onRemove={onRemoveAttachment}
+      />
       <div className="composer-footer">
         {!isMobile ? (
           <>

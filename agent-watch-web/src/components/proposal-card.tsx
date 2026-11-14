@@ -1,13 +1,21 @@
 import '#components/proposal-card.css'
 
 import { Button } from '@fohte/ui/button'
+import type { ClipboardEvent } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import {
+  AttachmentPreviewList,
+  handleAttachmentPaste,
+} from '#components/attachment-preview-list'
 import { numberShortcutChoice } from '#components/conversation-keyboard'
 import { MarkdownMessage } from '#components/markdown-message'
+import type { EncodedAttachment } from '#components/use-attachments'
+import { useAttachments } from '#components/use-attachments'
 import type { ProposalAnswer, ProposalOption } from '#types'
 
 type ProposalCardProps = {
+  sessionId?: string
   seq: number
   title: string
   summary: string | null
@@ -19,7 +27,10 @@ type ProposalCardProps = {
   isMobile: boolean
   defaultChoice?: number | null
   defaultComment?: string
-  onAnswer: (answer: ProposalAnswer) => Promise<boolean>
+  onAnswer: (
+    answer: ProposalAnswer,
+    attachments?: readonly EncodedAttachment[],
+  ) => Promise<boolean>
 }
 
 function choiceLabel(choice: number) {
@@ -27,6 +38,7 @@ function choiceLabel(choice: number) {
 }
 
 export function ProposalCard({
+  sessionId = 'proposal',
   seq,
   title,
   summary,
@@ -40,6 +52,7 @@ export function ProposalCard({
   defaultComment = '',
   onAnswer,
 }: ProposalCardProps) {
+  const attachmentState = useAttachments(`${sessionId}:proposal:${String(seq)}`)
   const [selectedChoice, setSelectedChoice] = useState<number | null>(
     answer?.choice ?? defaultChoice,
   )
@@ -63,17 +76,33 @@ export function ProposalCard({
 
   const submitAnswer = useCallback(
     async (choice: number | null) => {
-      if (isDisabled || (choice !== null && !options[choice])) return
+      if (
+        isDisabled ||
+        attachmentState.isProcessingAttachments ||
+        attachmentState.hasLimitError ||
+        (choice !== null && !options[choice])
+      ) {
+        return
+      }
       const response = {
         choice,
         comment: comment.trim() === '' ? null : comment.trim(),
       }
       setIsSubmitting(true)
-      const succeeded = await onAnswer(response)
-      setIsSubmitting(false)
-      if (succeeded) setSubmittedAnswer(response)
+      try {
+        await attachmentState.sendWithAttachments(async (attachments) => {
+          const succeeded =
+            attachments.length === 0
+              ? await onAnswer(response)
+              : await onAnswer(response, attachments)
+          if (succeeded) setSubmittedAnswer(response)
+          return succeeded
+        })
+      } finally {
+        setIsSubmitting(false)
+      }
     },
-    [comment, isDisabled, onAnswer, options],
+    [attachmentState, comment, isDisabled, onAnswer, options],
   )
 
   useEffect(() => {
@@ -141,6 +170,7 @@ export function ProposalCard({
     <article
       className="chat-proposal-card"
       aria-label="Proposal"
+      aria-busy={isSubmitting || attachmentState.isProcessingAttachments}
       data-mobile={isMobile ? 'true' : undefined}
       data-answerable={isDisabled ? undefined : 'true'}
       ref={cardRef}
@@ -225,29 +255,56 @@ export function ProposalCard({
           </div>
         ))}
       </div>
-      <label
-        className="chat-proposal-comment-label"
-        htmlFor={`proposal-comment-${String(seq)}`}
-      >
-        Comment (optional)
-      </label>
-      <textarea
-        id={`proposal-comment-${String(seq)}`}
-        className="chat-proposal-comment"
-        rows={2}
-        value={comment}
-        disabled={isAnswered || isSubmitting}
-        onChange={(event) => {
-          setComment(event.currentTarget.value)
-        }}
-      />
+      {latestAnswer?.comment != null ? (
+        <MarkdownMessage className="chat-proposal-answer-comment">
+          {latestAnswer.comment}
+        </MarkdownMessage>
+      ) : (
+        <>
+          <label
+            className="chat-proposal-comment-label"
+            htmlFor={`proposal-comment-${String(seq)}`}
+          >
+            Comment (optional)
+          </label>
+          <textarea
+            id={`proposal-comment-${String(seq)}`}
+            className="chat-proposal-comment"
+            rows={2}
+            value={comment}
+            disabled={isAnswered || isSubmitting}
+            onPaste={(event: ClipboardEvent<HTMLTextAreaElement>) => {
+              handleAttachmentPaste(event, attachmentState.onPasteFiles)
+            }}
+            onChange={(event) => {
+              setComment(event.currentTarget.value)
+            }}
+          />
+        </>
+      )}
+      {answer === null && !resolved ? (
+        <AttachmentPreviewList
+          attachments={attachmentState.attachments}
+          {...(isSubmitting || isAnswered
+            ? {}
+            : { onRemove: attachmentState.removeAttachment })}
+        />
+      ) : null}
+      {attachmentState.error === null ? null : (
+        <p role="alert">{attachmentState.error}</p>
+      )}
       <footer className="chat-proposal-footer">
         <div className="chat-proposal-actions">
           <Button
             type="button"
             variant="plain"
             className="aw-button aw-button--primary"
-            disabled={selectedChoice === null || isDisabled}
+            disabled={
+              selectedChoice === null ||
+              isDisabled ||
+              attachmentState.isProcessingAttachments ||
+              attachmentState.hasLimitError
+            }
             onClick={() => {
               void submitAnswer(selectedChoice)
             }}
@@ -258,7 +315,11 @@ export function ProposalCard({
             type="button"
             variant="plain"
             className="aw-button aw-button--outline"
-            disabled={isDisabled}
+            disabled={
+              isDisabled ||
+              attachmentState.isProcessingAttachments ||
+              attachmentState.hasLimitError
+            }
             onClick={() => {
               void submitAnswer(null)
             }}

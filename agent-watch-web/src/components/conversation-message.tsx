@@ -214,6 +214,7 @@ export function renderConversationMessage({
   if (message.type === 'proposal') {
     return (
       <ProposalCard
+        {...(sessionId === undefined ? {} : { sessionId })}
         seq={message.seq}
         title={message.title}
         summary={message.summary}
@@ -223,10 +224,11 @@ export function renderConversationMessage({
         resolution={message.resolution}
         withdrawalComment={message.comment}
         isMobile={isMobile}
-        onAnswer={(answer) =>
+        onAnswer={(answer, attachments) =>
           onAction(`proposals/${String(message.seq)}/answer`, {
             choice: answer.choice,
             comment: answer.comment,
+            ...(attachments === undefined ? {} : { attachments }),
           })
         }
       />
@@ -235,14 +237,17 @@ export function renderConversationMessage({
   if (message.type === 'todo') {
     return (
       <TodoCard
+        seq={message.seq}
+        {...(sessionId === undefined ? {} : { sessionId })}
         title={message.title}
         detail={message.detail}
         resolution={message.resolution}
         defaultComment={message.comment ?? ''}
-        onResolve={(resolution, comment) =>
+        onResolve={(resolution, comment, attachments) =>
           onAction(`todos/${String(message.seq)}/resolve`, {
             resolution,
             comment,
+            ...(attachments === undefined ? {} : { attachments }),
           })
         }
       />
