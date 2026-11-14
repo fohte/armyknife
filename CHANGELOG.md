@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.712](https://github.com/fohte/armyknife/compare/v0.1.711...v0.1.712) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** pin pending cards to the bottom ([#1804](https://github.com/fohte/armyknife/issues/1804)) ([be53e47](https://github.com/fohte/armyknife/commit/be53e4736f0986c2943fb5394263397f3436f52d))
+
 ## [0.1.711](https://github.com/fohte/armyknife/compare/v0.1.710...v0.1.711) (2026-11-14)
 
 
