@@ -94,13 +94,45 @@ it('does not offer to expand detail that fits in two lines', () => {
   renderCard(props({ detail: 'First line.\nSecond line.' }))
 
   const snapshot = () => ({
-    detail: container.querySelector('.chat-todo-detail p')?.textContent,
+    detail: container.querySelector('.chat-todo-detail .markdown-message')
+      ?.textContent,
     toggle: container.querySelector('.collapsible-text__toggle')?.textContent,
   })
 
   expect(snapshot()).toEqual({
     detail: 'First line.\nSecond line.',
     toggle: undefined,
+  })
+})
+
+it('renders task detail and completion comments as markdown', () => {
+  renderCard(
+    props({
+      detail:
+        'Review **the preview** and [read the guide](https://example.test).',
+    }),
+  )
+  const detail = container.querySelector(
+    '.chat-todo-detail .markdown-message',
+  )?.innerHTML
+  renderCard(
+    props({
+      resolution: 'completed',
+      defaultComment: 'The [preview](https://example.test) is **ready**.',
+    }),
+  )
+
+  const snapshot = () => ({
+    detail,
+    completionComment: container.querySelector('.chat-todo-completed-comment')
+      ?.innerHTML,
+  })
+
+  expect(snapshot()).toEqual({
+    detail:
+      '<p>Review <strong>the preview</strong> and <a href="https://example.test" target="_blank" rel="noopener noreferrer">read the guide</a>.</p>',
+    completionComment:
+      '<p>The <a href="https://example.test" target="_blank" rel="noopener noreferrer">preview</a> is <strong>ready</strong>.</p>',
   })
 })
 
@@ -116,7 +148,9 @@ it('expands and collapses long detail', async () => {
   )
 
   const detail = requireElement(
-    container.querySelector<HTMLParagraphElement>('.chat-todo-detail p'),
+    container.querySelector<HTMLDivElement>(
+      '.chat-todo-detail .collapsible-text__content',
+    ),
   )
   const toggle = requireElement(
     container.querySelector<HTMLButtonElement>('.collapsible-text__toggle'),

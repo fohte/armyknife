@@ -679,6 +679,10 @@ fn process_hook_event_impl_with_settings(
     if event == HookEvent::UserPromptSubmit
         && input.agent_id.is_none()
         && !super::peer_message::is_peer_message(input.prompt.as_deref())
+        && !input
+            .prompt
+            .as_deref()
+            .is_some_and(|prompt| super::peer_message::task_notification_envelope(prompt).is_some())
         && !session_lock.consume_pending_initial_prompt()?
     {
         session.last_prompted_at = Some(now);
@@ -5626,6 +5630,26 @@ mod tests {
 
                 Continue the review.
                 </peer-message>
+            "}
+        )]
+        #[case::task_notification(
+            None,
+            indoc::indoc! {"
+                <task-notification>
+                <task-id>fixture-task-id</task-id>
+                <status>completed</status>
+                </task-notification>
+            "}
+        )]
+        #[case::task_notification_with_leading_whitespace(
+            None,
+            " \t<task-notification><task-id>fixture-task-id</task-id><status>completed</status></task-notification>"
+        )]
+        #[case::prefixed_task_notification(
+            None,
+            indoc::indoc! {"
+                [SYSTEM NOTIFICATION - NOT USER INPUT]
+                <task-notification><task-id>fixture-task-id</task-id><status>completed</status></task-notification>
             "}
         )]
         #[case::subagent(Some("subagent-id"), "Continue the review.")]

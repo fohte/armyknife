@@ -2272,6 +2272,10 @@ it('jumps between own messages with Alt-arrow shortcuts', () => {
     ),
     scrollTargets: scrollIntoView.mock.contexts,
     scrollOptions: scrollIntoView.mock.calls.map(([options]) => options),
+    highlightedMessages: ownMessages.map(
+      (message) =>
+        message.getAttribute('data-own-message-highlighted') === 'true',
+    ),
     defaultPrevented: [
       previousEvent.defaultPrevented,
       nextEvent.defaultPrevented,
@@ -2285,10 +2289,120 @@ it('jumps between own messages with Alt-arrow shortcuts', () => {
     ],
     scrollTargets: [earlierMessage, laterMessage],
     scrollOptions: [
-      { block: 'center', behavior: 'smooth' },
-      { block: 'center', behavior: 'smooth' },
+      { block: 'center', behavior: 'instant' },
+      { block: 'center', behavior: 'instant' },
     ],
+    highlightedMessages: [false, false, true],
     defaultPrevented: [true, true],
+  })
+})
+
+it('removes the navigation highlight after one and a half seconds', async () => {
+  vi.useFakeTimers()
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [
+    { type: 'user', text: 'An earlier message.' },
+    { type: 'user', text: 'A later message.' },
+  ])
+
+  const scrollContainer = requireElement(
+    container.querySelector<HTMLElement>('.conversation-scroll'),
+  )
+  const ownMessages = Array.from(
+    container.querySelectorAll<HTMLElement>('[data-own-message="true"]'),
+  )
+  const laterMessage = requireElement(ownMessages[1] ?? null)
+  vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(
+    () => undefined,
+  )
+  mockConversationMessageBounds(scrollContainer, ownMessages, [
+    { top: 40, height: 30 },
+    { top: 500, height: 30 },
+  ])
+
+  dispatchKeyInAct(window, 'ArrowDown', { altKey: true })
+  const highlightedBeforeTimeout =
+    laterMessage.getAttribute('data-own-message-highlighted') === 'true'
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_500)
+  })
+
+  const snapshot = () => ({
+    highlightedBeforeTimeout,
+    highlightedAfterTimeout:
+      laterMessage.getAttribute('data-own-message-highlighted') === 'true',
+  })
+  expect(snapshot()).toEqual({
+    highlightedBeforeTimeout: true,
+    highlightedAfterTimeout: false,
+  })
+})
+
+it('keeps the latest navigation highlight when an earlier timer expires', async () => {
+  vi.useFakeTimers()
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [
+    { type: 'user', text: 'An earlier message.' },
+    { type: 'user', text: 'A middle message.' },
+    { type: 'user', text: 'A later message.' },
+  ])
+
+  const scrollContainer = requireElement(
+    container.querySelector<HTMLElement>('.conversation-scroll'),
+  )
+  const ownMessages = Array.from(
+    container.querySelectorAll<HTMLElement>('[data-own-message="true"]'),
+  )
+  vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(
+    () => undefined,
+  )
+  const messageBounds = ownMessages.map((message) =>
+    vi.spyOn(message, 'getBoundingClientRect'),
+  )
+  vi.spyOn(scrollContainer, 'getBoundingClientRect').mockReturnValue(
+    DOMRect.fromRect({ x: 0, y: 100, width: 400, height: 300 }),
+  )
+  vi.spyOn(scrollContainer, 'clientHeight', 'get').mockReturnValue(300)
+  const setMessageBounds = (tops: readonly number[]) => {
+    messageBounds.forEach((bounds, index) => {
+      bounds.mockReturnValue(
+        DOMRect.fromRect({
+          x: 0,
+          y: tops[index] ?? 0,
+          width: 300,
+          height: 30,
+        }),
+      )
+    })
+  }
+
+  setMessageBounds([40, 200, 500])
+  dispatchKeyInAct(window, 'ArrowUp', { altKey: true })
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000)
+  })
+  dispatchKeyInAct(window, 'ArrowDown', { altKey: true })
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(500)
+  })
+  const highlightedAfterEarlierDeadline = ownMessages.map(
+    (message) =>
+      message.getAttribute('data-own-message-highlighted') === 'true',
+  )
+
+  setMessageBounds([40, 500, 200])
+  dispatchKeyInAct(window, 'ArrowUp', { altKey: true })
+
+  const snapshot = () => ({
+    highlightedAfterEarlierDeadline,
+    highlightedAfterNextNavigation: ownMessages.map(
+      (message) =>
+        message.getAttribute('data-own-message-highlighted') === 'true',
+    ),
+  })
+  expect(snapshot()).toEqual({
+    highlightedAfterEarlierDeadline: [false, false, true],
+    highlightedAfterNextNavigation: [false, true, false],
   })
 })
 

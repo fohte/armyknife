@@ -28,15 +28,15 @@ it('offers to expand text after its available width shrinks', async () => {
   root = createRoot(frame)
   act(() => {
     root?.render(
-      <CollapsibleText
-        text="This note fits in one line at a wide size but wraps to several lines when the card narrows. Keep this extra sentence to ensure the content needs more than two lines at a narrow width."
-        expanded={false}
-        onExpandedChange={() => undefined}
-      />,
+      <CollapsibleText expanded={false} onExpandedChange={() => undefined}>
+        This note fits in one line at a wide size but wraps to several lines
+        when the card narrows. Keep this extra sentence to ensure the content
+        needs more than two lines at a narrow width.
+      </CollapsibleText>,
     )
   })
 
-  const content = container.querySelector<HTMLParagraphElement>(
+  const content = container.querySelector<HTMLDivElement>(
     '.collapsible-text__content',
   )
   if (content === null) throw new Error('The text content was not rendered')

@@ -117,7 +117,7 @@ it('renders the proposal heading, recommended option, and pros and cons', () => 
       .querySelector('.chat-proposal-options')
       ?.getAttribute('role'),
     options: Array.from(
-      container.querySelectorAll<HTMLLabelElement>('.chat-proposal-option'),
+      container.querySelectorAll<HTMLDivElement>('.chat-proposal-option'),
       (option) => ({
         text: option.textContent,
         checked: option.querySelector<HTMLInputElement>('input')?.checked,
@@ -156,6 +156,171 @@ it('renders the proposal heading, recommended option, and pros and cons', () => 
       { text: 'Ask for another option', disabled: false },
     ],
     hint: '1 / 2 to pick · ⌘↵ to send',
+  })
+})
+
+it('renders proposal summaries, descriptions, and withdrawal comments as markdown', () => {
+  renderCard(
+    props({
+      summary: 'Compare **the options** in [the guide](https://example.test).',
+      options: [
+        {
+          label: 'Use the existing flow',
+          description:
+            'Keep **the current flow** and [review details](https://example.test).',
+          pros: [],
+          cons: [],
+          recommended: false,
+        },
+      ],
+      resolved: true,
+      resolution: 'withdrawn',
+      withdrawalComment:
+        'See [the update](https://example.test) for **context**.',
+    }),
+  )
+
+  const snapshot = () => ({
+    summary: container.querySelector('.chat-proposal-summary')?.innerHTML,
+    description: container.querySelector('.chat-proposal-option-description')
+      ?.innerHTML,
+    withdrawalComment: container.querySelector(
+      '.chat-proposal-withdrawal-comment',
+    )?.innerHTML,
+  })
+
+  expect(snapshot()).toEqual({
+    summary:
+      '<p>Compare <strong>the options</strong> in <a href="https://example.test" target="_blank" rel="noopener noreferrer">the guide</a>.</p>',
+    description:
+      '<p>Keep <strong>the current flow</strong> and <a href="https://example.test" target="_blank" rel="noopener noreferrer">review details</a>.</p>',
+    withdrawalComment:
+      '<p>See <a href="https://example.test" target="_blank" rel="noopener noreferrer">the update</a> for <strong>context</strong>.</p>',
+  })
+})
+
+it('keeps option labels phrasing-only and links associated with their radios', () => {
+  renderCard(
+    props({
+      options: [
+        {
+          label: 'Use the existing flow',
+          description: 'Read [the guide](https://example.test).',
+          pros: [],
+          cons: [],
+          recommended: false,
+        },
+      ],
+    }),
+  )
+
+  const snapshot = () => {
+    const option = container.querySelector('.chat-proposal-option')
+    const input = option?.querySelector<HTMLInputElement>('input')
+    const label = option?.querySelector<HTMLLabelElement>('label')
+    const description = option?.querySelector(
+      '.chat-proposal-option-description',
+    )
+
+    return {
+      optionTag: option?.tagName,
+      inputId: input?.id,
+      labelFor: label?.htmlFor,
+      labelText: label?.textContent,
+      labelLinkCount: label?.querySelectorAll('a').length,
+      descriptionTag: description?.tagName,
+      descriptionLink: description?.querySelector('a')?.getAttribute('href'),
+    }
+  }
+
+  expect(snapshot()).toEqual({
+    optionTag: 'DIV',
+    inputId: 'proposal-7-option-0',
+    labelFor: 'proposal-7-option-0',
+    labelText: 'A · Use the existing flow',
+    labelLinkCount: 0,
+    descriptionTag: 'DIV',
+    descriptionLink: 'https://example.test',
+  })
+})
+
+it('selects an option from its description but not from its links', () => {
+  renderCard(
+    props({
+      options: [
+        {
+          label: 'Use the existing flow',
+          description: 'Read [the guide](https://example.test).',
+          pros: [],
+          cons: [],
+          recommended: false,
+        },
+        {
+          label: 'Show the choice earlier',
+          description: 'Move the choice before the next action.',
+          pros: [],
+          cons: [],
+          recommended: false,
+        },
+      ],
+    }),
+  )
+
+  const firstDescription = requireElement(
+    container.querySelector<HTMLParagraphElement>(
+      '.chat-proposal-option-description p',
+    ),
+  )
+  const secondDescription = requireElement(
+    container.querySelectorAll<HTMLParagraphElement>(
+      '.chat-proposal-option-description p',
+    )[1] ?? null,
+  )
+  const link = requireElement(
+    container.querySelector<HTMLAnchorElement>(
+      '.chat-proposal-option-description a',
+    ),
+  )
+  link.addEventListener('click', (event) => {
+    event.preventDefault()
+  })
+
+  const selected = () =>
+    Array.from(
+      container.querySelectorAll<HTMLInputElement>(
+        '.chat-proposal-option input',
+      ),
+      (input) => input.checked,
+    )
+
+  act(() => {
+    firstDescription.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true }),
+    )
+  })
+  const afterFirstDescriptionClick = selected()
+  act(() => {
+    secondDescription.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true }),
+    )
+  })
+  const afterSecondDescriptionClick = selected()
+  act(() => {
+    link.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true }),
+    )
+  })
+
+  const snapshot = () => ({
+    afterFirstDescriptionClick,
+    afterSecondDescriptionClick,
+    afterLinkClick: selected(),
+  })
+
+  expect(snapshot()).toEqual({
+    afterFirstDescriptionClick: [true, false],
+    afterSecondDescriptionClick: [false, true],
+    afterLinkClick: [false, true],
   })
 })
 

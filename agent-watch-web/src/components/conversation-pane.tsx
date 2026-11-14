@@ -163,6 +163,9 @@ export function ConversationPane({
     },
     [clearErrors, setError],
   )
+  const onCommandExecuted = useCallback(() => {
+    void refresh()
+  }, [refresh])
 
   useEffect(() => {
     setOpenInTerminalStatus(null)
@@ -365,7 +368,7 @@ export function ConversationPane({
         clearErrors()
       }}
       onAction={onAction}
-      onCommandExecuted={() => void refresh()}
+      onCommandExecuted={onCommandExecuted}
       onRewind={onRewind}
       onOpenInTerminal={onOpenInTerminal}
       onSelectSession={onSelectSession}

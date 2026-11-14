@@ -10,6 +10,7 @@ import {
 import { type SubmitEvent, useState } from 'react'
 
 import { OpenInTerminalAction } from '#components/open-in-terminal-action'
+import { PullRequestMergeAction } from '#components/pull-request-merge-action'
 import { PullRequestMergeConfirmation } from '#components/pull-request-merge-confirmation'
 import { SessionHeading } from '#components/session-heading'
 import { SessionTaskLinks } from '#components/session-task-links'
@@ -124,6 +125,7 @@ export function ConversationPaneHeader({
   const confirmMerge = async () => {
     if (mergeOperation === null || merging) return
     setMergeFeedback(null)
+    setMergeConfirmationOpen(false)
     const result = await run(mergeOperation)
     result.match(
       (response) => {
@@ -155,7 +157,6 @@ export function ConversationPaneHeader({
         })
       },
     )
-    setMergeConfirmationOpen(false)
   }
 
   const saveTitle = async (event: SubmitEvent<HTMLFormElement>) => {
@@ -393,18 +394,13 @@ export function ConversationPaneHeader({
                 {mergeOperation === null ||
                 (mergeFeedback?.kind === 'success' &&
                   mergeFeedback.number === mergeOperation.number) ? null : (
-                  <Button
-                    className="conversation-pr-merge-button"
-                    type="button"
-                    variant="plain"
-                    disabled={merging}
+                  <PullRequestMergeAction
+                    merging={merging}
                     onClick={() => {
                       setMergeFeedback(null)
                       setMergeConfirmationOpen(true)
                     }}
-                  >
-                    Merge
-                  </Button>
+                  />
                 )}
                 {mergeFeedback === null ||
                 mergeFeedback.number !== pullRequest?.number ? null : (
