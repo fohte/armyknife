@@ -89,7 +89,7 @@ export function ConversationPaneHeader({
   const [mergeConfirmationOpen, setMergeConfirmationOpen] = useState(false)
   const [mergeFeedback, setMergeFeedback] = useState<{
     number: number
-    kind: 'success' | 'error'
+    kind: 'success' | 'queued' | 'error'
     message: string
   } | null>(null)
   const { pendingOperations, run } = useSessionOperations()
@@ -143,7 +143,7 @@ export function ConversationPaneHeader({
               : `PR #${String(mergeOperation.number)} was added to the merge queue: ${response.message}`
         setMergeFeedback({
           number: mergeOperation.number,
-          kind: 'success',
+          kind: response.result === 'enqueued' ? 'queued' : 'success',
           message,
         })
       },

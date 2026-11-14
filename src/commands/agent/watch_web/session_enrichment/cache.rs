@@ -1,13 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::commands::agent::tq_session_tasks::order_tasks_by_priority;
-use crate::infra::github::PrProgressInfo;
+use crate::infra::github::PrHeadInfo;
 
 use super::{BranchPrKey, SessionTaskMetadata};
 
 pub(super) fn merge_pull_request_results(
-    cached: &mut HashMap<BranchPrKey, Option<PrProgressInfo>>,
-    refreshed: HashMap<BranchPrKey, Option<PrProgressInfo>>,
+    cached: &mut HashMap<BranchPrKey, Option<PrHeadInfo>>,
+    refreshed: HashMap<BranchPrKey, Option<PrHeadInfo>>,
     requested_keys: &HashSet<BranchPrKey>,
 ) {
     for key in requested_keys {
@@ -18,7 +18,7 @@ pub(super) fn merge_pull_request_results(
 }
 
 pub(super) fn prune_pull_request_results(
-    cached: &mut HashMap<BranchPrKey, Option<PrProgressInfo>>,
+    cached: &mut HashMap<BranchPrKey, Option<PrHeadInfo>>,
     stale_keys: &HashSet<BranchPrKey>,
 ) {
     cached.retain(|key, _| !stale_keys.contains(key));
@@ -154,7 +154,7 @@ pub(super) fn prune_session_task_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infra::github::{PrCiState, PrInfo, PrProgressInfo, PrState};
+    use crate::infra::github::{PrHeadInfo, PrInfo, PrState};
     use rstest::{fixture, rstest};
     use std::sync::Arc;
     use tokio::sync::watch;
@@ -168,15 +168,14 @@ mod tests {
         FETCH_TIMEOUT, PullRequestFetcher, SessionTaskMetadata, TaskMetadataFetcher,
     };
 
-    fn progress(number: u64, title: impl Into<String>, url: impl Into<String>) -> PrProgressInfo {
-        PrProgressInfo {
+    fn head_info(number: u64, title: impl Into<String>, url: impl Into<String>) -> PrHeadInfo {
+        PrHeadInfo {
             pull_request: PrInfo {
                 number,
                 title: title.into(),
                 state: PrState::Open,
                 url: url.into(),
             },
-            ci_state: PrCiState::Unknown,
             head_sha: Some("sample-head".to_string()),
         }
     }
@@ -262,7 +261,7 @@ mod tests {
                                 context.repo.clone(),
                                 context.branch.clone(),
                             ),
-                            Some(progress(
+                            Some(head_info(
                                 if context.branch == "branch-a" { 17 } else { 23 },
                                 format!("Change for {}", context.branch),
                                 format!("https://example.test/{}", context.branch),
@@ -298,7 +297,7 @@ mod tests {
                 HashMap::from([("session-a".to_string(), None)]),
                 HashMap::from([(
                     "session-a".to_string(),
-                    Some(progress(
+                    Some(head_info(
                         17,
                         "Change for branch-a",
                         "https://example.test/branch-a"
@@ -307,7 +306,7 @@ mod tests {
                 HashMap::from([("session-b".to_string(), None)]),
                 HashMap::from([(
                     "session-a".to_string(),
-                    Some(progress(
+                    Some(head_info(
                         17,
                         "Change for branch-a",
                         "https://example.test/branch-a"
@@ -315,7 +314,7 @@ mod tests {
                 )]),
                 HashMap::from([(
                     "session-b".to_string(),
-                    Some(progress(
+                    Some(head_info(
                         23,
                         "Change for branch-b",
                         "https://example.test/branch-b"
@@ -382,7 +381,7 @@ mod tests {
             (branch_a.clone(), None),
             (
                 branch_b.clone(),
-                Some(progress(
+                Some(head_info(
                     23,
                     "Change for branch-b",
                     "https://example.test/branch-b",
@@ -396,7 +395,7 @@ mod tests {
             cached,
             HashMap::from([(
                 branch_b,
-                Some(progress(
+                Some(head_info(
                     23,
                     "Change for branch-b",
                     "https://example.test/branch-b"

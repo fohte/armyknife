@@ -50,6 +50,10 @@
   color: var(--aw-color-working);
 }
 
+.conversation-pr-merge-feedback--queued {
+  color: var(--aw-color-warning);
+}
+
 .conversation-pr-merge-feedback--error {
   color: var(--aw-color-error);
 }

@@ -22,7 +22,7 @@ use crate::commands::agent::store;
 use crate::commands::agent::tq_session_tasks::SessionTask as LinkedSessionTask;
 use crate::commands::agent::types::{Engine, Session, SessionStatus, WebUiRegistration};
 use crate::commands::agent::user_turn::{UserTurnKind, user_turns};
-use crate::infra::github::{PrProgressInfo, PrState};
+use crate::infra::github::{PrHeadInfo, PrState};
 use crate::shared::config::{self, AgentConfig};
 
 mod category;
@@ -84,7 +84,7 @@ struct SessionPullRequestView {
 
 fn session_pull_request_view(
     session: &Session,
-    progress: &PrProgressInfo,
+    progress: &PrHeadInfo,
 ) -> Option<SessionPullRequestView> {
     let context = session.pr_context.as_ref()?;
     Some(SessionPullRequestView {
@@ -178,7 +178,7 @@ trait SessionSource: Clone + Send + Sync + 'static {
     fn fetch_pull_requests(
         &self,
         sessions: &[Session],
-    ) -> impl Future<Output = HashMap<String, Option<PrProgressInfo>>> + Send;
+    ) -> impl Future<Output = HashMap<String, Option<PrHeadInfo>>> + Send;
 
     fn running_background_task_session_ids(
         &self,
@@ -212,7 +212,7 @@ impl SessionSource for LiveSessionSource {
     async fn fetch_pull_requests(
         &self,
         sessions: &[Session],
-    ) -> HashMap<String, Option<PrProgressInfo>> {
+    ) -> HashMap<String, Option<PrHeadInfo>> {
         self.enrichment.pull_requests(sessions).await
     }
 
@@ -719,7 +719,7 @@ mod tests {
         task_priorities: HashMap<String, Option<i32>>,
         task_priority_order: HashMap<String, usize>,
         task_projects: HashMap<String, String>,
-        pull_requests: HashMap<String, Option<PrProgressInfo>>,
+        pull_requests: HashMap<String, Option<PrHeadInfo>>,
         decision_counts: HashMap<String, store::AgentDecisionCounts>,
         work_type_nav_labels: HashMap<String, String>,
         agent_statuses: HashMap<String, AgentStatusConfig>,
@@ -774,7 +774,7 @@ mod tests {
         async fn fetch_pull_requests(
             &self,
             _sessions: &[Session],
-        ) -> HashMap<String, Option<PrProgressInfo>> {
+        ) -> HashMap<String, Option<PrHeadInfo>> {
             self.pull_requests.clone()
         }
 
@@ -849,7 +849,7 @@ mod tests {
         async fn fetch_pull_requests(
             &self,
             sessions: &[Session],
-        ) -> HashMap<String, Option<PrProgressInfo>> {
+        ) -> HashMap<String, Option<PrHeadInfo>> {
             self.source.fetch_pull_requests(sessions).await
         }
 
@@ -953,14 +953,13 @@ mod tests {
             ]),
             pull_requests: HashMap::from([(
                 "child-session".to_string(),
-                Some(PrProgressInfo {
+                Some(PrHeadInfo {
                     pull_request: crate::infra::github::PrInfo {
                         number: 42,
                         title: "example pull request".to_string(),
                         state: PrState::Open,
                         url: "https://example.com/pull/42".to_string(),
                     },
-                    ci_state: crate::infra::github::PrCiState::Successful,
                     head_sha: Some("fixture-head".to_string()),
                 }),
             )]),
