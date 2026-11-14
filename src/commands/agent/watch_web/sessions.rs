@@ -365,10 +365,13 @@ async fn list_sessions<S: SessionSource>(
     let interrupted_session_ids = interrupted_sessions
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let question_previews = question_previews.map_err(|error| {
-        tracing::warn!(%error, "failed to load session question previews");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
+    let question_previews = match question_previews {
+        Ok(previews) => previews,
+        Err(error) => {
+            tracing::warn!(%error, "failed to load session question previews");
+            HashMap::new()
+        }
+    };
     let turn_kinds = user_turns(response_sessions.iter(), &snapshot.agent_config)
         .into_iter()
         .map(|turn| (turn.session.session_id.as_str(), turn.kind))
@@ -762,6 +765,7 @@ mod tests {
         work_type_nav_labels: HashMap<String, String>,
         agent_statuses: HashMap<String, AgentStatusConfig>,
         message_loaders: super::super::messages::RouteLoaders,
+        question_preview_error: bool,
         review_document_queue_calls: Arc<AtomicUsize>,
         review_document_queue_thread_id: Arc<Mutex<Option<std::thread::ThreadId>>>,
         now: DateTime<Utc>,
@@ -804,6 +808,9 @@ mod tests {
             &self,
             sessions: &[Session],
         ) -> anyhow::Result<HashMap<String, String>> {
+            if self.question_preview_error {
+                return Err(anyhow::anyhow!("synthetic question preview failure"));
+            }
             let sessions = sessions.to_vec();
             let loaders = self.message_loaders.clone();
             tokio::task::spawn_blocking(move || question_previews(&sessions, &loaders)).await?
@@ -1033,6 +1040,7 @@ mod tests {
                 |_, _| Ok(()),
                 |_| Ok(Vec::new()),
             ),
+            question_preview_error: false,
             review_document_queue_calls: Arc::default(),
             review_document_queue_thread_id: Arc::default(),
             now: Utc.timestamp_opt(1_100, 0).unwrap(),
@@ -1047,6 +1055,18 @@ mod tests {
             object.remove("token");
         }
         (status, response)
+    }
+
+    fn write_transcript(records: &[serde_json::Value]) -> (tempfile::TempDir, PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        let mut transcript = Vec::new();
+        for record in records {
+            transcript.extend(serde_json::to_vec(record).unwrap());
+            transcript.push(b'\n');
+        }
+        std::fs::write(&transcript_path, transcript).unwrap();
+        (directory, transcript_path)
     }
 
     async fn sessions_request(router: &Router, uri: &str) -> (StatusCode, serde_json::Value) {
@@ -1368,28 +1388,55 @@ mod tests {
     }
 
     #[rstest]
-    #[case::one_question("single-question-request", "Which display mode?")]
-    #[case::three_questions("multiple-question-request", "Which output format? +2")]
+    #[case::one_question(
+        serde_json::json!([{"question": "Which display mode?"}]),
+        "Which display mode?",
+        None,
+        None,
+    )]
+    #[case::three_questions(
+        serde_json::json!([
+            {"question": "Which output format?"},
+            {"question": "Include examples?"},
+            {"question": "Include a summary?"},
+        ]),
+        "Which output format? +2",
+        None,
+        None,
+    )]
+    #[case::question_precedes_proposal_title(
+        serde_json::json!([{"question": "Which display mode?"}]),
+        "Which display mode?",
+        Some("Synthetic proposal title"),
+        None,
+    )]
+    #[case::question_precedes_todo_title(
+        serde_json::json!([{"question": "Which display mode?"}]),
+        "Which display mode?",
+        None,
+        Some("Synthetic todo title"),
+    )]
     #[tokio::test]
     async fn ask_user_question_preview_shows_the_first_question_and_remaining_count(
         mut source: TestSessionSource,
-        #[case] request_id: &str,
+        #[case] questions: serde_json::Value,
         #[case] expected_preview: &str,
+        #[case] proposal_title: Option<&str>,
+        #[case] todo_title: Option<&str>,
     ) {
         source.web_states[0].later_until = None;
         source.sessions[0].current_tool = Some("AskUserQuestion".to_string());
         source.sessions[0].current_tool_name = Some("AskUserQuestion".to_string());
-        let questions = match request_id {
-            "single-question-request" => serde_json::json!([
-                {"question": "Which display mode?"},
-            ]),
-            "multiple-question-request" => serde_json::json!([
-                {"question": "Which output format?"},
-                {"question": "Include examples?"},
-                {"question": "Include a summary?"},
-            ]),
-            _ => serde_json::Value::Null,
-        };
+        if let Some(title) = proposal_title {
+            source
+                .unanswered_proposal_titles
+                .insert("child-session".to_string(), title.to_string());
+        }
+        if let Some(title) = todo_title {
+            source
+                .unanswered_todo_titles
+                .insert("child-session".to_string(), title.to_string());
+        }
         let transcript = serde_json::json!({
             "type": "assistant",
             "message": {"content": [{
@@ -1399,9 +1446,7 @@ mod tests {
                 "input": {"questions": questions},
             }]},
         });
-        let transcript_dir = tempfile::tempdir().unwrap();
-        let transcript_path = transcript_dir.path().join("transcript.jsonl");
-        std::fs::write(&transcript_path, serde_json::to_vec(&transcript).unwrap()).unwrap();
+        let (_transcript_dir, transcript_path) = write_transcript(&[transcript]);
         source.sessions[0].transcript_path = Some(transcript_path);
 
         let mut expected = expected_response(
@@ -1425,6 +1470,77 @@ mod tests {
             },
         );
         expected["sessions"][0]["preview"] = serde_json::json!(expected_preview);
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[case::latest_question_is_answered(true, "Question")]
+    #[case::current_tool_is_not_ask_user_question(false, "Stopped")]
+    #[tokio::test]
+    async fn question_preview_falls_back_to_last_message_when_no_question_is_pending(
+        mut source: TestSessionSource,
+        #[case] current_tool_is_ask_user_question: bool,
+        #[case] expected_kind: &str,
+    ) {
+        source.web_states[0].later_until = None;
+        if current_tool_is_ask_user_question {
+            source.sessions[0].current_tool = Some("AskUserQuestion".to_string());
+            source.sessions[0].current_tool_name = Some("AskUserQuestion".to_string());
+        }
+        let mut records = vec![
+            serde_json::json!({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use",
+                    "id": "fixture-earlier-question",
+                    "name": "AskUserQuestion",
+                    "input": {"questions": [{"question": "Which earlier option?"}]},
+                }]},
+            }),
+            serde_json::json!({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use",
+                    "id": "fixture-latest-question",
+                    "name": "AskUserQuestion",
+                    "input": {"questions": [{"question": "Which recent option?"}]},
+                }]},
+            }),
+        ];
+        if current_tool_is_ask_user_question {
+            records.push(serde_json::json!({
+                "type": "user",
+                "message": {"content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "fixture-latest-question",
+                    "content": "Your questions have been answered: \"Which recent option?\"=\"First fictional option\".",
+                }]},
+            }));
+        }
+        let (_transcript_dir, transcript_path) = write_transcript(&records);
+        source.sessions[0].transcript_path = Some(transcript_path);
+
+        let expected = expected_response(
+            "needs_action",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: Some(expected_kind),
+                category_when_not_later: "needs_action",
+                is_paused: false,
+                unread: true,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
@@ -1484,6 +1600,40 @@ mod tests {
             },
         );
         expected["sessions"][0]["preview"] = serde_json::json!("Which fallback should appear?");
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn inbox_response_survives_question_preview_lookup_failure(
+        mut source: TestSessionSource,
+    ) {
+        source.web_states[0].later_until = None;
+        source.sessions[0].current_tool = Some("AskUserQuestion".to_string());
+        source.sessions[0].current_tool_name = Some("AskUserQuestion".to_string());
+        source.question_preview_error = true;
+
+        let expected = expected_response(
+            "needs_action",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: Some("Question"),
+                category_when_not_later: "needs_action",
+                is_paused: false,
+                unread: true,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }

@@ -94,6 +94,7 @@ pub(super) struct RouteLoaders {
     agent_files: AgentFileLoader,
     message_cache: MessageCache,
     running_background_task_cache: RunningBackgroundTaskCache,
+    question_preview_cache: question_preview::QuestionPreviewCache,
 }
 
 impl RouteLoaders {
@@ -119,6 +120,7 @@ impl RouteLoaders {
             agent_files: Arc::new(|_| Ok(Vec::new())),
             message_cache: MessageCache::default(),
             running_background_task_cache: RunningBackgroundTaskCache::default(),
+            question_preview_cache: question_preview::QuestionPreviewCache::default(),
         }
     }
 
