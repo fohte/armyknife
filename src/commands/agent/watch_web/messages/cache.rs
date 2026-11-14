@@ -15,8 +15,9 @@ use super::{ConversationResponse, ParentSession, RouteLoaders};
 
 mod transcript_fingerprint;
 
-use transcript_fingerprint::transcript_fingerprint;
-pub(super) use transcript_fingerprint::{TranscriptChange, TranscriptFingerprint};
+pub(super) use transcript_fingerprint::{
+    TranscriptChange, TranscriptFingerprint, transcript_fingerprint,
+};
 
 const MAX_CACHED_SESSIONS: usize = 8;
 const MAX_CACHED_BACKGROUND_TASK_SESSIONS: usize = 256;
@@ -326,14 +327,14 @@ struct LruEntry<V> {
     last_used: u64,
 }
 
-struct LruCache<K, V> {
+pub(super) struct LruCache<K, V> {
     entries: HashMap<K, LruEntry<V>>,
     access_counter: u64,
     capacity: usize,
 }
 
 impl<K, V> LruCache<K, V> {
-    fn new(capacity: usize) -> Self {
+    pub(super) fn new(capacity: usize) -> Self {
         Self {
             entries: HashMap::new(),
             access_counter: 0,
@@ -346,14 +347,14 @@ impl<K, V> LruCache<K, V>
 where
     K: Clone + Eq + std::hash::Hash,
 {
-    fn get(&mut self, key: &K) -> Option<&V> {
+    pub(super) fn get(&mut self, key: &K) -> Option<&V> {
         let entry = self.entries.get_mut(key)?;
         self.access_counter += 1;
         entry.last_used = self.access_counter;
         Some(&entry.value)
     }
 
-    fn insert(&mut self, key: K, value: V) {
+    pub(super) fn insert(&mut self, key: K, value: V) {
         self.access_counter += 1;
         if !self.entries.contains_key(&key)
             && self.entries.len() >= self.capacity

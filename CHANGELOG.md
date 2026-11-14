@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.713](https://github.com/fohte/armyknife/compare/v0.1.712...v0.1.713) (2026-11-14)
+
+
+### Features
+
+* **watch-web:** support Inbox question previews ([#1806](https://github.com/fohte/armyknife/issues/1806)) ([13b6b3f](https://github.com/fohte/armyknife/commit/13b6b3f31bd4b9b00b896e8946b9d09ceb437fc1))
+
 ## [0.1.712](https://github.com/fohte/armyknife/compare/v0.1.711...v0.1.712) (2026-11-14)
 
 

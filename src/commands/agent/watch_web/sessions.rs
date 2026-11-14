@@ -26,6 +26,7 @@ use crate::infra::github::{PrHeadInfo, PrState};
 use crate::shared::config::{self, AgentConfig};
 
 mod category;
+mod question_preview;
 use self::category::{
     SessionCategory, SessionKind, category_for_with_interruption, category_for_with_later,
     kind_for_with_todo,
@@ -42,6 +43,7 @@ mod tree;
 use self::feed::{
     SessionSnapshotCache, SessionsFeedResponse, SessionsQuery, session_feed_response,
 };
+use self::question_preview::question_previews;
 use self::task_selection::primary_task_id;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -172,6 +174,13 @@ struct SessionSnapshot {
 trait SessionSource: Clone + Send + Sync + 'static {
     fn load_snapshot(&self) -> impl Future<Output = anyhow::Result<SessionSnapshot>> + Send;
 
+    fn question_previews(
+        &self,
+        _sessions: &[Session],
+    ) -> impl Future<Output = anyhow::Result<HashMap<String, String>>> + Send {
+        async { Ok(HashMap::new()) }
+    }
+
     fn fetch_task_metadata(
         &self,
         sessions: &[Session],
@@ -205,6 +214,15 @@ struct LiveSessionSource {
 impl SessionSource for LiveSessionSource {
     async fn load_snapshot(&self) -> anyhow::Result<SessionSnapshot> {
         tokio::task::spawn_blocking(load_snapshot).await?
+    }
+
+    async fn question_previews(
+        &self,
+        sessions: &[Session],
+    ) -> anyhow::Result<HashMap<String, String>> {
+        let sessions = sessions.to_vec();
+        let loaders = self.message_loaders.clone();
+        tokio::task::spawn_blocking(move || question_previews(&sessions, &loaders)).await?
     }
 
     async fn fetch_task_metadata(&self, sessions: &[Session]) -> SessionTaskMetadata {
@@ -331,10 +349,11 @@ async fn list_sessions<S: SessionSource>(
         .cloned()
         .collect::<Vec<_>>();
 
-    let (task_metadata, pull_requests, running_background_task_sessions) = tokio::join!(
+    let (task_metadata, pull_requests, running_background_task_sessions, question_previews) = tokio::join!(
         source.fetch_task_metadata(&response_sessions),
         source.fetch_pull_requests(&response_sessions),
         source.running_background_task_session_ids(stopped_claude_sessions),
+        source.question_previews(&response_sessions),
     );
     let running_background_task_sessions = running_background_task_sessions.map_err(|error| {
         tracing::warn!(
@@ -346,6 +365,13 @@ async fn list_sessions<S: SessionSource>(
     let interrupted_session_ids = interrupted_sessions
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let question_previews = match question_previews {
+        Ok(previews) => previews,
+        Err(error) => {
+            tracing::warn!(%error, "failed to load session question previews");
+            HashMap::new()
+        }
+    };
     let turn_kinds = user_turns(response_sessions.iter(), &snapshot.agent_config)
         .into_iter()
         .map(|turn| (turn.session.session_id.as_str(), turn.kind))
@@ -520,8 +546,10 @@ async fn list_sessions<S: SessionSource>(
                     .get(&session.session_id)
                     .cloned()
                     .unwrap_or_default(),
-                preview: proposal_title
+                preview: question_previews
+                    .get(&session.session_id)
                     .cloned()
+                    .or_else(|| proposal_title.cloned())
                     .or_else(|| todo_title.cloned())
                     .or_else(|| session.last_message.clone()),
                 updated_at: session.updated_at,
@@ -659,7 +687,7 @@ fn session_tree_related_ids(sessions: &[Session]) -> HashSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent::types::{AgentStatus, TmuxInfo};
+    use crate::commands::agent::types::{AgentStatus, MAIN_THREAD_AGENT_KEY, TmuxInfo};
     use crate::shared::config::{
         AgentStatusConfig, AgentStatusState, AgentWorkTypeColor, AgentWorkTypeConfig,
         AgentWorkTypeNamedColor,
@@ -732,6 +760,7 @@ mod tests {
         work_type_nav_labels: HashMap<String, String>,
         agent_statuses: HashMap<String, AgentStatusConfig>,
         message_loaders: super::super::messages::RouteLoaders,
+        question_preview_error: bool,
         review_document_queue_calls: Arc<AtomicUsize>,
         review_document_queue_thread_id: Arc<Mutex<Option<std::thread::ThreadId>>>,
         now: DateTime<Utc>,
@@ -768,6 +797,18 @@ mod tests {
                     ..AgentConfig::default()
                 },
             })
+        }
+
+        async fn question_previews(
+            &self,
+            sessions: &[Session],
+        ) -> anyhow::Result<HashMap<String, String>> {
+            if self.question_preview_error {
+                return Err(anyhow::anyhow!("synthetic question preview failure"));
+            }
+            let sessions = sessions.to_vec();
+            let loaders = self.message_loaders.clone();
+            tokio::task::spawn_blocking(move || question_previews(&sessions, &loaders)).await?
         }
 
         async fn fetch_task_metadata(&self, _sessions: &[Session]) -> SessionTaskMetadata {
@@ -852,6 +893,13 @@ mod tests {
 
         async fn fetch_task_metadata(&self, sessions: &[Session]) -> SessionTaskMetadata {
             self.source.fetch_task_metadata(sessions).await
+        }
+
+        async fn question_previews(
+            &self,
+            sessions: &[Session],
+        ) -> anyhow::Result<HashMap<String, String>> {
+            self.source.question_previews(sessions).await
         }
 
         async fn fetch_pull_requests(
@@ -987,6 +1035,7 @@ mod tests {
                 |_, _| Ok(()),
                 |_| Ok(Vec::new()),
             ),
+            question_preview_error: false,
             review_document_queue_calls: Arc::default(),
             review_document_queue_thread_id: Arc::default(),
             now: Utc.timestamp_opt(1_100, 0).unwrap(),
@@ -1001,6 +1050,18 @@ mod tests {
             object.remove("token");
         }
         (status, response)
+    }
+
+    fn write_transcript(records: &[serde_json::Value]) -> (tempfile::TempDir, PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        let mut transcript = Vec::new();
+        for record in records {
+            transcript.extend(serde_json::to_vec(record).unwrap());
+            transcript.push(b'\n');
+        }
+        std::fs::write(&transcript_path, transcript).unwrap();
+        (directory, transcript_path)
     }
 
     async fn sessions_request(router: &Router, uri: &str) -> (StatusCode, serde_json::Value) {
@@ -1319,6 +1380,269 @@ mod tests {
                 "critUrl": details.crit_url
             }]
         })
+    }
+
+    fn question_inbox_response(kind: &str, preview: Option<&str>) -> serde_json::Value {
+        let mut expected = expected_response(
+            "needs_action",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: Some(kind),
+                category_when_not_later: "needs_action",
+                is_paused: false,
+                unread: true,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        if let Some(preview) = preview {
+            expected["sessions"][0]["preview"] = serde_json::json!(preview);
+        }
+        expected
+    }
+
+    fn unanswered_question_transcript() -> Vec<serde_json::Value> {
+        vec![
+            serde_json::json!({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use",
+                    "id": "fixture-earlier-question",
+                    "name": "AskUserQuestion",
+                    "input": {"questions": [{"question": "Which earlier option?"}]},
+                }]},
+            }),
+            serde_json::json!({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use",
+                    "id": "fixture-latest-question",
+                    "name": "AskUserQuestion",
+                    "input": {"questions": [{"question": "Which recent option?"}]},
+                }]},
+            }),
+        ]
+    }
+
+    fn answered_question_transcript() -> Vec<serde_json::Value> {
+        let mut records = unanswered_question_transcript();
+        records.push(serde_json::json!({
+            "type": "user",
+            "message": {"content": [{
+                "type": "tool_result",
+                "tool_use_id": "fixture-latest-question",
+                "content": "Your questions have been answered: \"Which recent option?\"=\"First fictional option\".",
+            }]},
+        }));
+        records
+    }
+
+    #[rstest]
+    #[case::one_question(
+        serde_json::json!([{"question": "Which display mode?"}]),
+        "Which display mode?",
+        None,
+        None,
+    )]
+    #[case::three_questions(
+        serde_json::json!([
+            {"question": "Which output format?"},
+            {"question": "Include examples?"},
+            {"question": "Include a summary?"},
+        ]),
+        "Which output format? +2",
+        None,
+        None,
+    )]
+    #[case::question_precedes_proposal_title(
+        serde_json::json!([{"question": "Which display mode?"}]),
+        "Which display mode?",
+        Some("Synthetic proposal title"),
+        None,
+    )]
+    #[case::question_precedes_todo_title(
+        serde_json::json!([{"question": "Which display mode?"}]),
+        "Which display mode?",
+        None,
+        Some("Synthetic todo title"),
+    )]
+    #[tokio::test]
+    async fn ask_user_question_preview_shows_the_first_question_and_remaining_count(
+        mut source: TestSessionSource,
+        #[case] questions: serde_json::Value,
+        #[case] expected_preview: &str,
+        #[case] proposal_title: Option<&str>,
+        #[case] todo_title: Option<&str>,
+    ) {
+        source.web_states[0].later_until = None;
+        source.sessions[0].current_tool = Some("AskUserQuestion".to_string());
+        source.sessions[0].current_tool_name = Some("AskUserQuestion".to_string());
+        if let Some(title) = proposal_title {
+            source
+                .unanswered_proposal_titles
+                .insert("child-session".to_string(), title.to_string());
+        }
+        if let Some(title) = todo_title {
+            source
+                .unanswered_todo_titles
+                .insert("child-session".to_string(), title.to_string());
+        }
+        let transcript = serde_json::json!({
+            "type": "assistant",
+            "message": {"content": [{
+                "type": "tool_use",
+                "id": "fixture-question-request",
+                "name": "AskUserQuestion",
+                "input": {"questions": questions},
+            }]},
+        });
+        let (_transcript_dir, transcript_path) = write_transcript(&[transcript]);
+        source.sessions[0].transcript_path = Some(transcript_path);
+
+        let expected = question_inbox_response("Question", Some(expected_preview));
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn question_preview_cache_refreshes_after_transcript_update(
+        mut source: TestSessionSource,
+    ) {
+        source.web_states[0].later_until = None;
+        source.sessions[0].current_tool = Some("AskUserQuestion".to_string());
+        source.sessions[0].current_tool_name = Some("AskUserQuestion".to_string());
+        let first_record = serde_json::json!({
+            "type": "assistant",
+            "message": {"content": [{
+                "type": "tool_use",
+                "id": "fixture-first-question",
+                "name": "AskUserQuestion",
+                "input": {"questions": [{"question": "Which initial layout?"}]},
+            }]},
+        });
+        let (_transcript_dir, transcript_path) = write_transcript(&[first_record]);
+        source.sessions[0].transcript_path = Some(transcript_path.clone());
+
+        let first_response = sessions_response(source.clone()).await;
+        let mut transcript = std::fs::read(&transcript_path).unwrap();
+        transcript.extend(
+            serde_json::to_vec(&serde_json::json!({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use",
+                    "id": "fixture-updated-question",
+                    "name": "AskUserQuestion",
+                    "input": {"questions": [{"question": "Which updated layout?"}]},
+                }]},
+            }))
+            .unwrap(),
+        );
+        transcript.push(b'\n');
+        std::fs::write(&transcript_path, transcript).unwrap();
+        let second_response = sessions_response(source).await;
+
+        let first_expected = question_inbox_response("Question", Some("Which initial layout?"));
+        let second_expected = question_inbox_response("Question", Some("Which updated layout?"));
+
+        assert_eq!(
+            (first_response, second_response),
+            (
+                (StatusCode::OK, first_expected),
+                (StatusCode::OK, second_expected),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::latest_question_is_answered(
+        Some("AskUserQuestion"),
+        answered_question_transcript(),
+        "Question"
+    )]
+    #[case::current_tool_is_not_ask_user_question(
+        None,
+        unanswered_question_transcript(),
+        "Stopped"
+    )]
+    #[tokio::test]
+    async fn question_preview_falls_back_to_last_message_when_no_question_is_pending(
+        mut source: TestSessionSource,
+        #[case] current_tool: Option<&str>,
+        #[case] records: Vec<serde_json::Value>,
+        #[case] expected_kind: &str,
+    ) {
+        source.web_states[0].later_until = None;
+        source.sessions[0].current_tool = current_tool.map(String::from);
+        source.sessions[0].current_tool_name = current_tool.map(String::from);
+        let (_transcript_dir, transcript_path) = write_transcript(&records);
+        source.sessions[0].transcript_path = Some(transcript_path);
+
+        let expected = question_inbox_response(expected_kind, None);
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn ask_user_question_preview_uses_pending_permission_data_without_transcript_question(
+        mut source: TestSessionSource,
+    ) {
+        source.web_states[0].later_until = None;
+        source.sessions[0].current_tool = Some("AskUserQuestion".to_string());
+        source.sessions[0].current_tool_name = Some("AskUserQuestion".to_string());
+        source.sessions[0]
+            .pending_permission_agent_ids
+            .insert(MAIN_THREAD_AGENT_KEY.to_string());
+        source.sessions[0].pending_permission_request_ids.insert(
+            MAIN_THREAD_AGENT_KEY.to_string(),
+            "fixture-permission-question".to_string(),
+        );
+        source.message_loaders = super::super::messages::RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
+        .with_permission_request_data_loader(|_, request_id| {
+            Ok((request_id == "fixture-permission-question").then(|| {
+                store::PermissionRequestData {
+                    tool_name: Some("AskUserQuestion".to_string()),
+                    tool_input: serde_json::json!({
+                        "questions": [{"question": "Which fallback should appear?"}],
+                    }),
+                    pending: true,
+                }
+            }))
+        });
+
+        let expected = question_inbox_response("Approve", Some("Which fallback should appear?"));
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn inbox_response_survives_question_preview_lookup_failure(
+        mut source: TestSessionSource,
+    ) {
+        source.web_states[0].later_until = None;
+        source.sessions[0].current_tool = Some("AskUserQuestion".to_string());
+        source.sessions[0].current_tool_name = Some("AskUserQuestion".to_string());
+        source.question_preview_error = true;
+
+        let expected = question_inbox_response("Question", None);
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
 
     #[rstest]
