@@ -87,12 +87,7 @@ impl WebUiTransport for Client {
             let response = upstream_request.send().await?;
             let status =
                 StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-            let mut headers = HeaderMap::new();
-            for header in FORWARDED_RESPONSE_HEADERS {
-                for value in response.headers().get_all(&header) {
-                    headers.append(header.clone(), value.clone());
-                }
-            }
+            let headers = forwarded_response_headers(response.headers());
             Ok(WebUiResponse {
                 status,
                 headers,
@@ -100,6 +95,16 @@ impl WebUiTransport for Client {
             })
         }
     }
+}
+
+fn forwarded_response_headers(source: &HeaderMap) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    for header in FORWARDED_RESPONSE_HEADERS {
+        for value in source.get_all(&header) {
+            headers.append(header.clone(), value.clone());
+        }
+    }
+    headers
 }
 
 pub(super) fn router<T: WebUiTransport>(
@@ -349,6 +354,10 @@ fn rewrite_same_origin_location(location: &mut HeaderValue, port: u16) {
         path_and_query.push('?');
         path_and_query.push_str(query);
     }
+    if path_and_query.starts_with("//") {
+        // Browsers interpret a leading double slash as a new authority.
+        path_and_query.insert_str(1, "./");
+    }
     if let Some(fragment) = location_url.fragment() {
         path_and_query.push('#');
         path_and_query.push_str(fragment);
@@ -485,14 +494,13 @@ mod tests {
     use futures_util::stream;
     use futures_util::{SinkExt, StreamExt};
     use indoc::indoc;
-    use reqwest::Client;
     use rstest::rstest;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     use tower::ServiceExt;
 
     use super::{
         WEBSOCKET_PROTOCOL_HEADER, WebUiRequest, WebUiResponse, WebUiTransport,
-        router_with_url_loader,
+        forwarded_response_headers, router_with_url_loader,
     };
 
     #[derive(Clone)]
@@ -901,6 +909,10 @@ mod tests {
         "https://localhost:48761/design/sample/?mode=edit#canvas",
         "https://localhost:48761/design/sample/?mode=edit#canvas"
     )]
+    #[case::double_slash_path(
+        "http://localhost:48761//external.example/path?mode=edit#canvas",
+        "/.//external.example/path?mode=edit#canvas"
+    )]
     #[tokio::test]
     async fn proxy_response_rewrites_only_matching_upstream_locations(
         #[case] upstream_location: &str,
@@ -930,61 +942,18 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn reqwest_transport_forwards_and_rewrites_upstream_location_headers() {
-        let upstream_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .unwrap();
-        let upstream_port = upstream_listener.local_addr().unwrap().port();
-        let upstream_location = format!("http://localhost:{upstream_port}/next?mode=edit#canvas");
-        let upstream_server = tokio::spawn(async move {
-            axum::serve(
-                upstream_listener,
-                Router::new().route(
-                    "/start",
-                    any(move || {
-                        let upstream_location = upstream_location.clone();
-                        async move {
-                            let mut response = Response::new(Body::empty());
-                            *response.status_mut() = StatusCode::FOUND;
-                            response
-                                .headers_mut()
-                                .insert(LOCATION, upstream_location.parse().unwrap());
-                            response
-                        }
-                    }),
-                ),
-            )
-            .await
-        });
-        let client = Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap();
-        let app = router_with_url_loader(
-            move || Ok(vec![format!("http://127.0.0.1:{upstream_port}/start")]),
-            client,
-        );
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/start")
-                    .header(HOST, "localhost:4318")
-                    .header(COOKIE, format!("armyknife_web_ui_port={upstream_port}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+    #[test]
+    fn forwarded_response_headers_include_location() {
+        let mut source = HeaderMap::new();
+        source.insert(LOCATION, "/next?mode=edit#canvas".parse().unwrap());
+        source.insert(CONTENT_TYPE, "text/html".parse().unwrap());
+        source.insert(SET_COOKIE, "session=ignored".parse().unwrap());
 
-        assert_eq!(
-            (response.status(), response.headers().get(LOCATION).cloned()),
-            (
-                StatusCode::FOUND,
-                Some("/next?mode=edit#canvas".parse().unwrap()),
-            ),
-        );
-        upstream_server.abort();
+        let mut expected = HeaderMap::new();
+        expected.insert(LOCATION, "/next?mode=edit#canvas".parse().unwrap());
+        expected.insert(CONTENT_TYPE, "text/html".parse().unwrap());
+
+        assert_eq!(forwarded_response_headers(&source), expected);
     }
 
     #[tokio::test]
