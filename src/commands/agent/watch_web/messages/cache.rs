@@ -176,7 +176,7 @@ pub(super) struct CachedConversation {
 
 #[derive(Clone, Default)]
 pub(super) struct MessageCache {
-    entries: Arc<Mutex<HashMap<String, (MessageCacheKey, CachedConversation)>>>,
+    entries: Arc<Mutex<LruCache<String, (MessageCacheKey, CachedConversation)>>>,
     transcript_parsers: TranscriptParserCache,
 }
 
@@ -193,18 +193,19 @@ impl MessageCache {
         session_id: &str,
         key: &MessageCacheKey,
     ) -> anyhow::Result<Option<CachedConversation>> {
-        let entries = self
-            .entries
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some((cached_key, cached)) = entries.get(session_id) else {
-            return Ok(None);
+        let cached = {
+            let mut entries = self
+                .entries
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some((cached_key, cached)) = entries.get(&session_id.to_string()) else {
+                return Ok(None);
+            };
+            if cached_key != key {
+                return Ok(None);
+            }
+            cached.clone()
         };
-        if cached_key != key {
-            return Ok(None);
-        }
-        let cached = cached.clone();
-        drop(entries);
         if transcript_fingerprint(key.engine, key.transcript_path.as_deref())?
             != key.transcript_fingerprint
         {
@@ -224,8 +225,7 @@ impl MessageCache {
             .entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        insert_with_eviction(
-            &mut entries,
+        entries.insert(
             session_id.to_string(),
             (
                 key,
@@ -235,18 +235,16 @@ impl MessageCache {
                     cached_at: Instant::now(),
                 },
             ),
-            MAX_CACHED_SESSIONS,
         );
     }
 }
 
 #[derive(Clone, Default)]
 pub(super) struct TranscriptParserCache {
-    entries: Arc<Mutex<TranscriptParserEntries>>,
+    entries: Arc<Mutex<LruCache<String, TranscriptParserSlot>>>,
 }
 
 type TranscriptParserSlot = Arc<Mutex<Option<CachedTranscriptParser>>>;
-type TranscriptParserEntries = HashMap<String, TranscriptParserSlot>;
 
 pub(super) struct CachedTranscriptParser {
     pub(super) fingerprint: TranscriptFingerprint,
@@ -268,17 +266,66 @@ impl TranscriptParserCache {
             .entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let slot = entries
-            .get(session_id)
+        entries
+            .get(&session_id.to_string())
             .cloned()
-            .unwrap_or_else(|| Arc::new(Mutex::new(None)));
-        insert_with_eviction(
-            &mut entries,
-            session_id.to_string(),
-            Arc::clone(&slot),
-            MAX_CACHED_SESSIONS,
+            .unwrap_or_else(|| {
+                let slot = Arc::new(Mutex::new(None));
+                entries.insert(session_id.to_string(), Arc::clone(&slot));
+                slot
+            })
+    }
+}
+
+struct LruEntry<V> {
+    value: V,
+    last_used: u64,
+}
+
+struct LruCache<K, V> {
+    entries: HashMap<K, LruEntry<V>>,
+    access_counter: u64,
+}
+
+impl<K, V> Default for LruCache<K, V> {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            access_counter: 0,
+        }
+    }
+}
+
+impl<K, V> LruCache<K, V>
+where
+    K: Clone + Eq + std::hash::Hash,
+{
+    fn get(&mut self, key: &K) -> Option<&V> {
+        let entry = self.entries.get_mut(key)?;
+        self.access_counter += 1;
+        entry.last_used = self.access_counter;
+        Some(&entry.value)
+    }
+
+    fn insert(&mut self, key: K, value: V) {
+        self.access_counter += 1;
+        if !self.entries.contains_key(&key)
+            && self.entries.len() >= MAX_CACHED_SESSIONS
+            && let Some(evicted_key) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(key, _)| key.clone())
+        {
+            self.entries.remove(&evicted_key);
+        }
+        self.entries.insert(
+            key,
+            LruEntry {
+                value,
+                last_used: self.access_counter,
+            },
         );
-        slot
     }
 }
 
@@ -298,12 +345,100 @@ where
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use std::sync::Arc;
 
     use super::{
-        ConversationResponse, MessageCacheKey, MessageCacheRecords, refresh_image_availability_with,
+        ConversationResponse, MAX_CACHED_SESSIONS, MessageCache, MessageCacheKey,
+        MessageCacheRecords, TranscriptParserCache, refresh_image_availability_with,
     };
     use crate::commands::agent::types::{MAIN_THREAD_AGENT_KEY, Session};
     use crate::commands::agent::watch_web::messages::{ChatItem, UserContentPart};
+
+    fn message_cache_key() -> MessageCacheKey {
+        let session: Session = serde_json::from_value(json!({
+            "session_id": "fixture-session",
+            "cwd": "/fixture/project",
+            "status": "ended",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+        }))
+        .unwrap();
+        MessageCacheKey::new(
+            &session,
+            None,
+            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            MessageCacheRecords::default(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn message_cache_evicts_the_least_recently_used_session() {
+        let cache = MessageCache::default();
+        let key = message_cache_key();
+        for index in 0..MAX_CACHED_SESSIONS {
+            cache.insert(
+                &format!("fixture-session-{index}"),
+                key.clone(),
+                ConversationResponse::default(),
+                Vec::new(),
+            );
+        }
+
+        let was_read = cache.get("fixture-session-0", &key).unwrap().is_some();
+        cache.insert(
+            "fixture-session-8",
+            key.clone(),
+            ConversationResponse::default(),
+            Vec::new(),
+        );
+        cache.insert(
+            "fixture-session-3",
+            key.clone(),
+            ConversationResponse::default(),
+            Vec::new(),
+        );
+        cache.insert(
+            "fixture-session-9",
+            key.clone(),
+            ConversationResponse::default(),
+            Vec::new(),
+        );
+
+        let result = (
+            was_read,
+            [
+                cache.get("fixture-session-0", &key).unwrap().is_some(),
+                cache.get("fixture-session-3", &key).unwrap().is_some(),
+            ],
+            [
+                cache.get("fixture-session-1", &key).unwrap().is_none(),
+                cache.get("fixture-session-2", &key).unwrap().is_none(),
+            ],
+        );
+        assert_eq!(result, (true, [true, true], [true, true]));
+    }
+
+    #[test]
+    fn transcript_parser_cache_evicts_the_least_recently_used_session() {
+        let cache = TranscriptParserCache::default();
+        let slots = (0..MAX_CACHED_SESSIONS)
+            .map(|index| cache.get_or_create_slot(&format!("fixture-session-{index}")))
+            .collect::<Vec<_>>();
+
+        let recently_used = cache.get_or_create_slot("fixture-session-0");
+        cache.get_or_create_slot("fixture-session-8");
+        let evicted = cache.get_or_create_slot("fixture-session-1");
+
+        let result = (
+            Arc::ptr_eq(&slots[0], &recently_used),
+            Arc::ptr_eq(&slots[1], &evicted),
+        );
+        assert_eq!(result, (true, false));
+    }
 
     #[test]
     fn message_cache_key_ignores_last_assistant_message() {
