@@ -176,7 +176,7 @@ async fn actions(
             && session.engine == Engine::Claude
             && session.has_pending_permission_requests(),
         permission: (has_live_session
-            && session.engine == Engine::Claude
+            && matches!(session.engine, Engine::Claude | Engine::Codex)
             && session.has_pending_permission_requests())
         .then_some(PermissionCapabilities {
             approve: true,
@@ -228,7 +228,7 @@ async fn resolve_permission_action(
     approved: bool,
 ) -> Result<Json<Success>, ApiError> {
     let session = load_session(state.clone(), id).await?;
-    if session.engine != Engine::Claude {
+    if !matches!(session.engine, Engine::Claude | Engine::Codex) {
         return Err(ApiError::conflict(
             "permission approval is unavailable for this session",
         ));
@@ -1721,18 +1721,28 @@ mod tests {
     }
 
     #[rstest]
+    #[case::approve("approve", store::PermissionRequestDecision::Allow)]
+    #[case::reject(
+        "reject",
+        store::PermissionRequestDecision::Deny {
+            message: "Rejected from watch-web.".to_string(),
+            interrupt: false,
+        }
+    )]
     #[tokio::test]
-    async fn codex_permission_capability_is_disabled_and_approval_is_rejected(
+    async fn codex_permission_capability_allows_web_decisions(
+        #[case] action: &str,
+        #[case] expected_decision: store::PermissionRequestDecision,
         action_context: ActionContext,
     ) {
         let mut session = session("sample-session");
         session.engine = Engine::Codex;
-        session.current_tool = Some("AskUserQuestion".to_string());
-        session.current_tool_name = Some("AskUserQuestion".to_string());
-        session
-            .pending_permission_agent_ids
-            .insert("main".to_string());
-        action_context.save_session(&session);
+        action_context.save_pending_permission_request(
+            &mut session,
+            MAIN_THREAD_AGENT_KEY,
+            "permission-request-main",
+            "Bash",
+        );
         let app = action_context.router();
 
         let capabilities = app
@@ -1745,27 +1755,28 @@ mod tests {
             )
             .await
             .unwrap();
-        let approval = app
-            .clone()
+        let decision = app
             .oneshot(post(
-                "/sessions/sample-session/permission/approve",
-                json!({ "requestId": "missing-request" }),
+                &format!("/sessions/sample-session/permission/{action}"),
+                json!({ "requestId": "permission-request-main" }),
             ))
             .await
             .unwrap();
-        let answer = app
-            .oneshot(post(
-                "/sessions/sample-session/answer",
-                json!({ "requestId": "question-request-main", "skip": true }),
-            ))
-            .await
-            .unwrap();
+        let mut waiter =
+            store::PermissionRequestWaiter::open(&action_context.temp_dir.path().join("sessions"))
+                .unwrap();
 
         assert_eq!(
             (
                 response_snapshot(capabilities, &action_context).await,
-                response_snapshot(approval, &action_context).await,
-                response_snapshot(answer, &action_context).await,
+                response_snapshot(decision, &action_context).await,
+                waiter
+                    .poll(
+                        "sample-session",
+                        MAIN_THREAD_AGENT_KEY,
+                        "permission-request-main",
+                    )
+                    .unwrap(),
             ),
             (
                 json!({
@@ -1773,6 +1784,7 @@ mod tests {
                     "body": {
                         "message": true,
                         "answerQuestion": false,
+                        "permission": { "approve": true, "reject": true },
                         "interrupt": false,
                         "openInTerminal": true,
                         "rewind": true,
@@ -1780,15 +1792,15 @@ mod tests {
                     "calls": [],
                 }),
                 json!({
-                    "status": StatusCode::CONFLICT.as_u16(),
-                    "body": { "error": "permission approval is unavailable for this session" },
+                    "status": StatusCode::OK.as_u16(),
+                    "body": { "ok": true },
                     "calls": [],
                 }),
-                json!({
-                    "status": StatusCode::CONFLICT.as_u16(),
-                    "body": { "error": "session is not waiting for a question answer" },
-                    "calls": [],
-                }),
+                store::PermissionRequestWait::Decision {
+                    decision: expected_decision,
+                    tool_input: json!({}),
+                    answers: None,
+                },
             ),
         );
     }

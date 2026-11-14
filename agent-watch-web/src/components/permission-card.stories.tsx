@@ -51,6 +51,13 @@ export const WaitingForDecision: Story = {
   name: 'A permission request offers approval and rejection',
 }
 
+export const CodexApprovalIsAvailable: Story = {
+  name: 'A Codex permission request offers web approval and rejection',
+  args: {
+    isCodex: true,
+  },
+}
+
 export const FileReadShowsDescription: Story = {
   name: 'A file-read request shows its description',
   args: {

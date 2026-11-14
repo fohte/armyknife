@@ -123,6 +123,7 @@ pub fn run(args: &HookArgs) -> Result<()> {
             return Ok(());
         };
         return permission_request::wait_and_write(
+            args.engine,
             &sessions_dir,
             &session_id,
             &agent_key,
@@ -348,7 +349,7 @@ fn permission_request_agent_key(
     engine: Engine,
     agent_id: Option<&str>,
 ) -> Option<String> {
-    (event == HookEvent::PermissionRequest && engine == Engine::Claude)
+    (event == HookEvent::PermissionRequest && matches!(engine, Engine::Claude | Engine::Codex))
         .then(|| agent_id.unwrap_or(MAIN_THREAD_AGENT_KEY).to_string())
 }
 
@@ -1948,6 +1949,7 @@ mod tests {
         .expect("tool resolution should save");
         let mut output = Vec::new();
         permission_request::wait_and_write(
+            Engine::Claude,
             sessions_dir,
             "test-123",
             MAIN_THREAD_AGENT_KEY,
@@ -2299,9 +2301,20 @@ mod tests {
         Some("agent-fixture"),
         Some("agent-fixture")
     )]
-    #[case::main_codex(HookEvent::PermissionRequest, Engine::Codex, None, None)]
+    #[case::main_codex(
+        HookEvent::PermissionRequest,
+        Engine::Codex,
+        None,
+        Some(MAIN_THREAD_AGENT_KEY)
+    )]
+    #[case::subagent_codex(
+        HookEvent::PermissionRequest,
+        Engine::Codex,
+        Some("agent-fixture"),
+        Some("agent-fixture")
+    )]
     #[case::other_claude_event(HookEvent::PostToolUse, Engine::Claude, None, None)]
-    fn permission_request_waits_for_all_claude_agents(
+    fn permission_request_waits_for_supported_engine_agents(
         #[case] event: HookEvent,
         #[case] engine: Engine,
         #[case] agent_id: Option<&str>,

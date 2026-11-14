@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { PermissionCard } from '#components/permission-card'
-import type { ChatItem } from '#types'
+import type { ChatItem, SessionActions } from '#types'
 
 let container: HTMLDivElement
 let root: Root | null = null
@@ -29,22 +29,88 @@ afterEach(() => {
 
 function renderPermissionCard(
   message: Extract<ChatItem, { type: 'permission' }>,
+  options: { actions?: SessionActions | null; isCodex?: boolean } = {},
 ) {
+  const { actions = null, isCodex = false } = options
   root = createRoot(container)
   act(() => {
     root?.render(
       <PermissionCard
         message={message}
-        actions={null}
+        actions={actions}
         actionsReady
         pendingAction={null}
-        isCodex={false}
+        isCodex={isCodex}
         onAction={() => undefined}
         onOpenInTerminal={() => undefined}
       />,
     )
   })
 }
+
+it('shows web approval and rejection for a Codex permission with capabilities', () => {
+  const message: Extract<ChatItem, { type: 'permission' }> = {
+    type: 'permission',
+    requestId: 'permission-request-example',
+    tool: 'Bash',
+    description: '',
+    command,
+  }
+  const actions: SessionActions = {
+    message: true,
+    answerQuestion: false,
+    permission: { approve: true, reject: true },
+    interrupt: false,
+    openInTerminal: true,
+    rewind: false,
+  }
+  renderPermissionCard(message, { actions, isCodex: true })
+
+  const renderedState = () => ({
+    buttons: Array.from(container.querySelectorAll('button')).map(
+      (button) => button.getAttribute('aria-label') ?? button.textContent,
+    ),
+    terminalFallback: container.querySelector(
+      '.conversation-terminal-fallback',
+    ),
+  })
+
+  expect(renderedState()).toEqual({
+    buttons: ['Approve', 'Reject'],
+    terminalFallback: null,
+  })
+})
+
+it('keeps the terminal fallback for a Codex permission without web capabilities', () => {
+  const message: Extract<ChatItem, { type: 'permission' }> = {
+    type: 'permission',
+    requestId: 'permission-request-example',
+    tool: 'Bash',
+    description: '',
+    command,
+  }
+  const actions: SessionActions = {
+    message: true,
+    answerQuestion: false,
+    interrupt: false,
+    openInTerminal: true,
+    rewind: false,
+  }
+  renderPermissionCard(message, { actions, isCodex: true })
+
+  const renderedState = () => ({
+    buttons: Array.from(container.querySelectorAll('button')).map(
+      (button) => button.getAttribute('aria-label') ?? button.textContent,
+    ),
+    fallback: container.querySelector('.conversation-terminal-fallback')
+      ?.textContent,
+  })
+
+  expect(renderedState()).toEqual({
+    buttons: ['Open in terminal'],
+    fallback: 'Review this permission in terminal.',
+  })
+})
 
 it('highlights a multiline Bash permission without overflowing its card', async () => {
   const message: Extract<ChatItem, { type: 'permission' }> = {
