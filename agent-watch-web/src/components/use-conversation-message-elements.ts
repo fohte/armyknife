@@ -69,6 +69,7 @@ function isPendingInteraction(message: ChatItem): boolean {
   if (message.type === 'proposal') return isPendingProposal(message)
   return (
     message.type === 'question' &&
+    message.requestId !== undefined &&
     message.questions.every((question) => question.answer === null)
   )
 }

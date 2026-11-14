@@ -8448,6 +8448,16 @@ it('moves pending proposals and questions to the end until they are resolved', (
     requestId: 'request-rollout-window',
     questions: [pendingQuestionPrompt],
   }
+  const historicalQuestion: ChatItem = {
+    type: 'question',
+    questions: [
+      {
+        ...pendingQuestionPrompt,
+        header: 'Previous retry preference',
+        question: 'Which retry preference was selected?',
+      },
+    ],
+  }
   const withdrawableProposal: ChatItem = {
     ...proposal,
     seq: 22,
@@ -8480,6 +8490,7 @@ it('moves pending proposals and questions to the end until they are resolved', (
     pendingProposal,
     resolvedElsewhereProposal,
     secondMessage,
+    historicalQuestion,
     pendingQuestion,
     thirdMessage,
     withdrawableProposal,
@@ -8508,6 +8519,7 @@ it('moves pending proposals and questions to the end until they are resolved', (
       },
       resolvedElsewhereProposal,
       secondMessage,
+      historicalQuestion,
       {
         ...pendingQuestion,
         questions: [
@@ -8533,6 +8545,7 @@ it('moves pending proposals and questions to the end until they are resolved', (
     'The rollout plan is ready.',
     'Proposal: Keep the saved plan',
     'One alert detail remains.',
+    'Question: Previous retry preference',
     'The session continues working.',
     'The final summary is ready.',
     'Proposal: Choose the rollout interval',
@@ -8543,6 +8556,7 @@ it('moves pending proposals and questions to the end until they are resolved', (
     'Proposal: Choose the rollout interval',
     'Proposal: Keep the saved plan',
     'One alert detail remains.',
+    'Question: Previous retry preference',
     'Question: Alert channel',
     'The session continues working.',
     'Proposal: Choose the fallback mode',
