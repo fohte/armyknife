@@ -6,7 +6,6 @@ import type {
   ConversationResponse,
   JsonValue,
   SessionActions,
-  SessionPullRequestListResponse,
   SessionTreeNode,
   SkillSuggestion,
 } from '#types'
@@ -378,45 +377,6 @@ export function isSessionTreeResponse(
         Number.isInteger(session['decisionCount']) &&
         (session['pullRequest'] === null ||
           isPullRequest(session['pullRequest'])),
-    )
-  )
-}
-
-export function isSessionPullRequestListResponse(
-  value: unknown,
-): value is SessionPullRequestListResponse {
-  return (
-    isRecord(value) &&
-    (value['error'] === null || typeof value['error'] === 'string') &&
-    Array.isArray(value['pullRequests']) &&
-    value['pullRequests'].every(
-      (pullRequest) =>
-        isRecord(pullRequest) &&
-        typeof pullRequest['number'] === 'number' &&
-        Number.isInteger(pullRequest['number']) &&
-        pullRequest['number'] > 0 &&
-        (pullRequest['owner'] === null ||
-          typeof pullRequest['owner'] === 'string') &&
-        (pullRequest['repo'] === null ||
-          typeof pullRequest['repo'] === 'string') &&
-        typeof pullRequest['title'] === 'string' &&
-        typeof pullRequest['url'] === 'string' &&
-        (pullRequest['headSha'] === null ||
-          typeof pullRequest['headSha'] === 'string') &&
-        (pullRequest['state'] === null ||
-          pullRequest['state'] === 'Open' ||
-          pullRequest['state'] === 'Closed' ||
-          pullRequest['state'] === 'Merged') &&
-        (pullRequest['ciState'] === null ||
-          pullRequest['ciState'] === 'Waiting' ||
-          pullRequest['ciState'] === 'InProgress' ||
-          pullRequest['ciState'] === 'Successful' ||
-          pullRequest['ciState'] === 'Unknown') &&
-        (pullRequest['reviewStatus'] === 'done' ||
-          pullRequest['reviewStatus'] === 'user' ||
-          pullRequest['reviewStatus'] === 'working' ||
-          pullRequest['reviewStatus'] === 'waiting' ||
-          pullRequest['reviewStatus'] === 'not_started'),
     )
   )
 }

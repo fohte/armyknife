@@ -1,0 +1,59 @@
+.pull-request-merge-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 55%);
+}
+
+.pull-request-merge-confirm {
+  display: flex;
+  width: min(100%, 320px);
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--aw-border-row);
+  border-radius: 8px;
+  background: var(--aw-bg-nav);
+  color: var(--aw-text-primary);
+  box-shadow: 0 12px 36px rgb(0 0 0 / 24%);
+  font-size: 12px;
+}
+
+.pull-request-merge-confirm h3,
+.pull-request-merge-confirm p {
+  margin: 0;
+}
+
+.pull-request-merge-confirm code {
+  overflow-wrap: anywhere;
+  color: var(--aw-text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.pull-request-merge-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.conversation-pr-merge-feedback {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.conversation-pr-merge-feedback--success {
+  color: var(--aw-color-working);
+}
+
+.conversation-pr-merge-feedback--queued {
+  color: var(--aw-color-warning);
+}
+
+.conversation-pr-merge-feedback--error {
+  color: var(--aw-color-error);
+}

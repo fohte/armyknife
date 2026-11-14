@@ -13,6 +13,7 @@ use super::events::{ClaudeEffect, TimedClaudeEvent};
 use super::proposals::ProposalTimeline;
 use super::questions::apply_question_answers;
 use super::state::{ClaudeParserState, ToolUse};
+use super::transcript_branch::BranchMembership;
 use super::{ParsedTranscript, ParserAdditions};
 use crate::commands::agent::store::PermissionRequestData;
 
@@ -55,7 +56,15 @@ pub(super) fn render(
     let mut queue = super::super::queue::Queue::new(additions.queued_prompts);
     for event in &state.queue_events {
         queue.observe(event);
-        if event.active_branch_delivery {
+        let on_active_branch = event.delivery_branch_uuid.as_deref().is_none_or(|uuid| {
+            state.transcript_nodes.get(uuid).is_some_and(|node| {
+                matches!(
+                    node.membership,
+                    BranchMembership::Active | BranchMembership::ReachesActive
+                )
+            })
+        });
+        if event.rendered_in_transcript && on_active_branch {
             queue.observe_queued_prompt_delivery(event, additions.user_marker);
         }
     }

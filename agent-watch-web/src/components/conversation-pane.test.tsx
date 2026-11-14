@@ -13,7 +13,6 @@ import { formatMessageTime } from '#components/message-time'
 import { SessionConversationCacheProvider } from '#components/session-conversation-cache'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
-import { useSessionPullRequests } from '#components/use-session-pull-requests'
 import type {
   BackgroundTask,
   ChatItem,
@@ -59,30 +58,6 @@ const session: Session = {
   parent: null,
   ancestorSessionIds: [],
   pullRequest: null,
-}
-
-function PullRequestHookTestView({
-  session: currentSession,
-  enabled,
-}: {
-  session: Session
-  enabled: boolean
-}) {
-  const state = useSessionPullRequests({
-    session: currentSession,
-    enabled,
-  })
-  return (
-    <div>
-      <span>
-        {state.pullRequests.map((pullRequest) => pullRequest.title).join(', ')}
-      </span>
-      <span>{state.loading ? 'Loading' : 'Ready'}</span>
-      <button type="button" onClick={state.refresh}>
-        Refresh pull requests
-      </button>
-    </div>
-  )
 }
 
 const actions: SessionActions = {
@@ -196,13 +171,6 @@ function jsonResponse(body: unknown, status = 200) {
 function requestUrl(input: RequestInfo | URL) {
   if (typeof input === 'string') return input
   return input instanceof URL ? input.href : input.url
-}
-
-function setPageVisibility(visibilityState: DocumentVisibilityState) {
-  Object.defineProperty(document, 'visibilityState', {
-    configurable: true,
-    value: visibilityState,
-  })
 }
 
 const permission: ChatItem = {
@@ -867,6 +835,29 @@ function dispatchKeyInAct(
   return event
 }
 
+function mockConversationMessageBounds(
+  scrollContainer: HTMLElement,
+  messages: readonly HTMLElement[],
+  bounds: readonly { top: number; height: number }[],
+) {
+  vi.spyOn(scrollContainer, 'getBoundingClientRect').mockReturnValue(
+    DOMRect.fromRect({ x: 0, y: 100, width: 400, height: 300 }),
+  )
+  vi.spyOn(scrollContainer, 'clientHeight', 'get').mockReturnValue(300)
+  messages.forEach((message, index) => {
+    const position = bounds[index]
+    if (position === undefined) return
+    vi.spyOn(message, 'getBoundingClientRect').mockReturnValue(
+      DOMRect.fromRect({
+        x: 0,
+        y: position.top,
+        width: 300,
+        height: position.height,
+      }),
+    )
+  })
+}
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   optimizeImageAttachmentMock.mockReset()
@@ -959,561 +950,6 @@ it('loads and shows the session tree from the tree endpoint', async () => {
     tab: 'Tree1',
     countTone: 'session-status-panel-count session-status-panel-count--warning',
     rows: ['Choose a retry policy', 'Child session'],
-  })
-})
-
-it('shows linked pull requests alongside partial lookup errors', async () => {
-  const taskSession: Session = {
-    ...session,
-    id: 'linked-pull-request-session',
-    task: {
-      id: 'linked-pull-request-task',
-      number: 2048,
-      title: 'Show linked work in the sidebar',
-      priority: null,
-    },
-  }
-  const fetcher = vi.fn<typeof fetch>((input) => {
-    const url = requestUrl(input)
-    if (url.endsWith('/messages?limit=100')) {
-      return Promise.resolve(jsonResponse(messagesResponse([])))
-    }
-    if (url.endsWith('/actions')) {
-      return Promise.resolve(jsonResponse(actions))
-    }
-    if (url.endsWith('/pull-requests')) {
-      return Promise.resolve(
-        jsonResponse({
-          pullRequests: [
-            {
-              number: 2048,
-              owner: 'example',
-              repo: 'project',
-              title: 'Show linked work in the sidebar',
-              url: 'https://github.com/example/project/pull/2048',
-              headSha: 'confirmed-head',
-              state: 'Open',
-              ciState: 'Successful',
-              reviewStatus: 'done',
-            },
-          ],
-          error: 'Some linked pull requests could not be loaded.',
-        }),
-      )
-    }
-    return Promise.resolve(jsonResponse({}))
-  })
-  vi.stubGlobal('fetch', fetcher)
-  root = createRoot(container)
-  act(() => {
-    root?.render(
-      <ConversationPane
-        session={taskSession}
-        sessionTreeRefreshKey={0}
-        refreshKey={0}
-        statusPanelOpen
-        onSelectSession={() => undefined}
-      />,
-    )
-  })
-
-  await waitForState(
-    () => container.querySelector('.pull-request-list-title') !== null,
-  )
-  const snapshot = () => ({
-    requests: fetcher.mock.calls
-      .map(([input]) => requestUrl(input))
-      .filter((url) => url.endsWith('/pull-requests')),
-    tabs: Array.from(container.querySelectorAll('[role="tab"]'), (tab) => ({
-      label: tab.textContent,
-      selected: tab.getAttribute('aria-selected'),
-    })),
-    pullRequests: Array.from(
-      container.querySelectorAll('.pull-request-list-item'),
-      (item) => ({
-        title: item.querySelector('.pull-request-list-title')?.textContent,
-        href: item
-          .querySelector('.pull-request-list-title')
-          ?.getAttribute('href'),
-        status: item.querySelector('.pull-request-list-meta')?.textContent,
-      }),
-    ),
-    error: container.querySelector('.pull-request-list-error')?.textContent,
-  })
-
-  expect(snapshot()).toEqual({
-    requests: ['/api/sessions/linked-pull-request-session/pull-requests'],
-    tabs: [{ label: 'PRs1', selected: 'true' }],
-    pullRequests: [
-      {
-        title: '#2048Show linked work in the sidebar',
-        href: 'https://github.com/example/project/pull/2048',
-        status: 'OpenCI: PassingReview: Done',
-      },
-    ],
-    error: 'Some linked pull requests could not be loaded.',
-  })
-})
-
-it('pauses pull request refresh while hidden and refreshes when visible again', async () => {
-  vi.useFakeTimers()
-  setPageVisibility('hidden')
-  const taskSession: Session = {
-    ...session,
-    id: 'visibility-pull-request-session',
-    task: {
-      id: 'visibility-pull-request-task',
-      number: 2048,
-      title: 'Show linked work in the sidebar',
-      priority: null,
-    },
-  }
-  const fetcher = vi.fn<typeof fetch>((input) => {
-    const url = requestUrl(input)
-    if (url.endsWith('/messages?limit=100')) {
-      return Promise.resolve(jsonResponse(messagesResponse([])))
-    }
-    if (url.endsWith('/actions')) {
-      return Promise.resolve(jsonResponse(actions))
-    }
-    if (url.endsWith('/pull-requests')) {
-      return Promise.resolve(jsonResponse({ pullRequests: [], error: null }))
-    }
-    return Promise.resolve(jsonResponse({}))
-  })
-  vi.stubGlobal('fetch', fetcher)
-  root = createRoot(container)
-  act(() => {
-    root?.render(
-      <ConversationPane
-        session={taskSession}
-        sessionTreeRefreshKey={0}
-        refreshKey={0}
-        statusPanelOpen
-        onSelectSession={() => undefined}
-      />,
-    )
-  })
-  await act(async () => {
-    for (let index = 0; index < 12; index += 1) await Promise.resolve()
-  })
-  const pullRequestRequests = () =>
-    fetcher.mock.calls
-      .map(([input]) => requestUrl(input))
-      .filter((url) => url.endsWith('/pull-requests'))
-
-  const hiddenBeforeFirstRequest = pullRequestRequests()
-  setPageVisibility('visible')
-  await act(async () => {
-    document.dispatchEvent(new Event('visibilitychange'))
-    for (let index = 0; index < 12; index += 1) await Promise.resolve()
-  })
-  const visibleAfterResume = pullRequestRequests()
-  setPageVisibility('hidden')
-  await act(async () => {
-    document.dispatchEvent(new Event('visibilitychange'))
-    await Promise.resolve()
-  })
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(60_000)
-  })
-  const hiddenAfterRefreshInterval = pullRequestRequests()
-  setPageVisibility('visible')
-  await act(async () => {
-    document.dispatchEvent(new Event('visibilitychange'))
-    for (let index = 0; index < 12; index += 1) await Promise.resolve()
-  })
-
-  const snapshot = () => ({
-    hiddenBeforeFirstRequest,
-    visibleAfterResume,
-    hiddenAfterRefreshInterval,
-    visibleAfterSecondResume: pullRequestRequests(),
-  })
-  expect(snapshot()).toEqual({
-    hiddenBeforeFirstRequest: [],
-    visibleAfterResume: [
-      '/api/sessions/visibility-pull-request-session/pull-requests',
-    ],
-    hiddenAfterRefreshInterval: [
-      '/api/sessions/visibility-pull-request-session/pull-requests',
-    ],
-    visibleAfterSecondResume: [
-      '/api/sessions/visibility-pull-request-session/pull-requests',
-      '/api/sessions/visibility-pull-request-session/pull-requests',
-    ],
-  })
-})
-
-it('reuses recent pull request lists after keyed session remounts', async () => {
-  vi.useFakeTimers()
-  setPageVisibility('visible')
-  const firstSession = { ...session, id: 'first-session' }
-  const secondSession = { ...session, id: 'second-session' }
-  const fetcher = vi.fn<typeof fetch>((input) => {
-    const url = requestUrl(input)
-    if (url.endsWith('/pull-requests')) {
-      const sessionId = url.split('/')[3] ?? 'unknown-session'
-      return Promise.resolve(
-        jsonResponse({
-          pullRequests: [
-            {
-              number: 43,
-              owner: 'sample-owner',
-              repo: 'sample-repo',
-              title: `Request for ${sessionId}`,
-              url: 'https://github.com/sample-org/sample-project/pull/43',
-              headSha: 'sample-head',
-              state: 'Open',
-              ciState: 'Successful',
-              reviewStatus: 'done',
-            },
-          ],
-          error: null,
-        }),
-      )
-    }
-    if (url.endsWith('/messages?limit=100')) {
-      return Promise.resolve(jsonResponse(messagesResponse([])))
-    }
-    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
-    return Promise.resolve(jsonResponse({}))
-  })
-  vi.stubGlobal('fetch', fetcher)
-  root = createRoot(container)
-
-  const render = (currentSession: Session, enabled: boolean) => {
-    act(() => {
-      root?.render(
-        <PullRequestHookTestView
-          key={currentSession.id}
-          session={currentSession}
-          enabled={enabled}
-        />,
-      )
-    })
-  }
-  const flushRequests = async () => {
-    await act(async () => {
-      for (let index = 0; index < 12; index += 1) await Promise.resolve()
-    })
-  }
-
-  render(firstSession, true)
-  await flushRequests()
-  const requestsAfterFirstLoad = fetcher.mock.calls
-    .map(([input]) => requestUrl(input))
-    .filter((url) => url.endsWith('/pull-requests'))
-
-  render(secondSession, true)
-  await flushRequests()
-  render(firstSession, true)
-  const restoredImmediately = {
-    title: container.querySelector('span')?.textContent,
-    requests: fetcher.mock.calls
-      .map(([input]) => requestUrl(input))
-      .filter((url) => url.endsWith('/pull-requests')),
-  }
-  await flushRequests()
-  const recentSessionSnapshot = {
-    title: container.querySelector('span')?.textContent,
-    state: container.querySelectorAll('span')[1]?.textContent,
-    requests: fetcher.mock.calls
-      .map(([input]) => requestUrl(input))
-      .filter((url) => url.endsWith('/pull-requests')),
-  }
-
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(30_000)
-  })
-  const refreshedSessionSnapshot = {
-    title: container.querySelector('span')?.textContent,
-    requests: fetcher.mock.calls
-      .map(([input]) => requestUrl(input))
-      .filter((url) => url.endsWith('/pull-requests')),
-  }
-
-  const snapshot = () => ({
-    requestsAfterFirstLoad,
-    restoredImmediately,
-    recentSessionSnapshot,
-    refreshedSessionSnapshot,
-  })
-  expect(snapshot()).toEqual({
-    requestsAfterFirstLoad: ['/api/sessions/first-session/pull-requests'],
-    restoredImmediately: {
-      title: 'Request for first-session',
-      requests: [
-        '/api/sessions/first-session/pull-requests',
-        '/api/sessions/second-session/pull-requests',
-      ],
-    },
-    recentSessionSnapshot: {
-      title: 'Request for first-session',
-      state: 'Ready',
-      requests: [
-        '/api/sessions/first-session/pull-requests',
-        '/api/sessions/second-session/pull-requests',
-      ],
-    },
-    refreshedSessionSnapshot: {
-      title: 'Request for first-session',
-      requests: [
-        '/api/sessions/first-session/pull-requests',
-        '/api/sessions/second-session/pull-requests',
-        '/api/sessions/first-session/pull-requests',
-      ],
-    },
-  })
-})
-
-it('fetches a fresh pull request list when the selected task changes', async () => {
-  vi.useFakeTimers()
-  setPageVisibility('visible')
-  const firstTask = {
-    id: 'first-task',
-    number: 51,
-    title: 'First task',
-    priority: null,
-  }
-  const secondTask = {
-    id: 'second-task',
-    number: 52,
-    title: 'Second task',
-    priority: null,
-  }
-  let responseNumber = 0
-  const fetcher = vi.fn<typeof fetch>((input) => {
-    const url = requestUrl(input)
-    if (url.endsWith('/pull-requests')) {
-      responseNumber += 1
-      return Promise.resolve(
-        jsonResponse({
-          pullRequests: [
-            {
-              number: 43,
-              owner: 'sample-owner',
-              repo: 'sample-repo',
-              title: `Request ${String(responseNumber)}`,
-              url: 'https://github.com/sample-org/sample-project/pull/43',
-              headSha: 'sample-head',
-              state: 'Open',
-              ciState: 'Successful',
-              reviewStatus: 'done',
-            },
-          ],
-          error: null,
-        }),
-      )
-    }
-    if (url.endsWith('/messages?limit=100')) {
-      return Promise.resolve(jsonResponse(messagesResponse([])))
-    }
-    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
-    return Promise.resolve(jsonResponse({}))
-  })
-  vi.stubGlobal('fetch', fetcher)
-  root = createRoot(container)
-
-  const render = (task: Session['task']) => {
-    act(() => {
-      root?.render(
-        <PullRequestHookTestView
-          session={{ ...session, id: 'task-change-session', task }}
-          enabled={true}
-        />,
-      )
-    })
-  }
-  const flushRequests = async () => {
-    await act(async () => {
-      for (let index = 0; index < 12; index += 1) await Promise.resolve()
-    })
-  }
-
-  render(firstTask)
-  await flushRequests()
-  const titleAfterFirstTask = container.querySelector('span')?.textContent
-
-  render(secondTask)
-  await flushRequests()
-
-  const snapshot = () => ({
-    titleAfterFirstTask,
-    titleAfterTaskChange: container.querySelector('span')?.textContent,
-    requests: fetcher.mock.calls
-      .map(([input]) => requestUrl(input))
-      .filter((url) => url.endsWith('/pull-requests')),
-  })
-  expect(snapshot()).toEqual({
-    titleAfterFirstTask: 'Request 1',
-    titleAfterTaskChange: 'Request 2',
-    requests: [
-      '/api/sessions/task-change-session/pull-requests',
-      '/api/sessions/task-change-session/pull-requests',
-    ],
-  })
-})
-
-it('refreshes pull requests immediately when explicitly requested', async () => {
-  vi.useFakeTimers()
-  setPageVisibility('visible')
-  let responseNumber = 0
-  const fetcher = vi.fn<typeof fetch>((input) => {
-    const url = requestUrl(input)
-    if (url.endsWith('/pull-requests')) {
-      responseNumber += 1
-      return Promise.resolve(
-        jsonResponse({
-          pullRequests: [
-            {
-              number: 43,
-              owner: 'sample-owner',
-              repo: 'sample-repo',
-              title: `Request ${String(responseNumber)}`,
-              url: 'https://github.com/sample-org/sample-project/pull/43',
-              headSha: 'sample-head',
-              state: 'Open',
-              ciState: 'Successful',
-              reviewStatus: 'done',
-            },
-          ],
-          error: null,
-        }),
-      )
-    }
-    return Promise.resolve(jsonResponse({}))
-  })
-  vi.stubGlobal('fetch', fetcher)
-  root = createRoot(container)
-
-  act(() => {
-    root?.render(
-      <PullRequestHookTestView
-        session={{ ...session, id: 'explicit-refresh-session' }}
-        enabled={true}
-      />,
-    )
-  })
-  const flushRequests = async () => {
-    await act(async () => {
-      for (let index = 0; index < 12; index += 1) await Promise.resolve()
-    })
-  }
-  await flushRequests()
-  const refreshButton = container.querySelector('button')
-  if (refreshButton === null) throw new Error('Refresh button is missing')
-  act(() => {
-    refreshButton.click()
-  })
-  await flushRequests()
-
-  const snapshot = () => ({
-    title: container.querySelector('span')?.textContent,
-    requests: fetcher.mock.calls
-      .map(([input]) => requestUrl(input))
-      .filter((url) => url.endsWith('/pull-requests')),
-  })
-  expect(snapshot()).toEqual({
-    title: 'Request 2',
-    requests: [
-      '/api/sessions/explicit-refresh-session/pull-requests',
-      '/api/sessions/explicit-refresh-session/pull-requests',
-    ],
-  })
-})
-
-it('keeps the newest pull request response when an older refresh finishes late', async () => {
-  vi.useFakeTimers()
-  setPageVisibility('visible')
-  let resolveOlder: ((response: Response) => void) | undefined
-  let resolveNewer: ((response: Response) => void) | undefined
-  const olderResponse = new Promise<Response>((resolve) => {
-    resolveOlder = resolve
-  })
-  const newerResponse = new Promise<Response>((resolve) => {
-    resolveNewer = resolve
-  })
-  const requests: string[] = []
-  const fetcher = vi.fn<typeof fetch>((input) => {
-    const url = requestUrl(input)
-    if (!url.endsWith('/pull-requests'))
-      return Promise.resolve(jsonResponse({}))
-    requests.push(url)
-    return requests.length === 1 ? olderResponse : newerResponse
-  })
-  vi.stubGlobal('fetch', fetcher)
-  root = createRoot(container)
-  const firstSession = { ...session, id: 'out-of-order-pull-request-session' }
-  const secondSession = { ...session, id: 'other-out-of-order-session' }
-  const render = (currentSession: Session, key: string, enabled: boolean) => {
-    act(() => {
-      root?.render(
-        <PullRequestHookTestView
-          key={key}
-          session={currentSession}
-          enabled={enabled}
-        />,
-      )
-    })
-  }
-  const flushRequests = async () => {
-    await act(async () => {
-      for (let index = 0; index < 12; index += 1) await Promise.resolve()
-    })
-  }
-  const response = (title: string) =>
-    jsonResponse({
-      pullRequests: [
-        {
-          number: 43,
-          owner: 'sample-owner',
-          repo: 'sample-repo',
-          title,
-          url: 'https://github.com/sample-org/sample-project/pull/43',
-          headSha: 'sample-head',
-          state: 'Open',
-          ciState: 'Successful',
-          reviewStatus: 'done',
-        },
-      ],
-      error: null,
-    })
-
-  render(firstSession, 'first-pane', true)
-  await flushRequests()
-  const refreshButton = container.querySelector('button')
-  if (refreshButton === null) throw new Error('Refresh button is missing')
-  act(() => {
-    refreshButton.click()
-  })
-  await flushRequests()
-
-  await act(async () => {
-    resolveNewer?.(response('Newest response'))
-    await Promise.resolve()
-  })
-  await act(async () => {
-    resolveOlder?.(response('Older response'))
-    for (let index = 0; index < 12; index += 1) await Promise.resolve()
-  })
-
-  render(secondSession, 'second-pane', false)
-  render(firstSession, 'returned-pane', true)
-  await flushRequests()
-
-  const snapshot = () => ({
-    title: container.querySelector('span')?.textContent,
-    state: container.querySelectorAll('span')[1]?.textContent,
-    requests,
-  })
-  expect(snapshot()).toEqual({
-    title: 'Newest response',
-    state: 'Ready',
-    requests: [
-      '/api/sessions/out-of-order-pull-request-session/pull-requests',
-      '/api/sessions/out-of-order-pull-request-session/pull-requests',
-    ],
   })
 })
 
@@ -2791,6 +2227,207 @@ it('inserts Alt-Enter at the cursor without sending the message', async () => {
   })
 })
 
+it('jumps between own messages with Alt-arrow shortcuts', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [
+    { type: 'user', text: 'An earlier message.' },
+    {
+      type: 'user_with_content',
+      from: 'A linked session',
+      content: [{ type: 'text', text: 'A message from another session.' }],
+    },
+    {
+      type: 'queued_user',
+      content: [{ type: 'text', text: 'A queued message.' }],
+    },
+    {
+      type: 'user_with_content',
+      content: [{ type: 'text', text: 'A later message.' }],
+    },
+  ])
+
+  const scrollContainer = requireElement(
+    container.querySelector<HTMLElement>('.conversation-scroll'),
+  )
+  const ownMessages = Array.from(
+    container.querySelectorAll<HTMLElement>('[data-own-message="true"]'),
+  )
+  const earlierMessage = requireElement(ownMessages[0] ?? null)
+  const laterMessage = requireElement(ownMessages[2] ?? null)
+  const scrollIntoView = vi
+    .spyOn(HTMLElement.prototype, 'scrollIntoView')
+    .mockImplementation(() => undefined)
+  mockConversationMessageBounds(scrollContainer, ownMessages, [
+    { top: 40, height: 30 },
+    { top: 120, height: 30 },
+    { top: 500, height: 30 },
+  ])
+
+  const previousEvent = dispatchKeyInAct(window, 'ArrowUp', { altKey: true })
+  const nextEvent = dispatchKeyInAct(window, 'ArrowDown', { altKey: true })
+
+  const actual = () => ({
+    ownMessageTexts: ownMessages.map(
+      (message) => message.querySelector('.markdown-message')?.textContent,
+    ),
+    scrollTargets: scrollIntoView.mock.contexts,
+    scrollOptions: scrollIntoView.mock.calls.map(([options]) => options),
+    defaultPrevented: [
+      previousEvent.defaultPrevented,
+      nextEvent.defaultPrevented,
+    ],
+  })
+  expect(actual()).toEqual({
+    ownMessageTexts: [
+      'An earlier message.',
+      'A queued message.',
+      'A later message.',
+    ],
+    scrollTargets: [earlierMessage, laterMessage],
+    scrollOptions: [
+      { block: 'center', behavior: 'smooth' },
+      { block: 'center', behavior: 'smooth' },
+    ],
+    defaultPrevented: [true, true],
+  })
+})
+
+it('starts with the first own message when the viewport is above the conversation', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [
+    { type: 'user', text: 'An earlier message.' },
+    {
+      type: 'queued_user',
+      content: [{ type: 'text', text: 'A queued message.' }],
+    },
+  ])
+
+  const scrollContainer = requireElement(
+    container.querySelector<HTMLElement>('.conversation-scroll'),
+  )
+  const ownMessages = Array.from(
+    container.querySelectorAll<HTMLElement>('[data-own-message="true"]'),
+  )
+  const firstMessage = requireElement(ownMessages[0] ?? null)
+  const scrollIntoView = vi
+    .spyOn(HTMLElement.prototype, 'scrollIntoView')
+    .mockImplementation(() => undefined)
+  mockConversationMessageBounds(scrollContainer, ownMessages, [
+    { top: 500, height: 30 },
+    { top: 600, height: 30 },
+  ])
+
+  const previousEvent = dispatchKeyInAct(window, 'ArrowUp', { altKey: true })
+  const nextEvent = dispatchKeyInAct(window, 'ArrowDown', { altKey: true })
+
+  const actual = () => ({
+    scrollTargets: scrollIntoView.mock.contexts,
+    defaultPrevented: [
+      previousEvent.defaultPrevented,
+      nextEvent.defaultPrevented,
+    ],
+  })
+  expect(actual()).toEqual({
+    scrollTargets: [firstMessage],
+    defaultPrevented: [false, true],
+  })
+})
+
+it('leaves populated text fields alone and allows empty or unfocused shortcuts', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [
+    { type: 'user', text: 'An earlier message.' },
+    {
+      type: 'queued_user',
+      content: [{ type: 'text', text: 'A queued message.' }],
+    },
+    {
+      type: 'user',
+      text: 'A later message.',
+    },
+  ])
+
+  const scrollContainer = requireElement(
+    container.querySelector<HTMLElement>('.conversation-scroll'),
+  )
+  const ownMessages = Array.from(
+    container.querySelectorAll<HTMLElement>('[data-own-message="true"]'),
+  )
+  const earlierMessage = requireElement(ownMessages[0] ?? null)
+  const laterMessage = requireElement(ownMessages[2] ?? null)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const input = document.createElement('input')
+  requireElement(container.querySelector('.conversation-pane')).append(input)
+  const scrollIntoView = vi
+    .spyOn(HTMLElement.prototype, 'scrollIntoView')
+    .mockImplementation(() => undefined)
+  mockConversationMessageBounds(scrollContainer, ownMessages, [
+    { top: 40, height: 30 },
+    { top: 120, height: 30 },
+    { top: 500, height: 30 },
+  ])
+
+  setTextareaValue(textarea, 'Keep editing this draft')
+  input.value = 'Keep editing this field'
+  const populatedInputEvent = dispatchKeyInAct(input, 'ArrowDown', {
+    altKey: true,
+  })
+  const populatedEvent = dispatchKeyInAct(textarea, 'ArrowUp', {
+    altKey: true,
+  })
+  setTextareaValue(textarea, '')
+  const emptyEvent = dispatchKeyInAct(textarea, 'ArrowUp', { altKey: true })
+  const unfocusedEvent = dispatchKeyInAct(window, 'ArrowDown', {
+    altKey: true,
+  })
+
+  const actual = () => ({
+    scrollTargets: scrollIntoView.mock.contexts,
+    defaultPrevented: [
+      populatedInputEvent.defaultPrevented,
+      populatedEvent.defaultPrevented,
+      emptyEvent.defaultPrevented,
+      unfocusedEvent.defaultPrevented,
+    ],
+  })
+  expect(actual()).toEqual({
+    scrollTargets: [earlierMessage, laterMessage],
+    defaultPrevented: [false, false, true, true],
+  })
+})
+
+it('ignores Alt-arrow shortcuts on mobile', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(
+    onAction,
+    session,
+    undefined,
+    [{ type: 'user', text: 'A message.' }],
+    actions,
+    true,
+  )
+  const scrollIntoView = vi
+    .spyOn(HTMLElement.prototype, 'scrollIntoView')
+    .mockImplementation(() => undefined)
+
+  const previousEvent = dispatchKeyInAct(window, 'ArrowUp', { altKey: true })
+  const nextEvent = dispatchKeyInAct(window, 'ArrowDown', { altKey: true })
+
+  const actual = () => ({
+    scrollTargets: scrollIntoView.mock.contexts,
+    defaultPrevented: [
+      previousEvent.defaultPrevented,
+      nextEvent.defaultPrevented,
+    ],
+  })
+  expect(actual()).toEqual({
+    scrollTargets: [],
+    defaultPrevented: [false, false],
+  })
+})
+
 it('shows desktop newline shortcuts with the applicable interrupt hint', () => {
   const onAction = () => Promise.resolve(true)
   renderView(onAction)
@@ -2801,11 +2438,19 @@ it('shows desktop newline shortcuts with the applicable interrupt hint', () => {
   const nonInterruptibleHint = container.querySelector(
     '.composer-footer > span',
   )?.textContent
+  const ownMessageHint = container.querySelectorAll(
+    '.composer-footer > span',
+  )[1]?.textContent
 
-  const snapshot = () => ({ interruptibleHint, nonInterruptibleHint })
+  const snapshot = () => ({
+    interruptibleHint,
+    nonInterruptibleHint,
+    ownMessageHint,
+  })
   expect(snapshot()).toEqual({
     interruptibleHint: '↵ Send · ⇧↵ / ⌥↵ New line · Esc Interrupt',
     nonInterruptibleHint: '↵ Send · ⇧↵ / ⌥↵ New line',
+    ownMessageHint: '⌥↑ / ⌥↓ My messages',
   })
 })
 
@@ -5026,8 +4671,8 @@ it('directs Codex questions and permissions to the terminal', () => {
   expect(snapshot()).toEqual({
     disabledChoices: [true, true],
     guidance: [
-      'Answer in terminal to continue.',
       'Review this permission in terminal.',
+      'Answer in terminal to continue.',
     ],
     terminalButtons: [
       {
@@ -8122,7 +7767,7 @@ it('uses full conversation metadata for questions, proposals, and decisions', as
       '/api/sessions/sample-session/messages?limit=100',
       '/api/sessions/sample-session/actions',
     ],
-    questionChoicesDisabled: [false, false, true, true],
+    questionChoicesDisabled: [true, true, false, false],
     conversationDecisionPosition: '2 of 3',
     statusPanelDecisionCount: 3,
     composerPlaceholder: 'Choose an option above, or message the session',
@@ -8428,6 +8073,140 @@ it('keeps a question answer draft when a preceding conversation row arrives', ()
     '.chat-question-prompt textarea',
     'Use the bounded option',
   )
+})
+
+it('moves pending proposals and questions to the end until they are resolved', () => {
+  const pendingProposal: ChatItem = {
+    ...proposal,
+    seq: 21,
+    title: 'Choose the rollout interval',
+  }
+  const pendingQuestionPrompt = {
+    header: 'Alert channel',
+    question: 'Which alert channel should be enabled?',
+    choices: [{ label: 'Email' }, { label: 'Dashboard' }],
+    multi_select: false,
+    answer: null,
+  }
+  const pendingQuestion: ChatItem = {
+    type: 'question',
+    requestId: 'request-rollout-window',
+    questions: [pendingQuestionPrompt],
+  }
+  const historicalQuestion: ChatItem = {
+    type: 'question',
+    questions: [
+      {
+        ...pendingQuestionPrompt,
+        header: 'Previous retry preference',
+        question: 'Which retry preference was selected?',
+      },
+    ],
+  }
+  const withdrawableProposal: ChatItem = {
+    ...proposal,
+    seq: 22,
+    title: 'Choose the fallback mode',
+  }
+  const resolvedElsewhereProposal: ChatItem = {
+    ...proposal,
+    seq: 23,
+    title: 'Keep the saved plan',
+    resolved: true,
+  }
+  const firstMessage: ChatItem = {
+    type: 'assistant',
+    text: 'The rollout plan is ready.',
+  }
+  const secondMessage: ChatItem = {
+    type: 'assistant',
+    text: 'One alert detail remains.',
+  }
+  const thirdMessage: ChatItem = {
+    type: 'assistant',
+    text: 'The session continues working.',
+  }
+  const fourthMessage: ChatItem = {
+    type: 'assistant',
+    text: 'The final summary is ready.',
+  }
+  const messages: ChatItem[] = [
+    firstMessage,
+    pendingProposal,
+    resolvedElsewhereProposal,
+    secondMessage,
+    historicalQuestion,
+    pendingQuestion,
+    thirdMessage,
+    withdrawableProposal,
+    fourthMessage,
+  ]
+  renderConversationMessages(messages, 0)
+
+  const getTimeline = () =>
+    Array.from(
+      container.querySelectorAll<HTMLElement>(
+        '.chat-assistant-message, .chat-question-card, .chat-proposal-card',
+      ),
+      (element) =>
+        element.classList.contains('chat-assistant-message')
+          ? element.textContent
+          : `${element.classList.contains('chat-question-card') ? 'Question' : 'Proposal'}: ${element.querySelector('h3')?.textContent ?? ''}`,
+    )
+
+  const pendingOrder = getTimeline()
+  renderConversationMessages(
+    [
+      firstMessage,
+      {
+        ...pendingProposal,
+        answer: { choice: 0, comment: null },
+      },
+      resolvedElsewhereProposal,
+      secondMessage,
+      historicalQuestion,
+      {
+        ...pendingQuestion,
+        questions: [
+          {
+            ...pendingQuestionPrompt,
+            answer: 'Dashboard',
+          },
+        ],
+      },
+      thirdMessage,
+      { ...withdrawableProposal, resolution: 'withdrawn' },
+      fourthMessage,
+    ],
+    0,
+  )
+
+  const getTimelineSnapshot = () => [
+    ...pendingOrder,
+    'Resolved state',
+    ...getTimeline(),
+  ]
+  expect(getTimelineSnapshot()).toEqual([
+    'The rollout plan is ready.',
+    'Proposal: Keep the saved plan',
+    'One alert detail remains.',
+    'Question: Previous retry preference',
+    'The session continues working.',
+    'The final summary is ready.',
+    'Proposal: Choose the rollout interval',
+    'Question: Alert channel',
+    'Proposal: Choose the fallback mode',
+    'Resolved state',
+    'The rollout plan is ready.',
+    'Proposal: Choose the rollout interval',
+    'Proposal: Keep the saved plan',
+    'One alert detail remains.',
+    'Question: Previous retry preference',
+    'Question: Alert channel',
+    'The session continues working.',
+    'Proposal: Choose the fallback mode',
+    'The final summary is ready.',
+  ])
 })
 
 it('keeps repeated tool summaries attached to their batch when older rows arrive', () => {

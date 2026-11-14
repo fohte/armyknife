@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.1.691](https://github.com/fohte/armyknife/compare/v0.1.690...v0.1.691) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** merge session PRs from the header ([#1760](https://github.com/fohte/armyknife/issues/1760)) ([fa352e4](https://github.com/fohte/armyknife/commit/fa352e4dd90fc1acde445f60d696786162374a96))
+
+## [0.1.690](https://github.com/fohte/armyknife/compare/v0.1.689...v0.1.690) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** render task reminders in one line ([#1758](https://github.com/fohte/armyknife/issues/1758)) ([be190a1](https://github.com/fohte/armyknife/commit/be190a1aeb5ddb7ec2c1c0503d862e049c7a12d8))
+
+## [0.1.689](https://github.com/fohte/armyknife/compare/v0.1.688...v0.1.689) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** prevent duplicate queued messages ([#1756](https://github.com/fohte/armyknife/issues/1756)) ([67b68e0](https://github.com/fohte/armyknife/commit/67b68e04536caf837e4b2fac66fbeba26e19bb61))
+
+## [0.1.688](https://github.com/fohte/armyknife/compare/v0.1.687...v0.1.688) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** keep pending cards at the end ([#1754](https://github.com/fohte/armyknife/issues/1754)) ([615680d](https://github.com/fohte/armyknife/commit/615680db23e068269526ad3e353bb1bcbbb046a1))
+
+## [0.1.687](https://github.com/fohte/armyknife/compare/v0.1.686...v0.1.687) (2026-11-14)
+
+
+### Features
+
+* **watch-web:** support jumping to own messages ([#1752](https://github.com/fohte/armyknife/issues/1752)) ([e077b8c](https://github.com/fohte/armyknife/commit/e077b8ccc5cac5512df5277ec9e490b950dbae9b))
+
 ## [0.1.686](https://github.com/fohte/armyknife/compare/v0.1.685...v0.1.686) (2026-11-14)
 
 

@@ -7,12 +7,10 @@ import {
 import { requestJson } from '#components/conversation-requests'
 import type { Decision } from '#components/decision-card'
 import { DecisionsPanel } from '#components/decisions-panel'
-import { PullRequestListPanel } from '#components/pull-request-list-panel'
 import { ReviewDocumentPanel } from '#components/review-document-panel'
 import { RunningTasksPanel } from '#components/running-tasks-panel'
 import type { SessionStatusPanelTab } from '#components/session-status-panel'
 import { SessionTreePanel } from '#components/session-tree-panel'
-import { useSessionPullRequests } from '#components/use-session-pull-requests'
 import { WebUiPane } from '#components/web-ui-pane'
 import { useSessionOperations } from '#session-operation-context'
 import { createSessionOperation } from '#session-operations'
@@ -136,8 +134,6 @@ export function useConversationStatusPanel({
       (message): message is Decision => message.type === 'decision',
     )
   const decisionCount = session.decisionCount ?? decisions.length
-  const pullRequestListAvailable =
-    session.task !== null || session.hasSessionTree === true
   const unreviewedDecisionCount =
     session.unreviewedDecisionCount ??
     decisions.filter((decision) => decision.review === null).length
@@ -170,7 +166,6 @@ export function useConversationStatusPanel({
   const availableTabIds = [
     ...(backgroundTasks.length === 0 ? [] : ['running']),
     ...(treeAvailable ? ['tree'] : []),
-    ...(pullRequestListAvailable ? ['pull-requests'] : []),
     ...(reviewDocumentId == null ? [] : ['review-document']),
     ...(decisionCount === 0 ? [] : ['decisions']),
     ...webUiTabIds,
@@ -185,13 +180,6 @@ export function useConversationStatusPanel({
     activePanelTabId !== null && availableTabIds.includes(activePanelTabId)
       ? activePanelTabId
       : defaultPanelTabId
-  const pullRequestList = useSessionPullRequests({
-    session,
-    enabled:
-      statusPanelOpen &&
-      pullRequestListAvailable &&
-      activeTabId === 'pull-requests',
-  })
   useEffect(() => {
     if (reviewDocumentId == null) {
       setReviewDocumentState(null)
@@ -302,27 +290,6 @@ export function useConversationStatusPanel({
                   />
                 </>
               ),
-          },
-        ]
-      : []),
-    ...(availableTabIds.includes('pull-requests')
-      ? [
-          {
-            id: 'pull-requests',
-            label: 'PRs',
-            count: pullRequestList.pullRequests.length,
-            visible: true,
-            showCount: pullRequestList.pullRequests.length > 0,
-            content: (
-              <PullRequestListPanel
-                key={`${session.id}:${session.task?.id ?? ''}`}
-                sessionId={session.id}
-                pullRequests={pullRequestList.pullRequests}
-                loading={pullRequestList.loading}
-                error={pullRequestList.error}
-                onRefresh={pullRequestList.refresh}
-              />
-            ),
           },
         ]
       : []),

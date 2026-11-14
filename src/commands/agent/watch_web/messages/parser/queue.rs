@@ -16,7 +16,8 @@ pub(super) struct QueueReplayEvent {
     prompt: Option<String>,
     source_tool_assistant_uuid_present: bool,
     has_tool_use_result: bool,
-    pub(super) active_branch_delivery: bool,
+    pub(super) delivery_branch_uuid: Option<String>,
+    pub(super) rendered_in_transcript: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -42,6 +43,12 @@ impl QueueReplayEvent {
             .and_then(|attachment| attachment.get("type"))
             .and_then(Value::as_str);
         let timestamp = super::record_timestamp(record);
+        let delivery_branch_uuid = record
+            .get("uuid")
+            .and_then(Value::as_str)
+            .or_else(|| record.get("parentUuid").and_then(Value::as_str))
+            .or_else(|| record.get("logicalParentUuid").and_then(Value::as_str))
+            .map(str::to_owned);
 
         if kind == Some("queue-operation") {
             let operation = match record.get("operation").and_then(Value::as_str) {
@@ -68,7 +75,8 @@ impl QueueReplayEvent {
                 prompt,
                 source_tool_assistant_uuid_present: false,
                 has_tool_use_result: false,
-                active_branch_delivery: false,
+                delivery_branch_uuid,
+                rendered_in_transcript: false,
             });
         }
 
@@ -82,7 +90,8 @@ impl QueueReplayEvent {
                     .map(|prompt| claude_content_text(Some(prompt))),
                 source_tool_assistant_uuid_present: false,
                 has_tool_use_result: false,
-                active_branch_delivery: false,
+                delivery_branch_uuid,
+                rendered_in_transcript: false,
             });
         }
 
@@ -95,7 +104,8 @@ impl QueueReplayEvent {
                 has_tool_use_result: record
                     .get("toolUseResult")
                     .is_some_and(|result| !result.is_null()),
-                active_branch_delivery: false,
+                delivery_branch_uuid,
+                rendered_in_transcript: false,
             });
         }
 

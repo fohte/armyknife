@@ -8,7 +8,6 @@ const meta = {
     count: 3,
     expanded: false,
     onToggle: () => undefined,
-    placement: 'pull-request-list',
   },
 } satisfies Meta<typeof CompletedItemsToggle>
 
@@ -23,12 +22,5 @@ export const Expanded: Story = {
   name: 'The toggle offers to hide completed items while expanded.',
   args: {
     expanded: true,
-  },
-}
-
-export const LinkedTaskMenuPlacement: Story = {
-  name: 'The toggle uses compact styling in the linked task menu.',
-  args: {
-    placement: 'linked-task-menu',
   },
 }

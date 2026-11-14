@@ -26,6 +26,7 @@ import { useConversationFileDrop } from '#components/use-conversation-file-drop'
 import { useConversationMessageElements } from '#components/use-conversation-message-elements'
 import { useConversationScroll } from '#components/use-conversation-scroll'
 import { useConversationSelectionReply } from '#components/use-conversation-selection-reply'
+import { useOwnMessageKeyboardNavigation } from '#components/use-own-message-keyboard-navigation'
 import { useSessionLinkTargets } from '#session-link-targets'
 import type {
   BackgroundTask,
@@ -167,6 +168,10 @@ export function ConversationPaneView({
     onPruneOldMessages,
     sessionId: session.id,
     start,
+  })
+  useOwnMessageKeyboardNavigation({
+    isMobile,
+    scrollRef: conversationScrollRef,
   })
   const sessionLinkTargets = useSessionLinkTargets(sessions)
   const sessionElapsedSecondsById = useMemo(
