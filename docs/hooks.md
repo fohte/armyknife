@@ -8,9 +8,9 @@ A synchronous hook fails the calling command if it exits with a non-zero status,
 
 ## `web-ui-expose` and `web-ui-unexpose`
 
-When watch-web starts, it opens a separate loopback relay for each registered web interface and calls `web-ui-expose` with that relay URL and port. The URL keeps the registered interface's path and query. The relay forwards HTTP requests, streaming responses, and WebSocket connections to the registered local port. The hook may print an external URL to stdout; watch-web stores that URL for remote clients. A missing hook, hook failure, or empty output leaves the interface without an external URL, while the local relay remains available.
+When watch-web starts, it opens a separate loopback relay for each registered local web interface and calls `web-ui-expose` with that relay URL and port. The URL keeps the registered interface's path and query. The relay forwards HTTP requests, streaming responses, and WebSocket connections to the registered local port. The hook may print an external URL to stdout; watch-web stores that URL for remote clients. A missing hook, hook failure, or empty output leaves the interface without an external URL, while the local relay remains available.
 
-When a registration disappears or watch-web shuts down, watch-web calls `web-ui-unexpose` with the relay URL and port plus the URL returned by `web-ui-expose`, if any, then closes the relay. Failures are logged and do not interrupt cleanup. Adding or removing a registration only updates the session record; hook execution follows when watch-web observes that change.
+When a registration disappears or watch-web shuts down, watch-web calls `web-ui-unexpose` with the relay URL and port plus the URL returned by `web-ui-expose`, if any, then closes the relay. Hooks time out after 30 seconds. Failures are logged and do not interrupt cleanup. Adding or removing a registration only updates the session record; hook execution follows when watch-web observes that change.
 
 | Variable                       | Description                                        |
 | ------------------------------ | -------------------------------------------------- |
@@ -25,7 +25,7 @@ Example `web-ui-expose` hook:
 printf 'https://review.example.invalid/%s\n' "$ARMYKNIFE_WEB_UI_PORT"
 ```
 
-The hook decides how to expose or remove an interface. Each registration has its own relay port, so separate interfaces do not share browser cookies or routing state.
+The hook decides how to expose or remove an interface. Each registration has its own relay port, and that port selects its upstream interface. Remote Crit URLs keep their registered URL and do not use these hooks.
 
 ## `post-worktree-create`
 

@@ -2,7 +2,7 @@ use axum::Router;
 use axum::body::{Body, Bytes, to_bytes};
 use axum::extract::ws::{Message as ClientMessage, WebSocket, WebSocketUpgrade};
 use axum::extract::{FromRequestParts, Request, State};
-use axum::http::header::{ACCEPT, CONTENT_TYPE, LOCATION};
+use axum::http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, COOKIE, LOCATION, ORIGIN};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::middleware::from_fn;
 use axum::response::{IntoResponse, Response};
@@ -15,15 +15,17 @@ use tokio_tungstenite::tungstenite::protocol::Message as UpstreamMessage;
 use super::limits::MAX_REQUEST_BODY_BYTES;
 use super::security;
 
-const FORWARDED_REQUEST_HEADERS: [HeaderName; 6] = [
+const FORWARDED_REQUEST_HEADERS: [HeaderName; 8] = [
     ACCEPT,
+    AUTHORIZATION,
     CONTENT_TYPE,
+    COOKIE,
     HeaderName::from_static("if-modified-since"),
     HeaderName::from_static("if-none-match"),
     HeaderName::from_static("last-event-id"),
     HeaderName::from_static("range"),
 ];
-const FORWARDED_RESPONSE_HEADERS: [HeaderName; 9] = [
+const FORWARDED_RESPONSE_HEADERS: [HeaderName; 10] = [
     CONTENT_TYPE,
     HeaderName::from_static("cache-control"),
     HeaderName::from_static("content-encoding"),
@@ -33,9 +35,11 @@ const FORWARDED_RESPONSE_HEADERS: [HeaderName; 9] = [
     HeaderName::from_static("last-modified"),
     LOCATION,
     HeaderName::from_static("retry-after"),
+    HeaderName::from_static("set-cookie"),
 ];
 const WEBSOCKET_PROTOCOL_HEADER: HeaderName = HeaderName::from_static("sec-websocket-protocol");
-const FORWARDED_WEBSOCKET_HEADERS: [HeaderName; 1] = [WEBSOCKET_PROTOCOL_HEADER];
+const FORWARDED_WEBSOCKET_HEADERS: [HeaderName; 3] =
+    [AUTHORIZATION, COOKIE, WEBSOCKET_PROTOCOL_HEADER];
 
 #[derive(Clone)]
 struct WebUiProxyState<T> {
@@ -88,6 +92,12 @@ impl WebUiTransport for Client {
             })
         }
     }
+}
+
+pub(super) fn new_client() -> anyhow::Result<Client> {
+    Ok(Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?)
 }
 
 fn forwarded_response_headers(source: &HeaderMap) -> HeaderMap {
@@ -166,6 +176,12 @@ async fn proxy_request<T: WebUiTransport>(
         for value in parts.headers.get_all(&header) {
             headers.append(header.clone(), value.clone());
         }
+    }
+    if parts.headers.contains_key(ORIGIN) {
+        let Ok(origin) = HeaderValue::from_str(&format!("http://127.0.0.1:{port}")) else {
+            return StatusCode::BAD_REQUEST.into_response();
+        };
+        headers.insert(ORIGIN, origin);
     }
 
     let upstream_response = match state
@@ -246,7 +262,7 @@ fn websocket_request(
         }
     }
     request.headers_mut().insert(
-        axum::http::header::ORIGIN,
+        ORIGIN,
         HeaderValue::from_str(&format!("http://127.0.0.1:{port}"))?,
     );
     Ok(request)
@@ -340,17 +356,17 @@ mod tests {
     use axum::body::{Body, Bytes, to_bytes};
     use axum::extract::State;
     use axum::extract::ws::{Message as ServerMessage, WebSocketUpgrade};
-    use axum::http::header::{CONTENT_TYPE, HOST, LOCATION, ORIGIN};
-    use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode};
+    use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, COOKIE, HOST, LOCATION, ORIGIN};
+    use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode};
     use axum::response::Response;
-    use axum::routing::any;
+    use axum::routing::{any, get};
     use futures_util::stream;
     use futures_util::{SinkExt, StreamExt};
     use indoc::indoc;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     use tower::ServiceExt;
 
-    use super::{WebUiRequest, WebUiResponse, WebUiTransport, router};
+    use super::{WebUiRequest, WebUiResponse, WebUiTransport, new_client, router};
 
     #[derive(Clone)]
     struct FakeTransport {
@@ -362,36 +378,33 @@ mod tests {
         fn send(
             &self,
             request: WebUiRequest,
-        ) -> impl std::future::Future<Output = anyhow::Result<WebUiResponse>> + Send {
-            let observed = self.request.clone();
-            let response_headers = self.response_headers.clone();
-            async move {
-                let mut headers = HeaderMap::new();
-                headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
-                headers.extend(response_headers);
-                *observed
-                    .lock()
-                    .expect("observed request lock should succeed") = Some(request);
-                Ok(WebUiResponse {
-                    status: StatusCode::OK,
-                    headers,
-                    body: Body::from_stream(stream::iter([
-                        Ok::<_, Infallible>(Bytes::from_static(
-                            indoc! {"
-                                event: update
-                            "}
-                            .as_bytes(),
-                        )),
-                        Ok::<_, Infallible>(Bytes::from_static(
-                            indoc! {"
-                                data: ready
+        ) -> impl Future<Output = anyhow::Result<WebUiResponse>> + Send {
+            let mut headers = HeaderMap::new();
+            headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
+            headers.extend(self.response_headers.clone());
+            *self
+                .request
+                .lock()
+                .expect("observed request lock should succeed") = Some(request);
+            std::future::ready(Ok(WebUiResponse {
+                status: StatusCode::OK,
+                headers,
+                body: Body::from_stream(stream::iter([
+                    Ok::<_, Infallible>(Bytes::from_static(
+                        indoc! {"
+                            event: update
+                        "}
+                        .as_bytes(),
+                    )),
+                    Ok::<_, Infallible>(Bytes::from_static(
+                        indoc! {"
+                            data: ready
 
-                            "}
-                            .as_bytes(),
-                        )),
-                    ])),
-                })
-            }
+                        "}
+                        .as_bytes(),
+                    )),
+                ])),
+            }))
         }
     }
 
@@ -463,6 +476,8 @@ mod tests {
                     .header(HOST, "localhost:4318")
                     .header(ORIGIN, "http://localhost:4318")
                     .header(CONTENT_TYPE, "application/json")
+                    .header(COOKIE, "session=fixture")
+                    .header(AUTHORIZATION, "Bearer fixture-token")
                     .body(Body::from(r#"{"action":"approve"}"#))?,
             )
             .await?;
@@ -481,6 +496,18 @@ mod tests {
                     .headers
                     .get(CONTENT_TYPE)
                     .and_then(|value| value.to_str().ok()),
+                request
+                    .headers
+                    .get(COOKIE)
+                    .and_then(|value| value.to_str().ok()),
+                request
+                    .headers
+                    .get(AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok()),
+                request
+                    .headers
+                    .get(ORIGIN)
+                    .and_then(|value| value.to_str().ok()),
                 String::from_utf8(request.body.to_vec())?,
             ),
             (
@@ -488,6 +515,9 @@ mod tests {
                 Method::POST,
                 "http://127.0.0.1:49123/api/approve?item=fixture".to_owned(),
                 Some("application/json"),
+                Some("session=fixture"),
+                Some("Bearer fixture-token"),
+                Some("http://127.0.0.1:49123"),
                 r#"{"action":"approve"}"#.to_owned(),
             ),
         );
@@ -500,10 +530,16 @@ mod tests {
             49123,
             FakeTransport {
                 request: Arc::new(Mutex::new(None)),
-                response_headers: HeaderMap::from_iter([(
-                    LOCATION,
-                    HeaderValue::from_static("http://127.0.0.1:49123/review?item=fixture"),
-                )]),
+                response_headers: HeaderMap::from_iter([
+                    (
+                        LOCATION,
+                        HeaderValue::from_static("http://127.0.0.1:49123/review?item=fixture"),
+                    ),
+                    (
+                        HeaderName::from_static("set-cookie"),
+                        HeaderValue::from_static("session=fixture; Path=/; HttpOnly"),
+                    ),
+                ]),
             },
         );
         let response = app
@@ -523,25 +559,145 @@ mod tests {
                     .headers()
                     .get(LOCATION)
                     .and_then(|value| value.to_str().ok()),
+                response
+                    .headers()
+                    .get("set-cookie")
+                    .and_then(|value| value.to_str().ok()),
             ),
-            (StatusCode::OK, Some("/review?item=fixture")),
+            (
+                StatusCode::OK,
+                Some("/review?item=fixture"),
+                Some("session=fixture; Path=/; HttpOnly"),
+            ),
         );
         Ok(())
     }
 
-    type ObservedOrigin = Arc<Mutex<Option<String>>>;
+    #[tokio::test]
+    async fn streams_sse_chunks_before_the_upstream_finishes() -> anyhow::Result<()> {
+        #[derive(Clone)]
+        struct PendingSseTransport;
+
+        impl WebUiTransport for PendingSseTransport {
+            fn send(
+                &self,
+                _request: WebUiRequest,
+            ) -> impl Future<Output = anyhow::Result<WebUiResponse>> + Send {
+                std::future::ready(Ok(WebUiResponse {
+                    status: StatusCode::OK,
+                    headers: HeaderMap::new(),
+                    body: Body::from_stream(
+                        stream::once(async {
+                            Ok::<_, Infallible>(Bytes::from_static(
+                                indoc! {"
+                                        data: ready
+
+                                    "}
+                                .as_bytes(),
+                            ))
+                        })
+                        .chain(stream::pending()),
+                    ),
+                }))
+            }
+        }
+
+        let response = router(49123, PendingSseTransport)
+            .oneshot(
+                Request::builder()
+                    .uri("/events")
+                    .header(HOST, "localhost:4318")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        let chunk = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            response.into_body().into_data_stream().next(),
+        )
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("SSE stream ended before its first event"))??;
+
+        assert_eq!(
+            chunk.as_ref(),
+            indoc! {"
+                data: ready
+
+            "}
+            .as_bytes(),
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn client_does_not_follow_upstream_redirects() -> anyhow::Result<()> {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+        let port = listener.local_addr()?.port();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route(
+                    "/redirect",
+                    get(|| async {
+                        (
+                            StatusCode::FOUND,
+                            [(LOCATION, "http://127.0.0.1:1/redirect-target")],
+                            "redirect",
+                        )
+                    }),
+                ),
+            )
+            .await
+        });
+        let response = new_client()?
+            .send(WebUiRequest {
+                method: Method::GET,
+                url: format!("http://127.0.0.1:{port}/redirect"),
+                headers: HeaderMap::new(),
+                body: Bytes::new(),
+            })
+            .await?;
+        let actual = (
+            response.status,
+            response
+                .headers
+                .get(LOCATION)
+                .and_then(|value| value.to_str().ok()),
+        );
+        server.abort();
+
+        assert_eq!(
+            actual,
+            (
+                StatusCode::FOUND,
+                Some("http://127.0.0.1:1/redirect-target"),
+            ),
+        );
+        Ok(())
+    }
+
+    type ObservedHeaders = Arc<Mutex<Option<(Option<String>, Option<String>, Option<String>)>>>;
 
     async fn websocket_echo(
-        State(observed_origin): State<ObservedOrigin>,
+        State(observed_headers): State<ObservedHeaders>,
         headers: HeaderMap,
         ws: WebSocketUpgrade,
     ) -> Response {
-        *observed_origin
+        *observed_headers
             .lock()
-            .expect("observed origin lock should succeed") = headers
-            .get(ORIGIN)
-            .and_then(|header| header.to_str().ok())
-            .map(str::to_owned);
+            .expect("observed headers lock should succeed") = Some((
+            headers
+                .get(ORIGIN)
+                .and_then(|header| header.to_str().ok())
+                .map(str::to_owned),
+            headers
+                .get(COOKIE)
+                .and_then(|header| header.to_str().ok())
+                .map(str::to_owned),
+            headers
+                .get(AUTHORIZATION)
+                .and_then(|header| header.to_str().ok())
+                .map(str::to_owned),
+        ));
         ws.on_upgrade(|mut socket| async move {
             if let Some(Ok(ServerMessage::Text(message))) = socket.recv().await {
                 let _ = socket
@@ -555,15 +711,15 @@ mod tests {
     async fn relays_websocket_messages_and_rewrites_origin_to_the_upstream() -> anyhow::Result<()> {
         let upstream_listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
         let upstream_port = upstream_listener.local_addr()?.port();
-        let observed_origin = Arc::new(Mutex::new(None));
+        let observed_headers = Arc::new(Mutex::new(None));
         let upstream_server = tokio::spawn({
-            let observed_origin = observed_origin.clone();
+            let observed_headers = observed_headers.clone();
             async move {
                 axum::serve(
                     upstream_listener,
                     Router::new()
                         .route("/socket", any(websocket_echo))
-                        .with_state(observed_origin),
+                        .with_state(observed_headers),
                 )
                 .await
             }
@@ -583,6 +739,13 @@ mod tests {
             ORIGIN,
             HeaderValue::from_str(&format!("http://127.0.0.1:{relay_port}"))?,
         );
+        request
+            .headers_mut()
+            .insert(COOKIE, HeaderValue::from_static("session=fixture"));
+        request.headers_mut().insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer fixture-token"),
+        );
         let (mut socket, _) = tokio_tungstenite::connect_async(request).await?;
         socket
             .send(tokio_tungstenite::tungstenite::Message::Text(
@@ -601,14 +764,18 @@ mod tests {
         assert_eq!(
             (
                 reply.into_text()?.to_string(),
-                observed_origin
+                observed_headers
                     .lock()
-                    .expect("observed origin lock should succeed")
+                    .expect("observed headers lock should succeed")
                     .clone(),
             ),
             (
                 "reply:hello".to_owned(),
-                Some(format!("http://127.0.0.1:{upstream_port}")),
+                Some((
+                    Some(format!("http://127.0.0.1:{upstream_port}")),
+                    Some("session=fixture".to_owned()),
+                    Some("Bearer fixture-token".to_owned()),
+                )),
             ),
         );
         Ok(())

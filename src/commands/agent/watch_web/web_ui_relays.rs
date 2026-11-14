@@ -15,6 +15,7 @@ use crate::commands::agent::types::{SessionStatus, WebUiRegistration};
 use crate::shared::hooks;
 
 const SYNC_INTERVAL: Duration = Duration::from_secs(1);
+const HOOK_TIMEOUT: Duration = Duration::from_secs(30);
 const WEB_UI_URL_ENV: &str = "ARMYKNIFE_WEB_UI_URL";
 const WEB_UI_PORT_ENV: &str = "ARMYKNIFE_WEB_UI_PORT";
 const WEB_UI_EXPOSED_URL_ENV: &str = "ARMYKNIFE_WEB_UI_EXPOSED_URL";
@@ -53,7 +54,9 @@ pub(super) struct WebUiRelays {
 
 impl WebUiRelays {
     pub(super) fn new(sessions_dir: PathBuf) -> Self {
-        Self::with_hook_runner(sessions_dir, hooks::run_hook_capture_stdout)
+        Self::with_hook_runner(sessions_dir, |name, env| {
+            hooks::run_hook_capture_stdout_with_timeout(name, env, HOOK_TIMEOUT)
+        })
     }
 
     fn with_hook_runner(
@@ -67,16 +70,18 @@ impl WebUiRelays {
         }
     }
 
-    pub(super) async fn start(mut self, shutdown: watch::Receiver<bool>) -> JoinHandle<()> {
-        if let Err(error) = self.sync().await {
-            tracing::warn!(%error, "failed to synchronize web UI relays at startup");
-        }
-
+    pub(super) async fn start(self, shutdown: watch::Receiver<bool>) -> JoinHandle<()> {
         tokio::spawn(self.run_periodic(shutdown))
     }
 
     async fn run_periodic(mut self, mut shutdown: watch::Receiver<bool>) {
         let mut interval = tokio::time::interval(SYNC_INTERVAL);
+        interval.tick().await;
+        if !*shutdown.borrow()
+            && let Err(error) = self.sync().await
+        {
+            tracing::warn!(%error, "failed to synchronize web UI relays at startup");
+        }
         loop {
             tokio::select! {
                 _ = interval.tick() => {
@@ -101,23 +106,48 @@ impl WebUiRelays {
             tokio::task::spawn_blocking(move || store::list_all_sessions_from(&sessions_dir))
                 .await
                 .context("failed to join web UI session lookup")??;
-        let desired = sessions
+        let mut desired = HashMap::new();
+        for session in sessions
             .iter()
             .filter(|session| session.status != SessionStatus::Ended)
-            .flat_map(|session| {
-                session.web_uis.iter().map(move |registration| {
-                    (
+        {
+            for registration in &session.web_uis {
+                if super::super::web_ui::local_web_ui_port(&registration.url).is_ok() {
+                    desired.insert(
                         RelayKey::new(&session.session_id, registration),
                         registration.clone(),
-                    )
-                })
-            })
-            .collect::<HashMap<_, _>>();
+                    );
+                } else {
+                    let exposed_url = direct_remote_url(&registration.url);
+                    if registration.exposed_url != exposed_url
+                        && let Err(error) = persist_exposed_url(
+                            self.sessions_dir.clone(),
+                            RelayKey::new(&session.session_id, registration),
+                            exposed_url,
+                        )
+                        .await
+                    {
+                        tracing::warn!(
+                            session = %session.session_id,
+                            web_ui = %registration.name,
+                            %error,
+                            "failed to save direct web UI URL"
+                        );
+                    }
+                }
+            }
+        }
         let desired_keys = desired.keys().cloned().collect::<HashSet<_>>();
         let stale_keys = self
             .active
             .keys()
-            .filter(|key| !desired_keys.contains(*key))
+            .filter(|key| {
+                !desired_keys.contains(*key)
+                    || self
+                        .active
+                        .get(*key)
+                        .is_some_and(|relay| relay.server.is_finished())
+            })
             .cloned()
             .collect::<Vec<_>>();
 
@@ -165,12 +195,20 @@ impl WebUiRelays {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
         let port = listener.local_addr()?.port();
         let url = relay_url(&registration.url, port)?;
+        let client = web_ui_proxy::new_client()?;
+        let session_id = key.session_id.clone();
+        let web_ui_name = key.name.clone();
         let server = tokio::spawn(async move {
-            let _ = axum::serve(
-                listener,
-                web_ui_proxy::router(upstream_port, reqwest::Client::new()),
-            )
-            .await;
+            if let Err(error) =
+                axum::serve(listener, web_ui_proxy::router(upstream_port, client)).await
+            {
+                tracing::warn!(
+                    session = %session_id,
+                    web_ui = %web_ui_name,
+                    %error,
+                    "web UI relay server stopped"
+                );
+            }
         });
 
         let hook_url = url.clone();
@@ -313,12 +351,32 @@ fn valid_exposed_url(url: String) -> Option<String> {
     matches!(parsed.scheme(), "http" | "https").then(|| url.to_owned())
 }
 
+fn direct_remote_url(url: &str) -> Option<String> {
+    let parsed = Url::parse(url).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return None;
+    }
+    let host = parsed.host_str()?;
+    if host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
+    {
+        return None;
+    }
+    Some(url.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
     use std::sync::{Arc, Mutex};
 
     use reqwest::Url;
+    use rstest::rstest;
     use serde_json::json;
     use tempfile::TempDir;
 
@@ -346,6 +404,12 @@ mod tests {
             ]
         }))
         .expect("fixture session should deserialize")
+    }
+
+    fn session_with_one_web_ui() -> Session {
+        let mut session = session();
+        session.web_uis.truncate(1);
+        session
     }
 
     fn hook_runner(
@@ -488,8 +552,7 @@ mod tests {
     #[tokio::test]
     async fn ended_sessions_are_unexposed_by_watch_web() -> anyhow::Result<()> {
         let directory = TempDir::new()?;
-        let mut session = session();
-        session.web_uis.truncate(1);
+        let session = session_with_one_web_ui();
         store::save_session_to(directory.path(), &session)?;
         let calls = Arc::new(Mutex::new(Vec::new()));
         let mut relays = WebUiRelays::with_hook_runner(
@@ -536,6 +599,181 @@ mod tests {
                     ("web-ui-expose".to_owned(), "/design/sample/".to_owned()),
                     ("web-ui-unexpose".to_owned(), "/design/sample/".to_owned()),
                 ],
+            ),
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::missing(ExposeBehavior::Missing, None)]
+    #[case::empty(ExposeBehavior::Empty, None)]
+    #[case::invalid(ExposeBehavior::Invalid, None)]
+    #[case::failure(ExposeBehavior::Failure, None)]
+    #[case::valid(ExposeBehavior::Valid, Some("https://public.example.invalid/relay/"))]
+    #[tokio::test]
+    async fn hook_output_controls_the_stored_remote_url(
+        #[case] behavior: ExposeBehavior,
+        #[case] expected_url: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let directory = TempDir::new()?;
+        let session = session_with_one_web_ui();
+        store::save_session_to(directory.path(), &session)?;
+        let mut relays =
+            WebUiRelays::with_hook_runner(directory.path().to_path_buf(), move |hook, _| {
+                if hook != "web-ui-expose" {
+                    return Ok(None);
+                }
+                match behavior {
+                    ExposeBehavior::Missing => Ok(None),
+                    ExposeBehavior::Empty => Ok(Some(String::new())),
+                    ExposeBehavior::Invalid => Ok(Some("file:///invalid".to_owned())),
+                    ExposeBehavior::Failure => anyhow::bail!("fixture hook failed"),
+                    ExposeBehavior::Valid => {
+                        Ok(Some("https://public.example.invalid/relay/".to_owned()))
+                    }
+                }
+            });
+
+        relays.sync().await?;
+        let stored_url = store::load_session_from(directory.path(), "fixture-session")?
+            .expect("session should still exist")
+            .web_uis[0]
+            .exposed_url
+            .clone();
+        let relay_count = relays.active.len();
+        relays.stop_all().await;
+
+        assert_eq!((relay_count, stored_url.as_deref()), (1, expected_url),);
+        Ok(())
+    }
+
+    #[derive(Clone, Copy)]
+    enum ExposeBehavior {
+        Missing,
+        Empty,
+        Invalid,
+        Failure,
+        Valid,
+    }
+
+    #[tokio::test]
+    async fn finished_relay_is_unexposed_and_restarted() -> anyhow::Result<()> {
+        let directory = TempDir::new()?;
+        let session = session_with_one_web_ui();
+        store::save_session_to(directory.path(), &session)?;
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut relays = WebUiRelays::with_hook_runner(
+            directory.path().to_path_buf(),
+            hook_runner(calls.clone()),
+        );
+
+        relays.sync().await?;
+        relays
+            .active
+            .values()
+            .next()
+            .expect("relay should be running")
+            .server
+            .abort();
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while !relays
+                .active
+                .values()
+                .next()
+                .expect("relay should remain registered")
+                .server
+                .is_finished()
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        relays.sync().await?;
+        let restarted_count = relays.active.len();
+        let call_names = calls
+            .lock()
+            .expect("hook call lock should succeed")
+            .iter()
+            .map(|(hook, _)| hook.clone())
+            .collect::<Vec<_>>();
+        relays.stop_all().await;
+
+        assert_eq!(
+            (restarted_count, call_names),
+            (
+                1,
+                vec![
+                    "web-ui-expose".to_owned(),
+                    "web-ui-unexpose".to_owned(),
+                    "web-ui-expose".to_owned(),
+                ],
+            ),
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn manager_starts_before_expose_hook_finishes() -> anyhow::Result<()> {
+        let directory = TempDir::new()?;
+        let session = session_with_one_web_ui();
+        store::save_session_to(directory.path(), &session)?;
+        let (entered_sender, entered_receiver) = std::sync::mpsc::channel();
+        let (release_sender, release_receiver) = std::sync::mpsc::channel();
+        let release_receiver = Arc::new(Mutex::new(release_receiver));
+        let relays = WebUiRelays::with_hook_runner(directory.path().to_path_buf(), move |_, _| {
+            entered_sender.send(()).ok();
+            release_receiver
+                .lock()
+                .expect("hook release lock should succeed")
+                .recv()?;
+            Ok(None)
+        });
+        let (shutdown_sender, shutdown_receiver) = tokio::sync::watch::channel(false);
+        let manager = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            relays.start(shutdown_receiver),
+        )
+        .await?;
+
+        tokio::task::spawn_blocking(move || {
+            entered_receiver.recv_timeout(std::time::Duration::from_secs(1))
+        })
+        .await??;
+        shutdown_sender.send_replace(true);
+        release_sender.send(()).ok();
+        release_sender.send(()).ok();
+        tokio::time::timeout(std::time::Duration::from_secs(1), manager).await??;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remote_crit_urls_keep_their_registered_target() -> anyhow::Result<()> {
+        let directory = TempDir::new()?;
+        let mut session = session_with_one_web_ui();
+        session.web_uis[0].url = "https://review.example.test:9443/review/item".to_owned();
+        store::save_session_to(directory.path(), &session)?;
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut relays = WebUiRelays::with_hook_runner(
+            directory.path().to_path_buf(),
+            hook_runner(calls.clone()),
+        );
+
+        relays.sync().await?;
+        let stored_url = store::load_session_from(directory.path(), "fixture-session")?
+            .expect("session should still exist")
+            .web_uis[0]
+            .exposed_url
+            .clone();
+        let hook_calls = calls.lock().expect("hook call lock should succeed").clone();
+        relays.stop_all().await;
+
+        assert_eq!(
+            (relays.active.len(), stored_url, hook_calls),
+            (
+                0,
+                Some("https://review.example.test:9443/review/item".to_owned()),
+                Vec::new(),
             ),
         );
         Ok(())
