@@ -247,6 +247,7 @@ pub(super) async fn session_tree<S: SessionSource>(
                     has_unanswered_proposal,
                     todo_title.is_some(),
                     has_running_background_task,
+                    &snapshot.agent_config,
                 ),
                 title: snapshot
                     .title_by_id

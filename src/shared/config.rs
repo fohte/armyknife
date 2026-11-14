@@ -19,7 +19,7 @@ pub(crate) mod test_support {
 
     use rstest::fixture;
 
-    use super::{AgentConfig, AgentStatusConfig, AgentStatusState};
+    use super::{AgentConfig, AgentStatusConfig, AgentStatusState, AgentStatusWebKind};
 
     #[fixture]
     pub(crate) fn agent_config() -> AgentConfig {
@@ -29,18 +29,21 @@ pub(crate) mod test_support {
                     "needs_attention".to_string(),
                     AgentStatusConfig {
                         state: AgentStatusState::User,
+                        watch_web_kind: AgentStatusWebKind::Question,
                     },
                 ),
                 (
                     "awaiting_build".to_string(),
                     AgentStatusConfig {
                         state: AgentStatusState::Waiting,
+                        watch_web_kind: AgentStatusWebKind::Stopped,
                     },
                 ),
                 (
                     "finished_work".to_string(),
                     AgentStatusConfig {
                         state: AgentStatusState::Done,
+                        watch_web_kind: AgentStatusWebKind::Stopped,
                     },
                 ),
             ]),
@@ -55,7 +58,7 @@ mod work_type;
 pub use agent::{
     AgentConfig, BgTaskReminderConfig, CodexStatusInferenceConfig, StatusInferenceStatusConfig,
 };
-pub use agent_status::{AgentStatusConfig, AgentStatusState};
+pub use agent_status::{AgentStatusConfig, AgentStatusState, AgentStatusWebKind};
 pub use codex::CodexConfig;
 use env_overlay::env_overlay;
 pub use launch_profile::{
@@ -1075,18 +1078,21 @@ mod tests {
                     "needs_review".to_string(),
                     AgentStatusConfig {
                         state: AgentStatusState::User,
+                        watch_web_kind: AgentStatusWebKind::Review,
                     },
                 ),
                 (
                     "waiting_on_worker".to_string(),
                     AgentStatusConfig {
                         state: AgentStatusState::Waiting,
+                        watch_web_kind: AgentStatusWebKind::Stopped,
                     },
                 ),
                 (
                     "work_wrapped".to_string(),
                     AgentStatusConfig {
                         state: AgentStatusState::Done,
+                        watch_web_kind: AgentStatusWebKind::Stopped,
                     },
                 ),
             ]),
@@ -1100,7 +1106,7 @@ mod tests {
             agent:
               status_inference_prompt: Classify the stopped work.
               statuses:
-                needs_review: { state: user }
+                needs_review: { state: user, watch_web_kind: review }
                 waiting_on_worker: { state: waiting }
                 work_wrapped: { state: done }
               codex_status_inference:

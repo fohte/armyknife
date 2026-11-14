@@ -584,6 +584,7 @@ mod tests {
             "external_wait".to_string(),
             AgentStatusConfig {
                 state: AgentStatusState::Waiting,
+                watch_web_kind: Default::default(),
             },
         );
 
@@ -743,6 +744,7 @@ mod tests {
             "external_wait".to_string(),
             AgentStatusConfig {
                 state: AgentStatusState::Waiting,
+                watch_web_kind: Default::default(),
             },
         );
         let previous_rows = build_progress_rows(
@@ -970,6 +972,7 @@ mod tests {
             "needs_review".to_string(),
             AgentStatusConfig {
                 state: AgentStatusState::User,
+                watch_web_kind: Default::default(),
             },
         );
 

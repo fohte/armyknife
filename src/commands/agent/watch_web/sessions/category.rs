@@ -1,9 +1,9 @@
 use chrono::{DateTime, Utc};
 
 use crate::commands::agent::store;
-use crate::commands::agent::types::{Session, SessionStatus};
+use crate::commands::agent::types::{AgentStatus, Session, SessionStatus};
 use crate::commands::agent::user_turn::{UserTurnKind, user_turns};
-use crate::shared::config::{AgentConfig, AgentStatusState};
+use crate::shared::config::{AgentConfig, AgentStatusState, AgentStatusWebKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -138,12 +138,14 @@ fn kind_for(
     has_unanswered_proposal: bool,
     has_running_background_task: bool,
 ) -> Option<SessionKind> {
+    let agent_config = AgentConfig::default();
     kind_for_with_todo(
         session,
         turn,
         has_unanswered_proposal,
         false,
         has_running_background_task,
+        &agent_config,
     )
 }
 
@@ -153,6 +155,7 @@ pub(super) fn kind_for_with_todo(
     has_unanswered_proposal: bool,
     has_unanswered_todo: bool,
     has_running_background_task: bool,
+    agent_config: &AgentConfig,
 ) -> Option<SessionKind> {
     if session.is_current_tool_named("ExitPlanMode") {
         return Some(SessionKind::Plan);
@@ -172,6 +175,13 @@ pub(super) fn kind_for_with_todo(
     }
 
     let Some(turn) = turn else {
+        if matches!(
+            session.status,
+            SessionStatus::Stopped | SessionStatus::Paused | SessionStatus::Ended
+        ) && let Some(status) = session.agent_status.as_ref()
+        {
+            return kind_for_agent_status(status, agent_config, has_running_background_task);
+        }
         return (session.status == SessionStatus::Stopped && !has_running_background_task)
             .then_some(SessionKind::Stopped);
     };
@@ -181,32 +191,27 @@ pub(super) fn kind_for_with_todo(
         UserTurnKind::Allow => Some(SessionKind::Approve),
         UserTurnKind::Crit | UserTurnKind::Body => Some(SessionKind::Review),
         UserTurnKind::Failed => Some(SessionKind::Error),
-        UserTurnKind::AgentStatus => {
-            let status = session.agent_status.as_ref()?;
-            let content = format!("{} {}", status.kind, status.note).to_ascii_lowercase();
-            let has_word = |cues: &[&str]| {
-                content
-                    .split(|character: char| !character.is_ascii_alphanumeric())
-                    .any(|word| cues.contains(&word))
-            };
-            if content.contains('?') || has_word(&["question", "ask", "asked", "answer", "reply"]) {
-                Some(SessionKind::Question)
-            } else if has_word(&[
-                "review",
-                "reviews",
-                "reviewing",
-                "crit",
-                "body",
-                "approve",
-                "approval",
-                "proposal",
-            ]) {
-                Some(SessionKind::Review)
-            } else {
-                (!has_running_background_task).then_some(SessionKind::Stopped)
-            }
-        }
+        UserTurnKind::AgentStatus => session.agent_status.as_ref().and_then(|status| {
+            kind_for_agent_status(status, agent_config, has_running_background_task)
+        }),
         UserTurnKind::Merge => Some(SessionKind::Review),
+    }
+}
+
+fn kind_for_agent_status(
+    status: &AgentStatus,
+    agent_config: &AgentConfig,
+    has_running_background_task: bool,
+) -> Option<SessionKind> {
+    match agent_config
+        .statuses
+        .get(&status.kind)
+        .map_or(AgentStatusWebKind::Stopped, |config| config.watch_web_kind)
+    {
+        AgentStatusWebKind::Question => Some(SessionKind::Question),
+        AgentStatusWebKind::Review => Some(SessionKind::Review),
+        AgentStatusWebKind::Stopped if !has_running_background_task => Some(SessionKind::Stopped),
+        AgentStatusWebKind::Stopped => None,
     }
 }
 
@@ -282,20 +287,59 @@ mod tests {
     }
 
     #[rstest]
-    #[case::agent_question("ask_user", "", false, Some(SessionKind::Question))]
-    #[case::note_question("needs_attention", "Which option?", false, Some(SessionKind::Question))]
-    #[case::agent_review("needs_review", "", false, Some(SessionKind::Review))]
-    #[case::task_in_review_note(
-        "needs_review",
-        "Review the task plan",
+    #[case::configured_question_ignores_question_word(
+        "fixture_status",
+        "Should we continue?",
+        Some(AgentStatusWebKind::Question),
+        false,
+        Some(SessionKind::Question)
+    )]
+    #[case::configured_question_ignores_review_word(
+        "fixture_status",
+        "Review the result",
+        Some(AgentStatusWebKind::Question),
+        false,
+        Some(SessionKind::Question)
+    )]
+    #[case::configured_question_is_shown_with_background_task(
+        "fixture_status",
+        "Waiting for work",
+        Some(AgentStatusWebKind::Question),
+        true,
+        Some(SessionKind::Question)
+    )]
+    #[case::configured_review_ignores_question_word(
+        "fixture_status",
+        "Which option should we review?",
+        Some(AgentStatusWebKind::Review),
         false,
         Some(SessionKind::Review)
     )]
-    #[case::agent_stopped("waiting_for_external", "", false, Some(SessionKind::Stopped))]
-    #[case::active_background_task("waiting_for_external", "", true, None)]
-    fn maps_agent_status_to_web_kind(
+    #[case::unconfigured_question_words_default_to_stopped(
+        "fixture_question_status",
+        "Which option?",
+        None,
+        false,
+        Some(SessionKind::Stopped)
+    )]
+    #[case::unconfigured_review_words_default_to_stopped(
+        "fixture_review_status",
+        "Review the task plan",
+        None,
+        false,
+        Some(SessionKind::Stopped)
+    )]
+    #[case::unconfigured_background_status_has_no_kind(
+        "fixture_wait_status",
+        "Waiting for work",
+        None,
+        true,
+        None
+    )]
+    fn maps_agent_status_to_configured_web_kind(
         #[case] status_kind: &str,
         #[case] note: &str,
+        #[case] web_kind: Option<AgentStatusWebKind>,
         #[case] has_running_background_task: bool,
         #[case] expected: Option<SessionKind>,
     ) {
@@ -304,13 +348,25 @@ mod tests {
             kind: status_kind.to_string(),
             note: note.to_string(),
         });
+        let mut agent_config = AgentConfig::default();
+        if let Some(watch_web_kind) = web_kind {
+            agent_config.statuses.insert(
+                status_kind.to_string(),
+                AgentStatusConfig {
+                    state: AgentStatusState::User,
+                    watch_web_kind,
+                },
+            );
+        }
 
         assert_eq!(
-            kind_for(
+            kind_for_with_todo(
                 &session,
                 Some(UserTurnKind::AgentStatus),
                 false,
+                false,
                 has_running_background_task,
+                &agent_config,
             ),
             expected
         );
@@ -370,6 +426,7 @@ mod tests {
                 false,
                 true,
                 false,
+                &AgentConfig::default(),
             ),
             Some(expected),
         );
@@ -417,6 +474,7 @@ mod tests {
     #[case::configured_user(
         "fixture_user_status",
         AgentStatusState::User,
+        AgentStatusWebKind::Stopped,
         Some(UserTurnKind::AgentStatus),
         false,
         SessionCategory::NeedsAction,
@@ -425,6 +483,7 @@ mod tests {
     #[case::configured_user_with_background_task(
         "fixture_user_status",
         AgentStatusState::User,
+        AgentStatusWebKind::Stopped,
         Some(UserTurnKind::AgentStatus),
         true,
         SessionCategory::NeedsAction,
@@ -433,22 +492,43 @@ mod tests {
     #[case::configured_waiting(
         "fixture_waiting_status",
         AgentStatusState::Waiting,
+        AgentStatusWebKind::Question,
         None,
         false,
         SessionCategory::InProgress,
-        Some(SessionKind::Stopped)
+        Some(SessionKind::Question)
     )]
     #[case::configured_done(
         "fixture_done_status",
         AgentStatusState::Done,
+        AgentStatusWebKind::Review,
         None,
         false,
         SessionCategory::Done,
-        Some(SessionKind::Stopped)
+        Some(SessionKind::Review)
+    )]
+    #[case::configured_done_with_background_task(
+        "fixture_done_status",
+        AgentStatusState::Done,
+        AgentStatusWebKind::Review,
+        None,
+        true,
+        SessionCategory::InProgress,
+        Some(SessionKind::Review)
+    )]
+    #[case::configured_done_with_background_task_and_stopped_kind(
+        "fixture_done_status",
+        AgentStatusState::Done,
+        AgentStatusWebKind::Stopped,
+        None,
+        true,
+        SessionCategory::InProgress,
+        None
     )]
     fn stopped_agent_statuses_follow_configured_state(
         #[case] status_kind: &str,
         #[case] state: AgentStatusState,
+        #[case] watch_web_kind: AgentStatusWebKind,
         #[case] expected_turn: Option<UserTurnKind>,
         #[case] has_running_background_task: bool,
         #[case] expected_category: SessionCategory,
@@ -460,9 +540,13 @@ mod tests {
             note: "Waiting for a task result.".to_string(),
         });
         let mut agent_config = AgentConfig::default();
-        agent_config
-            .statuses
-            .insert(status_kind.to_string(), AgentStatusConfig { state });
+        agent_config.statuses.insert(
+            status_kind.to_string(),
+            AgentStatusConfig {
+                state,
+                watch_web_kind,
+            },
+        );
         let turn = user_turns([&session], &agent_config)
             .first()
             .map(|turn| turn.kind);
@@ -471,7 +555,14 @@ mod tests {
             (
                 turn,
                 category_for(&session, turn, has_running_background_task, Some(state)),
-                kind_for(&session, turn, false, has_running_background_task),
+                kind_for_with_todo(
+                    &session,
+                    turn,
+                    false,
+                    false,
+                    has_running_background_task,
+                    &agent_config,
+                ),
             ),
             (expected_turn, expected_category, expected_kind),
         );
@@ -494,9 +585,13 @@ mod tests {
             note: "Waiting for external work.".to_string(),
         });
         let mut agent_config = AgentConfig::default();
-        agent_config
-            .statuses
-            .insert(status_kind.to_string(), AgentStatusConfig { state });
+        agent_config.statuses.insert(
+            status_kind.to_string(),
+            AgentStatusConfig {
+                state,
+                watch_web_kind: AgentStatusWebKind::Stopped,
+            },
+        );
 
         assert_eq!(
             decision_category_is_done(
