@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.702](https://github.com/fohte/armyknife/compare/v0.1.701...v0.1.702) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** keep crit visible across rounds ([#1783](https://github.com/fohte/armyknife/issues/1783)) ([325994f](https://github.com/fohte/armyknife/commit/325994f709ee5f0fa224be62a04755e4ff32e9fa))
+
 ## [0.1.701](https://github.com/fohte/armyknife/compare/v0.1.700...v0.1.701) (2026-11-14)
 
 
