@@ -244,10 +244,11 @@ fn task_notification_reminder(record: &Value, text: &str) -> Option<MessageKind>
 
     let reminder_body = strip_stop_hook_error_prefix(reminder_body);
     let text = one_line(&format!("{summary}: {reminder_body}"));
+    let failed = is_failure(record, "task-notification", &text);
     Some(MessageKind::Event {
         kind: EventKind::System,
         text,
-        failed: false,
+        failed,
     })
 }
 
@@ -438,6 +439,15 @@ mod tests {
         </peer-message>
     "#};
 
+    const TASK_REMINDER_BODY: &str = indoc! {r#"
+        <task-notification>
+        <summary>Long-running command reminder</summary>
+        </task-notification>
+        <system-reminder>
+        Stop hook blocking error from command "SyntheticHook:Shell": This is a reminder, not an error: inspect the process output.
+        </system-reminder>
+    "#};
+
     #[rstest]
     #[case::human_user(json!({"type":"user","origin":{"kind":"human"}}), "Please continue.", Some("fixture-marker"), MessageKind::User { text: "Please continue.".to_owned() })]
     #[case::human_tagged_text_stays_user(json!({"type":"user","origin":{"kind":"human"}}), "<task-notification>Human supplied text.</task-notification>", None, MessageKind::User { text: "<task-notification>Human supplied text.</task-notification>".to_owned() })]
@@ -512,19 +522,22 @@ mod tests {
     #[case::background_task_without_summary_uses_id_and_status(json!({"type":"user"}), "<task-notification><task-id>fixture-task-id</task-id><status>completed</status></task-notification>", None, MessageKind::Event { kind: EventKind::System, text: "Background task fixture-task-id completed".to_owned(), failed: false })]
     #[case::task_reminder_combines_summary_and_reminder_without_failure(
         json!({"type":"user","origin":{"kind":"task-notification","producer":"session-task"},"promptSource":"system","turnOrigin":"task_notification"}),
-        indoc! {r#"
-            <task-notification>
-            <summary>Long-running command reminder</summary>
-            </task-notification>
-            <system-reminder>
-            Stop hook blocking error from command "SyntheticHook:Shell": This is a reminder, not an error: inspect the process output.
-            </system-reminder>
-        "#},
+        TASK_REMINDER_BODY,
         None,
         MessageKind::Event {
             kind: EventKind::System,
             text: "Long-running command reminder: This is a reminder, not an error: inspect the process output.".to_owned(),
             failed: false,
+        }
+    )]
+    #[case::task_reminder_preserves_explicit_failure(
+        json!({"type":"user","origin":{"kind":"task-notification","producer":"session-task"},"is_error":true}),
+        TASK_REMINDER_BODY,
+        None,
+        MessageKind::Event {
+            kind: EventKind::System,
+            text: "Long-running command reminder: This is a reminder, not an error: inspect the process output.".to_owned(),
+            failed: true,
         }
     )]
     #[case::away_summary_uses_record_content(json!({"type":"system","subtype":"away_summary","content":"The fictional task finished while the user was away."}), "", None, MessageKind::Event { kind: EventKind::System, text: "recap: The fictional task finished while the user was away.".to_owned(), failed: false })]
