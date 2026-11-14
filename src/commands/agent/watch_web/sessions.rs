@@ -1382,6 +1382,33 @@ mod tests {
         })
     }
 
+    fn question_inbox_response(kind: &str, preview: Option<&str>) -> serde_json::Value {
+        let mut expected = expected_response(
+            "needs_action",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: Some(kind),
+                category_when_not_later: "needs_action",
+                is_paused: false,
+                unread: true,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        if let Some(preview) = preview {
+            expected["sessions"][0]["preview"] = serde_json::json!(preview);
+        }
+        expected
+    }
+
     #[rstest]
     #[case::one_question(
         serde_json::json!([{"question": "Which display mode?"}]),
@@ -1444,27 +1471,7 @@ mod tests {
         let (_transcript_dir, transcript_path) = write_transcript(&[transcript]);
         source.sessions[0].transcript_path = Some(transcript_path);
 
-        let mut expected = expected_response(
-            "needs_action",
-            None,
-            true,
-            ExpectedSessionDetails {
-                kind: Some("Question"),
-                category_when_not_later: "needs_action",
-                is_paused: false,
-                unread: true,
-                crit_url: None,
-            },
-            ExpectedSessionResponse {
-                engine: "claude",
-                work_type: None,
-                work_type_nav_labels: serde_json::json!({}),
-                updated_at: "1970-01-01T00:16:40Z",
-                elapsed_seconds: 100,
-                can_open_in_terminal: true,
-            },
-        );
-        expected["sessions"][0]["preview"] = serde_json::json!(expected_preview);
+        let expected = question_inbox_response("Question", Some(expected_preview));
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
@@ -1507,48 +1514,8 @@ mod tests {
         std::fs::write(&transcript_path, transcript).unwrap();
         let second_response = sessions_response(source).await;
 
-        let mut first_expected = expected_response(
-            "needs_action",
-            None,
-            true,
-            ExpectedSessionDetails {
-                kind: Some("Question"),
-                category_when_not_later: "needs_action",
-                is_paused: false,
-                unread: true,
-                crit_url: None,
-            },
-            ExpectedSessionResponse {
-                engine: "claude",
-                work_type: None,
-                work_type_nav_labels: serde_json::json!({}),
-                updated_at: "1970-01-01T00:16:40Z",
-                elapsed_seconds: 100,
-                can_open_in_terminal: true,
-            },
-        );
-        first_expected["sessions"][0]["preview"] = serde_json::json!("Which initial layout?");
-        let mut second_expected = expected_response(
-            "needs_action",
-            None,
-            true,
-            ExpectedSessionDetails {
-                kind: Some("Question"),
-                category_when_not_later: "needs_action",
-                is_paused: false,
-                unread: true,
-                crit_url: None,
-            },
-            ExpectedSessionResponse {
-                engine: "claude",
-                work_type: None,
-                work_type_nav_labels: serde_json::json!({}),
-                updated_at: "1970-01-01T00:16:40Z",
-                elapsed_seconds: 100,
-                can_open_in_terminal: true,
-            },
-        );
-        second_expected["sessions"][0]["preview"] = serde_json::json!("Which updated layout?");
+        let first_expected = question_inbox_response("Question", Some("Which initial layout?"));
+        let second_expected = question_inbox_response("Question", Some("Which updated layout?"));
 
         assert_eq!(
             (first_response, second_response),
@@ -1560,20 +1527,9 @@ mod tests {
     }
 
     #[rstest]
-    #[case::latest_question_is_answered(true, "Question")]
-    #[case::current_tool_is_not_ask_user_question(false, "Stopped")]
-    #[tokio::test]
-    async fn question_preview_falls_back_to_last_message_when_no_question_is_pending(
-        mut source: TestSessionSource,
-        #[case] current_tool_is_ask_user_question: bool,
-        #[case] expected_kind: &str,
-    ) {
-        source.web_states[0].later_until = None;
-        if current_tool_is_ask_user_question {
-            source.sessions[0].current_tool = Some("AskUserQuestion".to_string());
-            source.sessions[0].current_tool_name = Some("AskUserQuestion".to_string());
-        }
-        let mut records = vec![
+    #[case::latest_question_is_answered(
+        Some("AskUserQuestion"),
+        vec![
             serde_json::json!({
                 "type": "assistant",
                 "message": {"content": [{
@@ -1592,40 +1548,55 @@ mod tests {
                     "input": {"questions": [{"question": "Which recent option?"}]},
                 }]},
             }),
-        ];
-        if current_tool_is_ask_user_question {
-            records.push(serde_json::json!({
+            serde_json::json!({
                 "type": "user",
                 "message": {"content": [{
                     "type": "tool_result",
                     "tool_use_id": "fixture-latest-question",
                     "content": "Your questions have been answered: \"Which recent option?\"=\"First fictional option\".",
                 }]},
-            }));
-        }
+            }),
+        ],
+        "Question",
+    )]
+    #[case::current_tool_is_not_ask_user_question(
+        None,
+        vec![
+            serde_json::json!({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use",
+                    "id": "fixture-earlier-question",
+                    "name": "AskUserQuestion",
+                    "input": {"questions": [{"question": "Which earlier option?"}]},
+                }]},
+            }),
+            serde_json::json!({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use",
+                    "id": "fixture-latest-question",
+                    "name": "AskUserQuestion",
+                    "input": {"questions": [{"question": "Which recent option?"}]},
+                }]},
+            }),
+        ],
+        "Stopped",
+    )]
+    #[tokio::test]
+    async fn question_preview_falls_back_to_last_message_when_no_question_is_pending(
+        mut source: TestSessionSource,
+        #[case] current_tool: Option<&str>,
+        #[case] records: Vec<serde_json::Value>,
+        #[case] expected_kind: &str,
+    ) {
+        source.web_states[0].later_until = None;
+        source.sessions[0].current_tool = current_tool.map(String::from);
+        source.sessions[0].current_tool_name = current_tool.map(String::from);
         let (_transcript_dir, transcript_path) = write_transcript(&records);
         source.sessions[0].transcript_path = Some(transcript_path);
 
-        let expected = expected_response(
-            "needs_action",
-            None,
-            true,
-            ExpectedSessionDetails {
-                kind: Some(expected_kind),
-                category_when_not_later: "needs_action",
-                is_paused: false,
-                unread: true,
-                crit_url: None,
-            },
-            ExpectedSessionResponse {
-                engine: "claude",
-                work_type: None,
-                work_type_nav_labels: serde_json::json!({}),
-                updated_at: "1970-01-01T00:16:40Z",
-                elapsed_seconds: 100,
-                can_open_in_terminal: true,
-            },
-        );
+        let expected = question_inbox_response(expected_kind, None);
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
@@ -1664,27 +1635,7 @@ mod tests {
             }))
         });
 
-        let mut expected = expected_response(
-            "needs_action",
-            None,
-            true,
-            ExpectedSessionDetails {
-                kind: Some("Approve"),
-                category_when_not_later: "needs_action",
-                is_paused: false,
-                unread: true,
-                crit_url: None,
-            },
-            ExpectedSessionResponse {
-                engine: "claude",
-                work_type: None,
-                work_type_nav_labels: serde_json::json!({}),
-                updated_at: "1970-01-01T00:16:40Z",
-                elapsed_seconds: 100,
-                can_open_in_terminal: true,
-            },
-        );
-        expected["sessions"][0]["preview"] = serde_json::json!("Which fallback should appear?");
+        let expected = question_inbox_response("Approve", Some("Which fallback should appear?"));
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
@@ -1699,26 +1650,7 @@ mod tests {
         source.sessions[0].current_tool_name = Some("AskUserQuestion".to_string());
         source.question_preview_error = true;
 
-        let expected = expected_response(
-            "needs_action",
-            None,
-            true,
-            ExpectedSessionDetails {
-                kind: Some("Question"),
-                category_when_not_later: "needs_action",
-                is_paused: false,
-                unread: true,
-                crit_url: None,
-            },
-            ExpectedSessionResponse {
-                engine: "claude",
-                work_type: None,
-                work_type_nav_labels: serde_json::json!({}),
-                updated_at: "1970-01-01T00:16:40Z",
-                elapsed_seconds: 100,
-                can_open_in_terminal: true,
-            },
-        );
+        let expected = question_inbox_response("Question", None);
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
