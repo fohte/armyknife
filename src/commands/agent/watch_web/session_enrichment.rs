@@ -11,7 +11,7 @@ use crate::commands::agent::tq_session_tasks::{
     order_tasks_by_priority, task_priority_metadata,
 };
 use crate::commands::agent::types::Session;
-use crate::infra::github::{BranchPrQuery, GitHubClient, PrInfo};
+use crate::infra::github::{BranchPrQuery, GitHubClient, PrProgressInfo};
 use crate::infra::tq::{TqClient, TqProjectSummary, TqTaskSummary};
 
 mod cache;
@@ -31,13 +31,14 @@ type FetchFuture<T> = Pin<Box<dyn Future<Output = Result<T, String>> + Send + 's
 type TaskMetadataFetcher = Arc<
     dyn Fn(HashSet<String>, SessionTaskMetadata) -> FetchFuture<SessionTaskMetadata> + Send + Sync,
 >;
-type PullRequestFetcher =
-    Arc<dyn Fn(Vec<Session>) -> FetchFuture<HashMap<BranchPrKey, Option<PrInfo>>> + Send + Sync>;
+type PullRequestFetcher = Arc<
+    dyn Fn(Vec<Session>) -> FetchFuture<HashMap<BranchPrKey, Option<PrProgressInfo>>> + Send + Sync,
+>;
 
 #[derive(Clone)]
 pub(super) struct SessionEnrichmentCache {
     tq: Arc<RefreshingCache<SessionTaskMetadata, String>>,
-    pull_requests: Arc<RefreshingCache<HashMap<BranchPrKey, Option<PrInfo>>, BranchPrKey>>,
+    pull_requests: Arc<RefreshingCache<HashMap<BranchPrKey, Option<PrProgressInfo>>, BranchPrKey>>,
     task_fetcher: TaskMetadataFetcher,
     pull_request_fetcher: PullRequestFetcher,
 }
@@ -50,7 +51,7 @@ impl SessionEnrichmentCache {
             },
         );
         let pull_request_fetcher: PullRequestFetcher = Arc::new(
-            |sessions| -> FetchFuture<HashMap<BranchPrKey, Option<PrInfo>>> {
+            |sessions| -> FetchFuture<HashMap<BranchPrKey, Option<PrProgressInfo>>> {
                 Box::pin(async move { fetch_pull_requests(&sessions).await })
             },
         );
@@ -99,7 +100,7 @@ impl SessionEnrichmentCache {
     pub(super) async fn pull_requests(
         &self,
         sessions: &[Session],
-    ) -> HashMap<String, Option<PrInfo>> {
+    ) -> HashMap<String, Option<PrProgressInfo>> {
         let query_keys = pull_request_keys(sessions);
         if query_keys.is_empty() {
             return HashMap::new();
@@ -374,7 +375,7 @@ async fn detected_tq_client() -> Result<Option<TqClient>, String> {
 
 async fn fetch_pull_requests(
     sessions: &[Session],
-) -> Result<HashMap<BranchPrKey, Option<PrInfo>>, String> {
+) -> Result<HashMap<BranchPrKey, Option<PrProgressInfo>>, String> {
     let mut queries = Vec::new();
     let mut seen = HashSet::new();
     for session in sessions {
@@ -399,7 +400,7 @@ async fn fetch_pull_requests(
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())?;
     let prs = client
-        .get_prs_for_branches_batch(&queries)
+        .get_pr_progress_for_branches_batch(&queries)
         .await
         .map_err(|error| error.to_string())?;
 
@@ -413,9 +414,23 @@ mod tests {
     };
     use super::*;
     use crate::commands::agent::tq_session_tasks::task_priority_metadata;
+    use crate::infra::github::{PrCiState, PrInfo, PrState};
     use rstest::rstest;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Notify;
+
+    fn progress(number: u64) -> PrProgressInfo {
+        PrProgressInfo {
+            pull_request: PrInfo {
+                number,
+                title: "Example change".to_string(),
+                state: PrState::Open,
+                url: format!("https://example.test/pull/{number}"),
+            },
+            ci_state: PrCiState::Successful,
+            head_sha: Some("sample-head".to_string()),
+        }
+    }
 
     fn task(id: &str, priority: Option<i32>) -> TqTaskSummary {
         TqTaskSummary {
@@ -793,12 +808,7 @@ mod tests {
                         "example-repository".to_string(),
                         "feature/example".to_string(),
                     ),
-                    Some(PrInfo {
-                        number: 17,
-                        title: "Example change".to_string(),
-                        state: crate::infra::github::PrState::Open,
-                        url: "https://example.test/pull/17".to_string(),
-                    }),
+                    Some(progress(17)),
                 )]))
             })
         });
@@ -817,24 +827,8 @@ mod tests {
             (
                 HashMap::from([("session-one".to_string(), None)]),
                 HashMap::from([
-                    (
-                        "session-one".to_string(),
-                        Some(PrInfo {
-                            number: 17,
-                            title: "Example change".to_string(),
-                            state: crate::infra::github::PrState::Open,
-                            url: "https://example.test/pull/17".to_string(),
-                        }),
-                    ),
-                    (
-                        "session-two".to_string(),
-                        Some(PrInfo {
-                            number: 17,
-                            title: "Example change".to_string(),
-                            state: crate::infra::github::PrState::Open,
-                            url: "https://example.test/pull/17".to_string(),
-                        }),
-                    ),
+                    ("session-one".to_string(), Some(progress(17)),),
+                    ("session-two".to_string(), Some(progress(17)),),
                 ]),
                 1,
             ),

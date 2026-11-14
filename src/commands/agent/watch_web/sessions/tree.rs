@@ -275,9 +275,9 @@ pub(super) async fn session_tree<S: SessionSource>(
                 pull_request: pull_requests
                     .get(&session.session_id)
                     .and_then(Option::as_ref)
-                    .map(|info| PullRequestView {
-                        number: info.number,
-                        state: info.state.clone(),
+                    .map(|progress| PullRequestView {
+                        number: progress.pull_request.number,
+                        state: progress.pull_request.state.clone(),
                     }),
             }
         })
