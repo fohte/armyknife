@@ -81,13 +81,15 @@ export function applyConversationOperation(
   switch (operation.type) {
     case 'message': {
       const messageCountBefore = operation.messageCountBefore
-      const hasServerMessage =
-        messageCountBefore !== undefined &&
-        conversation.messages.some(
-          (message, index) =>
-            matchesUserMessage(message, operation) &&
-            conversation.start + index >= messageCountBefore,
-        )
+      const hasServerMessage = conversation.messages.some((message, index) =>
+        isServerMessageForOperation(
+          message,
+          index,
+          conversation,
+          operation,
+          messageCountBefore,
+        ),
+      )
       if (!hasServerMessage) {
         const content = []
         if (operation.content !== '') {
@@ -213,11 +215,14 @@ export function isConversationOperationConfirmed(
 ) {
   switch (operation.type) {
     case 'message':
-      return conversation.messages.some(
-        (message, index) =>
-          matchesUserMessage(message, operation) &&
-          (operation.messageCountBefore === undefined ||
-            conversation.start + index >= operation.messageCountBefore),
+      return conversation.messages.some((message, index) =>
+        isServerMessageForOperation(
+          message,
+          index,
+          conversation,
+          operation,
+          operation.messageCountBefore,
+        ),
       )
     case 'answer': {
       const question = conversation.messages.find(
@@ -311,6 +316,26 @@ function matchesUserMessage(
   return (
     text === operation.content &&
     actualAttachmentCount === expectedAttachmentCount
+  )
+}
+
+function isServerMessageForOperation(
+  message: ChatItem,
+  index: number,
+  conversation: ConversationResponse,
+  operation: Extract<SessionOperation, { type: 'message' }>,
+  messageCountBefore: number | undefined,
+) {
+  if (operation.queuedPromptId !== undefined) {
+    return (
+      (message.type === 'user' || message.type === 'user_with_content') &&
+      message.queuedPromptId === operation.queuedPromptId
+    )
+  }
+  if (!matchesUserMessage(message, operation)) return false
+  return (
+    messageCountBefore === undefined ||
+    conversation.start + index >= messageCountBefore
   )
 }
 

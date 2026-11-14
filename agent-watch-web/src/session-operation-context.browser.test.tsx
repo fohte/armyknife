@@ -131,6 +131,15 @@ function MessageOperationHarness() {
       <span data-testid="message-statuses">
         {pendingMessages.map(({ status }) => status).join(',')}
       </span>
+      <span data-testid="queued-prompt-ids">
+        {pendingMessages
+          .map(({ operation }) =>
+            operation.type === 'message'
+              ? (operation.queuedPromptId ?? '')
+              : '',
+          )
+          .join(',')}
+      </span>
       <button
         type="button"
         onClick={() => {
@@ -447,7 +456,9 @@ it('renumbers later sends when an earlier message POST fails', async () => {
   if (completeSecondPost === undefined)
     throw new Error('Expected the second message request')
   await act(async () => {
-    completeSecondPost(new Response(null, { status: 204 }))
+    completeSecondPost(
+      Response.json({ ok: true, queuedPromptId: 'fixture-message-id' }),
+    )
     await messageRequests[1]
   })
   const afterSecondPost = {
@@ -455,6 +466,9 @@ it('renumbers later sends when an earlier message POST fails', async () => {
       ?.textContent,
     messageStatuses: container.querySelector('[data-testid="message-statuses"]')
       ?.textContent,
+    queuedPromptIds: container.querySelector(
+      '[data-testid="queued-prompt-ids"]',
+    )?.textContent,
   }
 
   const failureSnapshots = () => ({
@@ -468,6 +482,10 @@ it('renumbers later sends when an earlier message POST fails', async () => {
       messageStatuses: 'sending,sending',
     },
     afterFailure: { messageCounts: '0', messageStatuses: 'sending' },
-    afterSecondPost: { messageCounts: '0', messageStatuses: 'sent' },
+    afterSecondPost: {
+      messageCounts: '0',
+      messageStatuses: 'sent',
+      queuedPromptIds: 'fixture-message-id',
+    },
   })
 })

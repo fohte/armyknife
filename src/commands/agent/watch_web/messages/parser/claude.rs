@@ -334,6 +334,7 @@ mod tests {
                 text: "Selected request.".to_string(),
                 timestamp: Some("2026-06-01T12:00:00+00:00".to_string()),
                 from: None,
+                queued_prompt_id: None,
             }],
         );
     }
@@ -939,6 +940,7 @@ mod tests {
                     text: "Human request.".to_string(),
                     from: None,
                     timestamp: Some("2026-11-11T10:00:00+00:00".to_string()),
+                    queued_prompt_id: None,
                 },
                 ChatItem::Peer {
                     direction: PeerDirection::From,
@@ -1054,6 +1056,7 @@ mod tests {
                     text: "Earlier message.".to_string(),
                     timestamp: Some("2026-11-11T10:00:00+00:00".to_string()),
                     from: None,
+                    queued_prompt_id: None,
                 },
                 decision_item_at(1, "2026-11-11T10:30:00Z"),
                 decision_item_at(2, "2026-11-11T10:30:00Z"),
@@ -1228,6 +1231,7 @@ mod tests {
                 text: attachment_text.to_owned(),
                 timestamp: None,
                 from: None,
+                queued_prompt_id: None,
             }]
         );
     }
@@ -1549,6 +1553,7 @@ mod tests {
                     text: "Before the queued prompt.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
                 ChatItem::ToolSummary {
                     summary: "Read ×1".to_string(),
@@ -1559,12 +1564,14 @@ mod tests {
                     text: queued_text.to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
                 ChatItem::User {
                     rewind_id: None,
                     text: "After the queued prompt.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
             ]
         );
@@ -1622,6 +1629,7 @@ mod tests {
                     ],
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
                 ChatItem::UserWithContent {
                     rewind_id: None,
@@ -1639,6 +1647,7 @@ mod tests {
                     ],
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
             ],
         );
@@ -1671,6 +1680,7 @@ mod tests {
                     text: "Review the notification flow.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
                 ChatItem::Assistant {
                     text: "I will inspect the event handler.".to_string(),
@@ -1940,6 +1950,7 @@ mod tests {
                 text: "Visible user message.".to_string(),
                 timestamp: None,
                 from: None,
+                queued_prompt_id: None,
             }],
         );
     }
@@ -1979,6 +1990,7 @@ mod tests {
                     text: "/inspect fixture-argument".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
                 ChatItem::ToolSummary {
                     summary: "Edit notes.txt".to_string(),
@@ -1989,6 +2001,7 @@ mod tests {
                     text: "A visible user message.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
             ]
         );
@@ -2074,18 +2087,21 @@ mod tests {
                     text: "Keep this earlier message.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
                 ChatItem::User {
                     rewind_id: None,
                     text: "Show this queued text.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
                 ChatItem::User {
                     rewind_id: Some("fixture-active-id".to_string()),
                     text: "Keep this replacement message.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
             ]
         );
@@ -2109,6 +2125,7 @@ mod tests {
                     text: "Update the fixture.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
                 ChatItem::ToolSummary {
                     summary: "Edit plan.md  Read ×1".to_string(),
@@ -2140,6 +2157,7 @@ mod tests {
                     text: "Keep this pre-compact message.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
                 ChatItem::Event {
                     kind: super::super::super::EventKind::CompactBoundary,
@@ -2152,6 +2170,7 @@ mod tests {
                     text: "Keep this post-compact message.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
             ]
         );
@@ -2175,6 +2194,7 @@ mod tests {
                     text: "Keep the earlier history.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
                 ChatItem::Event {
                     kind: super::super::super::EventKind::CompactBoundary,
@@ -2187,12 +2207,14 @@ mod tests {
                     text: "Keep the post-compact context.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
                 ChatItem::User {
                     rewind_id: Some("fixture-current-id".to_string()),
                     text: "Keep this replacement message.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
             ]
         );
@@ -2223,12 +2245,14 @@ mod tests {
                     text: "Keep this earlier message.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
                 ChatItem::User {
                     rewind_id: Some("fixture-current-id".to_string()),
                     text: "Keep this current message.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
             ]
         );
@@ -2259,6 +2283,7 @@ mod tests {
                     text: "Read the plan.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
                 ChatItem::ToolSummary {
                     summary: "Read ×1".to_string(),
@@ -2283,12 +2308,14 @@ mod tests {
                     text: "Keep the first legacy message.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
                 ChatItem::User {
                     rewind_id: None,
                     text: "Keep the second legacy message.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
             ]
         );
@@ -2311,18 +2338,21 @@ mod tests {
                     text: "Keep the first legacy message.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
                 ChatItem::User {
                     rewind_id: Some("fixture-unreachable-id".to_string()),
                     text: "Keep the second legacy message.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
                 ChatItem::User {
                     rewind_id: Some("fixture-active-id".to_string()),
                     text: "Keep this current message.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
             ]
         );
@@ -2356,12 +2386,14 @@ mod tests {
                     text: "Direct user request.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
                 ChatItem::User {
                     rewind_id: None,
                     text: "Queued user request.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
                 ChatItem::Peer {
                     direction: PeerDirection::From,
@@ -2389,12 +2421,14 @@ mod tests {
                     text: "Direct user request.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
                 ChatItem::User {
                     rewind_id: None,
                     text: "Queued user request.".to_string(),
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 },
                 ChatItem::Peer {
                     direction: PeerDirection::From,

@@ -465,6 +465,7 @@ mod tests {
             text: user_text.to_string(),
             timestamp: None,
             from: None,
+            queued_prompt_id: None,
         });
 
         assert_eq!(
@@ -586,6 +587,7 @@ mod tests {
                         text: "Watch the fixture build.".to_string(),
                         timestamp: None,
                         from: None,
+                        queued_prompt_id: None,
                     },
                     ChatItem::ToolSummary {
                         summary: format!("Bash ×1  {result_tool} ×1"),
@@ -633,6 +635,7 @@ mod tests {
                         text: "Delegate a synthetic task.".to_string(),
                         timestamp: None,
                         from: None,
+                        queued_prompt_id: None,
                     },
                     ChatItem::ToolSummary {
                         summary: "Task ×1".to_string(),
@@ -717,6 +720,7 @@ mod tests {
                         text: "Review the synthetic change.".to_string(),
                         timestamp: None,
                         from: None,
+                        queued_prompt_id: None,
                     },
                     ChatItem::ToolSummary {
                         summary: "Agent ×1".to_string(),
@@ -751,6 +755,7 @@ mod tests {
                 text: "Watch the fixture build.".to_string(),
                 timestamp: None,
                 from: None,
+                queued_prompt_id: None,
             },
             ChatItem::ToolSummary {
                 summary: "Bash ×1".to_string(),

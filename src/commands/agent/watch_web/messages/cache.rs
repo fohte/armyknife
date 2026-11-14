@@ -441,6 +441,7 @@ mod tests {
                 ],
                 timestamp: None,
                 from: None,
+                queued_prompt_id: None,
             }],
             background_tasks: Vec::new(),
             ..ConversationResponse::default()
@@ -465,6 +466,7 @@ mod tests {
                     ],
                     timestamp: None,
                     from: None,
+                    queued_prompt_id: None,
                 }],
                 background_tasks: Vec::new(),
                 ..ConversationResponse::default()

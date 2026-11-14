@@ -130,6 +130,7 @@ pub(super) fn resolve_transcript_messages(
                 from,
                 timestamp,
                 rewind_id,
+                queued_prompt_id: prompt.message_id.clone(),
             }
         } else {
             ChatItem::UserWithContent {
@@ -137,6 +138,7 @@ pub(super) fn resolve_transcript_messages(
                 from,
                 timestamp,
                 rewind_id,
+                queued_prompt_id: prompt.message_id.clone(),
             }
         };
         if !prompt.resolved {

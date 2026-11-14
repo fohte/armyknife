@@ -735,6 +735,8 @@ enum ChatItem {
         text: String,
         #[serde(rename = "rewindId", skip_serializing_if = "Option::is_none")]
         rewind_id: Option<String>,
+        #[serde(rename = "queuedPromptId", skip_serializing_if = "Option::is_none")]
+        queued_prompt_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         timestamp: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -751,6 +753,8 @@ enum ChatItem {
         content: Vec<UserContentPart>,
         #[serde(rename = "rewindId", skip_serializing_if = "Option::is_none")]
         rewind_id: Option<String>,
+        #[serde(rename = "queuedPromptId", skip_serializing_if = "Option::is_none")]
+        queued_prompt_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         timestamp: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -3664,7 +3668,7 @@ mod tests {
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
-                    r#"{"messages":[{"type":"user","text":"Delivered fixture request.","timestamp":"2026-01-01T00:00:01+00:00"}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
+                r#"{"messages":[{"type":"user","text":"Delivered fixture request.","queuedPromptId":"fixture-message-7","timestamp":"2026-01-01T00:00:01+00:00"}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
                 ),
                 vec![7],
             ),
@@ -3716,7 +3720,7 @@ mod tests {
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
-                    r#"{"messages":[{"type":"user","text":"Codex delivered request.","timestamp":"2026-01-01T00:00:01+00:00"}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
+                    r#"{"messages":[{"type":"user","text":"Codex delivered request.","queuedPromptId":"fixture-message-8","timestamp":"2026-01-01T00:00:01+00:00"}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
                 ),
                 vec![8],
             ),

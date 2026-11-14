@@ -63,6 +63,30 @@ it('accepts todo cards with completion metadata', () => {
   ).toBe(true)
 })
 
+it('accepts a queued prompt ID on a delivered user message', () => {
+  expect(
+    isConversationResponse(
+      response({
+        type: 'user',
+        text: 'A message',
+        queuedPromptId: 'fixture-message-id',
+      }),
+    ),
+  ).toBe(true)
+})
+
+it('rejects a non-string queued prompt ID on a delivered user message', () => {
+  expect(
+    isConversationResponse(
+      response({
+        type: 'user',
+        text: 'A message',
+        queuedPromptId: 1,
+      }),
+    ),
+  ).toBe(false)
+})
+
 it('rejects todo cards with invalid completion state', () => {
   expect(
     isConversationResponse(
