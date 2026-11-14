@@ -187,7 +187,7 @@ pub(super) fn kind_for_with_todo(
             SessionStatus::Stopped | SessionStatus::Paused | SessionStatus::Ended
         ) && let Some(status) = session.agent_status.as_ref()
         {
-            return Some(kind_for_agent_status(status, agent_config));
+            return kind_for_agent_status(status, agent_config, has_running_background_task);
         }
         return (session.status == SessionStatus::Stopped && !has_running_background_task)
             .then_some(SessionKind::Stopped);
@@ -198,23 +198,27 @@ pub(super) fn kind_for_with_todo(
         UserTurnKind::Allow => Some(SessionKind::Approve),
         UserTurnKind::Crit | UserTurnKind::Body => Some(SessionKind::Review),
         UserTurnKind::Failed => Some(SessionKind::Error),
-        UserTurnKind::AgentStatus => session
-            .agent_status
-            .as_ref()
-            .map(|status| kind_for_agent_status(status, agent_config)),
+        UserTurnKind::AgentStatus => session.agent_status.as_ref().and_then(|status| {
+            kind_for_agent_status(status, agent_config, has_running_background_task)
+        }),
         UserTurnKind::Merge => Some(SessionKind::Review),
     }
 }
 
-fn kind_for_agent_status(status: &AgentStatus, agent_config: &AgentConfig) -> SessionKind {
+fn kind_for_agent_status(
+    status: &AgentStatus,
+    agent_config: &AgentConfig,
+    has_running_background_task: bool,
+) -> Option<SessionKind> {
     match agent_config
         .statuses
         .get(&status.kind)
         .map_or(AgentStatusWebKind::Stopped, |config| config.watch_web_kind)
     {
-        AgentStatusWebKind::Question => SessionKind::Question,
-        AgentStatusWebKind::Review => SessionKind::Review,
-        AgentStatusWebKind::Stopped => SessionKind::Stopped,
+        AgentStatusWebKind::Question => Some(SessionKind::Question),
+        AgentStatusWebKind::Review => Some(SessionKind::Review),
+        AgentStatusWebKind::Stopped if !has_running_background_task => Some(SessionKind::Stopped),
+        AgentStatusWebKind::Stopped => None,
     }
 }
 
@@ -302,6 +306,13 @@ mod tests {
         false,
         Some(SessionKind::Question)
     )]
+    #[case::configured_question_is_shown_with_background_task(
+        "fixture_status",
+        "Waiting for work",
+        Some(AgentStatusWebKind::Question),
+        true,
+        Some(SessionKind::Question)
+    )]
     #[case::configured_review_ignores_question_word(
         "fixture_status",
         "Which option should we review?",
@@ -323,12 +334,12 @@ mod tests {
         false,
         Some(SessionKind::Stopped)
     )]
-    #[case::unconfigured_background_status_defaults_to_stopped(
+    #[case::unconfigured_background_status_has_no_kind(
         "fixture_wait_status",
         "Waiting for work",
         None,
         true,
-        Some(SessionKind::Stopped)
+        None
     )]
     fn maps_agent_status_to_configured_web_kind(
         #[case] status_kind: &str,
@@ -465,7 +476,7 @@ mod tests {
         Some(UserTurnKind::AgentStatus),
         true,
         SessionCategory::NeedsAction,
-        Some(SessionKind::Stopped)
+        None
     )]
     #[case::configured_waiting(
         "fixture_waiting_status",
@@ -493,6 +504,15 @@ mod tests {
         true,
         SessionCategory::InProgress,
         Some(SessionKind::Review)
+    )]
+    #[case::configured_done_with_background_task_and_stopped_kind(
+        "fixture_done_status",
+        AgentStatusState::Done,
+        AgentStatusWebKind::Stopped,
+        None,
+        true,
+        SessionCategory::InProgress,
+        None
     )]
     fn stopped_agent_statuses_follow_configured_state(
         #[case] status_kind: &str,
