@@ -46,8 +46,23 @@ impl ClaudeParserState {
         if let Some(attachment) = record.get("attachment")
             && attachment.get("type").and_then(Value::as_str) == Some("skill_listing")
         {
-            self.skills =
+            let listing =
                 super::super::skill_suggestions::parse_claude_listing(attachment.get("content"));
+            if attachment.get("isInitial").and_then(Value::as_bool) == Some(false) {
+                for skill in listing {
+                    if let Some(existing) = self
+                        .skills
+                        .iter_mut()
+                        .find(|existing| existing.name == skill.name)
+                    {
+                        existing.description = skill.description;
+                    } else {
+                        self.skills.push(skill);
+                    }
+                }
+            } else {
+                self.skills = listing;
+            }
         }
 
         let task_notification = task_notification_text(&record);
