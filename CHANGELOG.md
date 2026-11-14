@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.696](https://github.com/fohte/armyknife/compare/v0.1.695...v0.1.696) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** open registered UIs remotely ([#1769](https://github.com/fohte/armyknife/issues/1769)) ([9402c9d](https://github.com/fohte/armyknife/commit/9402c9deaf0b1452eafff8ed39c79cde844a6c23))
+
 ## [0.1.695](https://github.com/fohte/armyknife/compare/v0.1.694...v0.1.695) (2026-11-14)
 
 
