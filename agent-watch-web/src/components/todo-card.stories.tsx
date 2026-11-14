@@ -41,6 +41,14 @@ export const TodoIsCompleted: Story = {
   },
 }
 
+export const TodoShowsASavedImage: Story = {
+  name: 'A completed to-do shows its attached image in the saved comment',
+  args: {
+    resolution: 'completed',
+    defaultComment: '![Sample screenshot](/card-comment-attachment.svg)',
+  },
+}
+
 export const TodoIsCompletedWithoutAComment: Story = {
   name: 'A completed to-do without a comment shows only its title',
   args: { resolution: 'completed', defaultComment: '' },

@@ -290,7 +290,7 @@ async fn send_queued_prompt_with_policy(
     Ok(Some(message_id))
 }
 
-async fn remove_attachments(paths: Vec<PathBuf>) {
+pub(super) async fn remove_attachments(paths: Vec<PathBuf>) {
     if paths.is_empty() {
         return;
     }

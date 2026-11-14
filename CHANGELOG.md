@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.715](https://github.com/fohte/armyknife/compare/v0.1.714...v0.1.715) (2026-11-14)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show images in card comments ([#1810](https://github.com/fohte/armyknife/issues/1810)) ([ae75278](https://github.com/fohte/armyknife/commit/ae75278ee3e39ab46b75652a0d6656cc42ad3d28))
+
+## [0.1.714](https://github.com/fohte/armyknife/compare/v0.1.713...v0.1.714) (2026-11-14)
+
+
+### Bug Fixes
+
+* **watch-web:** align question preview with parser ([#1809](https://github.com/fohte/armyknife/issues/1809)) ([40f9486](https://github.com/fohte/armyknife/commit/40f94868c26b5b491e6f4bae55559a3681cbd733))
+
 ## [0.1.713](https://github.com/fohte/armyknife/compare/v0.1.712...v0.1.713) (2026-11-14)
 
 

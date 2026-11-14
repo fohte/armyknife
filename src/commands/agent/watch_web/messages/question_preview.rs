@@ -108,6 +108,7 @@ fn transcript_question_preview(session: &Session, cache: &QuestionPreviewCache) 
             peer_out_messages: &[],
             proposals: &[],
             todos: &[],
+            additional_cards: &[],
         },
     };
     match incremental::parse_session_transcript(input) {

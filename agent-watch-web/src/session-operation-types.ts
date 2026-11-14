@@ -51,6 +51,7 @@ export type SessionOperation =
       seq: number
       choice: number | null
       comment: string | null
+      attachments?: unknown[]
     }
   | {
       type: 'todo_resolve'
@@ -58,6 +59,7 @@ export type SessionOperation =
       seq: number
       resolution: 'completed' | 'rejected'
       comment: string | null
+      attachments?: unknown[]
     }
   | {
       type: 'permission'

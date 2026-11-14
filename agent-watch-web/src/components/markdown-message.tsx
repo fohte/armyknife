@@ -418,9 +418,22 @@ const MarkdownParagraph: NonNullable<Components['p']> = ({ children }) => (
   <span>{children}</span>
 )
 
+const MarkdownImage: NonNullable<Components['img']> = ({ src, alt, title }) =>
+  src === undefined || src === '' ? null : (
+    <img
+      className="chat-user-image"
+      src={src}
+      alt={alt ?? ''}
+      title={title}
+      loading="lazy"
+      decoding="async"
+    />
+  )
+
 const markdownComponents: Components = {
   a: MarkdownAnchor,
   code: MarkdownCode,
+  img: MarkdownImage,
   pre: MarkdownPre,
 }
 

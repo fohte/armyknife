@@ -1,12 +1,21 @@
 import '#components/todo-card.css'
 
 import { Button } from '@fohte/ui/button'
+import type { ClipboardEvent } from 'react'
 import { useEffect, useId, useMemo, useState } from 'react'
 
+import {
+  AttachmentPreviewList,
+  handleAttachmentPaste,
+} from '#components/attachment-preview-list'
 import { CollapsibleText } from '#components/collapsible-text'
 import { MarkdownMessage } from '#components/markdown-message'
+import type { EncodedAttachment } from '#components/use-attachments'
+import { useAttachments } from '#components/use-attachments'
 
 type TodoCardProps = {
+  seq?: number
+  sessionId?: string
   title: string
   detail: string | null
   resolution: 'completed' | 'rejected' | 'withdrawn' | null
@@ -14,10 +23,13 @@ type TodoCardProps = {
   onResolve: (
     resolution: 'completed' | 'rejected',
     comment: string | null,
+    attachments?: readonly EncodedAttachment[],
   ) => Promise<boolean>
 }
 
 export function TodoCard({
+  seq = 0,
+  sessionId = 'todo',
   title,
   detail,
   resolution,
@@ -25,6 +37,7 @@ export function TodoCard({
   onResolve,
 }: TodoCardProps) {
   const commentId = useId()
+  const attachmentState = useAttachments(`${sessionId}:todo:${String(seq)}`)
   const detailContent = useMemo(
     () =>
       detail === null ? null : <MarkdownMessage>{detail}</MarkdownMessage>,
@@ -43,20 +56,36 @@ export function TodoCard({
     if (resolution !== null) setComment(defaultComment)
   }, [resolution, defaultComment])
 
-  const resolveTodo = (nextResolution: 'completed' | 'rejected') => {
-    if (isResolved || isSubmitting) return
+  const resolveTodo = async (nextResolution: 'completed' | 'rejected') => {
+    if (
+      isResolved ||
+      isSubmitting ||
+      attachmentState.isProcessingAttachments ||
+      attachmentState.hasLimitError
+    ) {
+      return
+    }
     const normalizedComment = comment.trim()
     setIsSubmitting(true)
-    void onResolve(
-      nextResolution,
-      normalizedComment === '' ? null : normalizedComment,
-    )
-      .then((succeeded) => {
+    try {
+      await attachmentState.sendWithAttachments(async (attachments) => {
+        const succeeded =
+          attachments.length === 0
+            ? await onResolve(
+                nextResolution,
+                normalizedComment === '' ? null : normalizedComment,
+              )
+            : await onResolve(
+                nextResolution,
+                normalizedComment === '' ? null : normalizedComment,
+                attachments,
+              )
         if (succeeded) setResolutionLocally(nextResolution)
+        return succeeded
       })
-      .finally(() => {
-        setIsSubmitting(false)
-      })
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   if (isResolved) {
@@ -82,6 +111,9 @@ export function TodoCard({
             {completionComment}
           </MarkdownMessage>
         ) : null}
+        {resolution === null ? (
+          <AttachmentPreviewList attachments={attachmentState.attachments} />
+        ) : null}
       </article>
     )
   }
@@ -90,7 +122,7 @@ export function TodoCard({
     <article
       className="chat-todo-card"
       aria-label="User task"
-      aria-busy={isSubmitting}
+      aria-busy={isSubmitting || attachmentState.isProcessingAttachments}
       data-resolution="pending"
     >
       <h2>To-do · pending</h2>
@@ -113,18 +145,34 @@ export function TodoCard({
         rows={2}
         value={comment}
         disabled={isSubmitting}
+        onPaste={(event: ClipboardEvent<HTMLTextAreaElement>) => {
+          handleAttachmentPaste(event, attachmentState.onPasteFiles)
+        }}
         onChange={(event) => {
           setComment(event.currentTarget.value)
         }}
       />
+      <AttachmentPreviewList
+        attachments={attachmentState.attachments}
+        {...(isSubmitting
+          ? {}
+          : { onRemove: attachmentState.removeAttachment })}
+      />
+      {attachmentState.error === null ? null : (
+        <p role="alert">{attachmentState.error}</p>
+      )}
       <footer className="chat-todo-footer">
         <Button
           type="button"
           variant="plain"
           className="aw-button aw-button--primary"
-          disabled={isSubmitting}
+          disabled={
+            isSubmitting ||
+            attachmentState.isProcessingAttachments ||
+            attachmentState.hasLimitError
+          }
           onClick={() => {
-            resolveTodo('completed')
+            void resolveTodo('completed')
           }}
         >
           Mark done
@@ -133,9 +181,13 @@ export function TodoCard({
           type="button"
           variant="plain"
           className="aw-button chat-todo-reject"
-          disabled={isSubmitting}
+          disabled={
+            isSubmitting ||
+            attachmentState.isProcessingAttachments ||
+            attachmentState.hasLimitError
+          }
           onClick={() => {
-            resolveTodo('rejected')
+            void resolveTodo('rejected')
           }}
         >
           Reject

@@ -81,7 +81,8 @@ fn router_with_state(state: ActionState) -> Router {
         )
         .route(
             "/sessions/{id}/proposals/{seq}/answer",
-            post(proposals::answer_proposal),
+            post(proposals::answer_proposal)
+                .layer(DefaultBodyLimit::max(messages::MAX_MESSAGE_BODY_BYTES)),
         )
         .route(
             "/sessions/{id}/permission-denials/{seq}/retry",
@@ -89,7 +90,8 @@ fn router_with_state(state: ActionState) -> Router {
         )
         .route(
             "/sessions/{id}/todos/{seq}/resolve",
-            post(todos::resolve_todo),
+            post(todos::resolve_todo)
+                .layer(DefaultBodyLimit::max(messages::MAX_MESSAGE_BODY_BYTES)),
         )
         .route("/sessions/{id}/title", post(title::set_title))
         .route(

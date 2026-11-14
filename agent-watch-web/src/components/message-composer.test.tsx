@@ -357,8 +357,9 @@ it('shows the size of a non-image attachment', () => {
   })
 
   const snapshot = () => ({
-    name: container.querySelector('.composer-attachment span')?.textContent,
-    size: container.querySelector('.composer-attachment small')?.textContent,
+    name: container.querySelector('.attachment-preview-item span')?.textContent,
+    size: container.querySelector('.attachment-preview-item small')
+      ?.textContent,
   })
   expect(snapshot()).toEqual({
     name: 'design-mock.html',
@@ -396,7 +397,7 @@ it('shows the byte size of a small non-image attachment', () => {
   })
 
   const snapshot = () =>
-    container.querySelector('.composer-attachment small')?.textContent
+    container.querySelector('.attachment-preview-item small')?.textContent
   expect(snapshot()).toEqual('512 B')
 })
 

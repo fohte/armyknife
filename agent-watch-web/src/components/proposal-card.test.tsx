@@ -5,6 +5,14 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { ProposalCard } from '#components/proposal-card'
 
+const { optimizeImageAttachmentMock } = vi.hoisted(() => ({
+  optimizeImageAttachmentMock: vi.fn<(file: File) => Promise<File>>(),
+}))
+
+vi.mock('#lib/image-attachment', () => ({
+  optimizeImageAttachment: optimizeImageAttachmentMock,
+}))
+
 type Props = ComponentProps<typeof ProposalCard>
 
 let container: HTMLDivElement
@@ -12,6 +20,7 @@ let root: Root | null = null
 
 function props(overrides: Partial<Props> = {}): Props {
   return {
+    sessionId: crypto.randomUUID(),
     seq: 7,
     title: 'When should the setting take effect?',
     summary: 'Choose how the change is introduced.',
@@ -79,6 +88,15 @@ function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
   })
 }
 
+async function pasteImage(textarea: HTMLTextAreaElement, file: File) {
+  const event = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(event, 'clipboardData', { value: { files: [file] } })
+  await act(async () => {
+    textarea.dispatchEvent(event)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  })
+}
+
 function dispatchKey(target: EventTarget, key: string, metaKey = false) {
   const event = new KeyboardEvent('keydown', {
     key,
@@ -94,6 +112,11 @@ function dispatchKey(target: EventTarget, key: string, metaKey = false) {
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  optimizeImageAttachmentMock.mockReset()
+  optimizeImageAttachmentMock.mockImplementation((file) =>
+    Promise.resolve(file),
+  )
+  vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:proposal-image')
   container = document.createElement('div')
   document.body.append(container)
 })
@@ -196,6 +219,35 @@ it('renders proposal summaries, descriptions, and withdrawal comments as markdow
       '<p>Keep <strong>the current flow</strong> and <a href="https://example.test" target="_blank" rel="noopener noreferrer">review details</a>.</p>',
     withdrawalComment:
       '<p>See <a href="https://example.test" target="_blank" rel="noopener noreferrer">the update</a> for <strong>context</strong>.</p>',
+  })
+})
+
+it('shows a saved image in an answered proposal comment', () => {
+  renderCard(
+    props({
+      answer: {
+        choice: 0,
+        comment: '![Sample screenshot](/api/images/fixture-image.png)',
+      },
+      resolved: true,
+    }),
+  )
+
+  const snapshot = () => ({
+    status: container.querySelector('h2')?.textContent,
+    comment: container.querySelector('.chat-proposal-answer-comment')
+      ?.innerHTML,
+    commentInput: container.querySelector('.chat-proposal-comment') !== null,
+    attachmentPreview:
+      container.querySelector('.attachment-preview-list') !== null,
+  })
+
+  expect(snapshot()).toEqual({
+    status: 'Proposal · chose A',
+    comment:
+      '<p><img class="chat-user-image" alt="Sample screenshot" loading="lazy" decoding="async" src="/api/images/fixture-image.png"></p>',
+    commentInput: false,
+    attachmentPreview: false,
   })
 })
 
@@ -325,7 +377,7 @@ it('selects an option from its description but not from its links', () => {
 })
 
 it('selects a numbered option and sends it with the comment on Command-Enter', async () => {
-  const onAnswer = vi.fn(() => Promise.resolve(true))
+  const onAnswer = vi.fn<Props['onAnswer']>(() => Promise.resolve(true))
   renderCard(props({ onAnswer }))
   dispatchKey(window, '2')
   const comment = requireElement(
@@ -466,6 +518,87 @@ it('asks for another option with a null choice and an optional comment', async (
     answerCalls: [[{ choice: null, comment: 'Add a simpler alternative.' }]],
     status: 'Proposal · asked for another option',
     optionsDisabled: [true, true],
+  })
+})
+
+it('previews and sends an image pasted into the proposal comment', async () => {
+  let resolveAnswer: (succeeded: boolean) => void = () => undefined
+  const answerResult = new Promise<boolean>((resolve) => {
+    resolveAnswer = resolve
+  })
+  let notifyAnswerCalled: () => void = () => undefined
+  const answerCalled = new Promise<void>((resolve) => {
+    notifyAnswerCalled = resolve
+  })
+  const onAnswer = vi.fn<Props['onAnswer']>(() => {
+    notifyAnswerCalled()
+    return answerResult
+  })
+  const sessionId = crypto.randomUUID()
+  renderCard(props({ sessionId, defaultChoice: 0, onAnswer }))
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+  )
+  await pasteImage(
+    comment,
+    new File(['image'], 'screen.png', { type: 'image/png' }),
+  )
+
+  const previewBeforeSend = container
+    .querySelector<HTMLImageElement>('.attachment-preview-item img')
+    ?.getAttribute('src')
+  const chooseButton = requireElement(
+    container.querySelector<HTMLButtonElement>('.chat-proposal-actions button'),
+  )
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  })
+  expect(chooseButton.disabled).toBe(false)
+  await act(async () => {
+    chooseButton.click()
+    await answerCalled
+  })
+  const canRemoveWhileSending =
+    container.querySelector('[aria-label="Remove screen.png"]') !== null
+  await act(async () => {
+    resolveAnswer(true)
+    await answerResult
+  })
+
+  const snapshot = () => ({
+    previewBeforeSend,
+    canRemoveWhileSending,
+    answerCalls: onAnswer.mock.calls,
+    sentAttachments: onAnswer.mock.calls[0]?.[1],
+    completedPreview: container
+      .querySelector<HTMLImageElement>('.attachment-preview-item img')
+      ?.getAttribute('src'),
+  })
+  expect(snapshot()).toEqual({
+    previewBeforeSend: 'blob:proposal-image',
+    canRemoveWhileSending: false,
+    answerCalls: [
+      [
+        { choice: 0, comment: null },
+        [
+          {
+            name: 'screen.png',
+            mimeType: 'image/png',
+            size: 5,
+            data: 'aW1hZ2U=',
+          },
+        ],
+      ],
+    ],
+    sentAttachments: [
+      {
+        name: 'screen.png',
+        mimeType: 'image/png',
+        size: 5,
+        data: 'aW1hZ2U=',
+      },
+    ],
+    completedPreview: 'blob:proposal-image',
   })
 })
 
