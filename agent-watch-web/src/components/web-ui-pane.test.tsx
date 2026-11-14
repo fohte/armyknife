@@ -103,6 +103,8 @@ it('opens the local web UI directly in the iframe and external link', () => {
       <WebUiPane
         name="crit"
         url="http://127.0.0.1:48761/review/sample"
+        exposedUrl="https://public.example.test/review/sample"
+        hostname="localhost"
         onClose={() => undefined}
       />,
     )

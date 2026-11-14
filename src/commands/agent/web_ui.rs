@@ -4,7 +4,7 @@ use anyhow::{Context, Result, ensure};
 use clap::{Args, Subcommand};
 
 use super::store;
-use super::types::{Session, WebUiRegistration};
+use super::types::{Session, SessionStatus, WebUiRegistration};
 use crate::commands::agent::crit::url::add_url;
 use crate::shared::hooks;
 
@@ -78,10 +78,16 @@ fn record_url_in_with_hooks(
         anyhow::bail!("Agent session not found: {session_id}");
     };
     let previous_urls = session.web_uis.clone();
-    register(&mut session.web_uis, name, url);
     if record_legacy_crit_url {
         add_url(&mut session.crit_urls, url);
     }
+    let registered_url = if record_legacy_crit_url {
+        session.crit_urls.last().map(String::as_str).unwrap_or(url)
+    } else {
+        url
+    }
+    .to_owned();
+    register(&mut session.web_uis, name, &registered_url);
     lock.save(&session)?;
     drop(lock);
 
@@ -94,18 +100,18 @@ fn record_url_in_with_hooks(
         run_unexpose_hook(previous, &mut run_hook);
     }
 
-    let exposed_url = match web_ui_port(url) {
+    let exposed_url = match web_ui_port(&registered_url) {
         Some(port) => {
             let port = port.to_string();
             match run_hook(
                 "web-ui-expose",
-                &[(WEB_UI_URL_ENV, url), (WEB_UI_PORT_ENV, &port)],
+                &[(WEB_UI_URL_ENV, &registered_url), (WEB_UI_PORT_ENV, &port)],
             ) {
                 Ok(url) => exposed_web_ui_url(url),
                 Err(error) => {
                     tracing::warn!(
                         event = "agent.web_ui.expose_failed",
-                        url,
+                        url = %registered_url,
                         error = %error,
                         "web-ui-expose hook failed"
                     );
@@ -119,25 +125,56 @@ fn record_url_in_with_hooks(
     if let Some(registered) = session
         .web_uis
         .iter_mut()
-        .find(|registered| registered.name == name.trim() && registered.url == url)
+        .find(|registered| registered.name == name.trim() && registered.url == registered_url)
     {
-        registered.exposed_url = exposed_url;
+        registered.exposed_url = exposed_url.clone();
     }
 
-    let lock = store::lock_session_for_update(sessions_dir, session_id)?;
-    if let Some(mut current) = lock.load()?
-        && let Some(registered) = current
-            .web_uis
-            .iter_mut()
-            .find(|registered| registered.name == name.trim() && registered.url == url)
-    {
-        registered.exposed_url = session
-            .web_uis
-            .iter()
-            .find(|registered| registered.name == name.trim() && registered.url == url)
-            .and_then(|registered| registered.exposed_url.clone());
-        lock.save(&current)?;
-        session = current;
+    let exposed_registration = WebUiRegistration {
+        name: name.trim().to_owned(),
+        url: registered_url.clone(),
+        exposed_url,
+    };
+    let update_result =
+        (|| -> Result<Option<Session>> {
+            let lock = store::lock_session_for_update(sessions_dir, session_id)?;
+            let Some(mut current) = lock.load()? else {
+                return Ok(None);
+            };
+            if current.status == SessionStatus::Ended {
+                return Ok(Some(current));
+            }
+            let Some(registered) = current.web_uis.iter_mut().find(|registered| {
+                registered.name == name.trim() && registered.url == registered_url
+            }) else {
+                return Ok(Some(current));
+            };
+            registered.exposed_url = exposed_registration.exposed_url.clone();
+            lock.save(&current)?;
+            Ok(Some(current))
+        })();
+
+    match update_result {
+        Ok(Some(current))
+            if current.status != SessionStatus::Ended
+                && current.web_uis.iter().any(|registered| {
+                    registered.name == name.trim() && registered.url == registered_url
+                }) =>
+        {
+            session = current;
+        }
+        Ok(Some(current)) => {
+            run_unexpose_hook(&exposed_registration, &mut run_hook);
+            return Ok(current);
+        }
+        Ok(None) => {
+            run_unexpose_hook(&exposed_registration, &mut run_hook);
+            return Ok(session);
+        }
+        Err(error) => {
+            run_unexpose_hook(&exposed_registration, &mut run_hook);
+            return Err(error);
+        }
     }
     Ok(session)
 }
@@ -155,9 +192,14 @@ pub(super) fn register(web_uis: &mut Vec<WebUiRegistration>, name: &str, url: &s
 #[cfg(not(test))]
 pub(super) fn unexpose_session_web_uis(session: &Session) {
     for web_ui in &session.web_uis {
-        let mut run_hook = hooks::run_hook_capture_stdout;
-        run_unexpose_hook(web_ui, &mut run_hook);
+        unexpose_web_ui(web_ui);
     }
+}
+
+#[cfg(not(test))]
+pub(super) fn unexpose_web_ui(web_ui: &WebUiRegistration) {
+    let mut run_hook = hooks::run_hook_capture_stdout;
+    run_unexpose_hook(web_ui, &mut run_hook);
 }
 
 fn run_unexpose_hook(
@@ -334,8 +376,11 @@ mod tests {
     }
 
     #[rstest]
+    #[case::unexpose_succeeds(false)]
+    #[case::unexpose_fails(true)]
     fn recording_a_web_ui_replaces_the_same_trimmed_name_with_a_new_url(
         sessions_dir_with_web_uis: tempfile::TempDir,
+        #[case] fail_unexpose: bool,
     ) {
         let mut calls = Vec::<(String, Vec<(String, String)>)>::new();
         let session = record_url_in_with_hooks(
@@ -353,6 +398,8 @@ mod tests {
                 ));
                 if hook == "web-ui-expose" {
                     Ok(Some("https://public.example.test/new".to_owned()))
+                } else if fail_unexpose {
+                    anyhow::bail!("unexpose failed")
                 } else {
                     Ok(None)
                 }
@@ -486,6 +533,144 @@ mod tests {
                     ],
                 )],
             ),
+        );
+    }
+
+    #[rstest]
+    fn recording_a_crit_root_url_exposes_the_effective_pathful_url(
+        sessions_dir: tempfile::TempDir,
+    ) {
+        let mut initial = store::load_session_from(sessions_dir.path(), "fixture-session")
+            .expect("session should load")
+            .expect("session should exist");
+        initial.crit_urls = vec!["http://localhost:48761/crit/review".to_owned()];
+        initial.web_uis = vec![WebUiRegistration {
+            name: "crit".to_owned(),
+            url: "http://localhost:48761/crit/review".to_owned(),
+            exposed_url: None,
+        }];
+        store::save_session_to(sessions_dir.path(), &initial).expect("session should save");
+        let mut calls = Vec::<(String, Vec<(String, String)>)>::new();
+
+        let session = record_url_in_with_hooks(
+            sessions_dir.path(),
+            "fixture-session",
+            "crit",
+            "http://localhost:48761/",
+            true,
+            |hook, env| {
+                calls.push((
+                    hook.to_owned(),
+                    env.iter()
+                        .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                        .collect(),
+                ));
+                Ok(Some("https://review.example.test/crit/review".to_owned()))
+            },
+        )
+        .expect("crit URL should preserve the effective pathful URL");
+
+        assert_eq!(
+            (session.crit_urls, session.web_uis, calls),
+            (
+                vec!["http://localhost:48761/crit/review".to_owned()],
+                vec![WebUiRegistration {
+                    name: "crit".to_owned(),
+                    url: "http://localhost:48761/crit/review".to_owned(),
+                    exposed_url: Some("https://review.example.test/crit/review".to_owned()),
+                }],
+                vec![(
+                    "web-ui-expose".to_owned(),
+                    vec![
+                        (
+                            "ARMYKNIFE_WEB_UI_URL".to_owned(),
+                            "http://localhost:48761/crit/review".to_owned(),
+                        ),
+                        ("ARMYKNIFE_WEB_UI_PORT".to_owned(), "48761".to_owned()),
+                    ],
+                )],
+            ),
+        );
+    }
+
+    #[rstest]
+    fn recording_cleans_up_exposure_if_registration_changes_during_the_hook(
+        sessions_dir: tempfile::TempDir,
+    ) {
+        let mut calls = Vec::<(String, Vec<(String, String)>)>::new();
+        let session = record_url_in_with_hooks(
+            sessions_dir.path(),
+            "fixture-session",
+            "Design editor",
+            "http://localhost:48761/initial",
+            false,
+            |hook, env| {
+                calls.push((
+                    hook.to_owned(),
+                    env.iter()
+                        .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                        .collect(),
+                ));
+                if hook == "web-ui-expose" {
+                    let mut current =
+                        store::load_session_from(sessions_dir.path(), "fixture-session")
+                            .expect("concurrent session should load")
+                            .expect("concurrent session should exist");
+                    register(
+                        &mut current.web_uis,
+                        "Design editor",
+                        "http://localhost:48761/replacement",
+                    );
+                    store::save_session_to(sessions_dir.path(), &current)
+                        .expect("concurrent replacement should save");
+                    Ok(Some("https://public.example.test/initial".to_owned()))
+                } else {
+                    Ok(None)
+                }
+            },
+        )
+        .expect("registration replacement during exposure should be recovered");
+        let stored = store::load_session_from(sessions_dir.path(), "fixture-session")
+            .expect("session should load")
+            .expect("session should exist");
+        let expected = vec![WebUiRegistration {
+            name: "Design editor".to_owned(),
+            url: "http://localhost:48761/replacement".to_owned(),
+            exposed_url: None,
+        }];
+
+        assert_eq!(
+            (session.web_uis, stored.web_uis, calls),
+            (
+                expected.clone(),
+                expected,
+                vec![
+                    (
+                        "web-ui-expose".to_owned(),
+                        vec![
+                            (
+                                "ARMYKNIFE_WEB_UI_URL".to_owned(),
+                                "http://localhost:48761/initial".to_owned()
+                            ),
+                            ("ARMYKNIFE_WEB_UI_PORT".to_owned(), "48761".to_owned()),
+                        ],
+                    ),
+                    (
+                        "web-ui-unexpose".to_owned(),
+                        vec![
+                            (
+                                "ARMYKNIFE_WEB_UI_URL".to_owned(),
+                                "http://localhost:48761/initial".to_owned()
+                            ),
+                            ("ARMYKNIFE_WEB_UI_PORT".to_owned(), "48761".to_owned()),
+                            (
+                                "ARMYKNIFE_WEB_UI_EXPOSED_URL".to_owned(),
+                                "https://public.example.test/initial".to_owned(),
+                            ),
+                        ],
+                    ),
+                ],
+            )
         );
     }
 

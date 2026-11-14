@@ -7,6 +7,7 @@ use anyhow::Result;
 
 use super::super::crit;
 use super::super::store;
+use super::super::types::WebUiRegistration;
 
 pub(super) fn clear_stale_links(sessions_dir: &Path, dry_run: bool) -> Result<usize> {
     clear_stale_links_with_port_probe(sessions_dir, dry_run, is_crit_port_live)
@@ -15,7 +16,21 @@ pub(super) fn clear_stale_links(sessions_dir: &Path, dry_run: bool) -> Result<us
 fn clear_stale_links_with_port_probe(
     sessions_dir: &Path,
     dry_run: bool,
+    is_endpoint_live: impl FnMut(SocketAddr) -> bool,
+) -> Result<usize> {
+    clear_stale_links_with_port_probe_and_unexpose(
+        sessions_dir,
+        dry_run,
+        is_endpoint_live,
+        unexpose_removed_web_ui,
+    )
+}
+
+fn clear_stale_links_with_port_probe_and_unexpose(
+    sessions_dir: &Path,
+    dry_run: bool,
     mut is_endpoint_live: impl FnMut(SocketAddr) -> bool,
+    mut unexpose_web_ui: impl FnMut(&WebUiRegistration),
 ) -> Result<usize> {
     let candidates = store::list_all_sessions_from(sessions_dir)?
         .into_iter()
@@ -67,23 +82,38 @@ fn clear_stale_links_with_port_probe(
         }
 
         let mut removed = 0;
+        let mut removed_web_uis = Vec::new();
         store::update_session_in(sessions_dir, &listed_session.session_id, |session| {
             let previous_len = session.crit_urls.len();
             session
                 .crit_urls
                 .retain(|url| !is_stale_local_crit_url(url, &live_ports));
             let previous_web_ui_len = session.web_uis.len();
-            session
-                .web_uis
-                .retain(|web_ui| !is_stale_local_crit_url(&web_ui.url, &live_ports));
+            session.web_uis.retain(|web_ui| {
+                let is_live = !is_stale_local_crit_url(&web_ui.url, &live_ports);
+                if !is_live {
+                    removed_web_uis.push(web_ui.clone());
+                }
+                is_live
+            });
             removed = previous_len - session.crit_urls.len() + previous_web_ui_len
                 - session.web_uis.len();
             removed > 0
         })?;
+        for web_ui in &removed_web_uis {
+            unexpose_web_ui(web_ui);
+        }
         cleared += removed;
     }
 
     Ok(cleared)
+}
+
+fn unexpose_removed_web_ui(web_ui: &WebUiRegistration) {
+    #[cfg(not(test))]
+    crate::commands::agent::web_ui::unexpose_web_ui(web_ui);
+    #[cfg(test)]
+    let _ = web_ui;
 }
 
 fn is_crit_port_live(endpoint: SocketAddr) -> bool {
@@ -267,6 +297,32 @@ mod tests {
                     exposed_url: None,
                 }],
             ),
+        );
+    }
+
+    #[test]
+    fn stale_web_ui_cleanup_unexposes_removed_registration() {
+        let mut before = session(&[]);
+        before.web_uis = vec![WebUiRegistration {
+            name: "Editor".to_owned(),
+            url: "http://localhost:42501/design/sample/".to_owned(),
+            exposed_url: Some("https://public.example.test/design/sample/".to_owned()),
+        }];
+        let dir = sessions_dir(&before);
+        let mut unexposed = Vec::new();
+
+        let result = clear_stale_links_with_port_probe_and_unexpose(
+            dir.path(),
+            false,
+            |_| false,
+            |web_ui| unexposed.push(web_ui.clone()),
+        )
+        .expect("stale web UI cleanup should succeed");
+        let stored = load_session(dir.path(), &before.session_id);
+
+        assert_eq!(
+            (result, stored.web_uis, unexposed),
+            (1, Vec::new(), before.web_uis)
         );
     }
 
