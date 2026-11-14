@@ -244,6 +244,86 @@ it('keeps option labels phrasing-only and links associated with their radios', (
   })
 })
 
+it('selects an option from its description but not from its links', () => {
+  renderCard(
+    props({
+      options: [
+        {
+          label: 'Use the existing flow',
+          description: 'Read [the guide](https://example.test).',
+          pros: [],
+          cons: [],
+          recommended: false,
+        },
+        {
+          label: 'Show the choice earlier',
+          description: 'Move the choice before the next action.',
+          pros: [],
+          cons: [],
+          recommended: false,
+        },
+      ],
+    }),
+  )
+
+  const firstDescription = requireElement(
+    container.querySelector<HTMLParagraphElement>(
+      '.chat-proposal-option-description p',
+    ),
+  )
+  const secondDescription = requireElement(
+    container.querySelectorAll<HTMLParagraphElement>(
+      '.chat-proposal-option-description p',
+    )[1] ?? null,
+  )
+  const link = requireElement(
+    container.querySelector<HTMLAnchorElement>(
+      '.chat-proposal-option-description a',
+    ),
+  )
+  link.addEventListener('click', (event) => {
+    event.preventDefault()
+  })
+
+  const selected = () =>
+    Array.from(
+      container.querySelectorAll<HTMLInputElement>(
+        '.chat-proposal-option input',
+      ),
+      (input) => input.checked,
+    )
+
+  act(() => {
+    firstDescription.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true }),
+    )
+  })
+  const afterFirstDescriptionClick = selected()
+  act(() => {
+    secondDescription.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true }),
+    )
+  })
+  const afterSecondDescriptionClick = selected()
+  act(() => {
+    link.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true }),
+    )
+  })
+
+  const snapshot = () => ({
+    afterFirstDescriptionClick,
+    afterSecondDescriptionClick,
+    afterLinkClick: selected(),
+  })
+
+  expect(snapshot()).toEqual({
+    afterFirstDescriptionClick: [true, false],
+    afterSecondDescriptionClick: [false, true],
+    afterLinkClick: [false, true],
+  })
+})
+
 it('selects a numbered option and sends it with the comment on Command-Enter', async () => {
   const onAnswer = vi.fn(() => Promise.resolve(true))
   renderCard(props({ onAnswer }))

@@ -167,6 +167,17 @@ export function ProposalCard({
             className="chat-proposal-option"
             data-selected={selectedChoice === index ? 'true' : undefined}
             key={`${String(index)}-${option.label}`}
+            role="presentation"
+            onClick={(event) => {
+              if (
+                isDisabled ||
+                (event.target instanceof Element &&
+                  event.target.closest('a') !== null)
+              ) {
+                return
+              }
+              setSelectedChoice(index)
+            }}
           >
             <input
               id={`proposal-${String(seq)}-option-${String(index)}`}
