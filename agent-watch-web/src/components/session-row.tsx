@@ -1,10 +1,10 @@
 import '#components/later-today.css'
 
 import { Button } from '@fohte/ui/button'
-import { Chip } from '@fohte/ui/chip'
 
 import { cn } from '#lib/utils'
 import { formatSessionDecisionCount } from '#session-decision-count'
+import { sessionKindIcon } from '#session-kind-label'
 import { formatLinkedTaskCount } from '#session-task-count'
 import type { Session } from '#types'
 
@@ -82,6 +82,7 @@ export function SessionRow({
   isMobile = false,
 }: SessionRowProps) {
   const kind = sessionKind(session)
+  const KindIcon = sessionKindIcon(kind)
   const taskLabel = sessionTaskLabel(session)
   const decisionLabel = formatSessionDecisionCount(session)
 
@@ -118,13 +119,15 @@ export function SessionRow({
             </span>
             {session.category === 'needs_action' ? (
               <span className="session-preview">
-                <Chip
+                <span
+                  aria-label={kind}
                   data-session-kind={kind.toLowerCase()}
-                  size="sm"
-                  tone="strong"
+                  className="session-kind-icon"
+                  role="img"
+                  title={kind}
                 >
-                  {kind}
-                </Chip>
+                  <KindIcon aria-hidden="true" size={14} />
+                </span>
                 {session.preview !== null && session.preview.length > 0 ? (
                   <span> · {session.preview}</span>
                 ) : null}
