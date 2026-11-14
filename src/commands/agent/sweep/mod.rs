@@ -400,9 +400,11 @@ pub struct SweepReport {
     pub active: usize,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 enum ShutdownOutcome {
     Exited,
     StillRunning,
+    SessionChanged,
 }
 
 /// Testable core of `run`. Reads sessions under `sessions_dir`, evaluates
@@ -470,10 +472,32 @@ where
                         pending_bg_tasks = session.pending_bg_task_ids.len(),
                         pending_agent_tasks = session.pending_agent_task_ids.len(),
                     );
-                    session.pending_bg_task_ids.clear();
-                    session.pending_agent_task_ids.clear();
                     if !dry_run {
-                        store::save_session_to(sessions_dir, &session)?;
+                        let expected_updated_at = session.updated_at;
+                        let expected_pending_bg_task_ids = session.pending_bg_task_ids.clone();
+                        let expected_pending_agent_task_ids =
+                            session.pending_agent_task_ids.clone();
+                        let mut updated_session = None;
+                        store::update_session_in(sessions_dir, &session.session_id, |current| {
+                            if current.status != SessionStatus::Stopped
+                                || current.updated_at != expected_updated_at
+                                || current.pending_bg_task_ids != expected_pending_bg_task_ids
+                                || current.pending_agent_task_ids != expected_pending_agent_task_ids
+                            {
+                                return false;
+                            }
+                            current.pending_bg_task_ids.clear();
+                            current.pending_agent_task_ids.clear();
+                            updated_session = Some(current.clone());
+                            true
+                        })?;
+                        let Some(updated_session) = updated_session else {
+                            continue;
+                        };
+                        session = updated_session;
+                    } else {
+                        session.pending_bg_task_ids.clear();
+                        session.pending_agent_task_ids.clear();
                     }
                 }
                 Ok(Some(_)) => {}
@@ -536,10 +560,12 @@ where
                                 event = "agent.sweep.paused",
                                 session = %session.session_id,
                             );
-                            confirm_paused(sessions_dir, session, syncer)?;
-                            report.paused += 1;
+                            if confirm_paused(sessions_dir, session, syncer)? {
+                                report.paused += 1;
+                            }
                         }
                         ShutdownOutcome::StillRunning => report.signaled += 1,
+                        ShutdownOutcome::SessionChanged => {}
                     }
                 }
                 Ok(None) => {
@@ -562,8 +588,9 @@ where
                         event = "agent.sweep.paused",
                         session = %session.session_id,
                     );
-                    confirm_paused(sessions_dir, session, syncer)?;
-                    report.paused += 1;
+                    if confirm_paused(sessions_dir, session, syncer)? {
+                        report.paused += 1;
+                    }
                 }
                 Err(error) => {
                     tracing::warn!(
@@ -616,8 +643,24 @@ fn signal_session<S: SignalSender + GracefulQuitRequester>(
     sender: &S,
 ) -> Result<ShutdownOutcome> {
     let first_request = !session.sweep_signaled;
-    session.sweep_signaled = true;
-    store::save_session_to(sessions_dir, session)?;
+    let expected_updated_at = session.updated_at;
+    let expected_sweep_signaled = session.sweep_signaled;
+    let mut signaled_session = None;
+    store::update_session_in(sessions_dir, &session.session_id, |current| {
+        if current.status != SessionStatus::Stopped
+            || current.updated_at != expected_updated_at
+            || current.sweep_signaled != expected_sweep_signaled
+        {
+            return false;
+        }
+        current.sweep_signaled = true;
+        signaled_session = Some(current.clone());
+        true
+    })?;
+    let Some(signaled_session) = signaled_session else {
+        return Ok(ShutdownOutcome::SessionChanged);
+    };
+    *session = signaled_session;
 
     if session.engine == Engine::Codex
         && first_request
@@ -670,12 +713,24 @@ fn signal_session<S: SignalSender + GracefulQuitRequester>(
 /// to do it.
 fn confirm_paused<T: TmuxStatusSyncer>(
     sessions_dir: &Path,
-    mut session: Session,
+    session: Session,
     syncer: &T,
-) -> Result<()> {
-    session.status = SessionStatus::Paused;
-    session.sweep_signaled = false;
-    store::save_session_to(sessions_dir, &session)?;
+) -> Result<bool> {
+    let expected_updated_at = session.updated_at;
+    let mut paused_session = None;
+    store::update_session_in(sessions_dir, &session.session_id, |current| {
+        if current.status != SessionStatus::Stopped || current.updated_at != expected_updated_at {
+            return false;
+        }
+        current.status = SessionStatus::Paused;
+        current.sweep_signaled = false;
+        current.updated_at = Utc::now();
+        paused_session = Some(current.clone());
+        true
+    })?;
+    let Some(session) = paused_session else {
+        return Ok(false);
+    };
 
     syncer.sync(
         session.tmux_info.as_ref().map(|info| info.pane_id.as_str()),
@@ -685,7 +740,7 @@ fn confirm_paused<T: TmuxStatusSyncer>(
         sessions_dir,
     );
 
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -2055,6 +2110,57 @@ mod tests {
                 Some("sess-tmux".to_string()),
                 test_dir.path.clone(),
             )],
+        );
+    }
+
+    #[rstest]
+    fn confirm_paused_keeps_a_newer_ended_session(test_dir: TestDir) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        let stale_session = make_session("fixture-session", SessionStatus::Stopped, old);
+        save_session_to(&test_dir.path, &stale_session).expect("save stale session");
+        let mut rewound_session = stale_session.clone();
+        rewound_session.status = SessionStatus::Ended;
+        rewound_session.updated_at = old + TimeDelta::seconds(1);
+        save_session_to(&test_dir.path, &rewound_session).expect("save rewound session");
+        let syncer = RecordingTmuxStatusSyncer::default();
+
+        let result = confirm_paused(&test_dir.path, stale_session, &syncer).expect("confirm pause");
+        let current_session = store::load_session_from(&test_dir.path, "fixture-session")
+            .expect("load session")
+            .map(|session| serde_json::to_value(session).expect("serialize session"));
+        let expected_session = serde_json::to_value(rewound_session).expect("serialize session");
+
+        assert_eq!(
+            (result, current_session, syncer.calls.borrow().clone()),
+            (false, Some(expected_session), Vec::new()),
+        );
+    }
+
+    #[rstest]
+    fn signal_session_does_not_signal_a_newer_ended_session(test_dir: TestDir) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        let mut stale_session = make_session("fixture-session", SessionStatus::Stopped, old);
+        save_session_to(&test_dir.path, &stale_session).expect("save stale session");
+        let mut rewound_session = stale_session.clone();
+        rewound_session.status = SessionStatus::Ended;
+        rewound_session.updated_at = old + TimeDelta::seconds(1);
+        save_session_to(&test_dir.path, &rewound_session).expect("save rewound session");
+        let sender = RecordingSender::default();
+
+        let result = signal_session(&test_dir.path, &mut stale_session, 4242, &sender)
+            .expect("signal stale session");
+        let current_session = store::load_session_from(&test_dir.path, "fixture-session")
+            .expect("load session")
+            .map(|session| serde_json::to_value(session).expect("serialize session"));
+        let expected_session = serde_json::to_value(rewound_session).expect("serialize session");
+
+        assert_eq!(
+            (result, current_session, sender.calls.borrow().clone()),
+            (
+                ShutdownOutcome::SessionChanged,
+                Some(expected_session),
+                Vec::new()
+            ),
         );
     }
 

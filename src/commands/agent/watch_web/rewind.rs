@@ -141,8 +141,17 @@ fn claude_file_rewind_command(session: &Session, message_id: &str) -> std::proce
 }
 
 pub(super) fn can_rewind(session: &Session) -> bool {
-    session.status == SessionStatus::WaitingInput && session.tmux_info.is_some()
+    matches!(
+        session.status,
+        SessionStatus::Stopped | SessionStatus::Paused
+    ) && session.tmux_info.is_some()
+        && !session.has_pending_bg_tasks()
+        && !session.sweep_signaled
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("session cannot be rewound")]
+pub(super) struct SessionNotRewindableError;
 
 pub(super) fn rewind_session(
     sessions_dir: &Path,
@@ -155,11 +164,9 @@ pub(super) fn rewind_session(
     let _session_wake_lock = store::lock_session_for_wake(sessions_dir, &session.session_id)?;
     let session = store::load_session_from(sessions_dir, &session.session_id)?
         .context("session no longer exists")?;
-    ensure!(can_rewind(&session), "session is not waiting for input");
-    ensure!(
-        session.status == SessionStatus::WaitingInput && !session.sweep_signaled,
-        "session is not waiting for input"
-    );
+    if !can_rewind(&session) {
+        return Err(SessionNotRewindableError.into());
+    }
     if session.engine == Engine::Codex {
         ensure!(
             mode == RewindMode::Conversation,
@@ -297,7 +304,7 @@ fn sessions_after_rewind(
 fn mark_rewind_started(sessions_dir: &Path, session_id: &str) -> Result<Session> {
     let mut marked_session = None;
     store::update_session_in(sessions_dir, session_id, |session| {
-        if !can_rewind(session) || session.sweep_signaled {
+        if !can_rewind(session) {
             return false;
         }
         session.sweep_signaled = true;
@@ -305,7 +312,7 @@ fn mark_rewind_started(sessions_dir: &Path, session_id: &str) -> Result<Session>
         marked_session = Some(session.clone());
         true
     })?;
-    marked_session.context("session is not waiting for input")
+    marked_session.ok_or_else(|| anyhow::Error::new(SessionNotRewindableError))
 }
 
 fn clear_rewind_marker(sessions_dir: &Path, session_id: &str) -> Result<()> {
@@ -436,6 +443,7 @@ mod tests {
     struct FakeHost {
         calls: Mutex<Vec<Value>>,
         codex_fork: Mutex<Option<ForkedCodexThread>>,
+        agent_process_running: bool,
     }
 
     impl FakeHost {
@@ -443,6 +451,7 @@ mod tests {
             Self {
                 calls: Mutex::new(Vec::new()),
                 codex_fork: Mutex::new(None),
+                agent_process_running: true,
             }
         }
 
@@ -450,16 +459,24 @@ mod tests {
             Self {
                 calls: Mutex::new(Vec::new()),
                 codex_fork: Mutex::new(Some(fork)),
+                agent_process_running: true,
             }
+        }
+
+        fn without_agent_process(mut self) -> Self {
+            self.agent_process_running = false;
+            self
         }
     }
 
     impl Host for FakeHost {
         fn stop_agent(&self, session: &Session) -> Result<()> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(serde_json::json!({"stop": session.session_id}));
+            if self.agent_process_running {
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .push(serde_json::json!({"stop": session.session_id}));
+            }
             Ok(())
         }
 
@@ -572,17 +589,26 @@ mod tests {
         );
     }
 
-    #[test]
-    fn codex_rewinds_before_the_selected_turn_and_respawns_the_fork() {
+    #[rstest::rstest]
+    #[case::stopped(SessionStatus::Stopped, true)]
+    #[case::paused_without_agent_process(SessionStatus::Paused, false)]
+    fn codex_rewinds_before_the_selected_turn_and_respawns_the_fork(
+        #[case] status: SessionStatus,
+        #[case] agent_process_running: bool,
+    ) {
         let directory = TempDir::new().unwrap();
         let mut session = test_session();
         session.engine = Engine::Codex;
+        session.status = status;
         store::save_session_to(directory.path(), &session).unwrap();
         let transcript_path = directory.path().join("codex-fork.jsonl");
-        let host = FakeHost::with_codex_fork(ForkedCodexThread {
+        let mut host = FakeHost::with_codex_fork(ForkedCodexThread {
             thread_id: "fixture-fork".to_string(),
             transcript_path: transcript_path.clone(),
         });
+        if !agent_process_running {
+            host = host.without_agent_process();
+        }
 
         let forked = rewind_session(
             directory.path(),
@@ -595,6 +621,15 @@ mod tests {
         let previous = store::load_session_from(directory.path(), &session.session_id)
             .unwrap()
             .unwrap();
+
+        let mut expected_calls = Vec::new();
+        if agent_process_running {
+            expected_calls.push(serde_json::json!({"stop": "fixture-session"}));
+        }
+        expected_calls.extend([
+            serde_json::json!({"forkCodex": ["fixture-session", "fixture-turn"]}),
+            serde_json::json!({"respawn": ["fixture-session", "fixture-fork"]}),
+        ]);
 
         assert_eq!(
             (
@@ -613,13 +648,7 @@ mod tests {
                 vec!["fixture-ancestor".to_string()],
                 SessionStatus::Ended,
                 false,
-                vec![
-                    serde_json::json!({"stop": "fixture-session"}),
-                    serde_json::json!({"forkCodex": ["fixture-session", "fixture-turn"]}),
-                    serde_json::json!({
-                        "respawn": ["fixture-session", "fixture-fork"]
-                    }),
-                ],
+                expected_calls,
             ),
         );
     }
@@ -636,6 +665,7 @@ mod tests {
         fs::write(&source, original).unwrap();
         let mut session = test_session();
         session.transcript_path = Some(source.clone());
+        session.status = SessionStatus::Stopped;
         store::save_session_to(directory.path(), &session).unwrap();
         let host = FakeHost::new();
 
@@ -727,6 +757,7 @@ mod tests {
         fs::write(&source, original).unwrap();
         let mut session = test_session();
         session.transcript_path = Some(source.clone());
+        session.status = SessionStatus::Stopped;
         store::save_session_to(directory.path(), &session).unwrap();
         let host = FakeHost::new();
 
@@ -794,13 +825,24 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::running(SessionStatus::Running)]
-    #[case::stopped(SessionStatus::Stopped)]
-    #[case::paused(SessionStatus::Paused)]
-    #[case::ended(SessionStatus::Ended)]
-    fn rejects_rewind_when_session_is_not_waiting(#[case] status: SessionStatus) {
+    #[case::running(SessionStatus::Running, false, false)]
+    #[case::waiting_input(SessionStatus::WaitingInput, false, false)]
+    #[case::ended(SessionStatus::Ended, false, false)]
+    #[case::stopped_during_sweep(SessionStatus::Stopped, true, false)]
+    #[case::stopped_with_pending_task(SessionStatus::Stopped, false, true)]
+    fn rejects_rewind_when_session_is_not_rewindable(
+        #[case] status: SessionStatus,
+        #[case] sweep_signaled: bool,
+        #[case] has_pending_bg_task: bool,
+    ) {
         let mut session = test_session();
         session.status = status;
+        session.sweep_signaled = sweep_signaled;
+        if has_pending_bg_task {
+            session
+                .pending_bg_task_ids
+                .insert("fixture-task".to_string());
+        }
         let directory = TempDir::new().unwrap();
         store::save_session_to(directory.path(), &session).unwrap();
         let host = FakeHost::new();
@@ -818,10 +860,7 @@ mod tests {
                 result.err().map(|error| error.to_string()),
                 host.calls.lock().unwrap().clone()
             ),
-            (
-                Some("session is not waiting for input".to_string()),
-                Vec::new()
-            ),
+            (Some("session cannot be rewound".to_string()), Vec::new()),
         );
     }
 
@@ -853,7 +892,7 @@ mod tests {
                     .status,
             ),
             (
-                Some("session is not waiting for input".to_string()),
+                Some("session cannot be rewound".to_string()),
                 Vec::new(),
                 SessionStatus::Running,
             ),
