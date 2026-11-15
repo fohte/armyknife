@@ -37,6 +37,7 @@ mod questions;
 pub(in crate::commands::agent::watch_web) mod queued_prompt;
 mod range;
 mod subagent_reports;
+mod transcript_path;
 
 use self::incremental::{filter_after_tail_window, parse_initial_or_full};
 #[cfg(test)]
@@ -59,6 +60,7 @@ mod file_attachments;
 use self::file_attachments::merge_stored_files;
 mod session_titles;
 use self::session_titles::{parent_session, resolve_peer_session_titles};
+use self::transcript_path::{archived_codex_transcript_path, codex_home_dir};
 
 pub(super) fn claude_content_text(content: Option<&Value>) -> String {
     match content {
@@ -320,14 +322,40 @@ fn load_conversation_with_initial_tail_window(
 
 fn load_conversation_with_tail_window(
     session_id: &str,
-    mut load_session: impl FnMut(&str) -> Result<Option<Session>>,
+    load_session: impl FnMut(&str) -> Result<Option<Session>>,
     load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
     loaders: &RouteLoaders,
     tail_window_limit: Option<usize>,
 ) -> Result<Option<ConversationResponse>> {
-    let Some(session) = load_session(session_id)? else {
+    let codex_home = codex_home_dir();
+    load_conversation_with_tail_window_from(
+        session_id,
+        load_session,
+        load_user_marker,
+        loaders,
+        tail_window_limit,
+        codex_home.as_deref(),
+    )
+}
+
+fn load_conversation_with_tail_window_from(
+    session_id: &str,
+    mut load_session: impl FnMut(&str) -> Result<Option<Session>>,
+    load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
+    loaders: &RouteLoaders,
+    tail_window_limit: Option<usize>,
+    codex_home: Option<&Path>,
+) -> Result<Option<ConversationResponse>> {
+    let Some(mut session) = load_session(session_id)? else {
         return Ok(None);
     };
+    if let Some(path) = archived_codex_transcript_path(
+        session.engine,
+        session.transcript_path.as_deref(),
+        codex_home,
+    )? {
+        session.transcript_path = Some(path);
+    }
     let user_marker = if session.engine == Engine::Claude {
         load_user_marker(session_id)?
     } else {
@@ -831,8 +859,8 @@ mod tests {
     use super::cache::TranscriptChange;
     use super::{
         ChatItem, MAX_PERMISSION_COMMAND_BYTES, QuestionChoice, QuestionPrompt, RouteLoaders,
-        load_conversation_with_queued_prompts, load_messages_with,
-        routes_with_decisions_and_queued_prompts_and_peer_out_messages,
+        load_conversation_with_queued_prompts, load_conversation_with_tail_window_from,
+        load_messages_with, routes_with_decisions_and_queued_prompts_and_peer_out_messages,
         routes_with_proposals_and_peer_out_messages,
     };
     use crate::commands::agent::store::{
@@ -852,6 +880,51 @@ mod tests {
             "last_message": null,
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn codex_messages_are_loaded_from_archived_transcript_when_recorded_path_is_missing() {
+        let codex_home = tempfile::tempdir().unwrap();
+        let file_name = "rollout-fixture-thread.jsonl";
+        let recorded_path = codex_home
+            .path()
+            .join("sessions/2026/01/01")
+            .join(file_name);
+        let archived_path = codex_home.path().join("archived_sessions").join(file_name);
+        std::fs::create_dir_all(archived_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &archived_path,
+            r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Recovered conversation."}]}}"#,
+        )
+        .unwrap();
+
+        let mut session = stored_session();
+        session.engine = Engine::Codex;
+        session.transcript_path = Some(recorded_path);
+        let loaders = RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        );
+        let conversation = load_conversation_with_tail_window_from(
+            "fixture-session",
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            &loaders,
+            None,
+            Some(codex_home.path()),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            conversation.messages,
+            vec![ChatItem::Assistant {
+                text: "Recovered conversation.".to_string(),
+            }],
+        );
     }
 
     fn background_task_output_router(transcript_path: &Path, output_path: &Path) -> Router {
