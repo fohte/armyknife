@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.721](https://github.com/fohte/armyknife/compare/v0.1.720...v0.1.721) (2026-11-15)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show Codex failure reasons ([#1824](https://github.com/fohte/armyknife/issues/1824)) ([b1faab7](https://github.com/fohte/armyknife/commit/b1faab78bff4b4b41d3e68d292623cfb37355515))
+
 ## [0.1.720](https://github.com/fohte/armyknife/compare/v0.1.719...v0.1.720) (2026-11-15)
 
 
