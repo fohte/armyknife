@@ -983,6 +983,104 @@ it('provides session links to cards through the conversation pane context', asyn
   })
 })
 
+it('executes a bang command from a todo card in the conversation', async () => {
+  const markdown = 'Check `! printf safe`.'
+  const todo: ChatItem = {
+    type: 'todo',
+    seq: 1,
+    title: 'Review the command result',
+    detail: markdown,
+    completed: false,
+    resolution: null,
+    comment: null,
+  }
+  const commandRequests: Array<{ url: string; body: unknown }> = []
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([todo])))
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(actions))
+    }
+    if (url.endsWith('/commands/preview')) {
+      const body = typeof init?.body === 'string' ? init.body : '{}'
+      commandRequests.push({
+        url,
+        body: JSON.parse(body),
+      })
+      return Promise.resolve(jsonResponse({ cwd: '/workspace/example' }))
+    }
+    if (url.endsWith('/commands/execute')) {
+      const body = typeof init?.body === 'string' ? init.body : '{}'
+      commandRequests.push({
+        url,
+        body: JSON.parse(body),
+      })
+      return Promise.resolve(
+        jsonResponse({ exitCode: 0, succeeded: true, timedOut: false }),
+      )
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+
+  const runButton = requireElement(
+    (await waitForState(() =>
+      Boolean(container.querySelector('.chat-todo-detail button')),
+    ))
+      ? container.querySelector<HTMLButtonElement>('.chat-todo-detail button')
+      : null,
+  )
+  await act(async () => userEvent.click(runButton))
+  const dialog = requireElement(
+    (await waitForState(() =>
+      Boolean(document.body.querySelector('[role="dialog"]')),
+    ))
+      ? document.body.querySelector<HTMLElement>('[role="dialog"]')
+      : null,
+  )
+  const confirmButton = Array.from(dialog.querySelectorAll('button')).find(
+    (button) => button.textContent === 'Run command',
+  )
+  if (!(confirmButton instanceof HTMLButtonElement)) {
+    throw new Error('Expected the confirmation button')
+  }
+  await act(async () => userEvent.click(confirmButton))
+  const completed = await waitForState(
+    () => runButton.textContent === 'Succeeded',
+  )
+
+  const getActual = () => ({
+    commandCompleted: completed,
+    commandRequests,
+  })
+  expect(getActual()).toEqual({
+    commandCompleted: true,
+    commandRequests: [
+      {
+        url: '/api/sessions/sample-session/commands/preview',
+        body: { messageText: markdown, commands: ['printf safe'] },
+      },
+      {
+        url: '/api/sessions/sample-session/commands/execute',
+        body: { messageText: markdown, commands: ['printf safe'] },
+      },
+    ],
+  })
+})
+
 it('loads and shows the session tree from the tree endpoint', async () => {
   const treeSession = { ...session, hasSessionTree: true }
   const tree: SessionTreeNode[] = [
