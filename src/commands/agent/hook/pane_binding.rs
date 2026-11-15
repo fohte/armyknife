@@ -10,7 +10,9 @@
 
 use std::path::Path;
 
-use crate::commands::agent::pane::process::pane_has_live_agent_process;
+use crate::commands::agent::pane::process::{
+    has_agent_ancestor_process, pane_has_live_agent_process,
+};
 use crate::commands::agent::store;
 use crate::commands::agent::types::{
     Engine, HookInput, TMUX_SESSION_OPTION, TMUX_SESSION_OPTION_LEGACY,
@@ -20,7 +22,14 @@ use crate::infra::tmux::{self, PaneInfo, PaneInfoWithOption};
 
 /// Resolves the hook's pane through process ancestry or its explicit session binding.
 pub(super) fn resolve(input: &HookInput) -> Option<PaneInfo> {
-    if let Some(pane) = tmux::get_pane_info_by_pid(std::process::id()) {
+    let pid = std::process::id();
+    if let Some(pane) = tmux::get_pane_info_by_pid(pid) {
+        if ProcessSnapshot::capture()
+            .as_ref()
+            .is_some_and(|snapshot| has_agent_ancestor_process(pid, snapshot))
+        {
+            return None;
+        }
         return Some(pane);
     }
 

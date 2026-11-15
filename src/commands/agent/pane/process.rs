@@ -28,3 +28,12 @@ pub fn pane_has_live_agent_process(
         .find_self_or_descendant_by_command(pane_pid, engine.process_name(), MAX_DESCENDANT_NODES)
         .is_some()
 }
+
+/// Returns whether an agent process is among `pid`'s ancestors.
+pub(crate) fn has_agent_ancestor_process(pid: u32, snapshot: &ProcessSnapshot) -> bool {
+    [Engine::Claude, Engine::Codex].into_iter().any(|engine| {
+        snapshot
+            .find_ancestor_by_command(pid, engine.process_name())
+            .is_some()
+    })
+}
