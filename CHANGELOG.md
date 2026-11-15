@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.717](https://github.com/fohte/armyknife/compare/v0.1.716...v0.1.717) (2026-11-15)
+
+
+### Performance Improvements
+
+* **agent-watch-web:** speed up task detection ([#1816](https://github.com/fohte/armyknife/issues/1816)) ([5b06c1c](https://github.com/fohte/armyknife/commit/5b06c1c117f53e775bfa3789dc363db6a9032c2b))
+
 ## [0.1.716](https://github.com/fohte/armyknife/compare/v0.1.715...v0.1.716) (2026-11-15)
 
 
