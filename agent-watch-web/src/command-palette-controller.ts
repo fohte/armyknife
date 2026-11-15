@@ -122,7 +122,8 @@ export function useCommandPaletteController({
                 result.error.message || `Could not close ${session.title}.`
               if (
                 result.error.code === 'unmerged_worktree' ||
-                result.error.code === 'dirty_worktree'
+                result.error.code === 'dirty_worktree' ||
+                result.error.code === 'worktree_process_guard'
               ) {
                 keepWorktreeSessionId = session.id
               }

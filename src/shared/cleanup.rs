@@ -9,192 +9,12 @@ use std::path::Path;
 
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, Session, SessionStatus};
-use crate::infra::git::GitRepo;
-use crate::infra::process;
 use crate::infra::tmux;
-use crate::shared::worktree::{
-    delete_branch_if_exists, delete_worktree, delete_worktree_if_clean, find_worktree_name,
-    get_main_repo, get_worktree_branch,
+mod worktree;
+pub use worktree::{
+    WorktreeCleanupResult, WorktreeProcessGuardError, cleanup_worktree_by_name,
+    cleanup_worktree_resources, cleanup_worktree_resources_with_post_delete,
 };
-
-/// Result of worktree resource cleanup.
-#[derive(Debug, Default)]
-pub struct WorktreeCleanupResult {
-    /// Whether a git worktree was deleted.
-    pub worktree_deleted: bool,
-    /// Name of the branch that was deleted, if any.
-    pub branch_deleted: Option<String>,
-    /// Number of tmux panes that were closed.
-    pub panes_closed: usize,
-    /// Number of agent sessions cleaned up.
-    pub sessions_cleaned: usize,
-    /// Number of process groups killed that were rooted in the worktree
-    /// (identified by a member process whose cwd was inside it).
-    pub process_groups_signaled: usize,
-    /// The resolved worktree root path (set when worktree_deleted is true).
-    /// Use this instead of raw cwd for path matching, since cwd may be a
-    /// subdirectory.
-    pub worktree_root: Option<std::path::PathBuf>,
-}
-
-/// Cleans up all resources associated with a worktree at `cwd`:
-/// worktree itself, branch, tmux panes, agent session records, and notifications.
-///
-/// `cwd` can be any path inside the worktree (including subdirectories);
-/// the worktree root is resolved via `repo.workdir()`.
-///
-/// If `cwd` is not inside a git worktree, returns a default (no-op) result.
-pub fn cleanup_worktree_resources(
-    cwd: &Path,
-    force: bool,
-) -> anyhow::Result<WorktreeCleanupResult> {
-    // The session-list TUI does not resolve merge status before deleting a
-    // worktree, so this path intentionally does not invoke post-delete hooks.
-    cleanup_worktree_resources_with_post_delete(cwd, force, || {})
-}
-
-/// Cleans up a worktree and invokes `after_delete` after git removes it but
-/// before cleanup can terminate a pane running the caller.
-pub fn cleanup_worktree_resources_with_post_delete(
-    cwd: &Path,
-    force: bool,
-    after_delete: impl FnOnce(),
-) -> anyhow::Result<WorktreeCleanupResult> {
-    let repo = match GitRepo::open_at(cwd) {
-        Ok(r) => r,
-        Err(_) => return Ok(WorktreeCleanupResult::default()),
-    };
-
-    if !repo.is_worktree() {
-        return Ok(WorktreeCleanupResult::default());
-    }
-
-    let main_repo = get_main_repo(&repo)?;
-
-    let worktree_root = repo.workdir().to_path_buf();
-    let worktree_root_str = worktree_root.to_string_lossy();
-
-    let worktree_name = match find_worktree_name(&main_repo, &worktree_root_str) {
-        Ok(name) => name,
-        Err(_) => return Ok(WorktreeCleanupResult::default()),
-    };
-
-    let mut result = cleanup_worktree_by_name(
-        &main_repo,
-        &worktree_name,
-        &worktree_root,
-        force,
-        after_delete,
-    )?;
-    if result.worktree_deleted {
-        result.worktree_root = Some(worktree_root);
-    }
-    Ok(result)
-}
-
-/// Cleans up a worktree and invokes `after_delete` once git confirms removal,
-/// before session and tmux cleanup runs.
-///
-/// `worktree_path` is the filesystem path of the worktree root, used for
-/// tmux pane and session record lookup.
-pub fn cleanup_worktree_by_name(
-    repo: &GitRepo,
-    worktree_name: &str,
-    worktree_path: &Path,
-    force: bool,
-    after_delete: impl FnOnce(),
-) -> anyhow::Result<WorktreeCleanupResult> {
-    // Collect tmux pane IDs and process groups rooted in the worktree
-    // before deleting it (the path must still exist to match against).
-    let path_str = worktree_path.to_string_lossy();
-    let pane_ids = tmux::get_pane_ids_in_path(&path_str);
-    let orphan_pgids = process::find_pgids_in_path(worktree_path);
-
-    let mut result = delete_worktree_and_branch(repo, worktree_name, worktree_path, force)?;
-
-    // Clean up sessions BEFORE killing tmux panes: if the caller is running
-    // inside one of those panes (e.g. `a agent close` invoked from the
-    // worktree's own pane), kill_pane terminates the caller's pane and
-    // SIGHUPs this very process, leaving Paused sessions orphaned on disk.
-    run_post_delete_cleanup(result.worktree_deleted, after_delete, || {
-        result.sessions_cleaned = cleanup_sessions_in_path(worktree_path).unwrap_or(0);
-        result.process_groups_signaled = process::kill_process_groups(&orphan_pgids);
-
-        result.panes_closed = kill_worktree_panes(
-            &pane_ids,
-            tmux::current_pane_id_from_env().as_deref(),
-            |pane_id| tmux::kill_pane(pane_id).is_ok(),
-        );
-    });
-
-    Ok(result)
-}
-
-fn run_post_delete_cleanup(
-    worktree_deleted: bool,
-    after_delete: impl FnOnce(),
-    cleanup: impl FnOnce(),
-) {
-    if worktree_deleted {
-        after_delete();
-        cleanup();
-    }
-}
-
-fn kill_worktree_panes(
-    pane_ids: &[String],
-    caller_pane_id: Option<&str>,
-    mut kill_pane: impl FnMut(&str) -> bool,
-) -> usize {
-    let caller_pane_id = caller_pane_id.and_then(|caller_pane_id| {
-        pane_ids
-            .iter()
-            .any(|pane_id| pane_id == caller_pane_id)
-            .then_some(caller_pane_id)
-    });
-
-    let mut panes_closed = 0;
-    for pane_id in pane_ids
-        .iter()
-        .filter(|pane_id| Some(pane_id.as_str()) != caller_pane_id)
-    {
-        if kill_pane(pane_id) {
-            panes_closed += 1;
-        }
-    }
-    if let Some(caller_pane_id) = caller_pane_id
-        && kill_pane(caller_pane_id)
-    {
-        panes_closed += 1;
-    }
-    panes_closed
-}
-
-/// Deletes a git worktree and its associated branch.
-fn delete_worktree_and_branch(
-    repo: &GitRepo,
-    worktree_name: &str,
-    worktree_path: &Path,
-    force: bool,
-) -> anyhow::Result<WorktreeCleanupResult> {
-    let branch_name = get_worktree_branch(repo, worktree_name);
-
-    let worktree_deleted = delete_worktree_if_clean(worktree_path, force, || {
-        Ok(delete_worktree(repo, worktree_name).unwrap_or(false))
-    })?;
-
-    let branch_deleted = if worktree_deleted {
-        branch_name.filter(|branch| delete_branch_if_exists(repo, branch))
-    } else {
-        None
-    };
-
-    Ok(WorktreeCleanupResult {
-        worktree_deleted,
-        branch_deleted,
-        ..WorktreeCleanupResult::default()
-    })
-}
 
 /// Returns true if the pane hosting this session still runs a live agent
 /// process that needs SIGTERM before we delete the session record.
@@ -231,11 +51,21 @@ fn should_sigterm_session(status: SessionStatus) -> bool {
 ///
 /// Returns the number of sessions cleaned up.
 pub fn cleanup_sessions_in_path(worktree_path: &Path) -> anyhow::Result<usize> {
+    cleanup_sessions_in_path_with_policy(worktree_path, true)
+}
+
+fn cleanup_sessions_in_path_with_policy(
+    worktree_path: &Path,
+    signal_agents: bool,
+) -> anyhow::Result<usize> {
     let sessions = store::list_all_sessions()?;
-    let alive_panes_by_socket =
+    let alive_panes_by_socket = if signal_agents {
         cache_alive_panes_by_socket(&sessions, worktree_path, |socket_path| {
             tmux::list_all_pane_ids_for_socket(socket_path).map_err(anyhow::Error::from)
-        });
+        })
+    } else {
+        tmux::PaneLiveness::default()
+    };
     let own_codex_session_id = crate::shared::env_var::EnvVars::load().codex_session_id;
 
     Ok(cleanup_sessions_with_deferred_archive(
@@ -563,7 +393,6 @@ fn withdraw_pending_cards(sessions_dir: &Path, session_id: &str) -> PendingCardC
 mod tests {
     use super::*;
     use crate::commands::agent::types::{Engine, TmuxInfo};
-    use crate::shared::testing::TestRepo;
     use chrono::Utc;
     use rstest::rstest;
     use std::cell::RefCell;
@@ -957,43 +786,6 @@ mod tests {
     }
 
     #[rstest]
-    #[case::deleted(true, vec!["hook", "cleanup"])]
-    #[case::not_deleted(false, vec![])]
-    fn post_delete_cleanup_runs_only_after_successful_deletion(
-        #[case] worktree_deleted: bool,
-        #[case] expected: Vec<&str>,
-    ) {
-        let events = RefCell::new(Vec::new());
-
-        run_post_delete_cleanup(
-            worktree_deleted,
-            || events.borrow_mut().push("hook"),
-            || events.borrow_mut().push("cleanup"),
-        );
-
-        assert_eq!(events.into_inner(), expected);
-    }
-
-    #[test]
-    fn kill_worktree_panes_closes_caller_last_and_counts_successes() {
-        let pane_ids = vec!["pane-a".to_string(), "pane-b".to_string()];
-        let killed_panes = RefCell::new(Vec::new());
-
-        let panes_closed = kill_worktree_panes(&pane_ids, Some("pane-a"), |pane_id| {
-            killed_panes.borrow_mut().push(pane_id.to_string());
-            pane_id != "pane-a"
-        });
-
-        assert_eq!(
-            (killed_panes.into_inner(), panes_closed),
-            (vec!["pane-b".to_string(), "pane-a".to_string()], 1),
-        );
-    }
-
-    // Tests exercise delete_worktree_and_branch directly to avoid depending
-    // on tmux or session store I/O.
-
-    #[rstest]
     #[case::running(SessionStatus::Running, true)]
     #[case::waiting(SessionStatus::WaitingInput, true)]
     #[case::stopped(SessionStatus::Stopped, true)]
@@ -1005,123 +797,5 @@ mod tests {
         // now hosts the user's shell -- signaling it would kill the caller
         // when `a agent close` runs from that same pane.
         assert_eq!(should_sigterm_session(status), expected);
-    }
-
-    #[test]
-    fn delete_worktree_and_branch_deletes_both() {
-        let test_repo = TestRepo::new();
-        test_repo.create_worktree("cleanup-test");
-
-        let repo = test_repo.open();
-        let result = delete_worktree_and_branch(
-            &repo,
-            "cleanup-test",
-            &test_repo.worktree_path("cleanup-test"),
-            false,
-        )
-        .expect("clean worktree should be deleted");
-
-        assert!(result.worktree_deleted);
-        assert_eq!(result.branch_deleted, Some("cleanup-test".to_string()));
-        assert_eq!(result.panes_closed, 0);
-        assert_eq!(result.sessions_cleaned, 0);
-        assert_eq!(result.process_groups_signaled, 0);
-
-        // After deletion, the worktree should no longer be listed.
-        let list =
-            crate::infra::git::cmd::run_git(repo.workdir(), ["worktree", "list", "--porcelain"])
-                .unwrap();
-        assert!(!list.contains("/.worktrees/cleanup-test"));
-    }
-
-    #[rstest]
-    #[case::untracked_without_force(false, false, (false, true, true, true))]
-    #[case::untracked_with_force(false, true, (true, false, false, false))]
-    #[case::tracked_without_force(true, false, (false, true, true, true))]
-    #[case::tracked_with_force(true, true, (true, false, false, false))]
-    fn deletion_checks_real_git_status_before_removing_dirty_worktrees(
-        #[case] tracked: bool,
-        #[case] force: bool,
-        #[case] expected: (bool, bool, bool, bool),
-    ) {
-        let test_repo = TestRepo::new();
-        if tracked {
-            test_repo.commit_file("tracked.txt", "original");
-        }
-        test_repo.create_worktree("dirty-worktree");
-
-        let worktree_path = test_repo.worktree_path("dirty-worktree");
-        let dirty_file = if tracked {
-            worktree_path.join("tracked.txt")
-        } else {
-            worktree_path.join("untracked.txt")
-        };
-        std::fs::write(&dirty_file, "changed").expect("write dirty worktree file");
-
-        let repo = test_repo.open();
-        if !tracked {
-            crate::infra::git::cmd::run_git(
-                repo.workdir(),
-                ["config", "status.showUntrackedFiles", "no"],
-            )
-            .expect("configure git to hide untracked files by default");
-        }
-
-        let result = delete_worktree_and_branch(&repo, "dirty-worktree", &worktree_path, force);
-        let observed = (
-            result.as_ref().is_ok_and(|result| result.worktree_deleted),
-            result.as_ref().err().is_some_and(|error| {
-                error
-                    .downcast_ref::<crate::shared::worktree::DirtyWorktreeError>()
-                    .is_some()
-            }),
-            worktree_path.is_dir(),
-            crate::shared::worktree::list_linked_worktrees(&repo)
-                .expect("list worktrees")
-                .iter()
-                .any(|worktree| worktree.name == "dirty-worktree"),
-        );
-
-        assert_eq!(observed, expected);
-    }
-
-    #[test]
-    fn delete_worktree_and_branch_returns_false_for_nonexistent() {
-        let test_repo = TestRepo::new();
-        let repo = test_repo.open();
-
-        let result = delete_worktree_and_branch(&repo, "nonexistent", &test_repo.path(), false)
-            .expect("missing worktree should return false");
-
-        assert!(!result.worktree_deleted);
-        assert!(result.branch_deleted.is_none());
-    }
-
-    #[test]
-    fn cleanup_worktree_resources_on_non_worktree_returns_default() {
-        // Opening a non-worktree path returns is_worktree() == false, so no
-        // tmux commands run.
-        let test_repo = TestRepo::new();
-        let result = cleanup_worktree_resources(&test_repo.path(), false)
-            .expect("should succeed on main repo");
-
-        assert!(!result.worktree_deleted);
-        assert!(result.branch_deleted.is_none());
-        assert_eq!(result.panes_closed, 0);
-        assert_eq!(result.sessions_cleaned, 0);
-        assert_eq!(result.process_groups_signaled, 0);
-    }
-
-    #[test]
-    fn cleanup_worktree_resources_on_nonexistent_path_returns_default() {
-        // open_at fails, so no tmux commands run.
-        let result = cleanup_worktree_resources(Path::new("/nonexistent/path/to/repo"), false)
-            .expect("should succeed on missing path");
-
-        assert!(!result.worktree_deleted);
-        assert!(result.branch_deleted.is_none());
-        assert_eq!(result.panes_closed, 0);
-        assert_eq!(result.sessions_cleaned, 0);
-        assert_eq!(result.process_groups_signaled, 0);
     }
 }

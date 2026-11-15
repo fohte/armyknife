@@ -17,12 +17,14 @@ use crate::shared::command;
 
 mod caller;
 mod output_tail;
+mod worktree;
 
 pub(crate) use output_tail::{
     DrainDeadlineCheck, OutputTail, OutputTailOptions, read_output_tail, set_nonblocking,
 };
 
 pub use caller::find_caller_pids_in_path;
+pub use worktree::{ProcessInPath, SHELL_COMMANDS, find_non_shell_processes_in_path};
 
 /// Upper bound on how long we sleep between exit checks in [`run_with_timeout`].
 const MAX_POLL_INTERVAL: Duration = Duration::from_millis(20);
