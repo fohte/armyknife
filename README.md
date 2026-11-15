@@ -1272,6 +1272,8 @@ cargo build
 
 Delete merged or closed worktrees in the current repository. Without `--force`, worktrees with uncommitted changes or untracked files are kept and reported while cleanup continues. Pass `--all` to scan repositories under `agent.worktree.repos_root`. The `ACTION` column shows `DELETE` for worktrees the confirmation will remove and `KEEP` for the rest. Confirmation must be entered through terminal stdin; piped input is not accepted. To remove a single worktree, use `a agent close <worktree>`.
 
+Unless deletion is cancelled, checking or deleting a worktree reports its error, cleanup continues with the remaining worktrees, and the command exits with an error afterward. A failed status check also causes a non-zero exit in `--dry-run` mode.
+
 When `a agent close`, `a agent clean`, or the TUI clean view's background cleanup removes a worktree whose branch's PR was merged, and that worktree hosted a delegated Claude Code session (`a agent new --worktree` from another session), it sends the configured `agent.merge_notification` template to the delegator session via `a agent peer notify` so a delegator blocked on "wait for this PR to merge" can continue. No notification is sent when the key is unset; see [Configuration](#configuration). Best-effort: notification failures (delegator already ended, no messaging socket, etc.) don't affect the cleanup.
 
 After `a agent close`, `a agent clean`, or the TUI clean view removes a worktree successfully, armyknife starts the configured `post-worktree-delete` hook in a detached session. The hook receives the deleted worktree path, branch, repository root, and whether the branch was merged; see [Hooks](docs/hooks.md#post-worktree-delete).
