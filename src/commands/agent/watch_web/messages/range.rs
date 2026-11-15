@@ -7,7 +7,6 @@ use super::{ChatItem, ConversationResponse};
 
 const RECENT_TAIL_MESSAGE_COUNT: usize = 20;
 const INITIAL_EPOCH_MESSAGE_COUNT: usize = 100;
-const MAX_EPOCH_CANDIDATES: usize = 4096;
 const MAX_EPOCH_TOKEN_BYTES: usize = 4096;
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -99,22 +98,21 @@ impl MessageRange {
 #[serde(rename_all = "camelCase")]
 struct MessageEpochCursor {
     version: u8,
-    message_count: usize,
-    digest: String,
-    first_message_digest: String,
-    last_message_digest: String,
+    anchor_count: usize,
+    anchor_digests: Vec<String>,
 }
 
 impl MessageEpochCursor {
     fn from_messages(messages: &[ChatItem]) -> Option<Self> {
-        let first_message = messages.first()?;
-        let last_message = messages.last()?;
+        let stable_prefix_count = messages.len().saturating_sub(RECENT_TAIL_MESSAGE_COUNT);
+        let anchor_count = stable_prefix_count.min(RECENT_TAIL_MESSAGE_COUNT);
+        if anchor_count == 0 {
+            return None;
+        }
         Some(Self {
-            version: 1,
-            message_count: messages.len(),
-            digest: message_digest(messages)?,
-            first_message_digest: message_digest(std::slice::from_ref(first_message))?,
-            last_message_digest: message_digest(std::slice::from_ref(last_message))?,
+            version: 2,
+            anchor_count,
+            anchor_digests: message_digests(&messages[..anchor_count])?,
         })
     }
 
@@ -125,34 +123,26 @@ impl MessageEpochCursor {
     fn decode(value: &str) -> Option<Self> {
         let decoded = URL_SAFE_NO_PAD.decode(value).ok()?;
         let cursor = serde_json::from_slice::<Self>(&decoded).ok()?;
-        (cursor.version == 1
-            && cursor.message_count > 0
-            && !cursor.digest.is_empty()
-            && !cursor.first_message_digest.is_empty()
-            && !cursor.last_message_digest.is_empty())
+        (cursor.version == 2
+            && cursor.anchor_count > 0
+            && cursor.anchor_count <= RECENT_TAIL_MESSAGE_COUNT
+            && cursor.anchor_count == cursor.anchor_digests.len()
+            && cursor.anchor_digests.iter().all(|digest| {
+                digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+            }))
         .then_some(cursor)
     }
 
     fn find_start(&self, messages: &[ChatItem]) -> Option<usize> {
-        let last_start = messages.len().checked_sub(self.message_count)?;
+        let message_digests = message_digests(messages)?;
+        let last_start = message_digests.len().checked_sub(self.anchor_count)?;
         let mut matched_start = None;
-        let mut candidates = 0;
         for start in 0..=last_start {
-            let end = start + self.message_count;
-            if message_digest(&messages[start..start + 1]).as_deref()
-                != Some(self.first_message_digest.as_str())
-                || message_digest(&messages[end - 1..end]).as_deref()
-                    != Some(self.last_message_digest.as_str())
-            {
+            if message_digests[start] != self.anchor_digests[0] {
                 continue;
             }
-            candidates += 1;
-            if candidates > MAX_EPOCH_CANDIDATES
-                || message_digest(&messages[start..end]).as_deref() != Some(&self.digest)
-            {
-                if candidates > MAX_EPOCH_CANDIDATES {
-                    return None;
-                }
+            let end = start + self.anchor_count;
+            if message_digests[start..end] != self.anchor_digests {
                 continue;
             }
             if matched_start.replace(start).is_some() {
@@ -223,10 +213,10 @@ impl ConversationResponse {
             .len()
             .saturating_sub(INITIAL_EPOCH_MESSAGE_COUNT);
         let page = self.messages[page_start..].to_vec();
-        self.set_initial_epoch_page(page);
+        self.set_initial_epoch_page(page, page_start > 0 || self.tail_window_start.is_some());
     }
 
-    fn set_initial_epoch_page(&mut self, page: Vec<ChatItem>) {
+    fn set_initial_epoch_page(&mut self, page: Vec<ChatItem>, has_older: bool) {
         let cursor = MessageEpochCursor::from_messages(&page).and_then(|cursor| cursor.encode());
         self.messages = page;
         self.start = 0;
@@ -237,7 +227,7 @@ impl ConversationResponse {
         self.stable_end = stable_end;
         self.stable_digest = stable_digest;
         self.epoch = cursor.clone();
-        self.older_cursor = cursor;
+        self.older_cursor = has_older.then_some(cursor).flatten();
     }
 
     fn apply_epoch_range(&mut self, epoch_start: usize, range: MessageRange) {
@@ -299,7 +289,7 @@ impl ConversationResponse {
             .messages
             .len()
             .saturating_sub(INITIAL_EPOCH_MESSAGE_COUNT);
-        self.set_initial_epoch_page(self.messages[page_start..].to_vec());
+        self.set_initial_epoch_page(self.messages[page_start..].to_vec(), page_start > 0);
         self.epoch_reset = true;
     }
 
@@ -371,6 +361,13 @@ fn message_digest(messages: &[ChatItem]) -> Option<String> {
     Some(crate::shared::hex::encode(&Sha256::digest(encoded)))
 }
 
+fn message_digests(messages: &[ChatItem]) -> Option<Vec<String>> {
+    messages
+        .iter()
+        .map(|message| message_digest(std::slice::from_ref(message)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
@@ -391,50 +388,128 @@ mod tests {
     }
 
     #[test]
-    fn stale_epoch_refresh_resets_to_the_latest_page() {
-        let mut messages = (0..101)
+    fn full_initial_page_without_history_has_no_older_cursor() {
+        let messages = (0..50)
             .map(|index| ChatItem::Assistant {
                 text: format!("Fixture message {index}."),
             })
             .collect::<Vec<_>>();
-        let stale_cursor = MessageEpochCursor::from_messages(&messages[1..])
-            .and_then(|cursor| cursor.encode())
-            .unwrap();
-        messages[100] = ChatItem::Assistant {
-            text: "Updated latest fixture message.".to_owned(),
-        };
-
+        let epoch = MessageEpochCursor::from_messages(&messages).and_then(|cursor| cursor.encode());
+        let (stable_start, stable_end, stable_digest) =
+            ConversationResponse::stable_range(0, &messages);
         let mut actual = ConversationResponse {
             messages: messages.clone(),
+            initial_epoch: true,
             ..ConversationResponse::default()
         };
         actual.update_metadata();
         actual.apply_range(MessageRange {
-            from: Some(0),
-            epoch: Some(stale_cursor.clone()),
-            older_cursor: Some(stale_cursor),
+            limit: Some(100),
             ..MessageRange::default()
         });
 
-        let latest_page = messages[1..].to_vec();
-        let new_cursor =
-            MessageEpochCursor::from_messages(&latest_page).and_then(|cursor| cursor.encode());
-        let (stable_start, stable_end, stable_digest) =
-            ConversationResponse::stable_range(0, &latest_page);
         assert_eq!(
             actual,
             ConversationResponse {
-                total: latest_page.len(),
-                messages: latest_page.clone(),
-                active_question_index: active_question_index(&latest_page),
+                messages: messages.clone(),
+                total: messages.len(),
                 stable_start,
                 stable_end,
                 stable_digest,
-                epoch: new_cursor.clone(),
-                older_cursor: new_cursor,
-                epoch_reset: true,
+                epoch,
+                initial_epoch: true,
                 ..ConversationResponse::default()
             },
+        );
+    }
+
+    #[test]
+    fn epoch_refresh_keeps_anchor_when_tail_changes_and_messages_append() {
+        let mut messages = (0..220)
+            .map(|index| ChatItem::Assistant {
+                text: format!("Fixture message {index}."),
+            })
+            .collect::<Vec<_>>();
+        let epoch_start = 120;
+        let initial_page = messages[epoch_start..].to_vec();
+        let epoch = MessageEpochCursor::from_messages(&initial_page)
+            .and_then(|cursor| cursor.encode())
+            .unwrap();
+        let (initial_stable_start, initial_stable_end, initial_stable_digest) =
+            ConversationResponse::stable_range(0, &initial_page);
+        messages[219] = ChatItem::Assistant {
+            text: "Updated fixture tail message.".to_owned(),
+        };
+        messages.push(ChatItem::Assistant {
+            text: "Appended fixture message.".to_owned(),
+        });
+
+        let mut actual_refresh = ConversationResponse {
+            messages: messages.clone(),
+            ..ConversationResponse::default()
+        };
+        actual_refresh.update_metadata();
+        actual_refresh.apply_range(MessageRange {
+            from: Some(0),
+            stable_start: initial_stable_start,
+            stable_end: initial_stable_end,
+            stable_digest: initial_stable_digest,
+            epoch: Some(epoch.clone()),
+            older_cursor: Some(epoch.clone()),
+            ..MessageRange::default()
+        });
+
+        let refreshed_epoch_messages = messages[epoch_start..].to_vec();
+        let refreshed_tail = refreshed_epoch_messages[80..].to_vec();
+        let (stable_start, stable_end, stable_digest) =
+            ConversationResponse::stable_range(0, &refreshed_epoch_messages);
+
+        let mut actual_older = ConversationResponse {
+            messages: messages.clone(),
+            ..ConversationResponse::default()
+        };
+        actual_older.update_metadata();
+        actual_older.apply_range(MessageRange {
+            limit: Some(100),
+            epoch: Some(epoch.clone()),
+            older_cursor: Some(epoch.clone()),
+            ..MessageRange::default()
+        });
+
+        let older_page = messages[20..epoch_start].to_vec();
+        let older_epoch_messages = messages[20..].to_vec();
+        let older_cursor =
+            MessageEpochCursor::from_messages(&older_page).and_then(|cursor| cursor.encode());
+        let (older_stable_start, older_stable_end, older_stable_digest) =
+            ConversationResponse::stable_range(0, &older_epoch_messages);
+        assert_eq!(
+            (actual_refresh, actual_older),
+            (
+                ConversationResponse {
+                    start: 80,
+                    total: refreshed_epoch_messages.len(),
+                    messages: refreshed_tail,
+                    active_question_index: active_question_index(&refreshed_epoch_messages),
+                    stable_start,
+                    stable_end,
+                    stable_digest,
+                    epoch: Some(epoch.clone()),
+                    older_cursor: Some(epoch),
+                    ..ConversationResponse::default()
+                },
+                ConversationResponse {
+                    start: 0,
+                    total: older_epoch_messages.len(),
+                    messages: older_page.clone(),
+                    active_question_index: active_question_index(&older_epoch_messages),
+                    stable_start: older_stable_start,
+                    stable_end: older_stable_end,
+                    stable_digest: older_stable_digest,
+                    epoch: older_cursor.clone(),
+                    older_cursor,
+                    ..ConversationResponse::default()
+                },
+            ),
         );
     }
 }

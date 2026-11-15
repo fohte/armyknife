@@ -3905,47 +3905,96 @@ mod tests {
         let tail_initial = message_response_with_query(&tail_router, "?limit=100").await;
         let mut full_responses = vec![full_initial];
         let mut tail_responses = vec![tail_initial.clone()];
-        if let Some(epoch) = tail_initial.2["epoch"].as_str() {
-            let start = tail_initial.2["start"].as_u64().unwrap();
-            let mut refresh_query = format!("?from={start}&epoch={epoch}");
-            if let Some(older_cursor) = tail_initial.2["olderCursor"].as_str() {
-                refresh_query.push_str(&format!("&olderCursor={older_cursor}"));
-            }
-            if let (Some(stable_start), Some(stable_end), Some(stable_digest)) = (
-                tail_initial.2["stableStart"].as_u64(),
-                tail_initial.2["stableEnd"].as_u64(),
-                tail_initial.2["stableDigest"].as_str(),
-            ) {
-                refresh_query.push_str(&format!(
-                    "&stableStart={stable_start}&stableEnd={stable_end}&stableDigest={stable_digest}"
-                ));
-            }
-            full_responses.push(message_response_with_query(&full_router, &refresh_query).await);
-            tail_responses.push(message_response_with_query(&tail_router, &refresh_query).await);
-
-            if let Some(older_cursor) = tail_initial.2["olderCursor"].as_str() {
-                let older_query = format!("?limit=100&epoch={epoch}&olderCursor={older_cursor}");
-                full_responses.push(message_response_with_query(&full_router, &older_query).await);
-                tail_responses.push(message_response_with_query(&tail_router, &older_query).await);
-            }
+        let epoch = tail_initial.2["epoch"].as_str().unwrap().to_owned();
+        let older_cursor = tail_initial.2["olderCursor"].as_str().unwrap();
+        let start = tail_initial.2["start"].as_u64().unwrap();
+        let mut refresh_query = format!("?from={start}&epoch={epoch}&olderCursor={older_cursor}");
+        if let (Some(stable_start), Some(stable_end), Some(stable_digest)) = (
+            tail_initial.2["stableStart"].as_u64(),
+            tail_initial.2["stableEnd"].as_u64(),
+            tail_initial.2["stableDigest"].as_str(),
+        ) {
+            refresh_query.push_str(&format!(
+                "&stableStart={stable_start}&stableEnd={stable_end}&stableDigest={stable_digest}"
+            ));
         }
+        let last_record = records.last_mut().unwrap();
+        let last_uuid = last_record["uuid"].as_str().unwrap().to_owned();
+        last_record["message"]["content"] = json!("Updated active fixture request.");
+        records.push(json!({
+            "type": "user",
+            "uuid": "fixture-appended-request",
+            "parentUuid": last_uuid,
+            "timestamp": "2026-01-01T00:00:02Z",
+            "message": {"content": "Appended active fixture request."},
+        }));
+        let updated_transcript = records
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&transcript_path, &updated_transcript).unwrap();
+        std::fs::write(
+            &compressed_path,
+            zstd::stream::encode_all(updated_transcript.as_bytes(), 0).unwrap(),
+        )
+        .unwrap();
 
-        let full_output = (full_responses, full_marked_ids.lock().unwrap().clone());
-        let tail_output = (tail_responses, tail_marked_ids.lock().unwrap().clone());
-        let older_message_count = full_output
-            .0
-            .get(2)
-            .and_then(|response| response.2["messages"].as_array())
-            .map(Vec::len);
+        full_responses.push(message_response_with_query(&full_router, &refresh_query).await);
+        tail_responses.push(message_response_with_query(&tail_router, &refresh_query).await);
+        let refreshed_epoch = tail_responses[1].2["epoch"].as_str().map(str::to_owned);
+        let refresh_reset = tail_responses[1].2["epochReset"].as_bool().unwrap_or(false);
+        let refreshed_user_messages = tail_responses[1].2["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|message| message["type"] == "user")
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .take(2)
+            .rev()
+            .map(|message| message["text"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
 
+        let older_query = format!("?limit=100&epoch={epoch}&olderCursor={older_cursor}");
+        full_responses.push(message_response_with_query(&full_router, &older_query).await);
+        tail_responses.push(message_response_with_query(&tail_router, &older_query).await);
+        let older_reset = tail_responses[2].2["epochReset"].as_bool().unwrap_or(false);
+        let older_message_count = tail_responses[2].2["messages"].as_array().map(Vec::len);
+        let full_marked_ids = full_marked_ids.lock().unwrap().clone();
+        let tail_marked_ids = tail_marked_ids.lock().unwrap().clone();
         assert_eq!(
-            (full_output, tail_output.clone(), older_message_count),
-            (tail_output.clone(), tail_output, Some(100)),
+            (
+                full_responses,
+                tail_responses.clone(),
+                full_marked_ids.clone(),
+                tail_marked_ids,
+                refreshed_epoch,
+                refresh_reset,
+                older_reset,
+                refreshed_user_messages,
+                older_message_count,
+            ),
+            (
+                tail_responses.clone(),
+                tail_responses.clone(),
+                full_marked_ids.clone(),
+                full_marked_ids,
+                Some(epoch),
+                false,
+                false,
+                vec![
+                    "Updated active fixture request.".to_owned(),
+                    "Appended active fixture request.".to_owned(),
+                ],
+                Some(100),
+            ),
         );
     }
 
     #[tokio::test]
-    async fn stale_epoch_message_request_returns_the_latest_page() {
+    async fn epoch_request_resets_when_its_anchor_is_missing() {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("transcript.jsonl");
         let mut records = Vec::new();
