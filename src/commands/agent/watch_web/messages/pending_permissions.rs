@@ -29,7 +29,7 @@ pub(super) fn permission_denied_cards(operations: &[PermissionDeniedOperation]) 
                 CardKind::PermissionDenied,
                 Some(operation.created_at),
                 operation.seq,
-                operation.resolved_at.is_none(),
+                operation.resolved_at.is_none() && operation.has_classifier_verdict(),
                 ChatItem::PermissionDenied {
                     seq: operation.seq,
                     tool_use_id: operation.tool_use_id.clone(),
