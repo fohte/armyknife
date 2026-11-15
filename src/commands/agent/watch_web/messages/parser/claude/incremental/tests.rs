@@ -318,6 +318,151 @@ fn pending_sibling_renders_only_the_active_branch() {
 }
 
 #[test]
+fn tail_window_matches_the_full_parse_after_a_compact_boundary_with_a_missing_parent() {
+    let mut records = vec![
+        r#"{"type":"user","uuid":"fixture-old-root","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"Earlier context."}}"#.to_owned(),
+        r#"{"type":"system","uuid":"fixture-compact","parentUuid":null,"logicalParentUuid":"fixture-unrecorded-parent","timestamp":"2026-01-01T00:00:02Z","subtype":"compact_boundary"}"#.to_owned(),
+    ];
+    let mut parent_uuid = "fixture-compact".to_owned();
+    for index in 0..101 {
+        let uuid = format!("fixture-message-{index}");
+        records.push(format!(
+            r#"{{"type":"user","uuid":"{uuid}","parentUuid":"{parent_uuid}","timestamp":"2026-01-01T00:00:03Z","message":{{"content":"Fixture request {index}."}}}}"#
+        ));
+        parent_uuid = uuid;
+    }
+    let transcript = records.join("\n");
+    let additions = empty_additions();
+    let expected = parse_all(transcript.as_bytes(), additions);
+    let actual = IncrementalClaudeParser::new_tail_window(
+        Cursor::new(transcript.as_bytes()),
+        None,
+        100,
+        &[],
+    )
+    .unwrap()
+    .unwrap()
+    .render_with(fixed_time(), additions)
+    .unwrap();
+    let last_messages = |mut parsed: super::ParsedTranscript| {
+        parsed.0 = parsed
+            .0
+            .into_iter()
+            .rev()
+            .take(100)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        parsed
+    };
+
+    assert_eq!(last_messages(actual), last_messages(expected));
+}
+
+#[test]
+fn tail_window_matches_the_full_parse_when_an_attachment_follows_tool_results() {
+    let transcript = indoc! {r#"
+        {"type":"user","uuid":"fixture-earlier-request","parentUuid":null,"timestamp":"2026-01-01T00:00:00Z","message":{"content":"Earlier fixture request."}}
+        {"type":"user","uuid":"fixture-root","parentUuid":"fixture-earlier-request","timestamp":"2026-01-01T00:00:01Z","message":{"content":"Run two fixture tools."}}
+        {"type":"assistant","uuid":"fixture-tool-call","parentUuid":"fixture-root","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_use","id":"fixture-call-a","name":"Read","input":{"file_path":"/fixture/a"}},{"type":"tool_use","id":"fixture-call-b","name":"Read","input":{"file_path":"/fixture/b"}}]}}
+        {"type":"user","uuid":"fixture-result-a","parentUuid":"fixture-tool-call","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-a","content":"First fixture result."}]}}
+        {"type":"attachment","uuid":"fixture-hook","parentUuid":"fixture-result-a","timestamp":"2026-01-01T00:00:04Z","attachment":{"type":"hook_success"}}
+        {"type":"user","uuid":"fixture-result-b","parentUuid":"fixture-tool-call","timestamp":"2026-01-01T00:00:05Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-call-b","content":"Second fixture result."}]}}
+        {"type":"assistant","uuid":"fixture-tool-answer","parentUuid":"fixture-result-b","timestamp":"2026-01-01T00:00:06Z","message":{"content":[{"type":"text","text":"The fixture tools are complete."}]}}
+        {"type":"user","uuid":"fixture-latest-request","parentUuid":"fixture-tool-answer","timestamp":"2026-01-01T00:00:07Z","message":{"content":"Latest fixture request."}}
+        {"type":"attachment","uuid":"fixture-final-hook","parentUuid":"fixture-latest-request","timestamp":"2026-01-01T00:00:08Z","attachment":{"type":"hook_success"}}
+    "#};
+    let additions = empty_additions();
+    let expected = parse_all(transcript.as_bytes(), additions);
+    let actual =
+        IncrementalClaudeParser::new_tail_window(Cursor::new(transcript.as_bytes()), None, 2, &[])
+            .unwrap()
+            .unwrap()
+            .render_with(fixed_time(), additions)
+            .unwrap();
+    let last_messages = |mut parsed: super::ParsedTranscript| {
+        parsed.0 = parsed.0.into_iter().rev().take(2).collect::<Vec<_>>();
+        parsed
+    };
+
+    assert_eq!(last_messages(actual), last_messages(expected));
+}
+
+#[test]
+fn tail_window_restores_an_older_pending_task_start() {
+    let prefix = indoc! {r#"
+        {"type":"assistant","uuid":"fixture-task-call","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"fixture-task-use","name":"Bash","input":{"command":"fixture background task","run_in_background":true}}]}}
+        {"type":"user","uuid":"fixture-task-started","parentUuid":"fixture-task-call","timestamp":"2026-01-01T00:00:02Z","toolUseResult":{"task_id":"fixture-task-id"},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-task-use","content":"Background task started (id: fixture-task-id)"}]}}
+    "#};
+    let padded_record = format!(
+        r#"{{"type":"system","uuid":"fixture-padding","parentUuid":null,"timestamp":"2026-01-01T00:00:02Z","padding":"{}"}}"#,
+        "x".repeat(70 * 1024),
+    );
+    let suffix = indoc! {r#"
+        {"type":"user","uuid":"fixture-first-request","parentUuid":"fixture-task-started","timestamp":"2026-01-01T00:00:03Z","message":{"content":"First request."}}
+        {"type":"user","uuid":"fixture-latest-request","parentUuid":"fixture-first-request","timestamp":"2026-01-01T00:00:04Z","message":{"content":"Latest request."}}
+    "#};
+    let transcript = [prefix, &padded_record, suffix].join("\n");
+    let additions = empty_additions();
+    let expected = parse_all(transcript.as_bytes(), additions);
+    let actual = IncrementalClaudeParser::new_tail_window(
+        Cursor::new(transcript.as_bytes()),
+        None,
+        1,
+        &["fixture-task-id".to_owned()],
+    )
+    .unwrap()
+    .unwrap()
+    .render_with(fixed_time(), additions)
+    .unwrap();
+    let last_message_and_state = |mut parsed: super::ParsedTranscript| {
+        parsed.0 = parsed
+            .0
+            .into_iter()
+            .rev()
+            .take(1)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        parsed
+    };
+
+    assert_eq!(
+        last_message_and_state(actual),
+        last_message_and_state(expected)
+    );
+}
+
+#[test]
+fn tail_window_restores_the_initial_skills_before_an_in_window_addition() {
+    let transcript = indoc! {r#"
+        {"type":"attachment","attachment":{"type":"skill_listing","isInitial":true,"content":"- fixture-existing-skill: Existing skill description."}}
+        {"type":"user","uuid":"fixture-first-request","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"First request."}}
+        {"type":"attachment","attachment":{"type":"skill_listing","isInitial":false,"content":"- fixture-added-skill: Added skill description."}}
+        {"type":"user","uuid":"fixture-latest-request","parentUuid":"fixture-first-request","timestamp":"2026-01-01T00:00:02Z","message":{"content":"Latest request."}}
+    "#};
+    let additions = empty_additions();
+    let expected = parse_all(transcript.as_bytes(), additions);
+    let actual =
+        IncrementalClaudeParser::new_tail_window(Cursor::new(transcript.as_bytes()), None, 1, &[])
+            .unwrap()
+            .unwrap()
+            .render_with(fixed_time(), additions)
+            .unwrap();
+    let last_message_and_state = |mut parsed: super::ParsedTranscript| {
+        parsed.0 = parsed.0.into_iter().rev().take(1).collect::<Vec<_>>();
+        parsed
+    };
+
+    assert_eq!(
+        last_message_and_state(actual),
+        last_message_and_state(expected)
+    );
+}
+
+#[test]
 fn pending_json_completed_after_a_second_append_matches_a_full_parse() {
     let prefix = indoc! {r#"
         {"type":"user","uuid":"message-one","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"A question."}}

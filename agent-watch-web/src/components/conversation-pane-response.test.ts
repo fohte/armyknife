@@ -47,6 +47,30 @@ it('accepts a compact boundary event from the conversation API', () => {
   ).toBe(true)
 })
 
+it('accepts an epoch response without an older cursor', () => {
+  expect(
+    isConversationResponse({
+      ...response({ type: 'assistant', text: 'Fixture response.' }),
+      epoch: 'fixture-epoch-amber',
+      epochReset: true,
+    }),
+  ).toBe(true)
+})
+
+it.each([
+  { name: 'a numeric epoch', field: 'epoch', value: 1 },
+  { name: 'a numeric older cursor', field: 'olderCursor', value: 1 },
+  { name: 'a null older cursor', field: 'olderCursor', value: null },
+  { name: 'a string epoch reset flag', field: 'epochReset', value: 'true' },
+])('rejects $name', ({ field, value }) => {
+  expect(
+    isConversationResponse({
+      ...response({ type: 'assistant', text: 'Fixture response.' }),
+      [field]: value,
+    }),
+  ).toBe(false)
+})
+
 it('accepts todo cards with completion metadata', () => {
   expect(
     isConversationResponse(

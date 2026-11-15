@@ -253,6 +253,13 @@ impl Queue {
         self.resolved_queued_prompt_ids.clone()
     }
 
+    pub(super) fn all_queued_prompt_ids_delivered(&self) -> bool {
+        self.queued_prompts
+            .iter()
+            .filter(|prompt| prompt.message_id.is_some())
+            .all(|prompt| self.delivered_prompt_ids.contains(&prompt.id))
+    }
+
     fn consume_removed_prompt(&mut self, prompt: &str) -> bool {
         if let Some(index) = matching_removed_prompt_index(&self.removed, prompt) {
             self.removed.remove(index);

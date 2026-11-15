@@ -53,6 +53,22 @@ impl TimedCard {
     }
 }
 
+pub(in crate::commands::agent::watch_web::messages) fn filter_additional_cards_after_tail_window(
+    cards: &[TimedCard],
+    cutoff: DateTime<Utc>,
+) -> Vec<TimedCard> {
+    cards
+        .iter()
+        .filter(|card| {
+            card.awaiting_user
+                || card
+                    .created_at
+                    .is_some_and(|created_at| created_at >= cutoff)
+        })
+        .cloned()
+        .collect()
+}
+
 pub(in crate::commands::agent::watch_web::messages) struct CardTimeline {
     cards: Vec<TimedCard>,
     inserted: HashSet<(CardKind, i64)>,
@@ -226,6 +242,137 @@ mod tests {
         DateTime::parse_from_rfc3339(value)
             .expect("test timestamp should parse")
             .with_timezone(&Utc)
+    }
+
+    #[test]
+    fn tail_window_keeps_pending_cards_and_recent_resolved_cards() {
+        let cutoff = timestamp("2026-06-01T12:00:00Z");
+        let filtered = filter_additional_cards_after_tail_window(
+            &[
+                TimedCard::new(
+                    CardKind::PermissionDenied,
+                    Some(cutoff - chrono::Duration::seconds(1)),
+                    1,
+                    false,
+                    ChatItem::PermissionDenied {
+                        seq: 1,
+                        tool_use_id: None,
+                        tool: "Bash".to_string(),
+                        input_summary: "old request".to_string(),
+                        command: None,
+                        reason: None,
+                        retryable: true,
+                        resolved: true,
+                    },
+                ),
+                TimedCard::new(
+                    CardKind::PermissionDenied,
+                    Some(cutoff - chrono::Duration::seconds(1)),
+                    2,
+                    true,
+                    ChatItem::PermissionDenied {
+                        seq: 2,
+                        tool_use_id: None,
+                        tool: "Bash".to_string(),
+                        input_summary: "pending request".to_string(),
+                        command: None,
+                        reason: None,
+                        retryable: true,
+                        resolved: false,
+                    },
+                ),
+                TimedCard::new(
+                    CardKind::PermissionDenied,
+                    Some(cutoff + chrono::Duration::seconds(1)),
+                    3,
+                    false,
+                    ChatItem::PermissionDenied {
+                        seq: 3,
+                        tool_use_id: None,
+                        tool: "Bash".to_string(),
+                        input_summary: "recent request".to_string(),
+                        command: None,
+                        reason: None,
+                        retryable: true,
+                        resolved: true,
+                    },
+                ),
+                TimedCard::new(
+                    CardKind::Permission,
+                    None,
+                    4,
+                    true,
+                    ChatItem::Permission {
+                        request_id: Some("fixture-request".to_string()),
+                        tool: "Bash".to_string(),
+                        description: "Waiting for permission".to_string(),
+                        command: None,
+                    },
+                ),
+            ],
+            cutoff,
+        );
+
+        assert_eq!(
+            filtered
+                .iter()
+                .map(|card| {
+                    (
+                        card.kind,
+                        card.created_at,
+                        card.seq,
+                        card.awaiting_user,
+                        card.item.clone(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    CardKind::PermissionDenied,
+                    Some(cutoff - chrono::Duration::seconds(1)),
+                    2,
+                    true,
+                    ChatItem::PermissionDenied {
+                        seq: 2,
+                        tool_use_id: None,
+                        tool: "Bash".to_string(),
+                        input_summary: "pending request".to_string(),
+                        command: None,
+                        reason: None,
+                        retryable: true,
+                        resolved: false,
+                    },
+                ),
+                (
+                    CardKind::PermissionDenied,
+                    Some(cutoff + chrono::Duration::seconds(1)),
+                    3,
+                    false,
+                    ChatItem::PermissionDenied {
+                        seq: 3,
+                        tool_use_id: None,
+                        tool: "Bash".to_string(),
+                        input_summary: "recent request".to_string(),
+                        command: None,
+                        reason: None,
+                        retryable: true,
+                        resolved: true,
+                    },
+                ),
+                (
+                    CardKind::Permission,
+                    None,
+                    4,
+                    true,
+                    ChatItem::Permission {
+                        request_id: Some("fixture-request".to_string()),
+                        tool: "Bash".to_string(),
+                        description: "Waiting for permission".to_string(),
+                        command: None,
+                    },
+                ),
+            ],
+        );
     }
 
     #[test]

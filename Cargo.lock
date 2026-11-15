@@ -116,6 +116,7 @@ dependencies = [
  "indoc",
  "lazy-regex",
  "libc",
+ "memchr",
  "mime_guess",
  "notify",
  "percent-encoding",

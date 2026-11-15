@@ -125,6 +125,12 @@ function messagesResponse(
   metadata: {
     start: number
     total: number
+    epoch?: string
+    olderCursor?: string
+    epochReset?: boolean
+    stableStart?: number
+    stableEnd?: number
+    stableDigest?: string
     decisions?: Extract<ChatItem, { type: 'decision' }>[]
     hasUnansweredProposal?: boolean
     activeQuestionIndex?: number | null
@@ -136,8 +142,24 @@ function messagesResponse(
   return {
     messages,
     backgroundTasks,
+    ...(metadata.epoch === undefined ? {} : { epoch: metadata.epoch }),
+    ...(metadata.olderCursor === undefined
+      ? {}
+      : { olderCursor: metadata.olderCursor }),
+    ...(metadata.epochReset === undefined
+      ? {}
+      : { epochReset: metadata.epochReset }),
     start: metadata.start,
     total: metadata.total,
+    ...(metadata.stableStart === undefined
+      ? {}
+      : { stableStart: metadata.stableStart }),
+    ...(metadata.stableEnd === undefined
+      ? {}
+      : { stableEnd: metadata.stableEnd }),
+    ...(metadata.stableDigest === undefined
+      ? {}
+      : { stableDigest: metadata.stableDigest }),
     decisions:
       metadata.decisions ??
       messages.filter(
@@ -7525,6 +7547,428 @@ it('prepends an older page without moving existing messages in the viewport', as
   })
 })
 
+it('loads older messages from a tail cursor and anchors when the epoch changes', async () => {
+  const latestMessage: ChatItem = {
+    type: 'assistant',
+    text: 'Latest fixture message.',
+  }
+  const earlierMessage: ChatItem = {
+    type: 'assistant',
+    text: 'Earlier fixture message.',
+  }
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse([latestMessage], [], {
+            start: 0,
+            total: 1,
+            epoch: 'fixture-epoch-amber',
+            olderCursor: 'fixture-epoch-amber',
+          }),
+        ),
+      )
+    }
+    if (
+      url.endsWith(
+        '/messages?olderCursor=fixture-epoch-amber&limit=100&epoch=fixture-epoch-amber',
+      )
+    ) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse([earlierMessage], [], {
+            start: 1,
+            total: 2,
+            epoch: 'fixture-epoch-cobalt',
+          }),
+        ),
+      )
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await waitForState(
+    () => container.querySelectorAll('.chat-assistant-message').length === 1,
+  )
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  Object.defineProperties(scroll, {
+    scrollHeight: {
+      configurable: true,
+      get: () =>
+        100 + container.querySelectorAll('.chat-assistant-message').length * 40,
+    },
+    clientHeight: { configurable: true, value: 100 },
+    scrollTop: { configurable: true, writable: true, value: 0 },
+  })
+  act(() => {
+    scroll.scrollTop = 12
+    container
+      .querySelector<HTMLButtonElement>('.conversation-load-older')
+      ?.click()
+  })
+  await waitForState(
+    () => container.querySelectorAll('.chat-assistant-message').length === 2,
+  )
+
+  const snapshot = () => ({
+    messageRequests: fetcher.mock.calls
+      .map(([url]) => requestUrl(url))
+      .filter((url) => url.includes('/messages?')),
+    messages: Array.from(
+      container.querySelectorAll('.chat-assistant-message'),
+      (element) => element.textContent,
+    ),
+    scrollTop: scroll.scrollTop,
+    olderButton: container.querySelector('.conversation-load-older'),
+  })
+  expect(snapshot()).toEqual({
+    messageRequests: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/messages?olderCursor=fixture-epoch-amber&limit=100&epoch=fixture-epoch-amber',
+    ],
+    messages: ['Earlier fixture message.', 'Latest fixture message.'],
+    scrollTop: 52,
+    olderButton: null,
+  })
+})
+
+it('keeps the current page when older history ends and clears its scroll anchor', async () => {
+  const resetMessages: ChatItem[] = [
+    { type: 'assistant', text: 'Reset fixture response.' },
+    { type: 'assistant', text: 'Current fixture response.' },
+  ]
+  let refreshKey = 0
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse([question], [], {
+            start: 0,
+            total: 1,
+            epoch: 'fixture-epoch-amber',
+            olderCursor: 'fixture-epoch-amber',
+            activeQuestionIndex: 0,
+          }),
+        ),
+      )
+    }
+    if (
+      url.endsWith(
+        '/messages?olderCursor=fixture-epoch-amber&limit=100&epoch=fixture-epoch-amber',
+      )
+    ) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse([], [], {
+            start: 0,
+            total: 1,
+            epoch: 'fixture-epoch-amber',
+            activeQuestionIndex: null,
+          }),
+        ),
+      )
+    }
+    if (url.endsWith('/messages?from=0&epoch=fixture-epoch-amber')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse(resetMessages, [], {
+            start: 0,
+            total: 2,
+            epoch: 'fixture-epoch-cobalt',
+            epochReset: true,
+          }),
+        ),
+      )
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  const renderConversation = () => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={refreshKey}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  }
+  act(renderConversation)
+  await waitForState(
+    () => container.querySelectorAll('.chat-question-card').length === 1,
+  )
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  Object.defineProperties(scroll, {
+    scrollHeight: {
+      configurable: true,
+      get: () =>
+        100 +
+        (container.querySelectorAll('.chat-question-card').length +
+          container.querySelectorAll('.chat-assistant-message').length) *
+          40,
+    },
+    clientHeight: { configurable: true, value: 100 },
+    scrollTop: { configurable: true, writable: true, value: 0 },
+  })
+  act(() => {
+    scroll.scrollTop = 10
+    scroll.dispatchEvent(new Event('scroll'))
+  })
+  await waitForState(
+    () => container.querySelector('.conversation-load-older') === null,
+  )
+
+  refreshKey = 1
+  act(renderConversation)
+  await waitForState(
+    () => container.querySelectorAll('.chat-assistant-message').length === 2,
+  )
+
+  const snapshot = () => ({
+    messageRequests: fetcher.mock.calls
+      .map(([url]) => requestUrl(url))
+      .filter((url) => url.includes('/messages?')),
+    questionCards: container.querySelectorAll('.chat-question-card').length,
+    messages: Array.from(
+      container.querySelectorAll('.chat-assistant-message'),
+      (element) => element.textContent,
+    ),
+    scrollTop: scroll.scrollTop,
+    olderButton: container.querySelector('.conversation-load-older'),
+  })
+  expect(snapshot()).toEqual({
+    messageRequests: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/messages?olderCursor=fixture-epoch-amber&limit=100&epoch=fixture-epoch-amber',
+      '/api/sessions/sample-session/messages?from=0&epoch=fixture-epoch-amber',
+    ],
+    questionCards: 0,
+    messages: ['Reset fixture response.', 'Current fixture response.'],
+    scrollTop: 10,
+    olderButton: null,
+  })
+})
+
+it('replaces loaded messages when an older cursor resets the epoch', async () => {
+  const currentMessage: ChatItem = {
+    type: 'assistant',
+    text: 'Current fixture response.',
+  }
+  const resetMessages: ChatItem[] = [
+    { type: 'assistant', text: 'Reset fixture response.' },
+  ]
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse([currentMessage], [], {
+            start: 0,
+            total: 1,
+            epoch: 'fixture-epoch-amber',
+            olderCursor: 'fixture-epoch-amber',
+          }),
+        ),
+      )
+    }
+    if (
+      url.endsWith(
+        '/messages?olderCursor=fixture-epoch-amber&limit=100&epoch=fixture-epoch-amber',
+      )
+    ) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse(resetMessages, [], {
+            start: 0,
+            total: 1,
+            epoch: 'fixture-epoch-cobalt',
+            epochReset: true,
+          }),
+        ),
+      )
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await waitForState(
+    () => container.querySelectorAll('.chat-assistant-message').length === 1,
+  )
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.conversation-load-older')
+      ?.click()
+  })
+  await waitForState(() =>
+    container.textContent.includes('Reset fixture response.'),
+  )
+
+  const snapshot = () => ({
+    messageRequests: fetcher.mock.calls
+      .map(([url]) => requestUrl(url))
+      .filter((url) => url.includes('/messages?')),
+    messages: Array.from(
+      container.querySelectorAll('.chat-assistant-message'),
+      (element) => element.textContent,
+    ),
+    olderButton: container.querySelector('.conversation-load-older'),
+  })
+  expect(snapshot()).toEqual({
+    messageRequests: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/messages?olderCursor=fixture-epoch-amber&limit=100&epoch=fixture-epoch-amber',
+    ],
+    messages: ['Reset fixture response.'],
+    olderButton: null,
+  })
+})
+
+it('keeps an epoch refresh prefix and replaces it after the epoch changes', async () => {
+  const initialMessages: ChatItem[] = [
+    { type: 'assistant', text: 'Earlier fixture message.' },
+    { type: 'assistant', text: 'Latest fixture message.' },
+  ]
+  const stableEpochMessages: ChatItem[] = [
+    { type: 'assistant', text: 'Newer fixture message.' },
+    { type: 'assistant', text: 'Newest fixture message.' },
+  ]
+  const changedEpochMessages: ChatItem[] = [
+    { type: 'assistant', text: 'Reset fixture message.' },
+    { type: 'assistant', text: 'Current fixture message.' },
+  ]
+  let refreshCount = 0
+  let refreshKey = 0
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse(initialMessages, [], {
+            start: 1,
+            total: 3,
+            epoch: 'fixture-epoch-amber',
+            olderCursor: 'fixture-epoch-amber',
+            stableStart: 1,
+            stableEnd: 2,
+            stableDigest: 'fixture-digest-cyan',
+          }),
+        ),
+      )
+    }
+    if (url.includes('/messages?from=')) {
+      refreshCount += 1
+      return Promise.resolve(
+        jsonResponse(
+          refreshCount === 1
+            ? messagesResponse(stableEpochMessages, [], {
+                start: 2,
+                total: 4,
+                epoch: 'fixture-epoch-amber',
+                olderCursor: 'fixture-epoch-amber',
+              })
+            : messagesResponse(changedEpochMessages, [], {
+                start: 0,
+                total: 2,
+                epoch: 'fixture-epoch-cobalt',
+              }),
+        ),
+      )
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  const renderConversation = () => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={refreshKey}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  }
+  act(renderConversation)
+  await waitForState(
+    () => container.querySelectorAll('.chat-assistant-message').length === 2,
+  )
+  refreshKey = 1
+  act(renderConversation)
+  await waitForState(
+    () => container.querySelectorAll('.chat-assistant-message').length === 3,
+  )
+  const stableEpochMessagesOnScreen = Array.from(
+    container.querySelectorAll('.chat-assistant-message'),
+    (element) => element.textContent,
+  )
+  refreshKey = 2
+  act(renderConversation)
+  await waitForState(
+    () =>
+      container.querySelectorAll('.chat-assistant-message').length === 2 &&
+      container.textContent.includes('Current fixture message.'),
+  )
+
+  const snapshot = () => ({
+    messageRequests: fetcher.mock.calls
+      .map(([url]) => requestUrl(url))
+      .filter((url) => url.includes('/messages?')),
+    stableEpochMessagesOnScreen,
+    changedEpochMessagesOnScreen: Array.from(
+      container.querySelectorAll('.chat-assistant-message'),
+      (element) => element.textContent,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    messageRequests: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/messages?from=1&epoch=fixture-epoch-amber&olderCursor=fixture-epoch-amber&stableStart=1&stableEnd=2&stableDigest=fixture-digest-cyan',
+      '/api/sessions/sample-session/messages?from=1&epoch=fixture-epoch-amber&olderCursor=fixture-epoch-amber',
+    ],
+    stableEpochMessagesOnScreen: [
+      'Earlier fixture message.',
+      'Newer fixture message.',
+      'Newest fixture message.',
+    ],
+    changedEpochMessagesOnScreen: [
+      'Reset fixture message.',
+      'Current fixture message.',
+    ],
+  })
+})
+
 it('loads an older page near the top and ignores repeated scrolls while it loads', async () => {
   const visibleMessages = [
     { type: 'assistant', text: 'First visible message.' },
@@ -8048,6 +8492,134 @@ it('keeps an older page loaded when a conversation refresh overlaps its request'
       'New message.',
     ],
     olderButton: null,
+  })
+})
+
+it('discards an older page after a refresh changes the conversation epoch', async () => {
+  const originalMessages: ChatItem[] = [
+    { type: 'assistant', text: 'Original first message.' },
+    { type: 'assistant', text: 'Original latest message.' },
+  ]
+  const refreshedMessages: ChatItem[] = [
+    { type: 'assistant', text: 'Replacement first message.' },
+    { type: 'assistant', text: 'Replacement latest message.' },
+  ]
+  let resolveOlderPage: ((response: Response) => void) | undefined
+  let resolveRefresh: ((response: Response) => void) | undefined
+  const olderPage = new Promise<Response>((resolve) => {
+    resolveOlderPage = resolve
+  })
+  const refreshPage = new Promise<Response>((resolve) => {
+    resolveRefresh = resolve
+  })
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.includes('from=')) return refreshPage
+    if (url.includes('olderCursor=')) return olderPage
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(
+      jsonResponse(
+        messagesResponse(originalMessages, [], {
+          start: 0,
+          total: 2,
+          epoch: 'fixture-epoch-original',
+          olderCursor: 'fixture-epoch-original',
+        }),
+      ),
+    )
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  const renderConversation = (refreshKey: number) => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={refreshKey}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  }
+  act(() => {
+    renderConversation(0)
+  })
+  await waitForState(
+    () => container.querySelectorAll('.chat-assistant-message').length === 2,
+  )
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.conversation-load-older')
+      ?.click()
+    renderConversation(1)
+  })
+  await waitForState(() =>
+    fetcher.mock.calls.some(([url]) => requestUrl(url).includes('from=')),
+  )
+  await act(async () => {
+    resolveRefresh?.(
+      jsonResponse(
+        messagesResponse(refreshedMessages, [], {
+          start: 0,
+          total: 2,
+          epoch: 'fixture-epoch-replacement',
+          olderCursor: 'fixture-epoch-replacement',
+          epochReset: true,
+        }),
+      ),
+    )
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(
+    () =>
+      container.querySelector('.chat-assistant-message')?.textContent ===
+      'Replacement first message.',
+  )
+  await act(async () => {
+    resolveOlderPage?.(
+      jsonResponse(
+        messagesResponse(
+          [{ type: 'assistant', text: 'Stale older message.' }],
+          [],
+          {
+            start: 0,
+            total: 3,
+            epoch: 'fixture-epoch-stale',
+            olderCursor: 'fixture-epoch-stale',
+          },
+        ),
+      ),
+    )
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    requests: fetcher.mock.calls.map(([url]) => requestUrl(url)),
+    messages: Array.from(
+      container.querySelectorAll('.chat-assistant-message'),
+      (element) => element.textContent,
+    ),
+    olderButton: container.querySelector<HTMLButtonElement>(
+      '.conversation-load-older',
+    )
+      ? {
+          text: container.querySelector('.conversation-load-older')
+            ?.textContent,
+          disabled: container.querySelector<HTMLButtonElement>(
+            '.conversation-load-older',
+          )?.disabled,
+        }
+      : null,
+  })
+  expect(snapshot()).toEqual({
+    requests: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/actions',
+      '/api/sessions/sample-session/messages?olderCursor=fixture-epoch-original&limit=100&epoch=fixture-epoch-original',
+      '/api/sessions/sample-session/messages?from=0&epoch=fixture-epoch-original&olderCursor=fixture-epoch-original',
+      '/api/sessions/sample-session/actions',
+    ],
+    messages: ['Replacement first message.', 'Replacement latest message.'],
+    olderButton: { text: 'Load older messages', disabled: false },
   })
 })
 

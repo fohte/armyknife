@@ -38,10 +38,10 @@ pub(in crate::commands::agent::watch_web) mod queued_prompt;
 mod range;
 mod subagent_reports;
 
-use self::incremental::parse_session_transcript_incrementally;
+use self::incremental::{filter_after_tail_window, parse_initial_or_full};
 #[cfg(test)]
 pub(super) use self::pending_permissions::MAX_PERMISSION_COMMAND_BYTES;
-use self::pending_permissions::collect_pending_permission_cards;
+use self::pending_permissions::{collect_pending_permission_cards, permission_denied_cards};
 pub(super) use self::pending_permissions::{
     permission_request_command, permission_request_command_summary, permission_request_description,
 };
@@ -229,14 +229,22 @@ async fn get_messages(
     if !range.is_valid() {
         return StatusCode::BAD_REQUEST.into_response();
     }
+    let tail_window_limit = range.initial_tail_window_limit();
 
-    match tokio::task::spawn_blocking(move || {
-        load_conversation_with_queued_prompts(
+    match tokio::task::spawn_blocking(move || match tail_window_limit {
+        Some(limit) => load_conversation_with_initial_tail_window(
             &session_id,
             |id| load_session(id),
             |id| load_user_marker(id),
             &loaders,
-        )
+            limit,
+        ),
+        None => load_conversation_with_queued_prompts(
+            &session_id,
+            |id| load_session(id),
+            |id| load_user_marker(id),
+            &loaders,
+        ),
     })
     .await
     {
@@ -287,9 +295,35 @@ fn load_messages_with(
 
 fn load_conversation_with_queued_prompts(
     session_id: &str,
+    load_session: impl FnMut(&str) -> Result<Option<Session>>,
+    load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
+    loaders: &RouteLoaders,
+) -> Result<Option<ConversationResponse>> {
+    load_conversation_with_tail_window(session_id, load_session, load_user_marker, loaders, None)
+}
+
+fn load_conversation_with_initial_tail_window(
+    session_id: &str,
+    load_session: impl FnMut(&str) -> Result<Option<Session>>,
+    load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
+    loaders: &RouteLoaders,
+    message_limit: usize,
+) -> Result<Option<ConversationResponse>> {
+    load_conversation_with_tail_window(
+        session_id,
+        load_session,
+        load_user_marker,
+        loaders,
+        Some(message_limit),
+    )
+}
+
+fn load_conversation_with_tail_window(
+    session_id: &str,
     mut load_session: impl FnMut(&str) -> Result<Option<Session>>,
     load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
     loaders: &RouteLoaders,
+    tail_window_limit: Option<usize>,
 ) -> Result<Option<ConversationResponse>> {
     let Some(session) = load_session(session_id)? else {
         return Ok(None);
@@ -310,7 +344,7 @@ fn load_conversation_with_queued_prompts(
     let todos = (loaders.todos)(session_id)?;
     let agent_files = (loaders.agent_files)(session_id)?;
     let permission_denials = (loaders.permission_denials)(session_id)?;
-    let mut additional_cards = pending_permissions::permission_denied_cards(&permission_denials);
+    let mut additional_cards = permission_denied_cards(&permission_denials);
     let parent = parent_session(&session, &mut load_session)?;
     let main_permission_pending = session
         .pending_permission_agent_ids
@@ -349,6 +383,8 @@ fn load_conversation_with_queued_prompts(
         },
     )?;
     if let Some(mut cached) = loaders.message_cache.get(session_id, &cache_key)? {
+        cached.conversation.initial_epoch =
+            tail_window_limit.is_some() && session.engine == Engine::Claude;
         let elapsed = cached.cached_at.elapsed().as_secs();
         for task in &mut cached.conversation.background_tasks {
             task.elapsed_seconds = task.elapsed_seconds.saturating_add(elapsed);
@@ -398,15 +434,25 @@ fn load_conversation_with_queued_prompts(
             additional_cards: &additional_cards,
         },
     };
-    let (mut conversation, resolved_queued_prompt_ids) = parse_session_transcript_incrementally(
+    let pending_task_ids = session
+        .pending_bg_task_ids
+        .union(&session.pending_agent_task_ids)
+        .cloned()
+        .collect::<Vec<_>>();
+    let (mut conversation, resolved_queued_prompt_ids, used_tail_window) = parse_initial_or_full(
         session_id,
         transcript_input,
+        tail_window_limit,
+        &pending_task_ids,
         cache_key.transcript_fingerprint.clone(),
         &loaders.message_cache,
     )?;
     cache::refresh_image_availability(&mut conversation);
     resolve_peer_session_titles(&mut conversation.messages, &mut load_session)?;
-    merge_stored_files(session_id, &agent_files, &mut conversation.messages);
+    let tail_window_start = conversation.tail_window_start;
+    let recent_agent_files =
+        filter_after_tail_window(&agent_files, tail_window_start, |file| file.created_at);
+    merge_stored_files(session_id, &recent_agent_files, &mut conversation.messages);
 
     attach_question_request_if_present(
         &mut conversation.messages,
@@ -425,14 +471,23 @@ fn load_conversation_with_queued_prompts(
     conversation.messages.extend(pending_permissions.questions);
 
     conversation.update_metadata();
+    if used_tail_window {
+        conversation.decisions = decisions.iter().cloned().map(ChatItem::from).collect();
+        conversation.has_unanswered_proposal = proposals
+            .iter()
+            .any(|proposal| proposal.answer.is_none() && proposal.resolved_at.is_none());
+    }
+    conversation.initial_epoch = tail_window_limit.is_some() && session.engine == Engine::Claude;
 
     cache::mark_resolved_queued_prompts(loaders, session_id, &resolved_queued_prompt_ids);
-    loaders.message_cache.insert(
-        session_id,
-        cache_key,
-        conversation.clone(),
-        resolved_queued_prompt_ids,
-    );
+    if !used_tail_window {
+        loaders.message_cache.insert(
+            session_id,
+            cache_key,
+            conversation.clone(),
+            resolved_queued_prompt_ids,
+        );
+    }
     Ok(Some(conversation))
 }
 
@@ -697,6 +752,16 @@ struct ConversationResponse {
     stable_end: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stable_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    epoch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    older_cursor: Option<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    epoch_reset: bool,
+    #[serde(skip)]
+    tail_window_start: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(skip)]
+    initial_epoch: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -2052,11 +2117,18 @@ mod tests {
     async fn message_response(
         router: &axum::Router,
     ) -> (StatusCode, Option<String>, serde_json::Value) {
+        message_response_with_query(router, "").await
+    }
+
+    async fn message_response_with_query(
+        router: &axum::Router,
+        query: &str,
+    ) -> (StatusCode, Option<String>, serde_json::Value) {
         let response = router
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/sessions/fixture-session/messages")
+                    .uri(format!("/sessions/fixture-session/messages{query}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -3667,6 +3739,314 @@ mod tests {
                 vec![7],
             ),
         );
+    }
+
+    #[rstest]
+    #[case::active_delivery(true, 0, 205)]
+    #[case::abandoned_delivery(false, 0, 205)]
+    #[case::rewound_history(false, 205, 205)]
+    #[tokio::test]
+    async fn initial_tail_window_matches_full_parse_for_queued_prompt_branches(
+        #[case] delivery_is_active: bool,
+        #[case] abandoned_input_count: usize,
+        #[case] active_input_count: usize,
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        let delivery_content = indoc::indoc! {r#"
+            ⟦armyknife-user:fixture-marker-cobalt⟧
+            This message was typed by the human user in armyknife watch-web.
+            Delivered fixture request.
+            <!-- armyknife-queued-prompt-id:fixture-message-7 -->
+        "#};
+        let mut records = vec![
+            json!({
+                "type": "system",
+                "padding": "x".repeat(5 * 1024 * 1024),
+            }),
+            json!({
+                "type": "user",
+                "uuid": "fixture-root",
+                "parentUuid": null,
+                "timestamp": "2026-01-01T00:00:01Z",
+                "message": {"content": "Fixture branch root."},
+            }),
+            json!({
+                "type": "user",
+                "uuid": "fixture-delivery",
+                "parentUuid": "fixture-root",
+                "timestamp": "2026-01-01T00:00:01Z",
+                "origin": {"kind": "peer", "from": "fixture-peer"},
+                "message": {"content": delivery_content},
+            }),
+        ];
+        let mut parent_uuid = "fixture-delivery".to_owned();
+        for index in 0..abandoned_input_count {
+            let uuid = format!("fixture-abandoned-request-{index}");
+            records.push(json!({
+                "type": "user",
+                "uuid": uuid,
+                "parentUuid": parent_uuid,
+                "timestamp": "2026-01-01T00:00:01Z",
+                "message": {"content": format!("Abandoned fixture request {index}.")},
+            }));
+            parent_uuid = uuid;
+        }
+        if !delivery_is_active {
+            records.push(json!({
+                "type": "assistant",
+                "uuid": "fixture-current-branch",
+                "parentUuid": "fixture-root",
+                "timestamp": "2026-01-01T00:00:01Z",
+                "message": {"content": [{"type": "text", "text": "Current fixture branch."}]},
+            }));
+            parent_uuid = "fixture-current-branch".to_owned();
+        }
+        for index in 0..active_input_count {
+            let uuid = format!("fixture-request-{index}");
+            records.push(json!({
+                "type": "user",
+                "uuid": uuid,
+                "parentUuid": parent_uuid,
+                "timestamp": "2026-01-01T00:00:01Z",
+                "message": {"content": format!("Fixture request {index}.")},
+            }));
+            parent_uuid = uuid;
+        }
+        let transcript = records
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&transcript_path, &transcript).unwrap();
+        let compressed_path = directory.path().join("full-transcript.jsonl.zst");
+        std::fs::write(
+            &compressed_path,
+            zstd::stream::encode_all(transcript.as_bytes(), 0).unwrap(),
+        )
+        .unwrap();
+        let base_session = stored_session();
+        let queued = saved_prompt(7, "Delivered fixture request.");
+        let old_created_at = chrono::DateTime::parse_from_rfc3339("2025-12-31T23:59:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let pending_decision = AgentDecision {
+            session_id: "fixture-session".to_string(),
+            seq: 1,
+            title: "Old pending decision".to_string(),
+            why: "The fixture keeps this decision pending.".to_string(),
+            considered: Vec::new(),
+            easy_to_change: "Change one fixture value.".to_string(),
+            created_at: old_created_at.to_rfc3339(),
+            review: None,
+            reviewed_at: None,
+        };
+        let pending_proposal = AgentProposal {
+            session_id: "fixture-session".to_string(),
+            seq: 1,
+            body: r#"{"title":"Old pending proposal","summary":null,"options":[{"label":"Option A"},{"label":"Option B"}]}"#.to_string(),
+            created_at: old_created_at,
+            answer: None,
+            resolved_at: None,
+            resolution: None,
+            comment: None,
+        };
+        let pending_todo = AgentTodo {
+            session_id: "fixture-session".to_string(),
+            seq: 1,
+            title: "Old pending todo".to_string(),
+            detail: None,
+            created_at: old_created_at,
+            completed_at: None,
+            resolution: None,
+            comment: None,
+        };
+        let pending_denial = PermissionDeniedOperation {
+            session_id: "fixture-session".to_string(),
+            seq: 1,
+            tool_use_id: Some("fixture-old-pending-denial".to_string()),
+            tool_name: "Bash".to_string(),
+            tool_input: json!({"command": "echo fixture"}),
+            reason: Some("Fixture denial".to_string()),
+            created_at: old_created_at,
+            resolved_at: None,
+        };
+        let full_marked_ids = Arc::new(Mutex::new(Vec::new()));
+        let tail_marked_ids = Arc::new(Mutex::new(Vec::new()));
+        let make_router = |marked_ids: Arc<Mutex<Vec<i64>>>, transcript_path: &Path| {
+            let mut session = base_session.clone();
+            session.transcript_path = Some(transcript_path.to_path_buf());
+            let queued = queued.clone();
+            let pending_decision = pending_decision.clone();
+            let pending_proposal = pending_proposal.clone();
+            let pending_todo = pending_todo.clone();
+            let pending_denial = pending_denial.clone();
+            let loaders = RouteLoaders::new(
+                move |_| Ok(vec![pending_decision.clone()]),
+                move |_| Ok(vec![queued.clone()]),
+                |_| Ok(Vec::new()),
+                move |_, ids| {
+                    marked_ids.lock().unwrap().extend_from_slice(ids);
+                    Ok(())
+                },
+                move |_| Ok(vec![pending_proposal.clone()]),
+            )
+            .with_todo_loader(move |_| Ok(vec![pending_todo.clone()]))
+            .with_permission_denied_loader(move |_| Ok(vec![pending_denial.clone()]));
+            routes_with_proposals_and_peer_out_messages(
+                move |_| Ok(Some(session.clone())),
+                |_| Ok(Some("⟦armyknife-user:fixture-marker-cobalt⟧".to_string())),
+                loaders,
+            )
+        };
+        let full_router = make_router(Arc::clone(&full_marked_ids), &compressed_path);
+        let tail_router = make_router(Arc::clone(&tail_marked_ids), &transcript_path);
+        let full_initial = message_response_with_query(&full_router, "?limit=100").await;
+        let tail_initial = message_response_with_query(&tail_router, "?limit=100").await;
+        let mut full_responses = vec![full_initial];
+        let mut tail_responses = vec![tail_initial.clone()];
+        let epoch = tail_initial.2["epoch"].as_str().unwrap().to_owned();
+        let older_cursor = tail_initial.2["olderCursor"].as_str().unwrap();
+        let start = tail_initial.2["start"].as_u64().unwrap();
+        let mut refresh_query = format!("?from={start}&epoch={epoch}&olderCursor={older_cursor}");
+        if let (Some(stable_start), Some(stable_end), Some(stable_digest)) = (
+            tail_initial.2["stableStart"].as_u64(),
+            tail_initial.2["stableEnd"].as_u64(),
+            tail_initial.2["stableDigest"].as_str(),
+        ) {
+            refresh_query.push_str(&format!(
+                "&stableStart={stable_start}&stableEnd={stable_end}&stableDigest={stable_digest}"
+            ));
+        }
+        let last_record = records.last_mut().unwrap();
+        let last_uuid = last_record["uuid"].as_str().unwrap().to_owned();
+        last_record["message"]["content"] = json!("Updated active fixture request.");
+        records.push(json!({
+            "type": "user",
+            "uuid": "fixture-appended-request",
+            "parentUuid": last_uuid,
+            "timestamp": "2026-01-01T00:00:02Z",
+            "message": {"content": "Appended active fixture request."},
+        }));
+        let updated_transcript = records
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&transcript_path, &updated_transcript).unwrap();
+        std::fs::write(
+            &compressed_path,
+            zstd::stream::encode_all(updated_transcript.as_bytes(), 0).unwrap(),
+        )
+        .unwrap();
+
+        full_responses.push(message_response_with_query(&full_router, &refresh_query).await);
+        tail_responses.push(message_response_with_query(&tail_router, &refresh_query).await);
+        let refreshed_epoch = tail_responses[1].2["epoch"].as_str().map(str::to_owned);
+        let refresh_reset = tail_responses[1].2["epochReset"].as_bool().unwrap_or(false);
+        let refreshed_user_messages = tail_responses[1].2["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|message| message["type"] == "user")
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .take(2)
+            .rev()
+            .map(|message| message["text"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+
+        let older_query = format!("?limit=100&epoch={epoch}&olderCursor={older_cursor}");
+        full_responses.push(message_response_with_query(&full_router, &older_query).await);
+        tail_responses.push(message_response_with_query(&tail_router, &older_query).await);
+        let older_reset = tail_responses[2].2["epochReset"].as_bool().unwrap_or(false);
+        let older_message_count = tail_responses[2].2["messages"].as_array().map(Vec::len);
+        let full_marked_ids = full_marked_ids.lock().unwrap().clone();
+        let tail_marked_ids = tail_marked_ids.lock().unwrap().clone();
+        assert_eq!(
+            (
+                full_responses,
+                tail_responses.clone(),
+                full_marked_ids.clone(),
+                tail_marked_ids,
+                refreshed_epoch,
+                refresh_reset,
+                older_reset,
+                refreshed_user_messages,
+                older_message_count,
+            ),
+            (
+                tail_responses.clone(),
+                tail_responses.clone(),
+                full_marked_ids.clone(),
+                full_marked_ids,
+                Some(epoch),
+                false,
+                false,
+                vec![
+                    "Updated active fixture request.".to_owned(),
+                    "Appended active fixture request.".to_owned(),
+                ],
+                Some(100),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn epoch_request_resets_when_its_anchor_is_missing() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        let mut records = Vec::new();
+        let mut parent_uuid = None;
+        for index in 0..120 {
+            let uuid = format!("fixture-message-{index}");
+            records.push(json!({
+                "type": "user",
+                "uuid": uuid,
+                "parentUuid": parent_uuid,
+                "timestamp": "2026-01-01T00:00:01Z",
+                "message": {"content": format!("Old fixture message {index}.")},
+            }));
+            parent_uuid = Some(uuid);
+        }
+        let transcript = records
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&transcript_path, transcript).unwrap();
+
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path.clone());
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+            move |_| Ok(Some(session.clone())),
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+        );
+        let initial_response = message_response_with_query(&router, "?limit=100").await;
+        let stale_epoch = initial_response.2["epoch"].as_str().unwrap().to_owned();
+
+        let replacement_record = json!({
+            "type": "user",
+            "uuid": "fixture-replacement-root",
+            "parentUuid": null,
+            "timestamp": "2026-01-02T00:00:01Z",
+            "message": {"content": "Replacement fixture message."},
+        });
+        std::fs::write(&transcript_path, replacement_record.to_string()).unwrap();
+        let stale_response = message_response_with_query(
+            &router,
+            &format!("?from=0&epoch={stale_epoch}&olderCursor={stale_epoch}"),
+        )
+        .await;
+        let mut expected_response = message_response_with_query(&router, "?limit=100").await;
+        expected_response.2["epochReset"] = json!(true);
+
+        assert_eq!(stale_response, expected_response);
     }
 
     #[tokio::test]

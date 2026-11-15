@@ -351,6 +351,8 @@ export function ConversationPane({
       sessions={sessions}
       messages={messages}
       start={conversation.start}
+      epoch={conversation.epoch}
+      olderCursor={conversation.olderCursor}
       decisions={displayedConversation.decisions}
       hasUnansweredProposal={displayedConversation.hasUnansweredProposal}
       loadingOlder={loadingOlder}

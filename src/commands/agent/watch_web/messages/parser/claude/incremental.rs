@@ -1,14 +1,16 @@
-use std::io::{self, BufRead, Seek, SeekFrom};
+use std::io::{self, BufRead, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-
-use chrono::{DateTime, Utc};
-use serde_json::Value;
 
 use super::super::super::parser::jsonl::JsonlLineBuffer;
 use super::state::{ClaudeParserState, is_attachment_record, record_parent_uuid};
 use super::transcript_branch::{BranchMembership, TranscriptNode, mark_active_branch};
 use super::user_input::is_tool_result_only_user_record;
 use super::{ParsedTranscript, ParserAdditions};
+use chrono::{DateTime, Utc};
+use serde_json::Value;
+
+mod tail_window;
+mod window;
 
 #[derive(Clone)]
 pub(in crate::commands::agent::watch_web::messages) struct IncrementalClaudeParser {
@@ -16,6 +18,8 @@ pub(in crate::commands::agent::watch_web::messages) struct IncrementalClaudePars
     lines: JsonlLineBuffer,
     image_directory: Option<PathBuf>,
     pending_is_initial: bool,
+    tail_window_start: Option<DateTime<Utc>>,
+    tail_window_start_offset: Option<u64>,
 }
 
 impl IncrementalClaudeParser {
@@ -101,7 +105,52 @@ impl IncrementalClaudeParser {
             lines: graph_lines,
             image_directory: image_directory.map(Path::to_path_buf),
             pending_is_initial: true,
+            tail_window_start: None,
+            tail_window_start_offset: None,
         })
+    }
+
+    pub(in crate::commands::agent::watch_web::messages) fn new_tail_window(
+        reader: impl BufRead + Seek,
+        image_directory: Option<&Path>,
+        message_limit: usize,
+        pending_task_ids: &[String],
+    ) -> io::Result<Option<Self>> {
+        window::new_tail_window(reader, image_directory, message_limit, pending_task_ids)
+    }
+
+    pub(in crate::commands::agent::watch_web::messages) fn tail_window_start(
+        &self,
+    ) -> Option<DateTime<Utc>> {
+        self.tail_window_start
+    }
+
+    pub(in crate::commands::agent::watch_web::messages) fn tail_window_start_offset(
+        &self,
+    ) -> Option<u64> {
+        self.tail_window_start_offset
+    }
+
+    pub(in crate::commands::agent::watch_web::messages) fn resolve_queued_prompt_ids_before_window(
+        &self,
+        reader: &mut (impl Read + Seek),
+        prefix_length: u64,
+        queued_prompts: &[crate::commands::agent::store::WatchWebQueuedPrompt],
+        user_marker: Option<&str>,
+    ) -> io::Result<Option<Vec<i64>>> {
+        const MAX_PREFIX_SEARCH_BYTES: u64 = 256 * 1024 * 1024;
+
+        if prefix_length > MAX_PREFIX_SEARCH_BYTES {
+            return Ok(None);
+        }
+        let (resolved_ids, complete) = tail_window::find_queued_prompt_deliveries(
+            reader,
+            prefix_length,
+            queued_prompts,
+            user_marker,
+            &self.state.transcript_nodes,
+        )?;
+        Ok(complete.then_some(resolved_ids))
     }
 
     pub(in crate::commands::agent::watch_web::messages) fn append_bytes(
@@ -223,17 +272,6 @@ fn ingest_record(
     true
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::commands::agent::watch_web::messages) enum IncrementalAppend {
-    Applied,
-    RestartRequired,
-}
-
-fn parse_record(line: &[u8]) -> Option<Value> {
-    let line = std::str::from_utf8(line).ok()?;
-    serde_json::from_str(line).ok()
-}
-
 fn is_active_branch_continuation(state: &ClaudeParserState, record: &Value) -> bool {
     let Some(uuid) = record.get("uuid").and_then(Value::as_str) else {
         return true;
@@ -271,6 +309,17 @@ fn is_active_branch_continuation(state: &ClaudeParserState, record: &Value) -> b
             || state.tool_result_parent.as_deref() == Some(parent_uuid.as_str());
     }
     parent_is_latest
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::commands::agent::watch_web::messages) enum IncrementalAppend {
+    Applied,
+    RestartRequired,
+}
+
+fn parse_record(line: &[u8]) -> Option<Value> {
+    let line = std::str::from_utf8(line).ok()?;
+    serde_json::from_str(line).ok()
 }
 
 #[cfg(test)]
