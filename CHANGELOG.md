@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.730](https://github.com/fohte/armyknife/compare/v0.1.729...v0.1.730) (2026-11-15)
+
+
+### Bug Fixes
+
+* **agent:** prompt web UI registration at startup ([#1842](https://github.com/fohte/armyknife/issues/1842)) ([2334a66](https://github.com/fohte/armyknife/commit/2334a6668ae3533950592281b0383fcb030d2788))
+
 ## [0.1.729](https://github.com/fohte/armyknife/compare/v0.1.728...v0.1.729) (2026-11-15)
 
 
