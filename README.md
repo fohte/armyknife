@@ -488,15 +488,18 @@ Push draft replies and resolve actions from the local Markdown file to GitHub.
 a gh pr-review reply push <pr-number> [options]
 ```
 
-| Option              | Description                      |
-| ------------------- | -------------------------------- |
-| `-R, --repo <REPO>` | Target repository (owner/repo)   |
-| `--dry-run`         | Preview changes without applying |
-| `--force`           | Force push even with conflicts   |
+| Option              | Description                                                                         |
+| ------------------- | ----------------------------------------------------------------------------------- |
+| `-R, --repo <REPO>` | Target repository (owner/repo)                                                      |
+| `--dry-run`         | Preview changes without applying                                                    |
+| `--force`           | Force push even with conflicts                                                      |
+| `--no-review`       | Skip editor approval when vibe mode is enabled and the target repository is allowed |
 
 New comments since pull conflict only on threads with a draft reply or resolve
 action; `--force` overrides the conflict. Approval (`submit: true`) is required
 only when changes are applied, so `--dry-run` and no-change pushes skip approval.
+`--no-review` skips editor approval when vibe mode is enabled and the target
+repository is allowed.
 
 ##### `a gh pr-review reply review`
 

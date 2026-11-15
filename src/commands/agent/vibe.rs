@@ -57,6 +57,18 @@ pub(crate) fn ensure_repo_vibe_access(config: &Config, owner: &str, repo: &str) 
     Ok(())
 }
 
+pub(crate) fn ensure_no_review_access(
+    vibe_enabled: impl FnOnce() -> Result<bool>,
+    load_config: impl FnOnce() -> Result<Config>,
+    owner: &str,
+    repo: &str,
+) -> Result<()> {
+    if !vibe_enabled()? {
+        bail!("The --no-review option is only available when vibe mode is enabled.");
+    }
+    ensure_repo_vibe_access(&load_config()?, owner, repo)
+}
+
 fn is_vibe_enabled_for(sessions_dir: &std::path::Path, session_id: &str) -> Result<bool> {
     let Some(session) = store::load_session_from(sessions_dir, session_id)? else {
         return Ok(false);
