@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.720](https://github.com/fohte/armyknife/compare/v0.1.719...v0.1.720) (2026-11-15)
+
+
+### Bug Fixes
+
+* **watch-web:** keep cards in the conversation ([#1822](https://github.com/fohte/armyknife/issues/1822)) ([fd29386](https://github.com/fohte/armyknife/commit/fd293868ef7f09613ffb9db0aed4403c66f491a6))
+
 ## [0.1.719](https://github.com/fohte/armyknife/compare/v0.1.718...v0.1.719) (2026-11-15)
 
 
