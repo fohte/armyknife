@@ -345,6 +345,16 @@ mod tests {
             AgentTodo {
                 session_id: "fixture-session".to_string(),
                 seq: 2,
+                title: "An old completed todo".to_string(),
+                detail: None,
+                created_at: timestamp("2026-06-01T11:59:58Z"),
+                completed_at: Some(timestamp("2026-06-01T11:59:59Z")),
+                resolution: Some(TodoResolution::Completed),
+                comment: None,
+            },
+            AgentTodo {
+                session_id: "fixture-session".to_string(),
+                seq: 3,
                 title: "A recent completed todo".to_string(),
                 detail: None,
                 created_at: timestamp("2026-06-01T12:00:00Z"),
@@ -362,7 +372,7 @@ mod tests {
             ),
             (
                 vec![decisions[1].clone()],
-                vec![todos[0].clone(), todos[1].clone()],
+                vec![todos[0].clone(), todos[2].clone()],
             ),
         );
     }
