@@ -1,10 +1,11 @@
-use std::path::Path;
+use std::path::PathBuf;
 
 use clap::Subcommand;
 
 use crate::infra::git;
 use crate::infra::github::{GitHubClient, RepoClient};
 use crate::shared::config;
+use crate::shared::repo_language::resolve_repo_language;
 
 /// Configuration management commands.
 #[derive(Subcommand, Clone, PartialEq, Eq)]
@@ -38,26 +39,26 @@ async fn run_get(key: &str) -> anyhow::Result<()> {
 
     let configured_value = cfg.get_value(key, repo_id.as_deref());
     if key == "repo.language" {
-        let copier_value = if configured_value.is_none() {
-            git::open_repo()
-                .ok()
-                .and_then(|repo| read_copier_repo_language(repo.workdir()))
+        let copier_answers_path = if configured_value.is_none() {
+            copier_answers_path_for_current_repo(repo_id.as_deref())
         } else {
             None
         };
-        let is_private = if configured_value.is_none() && copier_value.is_none() {
-            // Stay silent when there is no repo context — there is nothing to
-            // default to without an owner/repo.
-            if let Some((owner, repo)) = repo_id.as_deref().and_then(|id| id.split_once('/')) {
+        let value =
+            resolve_repo_language(configured_value, copier_answers_path.as_deref(), || async {
+                // Stay silent when there is no repo context — there is nothing to
+                // default to without an owner/repo.
+                let Some((owner, repo)) = repo_id.as_deref().and_then(|id| id.split_once('/'))
+                else {
+                    return Ok(None);
+                };
                 let client = GitHubClient::get()?;
-                Some(client.is_repo_private(owner, repo).await.unwrap_or(true))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        if let Some(value) = resolve_repo_language(configured_value, copier_value, is_private) {
+                Ok(Some(
+                    client.is_repo_private(owner, repo).await.unwrap_or(true),
+                ))
+            })
+            .await?;
+        if let Some(value) = value {
             print!("{}", format_value(&value)?);
         }
     } else if let Some(value) = configured_value {
@@ -68,28 +69,17 @@ async fn run_get(key: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn read_copier_repo_language(repo_root: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(repo_root.join(".copier-answers.yml")).ok()?;
-    let answers: serde_yaml::Value = serde_yaml::from_str(&content).ok()?;
-    answers
-        .get("repo_language")?
-        .as_str()
-        .filter(|value| !value.trim().is_empty())
-        .map(str::to_owned)
-}
-
-fn resolve_repo_language(
-    configured: Option<serde_json::Value>,
-    copier: Option<String>,
-    is_private: Option<bool>,
-) -> Option<serde_json::Value> {
-    configured
-        .or_else(|| copier.map(serde_json::Value::String))
-        .or_else(|| {
-            is_private.map(|is_private| {
-                serde_json::Value::String(if is_private { "ja" } else { "en" }.to_owned())
-            })
-        })
+pub(crate) fn copier_answers_path_for_current_repo(
+    expected_repo_id: Option<&str>,
+) -> Option<PathBuf> {
+    let repo = git::open_repo().ok()?;
+    if let Some(expected_repo_id) = expected_repo_id {
+        let (owner, name) = git::github_owner_and_repo(&repo).ok()?;
+        if format!("{owner}/{name}") != expected_repo_id {
+            return None;
+        }
+    }
+    Some(repo.workdir().join(".copier-answers.yml"))
 }
 
 /// Format a resolved config value for stdout. Scalars render bare (preserving
@@ -108,11 +98,10 @@ fn format_value(value: &serde_json::Value) -> anyhow::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_value, read_copier_repo_language, resolve_repo_language};
+    use super::format_value;
     use crate::shared::config::Config;
     use indoc::indoc;
     use rstest::{fixture, rstest};
-    use std::fs;
 
     #[rstest]
     fn get_value_agent_profile_renders_selected_profile_as_yaml(agent_profiles_config: Config) {
@@ -498,56 +487,5 @@ mod tests {
     #[test]
     fn get_value_repo_vibe_requires_repository_context() {
         assert_eq!(Config::default().get_value("repo.vibe", None), None,);
-    }
-
-    #[rstest]
-    #[case::config_overrides_copier_and_visibility(
-        Some(serde_json::json!("fr")),
-        Some("ja".to_owned()),
-        Some(false),
-        Some(serde_json::json!("fr")),
-    )]
-    #[case::copier_overrides_visibility(
-        None,
-        Some("ja".to_owned()),
-        Some(false),
-        Some(serde_json::json!("ja")),
-    )]
-    #[case::private_repo_fallback(None, None, Some(true), Some(serde_json::json!("ja")))]
-    #[case::public_repo_fallback(None, None, Some(false), Some(serde_json::json!("en")))]
-    #[case::no_repository_context(None, None, None, None)]
-    fn resolve_repo_language_uses_config_then_copier_then_visibility(
-        #[case] configured: Option<serde_json::Value>,
-        #[case] copier: Option<String>,
-        #[case] is_private: Option<bool>,
-        #[case] expected: Option<serde_json::Value>,
-    ) {
-        assert_eq!(
-            resolve_repo_language(configured, copier, is_private),
-            expected
-        );
-    }
-
-    #[rstest]
-    #[case::missing_file(None, None)]
-    #[case::missing_key(Some("project_name: sample-project\n"), None)]
-    #[case::repo_language(Some(indoc! {"
-        repo_language: ja
-    "}), Some("ja"))]
-    #[case::empty_value(Some("repo_language: \"\"\n"), None)]
-    #[case::non_string_value(Some("repo_language: [ja]\n"), None)]
-    fn read_copier_repo_language_reads_string_value(
-        #[case] content: Option<&str>,
-        #[case] expected: Option<&str>,
-    ) {
-        let temp_dir = tempfile::tempdir().unwrap();
-        if let Some(content) = content {
-            fs::write(temp_dir.path().join(".copier-answers.yml"), content).unwrap();
-        }
-
-        assert_eq!(
-            read_copier_repo_language(temp_dir.path()).as_deref(),
-            expected
-        );
     }
 }

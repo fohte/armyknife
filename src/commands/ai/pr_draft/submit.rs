@@ -256,8 +256,8 @@ async fn run_impl(
         return Err(PrDraftError::EmptyTitle.into());
     }
 
-    // For public repos without Japanese language config, check for Japanese characters
-    let allows_japanese = is_private || repo_allows_japanese(&target.owner, &target.repo);
+    // Reject Japanese content when the effective repository language is not Japanese.
+    let allows_japanese = repo_allows_japanese(&target.owner, &target.repo, is_private).await?;
     if !allows_japanese {
         if contains_japanese(&draft.frontmatter.title) {
             return Err(PrDraftError::JapaneseInTitle.into());

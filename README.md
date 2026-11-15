@@ -1325,7 +1325,7 @@ Configuration management.
 
 Get a configuration value by dot-separated key. Supports any config field (e.g., `agent.worktree.branch_prefix`, `editor.terminal`, `notification.sound`). Scalar leaves (string, bool, number) print as bare strings; maps and sequences (e.g., `orgs.<owner>`, `ai.review.reviewers`) print as YAML so the shape round-trips. If the key is missing, an error is printed to stderr and the process exits with status 1.
 
-For `repo.*` and `org.*` keys, the current directory's git remote is used to identify the repository. `repo.*` looks up `repos.<owner>/<repo>` and `org.*` looks up `orgs.<owner>`. `repo.language` falls back to `ja` for private repos and `en` for public repos when no explicit value is set.
+For `repo.*` and `org.*` keys, the current directory's git remote is used to identify the repository. `repo.*` looks up `repos.<owner>/<repo>` and `org.*` looks up `orgs.<owner>`. `repo.language` uses this precedence: the configured repository value, `repo_language` from `.copier-answers.yml` in the current worktree, then `ja` for private repos or `en` for public repos.
 
 `agent.profile` returns the map for `agent.active_profile`. `agent.profile.<path>` reads a dot-separated path from that selected profile, using the same scalar and YAML output formats. If no profile is selected, the selected profile is undefined, or the path is missing, the key lookup fails without a fallback. The profile name is used as a key in `agent.profiles`; it is not part of the alias path.
 
