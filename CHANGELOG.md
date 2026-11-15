@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.716](https://github.com/fohte/armyknife/compare/v0.1.715...v0.1.716) (2026-11-15)
+
+
+### Performance Improvements
+
+* **watch-web:** speed up conversation loading ([#1814](https://github.com/fohte/armyknife/issues/1814)) ([11b0bdb](https://github.com/fohte/armyknife/commit/11b0bdbd198af8957c664c7de87a4796ab54a309))
+
 ## [0.1.715](https://github.com/fohte/armyknife/compare/v0.1.714...v0.1.715) (2026-11-14)
 
 
