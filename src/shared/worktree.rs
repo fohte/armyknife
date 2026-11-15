@@ -16,6 +16,16 @@ pub struct DirtyWorktreeError {
     worktree_path: PathBuf,
 }
 
+impl DirtyWorktreeError {
+    pub(crate) fn new(worktree_path: PathBuf) -> Self {
+        Self { worktree_path }
+    }
+
+    pub(crate) fn worktree_path(&self) -> &std::path::Path {
+        &self.worktree_path
+    }
+}
+
 /// Refuses deletion when a worktree contains changes that would be discarded.
 pub fn ensure_clean_for_deletion(
     worktree_path: &std::path::Path,
@@ -36,10 +46,7 @@ fn ensure_clean_for_deletion_with(
     }
 
     if !status(worktree_path)?.is_empty() {
-        return Err(DirtyWorktreeError {
-            worktree_path: worktree_path.to_path_buf(),
-        }
-        .into());
+        return Err(DirtyWorktreeError::new(worktree_path.to_path_buf()).into());
     }
 
     Ok(())

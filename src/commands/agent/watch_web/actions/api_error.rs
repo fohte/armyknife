@@ -67,6 +67,19 @@ impl ApiError {
             return Self::internal(error);
         }
 
+        if let Some(dirty_worktree) =
+            error.downcast_ref::<crate::shared::worktree::DirtyWorktreeError>()
+        {
+            return Self {
+                status: StatusCode::CONFLICT,
+                message: format!(
+                    "Worktree contains uncommitted changes or untracked files: {}; commit or move them before closing",
+                    dirty_worktree.worktree_path().display(),
+                ),
+                code: Some("dirty_worktree"),
+            };
+        }
+
         let code = error
             .downcast_ref::<crate::shared::worktree_delete::UnmergedWorktreeError>()
             .map(|_| "unmerged_worktree");
@@ -106,6 +119,24 @@ mod tests {
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "the session closed, but its lifecycle storage cleanup failed; retry Close when storage is available: database unavailable".to_string(),
                 None,
+            ),
+        );
+    }
+
+    #[test]
+    fn close_dirty_worktree_errors_have_a_code_and_no_unavailable_force_option() {
+        let error = ApiError::close(anyhow::Error::new(
+            crate::shared::worktree::DirtyWorktreeError::new(std::path::PathBuf::from(
+                "/worktrees/dirty",
+            )),
+        ));
+
+        assert_eq!(
+            (error.status, error.message, error.code),
+            (
+                StatusCode::CONFLICT,
+                "Worktree contains uncommitted changes or untracked files: /worktrees/dirty; commit or move them before closing".to_string(),
+                Some("dirty_worktree"),
             ),
         );
     }

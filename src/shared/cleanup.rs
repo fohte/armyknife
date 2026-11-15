@@ -989,6 +989,57 @@ mod tests {
         assert!(!list.contains("/.worktrees/cleanup-test"));
     }
 
+    #[rstest]
+    #[case::untracked_without_force(false, false, (false, true, true, true))]
+    #[case::untracked_with_force(false, true, (true, false, false, false))]
+    #[case::tracked_without_force(true, false, (false, true, true, true))]
+    #[case::tracked_with_force(true, true, (true, false, false, false))]
+    fn deletion_checks_real_git_status_before_removing_dirty_worktrees(
+        #[case] tracked: bool,
+        #[case] force: bool,
+        #[case] expected: (bool, bool, bool, bool),
+    ) {
+        let test_repo = TestRepo::new();
+        if tracked {
+            test_repo.commit_file("tracked.txt", "original");
+        }
+        test_repo.create_worktree("dirty-worktree");
+
+        let worktree_path = test_repo.worktree_path("dirty-worktree");
+        let dirty_file = if tracked {
+            worktree_path.join("tracked.txt")
+        } else {
+            worktree_path.join("untracked.txt")
+        };
+        std::fs::write(&dirty_file, "changed").expect("write dirty worktree file");
+
+        let repo = test_repo.open();
+        if !tracked {
+            crate::infra::git::cmd::run_git(
+                repo.workdir(),
+                ["config", "status.showUntrackedFiles", "no"],
+            )
+            .expect("configure git to hide untracked files by default");
+        }
+
+        let result = delete_worktree_and_branch(&repo, "dirty-worktree", &worktree_path, force);
+        let observed = (
+            result.as_ref().is_ok_and(|result| result.worktree_deleted),
+            result.as_ref().err().is_some_and(|error| {
+                error
+                    .downcast_ref::<crate::shared::worktree::DirtyWorktreeError>()
+                    .is_some()
+            }),
+            worktree_path.is_dir(),
+            crate::shared::worktree::list_linked_worktrees(&repo)
+                .expect("list worktrees")
+                .iter()
+                .any(|worktree| worktree.name == "dirty-worktree"),
+        );
+
+        assert_eq!(observed, expected);
+    }
+
     #[test]
     fn delete_worktree_and_branch_returns_false_for_nonexistent() {
         let test_repo = TestRepo::new();
