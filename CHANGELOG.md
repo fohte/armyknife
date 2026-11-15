@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.734](https://github.com/fohte/armyknife/compare/v0.1.733...v0.1.734) (2026-11-15)
+
+
+### Bug Fixes
+
+* **config:** honor Copier repository language ([#1844](https://github.com/fohte/armyknife/issues/1844)) ([5c324db](https://github.com/fohte/armyknife/commit/5c324db527113f2cb80743a4efeb5037960ef276))
+
 ## [0.1.733](https://github.com/fohte/armyknife/compare/v0.1.732...v0.1.733) (2026-11-15)
 
 
