@@ -9,8 +9,10 @@ use super::markdown::serializer::{PreservedThreadActions, SerializeOptions, Thre
 use super::markdown::{MarkdownParser, MarkdownSerializer};
 use super::models::PrData;
 use super::storage::ThreadStorage;
+use crate::commands::agent::{ensure_repo_vibe_access, is_vibe_enabled};
 use crate::infra::git;
 use crate::infra::github::GitHubClient;
+use crate::shared::config::{Config, load_config};
 use crate::shared::human_in_the_loop::Document;
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -51,6 +53,10 @@ pub struct ReplyPushArgs {
     /// Force push even with conflicts
     #[arg(long = "force")]
     pub force: bool,
+
+    /// Skip editor approval when vibe mode and the target repository are allowed
+    #[arg(long)]
+    pub no_review: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,6 +82,30 @@ fn verify_push_approval(path: &std::path::Path, content: &str) -> anyhow::Result
         .approval_manager()
         .verify_content_matches_file(content.as_bytes())?;
     Ok(())
+}
+
+fn verify_push_approval_if_required(
+    path: &std::path::Path,
+    content: &str,
+    no_review: bool,
+) -> anyhow::Result<()> {
+    if no_review {
+        return Ok(());
+    }
+
+    verify_push_approval(path, content)
+}
+
+fn ensure_no_review_access(
+    vibe_enabled: impl FnOnce() -> anyhow::Result<bool>,
+    load_config: impl FnOnce() -> anyhow::Result<Config>,
+    owner: &str,
+    repo: &str,
+) -> anyhow::Result<()> {
+    if !vibe_enabled()? {
+        anyhow::bail!("The --no-review option is only available when vibe mode is enabled.");
+    }
+    ensure_repo_vibe_access(&load_config()?, owner, repo)
 }
 
 pub async fn run_pull(args: &ReplyPullArgs) -> anyhow::Result<()> {
@@ -234,6 +264,10 @@ fn prepare_existing_thread_actions(
 pub async fn run_push(args: &ReplyPushArgs) -> anyhow::Result<()> {
     let (owner, repo) = git::get_repo_owner_and_name(args.repo.as_deref())?;
 
+    if args.no_review {
+        ensure_no_review_access(is_vibe_enabled, load_config, &owner, &repo)?;
+    }
+
     let storage = ThreadStorage::new(&owner, &repo, args.pr_number);
 
     // Read and parse local data
@@ -272,7 +306,7 @@ pub async fn run_push(args: &ReplyPushArgs) -> anyhow::Result<()> {
         PushPlan::Apply => {
             changeset.display();
             let client = GitHubClient::get()?;
-            verify_push_approval(&storage.threads_path(), &content)?;
+            verify_push_approval_if_required(&storage.threads_path(), &content, args.no_review)?;
             changeset
                 .apply(client, &owner, &repo, args.pr_number)
                 .await?;
@@ -474,8 +508,11 @@ mod pull_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::gh::GhCommands;
     use crate::commands::gh::pr_review::changeset::ReplyAction;
+    use crate::commands::gh::pr_review::{PrReviewCommands, ReplyCommands};
     use crate::shared::human_in_the_loop::HumanInTheLoopError;
+    use clap::Parser;
     use indoc::indoc;
     use rstest::rstest;
     use tempfile::TempDir;
@@ -503,6 +540,102 @@ mod tests {
         };
 
         assert_eq!(push_plan(&changeset, dry_run), expected_plan);
+    }
+
+    #[test]
+    fn push_parses_no_review_flag() {
+        let parsed = crate::cli::Cli::try_parse_from([
+            "a",
+            "gh",
+            "pr-review",
+            "reply",
+            "push",
+            "42",
+            "--no-review",
+        ])
+        .expect("--no-review should be a valid push option");
+
+        assert!(
+            parsed.command
+                == crate::cli::Commands::Gh(GhCommands::PrReview {
+                    command: PrReviewCommands::Reply {
+                        command: ReplyCommands::Push(ReplyPushArgs {
+                            pr_number: 42,
+                            repo: None,
+                            dry_run: false,
+                            force: false,
+                            no_review: true,
+                        }),
+                    },
+                }),
+        );
+    }
+
+    #[rstest]
+    #[case::vibe_and_repo_allowed(
+        true,
+        indoc! {"
+            orgs:
+              example-org:
+                vibe: true
+        "},
+        Ok(())
+    )]
+    #[case::vibe_disabled(
+        false,
+        indoc! {"
+            orgs:
+              example-org:
+                vibe: true
+        "},
+        Err("The --no-review option is only available when vibe mode is enabled.".to_string())
+    )]
+    #[case::repo_access_denied(
+        true,
+        "{}",
+        Err("Vibe mode is disabled by configuration for repository example-org/example-repo.".to_string())
+    )]
+    fn no_review_requires_vibe_and_repo_access(
+        #[case] vibe_enabled: bool,
+        #[case] config_yaml: &str,
+        #[case] expected: Result<(), String>,
+    ) {
+        let config: Config = serde_yaml::from_str(config_yaml).unwrap();
+
+        let result = ensure_no_review_access(
+            || Ok(vibe_enabled),
+            || Ok(config),
+            "example-org",
+            "example-repo",
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    #[case::approval_still_required(false, false)]
+    #[case::approval_skipped_for_no_review(true, true)]
+    fn push_approval_is_skipped_only_for_no_review(
+        #[case] no_review: bool,
+        #[case] expected_success: bool,
+    ) {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("threads.md");
+        let content = indoc! {"
+            ---
+            pr: 1
+            repo: example/repo
+            pulled_at: '2024-01-15T10:00:00Z'
+            submit: false
+            ---
+            Draft reply"};
+        std::fs::write(&path, content).unwrap();
+
+        assert_eq!(
+            verify_push_approval_if_required(&path, content, no_review).is_ok(),
+            expected_success,
+        );
     }
 
     #[rstest]
