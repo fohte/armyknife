@@ -506,8 +506,11 @@ mod tests {
     struct FakePrMergeClient {
         snapshots: RefCell<VecDeque<PrSnapshot>>,
         events: Rc<RefCell<Vec<String>>>,
+        base_check_calls: RefCell<Vec<(String, bool)>>,
+        merge_commit_check_calls: RefCell<Vec<(String, Option<String>)>>,
         checks_error: bool,
         base_checks_error: bool,
+        base_checks_fail_on_second: bool,
         merge_commit_checks_error: bool,
         merge_error: bool,
         fallback_error: Option<AsyncMergeFallback>,
@@ -576,10 +579,17 @@ mod tests {
             &self,
             _owner: &str,
             _repo: &str,
-            _branch: &str,
+            branch: &str,
             allow_failures: bool,
         ) -> anyhow::Result<()> {
-            if self.base_checks_error && !allow_failures {
+            self.base_check_calls
+                .borrow_mut()
+                .push((branch.to_string(), allow_failures));
+            let is_second_check = self.base_check_calls.borrow().len() == 2;
+            if self.base_checks_error
+                && !allow_failures
+                && (!self.base_checks_fail_on_second || is_second_check)
+            {
                 anyhow::bail!("fake base branch checks failed");
             }
             Ok(())
@@ -589,9 +599,12 @@ mod tests {
             &self,
             _owner: &str,
             _repo: &str,
-            _branch: &str,
-            _merge_sha: Option<&str>,
+            branch: &str,
+            merge_sha: Option<&str>,
         ) -> anyhow::Result<()> {
+            self.merge_commit_check_calls
+                .borrow_mut()
+                .push((branch.to_string(), merge_sha.map(str::to_string)));
             if self.merge_commit_checks_error {
                 anyhow::bail!("fake merge commit checks failed");
             }
@@ -668,8 +681,11 @@ mod tests {
         FakePrMergeClient {
             snapshots: RefCell::new(snapshots.iter().cloned().collect()),
             events,
+            base_check_calls: RefCell::new(Vec::new()),
+            merge_commit_check_calls: RefCell::new(Vec::new()),
             checks_error,
             base_checks_error: false,
+            base_checks_fail_on_second: false,
             merge_commit_checks_error: false,
             merge_error,
             fallback_error: None,
@@ -718,11 +734,63 @@ mod tests {
         .map_err(|error| format!("{error:#}"));
 
         assert_eq!(
-            (result, hook_called, events.borrow().clone()),
+            (
+                result,
+                hook_called,
+                events.borrow().clone(),
+                client.base_check_calls.borrow().clone(),
+            ),
             (
                 Err("Cannot merge PR #42 while required checks on base branch `main` are failing: fake base branch checks failed".to_string()),
                 false,
                 vec!["view".to_string()],
+                vec![("main".to_string(), false)],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn run_merge_rechecks_the_base_before_merging(events: Rc<RefCell<Vec<String>>>) {
+        let mut client = fake_client(
+            &[
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+            ],
+            Rc::clone(&events),
+            false,
+            false,
+        );
+        client.base_checks_error = true;
+        client.base_checks_fail_on_second = true;
+
+        let result = merge_flow::run_merge_with_options(
+            &client,
+            &mut |_| Ok(()),
+            "sample-org",
+            "sample-repo",
+            42,
+            None,
+            false,
+        )
+        .await
+        .map_err(|error| format!("{error:#}"));
+
+        assert_eq!(
+            (
+                result,
+                events.borrow().clone(),
+                client.base_check_calls.borrow().clone(),
+            ),
+            (
+                Err("Cannot merge PR #42 while required checks on base branch `main` are failing: fake base branch checks failed".to_string()),
+                vec![
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "checks".to_string(),
+                    "view".to_string(),
+                ],
+                vec![("main".to_string(), false), ("main".to_string(), false)],
             ),
         );
     }
@@ -757,7 +825,11 @@ mod tests {
         .map_err(|error| format!("{error:#}"));
 
         assert_eq!(
-            (result, events.borrow().clone()),
+            (
+                result,
+                events.borrow().clone(),
+                client.base_check_calls.borrow().clone(),
+            ),
             (
                 Ok(MergeOutcome::Merged(snapshot(
                     PrState::Merged,
@@ -772,6 +844,7 @@ mod tests {
                     "merge:head-a".to_string(),
                     "view".to_string(),
                 ],
+                vec![("main".to_string(), true), ("main".to_string(), true)],
             ),
         );
     }
@@ -792,6 +865,9 @@ mod tests {
             false,
         );
         client.merge_commit_checks_error = true;
+        client.merge_result = AsyncMergeResult::Merged {
+            sha: Some("merge-response".to_string()),
+        };
         let mut closed = false;
 
         let result = run_merge_and_close(
@@ -809,10 +885,15 @@ mod tests {
         .map_err(|error| format!("{error:#}"));
 
         assert_eq!(
-            (result, closed),
+            (
+                result,
+                closed,
+                client.merge_commit_check_calls.borrow().clone(),
+            ),
             (
                 Err("PR #42 was merged, but required checks on the merge commit failed: fake merge commit checks failed".to_string()),
                 true,
+                vec![("main".to_string(), Some("merge-response".to_string()))],
             ),
         );
     }

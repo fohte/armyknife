@@ -5,6 +5,26 @@ use serde::Deserialize;
 
 use crate::infra::{external_tool::ExternalTool, process};
 
+mod commit;
+
+pub(super) fn wait_for_base_branch_checks(
+    owner: &str,
+    repo: &str,
+    branch: &str,
+    allow_failures: bool,
+) -> anyhow::Result<()> {
+    commit::wait_for_base_branch_checks(owner, repo, branch, allow_failures)
+}
+
+pub(super) fn wait_for_merge_commit_checks(
+    owner: &str,
+    repo: &str,
+    branch: &str,
+    merge_sha: Option<&str>,
+) -> anyhow::Result<()> {
+    commit::wait_for_merge_commit_checks(owner, repo, branch, merge_sha)
+}
+
 const GH_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const CHECK_POLL_INTERVAL: Duration = Duration::from_secs(10);
 
@@ -82,183 +102,6 @@ fn query_required_check_status(
             ))
         }
     }
-}
-
-pub(super) fn wait_for_base_branch_checks(
-    owner: &str,
-    repo: &str,
-    branch: &str,
-    allow_failures: bool,
-) -> anyhow::Result<()> {
-    let required_contexts = fetch_required_status_check_contexts(owner, repo, branch)?;
-    if required_contexts.is_empty() {
-        return Ok(());
-    }
-
-    let sha = fetch_branch_tip_sha(owner, repo, branch)?;
-    println!("Checking required checks on base branch `{branch}` ({sha})...");
-    wait_for_commit_checks(
-        owner,
-        repo,
-        branch,
-        &sha,
-        &required_contexts,
-        allow_failures,
-    )
-}
-
-pub(super) fn wait_for_merge_commit_checks(
-    owner: &str,
-    repo: &str,
-    branch: &str,
-    merge_sha: Option<&str>,
-) -> anyhow::Result<()> {
-    let required_contexts = fetch_required_status_check_contexts(owner, repo, branch)?;
-    if required_contexts.is_empty() {
-        return Ok(());
-    }
-
-    let merge_sha = merge_sha.context("GitHub did not report the confirmed merge commit SHA")?;
-    println!("Waiting for required checks on merge commit {merge_sha}...");
-    wait_for_commit_checks(owner, repo, branch, merge_sha, &required_contexts, false)
-}
-
-fn wait_for_commit_checks(
-    owner: &str,
-    repo: &str,
-    branch: &str,
-    sha: &str,
-    required_contexts: &[String],
-    allow_failures: bool,
-) -> anyhow::Result<()> {
-    wait_until_complete(
-        || {
-            let checks = fetch_commit_checks(owner, repo, sha)?;
-            classify_required_commit_checks(&checks, required_contexts, allow_failures)
-        },
-        |details| {
-            println!(
-                "Required checks on `{branch}` are pending: {details}; retrying in 10 seconds..."
-            );
-            thread::sleep(CHECK_POLL_INTERVAL);
-        },
-    )
-}
-
-fn fetch_branch_tip_sha(owner: &str, repo: &str, branch: &str) -> anyhow::Result<String> {
-    let encoded_branch =
-        percent_encoding::utf8_percent_encode(branch, percent_encoding::NON_ALPHANUMERIC);
-    let args = [
-        "api".to_string(),
-        format!("repos/{owner}/{repo}/git/ref/heads/{encoded_branch}"),
-        "--jq".to_string(),
-        ".object.sha".to_string(),
-    ];
-    let output = run_gh(&args).context("Failed to get base branch tip SHA")?;
-    if !output.status.success() {
-        bail!(
-            "gh api failed to get base branch tip: {}",
-            command_output_text(&output)
-        );
-    }
-    String::from_utf8(output.stdout)
-        .context("GitHub returned a non-UTF-8 base branch SHA")
-        .map(|sha| sha.trim().to_string())
-}
-
-fn fetch_required_status_check_contexts(
-    owner: &str,
-    repo: &str,
-    branch: &str,
-) -> anyhow::Result<Vec<String>> {
-    let args = required_status_check_rules_args(owner, repo, branch);
-    let output = run_gh(&args).context("Failed to inspect required status check rules")?;
-    if !output.status.success() {
-        bail!(
-            "gh api failed to inspect branch rules: {}",
-            command_output_text(&output)
-        );
-    }
-    parse_required_status_check_contexts(&output.stdout)
-}
-
-fn fetch_commit_checks(owner: &str, repo: &str, sha: &str) -> anyhow::Result<Vec<GhCheck>> {
-    let check_run_args = [
-        "api".to_string(),
-        format!("repos/{owner}/{repo}/commits/{sha}/check-runs"),
-        "--paginate".to_string(),
-        "--slurp".to_string(),
-        "-F".to_string(),
-        "per_page=100".to_string(),
-        "-F".to_string(),
-        "filter=latest".to_string(),
-    ];
-    let output = run_gh(&check_run_args).context("Failed to inspect commit check runs")?;
-    if !output.status.success() {
-        bail!(
-            "gh api failed to inspect commit check runs: {}",
-            command_output_text(&output)
-        );
-    }
-    let pages = serde_json::from_slice::<Vec<CheckRunPage>>(&output.stdout)
-        .context("Failed to parse commit check runs")?;
-    let mut checks = pages
-        .into_iter()
-        .flat_map(|page| page.check_runs)
-        .map(GhCheck::from)
-        .collect::<Vec<_>>();
-
-    let status_args = [
-        "api".to_string(),
-        format!("repos/{owner}/{repo}/commits/{sha}/status"),
-    ];
-    let output = run_gh(&status_args).context("Failed to inspect commit statuses")?;
-    if !output.status.success() {
-        bail!(
-            "gh api failed to inspect commit statuses: {}",
-            command_output_text(&output)
-        );
-    }
-    let status = serde_json::from_slice::<CombinedCommitStatus>(&output.stdout)
-        .context("Failed to parse commit statuses")?;
-    checks.extend(status.statuses.into_iter().map(GhCheck::from));
-    Ok(checks)
-}
-
-fn classify_required_commit_checks(
-    checks: &[GhCheck],
-    required_contexts: &[String],
-    allow_failures: bool,
-) -> anyhow::Result<CheckWaitStatus> {
-    let required_checks = checks
-        .iter()
-        .filter(|check| {
-            required_contexts
-                .iter()
-                .any(|context| context == &check.name)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    if required_checks.is_empty() {
-        return Ok(CheckWaitStatus::Complete);
-    }
-
-    let mut failed = Vec::new();
-    let mut pending = Vec::new();
-    for check in required_checks {
-        if is_failed_check(&check) {
-            failed.push(check);
-        } else if check.bucket == CheckBucket::Pending {
-            pending.push(check);
-        }
-    }
-    if !failed.is_empty() && !allow_failures {
-        bail!("Required checks failed: {}", format_check_details(&failed));
-    }
-    if !pending.is_empty() {
-        return Ok(CheckWaitStatus::Pending(format_check_details(&pending)));
-    }
-    Ok(CheckWaitStatus::Complete)
 }
 
 fn status_for_missing_check_output(has_required_checks: bool, gh_output: &str) -> CheckWaitStatus {
@@ -339,7 +182,10 @@ fn command_output_text(output: &std::process::Output) -> String {
 fn has_required_checks(owner: &str, repo: &str, pr_number: u64) -> anyhow::Result<bool> {
     has_required_checks_with(
         || fetch_required_check_page(owner, repo, pr_number),
-        |branch| fetch_required_status_check_rules(owner, repo, branch),
+        |branch| {
+            fetch_required_status_check_rules(owner, repo, branch)
+                .map(|rules| has_required_status_rules(&rules))
+        },
     )
 }
 
@@ -441,7 +287,7 @@ fn fetch_required_status_check_rules(
     owner: &str,
     repo: &str,
     branch: &str,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<Vec<RequiredStatusCheckRule>> {
     let args = required_status_check_rules_args(owner, repo, branch);
 
     let output = run_gh(&args).context("Failed to inspect required status check rules")?;
@@ -451,7 +297,7 @@ fn fetch_required_status_check_rules(
             command_output_text(&output)
         );
     }
-    parse_required_status_check_rules(&output.stdout)
+    parse_required_status_check_rule_pages(&output.stdout)
 }
 
 fn required_status_check_rules_args(owner: &str, repo: &str, branch: &str) -> [String; 8] {
@@ -470,36 +316,49 @@ fn required_status_check_rules_args(owner: &str, repo: &str, branch: &str) -> [S
     ]
 }
 
+#[cfg(test)]
 fn parse_required_status_check_rules(response: &[u8]) -> anyhow::Result<bool> {
+    let rules = parse_required_status_check_rule_pages(response)?;
+    Ok(has_required_status_rules(&rules))
+}
+
+fn parse_required_status_check_rule_pages(
+    response: &[u8],
+) -> anyhow::Result<Vec<RequiredStatusCheckRule>> {
     let pages = serde_json::from_slice::<Vec<Vec<RequiredStatusCheckRule>>>(response)
         .context("Failed to parse required status check rule pages")?;
     if pages.is_empty() {
         bail!("GitHub returned no branch-rule pages");
     }
+    Ok(pages.into_iter().flatten().collect())
+}
 
-    Ok(pages.into_iter().flatten().any(|rule| {
+fn has_required_status_rules(rules: &[RequiredStatusCheckRule]) -> bool {
+    rules.iter().any(|rule| {
         matches!(
             rule.rule_type.as_str(),
             "required_status_checks" | "workflows"
         )
-    }))
+    })
 }
 
-fn parse_required_status_check_contexts(response: &[u8]) -> anyhow::Result<Vec<String>> {
-    let pages = serde_json::from_slice::<Vec<Vec<RequiredStatusCheckRule>>>(response)
-        .context("Failed to parse required status check rule pages")?;
-    if pages.is_empty() {
-        bail!("GitHub returned no branch-rule pages");
-    }
+#[cfg(test)]
+fn parse_required_status_check_contexts(
+    response: &[u8],
+) -> anyhow::Result<Vec<RequiredStatusCheckContext>> {
+    let rules = parse_required_status_check_rule_pages(response)?;
+    Ok(required_status_check_contexts(&rules))
+}
 
-    Ok(pages
-        .into_iter()
-        .flatten()
+fn required_status_check_contexts(
+    rules: &[RequiredStatusCheckRule],
+) -> Vec<RequiredStatusCheckContext> {
+    rules
+        .iter()
         .filter(|rule| rule.rule_type == "required_status_checks")
-        .filter_map(|rule| rule.parameters)
-        .flat_map(|parameters| parameters.required_status_checks.unwrap_or_default())
-        .map(|check| check.context)
-        .collect())
+        .filter_map(|rule| rule.parameters.as_ref())
+        .flat_map(|parameters| parameters.required_status_checks.iter().flatten().cloned())
+        .collect()
 }
 
 fn run_gh(args: &[String]) -> anyhow::Result<std::process::Output> {
@@ -529,6 +388,7 @@ struct GhCheck {
     state: String,
     bucket: CheckBucket,
     link: String,
+    app_id: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -553,82 +413,22 @@ struct RequiredCheckPage {
     base_ref_name: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct RequiredStatusCheckRule {
     #[serde(rename = "type")]
     rule_type: String,
     parameters: Option<RequiredStatusCheckParameters>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct RequiredStatusCheckParameters {
     required_status_checks: Option<Vec<RequiredStatusCheckContext>>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 struct RequiredStatusCheckContext {
     context: String,
-}
-
-#[derive(Deserialize)]
-struct CheckRunPage {
-    check_runs: Vec<CheckRun>,
-}
-
-#[derive(Deserialize)]
-struct CheckRun {
-    name: String,
-    status: String,
-    conclusion: Option<String>,
-    html_url: String,
-}
-
-impl From<CheckRun> for GhCheck {
-    fn from(check_run: CheckRun) -> Self {
-        let state = check_run
-            .conclusion
-            .unwrap_or_else(|| check_run.status.to_uppercase());
-        let bucket = match state.as_str() {
-            "SUCCESS" | "NEUTRAL" | "SKIPPED" => CheckBucket::Pass,
-            "QUEUED" | "IN_PROGRESS" | "REQUESTED" | "WAITING" | "PENDING" => CheckBucket::Pending,
-            _ => CheckBucket::Fail,
-        };
-        Self {
-            name: check_run.name,
-            state,
-            bucket,
-            link: check_run.html_url,
-        }
-    }
-}
-
-#[derive(Deserialize)]
-struct CombinedCommitStatus {
-    statuses: Vec<CommitStatus>,
-}
-
-#[derive(Deserialize)]
-struct CommitStatus {
-    context: String,
-    state: String,
-    target_url: Option<String>,
-}
-
-impl From<CommitStatus> for GhCheck {
-    fn from(status: CommitStatus) -> Self {
-        let state = status.state.to_uppercase();
-        let bucket = match state.as_str() {
-            "SUCCESS" => CheckBucket::Pass,
-            "PENDING" => CheckBucket::Pending,
-            _ => CheckBucket::Fail,
-        };
-        Self {
-            name: status.context,
-            state,
-            bucket,
-            link: status.target_url.unwrap_or_default(),
-        }
-    }
+    integration_id: Option<u64>,
 }
 
 #[cfg(test)]
@@ -645,6 +445,7 @@ mod tests {
             state: state.to_string(),
             bucket,
             link: link.to_string(),
+            app_id: None,
         }
     }
 
@@ -841,67 +642,20 @@ mod tests {
     fn parse_required_status_check_contexts_reads_rule_contexts_only() {
         assert_eq!(
             parse_required_status_check_contexts(
-                br#"[[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"unit"},{"context":"integration"}]}},{"type":"workflows","parameters":{"workflows":[{"path":".github/workflows/ci.yml","ref":"refs/heads/main"}]}}]]"#,
+                br#"[[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"unit","integration_id":null},{"context":"integration","integration_id":42}]}},{"type":"workflows","parameters":{"workflows":[{"path":".github/workflows/ci.yml","ref":"refs/heads/main"}]}}]]"#,
             )
             .unwrap(),
-            vec!["unit".to_string(), "integration".to_string()],
+            vec![
+                RequiredStatusCheckContext {
+                    context: "unit".to_string(),
+                    integration_id: None,
+                },
+                RequiredStatusCheckContext {
+                    context: "integration".to_string(),
+                    integration_id: Some(42),
+                },
+            ],
         );
-    }
-
-    #[rstest]
-    #[case::unreported_required_check_is_ignored(
-        vec![],
-        vec!["unit".to_string()],
-        false,
-        Ok(CheckWaitStatus::Complete)
-    )]
-    #[case::unrelated_failed_check_is_ignored(
-        vec![gh_check("release", "FAILURE", CheckBucket::Fail, "https://example.invalid/release")],
-        vec!["unit".to_string()],
-        false,
-        Ok(CheckWaitStatus::Complete)
-    )]
-    #[case::reported_required_check_waits(
-        vec![gh_check("unit", "IN_PROGRESS", CheckBucket::Pending, "https://example.invalid/unit")],
-        vec!["unit".to_string()],
-        false,
-        Ok(CheckWaitStatus::Pending(
-            "unit (IN_PROGRESS) https://example.invalid/unit".to_string()
-        ))
-    )]
-    #[case::failed_required_check_names_its_url(
-        vec![gh_check("unit", "FAILURE", CheckBucket::Fail, "https://example.invalid/unit")],
-        vec!["unit".to_string()],
-        false,
-        Err("Required checks failed: unit (FAILURE) https://example.invalid/unit".to_string())
-    )]
-    #[case::base_failure_can_be_allowed(
-        vec![gh_check("unit", "FAILURE", CheckBucket::Fail, "https://example.invalid/unit")],
-        vec!["unit".to_string()],
-        true,
-        Ok(CheckWaitStatus::Complete)
-    )]
-    #[case::allowed_base_failure_still_waits_for_pending_checks(
-        vec![
-            gh_check("unit", "FAILURE", CheckBucket::Fail, "https://example.invalid/unit"),
-            gh_check("integration", "IN_PROGRESS", CheckBucket::Pending, "https://example.invalid/integration"),
-        ],
-        vec!["unit".to_string(), "integration".to_string()],
-        true,
-        Ok(CheckWaitStatus::Pending(
-            "integration (IN_PROGRESS) https://example.invalid/integration".to_string()
-        ))
-    )]
-    fn classify_required_commit_checks_cases(
-        #[case] checks: Vec<GhCheck>,
-        #[case] required_contexts: Vec<String>,
-        #[case] allow_failures: bool,
-        #[case] expected_result: Result<CheckWaitStatus, String>,
-    ) {
-        let result = classify_required_commit_checks(&checks, &required_contexts, allow_failures)
-            .map_err(|error| error.to_string());
-
-        assert_eq!(result, expected_result);
     }
 
     #[test]

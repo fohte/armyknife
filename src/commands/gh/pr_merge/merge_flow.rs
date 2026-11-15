@@ -108,6 +108,20 @@ pub(super) async fn run_merge_with_options(
     }
     ensure_pr_is_open_and_safe(&current, pr_number, Some(&initial.head_sha))?;
 
+    client
+        .wait_for_base_branch_checks(
+            owner,
+            repo,
+            &current.base_ref_name,
+            allow_failing_base,
+        )
+        .with_context(|| {
+            format!(
+                "Cannot merge PR #{pr_number} while required checks on base branch `{}` are failing",
+                current.base_ref_name
+            )
+        })?;
+
     let merge_result = match client
         .merge_async(owner, repo, pr_number, &initial.head_sha)
         .await
