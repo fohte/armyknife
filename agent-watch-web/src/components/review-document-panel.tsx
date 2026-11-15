@@ -302,79 +302,81 @@ export function ReviewDocumentPanel({
       data-mobile-view={mobileView}
       data-status={status}
     >
-      <section
-        className="review-document-frontmatter"
-        aria-label="Document metadata"
-      >
-        <h2>Frontmatter</h2>
-        {isJsonObject(frontmatter) ? (
-          <dl className="review-document-fields">
-            {Object.entries(frontmatter).map(([name, value]) => (
-              <FieldEditor
-                key={name}
-                name={name}
-                path={[name]}
-                value={value}
-                disabled={busy}
-                onChange={updateFrontmatter}
-              />
-            ))}
-          </dl>
-        ) : (
-          <FieldEditor
-            name="Frontmatter"
-            path={[]}
-            value={frontmatter}
-            disabled={busy}
-            onChange={(path, value) => {
-              if (path.length === 0) onFrontmatterChange(value)
-            }}
-          />
-        )}
-      </section>
-
-      <section
-        className="review-document-body-editor"
-        aria-label="Document body"
-      >
-        <div className="review-document-body-heading">
-          <h2>Body</h2>
-          <div className="review-document-view-toggle" aria-label="Body view">
-            <button
-              aria-pressed={mobileView === 'edit'}
-              type="button"
-              onClick={() => {
-                onMobileViewChange('edit')
-              }}
-            >
-              Edit
-            </button>
-            <button
-              aria-pressed={mobileView === 'preview'}
-              type="button"
-              onClick={() => {
-                onMobileViewChange('preview')
-              }}
-            >
-              Preview
-            </button>
-          </div>
-        </div>
-        <div className="review-document-body-columns">
-          <div className="review-document-edit-column">
-            <MarkdownEditor
-              value={body}
+      <div className="review-document-content">
+        <section
+          className="review-document-frontmatter"
+          aria-label="Document metadata"
+        >
+          <h2>Frontmatter</h2>
+          {isJsonObject(frontmatter) ? (
+            <dl className="review-document-fields">
+              {Object.entries(frontmatter).map(([name, value]) => (
+                <FieldEditor
+                  key={name}
+                  name={name}
+                  path={[name]}
+                  value={value}
+                  disabled={busy}
+                  onChange={updateFrontmatter}
+                />
+              ))}
+            </dl>
+          ) : (
+            <FieldEditor
+              name="Frontmatter"
+              path={[]}
+              value={frontmatter}
               disabled={busy}
-              onChange={onBodyChange}
+              onChange={(path, value) => {
+                if (path.length === 0) onFrontmatterChange(value)
+              }}
             />
+          )}
+        </section>
+
+        <section
+          className="review-document-body-editor"
+          aria-label="Document body"
+        >
+          <div className="review-document-body-heading">
+            <h2>Body</h2>
+            <div className="review-document-view-toggle" aria-label="Body view">
+              <button
+                aria-pressed={mobileView === 'edit'}
+                type="button"
+                onClick={() => {
+                  onMobileViewChange('edit')
+                }}
+              >
+                Edit
+              </button>
+              <button
+                aria-pressed={mobileView === 'preview'}
+                type="button"
+                onClick={() => {
+                  onMobileViewChange('preview')
+                }}
+              >
+                Preview
+              </button>
+            </div>
           </div>
-          <div className="review-document-preview-column">
-            <MarkdownMessage className="review-document-body">
-              {body}
-            </MarkdownMessage>
+          <div className="review-document-body-columns">
+            <div className="review-document-edit-column">
+              <MarkdownEditor
+                value={body}
+                disabled={busy}
+                onChange={onBodyChange}
+              />
+            </div>
+            <div className="review-document-preview-column">
+              <MarkdownMessage className="review-document-body">
+                {body}
+              </MarkdownMessage>
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
+      </div>
 
       <footer className="review-document-actions">
         <span aria-live="polite" className="review-document-status">

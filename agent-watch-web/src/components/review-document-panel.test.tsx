@@ -171,6 +171,78 @@ it('edits typed fields and the mobile Markdown editor before saving or finishing
   })
 })
 
+it.each([
+  { device: 'mobile', width: 390 },
+  { device: 'desktop', width: 1280 },
+])(
+  'keeps the review actions visible while document content scrolls at $device width',
+  async ({ width }) => {
+    await page.viewport(width, 844)
+    container.style.width = `${String(width)}px`
+    container.style.height = '360px'
+    root = createRoot(container)
+    act(() =>
+      root?.render(
+        <ReviewDocumentPanel
+          frontmatter={Object.fromEntries(
+            Array.from({ length: 20 }, (_, index) => [
+              `field-${String(index + 1)}`,
+              `value-${String(index + 1)}`,
+            ]),
+          )}
+          body={Array.from(
+            { length: 80 },
+            (_, index) => `Document line ${String(index + 1)}`,
+          ).join('\n')}
+        />,
+      ),
+    )
+
+    const panel = container.querySelector<HTMLElement>('.review-document-panel')
+    const content = container.querySelector<HTMLElement>(
+      '.review-document-content',
+    )
+    const footer = container.querySelector<HTMLElement>(
+      '.review-document-actions',
+    )
+    if (panel === null || content === null || footer === null) {
+      throw new Error('Review document layout elements were not rendered.')
+    }
+
+    act(() => {
+      content.scrollTop = content.scrollHeight
+    })
+
+    const panelRect = panel.getBoundingClientRect()
+    const footerRect = footer.getBoundingClientRect()
+    const actionButtonRects = Array.from(
+      footer.querySelectorAll<HTMLButtonElement>('button'),
+      (button) => button.getBoundingClientRect(),
+    )
+    const maxScrollTop = content.scrollHeight - content.clientHeight
+
+    const snapshot = () => ({
+      contentOverflowY: getComputedStyle(content).overflowY,
+      contentCanScroll: maxScrollTop > 0,
+      contentReachedEnd: content.scrollTop >= maxScrollTop,
+      footerWithinPanel:
+        footerRect.top >= panelRect.top &&
+        footerRect.bottom <= panelRect.bottom,
+      actionButtonsWithinPanel: actionButtonRects.map(
+        (rect) => rect.top >= panelRect.top && rect.bottom <= panelRect.bottom,
+      ),
+    })
+
+    expect(snapshot()).toEqual({
+      contentOverflowY: 'auto',
+      contentCanScroll: true,
+      contentReachedEnd: true,
+      footerWithinPanel: true,
+      actionButtonsWithinPanel: [true, true],
+    })
+  },
+)
+
 it('disables frontmatter and Markdown editing while a request is in progress', async () => {
   root = createRoot(container)
   act(() => root?.render(<ReviewDocumentHarness status="saving" />))
