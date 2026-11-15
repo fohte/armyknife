@@ -9,6 +9,7 @@ use super::reviewer::{Reviewer, builtin_default_reviewers};
 use crate::shared::config::load_config;
 use chrono::{DateTime, Utc};
 use clap::Args;
+use std::io::Write;
 
 const POLL_INTERVAL_SECS: u64 = 15;
 const TIMEOUT_SECS: u64 = 300; // 5 minutes
@@ -33,7 +34,7 @@ pub struct WaitArgs {
     #[arg(long, default_value_t = POLL_INTERVAL_SECS)]
     pub interval: u64,
 
-    /// Timeout in seconds
+    /// Timeout in seconds after a reviewer start signal is detected
     #[arg(long, default_value_t = TIMEOUT_SECS)]
     pub timeout: u64,
 }
@@ -157,6 +158,7 @@ async fn run_wait_with_start_timeout<C: DetectionClient>(
     )
     .await?
     {
+        println!();
         return Err(ReviewError::ReviewNotStarted.into());
     }
 
@@ -196,6 +198,16 @@ async fn wait_for_any_started<C: DetectionClient>(
         if remaining.is_zero() {
             return Ok(false);
         }
+        print!(
+            "\rWaiting for reviewer start from {:?}... ({}s elapsed, grace: {}s)   ",
+            detectors
+                .iter()
+                .map(|(reviewer, _)| reviewer)
+                .collect::<Vec<_>>(),
+            started_at.elapsed().as_secs(),
+            timeout.as_secs()
+        );
+        std::io::stdout().flush().ok();
         tokio::time::sleep(interval.min(remaining)).await;
     }
 }
@@ -513,5 +525,43 @@ mod tests {
             result.unwrap_err().to_string(),
             "Review has not started yet"
         );
+    }
+
+    #[tokio::test]
+    async fn wait_detects_devin_start_signal_that_appears_during_grace() {
+        let client = MockDetectionClient::new()
+            .with_commit_status("Devin Review", "PENDING", Utc::now())
+            .delay_start_signal(1);
+        let ctx = DetectionContext {
+            github: &client,
+            owner: "owner",
+            repo: "repo",
+            pr: 1,
+        };
+        let detectors = vec![(Reviewer::Devin, Reviewer::Devin.detector())];
+
+        let started = wait_for_any_started(
+            &detectors,
+            &ctx,
+            std::time::Duration::from_millis(50),
+            std::time::Duration::from_millis(2),
+        )
+        .await
+        .unwrap();
+
+        assert!(started);
+    }
+
+    #[tokio::test]
+    async fn wait_accepts_completed_devin_check_run_without_review_or_status() {
+        let client = MockDetectionClient::new().with_check_run(
+            "devin-review",
+            Some(Utc::now() + ChronoDuration::seconds(1)),
+        );
+        let args = make_args_single(Reviewer::Devin, 1, 5);
+
+        let result = run_wait(&args, &client, "owner", "repo", 1).await;
+
+        assert!(result.is_ok());
     }
 }

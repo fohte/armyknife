@@ -360,6 +360,17 @@ impl OctocrabDetectionClient {
     }
 }
 
+fn latest_review_time<'a>(
+    mut timestamps: impl Iterator<Item = &'a str>,
+) -> Result<Option<DateTime<Utc>>> {
+    timestamps.try_fold(None::<DateTime<Utc>>, |latest, timestamp| {
+        timestamp
+            .parse::<DateTime<Utc>>()
+            .map(|created_at| Some(latest.map_or(created_at, |previous| previous.max(created_at))))
+            .map_err(|_| ReviewError::TimestampParseError(timestamp.to_string()).into())
+    })
+}
+
 impl DetectionClient for OctocrabDetectionClient {
     async fn find_latest_review(
         &self,
@@ -372,19 +383,13 @@ impl DetectionClient for OctocrabDetectionClient {
             .await
             .context("Failed to fetch PR data")?;
 
-        pr_data
-            .reviews
-            .iter()
-            .filter(|review| review.author.as_ref().is_some_and(|a| a.login == bot_login))
-            .try_fold(None, |acc, review| {
-                review
-                    .created_at
-                    .parse::<DateTime<Utc>>()
-                    .map(|created_at| {
-                        Some(acc.map_or(created_at, |prev: DateTime<Utc>| prev.max(created_at)))
-                    })
-                    .map_err(|_| ReviewError::TimestampParseError(review.created_at.clone()).into())
-            })
+        latest_review_time(
+            pr_data
+                .reviews
+                .iter()
+                .filter(|review| review.author.as_ref().is_some_and(|a| a.login == bot_login))
+                .map(|review| review.created_at.as_str()),
+        )
     }
 
     async fn find_latest_review_on_head(
@@ -401,26 +406,27 @@ impl DetectionClient for OctocrabDetectionClient {
         let pr_data = fetch_pr_data(owner, repo, pr_number, true)
             .await
             .context("Failed to fetch PR data")?;
+        let current_head_oid = self
+            .fetch_pr_info(owner, repo, pr_number)
+            .await?
+            .head_ref_oid;
+        if current_head_oid != head_oid {
+            return Ok(None);
+        }
 
-        pr_data
-            .reviews
-            .iter()
-            .filter(|review| {
-                review.author.as_ref().is_some_and(|a| a.login == bot_login)
-                    && review
-                        .commit
-                        .as_ref()
-                        .is_some_and(|commit| commit.oid == head_oid)
-            })
-            .try_fold(None, |acc, review| {
-                review
-                    .created_at
-                    .parse::<DateTime<Utc>>()
-                    .map(|created_at| {
-                        Some(acc.map_or(created_at, |prev: DateTime<Utc>| prev.max(created_at)))
-                    })
-                    .map_err(|_| ReviewError::TimestampParseError(review.created_at.clone()).into())
-            })
+        latest_review_time(
+            pr_data
+                .reviews
+                .iter()
+                .filter(|review| {
+                    review.author.as_ref().is_some_and(|a| a.login == bot_login)
+                        && review
+                            .commit
+                            .as_ref()
+                            .is_some_and(|commit| commit.oid == head_oid)
+                })
+                .map(|review| review.created_at.as_str()),
+        )
     }
 
     async fn find_unable_comment(
@@ -716,6 +722,10 @@ pub mod mock {
         pub delayed_status_success_checks: Arc<Mutex<usize>>,
         /// Number of status completion checks made.
         pub status_completion_call_count: Arc<Mutex<usize>>,
+        /// Number of start checks that return false before the signal appears.
+        pub delayed_start_signal_checks: Arc<Mutex<usize>>,
+        /// Number of start checks made.
+        pub start_signal_check_count: Arc<Mutex<usize>>,
     }
 
     impl MockDetectionClient {
@@ -755,6 +765,11 @@ pub mod mock {
 
         pub fn delay_status_success(self, checks: usize) -> Self {
             *self.delayed_status_success_checks.lock().unwrap() = checks;
+            self
+        }
+
+        pub fn delay_start_signal(self, checks: usize) -> Self {
+            *self.delayed_start_signal_checks.lock().unwrap() = checks;
             self
         }
 
@@ -1003,6 +1018,15 @@ pub mod mock {
             _pr_number: u64,
             context: &str,
         ) -> Result<bool> {
+            let mut call_count = self.start_signal_check_count.lock().unwrap();
+            *call_count += 1;
+            let current_call = *call_count;
+            drop(call_count);
+
+            if current_call <= *self.delayed_start_signal_checks.lock().unwrap() {
+                return Ok(false);
+            }
+
             let statuses = self.commit_statuses.lock().unwrap();
             Ok(statuses.iter().any(|s| s.context == context))
         }
