@@ -15,8 +15,8 @@ fn print_cleanup_result(result: &crate::shared::cleanup::WorktreeCleanupResult) 
     if let Some(branch) = &result.branch_deleted {
         println!("  Branch deleted: {branch}");
     }
-    if result.windows_closed > 0 {
-        println!("  Tmux windows closed: {}", result.windows_closed);
+    if result.panes_closed > 0 {
+        println!("  Tmux panes closed: {}", result.panes_closed);
     }
     if result.sessions_cleaned > 0 {
         println!("  Sessions cleaned: {}", result.sessions_cleaned);

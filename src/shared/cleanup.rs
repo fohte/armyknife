@@ -24,8 +24,8 @@ pub struct WorktreeCleanupResult {
     pub worktree_deleted: bool,
     /// Name of the branch that was deleted, if any.
     pub branch_deleted: Option<String>,
-    /// Number of tmux windows that were closed.
-    pub windows_closed: usize,
+    /// Number of tmux panes that were closed.
+    pub panes_closed: usize,
     /// Number of agent sessions cleaned up.
     pub sessions_cleaned: usize,
     /// Number of process groups killed that were rooted in the worktree
@@ -38,7 +38,7 @@ pub struct WorktreeCleanupResult {
 }
 
 /// Cleans up all resources associated with a worktree at `cwd`:
-/// worktree itself, branch, tmux windows, agent session records, and notifications.
+/// worktree itself, branch, tmux panes, agent session records, and notifications.
 ///
 /// `cwd` can be any path inside the worktree (including subdirectories);
 /// the worktree root is resolved via `repo.workdir()`.
@@ -96,7 +96,7 @@ pub fn cleanup_worktree_resources_with_post_delete(
 /// before session and tmux cleanup runs.
 ///
 /// `worktree_path` is the filesystem path of the worktree root, used for
-/// tmux window and session record lookup.
+/// tmux pane and session record lookup.
 pub fn cleanup_worktree_by_name(
     repo: &GitRepo,
     worktree_name: &str,
@@ -104,27 +104,27 @@ pub fn cleanup_worktree_by_name(
     force: bool,
     after_delete: impl FnOnce(),
 ) -> anyhow::Result<WorktreeCleanupResult> {
-    // Collect tmux window IDs and process groups rooted in the worktree
+    // Collect tmux pane IDs and process groups rooted in the worktree
     // before deleting it (the path must still exist to match against).
     let path_str = worktree_path.to_string_lossy();
-    let window_ids = tmux::get_window_ids_in_path(&path_str);
+    let pane_ids = tmux::get_pane_ids_in_path(&path_str);
     let orphan_pgids = process::find_pgids_in_path(worktree_path);
 
     let mut result = delete_worktree_and_branch(repo, worktree_name, worktree_path, force)?;
 
-    // Clean up sessions BEFORE killing tmux windows: if the caller is running
-    // inside one of those windows (e.g. `a agent close` invoked from the
-    // worktree's own pane), kill_window terminates the caller's pane and
+    // Clean up sessions BEFORE killing tmux panes: if the caller is running
+    // inside one of those panes (e.g. `a agent close` invoked from the
+    // worktree's own pane), kill_pane terminates the caller's pane and
     // SIGHUPs this very process, leaving Paused sessions orphaned on disk.
     run_post_delete_cleanup(result.worktree_deleted, after_delete, || {
         result.sessions_cleaned = cleanup_sessions_in_path(worktree_path).unwrap_or(0);
         result.process_groups_signaled = process::kill_process_groups(&orphan_pgids);
 
-        for window_id in &window_ids {
-            if tmux::kill_window(window_id).is_ok() {
-                result.windows_closed += 1;
-            }
-        }
+        result.panes_closed = kill_worktree_panes(
+            &pane_ids,
+            tmux::current_pane_id_from_env().as_deref(),
+            |pane_id| tmux::kill_pane(pane_id).is_ok(),
+        );
     });
 
     Ok(result)
@@ -139,6 +139,35 @@ fn run_post_delete_cleanup(
         after_delete();
         cleanup();
     }
+}
+
+fn kill_worktree_panes(
+    pane_ids: &[String],
+    caller_pane_id: Option<&str>,
+    mut kill_pane: impl FnMut(&str) -> bool,
+) -> usize {
+    let caller_pane_id = caller_pane_id.and_then(|caller_pane_id| {
+        pane_ids
+            .iter()
+            .any(|pane_id| pane_id == caller_pane_id)
+            .then_some(caller_pane_id)
+    });
+
+    let mut panes_closed = 0;
+    for pane_id in pane_ids
+        .iter()
+        .filter(|pane_id| Some(pane_id.as_str()) != caller_pane_id)
+    {
+        if kill_pane(pane_id) {
+            panes_closed += 1;
+        }
+    }
+    if let Some(caller_pane_id) = caller_pane_id
+        && kill_pane(caller_pane_id)
+    {
+        panes_closed += 1;
+    }
+    panes_closed
 }
 
 /// Deletes a git worktree and its associated branch.
@@ -945,6 +974,22 @@ mod tests {
         assert_eq!(events.into_inner(), expected);
     }
 
+    #[test]
+    fn kill_worktree_panes_closes_caller_last_and_counts_successes() {
+        let pane_ids = vec!["pane-a".to_string(), "pane-b".to_string()];
+        let killed_panes = RefCell::new(Vec::new());
+
+        let panes_closed = kill_worktree_panes(&pane_ids, Some("pane-a"), |pane_id| {
+            killed_panes.borrow_mut().push(pane_id.to_string());
+            pane_id != "pane-a"
+        });
+
+        assert_eq!(
+            (killed_panes.into_inner(), panes_closed),
+            (vec!["pane-b".to_string(), "pane-a".to_string()], 1),
+        );
+    }
+
     // Tests exercise delete_worktree_and_branch directly to avoid depending
     // on tmux or session store I/O.
 
@@ -978,7 +1023,7 @@ mod tests {
 
         assert!(result.worktree_deleted);
         assert_eq!(result.branch_deleted, Some("cleanup-test".to_string()));
-        assert_eq!(result.windows_closed, 0);
+        assert_eq!(result.panes_closed, 0);
         assert_eq!(result.sessions_cleaned, 0);
         assert_eq!(result.process_groups_signaled, 0);
 
@@ -1062,7 +1107,7 @@ mod tests {
 
         assert!(!result.worktree_deleted);
         assert!(result.branch_deleted.is_none());
-        assert_eq!(result.windows_closed, 0);
+        assert_eq!(result.panes_closed, 0);
         assert_eq!(result.sessions_cleaned, 0);
         assert_eq!(result.process_groups_signaled, 0);
     }
@@ -1075,7 +1120,7 @@ mod tests {
 
         assert!(!result.worktree_deleted);
         assert!(result.branch_deleted.is_none());
-        assert_eq!(result.windows_closed, 0);
+        assert_eq!(result.panes_closed, 0);
         assert_eq!(result.sessions_cleaned, 0);
         assert_eq!(result.process_groups_signaled, 0);
     }

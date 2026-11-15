@@ -93,7 +93,7 @@ fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
                 "Delete session"
             };
             let suffix = if worktree_cleanup.is_some() {
-                " (last in worktree; also deletes worktree, branch, tmux windows)"
+                " (last in worktree; also deletes the worktree and branch and closes matching tmux panes)"
             } else {
                 ""
             };
