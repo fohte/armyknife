@@ -24,7 +24,7 @@ const meta = {
   },
   decorators: [
     (Story) => (
-      <div style={{ width: '720px', padding: '16px' }}>
+      <div style={{ width: '100%', maxWidth: '720px', padding: '16px' }}>
         <Story />
       </div>
     ),
@@ -41,6 +41,18 @@ export const ConversationRowIsCollapsed: Story = {
 export const ConversationRowIsExpanded: Story = {
   name: 'The expanded conversation row shows the decision details',
   args: { expanded: true },
+}
+
+export const MobileConversationRowKeepsALongTitleReadable: Story = {
+  name: 'The mobile conversation row keeps a long title readable',
+  args: {
+    decision: {
+      ...decision,
+      title: 'Keep retries within a predictable time budget',
+    },
+    position: '131 of 132',
+  },
+  parameters: { viewport: { defaultViewport: 'mobile1' } },
 }
 
 export const SelectedConversationRowShowsItsPosition: Story = {

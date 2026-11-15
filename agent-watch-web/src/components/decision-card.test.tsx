@@ -3,6 +3,7 @@ import '#index.css'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { page } from 'vitest/browser'
 
 import { type Decision, DecisionCard } from '#components/decision-card'
 
@@ -116,6 +117,54 @@ it('sends the OK action from the expanded card', () => {
   })
 
   expect(onOk.mock.calls).toEqual([[]])
+})
+
+it('keeps the conversation summary on one row at mobile widths', async () => {
+  await page.viewport(390, 844)
+  renderCard({
+    decision: {
+      ...decision,
+      title: 'Keep retries within a predictable time budget',
+    },
+    position: '131 of 132',
+  })
+
+  const summary = requireElement(
+    container.querySelector('.decision-card-summary'),
+  )
+  const title = requireElement(container.querySelector('.decision-card-title'))
+  const consideredCount = requireElement(
+    container.querySelector('.decision-card-considered-count'),
+  )
+  const mobileState = {
+    consideredCountDisplay: getComputedStyle(consideredCount).display,
+    summaryFlexWrap: getComputedStyle(summary).flexWrap,
+    summaryFitsOneLine: summary.getBoundingClientRect().height < 48,
+    titleHasSpace: title.getBoundingClientRect().width > 0,
+  }
+
+  await page.viewport(1280, 800)
+
+  const responsiveState = () => ({
+    mobile: mobileState,
+    desktop: {
+      consideredCountDisplay: getComputedStyle(consideredCount).display,
+      consideredCountWhiteSpace: getComputedStyle(consideredCount).whiteSpace,
+    },
+  })
+
+  expect(responsiveState()).toEqual({
+    mobile: {
+      consideredCountDisplay: 'none',
+      summaryFlexWrap: 'nowrap',
+      summaryFitsOneLine: true,
+      titleHasSpace: true,
+    },
+    desktop: {
+      consideredCountDisplay: 'block',
+      consideredCountWhiteSpace: 'nowrap',
+    },
+  })
 })
 
 it('keeps panel actions within the card when the target name is long', () => {
