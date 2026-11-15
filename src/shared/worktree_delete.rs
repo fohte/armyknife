@@ -219,7 +219,16 @@ async fn check_merge_status(
             let branch = branch.to_string();
             async move { get_merge_status_for_repo(&repo_for_status, &branch).await }
         },
-        confirm_unmerged_deletion,
+        || {
+            let stdin = io::stdin();
+            let stdout = io::stdout();
+            confirm_with_terminal(
+                "Delete anyway? [y/N] ",
+                &mut stdin.lock(),
+                &mut stdout.lock(),
+                || stdin.is_terminal(),
+            )
+        },
     )
     .await
 }
@@ -230,7 +239,7 @@ async fn check_merge_status_with<F, G, Fut>(
     unmerged_policy: UnmergedWorktreePolicy,
     branch_exists: F,
     get_status: G,
-    confirm: impl FnOnce() -> bool,
+    confirm: impl FnOnce() -> Option<bool>,
 ) -> Result<Option<MergeStatus>>
 where
     F: FnOnce(&str) -> bool,
@@ -251,50 +260,40 @@ where
             branch,
             merge_status.reason()
         );
-        if !confirm() {
-            return Err(WmError::Cancelled.into());
+        match confirm() {
+            Some(true) => {}
+            Some(false) => return Err(WmError::Cancelled.into()),
+            None => {
+                return Err(anyhow::anyhow!(
+                    "Cancelled: stdin is not a terminal; input was not accepted as confirmation."
+                ));
+            }
         }
     }
 
     Ok(Some(merge_status))
 }
 
-fn confirm_unmerged_deletion() -> bool {
-    let stdin = io::stdin();
-    let stdout = io::stdout();
-    confirm_unmerged_deletion_with(&mut stdin.lock(), &mut stdout.lock(), stdin.is_terminal())
-}
-
-fn confirm_unmerged_deletion_with<R: BufRead, W: Write>(
+pub(crate) fn confirm_with_terminal<R: BufRead, W: Write>(
+    prompt: &str,
     input: &mut R,
     output: &mut W,
-    stdin_is_terminal: bool,
-) -> bool {
-    if !stdin_is_terminal {
-        writeln!(
-            output,
-            "Cancelled: stdin is not a terminal; input was not accepted as confirmation."
-        )
-        .ok();
-        return false;
+    stdin_is_terminal: impl FnOnce() -> bool,
+) -> Option<bool> {
+    if !stdin_is_terminal() {
+        return None;
     }
 
-    if write!(output, "Delete anyway? [y/N] ")
+    if write!(output, "{prompt}")
         .and_then(|()| output.flush())
         .is_err()
     {
-        writeln!(output, "Cancelled.").ok();
-        return false;
+        return Some(false);
     }
 
     let mut line = String::new();
     input.read_line(&mut line).ok();
-    if line.trim().eq_ignore_ascii_case("y") {
-        true
-    } else {
-        writeln!(output, "\nCancelled.").ok();
-        false
-    }
+    Some(line.trim().eq_ignore_ascii_case("y"))
 }
 
 /// Resolve the worktree path from the argument or current directory.
@@ -337,7 +336,6 @@ fn resolve_worktree_path_with_repo_root(
 
 #[cfg(test)]
 mod tests {
-    use indoc::indoc;
     use rstest::rstest;
 
     use super::*;
@@ -360,7 +358,7 @@ mod tests {
                     reason: "PR #42 merged".to_string(),
                 })
             },
-            || true,
+            || Some(true),
         )
         .await
         .expect("merge status");
@@ -388,7 +386,7 @@ mod tests {
                     reason: "pull request is still open".to_string(),
                 })
             },
-            || true,
+            || Some(true),
         )
         .await;
 
@@ -415,7 +413,7 @@ mod tests {
                     reason: "pull request is still open".to_string(),
                 })
             },
-            || confirm_unmerged_deletion_with(&mut reader, &mut output, false),
+            || confirm_with_terminal("Delete anyway? [y/N] ", &mut reader, &mut output, || false),
         )
         .await;
 
@@ -428,9 +426,11 @@ mod tests {
                 unread,
             ),
             (
-                Some("Cancelled: no prompt provided".to_string()),
-                "Cancelled: stdin is not a terminal; input was not accepted as confirmation.\n"
-                    .to_string(),
+                Some(
+                    "Cancelled: stdin is not a terminal; input was not accepted as confirmation."
+                        .to_string(),
+                ),
+                String::new(),
                 "y\n".to_string(),
             ),
         );
@@ -462,25 +462,21 @@ mod tests {
     }
 
     #[rstest]
-    #[case::non_terminal_rejects_piped_y(false, "y\n", (false, "Cancelled: stdin is not a terminal; input was not accepted as confirmation.\n", "y\n"))]
-    #[case::terminal_accepts_y(true, "y\n", (true, "Delete anyway? [y/N] ", ""))]
-    #[case::terminal_rejects_n(
-        true,
-        "n\n",
-        (false, indoc! {"
-            Delete anyway? [y/N]
-            Cancelled.
-        "}, ""),
-    )]
+    #[case::non_terminal_rejects_piped_y(false, "y\n", (None, "", "y\n"))]
+    #[case::terminal_accepts_y(true, "y\n", (Some(true), "Delete anyway? [y/N] ", ""))]
+    #[case::terminal_rejects_n(true, "n\n", (Some(false), "Delete anyway? [y/N] ", ""))]
     fn unmerged_confirmation_requires_terminal_input(
         #[case] stdin_is_terminal: bool,
         #[case] input: &str,
-        #[case] expected: (bool, &str, &str),
+        #[case] expected: (Option<bool>, &str, &str),
     ) {
         let mut reader = io::Cursor::new(input.as_bytes());
         let mut output = Vec::new();
 
-        let confirmed = confirm_unmerged_deletion_with(&mut reader, &mut output, stdin_is_terminal);
+        let confirmed =
+            confirm_with_terminal("Delete anyway? [y/N] ", &mut reader, &mut output, || {
+                stdin_is_terminal
+            });
         let mut unread = String::new();
         io::Read::read_to_string(&mut reader, &mut unread).expect("read remaining input");
 
@@ -492,6 +488,34 @@ mod tests {
             ),
             expected,
         );
+    }
+
+    struct ClosedWriter;
+
+    impl Write for ClosedWriter {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn unmerged_confirmation_rejects_when_prompt_cannot_be_written() {
+        let mut reader = io::Cursor::new("y\n".as_bytes());
+
+        let result = confirm_with_terminal(
+            "Delete anyway? [y/N] ",
+            &mut reader,
+            &mut ClosedWriter,
+            || true,
+        );
+        let mut unread = String::new();
+        io::Read::read_to_string(&mut reader, &mut unread).expect("read remaining input");
+
+        assert_eq!((result, unread), (Some(false), "y\n".to_string()));
     }
 
     #[rstest]

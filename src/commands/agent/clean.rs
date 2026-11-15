@@ -491,31 +491,25 @@ fn confirm_deletion<R: BufRead, W: Write>(
         return true;
     }
 
-    if !stdin_is_terminal() {
-        writeln!(
-            output,
-            "Cancelled: stdin is not a terminal; input was not accepted as confirmation."
-        )
-        .ok();
-        return false;
-    }
-
-    // An unseen prompt must not let piped input confirm the deletion.
-    if write!(output, "\nDelete these worktrees? [y/N] ")
-        .and_then(|()| output.flush())
-        .is_err()
-    {
-        writeln!(output, "Cancelled.").ok();
-        return false;
-    }
-
-    let mut line = String::new();
-    input.read_line(&mut line).ok();
-    if line.trim().eq_ignore_ascii_case("y") {
-        true
-    } else {
-        writeln!(output, "\nCancelled.").ok();
-        false
+    match crate::shared::worktree_delete::confirm_with_terminal(
+        "\nDelete these worktrees? [y/N] ",
+        input,
+        output,
+        stdin_is_terminal,
+    ) {
+        Some(true) => true,
+        Some(false) => {
+            writeln!(output, "\nCancelled.").ok();
+            false
+        }
+        None => {
+            writeln!(
+                output,
+                "Cancelled: stdin is not a terminal; input was not accepted as confirmation."
+            )
+            .ok();
+            false
+        }
     }
 }
 
@@ -707,21 +701,23 @@ mod tests {
         false,
         true,
         "n\n",
-        (false, true, indoc! {"
-
-            Delete these worktrees? [y/N]
-            Cancelled.
-        "}, ""),
+        (
+            false,
+            true,
+            concat!("\nDelete these worktrees? [y/N] ", "\nCancelled.", "\n"),
+            "",
+        ),
     )]
     #[case::prompt_rejects_eof(
         false,
         true,
         "",
-        (false, true, indoc! {"
-
-            Delete these worktrees? [y/N]
-            Cancelled.
-        "}, ""),
+        (
+            false,
+            true,
+            concat!("\nDelete these worktrees? [y/N] ", "\nCancelled.", "\n"),
+            "",
+        ),
     )]
     #[case::non_terminal_rejects_piped_y(false, false, "y\n", (false, true, "Cancelled: stdin is not a terminal; input was not accepted as confirmation.\n", "y\n"))]
     fn test_confirm_deletion(
