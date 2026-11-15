@@ -140,6 +140,7 @@ export function SessionLink({
               if (event.button !== 0) {
                 return
               }
+              event.stopPropagation()
               if (
                 event.metaKey ||
                 event.ctrlKey ||

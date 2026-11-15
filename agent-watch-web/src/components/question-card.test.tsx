@@ -3,10 +3,21 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
+import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import { ProposalCard } from '#components/proposal-card'
 import { QuestionCard } from '#components/question-card'
+import type { SessionLinkTarget } from '#types'
 
 type Props = ComponentProps<typeof QuestionCard>
+
+const linkedSessionId = '11111111-1111-4111-8111-111111111111'
+const linkedSession: SessionLinkTarget = {
+  id: linkedSessionId,
+  repo: 'example/toolkit',
+  task: null,
+  title: 'Inspect the retry path',
+}
+const onSelectSession = vi.fn<(id: string) => void>()
 
 const singleChoiceQuestions: Props['questions'] = [
   {
@@ -53,7 +64,14 @@ function props(overrides: Partial<Props> = {}): Props {
 function renderQuestion(cardProps: Props) {
   root ??= createRoot(container)
   act(() => {
-    root?.render(<QuestionCard {...cardProps} />)
+    root?.render(
+      <MarkdownSessionLinksProvider
+        sessions={[linkedSession]}
+        onSelectSession={onSelectSession}
+      >
+        <QuestionCard {...cardProps} />
+      </MarkdownSessionLinksProvider>,
+    )
   })
 }
 
@@ -99,6 +117,7 @@ function dispatchKey(target: EventTarget, key: string) {
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  onSelectSession.mockReset()
   container = document.createElement('div')
   document.body.append(container)
 })
@@ -109,6 +128,68 @@ afterEach(() => {
   container.remove()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+})
+
+it('links session IDs in question prompts, choice labels, and descriptions', () => {
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  renderQuestion(
+    props({
+      onAnswer,
+      questions: [
+        {
+          header: 'Session',
+          question: `Should this follow ${linkedSessionId}?`,
+          choices: [
+            {
+              label: `Open ${linkedSessionId}`,
+              description: `Read the context in ${linkedSessionId}.`,
+            },
+            { label: 'Use another approach' },
+          ],
+          multi_select: false,
+          answer: null,
+        },
+      ],
+    }),
+  )
+
+  const links = Array.from(
+    container.querySelectorAll<HTMLAnchorElement>('.chat-question-card a'),
+  )
+  act(() => {
+    links.forEach((link) => {
+      link.dispatchEvent(
+        new MouseEvent('click', { bubbles: true, cancelable: true }),
+      )
+    })
+  })
+
+  const getActual = () => ({
+    links: links.map((link) => ({
+      text: link.textContent,
+      href: link.getAttribute('href'),
+    })),
+    selectedSessions: onSelectSession.mock.calls.map(([id]) => id),
+    answers: onAnswer.mock.calls,
+  })
+  expect(getActual()).toEqual({
+    links: [
+      {
+        text: linkedSessionId,
+        href: `?session=${linkedSessionId}`,
+      },
+      {
+        text: linkedSessionId,
+        href: `?session=${linkedSessionId}`,
+      },
+      {
+        text: linkedSessionId,
+        href: `?session=${linkedSessionId}`,
+      },
+    ],
+    selectedSessions: [linkedSessionId, linkedSessionId, linkedSessionId],
+    answers: [],
+  })
 })
 
 it('submits every selected answer once with multi-select labels joined', async () => {

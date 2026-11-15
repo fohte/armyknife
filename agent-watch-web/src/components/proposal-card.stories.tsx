@@ -1,7 +1,15 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 
+import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import { ProposalCard } from '#components/proposal-card'
-import type { ProposalOption } from '#types'
+import type { ProposalOption, SessionLinkTarget } from '#types'
+
+const linkedSession: SessionLinkTarget = {
+  id: '11111111-1111-4111-8111-111111111111',
+  repo: 'example/toolkit',
+  task: null,
+  title: 'Inspect the retry path',
+}
 
 const options: ProposalOption[] = [
   {
@@ -62,6 +70,31 @@ export const ProposalFormatsItsAgentTextAsMarkdown: Story = {
       },
       ...options.slice(1),
     ],
+  },
+}
+
+export const ProposalLinksKnownSessionIds: Story = {
+  name: 'A known session ID links from the summary and option description',
+  decorators: [
+    (Story) => (
+      <MarkdownSessionLinksProvider
+        sessions={[linkedSession]}
+        onSelectSession={() => undefined}
+      >
+        <Story />
+      </MarkdownSessionLinksProvider>
+    ),
+  ],
+  args: {
+    summary: `Compare the proposal with ${linkedSession.id}.`,
+    options: options.map((option, index) =>
+      index === 0
+        ? {
+            ...option,
+            description: `Use the behavior from ${linkedSession.id}.`,
+          }
+        : option,
+    ),
   },
 }
 

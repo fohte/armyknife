@@ -20,15 +20,7 @@ const messageWithoutDescription = {
 } satisfies Extract<ChatItem, { type: 'subagent_report' }>
 
 it('renders the task description with its report collapsed', () => {
-  expect(
-    renderToStaticMarkup(
-      <SubagentReport
-        message={message}
-        onSelectSession={() => undefined}
-        sessions={[]}
-      />,
-    ),
-  ).toBe(
+  expect(renderToStaticMarkup(<SubagentReport message={message} />)).toBe(
     '<details class="chat-tool-summary" data-has-operations="false"><summary>Review the fictional feature</summary><div class="markdown-message"><h2>Result</h2>\n<p>The requested change is complete.</p></div></details>',
   )
 })
@@ -36,12 +28,7 @@ it('renders the task description with its report collapsed', () => {
 it('uses the agent type name and renders the report body as markdown', () => {
   expect(
     renderToStaticMarkup(
-      <SubagentReport
-        message={messageWithoutDescription}
-        onSelectSession={() => undefined}
-        sessions={[]}
-        defaultOpen
-      />,
+      <SubagentReport message={messageWithoutDescription} defaultOpen />,
     ),
   ).toBe(
     '<details class="chat-tool-summary" data-has-operations="false" open=""><summary>general-purpose</summary><div class="markdown-message"><h2>Result</h2>\n<p>The requested change is complete.</p></div></details>',

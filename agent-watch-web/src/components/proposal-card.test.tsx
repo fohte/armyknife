@@ -3,7 +3,9 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
+import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import { ProposalCard } from '#components/proposal-card'
+import type { SessionLinkTarget } from '#types'
 
 const { optimizeImageAttachmentMock } = vi.hoisted(() => ({
   optimizeImageAttachmentMock: vi.fn<(file: File) => Promise<File>>(),
@@ -14,6 +16,15 @@ vi.mock('#lib/image-attachment', () => ({
 }))
 
 type Props = ComponentProps<typeof ProposalCard>
+
+const linkedSessionId = '11111111-1111-4111-8111-111111111111'
+const linkedSession: SessionLinkTarget = {
+  id: linkedSessionId,
+  repo: 'example/toolkit',
+  task: null,
+  title: 'Inspect the retry path',
+}
+const onSelectSession = vi.fn<(id: string) => void>()
 
 let container: HTMLDivElement
 let root: Root | null = null
@@ -53,7 +64,14 @@ function props(overrides: Partial<Props> = {}): Props {
 function renderCard(cardProps: Props) {
   root ??= createRoot(container)
   act(() => {
-    root?.render(<ProposalCard {...cardProps} />)
+    root?.render(
+      <MarkdownSessionLinksProvider
+        sessions={[linkedSession]}
+        onSelectSession={onSelectSession}
+      >
+        <ProposalCard {...cardProps} />
+      </MarkdownSessionLinksProvider>,
+    )
   })
 }
 
@@ -61,11 +79,16 @@ function renderCards(cardProps: Props[]) {
   root ??= createRoot(container)
   act(() => {
     root?.render(
-      <>
-        {cardProps.map((card) => (
-          <ProposalCard {...card} key={card.seq} />
-        ))}
-      </>,
+      <MarkdownSessionLinksProvider
+        sessions={[linkedSession]}
+        onSelectSession={onSelectSession}
+      >
+        <>
+          {cardProps.map((card) => (
+            <ProposalCard {...card} key={card.seq} />
+          ))}
+        </>
+      </MarkdownSessionLinksProvider>,
     )
   })
 }
@@ -112,6 +135,7 @@ function dispatchKey(target: EventTarget, key: string, metaKey = false) {
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  onSelectSession.mockReset()
   optimizeImageAttachmentMock.mockReset()
   optimizeImageAttachmentMock.mockImplementation((file) =>
     Promise.resolve(file),
@@ -127,6 +151,56 @@ afterEach(() => {
   container.remove()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+})
+
+it('links session IDs in proposal summary, options, answers, and withdrawal comments', () => {
+  renderCards([
+    props({
+      summary: `Compare the choices with ${linkedSessionId}.`,
+      options: props().options.map((option, index) =>
+        index === 0
+          ? {
+              ...option,
+              description: `Follow the detail in ${linkedSessionId}.`,
+            }
+          : option,
+      ),
+      answer: { choice: 0, comment: `See the result in ${linkedSessionId}.` },
+      resolved: true,
+    }),
+    props({
+      seq: 8,
+      resolution: 'withdrawn',
+      resolved: true,
+      withdrawalComment: `The session ${linkedSessionId} explains the change.`,
+    }),
+  ])
+
+  const links = Array.from(
+    container.querySelectorAll<HTMLAnchorElement>('.chat-proposal-card a'),
+  )
+  act(() => {
+    links.forEach((link) => {
+      link.dispatchEvent(
+        new MouseEvent('click', { bubbles: true, cancelable: true }),
+      )
+    })
+  })
+
+  const getActual = () => ({
+    links: links.map((link) => ({
+      text: link.textContent,
+      href: link.getAttribute('href'),
+    })),
+    selectedSessions: onSelectSession.mock.calls.map(([id]) => id),
+  })
+  expect(getActual()).toEqual({
+    links: Array.from({ length: 4 }, () => ({
+      text: linkedSessionId,
+      href: `?session=${linkedSessionId}`,
+    })),
+    selectedSessions: Array.from({ length: 4 }, () => linkedSessionId),
+  })
 })
 
 it('renders the proposal heading, recommended option, and pros and cons', () => {

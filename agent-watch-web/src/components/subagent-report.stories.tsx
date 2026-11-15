@@ -13,8 +13,6 @@ const meta = {
       description: 'Review the fictional feature',
       text: '## Result\n\nThe requested change is complete.',
     } satisfies Extract<ChatItem, { type: 'subagent_report' }>,
-    onSelectSession: () => undefined,
-    sessions: [],
   },
 } satisfies Meta<typeof SubagentReport>
 

@@ -4,7 +4,9 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
+import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import { TodoCard } from '#components/todo-card'
+import type { SessionLinkTarget } from '#types'
 
 const { optimizeImageAttachmentMock } = vi.hoisted(() => ({
   optimizeImageAttachmentMock: vi.fn<(file: File) => Promise<File>>(),
@@ -15,6 +17,15 @@ vi.mock('#lib/image-attachment', () => ({
 }))
 
 type Props = ComponentProps<typeof TodoCard>
+
+const linkedSessionId = '11111111-1111-4111-8111-111111111111'
+const linkedSession: SessionLinkTarget = {
+  id: linkedSessionId,
+  repo: 'example/toolkit',
+  task: null,
+  title: 'Inspect the retry path',
+}
+const onSelectSession = vi.fn<(id: string) => void>()
 
 let container: HTMLDivElement
 let root: Root | null = null
@@ -33,13 +44,24 @@ function props(overrides: Partial<Props> = {}): Props {
 function renderCard(cardProps: Props) {
   root ??= createRoot(container)
   act(() => {
-    root?.render(<TodoCard {...cardProps} />)
+    root?.render(
+      <MarkdownSessionLinksProvider
+        sessions={[linkedSession]}
+        onSelectSession={onSelectSession}
+      >
+        <TodoCard {...cardProps} />
+      </MarkdownSessionLinksProvider>,
+    )
   })
 }
 
 function requireElement<T extends Element>(element: T | null): T {
   if (element === null) throw new Error('Expected element was not rendered')
   return element
+}
+
+function normalizeBaseUiIds(markup: string | undefined) {
+  return markup?.replace(/ id="base-ui-[^"]+"/g, ' id="[generated]"')
 }
 
 function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
@@ -66,6 +88,7 @@ async function pasteImage(textarea: HTMLTextAreaElement, file: File) {
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  onSelectSession.mockReset()
   optimizeImageAttachmentMock.mockReset()
   optimizeImageAttachmentMock.mockImplementation((file) =>
     Promise.resolve(file),
@@ -131,31 +154,49 @@ it('does not offer to expand detail that fits in two lines', () => {
 it('renders task detail and completion comments as markdown', () => {
   renderCard(
     props({
-      detail:
-        'Review **the preview** and [read the guide](https://example.test).',
+      detail: `Review ${linkedSessionId}, **the preview**, and [read the guide](https://example.test).`,
     }),
   )
   const detail = container.querySelector(
     '.chat-todo-detail .markdown-message',
   )?.innerHTML
+  const detailLink = requireElement(
+    container.querySelector<HTMLAnchorElement>('.chat-todo-detail a'),
+  )
+  act(() => {
+    detailLink.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true }),
+    )
+  })
   renderCard(
     props({
       resolution: 'completed',
-      defaultComment: 'The [preview](https://example.test) is **ready**.',
+      defaultComment: `The ${linkedSessionId} [preview](https://example.test) is **ready**.`,
     }),
   )
+  const completionLink = requireElement(
+    container.querySelector<HTMLAnchorElement>(
+      '.chat-todo-completed-comment a',
+    ),
+  )
+  act(() => {
+    completionLink.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true }),
+    )
+  })
 
   const snapshot = () => ({
-    detail,
-    completionComment: container.querySelector('.chat-todo-completed-comment')
-      ?.innerHTML,
+    detail: normalizeBaseUiIds(detail),
+    completionComment: normalizeBaseUiIds(
+      container.querySelector('.chat-todo-completed-comment')?.innerHTML,
+    ),
+    selectedSessions: onSelectSession.mock.calls.map(([id]) => id),
   })
 
   expect(snapshot()).toEqual({
-    detail:
-      '<p>Review <strong>the preview</strong> and <a href="https://example.test" target="_blank" rel="noopener noreferrer">read the guide</a>.</p>',
-    completionComment:
-      '<p>The <a href="https://example.test" target="_blank" rel="noopener noreferrer">preview</a> is <strong>ready</strong>.</p>',
+    detail: `<p>Review <a class="session-link-trigger" href="?session=${linkedSessionId}" rel="noopener noreferrer" target="_blank" id="[generated]">${linkedSessionId}</a>, <strong>the preview</strong>, and <a href="https://example.test" target="_blank" rel="noopener noreferrer">read the guide</a>.</p>`,
+    completionComment: `<p>The <a class="session-link-trigger" href="?session=${linkedSessionId}" rel="noopener noreferrer" target="_blank" id="[generated]">${linkedSessionId}</a> <a href="https://example.test" target="_blank" rel="noopener noreferrer">preview</a> is <strong>ready</strong>.</p>`,
+    selectedSessions: [linkedSessionId, linkedSessionId],
   })
 })
 

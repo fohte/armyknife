@@ -1,6 +1,15 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 
+import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import { TodoCard } from '#components/todo-card'
+import type { SessionLinkTarget } from '#types'
+
+const linkedSession: SessionLinkTarget = {
+  id: '11111111-1111-4111-8111-111111111111',
+  repo: 'example/toolkit',
+  task: null,
+  title: 'Inspect the retry path',
+}
 
 const meta = {
   component: TodoCard,
@@ -22,9 +31,18 @@ export const TodoWaitsForTheUser: Story = {
 
 export const TodoShowsMarkdownDetail: Story = {
   name: 'A to-do detail formats links and emphasis as markdown',
+  decorators: [
+    (Story) => (
+      <MarkdownSessionLinksProvider
+        sessions={[linkedSession]}
+        onSelectSession={() => undefined}
+      >
+        <Story />
+      </MarkdownSessionLinksProvider>
+    ),
+  ],
   args: {
-    detail:
-      'Review [the example preview](https://example.test) before launch.\n\nKeep **the primary action visible** on small screens.',
+    detail: `Review ${linkedSession.id} and [the example preview](https://example.test) before launch.\n\nKeep **the primary action visible** on small screens.`,
   },
 }
 

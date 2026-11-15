@@ -4,13 +4,7 @@ import { useEffect, useState } from 'react'
 
 import { MarkdownMessage } from '#components/markdown-message'
 import { formatMessageTime } from '#components/message-time'
-import type {
-  ChatItem,
-  RewindMode,
-  Session,
-  SessionLinkTarget,
-  UserContentPart,
-} from '#types'
+import type { ChatItem, RewindMode, Session, UserContentPart } from '#types'
 
 type UserMessage = Extract<
   ChatItem,
@@ -50,8 +44,6 @@ function UserImage({
 
 export function UserWithContent({
   message,
-  onSelectSession,
-  sessions,
   now,
   canRewind,
   sessionEngine,
@@ -60,8 +52,6 @@ export function UserWithContent({
   navigationHighlighted = false,
 }: {
   message: UserMessage
-  onSelectSession?: (id: string) => void
-  sessions?: readonly SessionLinkTarget[]
   now?: Date
   canRewind?: boolean
   sessionEngine?: Session['engine']
@@ -169,8 +159,6 @@ export function UserWithContent({
           <MarkdownMessage
             className="chat-user-message"
             key={`text-${String(partIndex)}`}
-            {...(onSelectSession === undefined ? {} : { onSelectSession })}
-            {...(sessions === undefined ? {} : { sessions })}
           >
             {part.text}
           </MarkdownMessage>

@@ -1,6 +1,15 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 
 import { type Decision, DecisionCard } from '#components/decision-card'
+import { MarkdownSessionLinksProvider } from '#components/markdown-message'
+import type { SessionLinkTarget } from '#types'
+
+const linkedSession: SessionLinkTarget = {
+  id: '11111111-1111-4111-8111-111111111111',
+  repo: 'example/toolkit',
+  task: null,
+  title: 'Inspect the retry path',
+}
 
 const decision: Decision = {
   type: 'decision',
@@ -41,6 +50,32 @@ export const ConversationRowIsCollapsed: Story = {
 export const ConversationRowIsExpanded: Story = {
   name: 'The expanded conversation row shows the decision details',
   args: { expanded: true },
+}
+
+export const DecisionMarkdownLinksKnownSessionIds: Story = {
+  name: 'Decision details link known session IDs in every markdown field',
+  decorators: [
+    (Story) => (
+      <MarkdownSessionLinksProvider
+        sessions={[linkedSession]}
+        onSelectSession={() => undefined}
+      >
+        <Story />
+      </MarkdownSessionLinksProvider>
+    ),
+  ],
+  args: {
+    expanded: true,
+    decision: {
+      ...decision,
+      why: `Follow the approach from ${linkedSession.id}.`,
+      considered: [
+        `Keep the behavior in ${linkedSession.id}.`,
+        'Use a separate implementation.',
+      ],
+      easyToChange: `Revisit the setting with ${linkedSession.id}.`,
+    },
+  },
 }
 
 export const MobileConversationRowKeepsALongTitleReadable: Story = {

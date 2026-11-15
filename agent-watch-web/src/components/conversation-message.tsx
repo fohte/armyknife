@@ -93,8 +93,6 @@ export function renderConversationMessage({
     return (
       <UserWithContent
         message={message}
-        onSelectSession={onSelectSession}
-        sessions={sessions}
         canRewind={actions?.rewind === true}
         sessionEngine={sessionEngine}
         onRewind={onRewind}
@@ -113,13 +111,7 @@ export function renderConversationMessage({
     )
   }
   if (message.type === 'subagent_report') {
-    return (
-      <SubagentReport
-        message={message}
-        onSelectSession={onSelectSession}
-        sessions={sessions}
-      />
-    )
+    return <SubagentReport message={message} />
   }
   if (message.type === 'event') {
     const time = formatMessageTime(message.timestamp, now)
@@ -144,8 +136,6 @@ export function renderConversationMessage({
     return (
       <article className="chat-assistant-message">
         <MarkdownMessage
-          onSelectSession={onSelectSession}
-          sessions={sessions}
           {...(sessionId === undefined ? {} : { sessionId })}
           {...(onCommandExecuted === undefined ? {} : { onCommandExecuted })}
         >

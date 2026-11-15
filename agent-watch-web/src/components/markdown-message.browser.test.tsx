@@ -4,7 +4,10 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
-import { MarkdownMessage } from '#components/markdown-message'
+import {
+  MarkdownMessage,
+  MarkdownSessionLinksProvider,
+} from '#components/markdown-message'
 import { PeerMessage } from '#components/peer-message'
 import type {
   SessionOperation,
@@ -292,17 +295,17 @@ let unknownId = "${unknownId}";
   root = createRoot(container)
   act(() => {
     root?.render(
-      <MarkdownMessage
+      <MarkdownSessionLinksProvider
         onSelectSession={onSelectSession}
         sessions={[linkedSession]}
       >
-        {`The session ${linkedId} is active, while ${unknownId} is unknown.
+        <MarkdownMessage>{`The session ${linkedId} is active, while ${unknownId} is unknown.
 
 Use \`${linkedId}\` to open it.
 
 ~~~rust
-${fencedCode}~~~`}
-      </MarkdownMessage>,
+${fencedCode}~~~`}</MarkdownMessage>
+      </MarkdownSessionLinksProvider>,
     )
   })
 

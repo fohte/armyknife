@@ -7,6 +7,7 @@ import {
   memo,
   type ReactNode,
   useContext,
+  useMemo,
 } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -39,6 +40,34 @@ type MarkdownFile = {
 }
 
 const CodeBlockContext = createContext(false)
+
+type MarkdownSessionLinksValue = {
+  sessions: readonly SessionLinkTarget[]
+  onSelectSession?: (id: string) => void
+}
+
+const MarkdownSessionLinksContext = createContext<MarkdownSessionLinksValue>({
+  sessions: [],
+})
+
+export function MarkdownSessionLinksProvider({
+  children,
+  sessions,
+  onSelectSession,
+}: MarkdownSessionLinksValue & { children: ReactNode }) {
+  const value = useMemo(
+    () => ({
+      sessions,
+      ...(onSelectSession === undefined ? {} : { onSelectSession }),
+    }),
+    [onSelectSession, sessions],
+  )
+  return (
+    <MarkdownSessionLinksContext.Provider value={value}>
+      {children}
+    </MarkdownSessionLinksContext.Provider>
+  )
+}
 
 type MarkdownComponentContextValue = {
   sessionsById: ReadonlyMap<string, SessionLinkTarget>
@@ -213,8 +242,6 @@ type MarkdownMessageProps = {
   children: string
   className?: string
   inline?: boolean
-  onSelectSession?: (id: string) => void
-  sessions?: readonly SessionLinkTarget[]
   sessionId?: string
   onCommandExecuted?: () => void
 }
@@ -447,23 +474,24 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   children,
   className,
   inline = false,
-  onSelectSession,
-  sessions = [],
   sessionId,
   onCommandExecuted,
 }: MarkdownMessageProps) {
+  const sessionLinks = useContext(MarkdownSessionLinksContext)
   const rootClassName =
     className === undefined
       ? 'markdown-message'
       : `markdown-message ${className}`
 
   const sessionsById = new Map(
-    sessions.map((session) => [session.id.toLowerCase(), session]),
+    sessionLinks.sessions.map((session) => [session.id.toLowerCase(), session]),
   )
   const markdownSource = inline ? children : unwrapTaggedMessage(children)
   const componentContext: MarkdownComponentContextValue = {
     sessionsById,
-    ...(onSelectSession === undefined ? {} : { onSelectSession }),
+    ...(sessionLinks.onSelectSession === undefined
+      ? {}
+      : { onSelectSession: sessionLinks.onSelectSession }),
     ...(sessionId === undefined
       ? {}
       : {

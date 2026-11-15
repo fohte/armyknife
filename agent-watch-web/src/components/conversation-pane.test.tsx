@@ -9,6 +9,7 @@ import { ConversationMessageRow } from '#components/conversation-message-row'
 import { ConversationPane } from '#components/conversation-pane'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { InboxConversationPanes } from '#components/inbox-conversation-panes'
+import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import { formatMessageTime } from '#components/message-time'
 import { SessionConversationCacheProvider } from '#components/session-conversation-cache'
 import { SessionStatusPanel } from '#components/session-status-panel'
@@ -304,32 +305,39 @@ function renderView(
   root ??= createRoot(container)
   act(() => {
     root?.render(
-      <ConversationPaneView
-        session={viewSession}
+      <MarkdownSessionLinksProvider
         sessions={viewSessions}
-        messages={viewMessages}
-        backgroundTasks={viewBackgroundTasks}
-        actions={viewActions}
-        pendingPermissionActions={
-          pendingPermissionAction === undefined ||
-          pendingPermissionAction === null
-            ? {}
-            : {
-                [pendingPermissionAction.requestId]: pendingPermissionAction,
-              }
-        }
-        loading={false}
-        error={null}
-        onAction={onAction}
-        {...(onRewind === undefined ? {} : { onRewind })}
         onSelectSession={onSelectSession}
-        isMobile={isMobile}
-        isToday={today.isToday}
-        onToggleToday={today.onToggleToday}
-        statusPanelOpen={statusPanelOpen}
-        mobileStatusPanel={mobileStatusPanel}
-        {...(onToggleStatusPanel === undefined ? {} : { onToggleStatusPanel })}
-      />,
+      >
+        <ConversationPaneView
+          session={viewSession}
+          sessions={viewSessions}
+          messages={viewMessages}
+          backgroundTasks={viewBackgroundTasks}
+          actions={viewActions}
+          pendingPermissionActions={
+            pendingPermissionAction === undefined ||
+            pendingPermissionAction === null
+              ? {}
+              : {
+                  [pendingPermissionAction.requestId]: pendingPermissionAction,
+                }
+          }
+          loading={false}
+          error={null}
+          onAction={onAction}
+          {...(onRewind === undefined ? {} : { onRewind })}
+          onSelectSession={onSelectSession}
+          isMobile={isMobile}
+          isToday={today.isToday}
+          onToggleToday={today.onToggleToday}
+          statusPanelOpen={statusPanelOpen}
+          mobileStatusPanel={mobileStatusPanel}
+          {...(onToggleStatusPanel === undefined
+            ? {}
+            : { onToggleStatusPanel })}
+        />
+      </MarkdownSessionLinksProvider>,
     )
   })
 }

@@ -35,12 +35,14 @@ import type {
   RewindMode,
   Session,
   SessionActions,
+  SessionLinkTarget,
   SkillSuggestion,
 } from '#types'
 
 type ConversationPaneViewProps = {
   session: Session
   sessions?: readonly Session[]
+  sessionLinkTargets?: readonly SessionLinkTarget[]
   messages: readonly ChatItem[]
   start?: number
   epoch?: string | undefined
@@ -91,6 +93,7 @@ type ConversationPaneViewProps = {
 export function ConversationPaneView({
   session,
   sessions = [],
+  sessionLinkTargets: providedSessionLinkTargets,
   messages,
   start = 0,
   epoch,
@@ -181,7 +184,9 @@ export function ConversationPaneView({
     isMobile,
     scrollRef: conversationScrollRef,
   })
-  const sessionLinkTargets = useSessionLinkTargets(sessions)
+  const computedSessionLinkTargets = useSessionLinkTargets(sessions)
+  const sessionLinkTargets =
+    providedSessionLinkTargets ?? computedSessionLinkTargets
   const sessionElapsedSecondsById = useMemo(
     () =>
       new Map(
