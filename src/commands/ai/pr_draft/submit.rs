@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use super::common::{DraftFile, PrDraftError, RepoInfo, contains_japanese, repo_allows_japanese};
 use super::hooks::{HookContext, HookRunner, PRE_PR_SUBMIT_HOOK, default_runner, run_pr_hook};
 use super::stack::stack_created_pull_request;
-use crate::commands::agent::{ensure_repo_vibe_access, is_vibe_enabled};
+use crate::commands::agent::{ensure_no_review_access, is_vibe_enabled};
 use crate::commands::ai::pr_series::{
     PrSeriesPlan, has_managed_section, load_plan_if_present, preserve_managed_section,
 };
@@ -17,7 +17,7 @@ use crate::infra::github::{
     UpdatePrParams,
 };
 use crate::infra::tq::TqClient;
-use crate::shared::config::{Config, load_config};
+use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::LockGuard;
 
 const SERIES_MARKERS_REQUIRED_ERROR: &str = indoc::indoc! {"
@@ -179,18 +179,6 @@ pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
         |owner, repo| ensure_no_review_access(is_vibe_enabled, load_config, owner, repo),
     )
     .await
-}
-
-fn ensure_no_review_access(
-    vibe_enabled: impl FnOnce() -> anyhow::Result<bool>,
-    load_config: impl FnOnce() -> anyhow::Result<Config>,
-    owner: &str,
-    repo: &str,
-) -> anyhow::Result<()> {
-    if !vibe_enabled()? {
-        anyhow::bail!("The --no-review option is only available when vibe mode is enabled.");
-    }
-    ensure_repo_vibe_access(&load_config()?, owner, repo)
 }
 
 async fn run_impl(
