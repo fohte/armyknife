@@ -554,6 +554,7 @@ mod tests {
         #[case::ancestor_ids_only(
             Some("root, parent"),
             false,
+            true,
             None,
             false,
             vec![(EnvVars::ancestor_session_ids_name(), "root, parent")]
@@ -561,12 +562,14 @@ mod tests {
         #[case::vibe_marker_only(
             None,
             true,
+            true,
             None,
             false,
             vec![(EnvVars::session_vibe_launch_name(), "1")]
         )]
         #[case::vibe_marker_and_ancestors(
             Some("root, parent"),
+            true,
             true,
             None,
             false,
@@ -578,6 +581,7 @@ mod tests {
         #[case::pinned_work_type(
             None,
             false,
+            true,
             Some("designer"),
             true,
             vec![(EnvVars::session_work_type_name(), "designer")]
@@ -585,36 +589,48 @@ mod tests {
         #[case::inferred_work_type_is_not_restored(
             None,
             false,
+            true,
             Some("designer"),
+            false,
+            vec![]
+        )]
+        #[case::no_stored_session(
+            None,
+            false,
+            false,
+            None,
             false,
             vec![]
         )]
         fn creates_environment_for_resumed_session(
             #[case] ancestor_session_ids: Option<&str>,
             #[case] launched_with_vibe: bool,
+            #[case] stored_session_exists: bool,
             #[case] work_type: Option<&str>,
             #[case] work_type_pinned: bool,
             #[case] expected: Vec<(&'static str, &'static str)>,
         ) {
-            let session = serde_json::from_value::<Session>(serde_json::json!({
-                "session_id": "fixture-session",
-                "cwd": "/fixture/worktree",
-                "transcript_path": null,
-                "tmux_info": null,
-                "status": "stopped",
-                "created_at": "2026-01-01T00:00:00Z",
-                "updated_at": "2026-01-01T00:00:00Z",
-                "last_message": null,
-                "work_type": work_type,
-                "work_type_pinned": work_type_pinned,
-            }))
-            .unwrap();
+            let session = stored_session_exists.then(|| {
+                serde_json::from_value::<Session>(serde_json::json!({
+                    "session_id": "fixture-session",
+                    "cwd": "/fixture/worktree",
+                    "transcript_path": null,
+                    "tmux_info": null,
+                    "status": "stopped",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "last_message": null,
+                    "work_type": work_type,
+                    "work_type_pinned": work_type_pinned,
+                }))
+                .unwrap()
+            });
 
             assert_eq!(
                 resume_environment_variables(
                     ancestor_session_ids,
                     launched_with_vibe,
-                    Some(&session)
+                    session.as_ref()
                 ),
                 expected
             );
