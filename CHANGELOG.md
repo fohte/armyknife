@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.737](https://github.com/fohte/armyknife/compare/v0.1.736...v0.1.737) (2026-11-15)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** rank unset priorities by tq ([#1857](https://github.com/fohte/armyknife/issues/1857)) ([24b2c96](https://github.com/fohte/armyknife/commit/24b2c96d04e5a245fbf6f1514935c09f03e47b45))
+
 ## [0.1.736](https://github.com/fohte/armyknife/compare/v0.1.735...v0.1.736) (2026-11-15)
 
 
