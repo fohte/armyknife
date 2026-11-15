@@ -13,6 +13,7 @@ use super::{
 };
 
 mod tail_window;
+pub(super) use tail_window::parse_session_transcript_tail_window_bounded;
 
 pub(super) use tail_window::{filter_after_tail_window, parse_initial_or_full};
 

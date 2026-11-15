@@ -17,13 +17,31 @@ const MAX_ANCESTRY_SEARCHES: usize = 4096;
 type TimedRecord = (Option<DateTime<Utc>>, Value);
 
 pub(super) fn new_tail_window(
-    mut reader: impl BufRead + Seek,
+    reader: impl BufRead + Seek,
     image_directory: Option<&Path>,
     message_limit: usize,
     pending_task_ids: &[String],
 ) -> io::Result<Option<IncrementalClaudeParser>> {
+    new_tail_window_bounded(
+        reader,
+        image_directory,
+        message_limit,
+        pending_task_ids,
+        MAX_WINDOW_BYTES,
+    )
+}
+
+pub(super) fn new_tail_window_bounded(
+    mut reader: impl BufRead + Seek,
+    image_directory: Option<&Path>,
+    message_limit: usize,
+    pending_task_ids: &[String],
+    max_window_bytes: u64,
+) -> io::Result<Option<IncrementalClaudeParser>> {
     let file_length = reader.seek(SeekFrom::End(0))?;
-    let Some(window_start) = select_window_start(&mut reader, file_length, message_limit)? else {
+    let Some(window_start) =
+        select_window_start(&mut reader, file_length, message_limit, max_window_bytes)?
+    else {
         return Ok(None);
     };
     if window_start == 0 {
@@ -116,8 +134,9 @@ fn select_window_start(
     reader: &mut (impl Read + Seek),
     file_length: u64,
     message_limit: usize,
+    max_window_bytes: u64,
 ) -> io::Result<Option<u64>> {
-    let mut window_length = INITIAL_WINDOW_BYTES.min(file_length);
+    let mut window_length = INITIAL_WINDOW_BYTES.min(file_length).min(max_window_bytes);
     loop {
         let start = file_length.saturating_sub(window_length);
         reader.seek(SeekFrom::Start(start))?;
@@ -151,10 +170,10 @@ fn select_window_start(
         if start == 0 {
             return Ok(Some(0));
         }
-        if window_length == MAX_WINDOW_BYTES {
+        if window_length == max_window_bytes {
             return Ok(None);
         }
-        window_length = window_length.saturating_mul(2).min(MAX_WINDOW_BYTES);
+        window_length = window_length.saturating_mul(2).min(max_window_bytes);
     }
 }
 
@@ -192,8 +211,11 @@ fn restore_prefix_state(
         );
     }
     if !missing_task_ids.is_empty() {
-        let (task_results, complete) =
-            tail_window::find_background_task_starts(reader, window_start, missing_task_ids)?;
+        let (task_results, complete) = tail_window::find_pending_background_task_starts(
+            reader,
+            window_start,
+            missing_task_ids,
+        )?;
         if !complete {
             return Ok(None);
         }

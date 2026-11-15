@@ -52,19 +52,7 @@ impl BackgroundTaskTracker {
     }
 
     pub(super) fn finish_notification(&mut self, text: &str) {
-        let Some(body) = task_notification_body(text) else {
-            return;
-        };
-        if is_waiting_for_own_background_work(body) {
-            return;
-        }
-        let Some(task_id) = tagged_value(body, "task-id") else {
-            return;
-        };
-        let Some(status) = tagged_value(body, "status") else {
-            return;
-        };
-        if matches!(status, "completed" | "failed" | "killed" | "stopped") {
+        if let Some(task_id) = finished_task_notification_id(text) {
             self.tasks.retain(|task| task.id != task_id);
         }
     }
@@ -120,6 +108,16 @@ pub(super) fn task_notification_text(record: &Value) -> Option<String> {
     let text = notification_text(record)?;
     (origin_kind == Some("task-notification") || task_notification_body(&text).is_some())
         .then_some(text)
+}
+
+pub(super) fn finished_task_notification_id(text: &str) -> Option<&str> {
+    let body = task_notification_body(text)?;
+    if is_waiting_for_own_background_work(body) {
+        return None;
+    }
+    let task_id = tagged_value(body, "task-id")?;
+    let status = tagged_value(body, "status")?;
+    matches!(status, "completed" | "failed" | "killed" | "stopped").then_some(task_id)
 }
 
 fn notification_text(record: &Value) -> Option<String> {
