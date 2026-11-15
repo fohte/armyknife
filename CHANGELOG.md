@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.719](https://github.com/fohte/armyknife/compare/v0.1.718...v0.1.719) (2026-11-15)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** avoid tail-window EOF errors ([#1820](https://github.com/fohte/armyknife/issues/1820)) ([38c60a0](https://github.com/fohte/armyknife/commit/38c60a01fcc59df978c1dc048020feaa17a6e73a))
+
 ## [0.1.718](https://github.com/fohte/armyknife/compare/v0.1.717...v0.1.718) (2026-11-15)
 
 
