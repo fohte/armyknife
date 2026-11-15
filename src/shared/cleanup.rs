@@ -24,8 +24,8 @@ pub struct WorktreeCleanupResult {
     pub worktree_deleted: bool,
     /// Name of the branch that was deleted, if any.
     pub branch_deleted: Option<String>,
-    /// Number of tmux windows that were closed.
-    pub windows_closed: usize,
+    /// Number of tmux panes that were closed.
+    pub panes_closed: usize,
     /// Number of agent sessions cleaned up.
     pub sessions_cleaned: usize,
     /// Number of process groups killed that were rooted in the worktree
@@ -38,7 +38,7 @@ pub struct WorktreeCleanupResult {
 }
 
 /// Cleans up all resources associated with a worktree at `cwd`:
-/// worktree itself, branch, tmux windows, agent session records, and notifications.
+/// worktree itself, branch, tmux panes, agent session records, and notifications.
 ///
 /// `cwd` can be any path inside the worktree (including subdirectories);
 /// the worktree root is resolved via `repo.workdir()`.
@@ -96,7 +96,7 @@ pub fn cleanup_worktree_resources_with_post_delete(
 /// before session and tmux cleanup runs.
 ///
 /// `worktree_path` is the filesystem path of the worktree root, used for
-/// tmux window and session record lookup.
+/// tmux pane and session record lookup.
 pub fn cleanup_worktree_by_name(
     repo: &GitRepo,
     worktree_name: &str,
@@ -104,25 +104,25 @@ pub fn cleanup_worktree_by_name(
     force: bool,
     after_delete: impl FnOnce(),
 ) -> anyhow::Result<WorktreeCleanupResult> {
-    // Collect tmux window IDs and process groups rooted in the worktree
+    // Collect tmux pane IDs and process groups rooted in the worktree
     // before deleting it (the path must still exist to match against).
     let path_str = worktree_path.to_string_lossy();
-    let window_ids = tmux::get_window_ids_in_path(&path_str);
+    let pane_ids = tmux::get_pane_ids_in_path(&path_str);
     let orphan_pgids = process::find_pgids_in_path(worktree_path);
 
     let mut result = delete_worktree_and_branch(repo, worktree_name, worktree_path, force)?;
 
-    // Clean up sessions BEFORE killing tmux windows: if the caller is running
-    // inside one of those windows (e.g. `a agent close` invoked from the
-    // worktree's own pane), kill_window terminates the caller's pane and
+    // Clean up sessions BEFORE killing tmux panes: if the caller is running
+    // inside one of those panes (e.g. `a agent close` invoked from the
+    // worktree's own pane), kill_pane terminates the caller's pane and
     // SIGHUPs this very process, leaving Paused sessions orphaned on disk.
     run_post_delete_cleanup(result.worktree_deleted, after_delete, || {
         result.sessions_cleaned = cleanup_sessions_in_path(worktree_path).unwrap_or(0);
         result.process_groups_signaled = process::kill_process_groups(&orphan_pgids);
 
-        for window_id in &window_ids {
-            if tmux::kill_window(window_id).is_ok() {
-                result.windows_closed += 1;
+        for pane_id in &pane_ids {
+            if tmux::kill_pane(pane_id).is_ok() {
+                result.panes_closed += 1;
             }
         }
     });
@@ -978,7 +978,7 @@ mod tests {
 
         assert!(result.worktree_deleted);
         assert_eq!(result.branch_deleted, Some("cleanup-test".to_string()));
-        assert_eq!(result.windows_closed, 0);
+        assert_eq!(result.panes_closed, 0);
         assert_eq!(result.sessions_cleaned, 0);
         assert_eq!(result.process_groups_signaled, 0);
 
@@ -1062,7 +1062,7 @@ mod tests {
 
         assert!(!result.worktree_deleted);
         assert!(result.branch_deleted.is_none());
-        assert_eq!(result.windows_closed, 0);
+        assert_eq!(result.panes_closed, 0);
         assert_eq!(result.sessions_cleaned, 0);
         assert_eq!(result.process_groups_signaled, 0);
     }
@@ -1075,7 +1075,7 @@ mod tests {
 
         assert!(!result.worktree_deleted);
         assert!(result.branch_deleted.is_none());
-        assert_eq!(result.windows_closed, 0);
+        assert_eq!(result.panes_closed, 0);
         assert_eq!(result.sessions_cleaned, 0);
         assert_eq!(result.process_groups_signaled, 0);
     }

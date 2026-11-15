@@ -305,41 +305,42 @@ pub fn kill_pane(pane_id: &str) -> Result<()> {
     run_tmux(&["kill-pane", "-t", pane_id])
 }
 
-/// Get all window IDs that have panes with working directories inside the given path.
-///
-/// This searches all tmux sessions and returns unique window IDs where any pane
-/// has its current working directory inside `path`.
-pub fn get_window_ids_in_path(path: &str) -> Vec<String> {
+/// Get all pane IDs whose working directories are inside the given path.
+pub fn get_pane_ids_in_path(path: &str) -> Vec<String> {
     let output = match run_tmux_output(&[
         "list-panes",
         "-a",
         "-F",
-        "#{pane_current_path}\t#{window_id}",
+        "#{pane_id}\t#{window_id}\t#{pane_current_path}",
     ]) {
         Ok(output) => output,
         Err(_) => return Vec::new(),
     };
 
+    pane_ids_in_path(&output, path)
+}
+
+fn pane_ids_in_path(output: &str, path: &str) -> Vec<String> {
     let target_path = std::path::Path::new(path);
-    let mut window_ids: Vec<String> = output
+    let mut pane_ids: Vec<String> = output
         .lines()
         .filter_map(|line| {
-            // Use rsplit_once to handle paths containing tabs correctly,
-            // since window_id is guaranteed not to contain tabs
-            let (pane_path, window_id) = line.rsplit_once('\t')?;
+            let mut fields = line.splitn(3, '\t');
+            let pane_id = fields.next()?;
+            fields.next()?;
+            let pane_path = fields.next()?;
 
             if std::path::Path::new(pane_path).starts_with(target_path) {
-                Some(window_id.to_string())
+                Some(pane_id.to_string())
             } else {
                 None
             }
         })
         .collect();
 
-    // Remove duplicates (multiple panes can be in the same window)
-    window_ids.sort();
-    window_ids.dedup();
-    window_ids
+    pane_ids.sort();
+    pane_ids.dedup();
+    pane_ids
 }
 
 /// Focus a tmux pane by switching directly to it.
@@ -715,6 +716,22 @@ fn parse_pane_line_by_pid(line: &str, target_pid: u32) -> Option<PaneInfo> {
 mod tests {
     use super::*;
     use rstest::rstest;
+
+    #[rstest]
+    #[case::outside_pane_in_same_window(
+        "%1\t@1\t/repo/worktrees/target\n%2\t@1\t/repo/other",
+        vec!["%1".to_string()],
+    )]
+    #[case::all_panes_in_worktree(
+        "%3\t@2\t/repo/worktrees/target\n%4\t@2\t/repo/worktrees/target/nested",
+        vec!["%3".to_string(), "%4".to_string()],
+    )]
+    fn pane_ids_in_path_selects_only_matching_panes(
+        #[case] output: &str,
+        #[case] expected: Vec<String>,
+    ) {
+        assert_eq!(pane_ids_in_path(output, "/repo/worktrees/target"), expected);
+    }
 
     #[test]
     fn respawn_pane_args_include_each_environment_variable() {
