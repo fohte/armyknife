@@ -84,7 +84,7 @@ pub enum AppMode {
     /// Confirm deletion of a session. Holds the session_id and its status.
     /// If `worktree_cleanup` is `Some`, this is the last session in that
     /// worktree, and confirming will also delete the worktree, its branch,
-    /// and associated tmux windows in a single step.
+    /// and matching tmux panes in a single step.
     Confirm {
         session_id: String,
         is_alive: bool,

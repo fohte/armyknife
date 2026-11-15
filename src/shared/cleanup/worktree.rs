@@ -30,8 +30,8 @@ pub struct WorktreeCleanupResult {
     pub worktree_deleted: bool,
     /// Name of the branch that was deleted, if any.
     pub branch_deleted: Option<String>,
-    /// Number of tmux windows that were closed.
-    pub windows_closed: usize,
+    /// Number of tmux panes that were closed.
+    pub panes_closed: usize,
     /// Number of agent sessions cleaned up.
     pub sessions_cleaned: usize,
     /// Number of process groups killed that were rooted in the worktree
@@ -44,7 +44,7 @@ pub struct WorktreeCleanupResult {
 }
 
 /// Cleans up all resources associated with a worktree at `cwd`:
-/// worktree itself, branch, tmux windows, agent session records, and notifications.
+/// worktree itself, branch, tmux panes, agent session records, and notifications.
 ///
 /// `cwd` can be any path inside the worktree (including subdirectories);
 /// the worktree root is resolved via `repo.workdir()`.
@@ -102,7 +102,7 @@ pub fn cleanup_worktree_resources_with_post_delete(
 /// before session and tmux cleanup runs.
 ///
 /// `worktree_path` is the filesystem path of the worktree root, used for
-/// tmux window and session record lookup.
+/// tmux pane and session record lookup.
 pub fn cleanup_worktree_by_name(
     repo: &GitRepo,
     worktree_name: &str,
@@ -116,13 +116,13 @@ pub fn cleanup_worktree_by_name(
         after_delete,
         WorktreeCleanupOperations {
             detect_processes: process::find_non_shell_processes_in_path,
-            find_windows: |path: &Path| tmux::get_window_ids_in_path(&path.to_string_lossy()),
+            find_panes: |path: &Path| tmux::get_pane_ids_in_path(&path.to_string_lossy()),
             find_groups: process::find_pgids_in_path,
             clean_sessions: |path: &Path, signal_agents: bool| {
                 super::cleanup_sessions_in_path_with_policy(path, signal_agents).unwrap_or(0)
             },
             kill_groups: process::kill_process_groups,
-            kill_window: |window_id: &str| tmux::kill_window(window_id).is_ok(),
+            kill_pane: |pane_id: &str| tmux::kill_pane(pane_id).is_ok(),
             delete_worktree: |force, path: PathBuf, detect_processes| {
                 delete_worktree_and_branch(repo, worktree_name, &path, force, || {
                     check_process_guard(&path, force, detect_processes)
@@ -134,29 +134,29 @@ pub fn cleanup_worktree_by_name(
 
 struct WorktreeCleanupOperations<
     DetectProcesses,
-    FindWindows,
+    FindPanes,
     FindGroups,
     CleanSessions,
     KillGroups,
-    KillWindow,
+    KillPane,
     DeleteWorktree,
 > {
     detect_processes: DetectProcesses,
-    find_windows: FindWindows,
+    find_panes: FindPanes,
     find_groups: FindGroups,
     clean_sessions: CleanSessions,
     kill_groups: KillGroups,
-    kill_window: KillWindow,
+    kill_pane: KillPane,
     delete_worktree: DeleteWorktree,
 }
 
 fn cleanup_worktree_by_name_with_operations<
     DetectProcesses,
-    FindWindows,
+    FindPanes,
     FindGroups,
     CleanSessions,
     KillGroups,
-    KillWindow,
+    KillPane,
     DeleteWorktree,
 >(
     worktree_path: &Path,
@@ -164,35 +164,35 @@ fn cleanup_worktree_by_name_with_operations<
     after_delete: impl FnOnce(),
     operations: WorktreeCleanupOperations<
         DetectProcesses,
-        FindWindows,
+        FindPanes,
         FindGroups,
         CleanSessions,
         KillGroups,
-        KillWindow,
+        KillPane,
         DeleteWorktree,
     >,
 ) -> anyhow::Result<WorktreeCleanupResult>
 where
     DetectProcesses: FnOnce(&Path) -> Option<Vec<ProcessInPath>>,
-    FindWindows: FnOnce(&Path) -> Vec<String>,
+    FindPanes: FnOnce(&Path) -> Vec<String>,
     FindGroups: FnOnce(&Path) -> Vec<libc::pid_t>,
     CleanSessions: FnOnce(&Path, bool) -> usize,
     KillGroups: FnOnce(&[libc::pid_t]) -> usize,
-    KillWindow: FnMut(&str) -> bool,
+    KillPane: FnMut(&str) -> bool,
     DeleteWorktree: FnOnce(bool, PathBuf, DetectProcesses) -> anyhow::Result<WorktreeCleanupResult>,
 {
     let WorktreeCleanupOperations {
         detect_processes,
-        find_windows,
+        find_panes,
         find_groups,
         clean_sessions,
         kill_groups,
-        mut kill_window,
+        mut kill_pane,
         delete_worktree,
     } = operations;
 
-    // Collect tmux window IDs before deleting because the path is needed for matching.
-    let window_ids = find_windows(worktree_path);
+    // Collect tmux pane IDs before deleting because the path is needed for matching.
+    let pane_ids = find_panes(worktree_path);
     let orphan_pgids = if force {
         find_groups(worktree_path)
     } else {
@@ -201,16 +201,15 @@ where
 
     let mut result = delete_worktree(force, worktree_path.to_path_buf(), detect_processes)?;
 
-    // Clean up sessions before killing panes so a caller in the window can finish.
+    // Clean up sessions before killing panes so a caller in the pane can finish.
     run_post_delete_cleanup(result.worktree_deleted, after_delete, || {
         result.sessions_cleaned = clean_sessions(worktree_path, force);
         result.process_groups_signaled = if force { kill_groups(&orphan_pgids) } else { 0 };
-
-        for window_id in &window_ids {
-            if kill_window(window_id) {
-                result.windows_closed += 1;
-            }
-        }
+        result.panes_closed = kill_worktree_panes(
+            &pane_ids,
+            tmux::current_pane_id_from_env().as_deref(),
+            |pane_id| kill_pane(pane_id),
+        );
     });
 
     Ok(result)
@@ -255,6 +254,35 @@ fn run_post_delete_cleanup(
     }
 }
 
+fn kill_worktree_panes(
+    pane_ids: &[String],
+    caller_pane_id: Option<&str>,
+    mut kill_pane: impl FnMut(&str) -> bool,
+) -> usize {
+    let caller_pane_id = caller_pane_id.and_then(|caller_pane_id| {
+        pane_ids
+            .iter()
+            .any(|pane_id| pane_id == caller_pane_id)
+            .then_some(caller_pane_id)
+    });
+
+    let mut panes_closed = 0;
+    for pane_id in pane_ids
+        .iter()
+        .filter(|pane_id| Some(pane_id.as_str()) != caller_pane_id)
+    {
+        if kill_pane(pane_id) {
+            panes_closed += 1;
+        }
+    }
+    if let Some(caller_pane_id) = caller_pane_id
+        && kill_pane(caller_pane_id)
+    {
+        panes_closed += 1;
+    }
+    panes_closed
+}
+
 fn delete_worktree_and_branch(
     repo: &GitRepo,
     worktree_name: &str,
@@ -290,6 +318,22 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    fn closes_caller_pane_last_and_counts_successes() {
+        let pane_ids = vec!["%pane-a".to_string(), "%pane-b".to_string()];
+        let closed_panes = RefCell::new(Vec::new());
+
+        let panes_closed = kill_worktree_panes(&pane_ids, Some("%pane-a"), |pane_id| {
+            closed_panes.borrow_mut().push(pane_id.to_string());
+            pane_id == "%pane-b"
+        });
+
+        assert_eq!(
+            (closed_panes.into_inner(), panes_closed),
+            (vec!["%pane-b".to_string(), "%pane-a".to_string()], 1),
+        );
+    }
+
+    #[test]
     fn delete_worktree_and_branch_deletes_both() {
         let test_repo = TestRepo::new();
         test_repo.create_worktree("cleanup-test");
@@ -306,7 +350,7 @@ mod tests {
 
         assert!(result.worktree_deleted);
         assert_eq!(result.branch_deleted, Some("cleanup-test".to_string()));
-        assert_eq!(result.windows_closed, 0);
+        assert_eq!(result.panes_closed, 0);
         assert_eq!(result.sessions_cleaned, 0);
         assert_eq!(result.process_groups_signaled, 0);
 
@@ -320,22 +364,22 @@ mod tests {
     #[case::active_process_without_force(
         false,
         Some(vec![ProcessInPath { pid: 42, comm: "editor".to_string() }]),
-        (false, Some("active"), true, vec!["windows", "detect"]),
+        (false, Some("active"), true, vec!["panes", "detect"]),
     )]
     #[case::inspection_unavailable_without_force(
         false,
         None,
-        (false, Some("unavailable"), true, vec!["windows", "detect"]),
+        (false, Some("unavailable"), true, vec!["panes", "detect"]),
     )]
     #[case::shell_only_without_force(
         false,
         Some(vec![]),
-        (true, None, false, vec!["windows", "detect", "delete:false", "after_delete", "sessions:false", "window_closed"]),
+        (true, None, false, vec!["panes", "detect", "delete:false", "after_delete", "sessions:false", "pane_closed"]),
     )]
     #[case::force_skips_the_guard_and_signals_process_groups(
         true,
         None,
-        (true, None, false, vec!["windows", "groups_detect", "delete:true", "after_delete", "sessions:true", "groups:[77]", "window_closed"]),
+        (true, None, false, vec!["panes", "groups_detect", "delete:true", "after_delete", "sessions:true", "groups:[77]", "pane_closed"]),
     )]
     fn cleanup_checks_processes_before_deleting_and_signals_only_with_force(
         #[case] force: bool,
@@ -356,9 +400,9 @@ mod tests {
                     events.borrow_mut().push("detect");
                     detected_processes
                 },
-                find_windows: |_: &Path| {
-                    events.borrow_mut().push("windows");
-                    vec!["@process-guard-test".to_string()]
+                find_panes: |_: &Path| {
+                    events.borrow_mut().push("panes");
+                    vec!["%process-guard-test".to_string()]
                 },
                 find_groups: |_: &Path| {
                     events.borrow_mut().push("groups_detect");
@@ -380,8 +424,8 @@ mod tests {
                     });
                     pgids.len()
                 },
-                kill_window: |_: &str| {
-                    events.borrow_mut().push("window_closed");
+                kill_pane: |_: &str| {
+                    events.borrow_mut().push("pane_closed");
                     true
                 },
                 delete_worktree: |force, path: PathBuf, detect_processes| {
@@ -490,7 +534,7 @@ mod tests {
 
         assert!(!result.worktree_deleted);
         assert!(result.branch_deleted.is_none());
-        assert_eq!(result.windows_closed, 0);
+        assert_eq!(result.panes_closed, 0);
         assert_eq!(result.sessions_cleaned, 0);
         assert_eq!(result.process_groups_signaled, 0);
     }
@@ -502,7 +546,7 @@ mod tests {
 
         assert!(!result.worktree_deleted);
         assert!(result.branch_deleted.is_none());
-        assert_eq!(result.windows_closed, 0);
+        assert_eq!(result.panes_closed, 0);
         assert_eq!(result.sessions_cleaned, 0);
         assert_eq!(result.process_groups_signaled, 0);
     }

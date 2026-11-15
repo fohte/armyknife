@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.740](https://github.com/fohte/armyknife/compare/v0.1.739...v0.1.740) (2026-11-15)
+
+
+### Bug Fixes
+
+* **worktree:** preserve unrelated panes ([#1863](https://github.com/fohte/armyknife/issues/1863)) ([08ab4ec](https://github.com/fohte/armyknife/commit/08ab4ec41e51782e9a2305f05e4b6f309d57a681))
+
 ## [0.1.739](https://github.com/fohte/armyknife/compare/v0.1.738...v0.1.739) (2026-11-15)
 
 

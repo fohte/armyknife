@@ -12,7 +12,7 @@ impl App {
     ///
     /// If the session is the last one in its worktree, records the worktree
     /// root so a single `y` will delete both the session and the worktree
-    /// (branch, tmux windows, worktree dir) in one confirmation.
+    /// (branch, matching tmux panes, worktree dir) in one confirmation.
     pub fn request_delete(&mut self) {
         if let Some(session) = self.selected_session() {
             let session_id = session.session_id.clone();
@@ -41,7 +41,7 @@ impl App {
     /// If the session is alive, sends SIGTERM to the pane process first.
     ///
     /// When `worktree_cleanup` is `Some`, also removes the worktree, its
-    /// branch, associated tmux windows, and any remaining session records
+    /// branch, matching tmux panes, and any remaining session records
     /// inside the worktree.
     pub fn confirm_delete(&mut self) -> anyhow::Result<()> {
         self.confirm_delete_with(store::delete_session)

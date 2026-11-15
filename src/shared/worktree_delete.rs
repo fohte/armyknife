@@ -3,7 +3,6 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use crate::infra::git::{GitRepo, MergeStatus, get_merge_status_for_repo, get_repo_root};
-use crate::infra::tmux;
 use crate::shared::cleanup;
 use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
@@ -105,10 +104,6 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
         skip_hooks,
     );
 
-    // Capture the current tmux window ID before cleanup deletes it,
-    // so we can close the window we're sitting in
-    let current_window_id = tmux::get_window_id_if_in_path(&worktree_path_str);
-
     let result = cleanup::cleanup_worktree_by_name(
         &main_repo,
         &worktree_name,
@@ -161,14 +156,6 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
             "Process groups signaled: {}",
             result.process_groups_signaled
         );
-    }
-
-    // Close the current tmux window if we're inside the deleted worktree.
-    // cleanup_worktree_by_name uses get_window_ids_in_path which queries all
-    // panes globally, but the current window may have already been captured
-    // above via get_window_id_if_in_path. Ensure it's closed.
-    if let Some(window_id) = current_window_id {
-        let _ = tmux::kill_window(&window_id);
     }
 
     Ok(())
