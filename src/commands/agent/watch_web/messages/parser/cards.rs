@@ -170,7 +170,7 @@ pub(in crate::commands::agent::watch_web::messages) fn cards_from_sources(
                 CardKind::Decision,
                 created_at,
                 decision.seq,
-                decision.review.is_none(),
+                false,
                 ChatItem::from(decision.clone()),
             )
         })
@@ -581,6 +581,15 @@ mod tests {
                 text: "before".to_string(),
             },
             proposals[0].item.clone(),
+            ChatItem::Decision {
+                seq: 1,
+                title: "A pending decision".to_string(),
+                why: "The example should remain adjustable.".to_string(),
+                considered: Vec::new(),
+                easy_to_change: "Adjust the example.".to_string(),
+                review: None,
+                created_at: "2026-06-01T12:01:30Z".to_string(),
+            },
             ChatItem::Todo {
                 seq: 1,
                 title: "A completed todo".to_string(),
@@ -613,15 +622,6 @@ mod tests {
                 comment: None,
             },
             proposals[2].item.clone(),
-            ChatItem::Decision {
-                seq: 1,
-                title: "A pending decision".to_string(),
-                why: "The example should remain adjustable.".to_string(),
-                considered: Vec::new(),
-                easy_to_change: "Adjust the example.".to_string(),
-                review: None,
-                created_at: "2026-06-01T12:01:30Z".to_string(),
-            },
             additional_cards[1].item.clone(),
             ChatItem::Permission {
                 request_id: None,

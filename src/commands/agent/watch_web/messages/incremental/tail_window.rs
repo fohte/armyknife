@@ -7,6 +7,7 @@ use super::super::{
     ChatItem, ConversationResponse, Engine, TranscriptInput, open_seekable_transcript,
 };
 use super::render_parser;
+use crate::commands::agent::store::{AgentDecision, AgentTodo};
 
 pub(in crate::commands::agent::watch_web::messages) fn parse_initial_or_full<'a>(
     session_id: &str,
@@ -149,17 +150,7 @@ fn parse_session_transcript_tail_window_with_max_bytes(
     else {
         return Ok(None);
     };
-    let decisions = input
-        .additions
-        .decisions
-        .iter()
-        .filter(|decision| {
-            decision.review.is_none()
-                || chrono::DateTime::parse_from_rfc3339(&decision.created_at)
-                    .is_ok_and(|created_at| created_at.with_timezone(&chrono::Utc) >= cutoff)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
+    let decisions = filter_decisions_after_tail_window(input.additions.decisions, cutoff);
     let proposals = input
         .additions
         .proposals
@@ -175,13 +166,7 @@ fn parse_session_transcript_tail_window_with_max_bytes(
         })
         .cloned()
         .collect::<Vec<_>>();
-    let todos = input
-        .additions
-        .todos
-        .iter()
-        .filter(|todo| todo.completed_at.is_none() || todo.created_at >= cutoff)
-        .cloned()
-        .collect::<Vec<_>>();
+    let todos = filter_todos_after_tail_window(input.additions.todos, cutoff);
     let peer_out_messages = input
         .additions
         .peer_out_messages
@@ -217,6 +202,31 @@ fn parse_session_transcript_tail_window_with_max_bytes(
     resolved_ids.dedup();
     conversation.tail_window_start = Some(cutoff);
     Ok(Some((conversation, resolved_ids)))
+}
+
+fn filter_decisions_after_tail_window(
+    decisions: &[AgentDecision],
+    cutoff: chrono::DateTime<chrono::Utc>,
+) -> Vec<AgentDecision> {
+    decisions
+        .iter()
+        .filter(|decision| {
+            chrono::DateTime::parse_from_rfc3339(&decision.created_at)
+                .is_ok_and(|created_at| created_at.with_timezone(&chrono::Utc) >= cutoff)
+        })
+        .cloned()
+        .collect()
+}
+
+fn filter_todos_after_tail_window(
+    todos: &[AgentTodo],
+    cutoff: chrono::DateTime<chrono::Utc>,
+) -> Vec<AgentTodo> {
+    todos
+        .iter()
+        .filter(|todo| todo.completed_at.is_none() || todo.created_at >= cutoff)
+        .cloned()
+        .collect()
 }
 
 fn resolve_queued_prompts_before_window(
@@ -269,7 +279,19 @@ fn resolve_queued_prompts_before_window(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_tail_window_or_full;
+    use chrono::{DateTime, Utc};
+
+    use super::{
+        filter_decisions_after_tail_window, filter_todos_after_tail_window,
+        parse_tail_window_or_full,
+    };
+    use crate::commands::agent::store::{AgentDecision, AgentTodo, TodoResolution};
+
+    fn timestamp(value: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(value)
+            .expect("test timestamp should parse")
+            .with_timezone(&Utc)
+    }
 
     #[test]
     fn tail_window_io_error_falls_back_to_full_parse() {
@@ -281,5 +303,77 @@ mod tests {
         .unwrap();
 
         assert_eq!(actual, (full_result, false));
+    }
+
+    #[test]
+    fn tail_window_omits_old_decisions_but_keeps_unresolved_todos() {
+        let decisions = [
+            AgentDecision {
+                session_id: "fixture-session".to_string(),
+                seq: 1,
+                title: "An old unreviewed decision".to_string(),
+                why: "It predates the displayed transcript window.".to_string(),
+                considered: Vec::new(),
+                easy_to_change: "Change it later.".to_string(),
+                created_at: "2026-06-01T11:59:59Z".to_string(),
+                review: None,
+                reviewed_at: None,
+            },
+            AgentDecision {
+                session_id: "fixture-session".to_string(),
+                seq: 2,
+                title: "A recent reviewed decision".to_string(),
+                why: "It falls inside the displayed transcript window.".to_string(),
+                considered: Vec::new(),
+                easy_to_change: "Change it later.".to_string(),
+                created_at: "2026-06-01T12:00:00Z".to_string(),
+                review: Some("ok".to_string()),
+                reviewed_at: Some("2026-06-01T12:00:01Z".to_string()),
+            },
+        ];
+        let todos = [
+            AgentTodo {
+                session_id: "fixture-session".to_string(),
+                seq: 1,
+                title: "An old incomplete todo".to_string(),
+                detail: None,
+                created_at: timestamp("2026-06-01T11:59:59Z"),
+                completed_at: None,
+                resolution: None,
+                comment: None,
+            },
+            AgentTodo {
+                session_id: "fixture-session".to_string(),
+                seq: 2,
+                title: "An old completed todo".to_string(),
+                detail: None,
+                created_at: timestamp("2026-06-01T11:59:58Z"),
+                completed_at: Some(timestamp("2026-06-01T11:59:59Z")),
+                resolution: Some(TodoResolution::Completed),
+                comment: None,
+            },
+            AgentTodo {
+                session_id: "fixture-session".to_string(),
+                seq: 3,
+                title: "A recent completed todo".to_string(),
+                detail: None,
+                created_at: timestamp("2026-06-01T12:00:00Z"),
+                completed_at: Some(timestamp("2026-06-01T12:00:01Z")),
+                resolution: Some(TodoResolution::Completed),
+                comment: None,
+            },
+        ];
+        let cutoff = timestamp("2026-06-01T12:00:00Z");
+
+        assert_eq!(
+            (
+                filter_decisions_after_tail_window(&decisions, cutoff),
+                filter_todos_after_tail_window(&todos, cutoff),
+            ),
+            (
+                vec![decisions[1].clone()],
+                vec![todos[0].clone(), todos[2].clone()],
+            ),
+        );
     }
 }

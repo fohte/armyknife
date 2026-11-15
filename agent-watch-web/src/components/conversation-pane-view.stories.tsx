@@ -108,8 +108,8 @@ export const QuestionWaitsForAnAnswer: Story = {
   },
 }
 
-export const PendingActionsAppearAboveComposer: Story = {
-  name: 'Pending cards sit above the composer while answered cards stay in the conversation',
+export const ReplyWaitingCardsStayInConversation: Story = {
+  name: 'Reply-waiting cards stay in the conversation before the composer',
   args: {
     messages: [
       {
@@ -420,7 +420,7 @@ export const IPhoneConversationShowsAQuestion: Story = {
 }
 
 export const IPhoneConversationShowsMultiplePendingCards: Story = {
-  name: 'The iPhone composer keeps multiple pending cards within reach',
+  name: 'The iPhone conversation keeps multiple pending cards in the scroll area',
   args: {
     isMobile: true,
     actions: { ...actions, interrupt: false },
