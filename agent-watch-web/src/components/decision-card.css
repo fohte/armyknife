@@ -42,6 +42,16 @@
   color: var(--aw-text-secondary);
 }
 
+.decision-card-considered-count {
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .decision-card-considered-count {
+    display: none;
+  }
+}
+
 .decision-card-title {
   max-width: 100%;
   min-width: 0;
