@@ -171,6 +171,114 @@ it('edits typed fields and the mobile Markdown editor before saving or finishing
   })
 })
 
+it.each([
+  { device: 'mobile', width: 390 },
+  { device: 'desktop', width: 1280 },
+])(
+  'keeps the review actions visible while document content scrolls at $device width',
+  async ({ width }) => {
+    await page.viewport(width, 844)
+    container.style.width = `${String(width)}px`
+    container.style.height = '360px'
+    root = createRoot(container)
+    act(() =>
+      root?.render(
+        <ReviewDocumentPanel
+          frontmatter={Object.fromEntries(
+            Array.from({ length: 20 }, (_, index) => [
+              `field-${String(index + 1)}`,
+              `value-${String(index + 1)}`,
+            ]),
+          )}
+          body={Array.from(
+            { length: 80 },
+            (_, index) => `Document line ${String(index + 1)}`,
+          ).join('\n')}
+        />,
+      ),
+    )
+
+    const panel = container.querySelector<HTMLElement>('.review-document-panel')
+    const content = container.querySelector<HTMLElement>(
+      '.review-document-content',
+    )
+    const footer = container.querySelector<HTMLElement>(
+      '.review-document-actions',
+    )
+    if (panel === null || content === null || footer === null) {
+      throw new Error('Review document layout elements were not rendered.')
+    }
+
+    const readActionBounds = () => {
+      const panelRect = panel.getBoundingClientRect()
+      const footerRect = footer.getBoundingClientRect()
+      const actionButtonRects = Array.from(
+        footer.querySelectorAll<HTMLButtonElement>('button'),
+        (button) => button.getBoundingClientRect(),
+      )
+
+      return {
+        footer: { top: footerRect.top, bottom: footerRect.bottom },
+        footerWithinPanel:
+          footerRect.top >= panelRect.top &&
+          footerRect.bottom <= panelRect.bottom,
+        buttons: actionButtonRects.map((rect) => ({
+          top: rect.top,
+          bottom: rect.bottom,
+          withinPanel:
+            rect.top >= panelRect.top && rect.bottom <= panelRect.bottom,
+        })),
+      }
+    }
+
+    const boundsAtStart = readActionBounds()
+    act(() => {
+      content.scrollTop = content.scrollHeight
+    })
+    const boundsAtEnd = readActionBounds()
+    const maxScrollTop = content.scrollHeight - content.clientHeight
+
+    const snapshot = () => ({
+      contentOverflowY: getComputedStyle(content).overflowY,
+      contentCanScroll: maxScrollTop > 0,
+      contentReachedEnd: content.scrollTop >= maxScrollTop,
+      footerWithinPanelAtStart: boundsAtStart.footerWithinPanel,
+      footerWithinPanelAtEnd: boundsAtEnd.footerWithinPanel,
+      actionButtonsWithinPanelAtStart: boundsAtStart.buttons.map(
+        (button) => button.withinPanel,
+      ),
+      actionButtonsWithinPanelAtEnd: boundsAtEnd.buttons.map(
+        (button) => button.withinPanel,
+      ),
+      footerStayedInPlace:
+        boundsAtStart.footer.top === boundsAtEnd.footer.top &&
+        boundsAtStart.footer.bottom === boundsAtEnd.footer.bottom,
+      actionButtonsStayedInPlace:
+        boundsAtStart.buttons.length === boundsAtEnd.buttons.length &&
+        boundsAtStart.buttons.every((button, index) => {
+          const endButton = boundsAtEnd.buttons[index]
+          return (
+            endButton !== undefined &&
+            button.top === endButton.top &&
+            button.bottom === endButton.bottom
+          )
+        }),
+    })
+
+    expect(snapshot()).toEqual({
+      contentOverflowY: 'auto',
+      contentCanScroll: true,
+      contentReachedEnd: true,
+      footerWithinPanelAtStart: true,
+      footerWithinPanelAtEnd: true,
+      actionButtonsWithinPanelAtStart: [true, true],
+      actionButtonsWithinPanelAtEnd: [true, true],
+      footerStayedInPlace: true,
+      actionButtonsStayedInPlace: true,
+    })
+  },
+)
+
 it('disables frontmatter and Markdown editing while a request is in progress', async () => {
   root = createRoot(container)
   act(() => root?.render(<ReviewDocumentHarness status="saving" />))
