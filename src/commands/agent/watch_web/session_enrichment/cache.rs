@@ -89,9 +89,7 @@ fn merge_refreshed_task_metadata(
     let mut order_by_priority = cached
         .priorities
         .iter()
-        .filter_map(|(task_id, priority)| {
-            Some(((*priority)?, *cached.priority_order.get(task_id)?))
-        })
+        .filter_map(|(task_id, priority)| Some((*priority, *cached.priority_order.get(task_id)?)))
         .collect::<HashMap<_, _>>();
     let mut next_priority_order = cached
         .priority_order
@@ -123,7 +121,7 @@ fn merge_refreshed_task_metadata(
         .collect::<Vec<_>>();
     refreshed_order.sort_by_key(|(task_id, order)| (**order, (*task_id).clone()));
     for (task_id, _) in refreshed_order {
-        let Some(Some(priority)) = refreshed.priorities.get(task_id) else {
+        let Some(priority) = refreshed.priorities.get(task_id) else {
             continue;
         };
         let order = *order_by_priority.entry(*priority).or_insert_with(|| {
@@ -240,6 +238,71 @@ mod tests {
                     "session-b".to_string(),
                 ])),
             )
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn refreshed_cache_keeps_unset_priority_between_regular_and_deferred(
+        updates_and_receiver: (EnrichmentUpdates, watch::Receiver<()>),
+    ) {
+        let (updates, mut receiver) = updates_and_receiver;
+        let task_fetcher: TaskMetadataFetcher = Arc::new(|_, _| {
+            Box::pin(async {
+                Ok(SessionTaskMetadata {
+                    links: HashMap::from([(
+                        "session-a".to_string(),
+                        vec![
+                            linked_task("deferred"),
+                            linked_task("unset"),
+                            linked_task("regular"),
+                        ],
+                    )]),
+                    priorities: HashMap::from([
+                        ("regular".to_string(), Some(0)),
+                        ("unset".to_string(), None),
+                        ("deferred".to_string(), Some(-1)),
+                    ]),
+                    priority_order: HashMap::from([
+                        ("regular".to_string(), 0),
+                        ("unset".to_string(), 1),
+                        ("deferred".to_string(), 2),
+                    ]),
+                    task_projects: HashMap::new(),
+                })
+            })
+        });
+        let pull_request_fetcher: PullRequestFetcher =
+            Arc::new(|_| Box::pin(async { Ok(HashMap::new()) }));
+        let cache = cache_with_fetchers(updates, FETCH_TIMEOUT, task_fetcher, pull_request_fetcher);
+        let session = session("session-a", None);
+
+        let _ = cache.task_metadata(std::slice::from_ref(&session)).await;
+        wait_for_refresh(&mut receiver).await;
+
+        assert_eq!(
+            cache.task_metadata(std::slice::from_ref(&session)).await,
+            SessionTaskMetadata {
+                links: HashMap::from([(
+                    "session-a".to_string(),
+                    vec![
+                        linked_task("regular"),
+                        linked_task("unset"),
+                        linked_task("deferred"),
+                    ],
+                )]),
+                priorities: HashMap::from([
+                    ("regular".to_string(), Some(0)),
+                    ("unset".to_string(), None),
+                    ("deferred".to_string(), Some(-1)),
+                ]),
+                priority_order: HashMap::from([
+                    ("regular".to_string(), 0),
+                    ("unset".to_string(), 1),
+                    ("deferred".to_string(), 2),
+                ]),
+                task_projects: HashMap::new(),
+            },
         );
     }
 

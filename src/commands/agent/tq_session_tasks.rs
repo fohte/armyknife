@@ -141,14 +141,10 @@ pub(super) fn task_priority_metadata(
     let mut priorities = HashMap::new();
     let mut priority_order = HashMap::new();
     for task in tasks {
-        let order = task.priority.map(|priority| {
-            let next_order = order_by_priority.len();
-            *order_by_priority.entry(priority).or_insert(next_order)
-        });
+        let next_order = order_by_priority.len();
+        let order = *order_by_priority.entry(task.priority).or_insert(next_order);
         priorities.insert(task.id.clone(), task.priority);
-        if let Some(order) = order {
-            priority_order.insert(task.id, order);
-        }
+        priority_order.insert(task.id, order);
     }
 
     (priorities, priority_order)
@@ -338,15 +334,19 @@ mod tests {
     }
 
     #[rstest]
-    #[case::open_priority_precedes_link_order_and_unset_is_lowest(
+    #[case::open_priority_order_follows_tq_and_precedes_link_order(
         vec![
-            view_task("recent", 1, "Recent", false),
-            view_task("high", 2, "High priority", false),
-            view_task("unset", 3, "Unset priority", false),
+            view_task("deferred", 1, "Deferred", false),
+            view_task("unset", 2, "Unset priority", false),
+            view_task("high", 3, "High priority", false),
             view_task("completed", 4, "Completed", true),
         ],
-        HashMap::from([("high".to_string(), 0), ("recent".to_string(), 1)]),
-        vec!["high", "recent", "unset", "completed"],
+        HashMap::from([
+            ("high".to_string(), 0),
+            ("unset".to_string(), 1),
+            ("deferred".to_string(), 2),
+        ]),
+        vec!["high", "unset", "deferred", "completed"],
     )]
     #[case::equal_priorities_preserve_existing_order(
         vec![
