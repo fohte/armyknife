@@ -1,11 +1,15 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use super::cache::RunningBackgroundTaskCache;
-use super::incremental::parse_session_transcript_tail_window;
+use super::incremental::parse_session_transcript_tail_window_bounded;
 use super::parser::claude::ParserAdditions;
-use super::range::INITIAL_EPOCH_MESSAGE_COUNT;
 use super::{TranscriptInput, parse_session_transcript};
 use crate::commands::agent::types::{Engine, Session};
+
+// Pending IDs restore earlier task starts, so the current turn is enough here.
+const TASK_DETECTION_TAIL_MESSAGE_COUNT: usize = 1;
+// Sparse transcripts must fall back without expanding the list probe.
+const TASK_DETECTION_TAIL_MAX_BYTES: u64 = 4 * 1024 * 1024;
 
 pub(super) fn running_background_task_session_ids(
     sessions: &[Session],
@@ -35,18 +39,19 @@ pub(super) fn running_background_task_session_ids(
                 continue;
             }
         };
+        let pending_task_ids = session
+            .pending_bg_task_ids
+            .union(&session.pending_agent_task_ids)
+            .cloned()
+            .collect::<BTreeSet<_>>();
         let has_running_task = cache
-            .get(&session.session_id, &fingerprint)
+            .get(&session.session_id, &fingerprint, &pending_task_ids)
             .unwrap_or_else(|| {
                 if fingerprint.is_none() {
                     return session.has_pending_bg_tasks();
                 }
 
-                let pending_task_ids = session
-                    .pending_bg_task_ids
-                    .union(&session.pending_agent_task_ids)
-                    .cloned()
-                    .collect::<Vec<_>>();
+                let pending_task_ids = pending_task_ids.iter().cloned().collect::<Vec<_>>();
                 let input = TranscriptInput {
                     path: session.transcript_path.as_deref(),
                     engine: Engine::Claude,
@@ -63,24 +68,30 @@ pub(super) fn running_background_task_session_ids(
                         additional_cards: &[],
                     },
                 };
-                let tail_window_result = match parse_session_transcript_tail_window(
+                let tail_window_result = match parse_session_transcript_tail_window_bounded(
                     &input,
-                    INITIAL_EPOCH_MESSAGE_COUNT,
+                    TASK_DETECTION_TAIL_MESSAGE_COUNT,
                     &pending_task_ids,
+                    TASK_DETECTION_TAIL_MAX_BYTES,
                 ) {
                     Ok(Some((conversation, _))) => Some(!conversation.background_tasks.is_empty()),
                     Ok(None) => None,
                     Err(error) => {
                         tracing::warn!(
                             event = "agent.watch_web.background_task_tail_window_failed",
-                            session_id = %session.session_id,
+                            session = %session.session_id,
                             %error,
                         );
                         None
                     }
                 };
                 if let Some(has_running_task) = tail_window_result {
-                    cache.insert(&session.session_id, fingerprint.clone(), has_running_task);
+                    cache.insert(
+                        &session.session_id,
+                        fingerprint.clone(),
+                        pending_task_ids.iter().cloned().collect(),
+                        has_running_task,
+                    );
                     has_running_task
                 } else {
                     match parse_session_transcript(input) {
@@ -89,6 +100,7 @@ pub(super) fn running_background_task_session_ids(
                             cache.insert(
                                 &session.session_id,
                                 fingerprint.clone(),
+                                pending_task_ids.iter().cloned().collect(),
                                 has_running_task,
                             );
                             has_running_task
@@ -96,7 +108,7 @@ pub(super) fn running_background_task_session_ids(
                         Err(error) => {
                             tracing::warn!(
                                 event = "agent.watch_web.background_task_transcript_parse_failed",
-                                session_id = %session.session_id,
+                                session = %session.session_id,
                                 %error,
                             );
                             session.has_pending_bg_tasks()
@@ -122,11 +134,11 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::super::cache::RunningBackgroundTaskCache;
-    use super::super::incremental::parse_session_transcript_tail_window;
+    use super::super::incremental::parse_session_transcript_tail_window_bounded;
     use super::super::parser::claude::ParserAdditions;
-    use super::super::range::INITIAL_EPOCH_MESSAGE_COUNT;
     use super::super::{TranscriptInput, parse_session_transcript};
     use super::running_background_task_session_ids;
+    use super::{TASK_DETECTION_TAIL_MAX_BYTES, TASK_DETECTION_TAIL_MESSAGE_COUNT};
     use crate::commands::agent::types::{Engine, Session};
 
     #[rstest]
@@ -158,10 +170,11 @@ mod tests {
             .union(&session.pending_agent_task_ids)
             .cloned()
             .collect::<Vec<_>>();
-        let tail_window_was_created = parse_session_transcript_tail_window(
+        let tail_window_was_created = parse_session_transcript_tail_window_bounded(
             &input,
-            INITIAL_EPOCH_MESSAGE_COUNT,
+            TASK_DETECTION_TAIL_MESSAGE_COUNT,
             &pending_task_ids,
+            TASK_DETECTION_TAIL_MAX_BYTES,
         )
         .expect("tail window should parse")
         .is_some();
@@ -184,6 +197,30 @@ mod tests {
                 !compressed,
                 HashSet::from(["fixture-session".to_string()]),
                 true,
+            ),
+        );
+    }
+
+    #[test]
+    fn task_status_is_recomputed_when_pending_ids_change() {
+        let transcript_directory =
+            tempfile::tempdir().expect("fixture directory should be created");
+        let path = transcript_directory.path().join("fixture-transcript.jsonl");
+        let transcript = transcript_with_old_pending_task("shell", "fixture-task-id");
+        std::fs::write(&path, transcript).expect("fixture transcript should be written");
+        let mut session = session_for_transcript(&path, "shell", "fixture-task-id");
+        let cache = RunningBackgroundTaskCache::default();
+        let before_pending_ids_change =
+            running_background_task_session_ids(&[session.clone()], &cache);
+        session.pending_bg_task_ids.clear();
+
+        let after_pending_ids_change = running_background_task_session_ids(&[session], &cache);
+
+        assert_eq!(
+            (before_pending_ids_change, after_pending_ids_change),
+            (
+                HashSet::from(["fixture-session".to_string()]),
+                HashSet::new(),
             ),
         );
     }

@@ -50,6 +50,34 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript_
     message_limit: usize,
     pending_task_ids: &[String],
 ) -> Result<Option<(ConversationResponse, Vec<i64>)>> {
+    parse_session_transcript_tail_window_with_max_bytes(
+        input,
+        message_limit,
+        pending_task_ids,
+        None,
+    )
+}
+
+pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript_tail_window_bounded(
+    input: &TranscriptInput<'_>,
+    message_limit: usize,
+    pending_task_ids: &[String],
+    max_window_bytes: u64,
+) -> Result<Option<(ConversationResponse, Vec<i64>)>> {
+    parse_session_transcript_tail_window_with_max_bytes(
+        input,
+        message_limit,
+        pending_task_ids,
+        Some(max_window_bytes),
+    )
+}
+
+fn parse_session_transcript_tail_window_with_max_bytes(
+    input: &TranscriptInput<'_>,
+    message_limit: usize,
+    pending_task_ids: &[String],
+    max_window_bytes: Option<u64>,
+) -> Result<Option<(ConversationResponse, Vec<i64>)>> {
     if input.engine != Engine::Claude
         || input
             .path
@@ -66,13 +94,22 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript_
         .flatten()
         .unwrap_or_else(|| Box::new(std::io::Cursor::new(Vec::new())));
     let image_directory = super::super::super::image_attachments::storage_directory().ok();
-    let Some(parser) = parser::claude::IncrementalClaudeParser::new_tail_window(
-        reader,
-        image_directory.as_deref(),
-        message_limit,
-        pending_task_ids,
-    )?
-    else {
+    let parser = match max_window_bytes {
+        Some(max_window_bytes) => parser::claude::IncrementalClaudeParser::new_tail_window_bounded(
+            reader,
+            image_directory.as_deref(),
+            message_limit,
+            pending_task_ids,
+            max_window_bytes,
+        )?,
+        None => parser::claude::IncrementalClaudeParser::new_tail_window(
+            reader,
+            image_directory.as_deref(),
+            message_limit,
+            pending_task_ids,
+        )?,
+    };
+    let Some(parser) = parser else {
         return Ok(None);
     };
     let Some(cutoff) = parser.tail_window_start() else {

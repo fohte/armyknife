@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use super::{ChatItem, ConversationResponse};
 
 const RECENT_TAIL_MESSAGE_COUNT: usize = 20;
-pub(super) const INITIAL_EPOCH_MESSAGE_COUNT: usize = 100;
+const INITIAL_EPOCH_MESSAGE_COUNT: usize = 100;
 const MAX_EPOCH_TOKEN_BYTES: usize = 4096;
 
 #[derive(Debug, Clone, Default, Deserialize)]
