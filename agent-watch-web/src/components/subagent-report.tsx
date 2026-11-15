@@ -1,18 +1,14 @@
 import { MarkdownMessage } from '#components/markdown-message'
 import { ToolSummary } from '#components/tool-summary'
-import type { ChatItem, SessionLinkTarget } from '#types'
+import type { ChatItem } from '#types'
 
 type SubagentReportItem = Extract<ChatItem, { type: 'subagent_report' }>
 
 export function SubagentReport({
   message,
-  onSelectSession,
-  sessions,
   defaultOpen = false,
 }: {
   message: SubagentReportItem
-  onSelectSession: (id: string) => void
-  sessions: readonly SessionLinkTarget[]
   defaultOpen?: boolean
 }) {
   return (
@@ -21,9 +17,7 @@ export function SubagentReport({
       operations={[]}
       open={defaultOpen}
     >
-      <MarkdownMessage onSelectSession={onSelectSession} sessions={sessions}>
-        {message.text}
-      </MarkdownMessage>
+      <MarkdownMessage>{message.text}</MarkdownMessage>
     </ToolSummary>
   )
 }

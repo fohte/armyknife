@@ -6,6 +6,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { page } from 'vitest/browser'
 
 import { type Decision, DecisionCard } from '#components/decision-card'
+import { MarkdownSessionLinksProvider } from '#components/markdown-message'
+import type { SessionLinkTarget } from '#types'
 
 let container: HTMLDivElement
 let root: Root | null = null
@@ -21,19 +23,33 @@ const decision: Decision = {
   createdAt: '2026-11-11T03:25:59Z',
 }
 
+const linkedSessionId = '11111111-1111-4111-8111-111111111111'
+const linkedSession: SessionLinkTarget = {
+  id: linkedSessionId,
+  repo: 'example/toolkit',
+  task: null,
+  title: 'Inspect the retry path',
+}
+const onSelectSession = vi.fn<(id: string) => void>()
+
 function renderCard(
   overrides: Partial<Parameters<typeof DecisionCard>[0]> = {},
 ) {
   root ??= createRoot(container)
   act(() => {
     root?.render(
-      <DecisionCard
-        decision={decision}
-        variant="conversation"
-        onOk={() => Promise.resolve(true)}
-        onRequestChange={() => Promise.resolve(true)}
-        {...overrides}
-      />,
+      <MarkdownSessionLinksProvider
+        sessions={[linkedSession]}
+        onSelectSession={onSelectSession}
+      >
+        <DecisionCard
+          decision={decision}
+          variant="conversation"
+          onOk={() => Promise.resolve(true)}
+          onRequestChange={() => Promise.resolve(true)}
+          {...overrides}
+        />
+      </MarkdownSessionLinksProvider>,
     )
   })
 }
@@ -64,6 +80,7 @@ function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  onSelectSession.mockReset()
   container = document.createElement('div')
   document.body.append(container)
 })
@@ -76,6 +93,57 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+it('renders decision details as markdown with linked session IDs', () => {
+  renderCard({
+    expanded: true,
+    decision: {
+      ...decision,
+      why: `Follow the approach in ${linkedSessionId}.`,
+      considered: [
+        `Keep the behavior from ${linkedSessionId}.`,
+        'Use **a separate implementation**.',
+      ],
+      easyToChange: `Revisit the settings in ${linkedSessionId}.`,
+    },
+  })
+
+  const links = Array.from(
+    container.querySelectorAll<HTMLAnchorElement>('.decision-card-details a'),
+  )
+  act(() => {
+    links.forEach((link) => {
+      link.dispatchEvent(
+        new MouseEvent('click', { bubbles: true, cancelable: true }),
+      )
+    })
+  })
+
+  const getActual = () => ({
+    markdown: Array.from(
+      container.querySelectorAll('.decision-card-details .markdown-message'),
+      (message) => message.textContent,
+    ),
+    links: links.map((link) => ({
+      text: link.textContent,
+      href: link.getAttribute('href'),
+    })),
+    selectedSessions: onSelectSession.mock.calls.map(([id]) => id),
+  })
+  expect(getActual()).toEqual({
+    markdown: [
+      `Follow the approach in ${linkedSessionId}.`,
+      `Keep the behavior from ${linkedSessionId}.`,
+      'Use a separate implementation.',
+      `Revisit the settings in ${linkedSessionId}.`,
+    ],
+    links: Array.from({ length: 3 }, () => ({
+      text: linkedSessionId,
+      href: `?session=${linkedSessionId}`,
+    })),
+    selectedSessions: Array.from({ length: 3 }, () => linkedSessionId),
+  })
+})
+
 it('expands the conversation row when its summary is selected', () => {
   renderCard()
 
@@ -86,7 +154,7 @@ it('expands the conversation row when its summary is selected', () => {
   })
 
   expect(container.querySelector('.decision-card-details')?.textContent).toBe(
-    'Why · The current service has no reliable timing data.Also considered · Retry using the latest duration / Retry once per packageEasy to change · One configuration value in the CI workflow.OKChange…Not blocking · keeps working',
+    'Why · The current service has no reliable timing data.Also considered · Retry using the latest durationRetry once per packageEasy to change · One configuration value in the CI workflow.OKChange…Not blocking · keeps working',
   )
 })
 

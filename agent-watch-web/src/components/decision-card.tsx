@@ -1,8 +1,9 @@
 import '#components/decision-card.css'
 
 import { Button } from '@fohte/ui/button'
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 
+import { MarkdownMessage } from '#components/markdown-message'
 import type { ChatItem } from '#types'
 
 export type Decision = Extract<ChatItem, { type: 'decision' }>
@@ -141,7 +142,13 @@ export function DecisionCard({
             <>
               <strong className="decision-card-title">{decision.title}</strong>
               <span className="decision-panel-card-collapsed-considered">
-                Also considered · {decision.considered.join(' / ')}
+                Also considered ·{' '}
+                {decision.considered.map((item, index) => (
+                  <Fragment key={String(index)}>
+                    {index > 0 ? ' / ' : null}
+                    <MarkdownMessage inline>{item}</MarkdownMessage>
+                  </Fragment>
+                ))}
               </span>
             </>
           ) : null}
@@ -153,18 +160,24 @@ export function DecisionCard({
           {variant === 'panel' ? (
             <h3 className="decision-panel-card-title">{decision.title}</h3>
           ) : null}
-          <p>
+          <div className="decision-card-detail-field">
             <span>Why · </span>
-            {decision.why}
-          </p>
-          <p>
+            <MarkdownMessage>{decision.why}</MarkdownMessage>
+          </div>
+          <div className="decision-card-detail-field">
             <span>Also considered · </span>
-            {decision.considered.join(' / ')}
-          </p>
-          <p>
+            <div className="decision-card-considered">
+              {decision.considered.map((item, index) => (
+                <MarkdownMessage key={String(index)} inline>
+                  {item}
+                </MarkdownMessage>
+              ))}
+            </div>
+          </div>
+          <div className="decision-card-detail-field">
             <span>Easy to change · </span>
-            {decision.easyToChange}
-          </p>
+            <MarkdownMessage>{decision.easyToChange}</MarkdownMessage>
+          </div>
           {decision.review === null ? (
             editing ? (
               <form

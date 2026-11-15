@@ -89,8 +89,6 @@ export function PeerMessage({
             <MarkdownMessage
               className="chat-peer-text"
               key={`text-${String(index)}`}
-              onSelectSession={onSelectSession}
-              sessions={sessions}
             >
               {part.text}
             </MarkdownMessage>

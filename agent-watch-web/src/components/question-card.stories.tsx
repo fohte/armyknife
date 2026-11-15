@@ -1,6 +1,15 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 
+import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import { QuestionCard } from '#components/question-card'
+import type { SessionLinkTarget } from '#types'
+
+const linkedSession: SessionLinkTarget = {
+  id: '11111111-1111-4111-8111-111111111111',
+  repo: 'example/toolkit',
+  task: null,
+  title: 'Inspect the retry path',
+}
 
 const callbacks = {
   onAnswer: () => Promise.resolve(true),
@@ -83,6 +92,37 @@ export const WaitingOnAMobileScreen: Story = {
       </div>
     ),
   ],
+}
+
+export const QuestionLinksKnownSessionIds: Story = {
+  name: 'Known session IDs link from the question and its choices',
+  decorators: [
+    (Story) => (
+      <MarkdownSessionLinksProvider
+        sessions={[linkedSession]}
+        onSelectSession={() => undefined}
+      >
+        <Story />
+      </MarkdownSessionLinksProvider>
+    ),
+  ],
+  args: {
+    questions: [
+      {
+        header: 'Session',
+        question: `Should the change follow ${linkedSession.id}?`,
+        choices: [
+          {
+            label: `Open ${linkedSession.id}`,
+            description: `This session documents the same behavior as ${linkedSession.id}.`,
+          },
+          { label: 'Use a new approach' },
+        ],
+        multi_select: false,
+        answer: null,
+      },
+    ],
+  },
 }
 
 export const ShowingAnswers: Story = {

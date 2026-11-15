@@ -9,10 +9,12 @@ import { ConversationMessageRow } from '#components/conversation-message-row'
 import { ConversationPane } from '#components/conversation-pane'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { InboxConversationPanes } from '#components/inbox-conversation-panes'
+import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import { formatMessageTime } from '#components/message-time'
 import { SessionConversationCacheProvider } from '#components/session-conversation-cache'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
+import { useSessionLinkTargets } from '#session-link-targets'
 import type {
   BackgroundTask,
   ChatItem,
@@ -304,34 +306,61 @@ function renderView(
   root ??= createRoot(container)
   act(() => {
     root?.render(
-      <ConversationPaneView
-        session={viewSession}
+      <SessionLinkContextHarness
         sessions={viewSessions}
-        messages={viewMessages}
-        backgroundTasks={viewBackgroundTasks}
-        actions={viewActions}
-        pendingPermissionActions={
-          pendingPermissionAction === undefined ||
-          pendingPermissionAction === null
-            ? {}
-            : {
-                [pendingPermissionAction.requestId]: pendingPermissionAction,
-              }
-        }
-        loading={false}
-        error={null}
-        onAction={onAction}
-        {...(onRewind === undefined ? {} : { onRewind })}
         onSelectSession={onSelectSession}
-        isMobile={isMobile}
-        isToday={today.isToday}
-        onToggleToday={today.onToggleToday}
-        statusPanelOpen={statusPanelOpen}
-        mobileStatusPanel={mobileStatusPanel}
-        {...(onToggleStatusPanel === undefined ? {} : { onToggleStatusPanel })}
-      />,
+      >
+        <ConversationPaneView
+          session={viewSession}
+          sessions={viewSessions}
+          messages={viewMessages}
+          backgroundTasks={viewBackgroundTasks}
+          actions={viewActions}
+          pendingPermissionActions={
+            pendingPermissionAction === undefined ||
+            pendingPermissionAction === null
+              ? {}
+              : {
+                  [pendingPermissionAction.requestId]: pendingPermissionAction,
+                }
+          }
+          loading={false}
+          error={null}
+          onAction={onAction}
+          {...(onRewind === undefined ? {} : { onRewind })}
+          onSelectSession={onSelectSession}
+          isMobile={isMobile}
+          isToday={today.isToday}
+          onToggleToday={today.onToggleToday}
+          statusPanelOpen={statusPanelOpen}
+          mobileStatusPanel={mobileStatusPanel}
+          {...(onToggleStatusPanel === undefined
+            ? {}
+            : { onToggleStatusPanel })}
+        />
+      </SessionLinkContextHarness>,
     )
   })
+}
+
+function SessionLinkContextHarness({
+  children,
+  sessions,
+  onSelectSession,
+}: {
+  children: ReactNode
+  sessions: readonly Session[]
+  onSelectSession: (id: string) => void
+}) {
+  const sessionLinkTargets = useSessionLinkTargets(sessions)
+  return (
+    <MarkdownSessionLinksProvider
+      sessions={sessionLinkTargets}
+      onSelectSession={onSelectSession}
+    >
+      {children}
+    </MarkdownSessionLinksProvider>
+  )
 }
 
 function renderConversationMessages(
@@ -891,6 +920,67 @@ beforeEach(() => {
   window.localStorage.clear()
   container = document.createElement('div')
   document.body.append(container)
+})
+
+it('provides session links to cards through the conversation pane context', async () => {
+  const linkedSession: Session = {
+    ...session,
+    id: '11111111-1111-4111-8111-111111111111',
+    category: 'done',
+    title: 'Linked session',
+  }
+  const todo: ChatItem = {
+    type: 'todo',
+    seq: 1,
+    title: 'Review the session',
+    detail: `Open ${linkedSession.id} for context.`,
+    completed: false,
+    resolution: null,
+    comment: null,
+  }
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([todo])))
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(actions))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  const onSelectSession = vi.fn<(id: string) => void>()
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        sessions={[linkedSession]}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={onSelectSession}
+      />,
+    )
+  })
+
+  await waitForState(
+    () => container.querySelector('.chat-todo-detail a') !== null,
+  )
+  const link = requireElement(
+    container.querySelector<HTMLAnchorElement>('.chat-todo-detail a'),
+  )
+  act(() => {
+    link.click()
+  })
+
+  const getActual = () => ({
+    href: link.getAttribute('href'),
+    selectedSessions: onSelectSession.mock.calls.map(([id]) => id),
+  })
+  expect(getActual()).toEqual({
+    href: `?session=${linkedSession.id}`,
+    selectedSessions: [linkedSession.id],
+  })
 })
 
 it('loads and shows the session tree from the tree endpoint', async () => {

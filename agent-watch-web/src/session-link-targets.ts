@@ -5,8 +5,13 @@ import type { Session, SessionLinkTarget } from '#types'
 
 export function useSessionLinkTargets(
   sessions: readonly Session[],
+  providedTargets?: readonly SessionLinkTarget[],
 ): readonly SessionLinkTarget[] {
   const targetsRef = useRef<readonly SessionLinkTarget[] | null>(null)
+  if (providedTargets !== undefined) {
+    targetsRef.current = providedTargets
+    return providedTargets
+  }
   // Message rows consume this projection, so elapsed-time ticks stay out of their props.
   const nextTargets = sessions.map(
     ({ id, task, tasks, repo, title, engine, workType, kind, preview }) => ({

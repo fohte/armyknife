@@ -8,6 +8,7 @@ import {
 } from 'react'
 
 import { ConversationPaneView } from '#components/conversation-pane-view'
+import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import type { PendingPermissionActions } from '#components/permission-card'
 import { ResizableColumns } from '#components/resizable-columns'
 import { SessionStatusPanel } from '#components/session-status-panel'
@@ -18,6 +19,7 @@ import {
   type SessionTreeCallbacks,
   useSessionTree,
 } from '#components/use-session-tree'
+import { useSessionLinkTargets } from '#session-link-targets'
 import { useSessionOperations } from '#session-operation-context'
 import {
   applyConversationOperation,
@@ -80,6 +82,12 @@ export function ConversationPane({
   isToday = false,
   onToggleToday = () => undefined,
 }: ConversationPaneProps) {
+  const sessionLinkTargets = useSessionLinkTargets(sessions)
+  const onSelectSessionRef = useRef(onSelectSession)
+  onSelectSessionRef.current = onSelectSession
+  const selectLinkedSession = useCallback((id: string) => {
+    onSelectSessionRef.current(id)
+  }, [])
   const { pendingOperations, run, confirm } = useSessionOperations()
   const { sessionTree, sessionTreeError } = useSessionTree({
     session,
@@ -349,6 +357,7 @@ export function ConversationPane({
     <ConversationPaneView
       session={session}
       sessions={sessions}
+      sessionLinkTargets={sessionLinkTargets}
       messages={messages}
       start={conversation.start}
       epoch={conversation.epoch}
@@ -374,7 +383,7 @@ export function ConversationPane({
       onCommandExecuted={onCommandExecuted}
       onRewind={onRewind}
       onOpenInTerminal={onOpenInTerminal}
-      onSelectSession={onSelectSession}
+      onSelectSession={selectLinkedSession}
       isMobile={isMobile}
       statusPanelOpen={statusPanelOpen}
       selectedDecisionSeq={selectedDecisionSeq}
@@ -389,9 +398,9 @@ export function ConversationPane({
     />
   )
 
-  if (isMobile) return conversationView
-
-  return (
+  const conversationLayout = isMobile ? (
+    conversationView
+  ) : (
     <div className="conversation-status-panel-container">
       <ResizableColumns
         first={conversationView}
@@ -404,5 +413,14 @@ export function ConversationPane({
         label="Resize conversation and status panel"
       />
     </div>
+  )
+
+  return (
+    <MarkdownSessionLinksProvider
+      sessions={sessionLinkTargets}
+      onSelectSession={selectLinkedSession}
+    >
+      {conversationLayout}
+    </MarkdownSessionLinksProvider>
   )
 }

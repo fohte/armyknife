@@ -1,7 +1,10 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 
-import { MarkdownMessage } from '#components/markdown-message'
-import type { Session } from '#types'
+import {
+  MarkdownMessage,
+  MarkdownSessionLinksProvider,
+} from '#components/markdown-message'
+import type { SessionLinkTarget } from '#types'
 
 const meta = {
   component: MarkdownMessage,
@@ -53,25 +56,23 @@ export const RawHtmlStaysText: Story = {
   },
 }
 
-const linkedSession: Session = {
+const linkedSession: SessionLinkTarget = {
   id: '11111111-1111-4111-8111-111111111111',
-  category: 'in_progress',
-  isPaused: false,
-  kind: 'Plan',
-  title: 'Inspect the retry path',
-  preview: null,
-  elapsedSeconds: 30,
-  unread: false,
-  task: null,
   repo: 'example/toolkit',
-  project: 'example toolkit',
-  parent: null,
-  ancestorSessionIds: [],
-  pullRequest: null,
+  task: null,
+  title: 'Inspect the retry path',
 }
 
 export const KnownSessionIdsAreLinked: Story = {
   name: 'A known session ID links while an unknown ID stays plain',
+  render: (args) => (
+    <MarkdownSessionLinksProvider
+      sessions={[linkedSession]}
+      onSelectSession={() => undefined}
+    >
+      <MarkdownMessage {...args} />
+    </MarkdownSessionLinksProvider>
+  ),
   args: {
     children: `The session ${linkedSession.id} is active, while 22222222-2222-4222-8222-222222222222 is unknown.
 
@@ -80,8 +81,6 @@ Use \`${linkedSession.id}\` to open it.
 ~~~text
 ${linkedSession.id}
 ~~~`,
-    sessions: [linkedSession],
-    onSelectSession: () => undefined,
   },
 }
 

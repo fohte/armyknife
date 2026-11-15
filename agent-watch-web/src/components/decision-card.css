@@ -38,7 +38,7 @@
 .decision-card-considered-count,
 .decision-panel-card-kicker,
 .decision-panel-card-collapsed-considered,
-.decision-card-details p > span {
+.decision-card-detail-field > span {
   color: var(--aw-text-secondary);
 }
 
@@ -80,13 +80,18 @@
   padding: 0 12px 10px 35px;
 }
 
-.decision-card-details p {
+.decision-card-detail-field {
   margin: 0 0 6px;
   line-height: 1.5;
 }
 
-.decision-card-details p:last-of-type {
+.decision-card-detail-field:last-of-type {
   margin-bottom: 8px;
+}
+
+.decision-card-considered {
+  display: grid;
+  gap: 4px;
 }
 
 .decision-card-actions,
@@ -155,7 +160,7 @@
   padding: 8px 14px 12px;
 }
 
-.decision-card--panel .decision-card-details p:last-of-type {
+.decision-card--panel .decision-card-detail-field:last-of-type {
   margin-bottom: 12px;
 }
 

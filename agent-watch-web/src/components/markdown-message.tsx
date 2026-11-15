@@ -12,12 +12,15 @@ import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 import { BangCommandActions } from '#components/bang-command'
+import { useMarkdownSessionLinks } from '#components/markdown-session-links'
 import { SessionLink } from '#components/session-link'
 import {
   SyntaxCodeBlock,
   type SyntaxCodeBlockLink,
 } from '#components/syntax-code-block'
 import type { SessionLinkTarget } from '#types'
+
+export { MarkdownSessionLinksProvider } from '#components/markdown-session-links'
 
 type MarkdownNode = {
   children?: MarkdownNode[]
@@ -213,8 +216,6 @@ type MarkdownMessageProps = {
   children: string
   className?: string
   inline?: boolean
-  onSelectSession?: (id: string) => void
-  sessions?: readonly SessionLinkTarget[]
   sessionId?: string
   onCommandExecuted?: () => void
 }
@@ -447,23 +448,24 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   children,
   className,
   inline = false,
-  onSelectSession,
-  sessions = [],
   sessionId,
   onCommandExecuted,
 }: MarkdownMessageProps) {
+  const sessionLinks = useMarkdownSessionLinks()
   const rootClassName =
     className === undefined
       ? 'markdown-message'
       : `markdown-message ${className}`
 
   const sessionsById = new Map(
-    sessions.map((session) => [session.id.toLowerCase(), session]),
+    sessionLinks.sessions.map((session) => [session.id.toLowerCase(), session]),
   )
   const markdownSource = inline ? children : unwrapTaggedMessage(children)
   const componentContext: MarkdownComponentContextValue = {
     sessionsById,
-    ...(onSelectSession === undefined ? {} : { onSelectSession }),
+    ...(sessionLinks.onSelectSession === undefined
+      ? {}
+      : { onSelectSession: sessionLinks.onSelectSession }),
     ...(sessionId === undefined
       ? {}
       : {
