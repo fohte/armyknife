@@ -4450,7 +4450,7 @@ it('opens a registered web UI when other status tabs are available', () => {
     ],
     selectedTab: 'Design editor',
     webUiPane: true,
-    iframe: 'http://127.0.0.1:5000/design/sample/',
+    iframe: 'http://localhost:5000/design/sample/',
   })
 })
 

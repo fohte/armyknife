@@ -8,7 +8,10 @@ export function webUiTargetUrl(
   hostname = location.hostname,
 ): string | null {
   if (hostname === 'localhost' || hostname === '127.0.0.1') {
-    return url
+    return url.replace(
+      /^(https?:\/\/)(?:localhost|127\.0\.0\.1)(?=[:/?#]|$)/i,
+      (_, protocol: string) => `${protocol}${hostname}`,
+    )
   }
 
   if (
