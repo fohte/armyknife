@@ -16,6 +16,23 @@ pub(super) struct MergeOptions<'a> {
     pub run_branch_commit_checks: bool,
 }
 
+fn check_base_branch_before_merge(
+    client: &impl PrMergeClient,
+    owner: &str,
+    repo: &str,
+    pr_number: u64,
+    branch: &str,
+    allow_failing_base: bool,
+) -> anyhow::Result<()> {
+    client
+        .wait_for_base_branch_checks(owner, repo, branch, allow_failing_base)
+        .with_context(|| {
+            format!(
+                "Cannot merge PR #{pr_number} while required checks on base branch `{branch}` are failing"
+            )
+        })
+}
+
 #[cfg(test)]
 pub(super) async fn run_merge(
     client: &impl PrMergeClient,
@@ -84,19 +101,14 @@ pub(super) async fn run_merge_with_options(
     }
 
     if options.run_branch_commit_checks {
-        client
-            .wait_for_base_branch_checks(
-                owner,
-                repo,
-                &initial.base_ref_name,
-                options.allow_failing_base,
-            )
-            .with_context(|| {
-                format!(
-                    "Cannot merge PR #{pr_number} while required checks on base branch `{}` are failing",
-                    initial.base_ref_name
-                )
-            })?;
+        check_base_branch_before_merge(
+            client,
+            owner,
+            repo,
+            pr_number,
+            &initial.base_ref_name,
+            options.allow_failing_base,
+        )?;
     }
 
     let is_stacked = if let Some(stack) = client
@@ -135,19 +147,14 @@ pub(super) async fn run_merge_with_options(
     ensure_pr_is_open_and_safe(&current, pr_number, Some(&initial.head_sha))?;
 
     if options.run_branch_commit_checks {
-        client
-            .wait_for_base_branch_checks(
-                owner,
-                repo,
-                &current.base_ref_name,
-                options.allow_failing_base,
-            )
-            .with_context(|| {
-                format!(
-                    "Cannot merge PR #{pr_number} while required checks on base branch `{}` are failing",
-                    current.base_ref_name
-                )
-            })?;
+        check_base_branch_before_merge(
+            client,
+            owner,
+            repo,
+            pr_number,
+            &current.base_ref_name,
+            options.allow_failing_base,
+        )?;
     }
 
     let merge_result = match client

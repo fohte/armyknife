@@ -25,16 +25,32 @@ pub(super) fn wait_for_base_branch_checks(
         return Ok(());
     }
 
-    let sha = fetch_branch_tip_sha(owner, repo, branch)?;
-    println!("Checking required checks on base branch `{branch}` ({sha})...");
-    wait_for_commit_checks(
-        owner,
-        repo,
+    wait_for_latest_base_tip_checks(
         branch,
-        &sha,
-        &required_contexts,
-        allow_failures,
+        || fetch_branch_tip_sha(owner, repo, branch),
+        |sha| wait_for_commit_checks(owner, repo, branch, sha, &required_contexts, allow_failures),
     )
+}
+
+fn wait_for_latest_base_tip_checks(
+    branch: &str,
+    mut fetch_tip: impl FnMut() -> anyhow::Result<String>,
+    mut wait_for_checks: impl FnMut(&str) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    loop {
+        let sha = fetch_tip()?;
+        println!("Checking required checks on base branch `{branch}` ({sha})...");
+        let check_result = wait_for_checks(&sha);
+        let latest_sha = fetch_tip()?;
+        if latest_sha != sha {
+            println!(
+                "Base branch `{branch}` advanced to {latest_sha} while checks were running; checking the latest commit..."
+            );
+            continue;
+        }
+        check_result?;
+        return Ok(());
+    }
 }
 
 pub(super) fn wait_for_merge_commit_checks(
@@ -540,5 +556,41 @@ mod tests {
         .map_err(|error| error.to_string());
 
         assert_eq!((result, client.request_count, waits), (Ok(()), 2, 1));
+    }
+
+    #[test]
+    fn checks_the_new_base_tip_when_the_branch_advances_during_a_failed_wait() {
+        let mut tips = VecDeque::from([
+            "base-tip-before",
+            "base-tip-after",
+            "base-tip-after",
+            "base-tip-after",
+        ]);
+        let mut checked_shas = Vec::new();
+
+        let result = wait_for_latest_base_tip_checks(
+            "main",
+            || {
+                tips.pop_front()
+                    .map(str::to_string)
+                    .ok_or_else(|| anyhow::anyhow!("No fake branch tip remains"))
+            },
+            |sha| {
+                checked_shas.push(sha.to_string());
+                if sha == "base-tip-before" {
+                    anyhow::bail!("Required checks failed on the previous base tip");
+                }
+                Ok(())
+            },
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, checked_shas),
+            (
+                Ok(()),
+                vec!["base-tip-before".to_string(), "base-tip-after".to_string(),],
+            ),
+        );
     }
 }
