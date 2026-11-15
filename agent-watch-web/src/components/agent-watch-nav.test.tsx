@@ -269,13 +269,29 @@ it('opens the selected session from Recent', () => {
   expect(onSelectSession.mock.calls).toEqual([['recent-session']])
 })
 
-it('keeps the Recent section off the mobile navigation', () => {
+it('shows the Recent section in the mobile navigation', () => {
   renderNav([], {
     isMobile: true,
-    sessions: [{ ...baseTodaySession, lastPromptedAt: '2026-01-01T00:00:00Z' }],
+    sessions: [
+      {
+        ...baseTodaySession,
+        lastPromptedAt: '2026-01-01T00:00:00Z',
+      },
+    ],
   })
 
-  expect(container.querySelector('#recent-nav-title')).toBeNull()
+  const snapshot = () => ({
+    title: container.querySelector('#recent-nav-title')?.textContent,
+    sessions: Array.from(
+      container.querySelectorAll('.recent-session-title'),
+      (title) => title.textContent,
+    ),
+  })
+
+  expect(snapshot()).toEqual({
+    title: 'Recent',
+    sessions: ['Review the retry policy'],
+  })
 })
 
 it.each([
