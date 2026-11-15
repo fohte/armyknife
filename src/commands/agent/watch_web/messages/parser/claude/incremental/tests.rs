@@ -492,6 +492,25 @@ fn pending_json_completed_after_a_second_append_matches_a_full_parse() {
     );
 }
 
+#[test]
+fn tail_window_expansion_handles_files_smaller_than_the_next_window() {
+    let human_message = r#"{"type":"user","uuid":"fixture-request","parentUuid":null,"message":{"content":"Fixture request."}}"#;
+    let padding = format!(
+        r#"{{"type":"system","uuid":"fixture-padding","parentUuid":null,"padding":"{}"}}"#,
+        "x".repeat(5 * 1024 * 1024),
+    );
+    let transcript = [human_message.to_owned(), padding].join("\n");
+    let actual =
+        IncrementalClaudeParser::new_tail_window(Cursor::new(transcript.as_bytes()), None, 2, &[]);
+
+    assert_eq!(
+        actual
+            .map(|parser| parser.is_none())
+            .map_err(|error| error.kind()),
+        Ok(true),
+    );
+}
+
 #[rstest]
 fn appended_peer_delivery_resolves_queued_prompt_after_branch_reparse(
     saved_queued_prompt: WatchWebQueuedPrompt,
