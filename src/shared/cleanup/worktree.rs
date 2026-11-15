@@ -8,6 +8,8 @@ use crate::shared::worktree::{
     get_main_repo, get_worktree_branch,
 };
 
+type BeforeWorktreeDelete = Box<dyn FnOnce() -> anyhow::Result<()>>;
+
 #[derive(Debug, thiserror::Error)]
 pub enum WorktreeProcessGuardError {
     #[error(
@@ -18,7 +20,7 @@ pub enum WorktreeProcessGuardError {
         process_list: String,
     },
     #[error(
-        "Could not inspect processes in worktree '{worktree_path}'; ensure lsof and ps are available and working, or pass --force to delete the worktree"
+        "Could not inspect processes in worktree '{worktree_path}'; pass --force to delete the worktree"
     )]
     InspectionUnavailable { worktree_path: PathBuf },
 }
@@ -123,10 +125,8 @@ pub fn cleanup_worktree_by_name(
             },
             kill_groups: process::kill_process_groups,
             kill_pane: |pane_id: &str| tmux::kill_pane(pane_id).is_ok(),
-            delete_worktree: |force, path: PathBuf, detect_processes| {
-                delete_worktree_and_branch(repo, worktree_name, &path, force, || {
-                    check_process_guard(&path, force, detect_processes)
-                })
+            delete_worktree: |force, path: PathBuf, before_delete| {
+                delete_worktree_and_branch(repo, worktree_name, &path, force, before_delete)
             },
         },
     )
@@ -173,13 +173,14 @@ fn cleanup_worktree_by_name_with_operations<
     >,
 ) -> anyhow::Result<WorktreeCleanupResult>
 where
-    DetectProcesses: FnOnce(&Path) -> Option<Vec<ProcessInPath>>,
+    DetectProcesses: FnOnce(&Path) -> Option<Vec<ProcessInPath>> + 'static,
     FindPanes: FnOnce(&Path) -> Vec<String>,
     FindGroups: FnOnce(&Path) -> Vec<libc::pid_t>,
     CleanSessions: FnOnce(&Path, bool) -> usize,
     KillGroups: FnOnce(&[libc::pid_t]) -> usize,
     KillPane: FnMut(&str) -> bool,
-    DeleteWorktree: FnOnce(bool, PathBuf, DetectProcesses) -> anyhow::Result<WorktreeCleanupResult>,
+    DeleteWorktree:
+        FnOnce(bool, PathBuf, BeforeWorktreeDelete) -> anyhow::Result<WorktreeCleanupResult>,
 {
     let WorktreeCleanupOperations {
         detect_processes,
@@ -199,7 +200,10 @@ where
         Vec::new()
     };
 
-    let mut result = delete_worktree(force, worktree_path.to_path_buf(), detect_processes)?;
+    let guard_path = worktree_path.to_path_buf();
+    let before_delete: BeforeWorktreeDelete =
+        Box::new(move || check_process_guard(&guard_path, force, detect_processes));
+    let mut result = delete_worktree(force, worktree_path.to_path_buf(), before_delete)?;
 
     // Clean up sessions before killing panes so a caller in the pane can finish.
     run_post_delete_cleanup(result.worktree_deleted, after_delete, || {
@@ -315,6 +319,7 @@ mod tests {
     use crate::shared::testing::TestRepo;
     use rstest::rstest;
     use std::cell::RefCell;
+    use std::rc::Rc;
     use tempfile::TempDir;
 
     #[test]
@@ -389,15 +394,16 @@ mod tests {
         let temp_dir = TempDir::new().expect("temporary worktree directory should be created");
         let worktree_path = temp_dir.path().join("worktree");
         std::fs::create_dir(&worktree_path).expect("worktree directory should be created");
-        let events = RefCell::new(Vec::new());
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let detect_events = Rc::clone(&events);
 
         let result = cleanup_worktree_by_name_with_operations(
             &worktree_path,
             force,
             || events.borrow_mut().push("after_delete"),
             WorktreeCleanupOperations {
-                detect_processes: |_: &Path| {
-                    events.borrow_mut().push("detect");
+                detect_processes: move |_: &Path| {
+                    detect_events.borrow_mut().push("detect");
                     detected_processes
                 },
                 find_panes: |_: &Path| {
@@ -428,8 +434,8 @@ mod tests {
                     events.borrow_mut().push("pane_closed");
                     true
                 },
-                delete_worktree: |force, path: PathBuf, detect_processes| {
-                    check_process_guard(&path, force, detect_processes)?;
+                delete_worktree: |force, path: PathBuf, before_delete: BeforeWorktreeDelete| {
+                    before_delete()?;
                     events
                         .borrow_mut()
                         .push(if force { "delete:true" } else { "delete:false" });
@@ -455,7 +461,7 @@ mod tests {
                 result.as_ref().is_ok_and(|result| result.worktree_deleted),
                 guard_error,
                 worktree_path.is_dir(),
-                events.into_inner(),
+                events.borrow().clone(),
             ),
             expected,
         );

@@ -35,17 +35,6 @@ fn should_sigterm_session(status: SessionStatus) -> bool {
     }
 }
 
-fn send_sigterm_if_enabled(
-    enabled: bool,
-    mut send: impl FnMut(Option<&str>, &str),
-    socket_path: Option<&str>,
-    pane_id: &str,
-) {
-    if enabled {
-        send(socket_path, pane_id);
-    }
-}
-
 /// Cleans up active agent session records and notification groups for sessions
 /// whose `cwd` is inside `worktree_path`.
 ///
@@ -87,14 +76,7 @@ fn cleanup_sessions_in_path_with_policy(
             own_codex_session_id: own_codex_session_id.as_deref(),
         },
         SessionCleanupOperations {
-            send_sigterm: |socket_path: Option<&str>, pane_id: &str| {
-                send_sigterm_if_enabled(
-                    signal_agents,
-                    tmux::send_sigterm_to_pane_for_socket,
-                    socket_path,
-                    pane_id,
-                );
-            },
+            send_sigterm: tmux::send_sigterm_to_pane_for_socket,
             delete_session: store::delete_session_without_archive,
             withdraw_pending_cards: |session_id: &str| match store::sessions_dir() {
                 Ok(sessions_dir) => withdraw_pending_cards(&sessions_dir, session_id),
@@ -815,24 +797,5 @@ mod tests {
         // now hosts the user's shell -- signaling it would kill the caller
         // when `a agent close` runs from that same pane.
         assert_eq!(should_sigterm_session(status), expected);
-    }
-
-    #[rstest]
-    #[case::disabled(false, vec![])]
-    #[case::enabled(true, vec!["%pane-1".to_string()])]
-    fn session_sigterm_policy_controls_pane_signals(
-        #[case] enabled: bool,
-        #[case] expected: Vec<String>,
-    ) {
-        let signals = RefCell::new(Vec::new());
-
-        send_sigterm_if_enabled(
-            enabled,
-            |_, pane_id| signals.borrow_mut().push(pane_id.to_string()),
-            None,
-            "%pane-1",
-        );
-
-        assert_eq!(signals.into_inner(), expected);
     }
 }

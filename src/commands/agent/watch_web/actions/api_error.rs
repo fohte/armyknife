@@ -94,7 +94,7 @@ impl ApiError {
                 crate::shared::cleanup::WorktreeProcessGuardError::InspectionUnavailable {
                     worktree_path,
                 } => format!(
-                    "Could not inspect processes in worktree '{}'. Ensure lsof and ps are available and working, or close the session while keeping the worktree.",
+                    "Could not inspect processes in worktree '{}'. Close the session while keeping the worktree, then retry.",
                     worktree_path.display(),
                 ),
             };
@@ -197,7 +197,7 @@ mod tests {
             (error.status, error.message, error.code),
             (
                 StatusCode::CONFLICT,
-                "Could not inspect processes in worktree '/worktrees/uncheckable'. Ensure lsof and ps are available and working, or close the session while keeping the worktree.".to_string(),
+                "Could not inspect processes in worktree '/worktrees/uncheckable'. Close the session while keeping the worktree, then retry.".to_string(),
                 Some("worktree_process_guard"),
             ),
         );
