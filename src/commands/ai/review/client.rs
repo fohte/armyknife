@@ -19,6 +19,7 @@ const PR_INFO_QUERY: &str = indoc! {"
     query($owner: String!, $repo: String!, $pr: Int!) {
         repository(owner: $owner, name: $repo) {
             pullRequest(number: $pr) {
+                headRefOid
                 comments(first: 100) {
                     nodes {
                         author { login }
@@ -121,7 +122,9 @@ struct PrInfoRepository {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PrInfoPullRequest {
+    head_ref_oid: String,
     comments: PrInfoComments,
     commits: PrInfoCommits,
 }
@@ -158,6 +161,45 @@ struct PrInfoCommitNode {
 #[serde(rename_all = "camelCase")]
 struct PrInfoCommit {
     committed_date: String,
+}
+
+#[cfg(test)]
+mod response_deserialization_tests {
+    use super::PrInfoData;
+    use serde_json::json;
+
+    #[test]
+    fn pr_info_deserializes_github_graphql_camel_case_response() {
+        let response = serde_json::from_value::<PrInfoData>(json!({
+            "repository": {
+                "pullRequest": {
+                    "headRefOid": "example-head-oid",
+                    "comments": {
+                        "nodes": [{
+                            "author": { "login": "example-review-bot" },
+                            "body": "Example review comment",
+                            "createdAt": "2026-01-02T03:04:05Z"
+                        }]
+                    },
+                    "commits": {
+                        "nodes": [{
+                            "commit": {
+                                "committedDate": "2026-01-02T03:04:05Z"
+                            }
+                        }]
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let head_oid = response
+            .repository
+            .and_then(|repository| repository.pull_request)
+            .map(|pull_request| pull_request.head_ref_oid);
+
+        assert_eq!(head_oid.as_deref(), Some("example-head-oid"));
+    }
 }
 
 // Reaction query types
@@ -358,6 +400,17 @@ impl OctocrabDetectionClient {
     }
 }
 
+fn latest_review_time<'a>(
+    mut timestamps: impl Iterator<Item = &'a str>,
+) -> Result<Option<DateTime<Utc>>> {
+    timestamps.try_fold(None::<DateTime<Utc>>, |latest, timestamp| {
+        timestamp
+            .parse::<DateTime<Utc>>()
+            .map(|created_at| Some(latest.map_or(created_at, |previous| previous.max(created_at))))
+            .map_err(|_| ReviewError::TimestampParseError(timestamp.to_string()).into())
+    })
+}
+
 impl DetectionClient for OctocrabDetectionClient {
     async fn find_latest_review(
         &self,
@@ -370,19 +423,50 @@ impl DetectionClient for OctocrabDetectionClient {
             .await
             .context("Failed to fetch PR data")?;
 
-        pr_data
-            .reviews
-            .iter()
-            .filter(|review| review.author.as_ref().is_some_and(|a| a.login == bot_login))
-            .try_fold(None, |acc, review| {
-                review
-                    .created_at
-                    .parse::<DateTime<Utc>>()
-                    .map(|created_at| {
-                        Some(acc.map_or(created_at, |prev: DateTime<Utc>| prev.max(created_at)))
-                    })
-                    .map_err(|_| ReviewError::TimestampParseError(review.created_at.clone()).into())
-            })
+        latest_review_time(
+            pr_data
+                .reviews
+                .iter()
+                .filter(|review| review.author.as_ref().is_some_and(|a| a.login == bot_login))
+                .map(|review| review.created_at.as_str()),
+        )
+    }
+
+    async fn find_latest_review_on_head(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+        bot_login: &str,
+    ) -> Result<Option<DateTime<Utc>>> {
+        let head_oid = self
+            .fetch_pr_info(owner, repo, pr_number)
+            .await?
+            .head_ref_oid;
+        let pr_data = fetch_pr_data(owner, repo, pr_number, true)
+            .await
+            .context("Failed to fetch PR data")?;
+        let current_head_oid = self
+            .fetch_pr_info(owner, repo, pr_number)
+            .await?
+            .head_ref_oid;
+        if current_head_oid != head_oid {
+            return Ok(None);
+        }
+
+        latest_review_time(
+            pr_data
+                .reviews
+                .iter()
+                .filter(|review| {
+                    review.author.as_ref().is_some_and(|a| a.login == bot_login)
+                        && review
+                            .commit
+                            .as_ref()
+                            .is_some_and(|commit| commit.oid == head_oid)
+                })
+                .map(|review| review.created_at.as_str()),
+        )
     }
 
     async fn find_unable_comment(
@@ -604,6 +688,7 @@ pub mod mock {
     pub struct MockReview {
         pub bot_login: String,
         pub created_at: DateTime<Utc>,
+        pub commit_oid: String,
     }
 
     /// Mock data for a PR comment.
@@ -650,6 +735,8 @@ pub mod mock {
     pub struct MockDetectionClient {
         /// Reviews on the PR.
         pub reviews: Arc<Mutex<Vec<MockReview>>>,
+        /// Current head commit OID.
+        pub head_oid: Arc<Mutex<String>>,
         /// Comments on the PR.
         pub comments: Arc<Mutex<Vec<MockComment>>>,
         /// Latest commit time.
@@ -671,18 +758,58 @@ pub mod mock {
         pub initial_review_cutoff: Arc<Mutex<Option<DateTime<Utc>>>>,
         /// Number of calls to apply cutoff to (default: 1).
         pub initial_review_cutoff_calls: Arc<Mutex<usize>>,
+        /// Number of status completion checks that return no result before success appears.
+        pub delayed_status_success_checks: Arc<Mutex<usize>>,
+        /// Number of status completion checks made.
+        pub status_completion_call_count: Arc<Mutex<usize>>,
+        /// Number of start checks that return false before the signal appears.
+        pub delayed_start_signal_checks: Arc<Mutex<usize>>,
+        /// Number of start checks made.
+        pub start_signal_check_count: Arc<Mutex<usize>>,
     }
 
     impl MockDetectionClient {
         pub fn new() -> Self {
-            Self::default()
+            let client = Self::default();
+            *client.head_oid.lock().unwrap() = "head".to_string();
+            client
         }
 
         pub fn with_review(self, reviewer: Reviewer, created_at: DateTime<Utc>) -> Self {
             self.reviews.lock().unwrap().push(MockReview {
                 bot_login: reviewer.detector().bot_login().to_string(),
                 created_at,
+                commit_oid: "head".to_string(),
             });
+            self
+        }
+
+        pub fn with_review_on_commit(
+            self,
+            reviewer: Reviewer,
+            created_at: DateTime<Utc>,
+            commit_oid: impl Into<String>,
+        ) -> Self {
+            self.reviews.lock().unwrap().push(MockReview {
+                bot_login: reviewer.detector().bot_login().to_string(),
+                created_at,
+                commit_oid: commit_oid.into(),
+            });
+            self
+        }
+
+        pub fn with_head_oid(self, head_oid: impl Into<String>) -> Self {
+            *self.head_oid.lock().unwrap() = head_oid.into();
+            self
+        }
+
+        pub fn delay_status_success(self, checks: usize) -> Self {
+            *self.delayed_status_success_checks.lock().unwrap() = checks;
+            self
+        }
+
+        pub fn delay_start_signal(self, checks: usize) -> Self {
+            *self.delayed_start_signal_checks.lock().unwrap() = checks;
             self
         }
 
@@ -800,6 +927,45 @@ pub mod mock {
             Ok(latest)
         }
 
+        async fn find_latest_review_on_head(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _pr_number: u64,
+            bot_login: &str,
+        ) -> Result<Option<DateTime<Utc>>> {
+            let mut call_count = self.find_review_call_count.lock().unwrap();
+            *call_count += 1;
+            let current_call = *call_count;
+            drop(call_count);
+
+            let skip_n = *self.skip_first_n_reviews.lock().unwrap();
+            if current_call <= skip_n {
+                return Ok(None);
+            }
+
+            let head_oid = self.head_oid.lock().unwrap().clone();
+            let cutoff = *self.initial_review_cutoff.lock().unwrap();
+            let cutoff_calls = *self.initial_review_cutoff_calls.lock().unwrap();
+            let effective_call = current_call.saturating_sub(skip_n);
+
+            Ok(self
+                .reviews
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|review| review.bot_login == bot_login && review.commit_oid == head_oid)
+                .filter(|review| {
+                    if effective_call > 0 && effective_call <= cutoff_calls {
+                        cutoff.is_none_or(|cutoff| review.created_at < cutoff)
+                    } else {
+                        true
+                    }
+                })
+                .map(|review| review.created_at)
+                .max())
+        }
+
         async fn find_unable_comment(
             &self,
             _owner: &str,
@@ -892,6 +1058,15 @@ pub mod mock {
             _pr_number: u64,
             context: &str,
         ) -> Result<bool> {
+            let mut call_count = self.start_signal_check_count.lock().unwrap();
+            *call_count += 1;
+            let current_call = *call_count;
+            drop(call_count);
+
+            if current_call <= *self.delayed_start_signal_checks.lock().unwrap() {
+                return Ok(false);
+            }
+
             let statuses = self.commit_statuses.lock().unwrap();
             Ok(statuses.iter().any(|s| s.context == context))
         }
@@ -903,6 +1078,15 @@ pub mod mock {
             _pr_number: u64,
             context: &str,
         ) -> Result<Option<DateTime<Utc>>> {
+            let mut call_count = self.status_completion_call_count.lock().unwrap();
+            *call_count += 1;
+            let current_call = *call_count;
+            drop(call_count);
+
+            if current_call <= *self.delayed_status_success_checks.lock().unwrap() {
+                return Ok(None);
+            }
+
             let statuses = self.commit_statuses.lock().unwrap();
             Ok(statuses
                 .iter()

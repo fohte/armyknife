@@ -23,6 +23,7 @@ const GRAPHQL_QUERY: &str = indoc! {"
               body
               state
               createdAt
+              commit { oid }
             }
           }
           reviewThreads(first: 100, after: $threadCursor) {

@@ -340,7 +340,7 @@ Request or wait for bot reviews on a PR.
 | `-R, --repo <repo>`     | Target repository (owner/repo)                                                                                                    |
 | `-r, --reviewer <name>` | Reviewer(s) to request/wait for; can be repeated (`devin`, `coderabbit`). When omitted, falls back to repo > org config > `devin` |
 | `--interval <seconds>`  | Polling interval (default: 15)                                                                                                    |
-| `--timeout <seconds>`   | Timeout (default: 300)                                                                                                            |
+| `--timeout <seconds>`   | Timeout for completion (default: 300); `wait` allows an additional 30 seconds to detect a start signal before this timeout begins |
 
 When `--reviewer` is omitted, the reviewer set is resolved in this order:
 

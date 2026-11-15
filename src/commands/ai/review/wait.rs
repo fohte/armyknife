@@ -3,14 +3,17 @@
 use super::client::get_client;
 use super::common::{WaitConfig, get_pr_number, get_repo_owner_and_name, wait_for_all_reviews};
 use super::detector::{DetectionClient, DetectionContext, ReviewDetector};
+use super::detectors::AnyDetector;
 use super::error::{Result, ReviewError};
 use super::reviewer::{Reviewer, builtin_default_reviewers};
 use crate::shared::config::load_config;
 use chrono::{DateTime, Utc};
 use clap::Args;
+use std::io::Write;
 
 const POLL_INTERVAL_SECS: u64 = 15;
 const TIMEOUT_SECS: u64 = 300; // 5 minutes
+const START_WAIT_SECS: u64 = 30;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct WaitArgs {
@@ -31,7 +34,7 @@ pub struct WaitArgs {
     #[arg(long, default_value_t = POLL_INTERVAL_SECS)]
     pub interval: u64,
 
-    /// Timeout in seconds
+    /// Timeout in seconds after a reviewer start signal is detected
     #[arg(long, default_value_t = TIMEOUT_SECS)]
     pub timeout: u64,
 }
@@ -54,6 +57,25 @@ pub(crate) async fn run_wait<C: DetectionClient>(
     owner: &str,
     repo: &str,
     pr_number: u64,
+) -> Result<()> {
+    run_wait_with_start_timeout(
+        args,
+        client,
+        owner,
+        repo,
+        pr_number,
+        std::time::Duration::from_secs(START_WAIT_SECS),
+    )
+    .await
+}
+
+async fn run_wait_with_start_timeout<C: DetectionClient>(
+    args: &WaitArgs,
+    client: &C,
+    owner: &str,
+    repo: &str,
+    pr_number: u64,
+    start_timeout: std::time::Duration,
 ) -> Result<()> {
     let resolved = match args.reviewers.as_deref() {
         Some(r) => r.to_vec(),
@@ -122,21 +144,21 @@ pub(crate) async fn run_wait<C: DetectionClient>(
         return Ok(());
     }
 
-    // Check if any reviewer has started. If none have started, return error.
+    // Give reviewers time to publish their first signal after a PR is created or updated.
     let active_detectors: Vec<_> = active_reviewers
         .iter()
         .map(|r| (*r, r.detector()))
         .collect();
 
-    let mut any_started = false;
-    for (_, detector) in &active_detectors {
-        if detector.is_started(&ctx).await? {
-            any_started = true;
-            break;
-        }
-    }
-
-    if !any_started {
+    if !wait_for_any_started(
+        &active_detectors,
+        &ctx,
+        start_timeout,
+        std::time::Duration::from_secs(args.interval.max(1)),
+    )
+    .await?
+    {
+        println!();
         return Err(ReviewError::ReviewNotStarted.into());
     }
 
@@ -155,6 +177,39 @@ pub(crate) async fn run_wait<C: DetectionClient>(
 
     println!("\nAll reviews completed!");
     Ok(())
+}
+
+async fn wait_for_any_started<C: DetectionClient>(
+    detectors: &[(Reviewer, AnyDetector)],
+    ctx: &DetectionContext<'_, C>,
+    timeout: std::time::Duration,
+    interval: std::time::Duration,
+) -> Result<bool> {
+    let started_at = tokio::time::Instant::now();
+
+    loop {
+        for (_, detector) in detectors {
+            if detector.is_started(ctx).await? {
+                return Ok(true);
+            }
+        }
+
+        let remaining = timeout.saturating_sub(started_at.elapsed());
+        if remaining.is_zero() {
+            return Ok(false);
+        }
+        print!(
+            "\rWaiting for reviewer start from {:?}... ({}s elapsed, grace: {}s)   ",
+            detectors
+                .iter()
+                .map(|(reviewer, _)| reviewer)
+                .collect::<Vec<_>>(),
+            started_at.elapsed().as_secs(),
+            timeout.as_secs()
+        );
+        std::io::stdout().flush().ok();
+        tokio::time::sleep(interval.min(remaining)).await;
+    }
 }
 
 #[cfg(test)]
@@ -328,7 +383,19 @@ mod tests {
     async fn wait_fails(#[case] scenario: &str, #[case] expected_error: &str) {
         let (client, args) = build_error_client(scenario);
 
-        let result = run_wait(&args, &client, "owner", "repo", 1).await;
+        let result = if scenario == "timeout" {
+            run_wait(&args, &client, "owner", "repo", 1).await
+        } else {
+            run_wait_with_start_timeout(
+                &args,
+                &client,
+                "owner",
+                "repo",
+                1,
+                std::time::Duration::ZERO,
+            )
+            .await
+        };
 
         let err = result.unwrap_err();
         assert_eq!(err.to_string(), expected_error);
@@ -378,6 +445,123 @@ mod tests {
         let args = make_args_both(1, 5);
 
         let result = run_wait(&args, &client, "owner", "repo", 1).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn wait_recognizes_devin_commit_status_as_started() {
+        let client =
+            MockDetectionClient::new().with_commit_status("Devin Review", "PENDING", Utc::now());
+        let args = make_args_single(Reviewer::Devin, 1, 0);
+
+        let result = run_wait(&args, &client, "owner", "repo", 1).await;
+
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Timeout waiting for review after 0 seconds"
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_waits_for_devin_status_to_succeed() {
+        let now = Utc::now();
+        let client = MockDetectionClient::new()
+            .with_commit_status("Devin Review", "SUCCESS", now + ChronoDuration::seconds(1))
+            .delay_status_success(2);
+        let args = make_args_single(Reviewer::Devin, 1, 5);
+
+        let result = run_wait(&args, &client, "owner", "repo", 1).await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn wait_accepts_trial_skipped_success_status_without_review() {
+        let client =
+            MockDetectionClient::new().with_commit_status("Devin Review", "SUCCESS", Utc::now());
+        let args = make_args_single(Reviewer::Devin, 1, 5);
+
+        let result = run_wait(&args, &client, "owner", "repo", 1).await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn wait_does_not_accept_devin_review_for_old_head() {
+        let client = MockDetectionClient::new()
+            .with_head_oid("new-head")
+            .with_review_on_commit(
+                Reviewer::Devin,
+                Utc::now() - ChronoDuration::hours(1),
+                "old-head",
+            )
+            .with_commit_status("Devin Review", "PENDING", Utc::now());
+        let args = make_args_single(Reviewer::Devin, 1, 0);
+
+        let result = run_wait(&args, &client, "owner", "repo", 1).await;
+
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Timeout waiting for review after 0 seconds"
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_returns_not_started_after_start_grace() {
+        let client = MockDetectionClient::new();
+        let args = make_args_single(Reviewer::Devin, 1, 5);
+
+        let result = run_wait_with_start_timeout(
+            &args,
+            &client,
+            "owner",
+            "repo",
+            1,
+            std::time::Duration::from_millis(20),
+        )
+        .await;
+
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Review has not started yet"
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_detects_devin_start_signal_that_appears_during_grace() {
+        let client = MockDetectionClient::new()
+            .with_commit_status("Devin Review", "PENDING", Utc::now())
+            .delay_start_signal(1);
+        let ctx = DetectionContext {
+            github: &client,
+            owner: "owner",
+            repo: "repo",
+            pr: 1,
+        };
+        let detectors = vec![(Reviewer::Devin, Reviewer::Devin.detector())];
+
+        let started = wait_for_any_started(
+            &detectors,
+            &ctx,
+            std::time::Duration::from_millis(50),
+            std::time::Duration::from_millis(2),
+        )
+        .await
+        .unwrap();
+
+        assert!(started);
+    }
+
+    #[tokio::test]
+    async fn wait_accepts_completed_devin_check_run_without_review_or_status() {
+        let client = MockDetectionClient::new().with_check_run(
+            "devin-review",
+            Some(Utc::now() + ChronoDuration::seconds(1)),
+        );
+        let args = make_args_single(Reviewer::Devin, 1, 5);
+
+        let result = run_wait(&args, &client, "owner", "repo", 1).await;
+
         assert!(result.is_ok());
     }
 }
