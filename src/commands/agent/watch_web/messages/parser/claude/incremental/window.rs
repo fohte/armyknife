@@ -211,8 +211,11 @@ fn restore_prefix_state(
         );
     }
     if !missing_task_ids.is_empty() {
-        let (task_results, complete) =
-            tail_window::find_background_task_starts(reader, window_start, missing_task_ids)?;
+        let (task_results, complete) = tail_window::find_pending_background_task_starts(
+            reader,
+            window_start,
+            missing_task_ids,
+        )?;
         if !complete {
             return Ok(None);
         }

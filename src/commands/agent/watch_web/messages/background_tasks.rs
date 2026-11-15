@@ -142,16 +142,20 @@ mod tests {
     use crate::commands::agent::types::{Engine, Session};
 
     #[rstest]
-    #[case::background_shell("shell", false)]
-    #[case::subagent("subagent", false)]
-    #[case::compressed_transcript("shell", true)]
+    #[case::background_shell("shell", false, false)]
+    #[case::subagent("subagent", false, false)]
+    #[case::compressed_transcript("shell", true, false)]
+    #[case::completed_background_shell("shell", false, true)]
+    #[case::completed_subagent("subagent", false, true)]
     fn tail_window_matches_full_parse_for_pending_tasks(
         transcript_directory: tempfile::TempDir,
         #[case] task_type: &str,
         #[case] compressed: bool,
+        #[case] completed_before_window: bool,
     ) {
         let task_id = "fixture-task-id";
-        let transcript = transcript_with_old_pending_task(task_type, task_id);
+        let transcript =
+            transcript_with_old_pending_task(task_type, task_id, completed_before_window);
         let extension = if compressed { "jsonl.zst" } else { "jsonl" };
         let path = transcript_directory
             .path()
@@ -195,8 +199,12 @@ mod tests {
             ),
             (
                 !compressed,
-                HashSet::from(["fixture-session".to_string()]),
-                true,
+                if completed_before_window {
+                    HashSet::new()
+                } else {
+                    HashSet::from(["fixture-session".to_string()])
+                },
+                !completed_before_window,
             ),
         );
     }
@@ -206,7 +214,7 @@ mod tests {
         let transcript_directory =
             tempfile::tempdir().expect("fixture directory should be created");
         let path = transcript_directory.path().join("fixture-transcript.jsonl");
-        let transcript = transcript_with_old_pending_task("shell", "fixture-task-id");
+        let transcript = transcript_with_old_pending_task("shell", "fixture-task-id", false);
         std::fs::write(&path, transcript).expect("fixture transcript should be written");
         let mut session = session_for_transcript(&path, "shell", "fixture-task-id");
         let cache = RunningBackgroundTaskCache::default();
@@ -274,7 +282,11 @@ mod tests {
         }
     }
 
-    fn transcript_with_old_pending_task(task_type: &str, task_id: &str) -> String {
+    fn transcript_with_old_pending_task(
+        task_type: &str,
+        task_id: &str,
+        completed_before_window: bool,
+    ) -> String {
         let mut transcript = String::new();
         let (call, result) = if task_type == "shell" {
             (
@@ -353,6 +365,20 @@ mod tests {
             append_record(&mut transcript, &record);
         }
         let mut parent_uuid = "fixture-task-result-row".to_string();
+        if completed_before_window {
+            let notification = json!({
+                "uuid": "fixture-task-notification-row",
+                "parentUuid": parent_uuid,
+                "type": "user",
+                "timestamp": "2026-01-01T00:00:02Z",
+                "origin": {"kind": "task-notification"},
+                "message": {"content": format!(
+                    "<task-notification><task-id>{task_id}</task-id><status>completed</status></task-notification>"
+                )},
+            });
+            append_record(&mut transcript, &notification);
+            parent_uuid = "fixture-task-notification-row".to_string();
+        }
         for index in 0..100 {
             let uuid = format!("fixture-recent-message-{index}");
             let record = json!({

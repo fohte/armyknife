@@ -168,7 +168,7 @@ pub(super) fn resolve_ancestry_from_prefix(
     Ok(!exceeded_search_limit && (complete_scan || unresolved.is_empty()))
 }
 
-pub(super) fn find_background_task_starts<R: Read + Seek>(
+pub(super) fn find_pending_background_task_starts<R: Read + Seek>(
     reader: &mut R,
     prefix_length: u64,
     task_ids: &[String],
@@ -179,17 +179,26 @@ pub(super) fn find_background_task_starts<R: Read + Seek>(
         return Ok((matching_records, true));
     }
     let complete_scan = visit_prefix_lines_reverse(reader, prefix_length, |line| {
-        if memmem::find(line, b"toolUseResult").is_none() {
+        let has_task_result = memmem::find(line, b"toolUseResult").is_some();
+        let has_task_notification = memmem::find(line, b"<task-notification>").is_some();
+        if !has_task_result && !has_task_notification {
             return true;
         }
         let Some(record) = parse_record(line) else {
             return true;
         };
+        if has_task_notification
+            && let Some(text) = super::super::background_tasks::task_notification_text(&record)
+            && let Some(task_id) =
+                super::super::background_tasks::finished_task_notification_id(&text)
+        {
+            unresolved.remove(task_id);
+        }
         if record.get("type").and_then(Value::as_str) != Some("user") {
-            return true;
+            return !unresolved.is_empty();
         }
         let Some(result) = record.get("toolUseResult").and_then(Value::as_object) else {
-            return true;
+            return !unresolved.is_empty();
         };
         for key in [
             "task_id",
