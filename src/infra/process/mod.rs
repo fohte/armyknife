@@ -409,26 +409,6 @@ impl ProcessSnapshot {
         result
     }
 
-    /// Resolves the first ancestor of `pid` whose comm basename matches
-    /// `target`. The process itself is not considered.
-    pub fn find_ancestor_by_command(&self, pid: u32, target: &str) -> Option<u32> {
-        let mut current = pid;
-        let mut visited = HashSet::new();
-        visited.insert(current);
-
-        while let Some(&parent) = self.parents.get(&current) {
-            if !visited.insert(parent) {
-                return None;
-            }
-            if self.comm_basename(parent) == Some(target) {
-                return Some(parent);
-            }
-            current = parent;
-        }
-
-        None
-    }
-
     /// Returns the basename of the comm for `pid`, if known.
     pub fn comm_basename(&self, pid: u32) -> Option<&str> {
         self.comms
@@ -793,82 +773,33 @@ mod tests {
     }
 
     #[rstest]
-    #[case::agent_parent(
-        indoc! {"
-            100 1 init
-            200 100 claude
-            300 200 node
-            400 300 hook
-        "},
-        400,
-        "claude",
-        Some(200),
-    )]
-    #[case::agent_grandparent(
-        indoc! {"
-            100 1 init
-            200 100 /agent/bin/codex
-            300 200 zsh
-            400 300 hook
-        "},
-        400,
-        "codex",
-        Some(200),
-    )]
-    #[case::self_is_not_ancestor(
-        indoc! {"
-            100 1 init
-            200 100 claude
-        "},
-        200,
-        "claude",
-        None,
-    )]
-    #[case::no_matching_agent(
-        indoc! {"
-            100 1 init
-            200 100 zsh
-            300 200 hook
-        "},
-        300,
-        "codex",
-        None,
-    )]
-    fn find_ancestor_by_command_cases(
-        #[case] ps_output: &str,
-        #[case] pid: u32,
-        #[case] command: &str,
-        #[case] expected: Option<u32>,
-    ) {
-        let snapshot = ProcessSnapshot::from_ps_output(ps_output);
-        assert_eq!(snapshot.find_ancestor_by_command(pid, command), expected);
-    }
-
-    #[rstest]
     #[case::nested_under_claude(
         indoc! {"
             100 1 init
             200 100 claude
-            300 200 hook
+            300 200 claude
+            400 300 hook
         "},
-        300,
+        400,
         true,
     )]
     #[case::nested_under_codex(
         indoc! {"
             100 1 init
-            200 100 /agent/bin/codex
-            300 200 hook
+            200 100 claude
+            300 200 /agent/bin/codex
+            400 300 hook
         "},
-        300,
+        400,
         true,
     )]
     #[case::direct_agent_process(
         indoc! {"
             100 1 init
             200 100 claude
+            300 200 hook
         "},
-        200,
+        300,
         false,
     )]
     #[case::ordinary_shell_ancestor(
@@ -880,14 +811,14 @@ mod tests {
         300,
         false,
     )]
-    fn has_agent_ancestor_process_cases(
+    fn has_parent_agent_process_cases(
         #[case] ps_output: &str,
         #[case] pid: u32,
         #[case] expected: bool,
     ) {
         let snapshot = ProcessSnapshot::from_ps_output(ps_output);
         assert_eq!(
-            crate::commands::agent::pane::process::has_agent_ancestor_process(pid, &snapshot),
+            crate::commands::agent::pane::process::has_parent_agent_process(pid, &snapshot),
             expected,
         );
     }

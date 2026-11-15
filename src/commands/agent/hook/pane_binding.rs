@@ -11,7 +11,7 @@
 use std::path::Path;
 
 use crate::commands::agent::pane::process::{
-    has_agent_ancestor_process, pane_has_live_agent_process,
+    has_parent_agent_process, pane_has_live_agent_process,
 };
 use crate::commands::agent::store;
 use crate::commands::agent::types::{
@@ -22,22 +22,36 @@ use crate::infra::tmux::{self, PaneInfo, PaneInfoWithOption};
 
 /// Resolves the hook's pane through process ancestry or its explicit session binding.
 pub(super) fn resolve(input: &HookInput) -> Option<PaneInfo> {
-    let pid = std::process::id();
-    if let Some(pane) = tmux::get_pane_info_by_pid(pid) {
-        if ProcessSnapshot::capture()
-            .as_ref()
-            .is_some_and(|snapshot| has_agent_ancestor_process(pid, snapshot))
-        {
-            return None;
-        }
-        return Some(pane);
+    resolve_with(
+        input.engine,
+        &input.session_id,
+        std::process::id(),
+        tmux::get_pane_info_by_pid,
+        |pid| ProcessSnapshot::capture().map(|snapshot| has_parent_agent_process(pid, &snapshot)),
+        find_by_session_option,
+    )
+}
+
+fn resolve_with(
+    engine: Engine,
+    session_id: &str,
+    pid: u32,
+    get_pane_info: impl FnOnce(u32) -> Option<PaneInfo>,
+    has_parent_agent: impl FnOnce(u32) -> Option<bool>,
+    find_by_session: impl FnOnce(&str) -> Option<PaneInfo>,
+) -> Option<PaneInfo> {
+    if let Some(pane) = get_pane_info(pid) {
+        return match has_parent_agent(pid) {
+            Some(false) => Some(pane),
+            Some(true) | None => None,
+        };
     }
 
-    if input.engine != Engine::Codex {
-        return None;
+    if engine == Engine::Codex {
+        return find_by_session(session_id);
     }
 
-    find_by_session_option(&input.session_id)
+    None
 }
 
 /// Detects a reused pane so its inherited launch environment cannot pin a new session.
@@ -102,8 +116,9 @@ fn unique_live_pane_for_session<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::unique_live_pane_for_session;
-    use crate::infra::tmux::PaneInfoWithOption;
+    use super::{resolve_with, unique_live_pane_for_session};
+    use crate::commands::agent::types::Engine;
+    use crate::infra::tmux::{PaneInfo, PaneInfoWithOption};
     use rstest::{fixture, rstest};
 
     #[fixture]
@@ -123,6 +138,68 @@ mod tests {
             pane_id: pane_id.to_string(),
             option_value: Some(option_value.to_string()),
         }
+    }
+
+    fn pane_info() -> PaneInfo {
+        PaneInfo {
+            session_name: "session-main".to_string(),
+            window_name: "window-main".to_string(),
+            window_index: 0,
+            pane_id: "%12".to_string(),
+        }
+    }
+
+    #[rstest]
+    #[case::nested_agent_is_not_bound(true, None)]
+    #[case::direct_agent_keeps_pane_binding(false, Some(pane_info()))]
+    fn ancestry_pane_binding_cases(
+        #[case] has_parent_agent: bool,
+        #[case] expected: Option<PaneInfo>,
+    ) {
+        assert_eq!(
+            resolve_with(
+                Engine::Claude,
+                "session-example",
+                123,
+                |_| Some(pane_info()),
+                |_| Some(has_parent_agent),
+                |_| None,
+            ),
+            expected,
+        );
+    }
+
+    #[rstest]
+    #[case::snapshot_failure_is_unresolved(None)]
+    #[case::nested_agent_is_unresolved(Some(true))]
+    fn ancestry_pane_binding_requires_a_known_direct_agent(#[case] has_parent_agent: Option<bool>) {
+        assert_eq!(
+            resolve_with(
+                Engine::Claude,
+                "session-example",
+                123,
+                |_| Some(pane_info()),
+                |_| has_parent_agent,
+                |_| None,
+            ),
+            None,
+        );
+    }
+
+    #[test]
+    fn codex_without_ancestry_pane_uses_session_option_lookup() {
+        let expected = pane_info();
+        assert_eq!(
+            resolve_with(
+                Engine::Codex,
+                "session-example",
+                123,
+                |_| None,
+                |_| Some(false),
+                |session_id| (session_id == "session-example").then(|| expected.clone()),
+            ),
+            Some(expected),
+        );
     }
 
     #[rstest]

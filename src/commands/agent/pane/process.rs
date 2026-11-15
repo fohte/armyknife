@@ -29,11 +29,19 @@ pub fn pane_has_live_agent_process(
         .is_some()
 }
 
-/// Returns whether an agent process is among `pid`'s ancestors.
-pub(crate) fn has_agent_ancestor_process(pid: u32, snapshot: &ProcessSnapshot) -> bool {
-    [Engine::Claude, Engine::Codex].into_iter().any(|engine| {
-        snapshot
-            .find_ancestor_by_command(pid, engine.process_name())
-            .is_some()
-    })
+/// Returns whether another agent process is above the current agent in the
+/// hook's ancestry.
+pub(crate) fn has_parent_agent_process(pid: u32, snapshot: &ProcessSnapshot) -> bool {
+    let agent_ancestor_count = snapshot
+        .ancestors(pid)
+        .into_iter()
+        .filter(|&ancestor_pid| ancestor_pid != pid)
+        .filter(|&ancestor_pid| {
+            [Engine::Claude, Engine::Codex]
+                .into_iter()
+                .any(|engine| snapshot.comm_basename(ancestor_pid) == Some(engine.process_name()))
+        })
+        .count();
+
+    agent_ancestor_count > 1
 }
