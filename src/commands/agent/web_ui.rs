@@ -23,6 +23,10 @@ pub struct AddArgs {
     pub name: String,
 }
 
+pub(crate) fn session_start_instruction() -> &'static str {
+    "When you start a local web UI (an HTTP server with a port), register it with `a agent web-ui add <URL> --name <NAME>`."
+}
+
 pub fn run(command: &WebUiCommands) -> Result<()> {
     match command {
         WebUiCommands::Add(args) => {
