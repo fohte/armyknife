@@ -184,9 +184,10 @@ export function ConversationPaneView({
     isMobile,
     scrollRef: conversationScrollRef,
   })
-  const computedSessionLinkTargets = useSessionLinkTargets(sessions)
-  const sessionLinkTargets =
-    providedSessionLinkTargets ?? computedSessionLinkTargets
+  const sessionLinkTargets = useSessionLinkTargets(
+    sessions,
+    providedSessionLinkTargets,
+  )
   const sessionElapsedSecondsById = useMemo(
     () =>
       new Map(

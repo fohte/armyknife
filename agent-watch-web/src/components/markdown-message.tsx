@@ -7,18 +7,20 @@ import {
   memo,
   type ReactNode,
   useContext,
-  useMemo,
 } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 import { BangCommandActions } from '#components/bang-command'
+import { useMarkdownSessionLinks } from '#components/markdown-session-links'
 import { SessionLink } from '#components/session-link'
 import {
   SyntaxCodeBlock,
   type SyntaxCodeBlockLink,
 } from '#components/syntax-code-block'
 import type { SessionLinkTarget } from '#types'
+
+export { MarkdownSessionLinksProvider } from '#components/markdown-session-links'
 
 type MarkdownNode = {
   children?: MarkdownNode[]
@@ -40,34 +42,6 @@ type MarkdownFile = {
 }
 
 const CodeBlockContext = createContext(false)
-
-type MarkdownSessionLinksValue = {
-  sessions: readonly SessionLinkTarget[]
-  onSelectSession?: (id: string) => void
-}
-
-const MarkdownSessionLinksContext = createContext<MarkdownSessionLinksValue>({
-  sessions: [],
-})
-
-export function MarkdownSessionLinksProvider({
-  children,
-  sessions,
-  onSelectSession,
-}: MarkdownSessionLinksValue & { children: ReactNode }) {
-  const value = useMemo(
-    () => ({
-      sessions,
-      ...(onSelectSession === undefined ? {} : { onSelectSession }),
-    }),
-    [onSelectSession, sessions],
-  )
-  return (
-    <MarkdownSessionLinksContext.Provider value={value}>
-      {children}
-    </MarkdownSessionLinksContext.Provider>
-  )
-}
 
 type MarkdownComponentContextValue = {
   sessionsById: ReadonlyMap<string, SessionLinkTarget>
@@ -477,7 +451,7 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   sessionId,
   onCommandExecuted,
 }: MarkdownMessageProps) {
-  const sessionLinks = useContext(MarkdownSessionLinksContext)
+  const sessionLinks = useMarkdownSessionLinks()
   const rootClassName =
     className === undefined
       ? 'markdown-message'
