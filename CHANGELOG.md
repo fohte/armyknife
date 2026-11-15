@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.738](https://github.com/fohte/armyknife/compare/v0.1.737...v0.1.738) (2026-11-15)
+
+
+### Bug Fixes
+
+* **agent:** keep nested hooks off parent panes ([#1859](https://github.com/fohte/armyknife/issues/1859)) ([b7464d3](https://github.com/fohte/armyknife/commit/b7464d35c8c317e36400564862a9d333e4bfc6c7))
+
 ## [0.1.737](https://github.com/fohte/armyknife/compare/v0.1.736...v0.1.737) (2026-11-15)
 
 
