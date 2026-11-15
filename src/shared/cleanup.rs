@@ -180,7 +180,7 @@ fn should_sigterm_session(status: SessionStatus) -> bool {
 ///    after this cleanup process exits.
 /// 2. If the session's Claude process is still expected to be alive and the
 ///    tmux pane is alive, sends SIGTERM to it
-/// 3. Retains the session record while an incomplete todo needs the user to finish it in watch-web
+/// 3. Withdraws unanswered todos and proposals so they no longer need a reply
 /// 4. Removes the notification group on a best-effort basis
 ///
 /// Returns the number of sessions cleaned up.
@@ -202,6 +202,9 @@ pub fn cleanup_sessions_in_path(worktree_path: &Path) -> anyhow::Result<usize> {
         SessionCleanupOperations {
             send_sigterm: tmux::send_sigterm_to_pane_for_socket,
             delete_session: store::delete_session_without_archive,
+            withdraw_pending_cards: |session_id: &str| {
+                withdraw_pending_cards(&store::sessions_dir()?, session_id)
+            },
             remove_notification_group: crate::infra::notification::remove_group,
             archive_codex_thread: crate::commands::agent::codex_steer::archive_thread,
             defer_archive: crate::commands::agent::spawn_after_parent_exit,
@@ -235,12 +238,14 @@ fn cache_alive_panes_by_socket(
 struct SessionCleanupOperations<
     SendSigterm,
     DeleteSession,
+    WithdrawCards,
     RemoveNotification,
     Archive,
     DeferArchive,
 > {
     send_sigterm: SendSigterm,
     delete_session: DeleteSession,
+    withdraw_pending_cards: WithdrawCards,
     remove_notification_group: RemoveNotification,
     archive_codex_thread: Archive,
     defer_archive: DeferArchive,
@@ -249,6 +254,7 @@ struct SessionCleanupOperations<
 fn cleanup_sessions_with_deferred_archive<
     SendSigterm,
     DeleteSession,
+    WithdrawCards,
     RemoveNotification,
     Archive,
     DeferArchive,
@@ -258,6 +264,7 @@ fn cleanup_sessions_with_deferred_archive<
     operations: SessionCleanupOperations<
         SendSigterm,
         DeleteSession,
+        WithdrawCards,
         RemoveNotification,
         Archive,
         DeferArchive,
@@ -266,6 +273,7 @@ fn cleanup_sessions_with_deferred_archive<
 where
     SendSigterm: FnMut(Option<&str>, &str),
     DeleteSession: FnMut(&str) -> anyhow::Result<bool>,
+    WithdrawCards: FnMut(&str) -> anyhow::Result<()>,
     RemoveNotification: FnMut(&str) -> anyhow::Result<()>,
     Archive: FnMut(&str) -> anyhow::Result<()>,
     DeferArchive: FnMut(&str) -> anyhow::Result<()>,
@@ -284,6 +292,7 @@ where
     let SessionCleanupOperations {
         send_sigterm,
         delete_session,
+        withdraw_pending_cards,
         remove_notification_group,
         archive_codex_thread,
         mut defer_archive,
@@ -294,6 +303,7 @@ where
         context,
         send_sigterm,
         delete_session,
+        withdraw_pending_cards,
         remove_notification_group,
         archive_codex_thread,
     );
@@ -326,6 +336,7 @@ fn cleanup_sessions(
     context: SessionCleanupContext<'_>,
     mut send_sigterm: impl FnMut(Option<&str>, &str),
     mut delete_session: impl FnMut(&str) -> anyhow::Result<bool>,
+    mut withdraw_pending_cards: impl FnMut(&str) -> anyhow::Result<()>,
     mut remove_notification_group: impl FnMut(&str) -> anyhow::Result<()>,
     mut archive_codex_thread: impl FnMut(&str) -> anyhow::Result<()>,
 ) -> usize {
@@ -353,6 +364,19 @@ fn cleanup_sessions(
                     == Some(true)
             {
                 send_sigterm(tmux_info.socket_path.as_deref(), &tmux_info.pane_id);
+            }
+
+            if let Err(error) = withdraw_pending_cards(&session.session_id) {
+                eprintln!(
+                    "Warning: Failed to withdraw pending cards for session {}: {error:#}",
+                    session.session_id
+                );
+                tracing::warn!(
+                    target: "armyknife::shared::cleanup",
+                    event = "cleanup.pending_card_withdrawal.err",
+                    session = %session.session_id,
+                    msg = format!("failed to withdraw pending cards: {error:#}"),
+                );
             }
 
             if session.status != SessionStatus::Ended {
@@ -386,6 +410,78 @@ fn cleanup_sessions(
     cleaned
 }
 
+fn withdraw_pending_todos(sessions_dir: &Path, session_id: &str) -> anyhow::Result<()> {
+    let _lock = store::lock_agent_todo_resolution(sessions_dir, session_id)?;
+    let todos = store::agent_todos_from(sessions_dir, session_id)?;
+    let mut errors = Vec::new();
+
+    for todo in todos.into_iter().filter(|todo| todo.resolution.is_none()) {
+        if let Err(error) = store::resolve_agent_todo_from(
+            sessions_dir,
+            session_id,
+            todo.seq,
+            store::TodoResolution::Withdrawn,
+            Some("Withdrawn during worktree cleanup."),
+        ) {
+            errors.push(format!("todo {}: {error:#}", todo.seq));
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        anyhow::bail!(errors.join("; "))
+    }
+}
+
+fn withdraw_pending_proposals(sessions_dir: &Path, session_id: &str) -> anyhow::Result<()> {
+    let proposals = store::agent_proposals_from(sessions_dir, session_id)?;
+    let mut errors = Vec::new();
+
+    for proposal in proposals
+        .into_iter()
+        .filter(|proposal| proposal.resolved_at.is_none())
+    {
+        let result = (|| {
+            let _lock =
+                store::lock_agent_proposal_resolution_from(sessions_dir, session_id, proposal.seq)?;
+            store::resolve_agent_proposal_from(
+                sessions_dir,
+                session_id,
+                proposal.seq,
+                Some("Withdrawn during worktree cleanup."),
+            )?;
+            anyhow::Ok(())
+        })();
+
+        if let Err(error) = result {
+            errors.push(format!("proposal {}: {error:#}", proposal.seq));
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        anyhow::bail!(errors.join("; "))
+    }
+}
+
+fn withdraw_pending_cards(sessions_dir: &Path, session_id: &str) -> anyhow::Result<()> {
+    let todo_result = withdraw_pending_todos(sessions_dir, session_id);
+    let proposal_result = withdraw_pending_proposals(sessions_dir, session_id);
+    let errors = [todo_result.err(), proposal_result.err()]
+        .into_iter()
+        .flatten()
+        .map(|error| format!("{error:#}"))
+        .collect::<Vec<_>>();
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        anyhow::bail!(errors.join("; "))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -395,6 +491,7 @@ mod tests {
     use rstest::rstest;
     use std::cell::RefCell;
     use std::path::PathBuf;
+    use tempfile::TempDir;
 
     fn make_session(session_id: &str, cwd: &Path, engine: Engine) -> Session {
         Session {
@@ -464,9 +561,159 @@ mod tests {
             |_| Ok(false),
             |_| Ok(()),
             |_| Ok(()),
+            |_| Ok(()),
         );
 
         assert_eq!(cleaned, 0);
+    }
+
+    #[test]
+    fn cleanup_withdraws_pending_todos_and_proposals_from_the_inbox() {
+        let sessions_dir = TempDir::new().expect("temporary sessions directory should be created");
+        let worktree_path = PathBuf::from("/tmp/example-worktree");
+        let session = make_session("session-a", &worktree_path, Engine::Claude);
+        store::save_session_to(sessions_dir.path(), &session).expect("session should be stored");
+
+        let completed_todo = store::add_agent_todo_in(
+            sessions_dir.path(),
+            &session.session_id,
+            "A finished task",
+            None,
+        )
+        .expect("completed todo should be recorded");
+        store::resolve_agent_todo_from(
+            sessions_dir.path(),
+            &session.session_id,
+            completed_todo,
+            store::TodoResolution::Completed,
+            None,
+        )
+        .expect("todo should be completed");
+        store::add_agent_todo_in(
+            sessions_dir.path(),
+            &session.session_id,
+            "A pending task",
+            None,
+        )
+        .expect("pending todo should be recorded");
+
+        let answered_proposal = store::add_agent_proposal_in(
+            sessions_dir.path(),
+            &session.session_id,
+            "{\"title\":\"An answered choice\"}",
+        )
+        .expect("answered proposal should be recorded");
+        store::write_agent_proposal_answer_from(
+            sessions_dir.path(),
+            &session.session_id,
+            answered_proposal,
+            "Selected an option.",
+        )
+        .expect("proposal should be answered");
+        store::add_agent_proposal_in(
+            sessions_dir.path(),
+            &session.session_id,
+            "{\"title\":\"A pending choice\"}",
+        )
+        .expect("pending proposal should be recorded");
+
+        cleanup_sessions(
+            std::slice::from_ref(&session),
+            SessionCleanupContext {
+                worktree_path: &worktree_path,
+                alive_panes_by_socket: &tmux::PaneLiveness::default(),
+                own_codex_session_id: None,
+            },
+            |_, _| {},
+            |_| Ok(true),
+            |session_id| withdraw_pending_cards(sessions_dir.path(), session_id),
+            |_| Ok(()),
+            |_| Ok(()),
+        );
+
+        let todos = store::agent_todos_from(sessions_dir.path(), &session.session_id)
+            .expect("todos should remain queryable");
+        let proposals = store::agent_proposals_from(sessions_dir.path(), &session.session_id)
+            .expect("proposals should remain queryable");
+        let session_ids = vec![session.session_id];
+        assert_eq!(
+            (
+                todos
+                    .iter()
+                    .map(|todo| (todo.seq, todo.resolution, todo.comment.as_deref()))
+                    .collect::<Vec<_>>(),
+                proposals
+                    .iter()
+                    .map(|proposal| {
+                        (
+                            proposal.seq,
+                            proposal.resolved_at.is_some(),
+                            proposal.comment.as_deref(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                store::incomplete_agent_todo_titles_from(sessions_dir.path(), &session_ids)
+                    .expect("incomplete todo titles should be queryable"),
+                store::unanswered_agent_proposal_bodies_from(sessions_dir.path(), &session_ids)
+                    .expect("unanswered proposal bodies should be queryable"),
+            ),
+            (
+                vec![
+                    (1, Some(store::TodoResolution::Completed), None),
+                    (
+                        2,
+                        Some(store::TodoResolution::Withdrawn),
+                        Some("Withdrawn during worktree cleanup."),
+                    ),
+                ],
+                vec![
+                    (1, true, None),
+                    (2, true, Some("Withdrawn during worktree cleanup."),),
+                ],
+                vec![],
+                vec![],
+            ),
+        );
+    }
+
+    #[test]
+    fn cleanup_continues_after_pending_card_withdrawal_fails() {
+        let worktree_path = PathBuf::from("/tmp/example-worktree");
+        let session = make_session("session-a", &worktree_path, Engine::Claude);
+        let events = RefCell::new(Vec::new());
+
+        let cleaned = cleanup_sessions(
+            &[session],
+            SessionCleanupContext {
+                worktree_path: &worktree_path,
+                alive_panes_by_socket: &tmux::PaneLiveness::default(),
+                own_codex_session_id: None,
+            },
+            |_, _| {},
+            |session_id| {
+                events.borrow_mut().push(format!("delete:{session_id}"));
+                Ok(true)
+            },
+            |_| Err(anyhow::anyhow!("card database is unavailable")),
+            |session_id| {
+                events
+                    .borrow_mut()
+                    .push(format!("notification:{session_id}"));
+                Ok(())
+            },
+            |_| Ok(()),
+        );
+
+        assert_eq!(
+            (cleaned, events.into_inner()),
+            (
+                1,
+                vec![
+                    "delete:session-a".to_string(),
+                    "notification:session-a".to_string(),
+                ],
+            ),
+        );
     }
 
     #[test]
@@ -539,6 +786,7 @@ mod tests {
             |_| Ok(true),
             |_| Ok(()),
             |_| Ok(()),
+            |_| Ok(()),
         );
 
         assert_eq!(
@@ -582,6 +830,7 @@ mod tests {
                     events.borrow_mut().push(format!("delete:{session_id}"));
                     Ok(true)
                 },
+                withdraw_pending_cards: |_session_id: &str| Ok(()),
                 remove_notification_group: |session_id: &str| {
                     events
                         .borrow_mut()
