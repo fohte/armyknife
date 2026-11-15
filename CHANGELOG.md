@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.718](https://github.com/fohte/armyknife/compare/v0.1.717...v0.1.718) (2026-11-15)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** keep mobile titles readable ([#1818](https://github.com/fohte/armyknife/issues/1818)) ([cfd1438](https://github.com/fohte/armyknife/commit/cfd1438b952c296c0fe480a82cf26e667c7c696f))
+
 ## [0.1.717](https://github.com/fohte/armyknife/compare/v0.1.716...v0.1.717) (2026-11-15)
 
 
