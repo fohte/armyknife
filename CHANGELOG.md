@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.726](https://github.com/fohte/armyknife/compare/v0.1.725...v0.1.726) (2026-11-15)
+
+
+### Bug Fixes
+
+* **agent:** reject non-terminal delete prompts ([#1834](https://github.com/fohte/armyknife/issues/1834)) ([48de9f7](https://github.com/fohte/armyknife/commit/48de9f7b875d964d545d77898eb9b422cdecd952))
+
 ## [0.1.725](https://github.com/fohte/armyknife/compare/v0.1.724...v0.1.725) (2026-11-15)
 
 
