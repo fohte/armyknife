@@ -930,6 +930,7 @@ mod tests {
                 body: body_text.to_string(),
                 state: ReviewState::ChangesRequested,
                 created_at: "2024-01-15T09:00:00Z".to_string(),
+                commit: None,
             }],
             threads: vec![],
         };

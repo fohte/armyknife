@@ -40,6 +40,7 @@ fn make_review(id: i64, body: &str, state: ReviewState) -> Review {
         body: body.to_string(),
         state,
         created_at: "2024-01-01T00:00:00Z".to_string(),
+        commit: None,
     }
 }
 
