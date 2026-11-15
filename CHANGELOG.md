@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.735](https://github.com/fohte/armyknife/compare/v0.1.734...v0.1.735) (2026-11-15)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** allow bang commands in cards ([#1853](https://github.com/fohte/armyknife/issues/1853)) ([b4c88fb](https://github.com/fohte/armyknife/commit/b4c88fb0b083c6301750b0a1295b01cd53441d11))
+
 ## [0.1.734](https://github.com/fohte/armyknife/compare/v0.1.733...v0.1.734) (2026-11-15)
 
 
