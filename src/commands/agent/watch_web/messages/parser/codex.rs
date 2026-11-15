@@ -67,6 +67,10 @@ enum CodexEffect {
         text: CodexText,
         timestamp: Option<DateTime<Utc>>,
     },
+    TurnFailed {
+        reason: Option<CodexText>,
+        timestamp: Option<DateTime<Utc>>,
+    },
     ToolAction(CodexToolSummaryRecord),
     EditedFiles(Vec<String>),
 }
@@ -282,14 +286,41 @@ impl CodexParserState {
                 payload.get("type").and_then(Value::as_str),
                 Some("task_complete" | "turn_aborted")
             ) {
+                let is_task_complete =
+                    payload.get("type").and_then(Value::as_str) == Some("task_complete");
+                let (failed_task_complete, failure_reason) = if is_task_complete {
+                    let message = payload.get("message").and_then(Value::as_str);
+                    let has_error_info = payload
+                        .get("codex_error_info")
+                        .is_some_and(|error_info| !error_info.is_null());
+                    let failed = message.is_some() || has_error_info;
+                    let reason = if failed {
+                        message
+                            .filter(|message| !message.trim().is_empty())
+                            .map(|message| CodexText::new(message.to_owned()))
+                            .transpose()?
+                    } else {
+                        None
+                    };
+                    (failed, reason)
+                } else {
+                    (false, None)
+                };
                 // Missing tool outputs must not suppress actions from the next turn.
-                let failed = payload.get("type").and_then(Value::as_str) == Some("turn_aborted");
+                let failed = payload.get("type").and_then(Value::as_str) == Some("turn_aborted")
+                    || failed_task_complete;
                 for pending in self.pending_tool_calls.drain(..) {
                     effects.push(CodexEffect::ToolAction(codex_tool_summary_record(
                         &pending.name,
                         pending.input.as_ref(),
                         failed,
                     )));
+                }
+                if failed_task_complete {
+                    effects.push(CodexEffect::TurnFailed {
+                        reason: failure_reason,
+                        timestamp,
+                    });
                 }
             } else if payload.get("type").and_then(Value::as_str) == Some("item_completed")
                 && let Some(item) = payload.get("item")
@@ -386,6 +417,22 @@ impl CodexParserState {
                             kind: EventKind::Armyknife,
                             text: classifier::one_line(&text.decode()?),
                             failed: false,
+                            timestamp: timestamp.map(|timestamp| timestamp.to_rfc3339()),
+                        });
+                    }
+                    CodexEffect::TurnFailed { reason, timestamp } => {
+                        tools.flush_into(&mut items);
+                        let text = match reason {
+                            Some(reason) => format!(
+                                "Codex turn failed: {}",
+                                classifier::one_line(&reason.decode()?),
+                            ),
+                            None => "Codex turn failed.".to_string(),
+                        };
+                        items.push(ChatItem::Event {
+                            kind: EventKind::System,
+                            text,
+                            failed: true,
                             timestamp: timestamp.map(|timestamp| timestamp.to_rfc3339()),
                         });
                     }
@@ -1194,6 +1241,74 @@ mod tests {
     }
 
     #[rstest]
+    #[case::failure_with_reason(
+        json!({
+            "type": "event_msg",
+            "timestamp": "2026-11-11T10:02:00Z",
+            "payload": {
+                "type": "task_complete",
+                "message": "Synthetic response limit reached.",
+                "codex_error_info": "other",
+            },
+        }),
+        vec![ChatItem::Event {
+            kind: EventKind::System,
+            text: "Codex turn failed: Synthetic response limit reached.".to_string(),
+            failed: true,
+            timestamp: Some("2026-11-11T10:02:00+00:00".to_string()),
+        }],
+    )]
+    #[case::failure_without_reason(
+        json!({
+            "type": "event_msg",
+            "payload": {
+                "type": "task_complete",
+                "codex_error_info": "other",
+            },
+        }),
+        vec![ChatItem::Event {
+            kind: EventKind::System,
+            text: "Codex turn failed.".to_string(),
+            failed: true,
+            timestamp: None,
+        }],
+    )]
+    #[case::message_only_failure(
+        json!({
+            "type": "event_msg",
+            "payload": {
+                "type": "task_complete",
+                "message": "Synthetic request rejected.",
+            },
+        }),
+        vec![ChatItem::Event {
+            kind: EventKind::System,
+            text: "Codex turn failed: Synthetic request rejected.".to_string(),
+            failed: true,
+            timestamp: None,
+        }],
+    )]
+    #[case::successful_completion(
+        json!({
+            "type": "event_msg",
+            "payload": {
+                "type": "task_complete",
+                "codex_error_info": null,
+            },
+        }),
+        Vec::new(),
+    )]
+    fn task_complete_reports_failures_but_not_successes(
+        #[case] record: serde_json::Value,
+        #[case] expected: Vec<ChatItem>,
+    ) {
+        assert_eq!(
+            parse(Cursor::new(record.to_string()), None).unwrap(),
+            expected
+        );
+    }
+
+    #[rstest]
     #[case::aborted("turn_aborted", true)]
     #[case::completed("task_complete", false)]
     fn terminal_turn_events_clear_unanswered_tool_calls(
@@ -1266,6 +1381,30 @@ mod tests {
                     operation("FileChange", Some("src/fixture.rs")),
                 ],
             }]
+        );
+    }
+
+    #[test]
+    fn failure_marked_task_complete_marks_pending_tool_calls_failed() {
+        let transcript = indoc! {r#"
+            {"type":"response_item","payload":{"type":"custom_tool_call","call_id":"fixture-call","name":"exec","input":"echo fixture"}}
+            {"type":"event_msg","payload":{"type":"task_complete","codex_error_info":"other"}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None).unwrap(),
+            vec![
+                ChatItem::ToolSummary {
+                    summary: "exec ×1 · 1 failed".to_string(),
+                    operations: vec![operation_with_failure("exec", Some("echo fixture"), true)],
+                },
+                ChatItem::Event {
+                    kind: EventKind::System,
+                    text: "Codex turn failed.".to_string(),
+                    failed: true,
+                    timestamp: None,
+                },
+            ],
         );
     }
 
