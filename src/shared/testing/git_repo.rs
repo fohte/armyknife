@@ -76,6 +76,17 @@ impl TestRepo {
         );
     }
 
+    /// Add a tracked file to the initial commit.
+    pub fn commit_file(&self, name: &str, contents: &str) {
+        let path = self.path().join(name);
+        std::fs::write(path, contents).expect("Failed to write tracked test file");
+        git(&self.path(), &["add", name]);
+        git(
+            &self.path(),
+            &["commit", "-q", "-m", "Add tracked test file"],
+        );
+    }
+
     /// Get the path to a worktree.
     pub fn worktree_path(&self, branch_name: &str) -> PathBuf {
         self.path().join(".worktrees").join(branch_name)

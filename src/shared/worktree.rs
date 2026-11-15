@@ -8,6 +8,37 @@ use super::worktree_error::{Result, WmError};
 use crate::infra::git::GitRepo;
 use crate::infra::git::cmd::run_git;
 
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "Worktree contains uncommitted changes or untracked files: {worktree_path}; pass --force to delete it"
+)]
+pub struct DirtyWorktreeError {
+    worktree_path: PathBuf,
+}
+
+/// Refuses deletion when a worktree contains changes that would be discarded.
+pub fn ensure_clean_for_deletion(
+    worktree_path: &std::path::Path,
+    force: bool,
+) -> anyhow::Result<()> {
+    if force || !worktree_path.is_dir() {
+        return Ok(());
+    }
+
+    let status = run_git(
+        worktree_path,
+        ["status", "--porcelain", "--untracked-files=normal"],
+    )?;
+    if !status.is_empty() {
+        return Err(DirtyWorktreeError {
+            worktree_path: worktree_path.to_path_buf(),
+        }
+        .into());
+    }
+
+    Ok(())
+}
+
 /// Normalize a branch name to a worktree directory name.
 /// - Removes the given branch_prefix
 /// - Replaces slashes with dashes

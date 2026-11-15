@@ -87,7 +87,7 @@ impl App {
             && !self.has_session_in_worktree(&worktree_root)
         {
             use crate::shared::cleanup;
-            cleanup::cleanup_worktree_resources(&worktree_root)
+            cleanup::cleanup_worktree_resources(&worktree_root, true)
         } else {
             Ok(Default::default())
         };

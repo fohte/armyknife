@@ -13,8 +13,8 @@ use crate::infra::git::GitRepo;
 use crate::infra::process;
 use crate::infra::tmux;
 use crate::shared::worktree::{
-    delete_branch_if_exists, delete_worktree, find_worktree_name, get_main_repo,
-    get_worktree_branch,
+    delete_branch_if_exists, delete_worktree, ensure_clean_for_deletion, find_worktree_name,
+    get_main_repo, get_worktree_branch,
 };
 
 /// Result of worktree resource cleanup.
@@ -44,16 +44,20 @@ pub struct WorktreeCleanupResult {
 /// the worktree root is resolved via `repo.workdir()`.
 ///
 /// If `cwd` is not inside a git worktree, returns a default (no-op) result.
-pub fn cleanup_worktree_resources(cwd: &Path) -> anyhow::Result<WorktreeCleanupResult> {
+pub fn cleanup_worktree_resources(
+    cwd: &Path,
+    force: bool,
+) -> anyhow::Result<WorktreeCleanupResult> {
     // The session-list TUI does not resolve merge status before deleting a
     // worktree, so this path intentionally does not invoke post-delete hooks.
-    cleanup_worktree_resources_with_post_delete(cwd, || {})
+    cleanup_worktree_resources_with_post_delete(cwd, force, || {})
 }
 
 /// Cleans up a worktree and invokes `after_delete` after git removes it but
 /// before cleanup can terminate a pane running the caller.
 pub fn cleanup_worktree_resources_with_post_delete(
     cwd: &Path,
+    force: bool,
     after_delete: impl FnOnce(),
 ) -> anyhow::Result<WorktreeCleanupResult> {
     let repo = match GitRepo::open_at(cwd) {
@@ -75,8 +79,13 @@ pub fn cleanup_worktree_resources_with_post_delete(
         Err(_) => return Ok(WorktreeCleanupResult::default()),
     };
 
-    let mut result =
-        cleanup_worktree_by_name(&main_repo, &worktree_name, &worktree_root, after_delete)?;
+    let mut result = cleanup_worktree_by_name(
+        &main_repo,
+        &worktree_name,
+        &worktree_root,
+        force,
+        after_delete,
+    )?;
     if result.worktree_deleted {
         result.worktree_root = Some(worktree_root);
     }
@@ -92,6 +101,7 @@ pub fn cleanup_worktree_by_name(
     repo: &GitRepo,
     worktree_name: &str,
     worktree_path: &Path,
+    force: bool,
     after_delete: impl FnOnce(),
 ) -> anyhow::Result<WorktreeCleanupResult> {
     // Collect tmux window IDs and process groups rooted in the worktree
@@ -100,7 +110,7 @@ pub fn cleanup_worktree_by_name(
     let window_ids = tmux::get_window_ids_in_path(&path_str);
     let orphan_pgids = process::find_pgids_in_path(worktree_path);
 
-    let mut result = delete_worktree_and_branch(repo, worktree_name);
+    let mut result = delete_worktree_and_branch(repo, worktree_name, worktree_path, force)?;
 
     // Clean up sessions BEFORE killing tmux windows: if the caller is running
     // inside one of those windows (e.g. `a agent close` invoked from the
@@ -132,7 +142,14 @@ fn run_post_delete_cleanup(
 }
 
 /// Deletes a git worktree and its associated branch.
-fn delete_worktree_and_branch(repo: &GitRepo, worktree_name: &str) -> WorktreeCleanupResult {
+fn delete_worktree_and_branch(
+    repo: &GitRepo,
+    worktree_name: &str,
+    worktree_path: &Path,
+    force: bool,
+) -> anyhow::Result<WorktreeCleanupResult> {
+    ensure_clean_for_deletion(worktree_path, force)?;
+
     let branch_name = get_worktree_branch(repo, worktree_name);
 
     let worktree_deleted = delete_worktree(repo, worktree_name).unwrap_or(false);
@@ -143,11 +160,11 @@ fn delete_worktree_and_branch(repo: &GitRepo, worktree_name: &str) -> WorktreeCl
         None
     };
 
-    WorktreeCleanupResult {
+    Ok(WorktreeCleanupResult {
         worktree_deleted,
         branch_deleted,
         ..WorktreeCleanupResult::default()
-    }
+    })
 }
 
 /// Returns true if the pane hosting this session still runs a live agent
@@ -951,7 +968,13 @@ mod tests {
         test_repo.create_worktree("cleanup-test");
 
         let repo = test_repo.open();
-        let result = delete_worktree_and_branch(&repo, "cleanup-test");
+        let result = delete_worktree_and_branch(
+            &repo,
+            "cleanup-test",
+            &test_repo.worktree_path("cleanup-test"),
+            false,
+        )
+        .expect("clean worktree should be deleted");
 
         assert!(result.worktree_deleted);
         assert_eq!(result.branch_deleted, Some("cleanup-test".to_string()));
@@ -971,10 +994,53 @@ mod tests {
         let test_repo = TestRepo::new();
         let repo = test_repo.open();
 
-        let result = delete_worktree_and_branch(&repo, "nonexistent");
+        let result = delete_worktree_and_branch(&repo, "nonexistent", &test_repo.path(), false)
+            .expect("missing worktree should return false");
 
         assert!(!result.worktree_deleted);
         assert!(result.branch_deleted.is_none());
+    }
+
+    #[rstest]
+    #[case::tracked_change_without_force(true, false, false)]
+    #[case::untracked_file_without_force(false, false, false)]
+    #[case::clean_without_force(false, false, true)]
+    #[case::tracked_change_with_force(true, true, true)]
+    #[case::untracked_file_with_force(false, true, true)]
+    fn delete_worktree_guards_uncommitted_data(
+        #[case] tracked_change: bool,
+        #[case] force: bool,
+        #[case] expected_deleted: bool,
+    ) {
+        let test_repo = TestRepo::new();
+        if tracked_change {
+            test_repo.commit_file("tracked.txt", "original");
+        }
+        test_repo.create_worktree("cleanup-test");
+
+        let worktree_path = test_repo.worktree_path("cleanup-test");
+        if tracked_change {
+            std::fs::write(worktree_path.join("tracked.txt"), "modified")
+                .expect("tracked file should be modified");
+        } else if !expected_deleted {
+            std::fs::write(worktree_path.join("untracked.txt"), "untracked")
+                .expect("untracked file should be created");
+        }
+
+        let result =
+            delete_worktree_and_branch(&test_repo.open(), "cleanup-test", &worktree_path, force)
+                .map(|result| (result.worktree_deleted, worktree_path.exists()))
+                .map_err(|error| {
+                    format!("{error:#}")
+                        .replace(worktree_path.to_string_lossy().as_ref(), "<worktree>")
+                });
+
+        let expected = if expected_deleted {
+            Ok((true, false))
+        } else {
+            Err("Worktree contains uncommitted changes or untracked files: <worktree>; pass --force to delete it".to_string())
+        };
+        assert_eq!(result, expected);
     }
 
     #[test]
@@ -982,8 +1048,8 @@ mod tests {
         // Opening a non-worktree path returns is_worktree() == false, so no
         // tmux commands run.
         let test_repo = TestRepo::new();
-        let result =
-            cleanup_worktree_resources(&test_repo.path()).expect("should succeed on main repo");
+        let result = cleanup_worktree_resources(&test_repo.path(), false)
+            .expect("should succeed on main repo");
 
         assert!(!result.worktree_deleted);
         assert!(result.branch_deleted.is_none());
@@ -995,7 +1061,7 @@ mod tests {
     #[test]
     fn cleanup_worktree_resources_on_nonexistent_path_returns_default() {
         // open_at fails, so no tmux commands run.
-        let result = cleanup_worktree_resources(Path::new("/nonexistent/path/to/repo"))
+        let result = cleanup_worktree_resources(Path::new("/nonexistent/path/to/repo"), false)
             .expect("should succeed on missing path");
 
         assert!(!result.worktree_deleted);

@@ -37,8 +37,7 @@ pub struct CleanArgs {
     #[arg(long)]
     pub all: bool,
 
-    /// Delete even worktrees that currently host an active Claude Code session.
-    /// Without this flag, such worktrees are kept regardless of merge status.
+    /// Delete worktrees with active sessions or uncommitted changes.
     #[arg(long)]
     pub force: bool,
 
@@ -99,7 +98,7 @@ pub async fn run(args: &CleanArgs) -> Result<()> {
     }
 
     println!();
-    delete_worktrees_single_repo(&main_repo, &to_delete).await?;
+    delete_worktrees_single_repo(&main_repo, &to_delete, args.force).await?;
 
     Ok(())
 }
@@ -272,7 +271,7 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
     }
 
     println!();
-    delete_worktrees_all_repos(&repos_root, &all_to_delete).await?;
+    delete_worktrees_all_repos(&repos_root, &all_to_delete, args.force).await?;
 
     Ok(())
 }
@@ -538,11 +537,23 @@ fn print_cleanup_result(result: &crate::shared::cleanup::WorktreeCleanupResult) 
 async fn delete_worktrees_single_repo(
     repo: &GitRepo,
     worktrees: &[CleanWorktreeInfo],
+    force: bool,
 ) -> Result<()> {
     let mut deleted_count = 0;
 
     for info in worktrees {
-        let result = delete_one_worktree(repo, info).await?;
+        let result = match delete_one_worktree(repo, info, force).await {
+            Ok(result) => result,
+            Err(error)
+                if error
+                    .downcast_ref::<crate::shared::worktree::DirtyWorktreeError>()
+                    .is_some() =>
+            {
+                eprintln!("Failed to delete {}: {error:#}", info.wt.name);
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
 
         if result.worktree_deleted {
             println!("Deleted: {}", info.wt.name);
@@ -562,6 +573,7 @@ async fn delete_worktrees_single_repo(
 async fn delete_worktrees_all_repos(
     repos_root: &Path,
     worktrees: &[CleanWorktreeInfo],
+    force: bool,
 ) -> Result<()> {
     let mut deleted_count = 0;
 
@@ -584,7 +596,18 @@ async fn delete_worktrees_all_repos(
         };
 
         for info in infos {
-            let result = delete_one_worktree(&repo, info).await?;
+            let result = match delete_one_worktree(&repo, info, force).await {
+                Ok(result) => result,
+                Err(error)
+                    if error
+                        .downcast_ref::<crate::shared::worktree::DirtyWorktreeError>()
+                        .is_some() =>
+                {
+                    eprintln!("Failed to delete {repo_name}/{}: {error:#}", info.wt.name);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
 
             if result.worktree_deleted {
                 println!("Deleted: {repo_name}/{}", info.wt.name);
@@ -603,20 +626,29 @@ async fn delete_worktrees_all_repos(
 async fn delete_one_worktree(
     repo: &GitRepo,
     info: &CleanWorktreeInfo,
+    force: bool,
 ) -> Result<crate::shared::cleanup::WorktreeCleanupResult> {
+    crate::shared::worktree::ensure_clean_for_deletion(&info.wt.path, force)?;
+
     // Delegate metadata is stored in session records that cleanup removes.
     if info.status.is_merged() {
         notify_delegator_of_merge(repo, &info.wt.branch, &info.wt.path).await;
     }
 
-    crate::shared::cleanup::cleanup_worktree_by_name(repo, &info.wt.name, &info.wt.path, || {
-        hooks::spawn_post_worktree_delete_hook(
-            repo.workdir(),
-            &info.wt.path,
-            hook_branch_name(&info.wt.branch),
-            info.status.is_merged(),
-        );
-    })
+    crate::shared::cleanup::cleanup_worktree_by_name(
+        repo,
+        &info.wt.name,
+        &info.wt.path,
+        force,
+        || {
+            hooks::spawn_post_worktree_delete_hook(
+                repo.workdir(),
+                &info.wt.path,
+                hook_branch_name(&info.wt.branch),
+                info.status.is_merged(),
+            );
+        },
+    )
 }
 
 fn hook_branch_name(branch: &str) -> Option<&str> {

@@ -110,6 +110,8 @@ struct RealCleaner;
 
 impl Cleaner for RealCleaner {
     async fn cleanup(&self, path: &Path) -> Result<()> {
+        crate::shared::worktree::ensure_clean_for_deletion(path, false)?;
+
         let worktree = find_worktree_cleanup_info(path).await;
         if let Some(worktree) = &worktree
             && worktree.merged
@@ -118,7 +120,7 @@ impl Cleaner for RealCleaner {
             notify_delegator_of_merge(&worktree.main_repo, branch, &worktree.path).await;
         }
 
-        let result = cleanup::cleanup_worktree_resources_with_post_delete(path, || {
+        let result = cleanup::cleanup_worktree_resources_with_post_delete(path, false, || {
             if let Some(worktree) = &worktree {
                 hooks::spawn_post_worktree_delete_hook(
                     worktree.main_repo.workdir(),
