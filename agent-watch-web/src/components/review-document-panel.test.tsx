@@ -253,11 +253,16 @@ it.each([
       footerStayedInPlace:
         boundsAtStart.footer.top === boundsAtEnd.footer.top &&
         boundsAtStart.footer.bottom === boundsAtEnd.footer.bottom,
-      actionButtonsStayedInPlace: boundsAtStart.buttons.every(
-        (button, index) =>
-          button.top === boundsAtEnd.buttons[index].top &&
-          button.bottom === boundsAtEnd.buttons[index].bottom,
-      ),
+      actionButtonsStayedInPlace:
+        boundsAtStart.buttons.length === boundsAtEnd.buttons.length &&
+        boundsAtStart.buttons.every((button, index) => {
+          const endButton = boundsAtEnd.buttons[index]
+          return (
+            endButton !== undefined &&
+            button.top === endButton.top &&
+            button.bottom === endButton.bottom
+          )
+        }),
     })
 
     expect(snapshot()).toEqual({
