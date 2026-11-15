@@ -36,6 +36,7 @@ mod permission_request;
 mod prompt_skill;
 mod session_lifecycle;
 mod session_metadata;
+mod session_start;
 mod side_effects;
 mod stop;
 mod vibe;
@@ -125,22 +126,16 @@ pub fn run(args: &HookArgs) -> Result<()> {
         ProcessResult::StopBlocked(reason) => Some(reason),
         ProcessResult::SessionSaved | ProcessResult::SessionEnded | ProcessResult::Skipped => None,
     };
-    if event == HookEvent::SessionStart {
-        let marker = if args.engine == Engine::Claude {
-            store::watch_web_user_marker(&session_id)?
-        } else {
-            None
-        };
-        return write_session_start_context_response(
-            args.engine,
-            marker.as_deref(),
-            &mut io::stdout().lock(),
-        );
-    }
-    write_stop_response(
-        args.engine,
+    let marker = if event == HookEvent::SessionStart && args.engine == Engine::Claude {
+        store::watch_web_user_marker(&session_id)?
+    } else {
+        None
+    };
+    session_start::write_hook_response(
         event,
+        args.engine,
         block_reason.as_deref(),
+        marker.as_deref(),
         &mut io::stdout().lock(),
     )
 }
@@ -152,42 +147,9 @@ fn write_stop_response(
     output: impl Write,
 ) -> Result<()> {
     if event == HookEvent::SessionStart && engine == Engine::Claude {
-        return write_claude_session_start_response_without_agent_instruction(output);
+        return session_start::write_without_instruction(output);
     }
     stop::write_response(engine, event, block_reason, output)
-}
-
-fn session_start_context(marker: Option<&str>) -> String {
-    let decision_instruction = super::decision::session_start_instruction();
-    let web_ui_instruction = super::web_ui::session_start_instruction();
-    let mut context = formatdoc! {"
-        {decision_instruction}
-
-        {web_ui_instruction}"
-    };
-    if let Some(marker) = marker {
-        context.push('\n');
-        context.push('\n');
-        context.push_str(&super::watch_web_user_marker::session_start_context(marker));
-    }
-    context
-}
-
-fn write_session_start_context_response(
-    engine: Engine,
-    marker: Option<&str>,
-    output: impl Write,
-) -> Result<()> {
-    let marker = if engine == Engine::Claude {
-        marker
-    } else {
-        None
-    };
-    stop::write_session_start_response(&session_start_context(marker), output)
-}
-
-fn write_claude_session_start_response_without_agent_instruction(output: impl Write) -> Result<()> {
-    stop::write_session_start_response("", output)
 }
 
 /// Result of processing a hook event.
@@ -1618,49 +1580,6 @@ mod tests {
         side_effects: &SideEffects,
     ) -> Result<ProcessResult> {
         process_hook_event_impl_with_instruction(event, input, sessions_dir, side_effects, None)
-    }
-
-    #[rstest]
-    #[case::claude_without_watch_web_marker(Engine::Claude, None)]
-    #[case::claude_with_watch_web_marker(
-        Engine::Claude,
-        Some("⟦armyknife-user:fixture-marker-cobalt⟧")
-    )]
-    #[case::codex(Engine::Codex, None)]
-    fn session_start_response_includes_the_decision_and_web_ui_instructions(
-        #[case] engine: Engine,
-        #[case] marker: Option<&str>,
-    ) {
-        let mut output = Vec::new();
-
-        write_session_start_context_response(engine, marker, &mut output)
-            .expect("SessionStart response should serialize");
-
-        let decision_instruction = crate::commands::agent::decision::session_start_instruction();
-        let web_ui_instruction = "When you start a local web UI (an HTTP server with a port), register it with `a agent web-ui add <URL> --name <NAME>`.";
-        let mut expected_context = indoc::formatdoc! {"
-            {decision_instruction}
-
-            {web_ui_instruction}"
-        };
-        if let Some(marker) = marker {
-            expected_context.push('\n');
-            expected_context.push('\n');
-            expected_context.push_str(
-                &crate::commands::agent::watch_web_user_marker::session_start_context(marker),
-            );
-        }
-
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&output)
-                .expect("response should be valid JSON"),
-            serde_json::json!({
-                "hookSpecificOutput": {
-                    "hookEventName": "SessionStart",
-                    "additionalContext": expected_context,
-                }
-            }),
-        );
     }
 
     #[test]
