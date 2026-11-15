@@ -399,9 +399,39 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::terminal_y_continues(
+        true,
+        "y\n",
+        Ok(Some(MergeStatus::NotMerged {
+            reason: "pull request is still open".to_string(),
+        })),
+        "Delete anyway? [y/N] ",
+        "",
+    )]
+    #[case::terminal_n_cancels(
+        true,
+        "n\n",
+        Err("Cancelled.".to_string()),
+        "Delete anyway? [y/N] ",
+        "",
+    )]
+    #[case::non_terminal_y_cancels(
+        false,
+        "y\n",
+        Err("Cancelled: stdin is not a terminal; input was not accepted as confirmation.".to_string()),
+        "",
+        "y\n",
+    )]
     #[tokio::test]
-    async fn rejects_piped_confirmation_for_unmerged_worktrees() {
-        let mut reader = io::Cursor::new("y\n".as_bytes());
+    async fn confirms_unmerged_worktrees_only_with_terminal_y(
+        #[case] stdin_is_terminal: bool,
+        #[case] input: &str,
+        #[case] expected_result: std::result::Result<Option<MergeStatus>, String>,
+        #[case] expected_output: &str,
+        #[case] expected_unread: &str,
+    ) {
+        let mut reader = io::Cursor::new(input.as_bytes());
         let mut output = Vec::new();
         let result = check_merge_status_with(
             Some("feature"),
@@ -413,25 +443,27 @@ mod tests {
                     reason: "pull request is still open".to_string(),
                 })
             },
-            || confirm_with_terminal("Delete anyway? [y/N] ", &mut reader, &mut output, || false),
+            || {
+                confirm_with_terminal("Delete anyway? [y/N] ", &mut reader, &mut output, || {
+                    stdin_is_terminal
+                })
+            },
         )
-        .await;
+        .await
+        .map_err(|error| error.to_string());
 
         let mut unread = String::new();
         io::Read::read_to_string(&mut reader, &mut unread).expect("read remaining input");
         assert_eq!(
             (
-                result.err().map(|error| error.to_string()),
+                result,
                 String::from_utf8(output).expect("utf8 output"),
                 unread,
             ),
             (
-                Some(
-                    "Cancelled: stdin is not a terminal; input was not accepted as confirmation."
-                        .to_string(),
-                ),
-                String::new(),
-                "y\n".to_string(),
+                expected_result,
+                expected_output.to_string(),
+                expected_unread.to_string(),
             ),
         );
     }
