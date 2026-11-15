@@ -9,7 +9,9 @@ use thiserror::Error;
 
 use crate::infra::git;
 use crate::infra::github::{self, RepoClient};
+use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::{ApprovalManager, DocumentSchema, HumanInTheLoopError};
+use crate::shared::repo_language::{copier_answers_path_for_current_repo, resolve_repo_language};
 use crate::shared::yaml_frontmatter;
 
 #[derive(Error, Debug)]
@@ -352,12 +354,12 @@ fn parse_frontmatter(content: &str) -> Result<(Frontmatter, String)> {
     }
 }
 
-pub fn generate_frontmatter(title: &str, is_private: bool) -> String {
+pub fn generate_frontmatter(title: &str, allows_japanese: bool) -> String {
     // Use serde_yaml to properly escape title (handles ", \n, and other special chars)
     let escaped_title = serde_yaml::to_string(&title).unwrap_or_else(|_| format!("\"{title}\""));
     let escaped_title = escaped_title.trim();
 
-    if is_private {
+    if allows_japanese {
         formatdoc! {"
             ---
             title: {escaped_title}
@@ -377,17 +379,22 @@ pub fn generate_frontmatter(title: &str, is_private: bool) -> String {
     }
 }
 
-/// Check if the repo's config language allows Japanese content.
-pub fn repo_allows_japanese(owner: &str, repo: &str) -> bool {
-    let Ok(config) = crate::shared::config::load_config() else {
-        return false;
-    };
+/// Resolve whether Japanese content is allowed for the target repository.
+pub async fn repo_allows_japanese(
+    owner: &str,
+    repo: &str,
+    is_private: bool,
+) -> anyhow::Result<bool> {
+    let config = load_config()?;
     let repo_id = format!("{owner}/{repo}");
-    config
-        .repos
-        .get(&repo_id)
-        .and_then(|r| r.language.as_deref())
-        == Some("ja")
+    let copier_answers_path = copier_answers_path_for_current_repo(Some(&repo_id));
+    let language = resolve_repo_language(
+        config.get_value("repo.language", Some(&repo_id)),
+        copier_answers_path.as_deref(),
+        || async { Ok(Some(is_private)) },
+    )
+    .await?;
+    Ok(language.as_ref().and_then(serde_json::Value::as_str) == Some("ja"))
 }
 
 pub fn contains_japanese(text: &str) -> bool {

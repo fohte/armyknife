@@ -3,6 +3,7 @@ use clap::Subcommand;
 use crate::infra::git;
 use crate::infra::github::{GitHubClient, RepoClient};
 use crate::shared::config;
+use crate::shared::repo_language::{copier_answers_path_for_current_repo, resolve_repo_language};
 
 /// Configuration management commands.
 #[derive(Subcommand, Clone, PartialEq, Eq)]
@@ -34,20 +35,34 @@ async fn run_get(key: &str) -> anyhow::Result<()> {
         None
     };
 
-    match cfg.get_value(key, repo_id.as_deref()) {
-        Some(value) => print!("{}", format_value(&value)?),
-        None if key == "repo.language" => {
-            // Default: private repos -> "ja", public repos -> "en".
-            // Stay silent when there is no repo context — there's nothing to
-            // default to without an owner/repo.
-            if let Some((owner, repo)) = repo_id.as_deref().and_then(|id| id.split_once('/')) {
+    let configured_value = cfg.get_value(key, repo_id.as_deref());
+    if key == "repo.language" {
+        let copier_answers_path = if configured_value.is_none() {
+            copier_answers_path_for_current_repo(repo_id.as_deref())
+        } else {
+            None
+        };
+        let value =
+            resolve_repo_language(configured_value, copier_answers_path.as_deref(), || async {
+                // Stay silent when there is no repo context — there is nothing to
+                // default to without an owner/repo.
+                let Some((owner, repo)) = repo_id.as_deref().and_then(|id| id.split_once('/'))
+                else {
+                    return Ok(None);
+                };
                 let client = GitHubClient::get()?;
-                let is_private = client.is_repo_private(owner, repo).await.unwrap_or(true);
-                let default_lang = if is_private { "ja" } else { "en" };
-                println!("{default_lang}");
-            }
+                Ok(Some(
+                    client.is_repo_private(owner, repo).await.unwrap_or(true),
+                ))
+            })
+            .await?;
+        if let Some(value) = value {
+            print!("{}", format_value(&value)?);
         }
-        None => anyhow::bail!("key not found: {key}"),
+    } else if let Some(value) = configured_value {
+        print!("{}", format_value(&value)?);
+    } else {
+        anyhow::bail!("key not found: {key}");
     }
     Ok(())
 }
@@ -69,7 +84,6 @@ fn format_value(value: &serde_json::Value) -> anyhow::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::format_value;
-    use crate::infra::github::{GitHubMockServer, RepoClient};
     use crate::shared::config::Config;
     use indoc::indoc;
     use rstest::{fixture, rstest};
@@ -458,35 +472,5 @@ mod tests {
     #[test]
     fn get_value_repo_vibe_requires_repository_context() {
         assert_eq!(Config::default().get_value("repo.vibe", None), None,);
-    }
-
-    #[rstest]
-    #[case::private_repo(true, "ja")]
-    #[case::public_repo(false, "en")]
-    #[tokio::test]
-    async fn run_get_repo_language_defaults_by_visibility(
-        #[case] is_private: bool,
-        #[case] expected: &str,
-    ) {
-        let mock = GitHubMockServer::start().await;
-        mock.repo("owner", "repo")
-            .repo_info()
-            .private(is_private)
-            .get()
-            .await;
-        let client = mock.client();
-
-        // Config has no repos entry, so default should kick in
-        let cfg = Config::default();
-        let repo_id = Some("owner/repo");
-
-        let result = cfg.get_value("repo.language", repo_id);
-        assert!(result.is_none(), "should fall through to default");
-
-        // Verify the default logic directly
-        let is_private_result = client.is_repo_private("owner", "repo").await.unwrap();
-        assert_eq!(is_private_result, is_private);
-        let default_lang = if is_private_result { "ja" } else { "en" };
-        assert_eq!(default_lang, expected);
     }
 }
