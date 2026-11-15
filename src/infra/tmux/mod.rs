@@ -262,10 +262,7 @@ pub fn get_session_name_for_pane(pane_id: &str) -> Option<String> {
 
 /// Returns the window ID (e.g. `@3`) of the window containing `pane_id`.
 ///
-/// Unlike querying the currently focused window, this targets a specific pane,
-/// so it resolves the window of a known pane rather than the caller's own —
-/// needed by
-/// detached processes (e.g. an `a agent hook` invocation) that must update the
+/// This targets a specific pane so detached hook processes can update the
 /// window of the session that fired the hook.
 ///
 /// Returns None if the pane no longer exists or tmux is unavailable.
@@ -294,6 +291,7 @@ fn pane_ids_in_path(output: &str, path: &str) -> Vec<String> {
     let mut pane_ids: Vec<String> = output
         .lines()
         .filter_map(|line| {
+            // Pane IDs cannot contain tabs, so split at the end to preserve tabs in paths.
             let (pane_path, pane_id) = line.rsplit_once('\t')?;
 
             if std::path::Path::new(pane_path).starts_with(target_path) {
