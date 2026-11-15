@@ -109,6 +109,18 @@ it.each([
     hostname: 'localhost',
     expectedUrl: 'http://localhost:48761/review/sample',
   },
+  {
+    name: 'keeps a remote URL when watch-web is local',
+    url: 'https://review.example.test:4321/review',
+    hostname: 'localhost',
+    expectedUrl: 'https://review.example.test:4321/review',
+  },
+  {
+    name: 'keeps a malformed legacy URL without throwing',
+    url: 'xhttp://127.0.0.1:48761/review',
+    hostname: 'localhost',
+    expectedUrl: 'xhttp://127.0.0.1:48761/review',
+  },
 ])(
   'opens the local web UI with a matching host: $name',
   ({ url, hostname, expectedUrl }) => {
