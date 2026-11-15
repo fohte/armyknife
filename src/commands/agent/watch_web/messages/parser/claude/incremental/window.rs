@@ -173,7 +173,10 @@ fn select_window_start(
         if window_length == max_window_bytes {
             return Ok(None);
         }
-        window_length = window_length.saturating_mul(2).min(max_window_bytes);
+        window_length = window_length
+            .saturating_mul(2)
+            .min(max_window_bytes)
+            .min(file_length);
     }
 }
 

@@ -17,16 +17,39 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_initial_or_full<'a>
     cache: &MessageCache,
 ) -> Result<(ConversationResponse, Vec<i64>, bool)> {
     let tail_result = match tail_window_limit {
-        Some(limit) => parse_session_transcript_tail_window(&input, limit, pending_task_ids)?,
-        None => None,
+        Some(limit) => parse_session_transcript_tail_window(&input, limit, pending_task_ids),
+        None => Ok(None),
     };
+    parse_tail_window_or_full(tail_result, || {
+        super::parse_session_transcript_incrementally(session_id, input, fingerprint, cache)
+    })
+    .map(|((conversation, resolved_ids), used_tail_window)| {
+        (conversation, resolved_ids, used_tail_window)
+    })
+}
+
+fn parse_tail_window_or_full<T>(
+    tail_result: Result<Option<T>>,
+    full_parse: impl FnOnce() -> Result<T>,
+) -> Result<(T, bool)> {
     match tail_result {
-        Some((conversation, resolved_ids)) => Ok((conversation, resolved_ids, true)),
-        None => {
-            super::parse_session_transcript_incrementally(session_id, input, fingerprint, cache)
-                .map(|(conversation, resolved_ids)| (conversation, resolved_ids, false))
+        Ok(Some(tail_result)) => Ok((tail_result, true)),
+        Ok(None) => full_parse().map(|result| (result, false)),
+        Err(error) if contains_io_error(&error) => {
+            tracing::warn!(
+                error = %error,
+                "failed to read transcript tail window; falling back to full parse"
+            );
+            full_parse().map(|result| (result, false))
         }
+        Err(error) => Err(error),
     }
+}
+
+fn contains_io_error(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.downcast_ref::<std::io::Error>().is_some())
 }
 
 pub(in crate::commands::agent::watch_web::messages) fn filter_after_tail_window<T: Clone>(
@@ -242,4 +265,21 @@ fn resolve_queued_prompts_before_window(
         .cloned()
         .collect();
     Ok(Some((remaining_prompts, prior_resolved_ids)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_tail_window_or_full;
+
+    #[test]
+    fn tail_window_io_error_falls_back_to_full_parse() {
+        let full_result = ("full transcript".to_owned(), vec![3, 7]);
+        let actual = parse_tail_window_or_full::<(String, Vec<i64>)>(
+            Err(std::io::Error::other("fixture read failure").into()),
+            || Ok(full_result.clone()),
+        )
+        .unwrap();
+
+        assert_eq!(actual, (full_result, false));
+    }
 }
