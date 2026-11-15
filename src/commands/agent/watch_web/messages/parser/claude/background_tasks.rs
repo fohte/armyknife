@@ -133,6 +133,7 @@ fn notification_text(record: &Value) -> Option<String> {
 
 fn task_notification_body(text: &str) -> Option<&str> {
     task_notification_envelope(text)?
+        .notification
         .strip_prefix("<task-notification>")?
         .strip_suffix("</task-notification>")
 }
