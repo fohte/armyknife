@@ -773,6 +773,57 @@ mod tests {
     }
 
     #[rstest]
+    #[case::nested_under_claude(
+        indoc! {"
+            100 1 init
+            200 100 claude
+            300 200 claude
+            400 300 hook
+        "},
+        400,
+        true,
+    )]
+    #[case::nested_under_codex(
+        indoc! {"
+            100 1 init
+            200 100 claude
+            300 200 /agent/bin/codex
+            400 300 hook
+        "},
+        400,
+        true,
+    )]
+    #[case::direct_agent_process(
+        indoc! {"
+            100 1 init
+            200 100 claude
+            300 200 hook
+        "},
+        300,
+        false,
+    )]
+    #[case::ordinary_shell_ancestor(
+        indoc! {"
+            100 1 init
+            200 100 zsh
+            300 200 hook
+        "},
+        300,
+        false,
+    )]
+    fn has_parent_agent_process_cases(
+        #[case] ps_output: &str,
+        #[case] pid: u32,
+        #[case] expected: bool,
+    ) {
+        let snapshot = ProcessSnapshot::from_ps_output(ps_output);
+        assert_eq!(
+            crate::commands::agent::pane::process::has_parent_agent_process(pid, &snapshot),
+            expected,
+        );
+    }
+
+    #[rstest]
     #[case::known_basename("/usr/local/bin/claude", 200, Some("claude"))]
     #[case::bare_basename("claude", 200, Some("claude"))]
     #[case::unknown_pid("claude", 999, None)]
