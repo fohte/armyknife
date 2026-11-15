@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.731](https://github.com/fohte/armyknife/compare/v0.1.730...v0.1.731) (2026-11-15)
+
+
+### Features
+
+* **gh-pr-review:** allow no-review reply pushes ([#1847](https://github.com/fohte/armyknife/issues/1847)) ([ec4856e](https://github.com/fohte/armyknife/commit/ec4856e1329ffd96765e64d286a0d205bf41f716))
+
 ## [0.1.730](https://github.com/fohte/armyknife/compare/v0.1.729...v0.1.730) (2026-11-15)
 
 
