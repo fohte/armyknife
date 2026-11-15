@@ -51,8 +51,8 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
 
     let sessions_dir = store::sessions_dir()?;
     let session_id = resolve_resume_session_id(&sessions_dir, &requested_session_id)?;
-    let stored_engine =
-        store::load_session_from(&sessions_dir, &session_id)?.map(|session| session.engine);
+    let stored_session = store::load_session_from(&sessions_dir, &session_id)?;
+    let stored_engine = stored_session.as_ref().map(|session| session.engine);
     let engine = resolve_resume_engine(args.engine, stored_engine);
 
     let (binary_name, resume_args) = resume_binary_and_args(engine, &session_id);
@@ -86,7 +86,11 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
         // SessionStart restores the ancestor chain when it creates a missing Claude record.
         session_metadata::mark_vibe_launch_if_session_exists(&store::sessions_dir()?, &session_id)?;
     }
-    let env_vars = resume_environment_variables(ancestor_session_ids, args.launched_with_vibe);
+    let env_vars = resume_environment_variables(
+        ancestor_session_ids,
+        args.launched_with_vibe,
+        stored_session.as_ref(),
+    );
     let err = process::exec_replace_with_env(&binary_path, resume_args, &env_vars);
 
     bail!("Failed to exec {}: {}", binary_name, err)
@@ -102,16 +106,23 @@ fn resolve_resume_session_id(sessions_dir: &Path, session_id: &str) -> Result<St
     store::resolve_current_session_id_from(sessions_dir, session_id)
 }
 
-fn resume_environment_variables(
-    ancestor_session_ids: Option<&str>,
+fn resume_environment_variables<'a>(
+    ancestor_session_ids: Option<&'a str>,
     launched_with_vibe: bool,
-) -> Vec<(&'static str, &str)> {
-    let mut env_vars = Vec::with_capacity(2);
+    session: Option<&'a Session>,
+) -> Vec<(&'static str, &'a str)> {
+    let mut env_vars = Vec::with_capacity(3);
     if let Some(ancestor_session_ids) = ancestor_session_ids {
         env_vars.push((EnvVars::ancestor_session_ids_name(), ancestor_session_ids));
     }
     if launched_with_vibe {
         env_vars.push((EnvVars::session_vibe_launch_name(), "1"));
+    }
+    if let Some(work_type) = session
+        .filter(|session| session.work_type_pinned)
+        .and_then(|session| session.work_type.as_deref())
+    {
+        env_vars.push((EnvVars::session_work_type_name(), work_type));
     }
     env_vars
 }
@@ -543,28 +554,68 @@ mod tests {
         #[case::ancestor_ids_only(
             Some("root, parent"),
             false,
+            None,
+            false,
             vec![(EnvVars::ancestor_session_ids_name(), "root, parent")]
         )]
         #[case::vibe_marker_only(
             None,
             true,
+            None,
+            false,
             vec![(EnvVars::session_vibe_launch_name(), "1")]
         )]
         #[case::vibe_marker_and_ancestors(
             Some("root, parent"),
             true,
+            None,
+            false,
             vec![
                 (EnvVars::ancestor_session_ids_name(), "root, parent"),
                 (EnvVars::session_vibe_launch_name(), "1"),
             ]
         )]
+        #[case::pinned_work_type(
+            None,
+            false,
+            Some("designer"),
+            true,
+            vec![(EnvVars::session_work_type_name(), "designer")]
+        )]
+        #[case::inferred_work_type_is_not_restored(
+            None,
+            false,
+            Some("designer"),
+            false,
+            vec![]
+        )]
         fn creates_environment_for_resumed_session(
             #[case] ancestor_session_ids: Option<&str>,
             #[case] launched_with_vibe: bool,
+            #[case] work_type: Option<&str>,
+            #[case] work_type_pinned: bool,
             #[case] expected: Vec<(&'static str, &'static str)>,
         ) {
+            let session = serde_json::from_value::<Session>(serde_json::json!({
+                "session_id": "fixture-session",
+                "cwd": "/fixture/worktree",
+                "transcript_path": null,
+                "tmux_info": null,
+                "status": "stopped",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "last_message": null,
+                "work_type": work_type,
+                "work_type_pinned": work_type_pinned,
+            }))
+            .unwrap();
+
             assert_eq!(
-                resume_environment_variables(ancestor_session_ids, launched_with_vibe),
+                resume_environment_variables(
+                    ancestor_session_ids,
+                    launched_with_vibe,
+                    Some(&session)
+                ),
                 expected
             );
         }
