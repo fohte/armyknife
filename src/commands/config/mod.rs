@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use clap::Subcommand;
 
 use crate::infra::git;
@@ -34,22 +36,60 @@ async fn run_get(key: &str) -> anyhow::Result<()> {
         None
     };
 
-    match cfg.get_value(key, repo_id.as_deref()) {
-        Some(value) => print!("{}", format_value(&value)?),
-        None if key == "repo.language" => {
-            // Default: private repos -> "ja", public repos -> "en".
-            // Stay silent when there is no repo context — there's nothing to
+    let configured_value = cfg.get_value(key, repo_id.as_deref());
+    if key == "repo.language" {
+        let copier_value = if configured_value.is_none() {
+            git::open_repo()
+                .ok()
+                .and_then(|repo| read_copier_repo_language(repo.workdir()))
+        } else {
+            None
+        };
+        let is_private = if configured_value.is_none() && copier_value.is_none() {
+            // Stay silent when there is no repo context — there is nothing to
             // default to without an owner/repo.
             if let Some((owner, repo)) = repo_id.as_deref().and_then(|id| id.split_once('/')) {
                 let client = GitHubClient::get()?;
-                let is_private = client.is_repo_private(owner, repo).await.unwrap_or(true);
-                let default_lang = if is_private { "ja" } else { "en" };
-                println!("{default_lang}");
+                Some(client.is_repo_private(owner, repo).await.unwrap_or(true))
+            } else {
+                None
             }
+        } else {
+            None
+        };
+        if let Some(value) = resolve_repo_language(configured_value, copier_value, is_private) {
+            print!("{}", format_value(&value)?);
         }
-        None => anyhow::bail!("key not found: {key}"),
+    } else if let Some(value) = configured_value {
+        print!("{}", format_value(&value)?);
+    } else {
+        anyhow::bail!("key not found: {key}");
     }
     Ok(())
+}
+
+fn read_copier_repo_language(repo_root: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(repo_root.join(".copier-answers.yml")).ok()?;
+    let answers: serde_yaml::Value = serde_yaml::from_str(&content).ok()?;
+    answers
+        .get("repo_language")?
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned)
+}
+
+fn resolve_repo_language(
+    configured: Option<serde_json::Value>,
+    copier: Option<String>,
+    is_private: Option<bool>,
+) -> Option<serde_json::Value> {
+    configured
+        .or_else(|| copier.map(serde_json::Value::String))
+        .or_else(|| {
+            is_private.map(|is_private| {
+                serde_json::Value::String(if is_private { "ja" } else { "en" }.to_owned())
+            })
+        })
 }
 
 /// Format a resolved config value for stdout. Scalars render bare (preserving
@@ -68,11 +108,11 @@ fn format_value(value: &serde_json::Value) -> anyhow::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::format_value;
-    use crate::infra::github::{GitHubMockServer, RepoClient};
+    use super::{format_value, read_copier_repo_language, resolve_repo_language};
     use crate::shared::config::Config;
     use indoc::indoc;
     use rstest::{fixture, rstest};
+    use std::fs;
 
     #[rstest]
     fn get_value_agent_profile_renders_selected_profile_as_yaml(agent_profiles_config: Config) {
@@ -461,32 +501,53 @@ mod tests {
     }
 
     #[rstest]
-    #[case::private_repo(true, "ja")]
-    #[case::public_repo(false, "en")]
-    #[tokio::test]
-    async fn run_get_repo_language_defaults_by_visibility(
-        #[case] is_private: bool,
-        #[case] expected: &str,
+    #[case::config_overrides_copier_and_visibility(
+        Some(serde_json::json!("fr")),
+        Some("ja".to_owned()),
+        Some(false),
+        Some(serde_json::json!("fr")),
+    )]
+    #[case::copier_overrides_visibility(
+        None,
+        Some("ja".to_owned()),
+        Some(false),
+        Some(serde_json::json!("ja")),
+    )]
+    #[case::private_repo_fallback(None, None, Some(true), Some(serde_json::json!("ja")))]
+    #[case::public_repo_fallback(None, None, Some(false), Some(serde_json::json!("en")))]
+    #[case::no_repository_context(None, None, None, None)]
+    fn resolve_repo_language_uses_config_then_copier_then_visibility(
+        #[case] configured: Option<serde_json::Value>,
+        #[case] copier: Option<String>,
+        #[case] is_private: Option<bool>,
+        #[case] expected: Option<serde_json::Value>,
     ) {
-        let mock = GitHubMockServer::start().await;
-        mock.repo("owner", "repo")
-            .repo_info()
-            .private(is_private)
-            .get()
-            .await;
-        let client = mock.client();
+        assert_eq!(
+            resolve_repo_language(configured, copier, is_private),
+            expected
+        );
+    }
 
-        // Config has no repos entry, so default should kick in
-        let cfg = Config::default();
-        let repo_id = Some("owner/repo");
+    #[rstest]
+    #[case::missing_file(None, None)]
+    #[case::missing_key(Some("project_name: sample-project\n"), None)]
+    #[case::repo_language(Some(indoc! {"
+        repo_language: ja
+    "}), Some("ja"))]
+    #[case::empty_value(Some("repo_language: \"\"\n"), None)]
+    #[case::non_string_value(Some("repo_language: [ja]\n"), None)]
+    fn read_copier_repo_language_reads_string_value(
+        #[case] content: Option<&str>,
+        #[case] expected: Option<&str>,
+    ) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        if let Some(content) = content {
+            fs::write(temp_dir.path().join(".copier-answers.yml"), content).unwrap();
+        }
 
-        let result = cfg.get_value("repo.language", repo_id);
-        assert!(result.is_none(), "should fall through to default");
-
-        // Verify the default logic directly
-        let is_private_result = client.is_repo_private("owner", "repo").await.unwrap();
-        assert_eq!(is_private_result, is_private);
-        let default_lang = if is_private_result { "ja" } else { "en" };
-        assert_eq!(default_lang, expected);
+        assert_eq!(
+            read_copier_repo_language(temp_dir.path()).as_deref(),
+            expected
+        );
     }
 }
