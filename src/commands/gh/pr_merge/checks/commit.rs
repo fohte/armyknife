@@ -1,4 +1,7 @@
-use std::thread;
+use std::{
+    thread,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, bail};
 use serde::Deserialize;
@@ -8,6 +11,8 @@ use super::{
     command_output_text, format_check_details, is_failed_check, required_status_check_contexts,
     run_gh, wait_until_complete,
 };
+
+const COMMIT_CHECK_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(180);
 
 pub(super) fn wait_for_base_branch_checks(
     owner: &str,
@@ -56,17 +61,45 @@ fn wait_for_commit_checks(
     required_contexts: &[RequiredStatusCheckContext],
     allow_failures: bool,
 ) -> anyhow::Result<()> {
-    wait_until_complete(
-        || {
-            let checks = fetch_commit_checks(owner, repo, sha)?;
-            classify_required_commit_checks(&checks, required_contexts, allow_failures)
-        },
+    wait_for_commit_checks_with(
+        required_contexts,
+        allow_failures,
+        || fetch_commit_checks(owner, repo, sha),
         |details| {
             println!(
                 "Required checks on `{branch}` are pending: {details}; retrying in 10 seconds..."
             );
             thread::sleep(CHECK_POLL_INTERVAL);
         },
+        Instant::now,
+        COMMIT_CHECK_DISCOVERY_TIMEOUT,
+    )
+}
+
+fn wait_for_commit_checks_with(
+    required_contexts: &[RequiredStatusCheckContext],
+    allow_failures: bool,
+    mut fetch_checks: impl FnMut() -> anyhow::Result<Vec<GhCheck>>,
+    wait: impl FnMut(&str),
+    mut now: impl FnMut() -> Instant,
+    discovery_timeout: Duration,
+) -> anyhow::Result<()> {
+    let discovery_deadline = now() + discovery_timeout;
+    wait_until_complete(
+        || {
+            let checks = fetch_checks()?;
+            match classify_required_commit_checks(&checks, required_contexts, allow_failures)? {
+                CommitCheckStatus::Complete => Ok(CheckWaitStatus::Complete),
+                CommitCheckStatus::Pending(details) => Ok(CheckWaitStatus::Pending(details)),
+                CommitCheckStatus::Unreported if now() < discovery_deadline => {
+                    Ok(CheckWaitStatus::Pending(
+                        "No required checks have been reported yet".to_string(),
+                    ))
+                }
+                CommitCheckStatus::Unreported => Ok(CheckWaitStatus::Complete),
+            }
+        },
+        wait,
     )
 }
 
@@ -74,7 +107,7 @@ fn classify_required_commit_checks(
     checks: &[GhCheck],
     required_contexts: &[RequiredStatusCheckContext],
     allow_failures: bool,
-) -> anyhow::Result<CheckWaitStatus> {
+) -> anyhow::Result<CommitCheckStatus> {
     let required_checks = checks
         .iter()
         .filter(|check| {
@@ -88,7 +121,7 @@ fn classify_required_commit_checks(
         .cloned()
         .collect::<Vec<_>>();
     if required_checks.is_empty() {
-        return Ok(CheckWaitStatus::Complete);
+        return Ok(CommitCheckStatus::Unreported);
     }
 
     let mut failed = Vec::new();
@@ -104,9 +137,16 @@ fn classify_required_commit_checks(
         bail!("Required checks failed: {}", format_check_details(&failed));
     }
     if !pending.is_empty() {
-        return Ok(CheckWaitStatus::Pending(format_check_details(&pending)));
+        return Ok(CommitCheckStatus::Pending(format_check_details(&pending)));
     }
-    Ok(CheckWaitStatus::Complete)
+    Ok(CommitCheckStatus::Complete)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CommitCheckStatus {
+    Complete,
+    Pending(String),
+    Unreported,
 }
 
 fn fetch_required_status_check_contexts(
@@ -254,6 +294,8 @@ impl From<CommitStatus> for GhCheck {
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::Cell, collections::VecDeque};
+
     use rstest::rstest;
 
     use super::*;
@@ -355,7 +397,7 @@ mod tests {
 
         assert_eq!(
             classify_required_commit_checks(&checks, &[required("unit", Some(42))], false).unwrap(),
-            CheckWaitStatus::Complete,
+            CommitCheckStatus::Complete,
         );
     }
 
@@ -364,19 +406,19 @@ mod tests {
         vec![],
         vec![required("unit", None)],
         false,
-        Ok(CheckWaitStatus::Complete)
+        Ok(CommitCheckStatus::Unreported)
     )]
     #[case::unrelated_failed_check_is_ignored(
         vec![gh_check("release", "FAILURE", CheckBucket::Fail, "https://example.invalid/release")],
         vec![required("unit", None)],
         false,
-        Ok(CheckWaitStatus::Complete)
+        Ok(CommitCheckStatus::Unreported)
     )]
     #[case::reported_required_check_waits(
         vec![gh_check("unit", "IN_PROGRESS", CheckBucket::Pending, "https://example.invalid/unit")],
         vec![required("unit", None)],
         false,
-        Ok(CheckWaitStatus::Pending(
+        Ok(CommitCheckStatus::Pending(
             "unit (IN_PROGRESS) https://example.invalid/unit".to_string()
         ))
     )]
@@ -390,7 +432,7 @@ mod tests {
         vec![gh_check("unit", "FAILURE", CheckBucket::Fail, "https://example.invalid/unit")],
         vec![required("unit", None)],
         true,
-        Ok(CheckWaitStatus::Complete)
+        Ok(CommitCheckStatus::Complete)
     )]
     #[case::allowed_base_failure_still_waits_for_pending_checks(
         vec![
@@ -399,7 +441,7 @@ mod tests {
         ],
         vec![required("unit", None), required("integration", None)],
         true,
-        Ok(CheckWaitStatus::Pending(
+        Ok(CommitCheckStatus::Pending(
             "integration (IN_PROGRESS) https://example.invalid/integration".to_string()
         ))
     )]
@@ -407,11 +449,96 @@ mod tests {
         #[case] checks: Vec<GhCheck>,
         #[case] required_contexts: Vec<RequiredStatusCheckContext>,
         #[case] allow_failures: bool,
-        #[case] expected: Result<CheckWaitStatus, String>,
+        #[case] expected: Result<CommitCheckStatus, String>,
     ) {
         let result = classify_required_commit_checks(&checks, &required_contexts, allow_failures)
             .map_err(|error| error.to_string());
 
         assert_eq!(result, expected);
+    }
+
+    struct FakeCommitCheckClient {
+        responses: VecDeque<Vec<GhCheck>>,
+        request_count: usize,
+    }
+
+    impl FakeCommitCheckClient {
+        fn fetch(&mut self) -> anyhow::Result<Vec<GhCheck>> {
+            self.request_count += 1;
+            self.responses
+                .pop_front()
+                .ok_or_else(|| anyhow::anyhow!("No fake check response remains"))
+        }
+    }
+
+    #[test]
+    fn waits_for_a_required_check_that_appears_after_an_empty_response() {
+        let mut client = FakeCommitCheckClient {
+            responses: VecDeque::from([
+                vec![],
+                vec![gh_check(
+                    "unit",
+                    "FAILURE",
+                    CheckBucket::Fail,
+                    "https://example.invalid/checks/unit",
+                )],
+            ]),
+            request_count: 0,
+        };
+        let started_at = Instant::now();
+        let elapsed = Cell::new(Duration::ZERO);
+        let mut waits = 0;
+
+        let result = wait_for_commit_checks_with(
+            &[required("unit", None)],
+            false,
+            || client.fetch(),
+            |_| {
+                waits += 1;
+                elapsed.set(elapsed.get() + CHECK_POLL_INTERVAL);
+            },
+            || started_at + elapsed.get(),
+            COMMIT_CHECK_DISCOVERY_TIMEOUT,
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, client.request_count, waits),
+            (
+                Err(
+                    "Required checks failed: unit (FAILURE) https://example.invalid/checks/unit"
+                        .to_string()
+                ),
+                2,
+                1,
+            ),
+        );
+    }
+
+    #[test]
+    fn stops_waiting_when_no_required_check_is_reported_before_the_deadline() {
+        let mut client = FakeCommitCheckClient {
+            responses: VecDeque::from([vec![], vec![]]),
+            request_count: 0,
+        };
+        let started_at = Instant::now();
+        let elapsed = Cell::new(Duration::ZERO);
+        let discovery_timeout = Duration::from_secs(30);
+        let mut waits = 0;
+
+        let result = wait_for_commit_checks_with(
+            &[required("pr-title-check", None)],
+            false,
+            || client.fetch(),
+            |_| {
+                waits += 1;
+                elapsed.set(elapsed.get() + discovery_timeout);
+            },
+            || started_at + elapsed.get(),
+            discovery_timeout,
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!((result, client.request_count, waits), (Ok(()), 2, 1));
     }
 }

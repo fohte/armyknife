@@ -24,9 +24,10 @@ mod checks;
 mod merge_flow;
 mod watch_web;
 
+use merge_flow::MergeOptions;
 #[cfg(test)]
 use watch_web::run_merge_and_close;
-use watch_web::{MergeOptions, run_merge_and_close_with_options};
+use watch_web::run_merge_and_close_with_options;
 pub(crate) use watch_web::{WatchWebPrMergeResult, run_watch_web_pr_merge};
 
 #[cfg(test)]
@@ -64,6 +65,7 @@ pub async fn run(args: &PrMergeArgs) -> anyhow::Result<()> {
         MergeOptions {
             expected_head_sha: None,
             allow_failing_base: args.allow_failing_base,
+            run_branch_commit_checks: true,
         },
         |merged_pr| async move { close_merged_head_worktree(&merged_pr).await },
     )
@@ -727,8 +729,11 @@ mod tests {
             "sample-org",
             "sample-repo",
             42,
-            None,
-            false,
+            MergeOptions {
+                expected_head_sha: None,
+                allow_failing_base: false,
+                run_branch_commit_checks: true,
+            },
         )
         .await
         .map_err(|error| format!("{error:#}"));
@@ -770,8 +775,11 @@ mod tests {
             "sample-org",
             "sample-repo",
             42,
-            None,
-            false,
+            MergeOptions {
+                expected_head_sha: None,
+                allow_failing_base: false,
+                run_branch_commit_checks: true,
+            },
         )
         .await
         .map_err(|error| format!("{error:#}"));
@@ -818,8 +826,11 @@ mod tests {
             "sample-org",
             "sample-repo",
             42,
-            None,
-            true,
+            MergeOptions {
+                expected_head_sha: None,
+                allow_failing_base: true,
+                run_branch_commit_checks: true,
+            },
         )
         .await
         .map_err(|error| format!("{error:#}"));
@@ -1742,6 +1753,65 @@ mod tests {
             (
                 Err("PR #42 head changed since confirmation.".to_string()),
                 vec!["view".to_string()],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn run_watch_web_merge_skips_branch_commit_checks(events: Rc<RefCell<Vec<String>>>) {
+        let client = fake_client(
+            &[
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Merged, "head-a", "CLEAN"),
+            ],
+            Rc::clone(&events),
+            false,
+            false,
+        );
+        let mut closed = false;
+
+        let result = watch_web::run_merge_and_close_with_expected_head(
+            &client,
+            &mut |_| Ok(()),
+            "sample-org",
+            "sample-repo",
+            42,
+            Some("head-a"),
+            |_| async {
+                closed = true;
+                Ok(())
+            },
+        )
+        .await
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (
+                result,
+                closed,
+                events.borrow().clone(),
+                client.base_check_calls.borrow().clone(),
+                client.merge_commit_check_calls.borrow().clone(),
+            ),
+            (
+                Ok(MergeOutcome::Merged(snapshot(
+                    PrState::Merged,
+                    "head-a",
+                    "CLEAN",
+                ))),
+                true,
+                vec![
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "checks".to_string(),
+                    "view".to_string(),
+                    "merge:head-a".to_string(),
+                    "view".to_string(),
+                ],
+                vec![],
+                vec![],
             ),
         );
     }

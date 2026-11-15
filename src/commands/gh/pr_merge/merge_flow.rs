@@ -9,6 +9,13 @@ use super::{
     MergeOutcome, PrMergeClient, PrSnapshot, ensure_pr_is_open_and_safe, unmerged_lower_pr,
 };
 
+#[derive(Clone, Copy)]
+pub(super) struct MergeOptions<'a> {
+    pub expected_head_sha: Option<&'a str>,
+    pub allow_failing_base: bool,
+    pub run_branch_commit_checks: bool,
+}
+
 #[cfg(test)]
 pub(super) async fn run_merge(
     client: &impl PrMergeClient,
@@ -17,7 +24,19 @@ pub(super) async fn run_merge(
     repo: &str,
     pr_number: u64,
 ) -> anyhow::Result<MergeOutcome> {
-    run_merge_with_expected_head(client, hook_runner, owner, repo, pr_number, None).await
+    run_merge_with_options(
+        client,
+        hook_runner,
+        owner,
+        repo,
+        pr_number,
+        MergeOptions {
+            expected_head_sha: None,
+            allow_failing_base: false,
+            run_branch_commit_checks: true,
+        },
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -35,8 +54,11 @@ pub(super) async fn run_merge_with_expected_head(
         owner,
         repo,
         pr_number,
-        expected_head_sha,
-        false,
+        MergeOptions {
+            expected_head_sha,
+            allow_failing_base: false,
+            run_branch_commit_checks: false,
+        },
     )
     .await
 }
@@ -47,31 +69,35 @@ pub(super) async fn run_merge_with_options(
     owner: &str,
     repo: &str,
     pr_number: u64,
-    expected_head_sha: Option<&str>,
-    allow_failing_base: bool,
+    options: MergeOptions<'_>,
 ) -> anyhow::Result<MergeOutcome> {
     let initial = client.view_pr(owner, repo, pr_number)?;
     if initial.state == PrState::Merged {
         return Ok(MergeOutcome::AlreadyMerged(initial));
     }
     ensure_pr_is_open_and_safe(&initial, pr_number, None)?;
-    if expected_head_sha.is_some_and(|expected| expected != initial.head_sha) {
+    if options
+        .expected_head_sha
+        .is_some_and(|expected| expected != initial.head_sha)
+    {
         bail!("PR #{pr_number} head changed since confirmation.");
     }
 
-    client
-        .wait_for_base_branch_checks(
-            owner,
-            repo,
-            &initial.base_ref_name,
-            allow_failing_base,
-        )
-        .with_context(|| {
-            format!(
-                "Cannot merge PR #{pr_number} while required checks on base branch `{}` are failing",
-                initial.base_ref_name
+    if options.run_branch_commit_checks {
+        client
+            .wait_for_base_branch_checks(
+                owner,
+                repo,
+                &initial.base_ref_name,
+                options.allow_failing_base,
             )
-        })?;
+            .with_context(|| {
+                format!(
+                    "Cannot merge PR #{pr_number} while required checks on base branch `{}` are failing",
+                    initial.base_ref_name
+                )
+            })?;
+    }
 
     let is_stacked = if let Some(stack) = client
         .get_stack_for_pull_request(owner, repo, pr_number)
@@ -108,19 +134,21 @@ pub(super) async fn run_merge_with_options(
     }
     ensure_pr_is_open_and_safe(&current, pr_number, Some(&initial.head_sha))?;
 
-    client
-        .wait_for_base_branch_checks(
-            owner,
-            repo,
-            &current.base_ref_name,
-            allow_failing_base,
-        )
-        .with_context(|| {
-            format!(
-                "Cannot merge PR #{pr_number} while required checks on base branch `{}` are failing",
-                current.base_ref_name
+    if options.run_branch_commit_checks {
+        client
+            .wait_for_base_branch_checks(
+                owner,
+                repo,
+                &current.base_ref_name,
+                options.allow_failing_base,
             )
-        })?;
+            .with_context(|| {
+                format!(
+                    "Cannot merge PR #{pr_number} while required checks on base branch `{}` are failing",
+                    current.base_ref_name
+                )
+            })?;
+    }
 
     let merge_result = match client
         .merge_async(owner, repo, pr_number, &initial.head_sha)

@@ -2,7 +2,10 @@ use std::{future::Future, io::Write};
 
 use anyhow::Context;
 
-use super::{GhCli, MergeOutcome, PrMergeClient, PrSnapshot, close_merged_head_worktree};
+use super::{
+    GhCli, MergeOutcome, PrMergeClient, PrSnapshot, close_merged_head_worktree,
+    merge_flow::MergeOptions,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "result", content = "message", rename_all = "camelCase")]
@@ -10,11 +13,6 @@ pub(crate) enum WatchWebPrMergeResult {
     Merged,
     AlreadyMerged,
     Enqueued(String),
-}
-
-pub(super) struct MergeOptions<'a> {
-    pub expected_head_sha: Option<&'a str>,
-    pub allow_failing_base: bool,
 }
 
 #[cfg(test)]
@@ -39,6 +37,7 @@ where
         MergeOptions {
             expected_head_sha: None,
             allow_failing_base: false,
+            run_branch_commit_checks: true,
         },
         close_worktree,
     )
@@ -68,6 +67,7 @@ where
         MergeOptions {
             expected_head_sha,
             allow_failing_base: false,
+            run_branch_commit_checks: false,
         },
         close_worktree,
     )
@@ -93,8 +93,7 @@ where
         owner,
         repo,
         pr_number,
-        options.expected_head_sha,
-        options.allow_failing_base,
+        options,
     )
     .await?;
     match &outcome {
@@ -107,18 +106,20 @@ where
                     merged.head_ref_name,
                 );
             }
-            client
-                .wait_for_merge_commit_checks(
-                    owner,
-                    repo,
-                    &merged.base_ref_name,
-                    merged.merge_commit_sha.as_deref(),
-                )
-                .with_context(|| {
-                    format!(
-                        "PR #{pr_number} was merged, but required checks on the merge commit failed"
+            if options.run_branch_commit_checks {
+                client
+                    .wait_for_merge_commit_checks(
+                        owner,
+                        repo,
+                        &merged.base_ref_name,
+                        merged.merge_commit_sha.as_deref(),
                     )
-                })?;
+                    .with_context(|| {
+                        format!(
+                            "PR #{pr_number} was merged, but required checks on the merge commit failed"
+                        )
+                    })?;
+            }
         }
         MergeOutcome::AlreadyMerged(_) => {
             println!("PR #{pr_number} was already merged.");
