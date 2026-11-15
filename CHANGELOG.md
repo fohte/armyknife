@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.741](https://github.com/fohte/armyknife/compare/v0.1.740...v0.1.741) (2026-11-15)
+
+
+### Bug Fixes
+
+* **agent:** refuse to delete worktrees with non-shell processes ([#1865](https://github.com/fohte/armyknife/issues/1865)) ([482a84a](https://github.com/fohte/armyknife/commit/482a84aad9e9f4b7f9213b393429533b93c2b421))
+
 ## [0.1.740](https://github.com/fohte/armyknife/compare/v0.1.739...v0.1.740) (2026-11-15)
 
 
