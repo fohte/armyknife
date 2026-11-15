@@ -52,6 +52,11 @@ pub(super) async fn delete_worktrees_single_repo(
                 println!("Deleted: {}", info.wt.name);
                 deleted_count += 1;
                 print_cleanup_result(&result);
+            } else {
+                eprintln!(
+                    "Failed to delete {}: worktree was not removed",
+                    info.wt.name
+                );
             }
         },
     )
@@ -84,7 +89,11 @@ pub(super) async fn delete_worktrees_all_repos(
         let repo = match GitRepo::open_at(&repo_path) {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("Warning: Failed to open {repo_name}: {e}");
+                eprintln!(
+                    "Warning: Failed to open {repo_name}; skipped {} worktree(s): {e}",
+                    infos.len()
+                );
+                failed_count += infos.len();
                 continue;
             }
         };
@@ -106,6 +115,11 @@ pub(super) async fn delete_worktrees_all_repos(
                     println!("Deleted: {repo_name}/{}", info.wt.name);
                     deleted_count += 1;
                     print_cleanup_result(&result);
+                } else {
+                    eprintln!(
+                        "Failed to delete {repo_name}/{}: worktree was not removed",
+                        info.wt.name
+                    );
                 }
             },
         )
@@ -133,7 +147,10 @@ where
     let mut failed_count = 0;
     for info in worktrees {
         let result = delete(info.clone()).await;
-        if result.is_err() {
+        if !result
+            .as_ref()
+            .is_ok_and(|cleanup_result| cleanup_result.worktree_deleted)
+        {
             failed_count += 1;
         }
         handle_result(info, result);
@@ -200,9 +217,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deletion_continues_after_a_worktree_error() {
+    async fn deletion_continues_after_errors_and_non_deletions() {
         let worktrees = vec![
             make_worktree_info("unreadable"),
+            make_worktree_info("not-removed"),
             make_worktree_info("clean"),
         ];
         let attempted = RefCell::new(Vec::new());
@@ -216,6 +234,8 @@ mod tests {
                     attempted.borrow_mut().push(info.wt.name.clone());
                     if info.wt.name == "unreadable" {
                         Err(anyhow::anyhow!("git status failed"))
+                    } else if info.wt.name == "not-removed" {
+                        Ok(crate::shared::cleanup::WorktreeCleanupResult::default())
                     } else {
                         Ok(crate::shared::cleanup::WorktreeCleanupResult {
                             worktree_deleted: true,
@@ -238,15 +258,20 @@ mod tests {
         assert_eq!(
             (attempted.into_inner(), outcomes.into_inner(), failed_count),
             (
-                vec!["unreadable".to_string(), "clean".to_string()],
+                vec![
+                    "unreadable".to_string(),
+                    "not-removed".to_string(),
+                    "clean".to_string()
+                ],
                 vec![
                     (
                         "unreadable".to_string(),
                         Err("git status failed".to_string())
                     ),
+                    ("not-removed".to_string(), Ok(false)),
                     ("clean".to_string(), Ok(true)),
                 ],
-                1,
+                2,
             ),
         );
     }
