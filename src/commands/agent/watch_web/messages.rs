@@ -60,7 +60,7 @@ mod file_attachments;
 use self::file_attachments::merge_stored_files;
 mod session_titles;
 use self::session_titles::{parent_session, resolve_peer_session_titles};
-use self::transcript_path::{archived_codex_transcript_path, codex_home_dir};
+use self::transcript_path::archived_codex_transcript_path;
 
 pub(super) fn claude_content_text(content: Option<&Value>) -> String {
     match content {
@@ -327,7 +327,7 @@ fn load_conversation_with_tail_window(
     loaders: &RouteLoaders,
     tail_window_limit: Option<usize>,
 ) -> Result<Option<ConversationResponse>> {
-    let codex_home = codex_home_dir();
+    let codex_home = crate::shared::dirs::codex_home_dir();
     load_conversation_with_tail_window_from(
         session_id,
         load_session,
@@ -563,12 +563,14 @@ fn open_transcript(path: &Path, allow_compressed: bool) -> Result<Option<Box<dyn
     }
 
     if !allow_compressed {
-        return Ok(None);
+        return open_archived_codex_transcript(path);
     }
     let compressed_path = compressed_path(path);
     let file = match File::open(&compressed_path) {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return open_archived_codex_transcript(path);
+        }
         Err(error) => {
             return Err(error)
                 .with_context(|| format!("open transcript {}", compressed_path.display()));
@@ -577,6 +579,21 @@ fn open_transcript(path: &Path, allow_compressed: bool) -> Result<Option<Box<dyn
     let decoder = zstd::stream::read::Decoder::new(file)
         .with_context(|| format!("decompress transcript {}", compressed_path.display()))?;
     Ok(Some(Box::new(BufReader::new(decoder))))
+}
+
+fn open_archived_codex_transcript(path: &Path) -> Result<Option<Box<dyn BufRead + Send>>> {
+    let codex_home = crate::shared::dirs::codex_home_dir();
+    let Some(archived_path) =
+        archived_codex_transcript_path(Engine::Codex, Some(path), codex_home.as_deref())?
+    else {
+        return Ok(None);
+    };
+    match File::open(&archived_path) {
+        Ok(file) => reader_for(file, &archived_path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error)
+            .with_context(|| format!("open archived transcript {}", archived_path.display())),
+    }
 }
 
 fn reader_for(file: File, path: &Path) -> Result<Option<Box<dyn BufRead + Send>>> {
@@ -882,8 +899,12 @@ mod tests {
         .unwrap()
     }
 
-    #[test]
-    fn codex_messages_are_loaded_from_archived_transcript_when_recorded_path_is_missing() {
+    #[rstest]
+    #[case::already_archived(false)]
+    #[case::archived_during_loading(true)]
+    fn codex_messages_are_loaded_from_archive_after_transcript_moves(
+        #[case] archive_during_loading: bool,
+    ) {
         let codex_home = tempfile::tempdir().unwrap();
         let file_name = "rollout-fixture-thread.jsonl";
         let recorded_path = codex_home
@@ -892,30 +913,46 @@ mod tests {
             .join(file_name);
         let archived_path = codex_home.path().join("archived_sessions").join(file_name);
         std::fs::create_dir_all(archived_path.parent().unwrap()).unwrap();
+        let transcript_path = if archive_during_loading {
+            std::fs::create_dir_all(recorded_path.parent().unwrap()).unwrap();
+            &recorded_path
+        } else {
+            &archived_path
+        };
         std::fs::write(
-            &archived_path,
+            transcript_path,
             r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Recovered conversation."}]}}"#,
         )
         .unwrap();
 
         let mut session = stored_session();
         session.engine = Engine::Codex;
-        session.transcript_path = Some(recorded_path);
+        session.transcript_path = Some(recorded_path.clone());
+        let recorded_path_for_loader = recorded_path.clone();
+        let archived_path_for_loader = archived_path.clone();
         let loaders = RouteLoaders::new(
-            |_| Ok(Vec::new()),
+            move |_| {
+                if archive_during_loading {
+                    std::fs::rename(&recorded_path_for_loader, &archived_path_for_loader)?;
+                }
+                Ok(Vec::new())
+            },
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
             |_| Ok(Vec::new()),
         );
-        let conversation = load_conversation_with_tail_window_from(
-            "fixture-session",
-            move |id| Ok((id == "fixture-session").then(|| session.clone())),
-            |_| Ok(None),
-            &loaders,
-            None,
-            Some(codex_home.path()),
-        )
+        let codex_home_path = codex_home.path().to_str().unwrap();
+        let conversation = temp_env::with_vars([("CODEX_HOME", Some(codex_home_path))], || {
+            load_conversation_with_tail_window_from(
+                "fixture-session",
+                move |id| Ok((id == "fixture-session").then(|| session.clone())),
+                |_| Ok(None),
+                &loaders,
+                None,
+                Some(codex_home.path()),
+            )
+        })
         .unwrap()
         .unwrap();
 

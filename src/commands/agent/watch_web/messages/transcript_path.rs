@@ -4,13 +4,6 @@ use anyhow::{Context, Result};
 
 use crate::commands::agent::types::Engine;
 
-pub(super) fn codex_home_dir() -> Option<PathBuf> {
-    std::env::var_os("CODEX_HOME")
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| crate::shared::dirs::home_dir().map(|home| home.join(".codex")))
-}
-
 pub(super) fn archived_codex_transcript_path(
     engine: Engine,
     transcript_path: Option<&Path>,
