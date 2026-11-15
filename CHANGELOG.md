@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.733](https://github.com/fohte/armyknife/compare/v0.1.732...v0.1.733) (2026-11-15)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show Recent on mobile ([#1850](https://github.com/fohte/armyknife/issues/1850)) ([5a810c6](https://github.com/fohte/armyknife/commit/5a810c625abd8cfb38b6b36fb8a2987d89478b03))
+
 ## [0.1.732](https://github.com/fohte/armyknife/compare/v0.1.731...v0.1.732) (2026-11-15)
 
 
