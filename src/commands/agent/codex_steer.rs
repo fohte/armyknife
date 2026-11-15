@@ -232,10 +232,7 @@ pub(crate) fn fork_thread(
 }
 
 fn control_socket_path() -> anyhow::Result<PathBuf> {
-    let codex_home = std::env::var_os("CODEX_HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| crate::shared::dirs::home_dir().map(|home| home.join(".codex")))
+    let codex_home = crate::shared::dirs::codex_home_dir()
         .context("could not determine CODEX_HOME for the app-server control socket")?;
     Ok(codex_home
         .join("app-server-control")

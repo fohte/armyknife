@@ -6,6 +6,14 @@ pub fn home_dir() -> Option<PathBuf> {
     non_empty_env("HOME").map(PathBuf::from)
 }
 
+/// Returns the Codex home directory from CODEX_HOME or ~/.codex.
+pub fn codex_home_dir() -> Option<PathBuf> {
+    std::env::var_os("CODEX_HOME")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| home_dir().map(|home| home.join(".codex")))
+}
+
 /// Returns the XDG cache directory (~/.cache or $XDG_CACHE_HOME).
 /// Empty values are treated as unset per XDG Base Directory Specification.
 pub fn cache_dir() -> Option<PathBuf> {
