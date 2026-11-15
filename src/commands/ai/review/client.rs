@@ -122,6 +122,7 @@ struct PrInfoRepository {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PrInfoPullRequest {
     head_ref_oid: String,
     comments: PrInfoComments,
@@ -160,6 +161,45 @@ struct PrInfoCommitNode {
 #[serde(rename_all = "camelCase")]
 struct PrInfoCommit {
     committed_date: String,
+}
+
+#[cfg(test)]
+mod response_deserialization_tests {
+    use super::PrInfoData;
+    use serde_json::json;
+
+    #[test]
+    fn pr_info_deserializes_github_graphql_camel_case_response() {
+        let response = serde_json::from_value::<PrInfoData>(json!({
+            "repository": {
+                "pullRequest": {
+                    "headRefOid": "example-head-oid",
+                    "comments": {
+                        "nodes": [{
+                            "author": { "login": "example-review-bot" },
+                            "body": "Example review comment",
+                            "createdAt": "2026-01-02T03:04:05Z"
+                        }]
+                    },
+                    "commits": {
+                        "nodes": [{
+                            "commit": {
+                                "committedDate": "2026-01-02T03:04:05Z"
+                            }
+                        }]
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let head_oid = response
+            .repository
+            .and_then(|repository| repository.pull_request)
+            .map(|pull_request| pull_request.head_ref_oid);
+
+        assert_eq!(head_oid.as_deref(), Some("example-head-oid"));
+    }
 }
 
 // Reaction query types
