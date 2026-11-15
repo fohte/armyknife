@@ -259,7 +259,6 @@ fn render_parser(
 
 #[cfg(test)]
 mod tests {
-    use super::tail_window::parse_initial_or_full;
     use super::{parse_session_transcript, parse_session_transcript_incrementally};
     use crate::commands::agent::store::{WatchWebQueuedAttachment, WatchWebQueuedPrompt};
     use crate::commands::agent::types::{Engine, Session};
@@ -271,49 +270,6 @@ mod tests {
         ChatItem, ConversationResponse, TranscriptInput, UserContentPart,
     };
     use chrono::{DateTime, Utc};
-
-    #[test]
-    fn initial_parse_falls_back_when_window_expansion_reaches_file_start() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("fixture.jsonl");
-        let human_message = r#"{"type":"user","uuid":"fixture-request","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"Fixture request."}}"#;
-        let padding = format!(
-            r#"{{"type":"system","uuid":"fixture-padding","parentUuid":null,"padding":"{}"}}"#,
-            "x".repeat(5 * 1024 * 1024),
-        );
-        std::fs::write(&path, format!("{human_message}\n{padding}")).unwrap();
-        let input = || TranscriptInput {
-            path: Some(&path),
-            engine: Engine::Claude,
-            additions: ParserAdditions {
-                session_id: "fixture-session",
-                parent: None,
-                pending_tool: None,
-                user_marker: None,
-                decisions: &[],
-                queued_prompts: &[],
-                peer_out_messages: &[],
-                proposals: &[],
-                todos: &[],
-                additional_cards: &[],
-            },
-        };
-        let expected = parse_session_transcript(input()).unwrap();
-        let actual = parse_initial_or_full(
-            "fixture-session",
-            input(),
-            Some(1),
-            &[],
-            None,
-            &MessageCache::default(),
-        )
-        .unwrap();
-
-        assert_eq!(
-            (actual.0.messages, actual.1, actual.2),
-            (expected.0.messages, expected.1, false),
-        );
-    }
 
     #[rstest::rstest]
     #[case::claude(Engine::Claude)]

@@ -8,6 +8,12 @@ use super::super::super::super::ChatItem;
 use super::super::ParserAdditions;
 use super::{IncrementalAppend, IncrementalClaudeParser};
 use crate::commands::agent::store::{AgentDecision, AgentTodo, WatchWebQueuedPrompt};
+use crate::commands::agent::types::Engine;
+use crate::commands::agent::watch_web::messages::TranscriptInput;
+use crate::commands::agent::watch_web::messages::cache::MessageCache;
+use crate::commands::agent::watch_web::messages::incremental::{
+    parse_initial_or_full, parse_session_transcript,
+};
 
 fn fixed_time() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).single().unwrap()
@@ -26,6 +32,15 @@ fn empty_additions() -> ParserAdditions<'static> {
         todos: &[],
         additional_cards: &[],
     }
+}
+
+#[rstest::fixture]
+fn oversized_transcript() -> String {
+    let padding = "x".repeat(5 * 1024 * 1024);
+    indoc::formatdoc! {r#"
+        {{"type":"user","uuid":"fixture-request","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{{"content":"Fixture request."}}}}
+        {{"type":"system","uuid":"fixture-padding","parentUuid":null,"padding":"{padding}"}}
+    "#}
 }
 
 #[rstest::fixture]
@@ -492,16 +507,14 @@ fn pending_json_completed_after_a_second_append_matches_a_full_parse() {
     );
 }
 
-#[test]
-fn tail_window_expansion_handles_files_smaller_than_the_next_window() {
-    let human_message = r#"{"type":"user","uuid":"fixture-request","parentUuid":null,"message":{"content":"Fixture request."}}"#;
-    let padding = format!(
-        r#"{{"type":"system","uuid":"fixture-padding","parentUuid":null,"padding":"{}"}}"#,
-        "x".repeat(5 * 1024 * 1024),
+#[rstest]
+fn tail_window_expansion_handles_files_smaller_than_the_next_window(oversized_transcript: String) {
+    let actual = IncrementalClaudeParser::new_tail_window(
+        Cursor::new(oversized_transcript.as_bytes()),
+        None,
+        2,
+        &[],
     );
-    let transcript = [human_message.to_owned(), padding].join("\n");
-    let actual =
-        IncrementalClaudeParser::new_tail_window(Cursor::new(transcript.as_bytes()), None, 2, &[]);
 
     assert_eq!(
         actual
@@ -509,6 +522,41 @@ fn tail_window_expansion_handles_files_smaller_than_the_next_window() {
             .map_err(|error| error.kind()),
         Ok(true),
     );
+}
+
+#[rstest]
+fn initial_parse_falls_back_when_window_expansion_reaches_file_start(oversized_transcript: String) {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("fixture.jsonl");
+    std::fs::write(&path, oversized_transcript).unwrap();
+    let input = || TranscriptInput {
+        path: Some(&path),
+        engine: Engine::Claude,
+        additions: ParserAdditions {
+            session_id: "fixture-session",
+            parent: None,
+            pending_tool: None,
+            user_marker: None,
+            decisions: &[],
+            queued_prompts: &[],
+            peer_out_messages: &[],
+            proposals: &[],
+            todos: &[],
+            additional_cards: &[],
+        },
+    };
+    let expected = parse_session_transcript(input()).unwrap();
+    let actual = parse_initial_or_full(
+        "fixture-session",
+        input(),
+        Some(1),
+        &[],
+        None,
+        &MessageCache::default(),
+    )
+    .unwrap();
+
+    assert_eq!(actual, (expected.0, expected.1, false));
 }
 
 #[rstest]
