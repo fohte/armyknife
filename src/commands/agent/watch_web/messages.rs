@@ -1247,7 +1247,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn messages_route_places_resolved_permission_denials_in_time_and_pins_pending_denials() {
+    async fn messages_route_places_unclassified_denials_in_time_and_pins_pending_denials() {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("fixture-session.jsonl");
         std::fs::write(
@@ -1263,6 +1263,7 @@ mod tests {
         let created_at = chrono::DateTime::parse_from_rfc3339("2026-06-01T12:01:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
+        let unclassified_created_at = created_at + chrono::Duration::minutes(1);
         let permission_denials = vec![
             PermissionDeniedOperation {
                 session_id: "fixture-session".to_string(),
@@ -1273,6 +1274,16 @@ mod tests {
                 reason: Some("Fixture denial".to_string()),
                 created_at,
                 resolved_at: Some(created_at),
+            },
+            PermissionDeniedOperation {
+                session_id: "fixture-session".to_string(),
+                seq: 3,
+                tool_use_id: Some("fixture-unclassified-denial".to_string()),
+                tool_name: "Bash".to_string(),
+                tool_input: json!({"command": "echo fixture"}),
+                reason: Some("Classifier unavailable".to_string()),
+                created_at: unclassified_created_at,
+                resolved_at: None,
             },
             PermissionDeniedOperation {
                 session_id: "fixture-session".to_string(),
@@ -1318,6 +1329,17 @@ mod tests {
                             "retryable": true,
                             "resolved": true,
                         },
+                        {
+                            "type": "permission_denied",
+                            "seq": 3,
+                            "toolUseId": "fixture-unclassified-denial",
+                            "tool": "Bash",
+                            "inputSummary": "echo fixture",
+                            "command": "echo fixture",
+                            "reason": "Classifier unavailable",
+                            "retryable": false,
+                            "resolved": false,
+                        },
                         {"type": "assistant", "text": "After the denials."},
                         {
                             "type": "permission_denied",
@@ -1333,7 +1355,7 @@ mod tests {
                     ],
                     "backgroundTasks": [],
                     "start": 0,
-                    "total": 4,
+                    "total": 5,
                     "decisions": [],
                     "hasUnansweredProposal": false,
                     "activeQuestionIndex": null,

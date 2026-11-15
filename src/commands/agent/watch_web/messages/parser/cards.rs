@@ -268,6 +268,22 @@ mod tests {
                 TimedCard::new(
                     CardKind::PermissionDenied,
                     Some(cutoff - chrono::Duration::seconds(1)),
+                    5,
+                    false,
+                    ChatItem::PermissionDenied {
+                        seq: 5,
+                        tool_use_id: None,
+                        tool: "Bash".to_string(),
+                        input_summary: "unclassified request".to_string(),
+                        command: None,
+                        reason: Some("Classifier unavailable".to_string()),
+                        retryable: false,
+                        resolved: false,
+                    },
+                ),
+                TimedCard::new(
+                    CardKind::PermissionDenied,
+                    Some(cutoff - chrono::Duration::seconds(1)),
                     2,
                     true,
                     ChatItem::PermissionDenied {
