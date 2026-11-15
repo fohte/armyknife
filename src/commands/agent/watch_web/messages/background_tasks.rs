@@ -6,7 +6,7 @@ use super::parser::claude::ParserAdditions;
 use super::{TranscriptInput, parse_session_transcript};
 use crate::commands::agent::types::{Engine, Session};
 
-// Pending IDs restore earlier task starts, so the current turn is enough here.
+// Stop-hook task IDs restore earlier starts; older Claude versions omit this registry.
 const TASK_DETECTION_TAIL_MESSAGE_COUNT: usize = 1;
 // Sparse transcripts must fall back without expanding the list probe.
 const TASK_DETECTION_TAIL_MAX_BYTES: u64 = 4 * 1024 * 1024;
@@ -85,34 +85,29 @@ pub(super) fn running_background_task_session_ids(
                         None
                     }
                 };
-                if let Some(has_running_task) = tail_window_result {
-                    cache.insert(
-                        &session.session_id,
-                        fingerprint.clone(),
-                        pending_task_ids.iter().cloned().collect(),
-                        has_running_task,
-                    );
-                    has_running_task
+                let parse_result = if let Some(has_running_task) = tail_window_result {
+                    Ok(has_running_task)
                 } else {
-                    match parse_session_transcript(input) {
-                        Ok((conversation, _)) => {
-                            let has_running_task = !conversation.background_tasks.is_empty();
-                            cache.insert(
-                                &session.session_id,
-                                fingerprint.clone(),
-                                pending_task_ids.iter().cloned().collect(),
-                                has_running_task,
-                            );
-                            has_running_task
-                        }
-                        Err(error) => {
-                            tracing::warn!(
-                                event = "agent.watch_web.background_task_transcript_parse_failed",
-                                session = %session.session_id,
-                                %error,
-                            );
-                            session.has_pending_bg_tasks()
-                        }
+                    parse_session_transcript(input)
+                        .map(|(conversation, _)| !conversation.background_tasks.is_empty())
+                };
+                match parse_result {
+                    Ok(has_running_task) => {
+                        cache.insert(
+                            &session.session_id,
+                            fingerprint.clone(),
+                            pending_task_ids.iter().cloned().collect(),
+                            has_running_task,
+                        );
+                        has_running_task
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            event = "agent.watch_web.background_task_transcript_parse_failed",
+                            session = %session.session_id,
+                            %error,
+                        );
+                        session.has_pending_bg_tasks()
                     }
                 }
             });
@@ -142,20 +137,26 @@ mod tests {
     use crate::commands::agent::types::{Engine, Session};
 
     #[rstest]
-    #[case::background_shell("shell", false, false)]
-    #[case::subagent("subagent", false, false)]
-    #[case::compressed_transcript("shell", true, false)]
-    #[case::completed_background_shell("shell", false, true)]
-    #[case::completed_subagent("subagent", false, true)]
+    #[case::background_shell("shell", false, false, false)]
+    #[case::subagent("subagent", false, false, false)]
+    #[case::compressed_transcript("shell", true, false, false)]
+    #[case::completed_background_shell("shell", false, true, false)]
+    #[case::completed_subagent("subagent", false, true, false)]
+    #[case::byte_cap_fallback("shell", false, false, true)]
     fn tail_window_matches_full_parse_for_pending_tasks(
         transcript_directory: tempfile::TempDir,
         #[case] task_type: &str,
         #[case] compressed: bool,
         #[case] completed_before_window: bool,
+        #[case] exceeds_tail_window_byte_cap: bool,
     ) {
         let task_id = "fixture-task-id";
-        let transcript =
-            transcript_with_old_pending_task(task_type, task_id, completed_before_window);
+        let transcript = transcript_with_old_pending_task(
+            task_type,
+            task_id,
+            completed_before_window,
+            exceeds_tail_window_byte_cap,
+        );
         let extension = if compressed { "jsonl.zst" } else { "jsonl" };
         let path = transcript_directory
             .path()
@@ -198,7 +199,7 @@ mod tests {
                 full_parse_has_task
             ),
             (
-                !compressed,
+                !compressed && !exceeds_tail_window_byte_cap,
                 if completed_before_window {
                     HashSet::new()
                 } else {
@@ -209,12 +210,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn task_status_is_recomputed_when_pending_ids_change() {
-        let transcript_directory =
-            tempfile::tempdir().expect("fixture directory should be created");
+    #[rstest]
+    fn task_status_is_recomputed_when_pending_ids_change(transcript_directory: tempfile::TempDir) {
         let path = transcript_directory.path().join("fixture-transcript.jsonl");
-        let transcript = transcript_with_old_pending_task("shell", "fixture-task-id", false);
+        let transcript = transcript_with_old_pending_task("shell", "fixture-task-id", false, false);
         std::fs::write(&path, transcript).expect("fixture transcript should be written");
         let mut session = session_for_transcript(&path, "shell", "fixture-task-id");
         let cache = RunningBackgroundTaskCache::default();
@@ -286,6 +285,7 @@ mod tests {
         task_type: &str,
         task_id: &str,
         completed_before_window: bool,
+        exceeds_tail_window_byte_cap: bool,
     ) -> String {
         let mut transcript = String::new();
         let (call, result) = if task_type == "shell" {
@@ -390,6 +390,16 @@ mod tests {
             });
             append_record(&mut transcript, &record);
             parent_uuid = uuid;
+        }
+        if exceeds_tail_window_byte_cap {
+            let record = json!({
+                "uuid": "fixture-large-assistant-row",
+                "parentUuid": parent_uuid,
+                "type": "assistant",
+                "timestamp": "2026-01-01T00:02:00Z",
+                "message": {"content": "x".repeat(5 * 1024 * 1024)},
+            });
+            append_record(&mut transcript, &record);
         }
         transcript
     }
