@@ -1,5 +1,7 @@
 use std::{future::Future, io::Write};
 
+use anyhow::Context;
+
 use super::{GhCli, MergeOutcome, PrMergeClient, PrSnapshot, close_merged_head_worktree};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -10,6 +12,12 @@ pub(crate) enum WatchWebPrMergeResult {
     Enqueued(String),
 }
 
+pub(super) struct MergeOptions<'a> {
+    pub expected_head_sha: Option<&'a str>,
+    pub allow_failing_base: bool,
+}
+
+#[cfg(test)]
 pub(super) async fn run_merge_and_close<C, F>(
     client: &impl PrMergeClient,
     hook_runner: &mut impl FnMut(&[(&str, &str)]) -> anyhow::Result<()>,
@@ -22,13 +30,16 @@ where
     C: FnOnce(PrSnapshot) -> F,
     F: Future<Output = anyhow::Result<()>>,
 {
-    run_merge_and_close_with_expected_head(
+    run_merge_and_close_with_options(
         client,
         hook_runner,
         owner,
         repo,
         pr_number,
-        None,
+        MergeOptions {
+            expected_head_sha: None,
+            allow_failing_base: false,
+        },
         close_worktree,
     )
     .await
@@ -48,13 +59,42 @@ where
     C: FnOnce(PrSnapshot) -> F,
     F: Future<Output = anyhow::Result<()>>,
 {
-    let outcome = super::merge_flow::run_merge_with_expected_head(
+    run_merge_and_close_with_options(
         client,
         hook_runner,
         owner,
         repo,
         pr_number,
-        expected_head_sha,
+        MergeOptions {
+            expected_head_sha,
+            allow_failing_base: false,
+        },
+        close_worktree,
+    )
+    .await
+}
+
+pub(super) async fn run_merge_and_close_with_options<C, F>(
+    client: &impl PrMergeClient,
+    hook_runner: &mut impl FnMut(&[(&str, &str)]) -> anyhow::Result<()>,
+    owner: &str,
+    repo: &str,
+    pr_number: u64,
+    options: MergeOptions<'_>,
+    close_worktree: C,
+) -> anyhow::Result<MergeOutcome>
+where
+    C: FnOnce(PrSnapshot) -> F,
+    F: Future<Output = anyhow::Result<()>>,
+{
+    let outcome = super::merge_flow::run_merge_with_options(
+        client,
+        hook_runner,
+        owner,
+        repo,
+        pr_number,
+        options.expected_head_sha,
+        options.allow_failing_base,
     )
     .await?;
     match &outcome {
@@ -67,6 +107,18 @@ where
                     merged.head_ref_name,
                 );
             }
+            client
+                .wait_for_merge_commit_checks(
+                    owner,
+                    repo,
+                    &merged.base_ref_name,
+                    merged.merge_commit_sha.as_deref(),
+                )
+                .with_context(|| {
+                    format!(
+                        "PR #{pr_number} was merged, but required checks on the merge commit failed"
+                    )
+                })?;
         }
         MergeOutcome::AlreadyMerged(_) => {
             println!("PR #{pr_number} was already merged.");

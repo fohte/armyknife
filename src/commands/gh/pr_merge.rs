@@ -24,7 +24,9 @@ mod checks;
 mod merge_flow;
 mod watch_web;
 
+#[cfg(test)]
 use watch_web::run_merge_and_close;
+use watch_web::{MergeOptions, run_merge_and_close_with_options};
 pub(crate) use watch_web::{WatchWebPrMergeResult, run_watch_web_pr_merge};
 
 #[cfg(test)]
@@ -38,6 +40,10 @@ pub struct PrMergeArgs {
     /// Target repository (owner/repo)
     #[arg(short = 'R', long = "repo")]
     pub repo: Option<String>,
+
+    /// Allow merging while required checks on the base branch are failing
+    #[arg(long)]
+    pub allow_failing_base: bool,
 }
 
 pub async fn run(args: &PrMergeArgs) -> anyhow::Result<()> {
@@ -49,12 +55,16 @@ pub async fn run(args: &PrMergeArgs) -> anyhow::Result<()> {
     ensure_repo_vibe_access_for_session(in_agent_session, load_config, &owner, &repo)?;
 
     let client = GhCli;
-    run_merge_and_close(
+    run_merge_and_close_with_options(
         &client,
         &mut |env| hooks::run_hook("pre-pr-merge", env),
         &owner,
         &repo,
         args.pr_number,
+        MergeOptions {
+            expected_head_sha: None,
+            allow_failing_base: args.allow_failing_base,
+        },
         |merged_pr| async move { close_merged_head_worktree(&merged_pr).await },
     )
     .await?;
@@ -100,6 +110,20 @@ trait PrMergeClient {
         repo: &str,
         pr_number: u64,
     ) -> anyhow::Result<()>;
+    fn wait_for_base_branch_checks(
+        &self,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+        allow_failures: bool,
+    ) -> anyhow::Result<()>;
+    fn wait_for_merge_commit_checks(
+        &self,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+        merge_sha: Option<&str>,
+    ) -> anyhow::Result<()>;
     async fn merge_async(
         &self,
         owner: &str,
@@ -131,6 +155,7 @@ struct PrSnapshot {
     head_repository: Option<String>,
     merge_state_status: String,
     url: String,
+    merge_commit_sha: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -314,7 +339,7 @@ impl PrMergeClient for GhCli {
             "--repo",
             repository.as_str(),
             "--json",
-            "state,headRefOid,headRefName,baseRefName,headRepository,mergeStateStatus,url",
+            "state,headRefOid,headRefName,baseRefName,headRepository,mergeStateStatus,url,mergeCommit",
         ];
         let output = run_gh(&args)?;
         let response: GhPrResponse = serde_json::from_slice(&output.stdout)
@@ -329,6 +354,7 @@ impl PrMergeClient for GhCli {
                 .map(|repository| repository.name_with_owner),
             merge_state_status: response.merge_state_status.unwrap_or_default(),
             url: response.url,
+            merge_commit_sha: response.merge_commit.map(|commit| commit.oid),
         })
     }
 
@@ -361,6 +387,26 @@ impl PrMergeClient for GhCli {
         pr_number: u64,
     ) -> anyhow::Result<()> {
         checks::wait_for_required_checks(owner, repo, pr_number)
+    }
+
+    fn wait_for_base_branch_checks(
+        &self,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+        allow_failures: bool,
+    ) -> anyhow::Result<()> {
+        checks::wait_for_base_branch_checks(owner, repo, branch, allow_failures)
+    }
+
+    fn wait_for_merge_commit_checks(
+        &self,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+        merge_sha: Option<&str>,
+    ) -> anyhow::Result<()> {
+        checks::wait_for_merge_commit_checks(owner, repo, branch, merge_sha)
     }
 
     async fn merge_async(
@@ -409,6 +455,12 @@ struct GhPrResponse {
     head_repository: Option<GhRepository>,
     merge_state_status: Option<String>,
     url: String,
+    merge_commit: Option<GhCommit>,
+}
+
+#[derive(serde::Deserialize)]
+struct GhCommit {
+    oid: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -455,6 +507,8 @@ mod tests {
         snapshots: RefCell<VecDeque<PrSnapshot>>,
         events: Rc<RefCell<Vec<String>>>,
         checks_error: bool,
+        base_checks_error: bool,
+        merge_commit_checks_error: bool,
         merge_error: bool,
         fallback_error: Option<AsyncMergeFallback>,
         sync_merge_error: bool,
@@ -518,6 +572,32 @@ mod tests {
             Ok(())
         }
 
+        fn wait_for_base_branch_checks(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _branch: &str,
+            allow_failures: bool,
+        ) -> anyhow::Result<()> {
+            if self.base_checks_error && !allow_failures {
+                anyhow::bail!("fake base branch checks failed");
+            }
+            Ok(())
+        }
+
+        fn wait_for_merge_commit_checks(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _branch: &str,
+            _merge_sha: Option<&str>,
+        ) -> anyhow::Result<()> {
+            if self.merge_commit_checks_error {
+                anyhow::bail!("fake merge commit checks failed");
+            }
+            Ok(())
+        }
+
         async fn merge_async(
             &self,
             _owner: &str,
@@ -575,6 +655,7 @@ mod tests {
             head_repository: Some("sample-org/sample-repo".to_string()),
             merge_state_status: merge_state_status.to_string(),
             url: "https://github.com/sample-org/sample-repo/pull/42".to_string(),
+            merge_commit_sha: Some("merge-a".to_string()),
         }
     }
 
@@ -588,6 +669,8 @@ mod tests {
             snapshots: RefCell::new(snapshots.iter().cloned().collect()),
             events,
             checks_error,
+            base_checks_error: false,
+            merge_commit_checks_error: false,
             merge_error,
             fallback_error: None,
             sync_merge_error: false,
@@ -605,6 +688,133 @@ mod tests {
             request_uuid: "request-id".to_string(),
             pull_request: 42,
         }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn run_merge_stops_when_base_branch_checks_fail(events: Rc<RefCell<Vec<String>>>) {
+        let mut client = fake_client(
+            &[snapshot(PrState::Open, "head-a", "CLEAN")],
+            Rc::clone(&events),
+            false,
+            false,
+        );
+        client.base_checks_error = true;
+        let mut hook_called = false;
+
+        let result = merge_flow::run_merge_with_options(
+            &client,
+            &mut |_| {
+                hook_called = true;
+                Ok(())
+            },
+            "sample-org",
+            "sample-repo",
+            42,
+            None,
+            false,
+        )
+        .await
+        .map_err(|error| format!("{error:#}"));
+
+        assert_eq!(
+            (result, hook_called, events.borrow().clone()),
+            (
+                Err("Cannot merge PR #42 while required checks on base branch `main` are failing: fake base branch checks failed".to_string()),
+                false,
+                vec!["view".to_string()],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn run_merge_allows_a_failing_base_when_explicitly_requested(
+        events: Rc<RefCell<Vec<String>>>,
+    ) {
+        let mut client = fake_client(
+            &[
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Merged, "head-a", "CLEAN"),
+            ],
+            Rc::clone(&events),
+            false,
+            false,
+        );
+        client.base_checks_error = true;
+
+        let result = merge_flow::run_merge_with_options(
+            &client,
+            &mut |_| Ok(()),
+            "sample-org",
+            "sample-repo",
+            42,
+            None,
+            true,
+        )
+        .await
+        .map_err(|error| format!("{error:#}"));
+
+        assert_eq!(
+            (result, events.borrow().clone()),
+            (
+                Ok(MergeOutcome::Merged(snapshot(
+                    PrState::Merged,
+                    "head-a",
+                    "CLEAN",
+                ))),
+                vec![
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "checks".to_string(),
+                    "view".to_string(),
+                    "merge:head-a".to_string(),
+                    "view".to_string(),
+                ],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn post_merge_check_failure_is_reported_after_worktree_cleanup(
+        events: Rc<RefCell<Vec<String>>>,
+    ) {
+        let mut client = fake_client(
+            &[
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Merged, "head-a", "CLEAN"),
+            ],
+            events,
+            false,
+            false,
+        );
+        client.merge_commit_checks_error = true;
+        let mut closed = false;
+
+        let result = run_merge_and_close(
+            &client,
+            &mut |_| Ok(()),
+            "sample-org",
+            "sample-repo",
+            42,
+            |_| async {
+                closed = true;
+                Ok(())
+            },
+        )
+        .await
+        .map_err(|error| format!("{error:#}"));
+
+        assert_eq!(
+            (result, closed),
+            (
+                Err("PR #42 was merged, but required checks on the merge commit failed: fake merge commit checks failed".to_string()),
+                true,
+            ),
+        );
     }
 
     #[rstest]
@@ -641,7 +851,6 @@ mod tests {
         };
 
         let result = run_merge(&client, &mut hook, "example-org", "example-repo", 42).await;
-
         assert_eq!(
             (result.is_ok(), events.borrow().clone()),
             (
@@ -743,6 +952,8 @@ mod tests {
         };
 
         let result = run_merge(&client, &mut hook, "example-org", "example-repo", 42).await;
+        let mut merged_snapshot = snapshot(PrState::Merged, "head-a", "CLEAN");
+        merged_snapshot.merge_commit_sha = Some("sync-merge".to_string());
 
         assert_eq!(
             (
@@ -750,11 +961,7 @@ mod tests {
                 events.borrow().clone(),
             ),
             (
-                Ok(MergeOutcome::Merged(snapshot(
-                    PrState::Merged,
-                    "head-a",
-                    "CLEAN",
-                ))),
+                Ok(MergeOutcome::Merged(merged_snapshot)),
                 vec![
                     "view".to_string(),
                     "stack".to_string(),
