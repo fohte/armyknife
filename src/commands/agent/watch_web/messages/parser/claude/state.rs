@@ -136,7 +136,7 @@ impl ClaudeParserState {
                         effects.push(ClaudeEffect::Inbound {
                             record: classifier_record(record),
                             text: task_notification
-                                .and_then(task_notification_envelope)
+                                .and_then(task_notification_display_text)
                                 .unwrap_or(&text)
                                 .to_owned(),
                             images,
@@ -197,7 +197,7 @@ impl ClaudeParserState {
                         effects.push(ClaudeEffect::Inbound {
                             record: classifier_record(record),
                             text: task_notification
-                                .and_then(task_notification_envelope)
+                                .and_then(task_notification_display_text)
                                 .unwrap_or(&text)
                                 .to_owned(),
                             images,
@@ -304,6 +304,21 @@ impl ToolUse {
         permission.tool_name.as_deref() == Some(self.name.as_str())
             && self.input.as_ref() == Some(&permission.tool_input)
     }
+}
+
+fn task_notification_display_text(text: &str) -> Option<&str> {
+    let envelope = task_notification_envelope(text)?;
+    Some(
+        if envelope
+            .trailing_text
+            .trim_start()
+            .starts_with("<system-reminder>")
+        {
+            text
+        } else {
+            envelope.notification
+        },
+    )
 }
 
 fn classifier_record(record: &Value) -> Value {

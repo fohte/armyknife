@@ -5778,7 +5778,8 @@ mod tests {
             indoc::indoc! {"
                 Another Claude session sent a message:
                 Continue the review.
-            "}
+            "},
+            "previous"
         )]
         #[case::armyknife_peer(
             None,
@@ -5788,7 +5789,8 @@ mod tests {
 
                 Continue the review.
                 </peer-message>
-            "}
+            "},
+            "previous"
         )]
         #[case::task_notification(
             None,
@@ -5797,23 +5799,43 @@ mod tests {
                 <task-id>fixture-task-id</task-id>
                 <status>completed</status>
                 </task-notification>
-            "}
+            "},
+            "previous"
         )]
         #[case::task_notification_with_leading_whitespace(
             None,
-            " \t<task-notification><task-id>fixture-task-id</task-id><status>completed</status></task-notification>"
+            " \t<task-notification><task-id>fixture-task-id</task-id><status>completed</status></task-notification>",
+            "previous"
         )]
         #[case::prefixed_task_notification(
             None,
             indoc::indoc! {"
                 [SYSTEM NOTIFICATION - NOT USER INPUT]
                 <task-notification><task-id>fixture-task-id</task-id><status>completed</status></task-notification>
-            "}
+            "},
+            "previous"
         )]
-        #[case::subagent(Some("subagent-id"), "Continue the review.")]
-        fn non_human_prompt_does_not_update_the_human_prompt_timestamp(
+        #[case::check_in_with_follow_up(
+            None,
+            indoc::indoc! {"
+                <task-notification>
+                <summary>Fixture task remains active</summary>
+                </task-notification>
+                This is a check-in. The next check-in follows after more silence.
+            "},
+            "previous"
+        )]
+        #[case::human(None, "Continue the review.", "updated")]
+        #[case::human_quoting_notification(
+            None,
+            "Please inspect this quoted notification: <task-notification>Fixture text</task-notification>",
+            "updated"
+        )]
+        #[case::subagent(Some("subagent-id"), "Continue the review.", "previous")]
+        fn prompt_timestamp_tracks_human_input(
             #[case] agent_id: Option<&str>,
             #[case] prompt: &str,
+            #[case] expected_prompt_timestamp: &str,
         ) {
             let temp_dir = create_temp_sessions_dir();
             let initial_result = process_hook_event_impl(
@@ -5846,7 +5868,12 @@ mod tests {
             let session = store::load_session_from(temp_dir.path(), "test-123")
                 .expect("session should load")
                 .expect("session should exist");
-            assert_eq!(session.last_prompted_at, Some(previous_prompt_at));
+            let prompt_timestamp = match session.last_prompted_at {
+                Some(timestamp) if timestamp == previous_prompt_at => "previous",
+                Some(_) => "updated",
+                None => "missing",
+            };
+            assert_eq!(prompt_timestamp, expected_prompt_timestamp);
         }
 
         #[rstest]

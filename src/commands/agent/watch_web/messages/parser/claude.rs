@@ -1473,6 +1473,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn renders_check_in_notification_with_trailing_guidance_as_a_system_event() {
+        let transcript = indoc! {r#"
+            {"type":"user","message":{"content":"<task-notification><summary>Fixture task remains active</summary></task-notification>\nThis is a check-in. The next check-in follows after more silence."}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
+            vec![ChatItem::Event {
+                kind: super::super::super::EventKind::System,
+                text: "Fixture task remains active".to_string(),
+                timestamp: None,
+                failed: false,
+            }],
+        );
+    }
+
     #[rstest]
     #[case::failure_word("Delivery failed for the fictional target.")]
     #[case::zero_failed("0 failed")]
