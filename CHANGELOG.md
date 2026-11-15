@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.724](https://github.com/fohte/armyknife/compare/v0.1.723...v0.1.724) (2026-11-15)
+
+
+### Bug Fixes
+
+* **watch-web:** ignore check-ins in Recent order ([#1830](https://github.com/fohte/armyknife/issues/1830)) ([29e8139](https://github.com/fohte/armyknife/commit/29e813958d3bb473df63f72b9194b0ff69da60dd))
+
 ## [0.1.723](https://github.com/fohte/armyknife/compare/v0.1.722...v0.1.723) (2026-11-15)
 
 
