@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.722](https://github.com/fohte/armyknife/compare/v0.1.721...v0.1.722) (2026-11-15)
+
+
+### Features
+
+* **agent:** remove post-stop status inference ([#1813](https://github.com/fohte/armyknife/issues/1813)) ([6da3528](https://github.com/fohte/armyknife/commit/6da35284e0e1386e7659a4c27265bbd83f13ac76))
+
 ## [0.1.721](https://github.com/fohte/armyknife/compare/v0.1.720...v0.1.721) (2026-11-15)
 
 
