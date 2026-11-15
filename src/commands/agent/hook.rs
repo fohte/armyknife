@@ -36,6 +36,7 @@ mod permission_request;
 mod prompt_skill;
 mod session_lifecycle;
 mod session_metadata;
+mod session_start;
 mod side_effects;
 mod stop;
 mod vibe;
@@ -125,14 +126,16 @@ pub fn run(args: &HookArgs) -> Result<()> {
         ProcessResult::StopBlocked(reason) => Some(reason),
         ProcessResult::SessionSaved | ProcessResult::SessionEnded | ProcessResult::Skipped => None,
     };
-    if event == HookEvent::SessionStart && args.engine == Engine::Claude {
-        let marker = store::watch_web_user_marker(&session_id)?;
-        return write_claude_session_start_response(marker.as_deref(), &mut io::stdout().lock());
-    }
-    write_stop_response(
-        args.engine,
+    let marker = if event == HookEvent::SessionStart && args.engine == Engine::Claude {
+        store::watch_web_user_marker(&session_id)?
+    } else {
+        None
+    };
+    session_start::write_hook_response(
         event,
+        args.engine,
         block_reason.as_deref(),
+        marker.as_deref(),
         &mut io::stdout().lock(),
     )
 }
@@ -144,27 +147,9 @@ fn write_stop_response(
     output: impl Write,
 ) -> Result<()> {
     if event == HookEvent::SessionStart && engine == Engine::Claude {
-        return write_claude_session_start_response_without_agent_instruction(output);
+        return session_start::write_without_instruction(output);
     }
     stop::write_response(engine, event, block_reason, output)
-}
-
-fn session_start_context(marker: Option<&str>) -> String {
-    let mut context = super::decision::session_start_instruction().to_string();
-    if let Some(marker) = marker {
-        context.push('\n');
-        context.push('\n');
-        context.push_str(&super::watch_web_user_marker::session_start_context(marker));
-    }
-    context
-}
-
-fn write_claude_session_start_response(marker: Option<&str>, output: impl Write) -> Result<()> {
-    stop::write_session_start_response(&session_start_context(marker), output)
-}
-
-fn write_claude_session_start_response_without_agent_instruction(output: impl Write) -> Result<()> {
-    stop::write_session_start_response("", output)
 }
 
 /// Result of processing a hook event.
@@ -1595,29 +1580,6 @@ mod tests {
         side_effects: &SideEffects,
     ) -> Result<ProcessResult> {
         process_hook_event_impl_with_instruction(event, input, sessions_dir, side_effects, None)
-    }
-
-    #[rstest]
-    #[case::without_watch_web_marker(None)]
-    #[case::with_watch_web_marker(Some("⟦armyknife-user:fixture-marker-cobalt⟧"))]
-    fn claude_session_start_response_includes_the_decision_instruction(
-        #[case] marker: Option<&str>,
-    ) {
-        let mut output = Vec::new();
-
-        write_claude_session_start_response(marker, &mut output)
-            .expect("SessionStart response should serialize");
-
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&output)
-                .expect("response should be valid JSON"),
-            serde_json::json!({
-                "hookSpecificOutput": {
-                    "hookEventName": "SessionStart",
-                    "additionalContext": session_start_context(marker),
-                }
-            }),
-        );
     }
 
     #[test]
