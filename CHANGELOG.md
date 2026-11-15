@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.736](https://github.com/fohte/armyknife/compare/v0.1.735...v0.1.736) (2026-11-15)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align loopback URL hosts ([#1855](https://github.com/fohte/armyknife/issues/1855)) ([8a23e41](https://github.com/fohte/armyknife/commit/8a23e4121f2dedd7874e443e385ab06cbfa519d2))
+
 ## [0.1.735](https://github.com/fohte/armyknife/compare/v0.1.734...v0.1.735) (2026-11-15)
 
 
