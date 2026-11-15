@@ -67,17 +67,6 @@ function isPendingProposal(
   )
 }
 
-function isPendingInteraction(message: ChatItem): boolean {
-  if (message.type === 'proposal') return isPendingProposal(message)
-  if (message.type === 'todo') return message.resolution === null
-  if (message.type === 'permission') return true
-  return (
-    message.type === 'question' &&
-    message.requestId !== undefined &&
-    message.questions.every((question) => question.answer === null)
-  )
-}
-
 function getConversationMessageIdentity(message: ChatItem): string {
   switch (message.type) {
     case 'proposal':
@@ -248,12 +237,7 @@ export function useConversationMessageElements({
     return {
       activeTool,
       conversationMessageCount: conversationMessages.length,
-      elements: rows
-        .filter(({ message }) => !isPendingInteraction(message))
-        .map(({ element }) => element),
-      pendingInteractionElements: rows
-        .filter(({ message }) => isPendingInteraction(message))
-        .map(({ element }) => element),
+      elements: rows.map(({ element }) => element),
       hasUnansweredProposal,
     }
   }, [
