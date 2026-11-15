@@ -96,25 +96,41 @@ it('toggles the review between its column and fullscreen layouts', () => {
   })
 })
 
-it('opens the local web UI directly in the iframe and external link', () => {
-  root = createRoot(container)
-  act(() => {
-    root?.render(
-      <WebUiPane
-        name="crit"
-        url="http://127.0.0.1:48761/review/sample"
-        exposedUrl="https://public.example.test/review/sample"
-        hostname="localhost"
-        onClose={() => undefined}
-      />,
-    )
-  })
+it.each([
+  {
+    name: 'matches localhost to a 127.0.0.1 watch-web host',
+    url: 'http://localhost:48761/review/sample',
+    hostname: '127.0.0.1',
+    expectedUrl: 'http://127.0.0.1:48761/review/sample',
+  },
+  {
+    name: 'matches 127.0.0.1 to a localhost watch-web host',
+    url: 'http://127.0.0.1:48761/review/sample',
+    hostname: 'localhost',
+    expectedUrl: 'http://localhost:48761/review/sample',
+  },
+])(
+  'opens the local web UI with a matching host: $name',
+  ({ url, hostname, expectedUrl }) => {
+    root = createRoot(container)
+    act(() => {
+      root?.render(
+        <WebUiPane
+          name="crit"
+          url={url}
+          exposedUrl="https://public.example.test/review/sample"
+          hostname={hostname}
+          onClose={() => undefined}
+        />,
+      )
+    })
 
-  expect(relayTargets()).toEqual({
-    iframe: 'http://127.0.0.1:48761/review/sample',
-    link: 'http://127.0.0.1:48761/review/sample',
-  })
-})
+    expect(relayTargets()).toEqual({
+      iframe: expectedUrl,
+      link: expectedUrl,
+    })
+  },
+)
 
 it('opens the exposed web UI when watch-web is opened remotely', () => {
   root = createRoot(container)
