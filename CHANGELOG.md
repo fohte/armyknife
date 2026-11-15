@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.727](https://github.com/fohte/armyknife/compare/v0.1.726...v0.1.727) (2026-11-15)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** keep review actions visible ([#1836](https://github.com/fohte/armyknife/issues/1836)) ([0dec61b](https://github.com/fohte/armyknife/commit/0dec61b036ed1cec2c6de159b547b04e5683f56b))
+
 ## [0.1.726](https://github.com/fohte/armyknife/compare/v0.1.725...v0.1.726) (2026-11-15)
 
 
