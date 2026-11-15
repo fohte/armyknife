@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.729](https://github.com/fohte/armyknife/compare/v0.1.728...v0.1.729) (2026-11-15)
+
+
+### Bug Fixes
+
+* **agent:** withdraw pending cards on cleanup ([#1840](https://github.com/fohte/armyknife/issues/1840)) ([942cfc0](https://github.com/fohte/armyknife/commit/942cfc067da5ae4a3b1efa8cdbe8288fc46dd00d))
+
 ## [0.1.728](https://github.com/fohte/armyknife/compare/v0.1.727...v0.1.728) (2026-11-15)
 
 
