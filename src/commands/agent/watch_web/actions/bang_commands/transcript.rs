@@ -27,7 +27,7 @@ pub(super) fn transcript_contains_commands(
     Ok(false)
 }
 
-fn commands_are_candidates(message: &str, commands: &[String]) -> bool {
+pub(super) fn commands_are_candidates(message: &str, commands: &[String]) -> bool {
     let mut remaining = HashMap::<String, usize>::new();
     for candidate in bang_commands(message) {
         *remaining.entry(candidate).or_default() += 1;

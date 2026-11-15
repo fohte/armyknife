@@ -28,6 +28,7 @@ use crate::commands::agent::user_turn::is_ask_user_question;
 
 mod background_task_outputs;
 mod background_tasks;
+mod command_source;
 mod incremental;
 mod parser;
 mod pending_permissions;
@@ -304,6 +305,31 @@ fn load_conversation_with_queued_prompts(
     load_conversation_with_tail_window(session_id, load_session, load_user_marker, loaders, None)
 }
 
+pub(super) fn conversation_contains_markdown_source(
+    session_id: &str,
+    load_session: impl FnMut(&str) -> Result<Option<Session>>,
+    load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
+    loaders: &RouteLoaders,
+    expected_message: &str,
+) -> Result<bool> {
+    let Some(conversation) = load_conversation_with_tail_window_and_marker_updates(
+        session_id,
+        load_session,
+        load_user_marker,
+        loaders,
+        None,
+        false,
+    )?
+    else {
+        return Ok(false);
+    };
+
+    Ok(command_source::contains_markdown_source(
+        &conversation.messages,
+        expected_message,
+    ))
+}
+
 fn load_conversation_with_initial_tail_window(
     session_id: &str,
     load_session: impl FnMut(&str) -> Result<Option<Session>>,
@@ -327,6 +353,24 @@ fn load_conversation_with_tail_window(
     loaders: &RouteLoaders,
     tail_window_limit: Option<usize>,
 ) -> Result<Option<ConversationResponse>> {
+    load_conversation_with_tail_window_and_marker_updates(
+        session_id,
+        load_session,
+        load_user_marker,
+        loaders,
+        tail_window_limit,
+        true,
+    )
+}
+
+fn load_conversation_with_tail_window_and_marker_updates(
+    session_id: &str,
+    load_session: impl FnMut(&str) -> Result<Option<Session>>,
+    load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
+    loaders: &RouteLoaders,
+    tail_window_limit: Option<usize>,
+    mark_resolved_queued_prompts: bool,
+) -> Result<Option<ConversationResponse>> {
     let codex_home = crate::shared::dirs::codex_home_dir();
     load_conversation_with_tail_window_from(
         session_id,
@@ -335,6 +379,7 @@ fn load_conversation_with_tail_window(
         loaders,
         tail_window_limit,
         codex_home.as_deref(),
+        mark_resolved_queued_prompts,
     )
 }
 
@@ -345,6 +390,7 @@ fn load_conversation_with_tail_window_from(
     loaders: &RouteLoaders,
     tail_window_limit: Option<usize>,
     codex_home: Option<&Path>,
+    mark_resolved_queued_prompts: bool,
 ) -> Result<Option<ConversationResponse>> {
     let Some(mut session) = load_session(session_id)? else {
         return Ok(None);
@@ -428,11 +474,13 @@ fn load_conversation_with_tail_window_from(
         );
         resolve_peer_session_titles(&mut cached.conversation.messages, &mut load_session)?;
         cached.conversation.update_metadata();
-        cache::mark_resolved_queued_prompts(
-            loaders,
-            session_id,
-            &cached.resolved_queued_prompt_ids,
-        );
+        if mark_resolved_queued_prompts {
+            cache::mark_resolved_queued_prompts(
+                loaders,
+                session_id,
+                &cached.resolved_queued_prompt_ids,
+            );
+        }
         return Ok(Some(cached.conversation));
     }
 
@@ -507,7 +555,9 @@ fn load_conversation_with_tail_window_from(
     }
     conversation.initial_epoch = tail_window_limit.is_some() && session.engine == Engine::Claude;
 
-    cache::mark_resolved_queued_prompts(loaders, session_id, &resolved_queued_prompt_ids);
+    if mark_resolved_queued_prompts {
+        cache::mark_resolved_queued_prompts(loaders, session_id, &resolved_queued_prompt_ids);
+    }
     if !used_tail_window {
         loaders.message_cache.insert(
             session_id,
@@ -951,6 +1001,7 @@ mod tests {
                 &loaders,
                 None,
                 Some(codex_home.path()),
+                true,
             )
         })
         .unwrap()

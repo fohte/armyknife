@@ -50,7 +50,7 @@ pub(super) async fn preview(
         return Err(ApiError::conflict("session has ended"));
     }
     validate_request(&request)?;
-    validate_transcript(&session, &request).await?;
+    validate_message_source(state.clone(), &session, &request).await?;
     Ok(Json(PreviewResponse {
         cwd: session.cwd.display().to_string(),
     }))
@@ -77,7 +77,7 @@ pub(super) async fn execute(
         .try_lock_owned()
         .map_err(|_| ApiError::conflict("this command is already running"))?;
 
-    validate_transcript(&session, &request).await?;
+    validate_message_source(state.clone(), &session, &request).await?;
 
     let sessions_dir =
         resolve_sessions_dir(state.sessions_dir.clone()).map_err(ApiError::internal)?;
@@ -153,22 +153,52 @@ fn command_script(commands: &[String]) -> String {
     script
 }
 
-async fn validate_transcript(session: &Session, request: &ExecuteRequest) -> Result<(), ApiError> {
-    let transcript_path = session
-        .transcript_path
-        .clone()
-        .ok_or_else(|| ApiError::conflict("session has no transcript"))?;
+async fn validate_message_source(
+    state: ActionState,
+    session: &Session,
+    request: &ExecuteRequest,
+) -> Result<(), ApiError> {
     let expected_message = request.message_text.clone();
     let expected_commands = request.commands.clone();
+    if let Some(transcript_path) = session.transcript_path.clone()
+        && run_blocking({
+            let expected_message = expected_message.clone();
+            let expected_commands = expected_commands.clone();
+            move || {
+                transcript_contains_commands(
+                    &transcript_path,
+                    &expected_message,
+                    &expected_commands,
+                )
+            }
+        })
+        .await?
+    {
+        return Ok(());
+    }
+
+    let sessions_dir =
+        resolve_sessions_dir(state.sessions_dir.clone()).map_err(ApiError::internal)?;
+    let message_loaders = state.message_loaders.clone();
+    let session_id = session.session_id.clone();
     let found = run_blocking(move || {
-        transcript_contains_commands(&transcript_path, &expected_message, &expected_commands)
+        if !transcript::commands_are_candidates(&expected_message, &expected_commands) {
+            return Ok(false);
+        }
+        super::super::messages::conversation_contains_markdown_source(
+            &session_id,
+            |id| store::load_session_from(&sessions_dir, id),
+            |id| store::watch_web_user_marker_from(&sessions_dir, id),
+            &message_loaders,
+            &expected_message,
+        )
     })
     .await?;
     if found {
         Ok(())
     } else {
         Err(ApiError::conflict(
-            "the selected command is not present in the agent transcript",
+            "the selected command is not present in the session conversation",
         ))
     }
 }

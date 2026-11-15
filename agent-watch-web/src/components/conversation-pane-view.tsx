@@ -14,6 +14,7 @@ import {
 import { ConversationPaneHeader } from '#components/conversation-pane-header'
 import { ConversationSelectionReply } from '#components/conversation-selection-reply'
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
+import { MarkdownCommandContextProvider } from '#components/markdown-command-context'
 import { MessageComposer } from '#components/message-composer'
 import type {
   PendingPermissionActions,
@@ -370,7 +371,12 @@ export function ConversationPaneView({
         {!loading && conversationMessageCount === 0 && activeTool == null ? (
           <p className="conversation-status">No messages yet.</p>
         ) : null}
-        {conversationMessageElements}
+        <MarkdownCommandContextProvider
+          sessionId={session.id}
+          {...(onCommandExecuted === undefined ? {} : { onCommandExecuted })}
+        >
+          {conversationMessageElements}
+        </MarkdownCommandContextProvider>
       </div>
 
       {session.isCompacting === true ||
