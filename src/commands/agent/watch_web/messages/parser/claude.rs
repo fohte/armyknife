@@ -1476,7 +1476,7 @@ mod tests {
     #[test]
     fn renders_check_in_notification_with_trailing_guidance_as_a_system_event() {
         let transcript = indoc! {r#"
-            {"type":"user","message":{"content":"<task-notification><summary>Fixture task remains active</summary></task-notification>\nThis is a check-in. The next check-in follows after more silence."}}
+            {"type":"user","message":{"content":"<task-notification><summary>Fixture task remains active</summary></task-notification>\nThis is a check-in, not a completion. The fictional task may be working quietly."}}
         "#};
 
         assert_eq!(
@@ -1484,6 +1484,24 @@ mod tests {
             vec![ChatItem::Event {
                 kind: super::super::super::EventKind::System,
                 text: "Fixture task remains active".to_string(),
+                timestamp: None,
+                failed: false,
+            }],
+        );
+    }
+
+    #[test]
+    fn renders_task_notification_with_system_reminder_as_a_combined_system_event() {
+        let transcript = indoc! {r#"
+            {"type":"user","origin":{"kind":"task-notification","producer":"session-task"},"message":{"content":"<task-notification><summary>Fixture long-running command</summary></task-notification>\n<system-reminder>Reminder for the fictional worker: background work continues.</system-reminder>"}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
+            vec![ChatItem::Event {
+                kind: super::super::super::EventKind::System,
+                text: "Fixture long-running command: Reminder for the fictional worker: background work continues."
+                    .to_string(),
                 timestamp: None,
                 failed: false,
             }],

@@ -2,6 +2,7 @@ use serde_json::Value;
 
 use crate::commands::agent::peer_message::{
     ANOTHER_PEER_SESSION_MESSAGE_PREFIX, PEER_MESSAGE_END_MARKER, PEER_MESSAGE_START_TAG,
+    task_notification_envelope,
 };
 
 mod system_record;
@@ -257,12 +258,12 @@ fn task_notification_reminder(record: &Value, text: &str) -> Option<MessageKind>
 }
 
 fn task_notification_and_reminder(text: &str) -> Option<(&str, &str)> {
-    let text = text.trim();
-    let notification_body = text
+    let envelope = task_notification_envelope(text)?;
+    let notification_body = envelope
+        .notification
         .strip_prefix("<task-notification>")?
-        .split_once("</task-notification>")?;
-    let (notification_body, reminder) = notification_body;
-    let (reminder_tag, reminder_body) = tagged_body(reminder.trim())?;
+        .strip_suffix("</task-notification>")?;
+    let (reminder_tag, reminder_body) = tagged_body(envelope.trailing_text.trim())?;
     (reminder_tag == "system-reminder").then_some((notification_body, reminder_body))
 }
 

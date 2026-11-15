@@ -5821,7 +5821,7 @@ mod tests {
                 <task-notification>
                 <summary>Fixture task remains active</summary>
                 </task-notification>
-                This is a check-in. The next check-in follows after more silence.
+                This is a check-in, not a completion. The fictional task may be working quietly.
             "},
             "previous"
         )]
@@ -5829,6 +5829,11 @@ mod tests {
         #[case::human_quoting_notification(
             None,
             "Please inspect this quoted notification: <task-notification>Fixture text</task-notification>",
+            "updated"
+        )]
+        #[case::human_starts_with_quoted_notification(
+            None,
+            "<task-notification><summary>Fixture text</summary></task-notification>\nPlease explain this quoted notification.",
             "updated"
         )]
         #[case::subagent(Some("subagent-id"), "Continue the review.", "previous")]
@@ -5868,12 +5873,17 @@ mod tests {
             let session = store::load_session_from(temp_dir.path(), "test-123")
                 .expect("session should load")
                 .expect("session should exist");
-            let prompt_timestamp = match session.last_prompted_at {
-                Some(timestamp) if timestamp == previous_prompt_at => "previous",
-                Some(_) => "updated",
-                None => "missing",
-            };
-            assert_eq!(prompt_timestamp, expected_prompt_timestamp);
+            let prompt_timestamp_state = (
+                session.last_prompted_at == Some(previous_prompt_at),
+                session.last_prompted_at == Some(session.updated_at),
+            );
+            assert_eq!(
+                prompt_timestamp_state,
+                (
+                    expected_prompt_timestamp == "previous",
+                    expected_prompt_timestamp == "updated",
+                ),
+            );
         }
 
         #[rstest]
