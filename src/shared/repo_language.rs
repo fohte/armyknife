@@ -1,7 +1,21 @@
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use crate::infra::git;
 use serde_json::Value;
+
+pub(crate) fn copier_answers_path_for_current_repo(
+    expected_repo_id: Option<&str>,
+) -> Option<PathBuf> {
+    let repo = git::open_repo().ok()?;
+    if let Some(expected_repo_id) = expected_repo_id {
+        let (owner, name) = git::github_owner_and_repo(&repo).ok()?;
+        if format!("{owner}/{name}") != expected_repo_id {
+            return None;
+        }
+    }
+    Some(repo.workdir().join(".copier-answers.yml"))
+}
 
 pub(crate) async fn resolve_repo_language<F, Fut>(
     configured: Option<Value>,

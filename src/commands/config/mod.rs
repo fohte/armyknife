@@ -1,11 +1,9 @@
-use std::path::PathBuf;
-
 use clap::Subcommand;
 
 use crate::infra::git;
 use crate::infra::github::{GitHubClient, RepoClient};
 use crate::shared::config;
-use crate::shared::repo_language::resolve_repo_language;
+use crate::shared::repo_language::{copier_answers_path_for_current_repo, resolve_repo_language};
 
 /// Configuration management commands.
 #[derive(Subcommand, Clone, PartialEq, Eq)]
@@ -67,19 +65,6 @@ async fn run_get(key: &str) -> anyhow::Result<()> {
         anyhow::bail!("key not found: {key}");
     }
     Ok(())
-}
-
-pub(crate) fn copier_answers_path_for_current_repo(
-    expected_repo_id: Option<&str>,
-) -> Option<PathBuf> {
-    let repo = git::open_repo().ok()?;
-    if let Some(expected_repo_id) = expected_repo_id {
-        let (owner, name) = git::github_owner_and_repo(&repo).ok()?;
-        if format!("{owner}/{name}") != expected_repo_id {
-            return None;
-        }
-    }
-    Some(repo.workdir().join(".copier-answers.yml"))
 }
 
 /// Format a resolved config value for stdout. Scalars render bare (preserving

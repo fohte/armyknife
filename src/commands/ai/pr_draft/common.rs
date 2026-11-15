@@ -11,7 +11,7 @@ use crate::infra::git;
 use crate::infra::github::{self, RepoClient};
 use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::{ApprovalManager, DocumentSchema, HumanInTheLoopError};
-use crate::shared::repo_language::resolve_repo_language;
+use crate::shared::repo_language::{copier_answers_path_for_current_repo, resolve_repo_language};
 use crate::shared::yaml_frontmatter;
 
 #[derive(Error, Debug)]
@@ -387,8 +387,7 @@ pub async fn repo_allows_japanese(
 ) -> anyhow::Result<bool> {
     let config = load_config()?;
     let repo_id = format!("{owner}/{repo}");
-    let copier_answers_path =
-        crate::commands::config::copier_answers_path_for_current_repo(Some(&repo_id));
+    let copier_answers_path = copier_answers_path_for_current_repo(Some(&repo_id));
     let language = resolve_repo_language(
         config.get_value("repo.language", Some(&repo_id)),
         copier_answers_path.as_deref(),
