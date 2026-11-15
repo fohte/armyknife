@@ -286,27 +286,41 @@ impl CodexParserState {
                 payload.get("type").and_then(Value::as_str),
                 Some("task_complete" | "turn_aborted")
             ) {
-                if payload.get("type").and_then(Value::as_str) == Some("task_complete") {
+                let is_task_complete =
+                    payload.get("type").and_then(Value::as_str) == Some("task_complete");
+                let (failed_task_complete, failure_reason) = if is_task_complete {
                     let message = payload.get("message").and_then(Value::as_str);
                     let has_error_info = payload
                         .get("codex_error_info")
                         .is_some_and(|error_info| !error_info.is_null());
-                    if message.is_some() || has_error_info {
-                        let reason = message
+                    let failed = message.is_some() || has_error_info;
+                    let reason = if failed {
+                        message
                             .filter(|message| !message.trim().is_empty())
                             .map(|message| CodexText::new(message.to_owned()))
-                            .transpose()?;
-                        effects.push(CodexEffect::TurnFailed { reason, timestamp });
-                    }
-                }
+                            .transpose()?
+                    } else {
+                        None
+                    };
+                    (failed, reason)
+                } else {
+                    (false, None)
+                };
                 // Missing tool outputs must not suppress actions from the next turn.
-                let failed = payload.get("type").and_then(Value::as_str) == Some("turn_aborted");
+                let failed = payload.get("type").and_then(Value::as_str) == Some("turn_aborted")
+                    || failed_task_complete;
                 for pending in self.pending_tool_calls.drain(..) {
                     effects.push(CodexEffect::ToolAction(codex_tool_summary_record(
                         &pending.name,
                         pending.input.as_ref(),
                         failed,
                     )));
+                }
+                if failed_task_complete {
+                    effects.push(CodexEffect::TurnFailed {
+                        reason: failure_reason,
+                        timestamp,
+                    });
                 }
             } else if payload.get("type").and_then(Value::as_str) == Some("item_completed")
                 && let Some(item) = payload.get("item")
@@ -1259,6 +1273,21 @@ mod tests {
             timestamp: None,
         }],
     )]
+    #[case::message_only_failure(
+        json!({
+            "type": "event_msg",
+            "payload": {
+                "type": "task_complete",
+                "message": "Synthetic request rejected.",
+            },
+        }),
+        vec![ChatItem::Event {
+            kind: EventKind::System,
+            text: "Codex turn failed: Synthetic request rejected.".to_string(),
+            failed: true,
+            timestamp: None,
+        }],
+    )]
     #[case::successful_completion(
         json!({
             "type": "event_msg",
@@ -1352,6 +1381,30 @@ mod tests {
                     operation("FileChange", Some("src/fixture.rs")),
                 ],
             }]
+        );
+    }
+
+    #[test]
+    fn failure_marked_task_complete_marks_pending_tool_calls_failed() {
+        let transcript = indoc! {r#"
+            {"type":"response_item","payload":{"type":"custom_tool_call","call_id":"fixture-call","name":"exec","input":"echo fixture"}}
+            {"type":"event_msg","payload":{"type":"task_complete","codex_error_info":"other"}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None).unwrap(),
+            vec![
+                ChatItem::ToolSummary {
+                    summary: "exec ×1 · 1 failed".to_string(),
+                    operations: vec![operation_with_failure("exec", Some("echo fixture"), true)],
+                },
+                ChatItem::Event {
+                    kind: EventKind::System,
+                    text: "Codex turn failed.".to_string(),
+                    failed: true,
+                    timestamp: None,
+                },
+            ],
         );
     }
 
