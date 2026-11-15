@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.723](https://github.com/fohte/armyknife/compare/v0.1.722...v0.1.723) (2026-11-15)
+
+
+### Bug Fixes
+
+* **watch-web:** place denials by creation time ([#1828](https://github.com/fohte/armyknife/issues/1828)) ([c92799d](https://github.com/fohte/armyknife/commit/c92799d3e740269ff30ed121b08f39ff2b48b091))
+
 ## [0.1.722](https://github.com/fohte/armyknife/compare/v0.1.721...v0.1.722) (2026-11-15)
 
 
