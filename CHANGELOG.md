@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.732](https://github.com/fohte/armyknife/compare/v0.1.731...v0.1.732) (2026-11-15)
+
+
+### Bug Fixes
+
+* **ai/review:** wait for Devin commit status ([#1846](https://github.com/fohte/armyknife/issues/1846)) ([757d6f4](https://github.com/fohte/armyknife/commit/757d6f4ceacbdb6d427b3c4d6ebd8945e845520e))
+
 ## [0.1.731](https://github.com/fohte/armyknife/compare/v0.1.730...v0.1.731) (2026-11-15)
 
 
