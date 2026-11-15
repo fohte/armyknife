@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use std::io::{self, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use crate::infra::git::{GitRepo, MergeStatus, get_merge_status_for_repo, get_repo_root};
@@ -219,6 +219,7 @@ async fn check_merge_status(
             let branch = branch.to_string();
             async move { get_merge_status_for_repo(&repo_for_status, &branch).await }
         },
+        confirm_unmerged_deletion,
     )
     .await
 }
@@ -229,6 +230,7 @@ async fn check_merge_status_with<F, G, Fut>(
     unmerged_policy: UnmergedWorktreePolicy,
     branch_exists: F,
     get_status: G,
+    confirm: impl FnOnce() -> bool,
 ) -> Result<Option<MergeStatus>>
 where
     F: FnOnce(&str) -> bool,
@@ -249,18 +251,50 @@ where
             branch,
             merge_status.reason()
         );
-        print!("Delete anyway? [y/N] ");
-        io::stdout().flush().ok();
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).ok();
-        if !input.trim().eq_ignore_ascii_case("y") {
-            println!("Cancelled.");
+        if !confirm() {
             return Err(WmError::Cancelled.into());
         }
     }
 
     Ok(Some(merge_status))
+}
+
+fn confirm_unmerged_deletion() -> bool {
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    confirm_unmerged_deletion_with(&mut stdin.lock(), &mut stdout.lock(), stdin.is_terminal())
+}
+
+fn confirm_unmerged_deletion_with<R: BufRead, W: Write>(
+    input: &mut R,
+    output: &mut W,
+    stdin_is_terminal: bool,
+) -> bool {
+    if !stdin_is_terminal {
+        writeln!(
+            output,
+            "Cancelled: stdin is not a terminal; input was not accepted as confirmation."
+        )
+        .ok();
+        return false;
+    }
+
+    if write!(output, "Delete anyway? [y/N] ")
+        .and_then(|()| output.flush())
+        .is_err()
+    {
+        writeln!(output, "Cancelled.").ok();
+        return false;
+    }
+
+    let mut line = String::new();
+    input.read_line(&mut line).ok();
+    if line.trim().eq_ignore_ascii_case("y") {
+        true
+    } else {
+        writeln!(output, "\nCancelled.").ok();
+        false
+    }
 }
 
 /// Resolve the worktree path from the argument or current directory.
@@ -303,6 +337,7 @@ fn resolve_worktree_path_with_repo_root(
 
 #[cfg(test)]
 mod tests {
+    use indoc::indoc;
     use rstest::rstest;
 
     use super::*;
@@ -325,6 +360,7 @@ mod tests {
                     reason: "PR #42 merged".to_string(),
                 })
             },
+            || true,
         )
         .await
         .expect("merge status");
@@ -352,6 +388,7 @@ mod tests {
                     reason: "pull request is still open".to_string(),
                 })
             },
+            || true,
         )
         .await;
 
@@ -361,6 +398,99 @@ mod tests {
                 "Branch `feature` is not merged (pull request is still open); close the session while keeping its worktree to continue"
                     .to_string(),
             ),
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_piped_confirmation_for_unmerged_worktrees() {
+        let mut reader = io::Cursor::new("y\n".as_bytes());
+        let mut output = Vec::new();
+        let result = check_merge_status_with(
+            Some("feature"),
+            false,
+            UnmergedWorktreePolicy::Confirm,
+            |_| true,
+            |_| {
+                std::future::ready(MergeStatus::NotMerged {
+                    reason: "pull request is still open".to_string(),
+                })
+            },
+            || confirm_unmerged_deletion_with(&mut reader, &mut output, false),
+        )
+        .await;
+
+        let mut unread = String::new();
+        io::Read::read_to_string(&mut reader, &mut unread).expect("read remaining input");
+        assert_eq!(
+            (
+                result.err().map(|error| error.to_string()),
+                String::from_utf8(output).expect("utf8 output"),
+                unread,
+            ),
+            (
+                Some("Cancelled: no prompt provided".to_string()),
+                "Cancelled: stdin is not a terminal; input was not accepted as confirmation.\n"
+                    .to_string(),
+                "y\n".to_string(),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn force_skips_confirmation_for_unmerged_worktrees() {
+        let result = check_merge_status_with(
+            Some("feature"),
+            true,
+            UnmergedWorktreePolicy::Confirm,
+            |_| true,
+            |_| {
+                std::future::ready(MergeStatus::NotMerged {
+                    reason: "pull request is still open".to_string(),
+                })
+            },
+            || panic!("force must skip the confirmation"),
+        )
+        .await
+        .expect("force bypasses confirmation");
+
+        assert_eq!(
+            result,
+            Some(MergeStatus::NotMerged {
+                reason: "pull request is still open".to_string(),
+            }),
+        );
+    }
+
+    #[rstest]
+    #[case::non_terminal_rejects_piped_y(false, "y\n", (false, "Cancelled: stdin is not a terminal; input was not accepted as confirmation.\n", "y\n"))]
+    #[case::terminal_accepts_y(true, "y\n", (true, "Delete anyway? [y/N] ", ""))]
+    #[case::terminal_rejects_n(
+        true,
+        "n\n",
+        (false, indoc! {"
+            Delete anyway? [y/N]
+            Cancelled.
+        "}, ""),
+    )]
+    fn unmerged_confirmation_requires_terminal_input(
+        #[case] stdin_is_terminal: bool,
+        #[case] input: &str,
+        #[case] expected: (bool, &str, &str),
+    ) {
+        let mut reader = io::Cursor::new(input.as_bytes());
+        let mut output = Vec::new();
+
+        let confirmed = confirm_unmerged_deletion_with(&mut reader, &mut output, stdin_is_terminal);
+        let mut unread = String::new();
+        io::Read::read_to_string(&mut reader, &mut unread).expect("read remaining input");
+
+        assert_eq!(
+            (
+                confirmed,
+                String::from_utf8(output).expect("utf8 output").as_str(),
+                unread.as_str(),
+            ),
+            expected,
         );
     }
 

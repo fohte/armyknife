@@ -92,8 +92,9 @@ pub async fn run(args: &CleanArgs) -> Result<()> {
         return Ok(());
     }
 
-    if !confirm_deletion(args.yes, &mut io::stdin().lock(), &mut io::stdout()) {
-        println!("Cancelled.");
+    if !confirm_deletion(args.yes, &mut io::stdin().lock(), &mut io::stdout(), || {
+        io::stdin().is_terminal()
+    }) {
         return Ok(());
     }
 
@@ -264,8 +265,9 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
         return Ok(());
     }
 
-    if !confirm_deletion(args.yes, &mut io::stdin().lock(), &mut io::stdout()) {
-        println!("Cancelled.");
+    if !confirm_deletion(args.yes, &mut io::stdin().lock(), &mut io::stdout(), || {
+        io::stdin().is_terminal()
+    }) {
         return Ok(());
     }
 
@@ -479,9 +481,23 @@ fn render_worktrees_table<W: Write>(
 }
 
 /// Prompt user for confirmation; `yes` skips the prompt without reading input.
-fn confirm_deletion<R: BufRead, W: Write>(yes: bool, input: &mut R, output: &mut W) -> bool {
+fn confirm_deletion<R: BufRead, W: Write>(
+    yes: bool,
+    input: &mut R,
+    output: &mut W,
+    stdin_is_terminal: impl FnOnce() -> bool,
+) -> bool {
     if yes {
         return true;
+    }
+
+    if !stdin_is_terminal() {
+        writeln!(
+            output,
+            "Cancelled: stdin is not a terminal; input was not accepted as confirmation."
+        )
+        .ok();
+        return false;
     }
 
     // An unseen prompt must not let piped input confirm the deletion.
@@ -489,12 +505,18 @@ fn confirm_deletion<R: BufRead, W: Write>(yes: bool, input: &mut R, output: &mut
         .and_then(|()| output.flush())
         .is_err()
     {
+        writeln!(output, "Cancelled.").ok();
         return false;
     }
 
     let mut line = String::new();
     input.read_line(&mut line).ok();
-    line.trim().eq_ignore_ascii_case("y")
+    if line.trim().eq_ignore_ascii_case("y") {
+        true
+    } else {
+        writeln!(output, "\nCancelled.").ok();
+        false
+    }
 }
 
 /// Prints the indented detail lines for a successful worktree cleanup
@@ -677,27 +699,52 @@ mod tests {
         assert_eq!(clean_args, Some((true, true, true, expected_yes)));
     }
 
-    /// Returns (confirmed, prompt written, input left unread).
+    /// Returns (confirmed, output written, input left unread).
     #[rstest]
-    #[case::yes_skips_prompt(true, "n\n", (true, "", "n\n"))]
-    #[case::prompt_accepts_y(false, "y\n", (true, "\nDelete these worktrees? [y/N] ", ""))]
-    #[case::prompt_rejects_n(false, "n\n", (false, "\nDelete these worktrees? [y/N] ", ""))]
-    #[case::prompt_rejects_eof(false, "", (false, "\nDelete these worktrees? [y/N] ", ""))]
+    #[case::yes_skips_prompt(true, false, "n\n", (true, false, "", "n\n"))]
+    #[case::prompt_accepts_y(false, true, "y\n", (true, true, "\nDelete these worktrees? [y/N] ", ""))]
+    #[case::prompt_rejects_n(
+        false,
+        true,
+        "n\n",
+        (false, true, indoc! {"
+
+            Delete these worktrees? [y/N]
+            Cancelled.
+        "}, ""),
+    )]
+    #[case::prompt_rejects_eof(
+        false,
+        true,
+        "",
+        (false, true, indoc! {"
+
+            Delete these worktrees? [y/N]
+            Cancelled.
+        "}, ""),
+    )]
+    #[case::non_terminal_rejects_piped_y(false, false, "y\n", (false, true, "Cancelled: stdin is not a terminal; input was not accepted as confirmation.\n", "y\n"))]
     fn test_confirm_deletion(
         #[case] yes: bool,
+        #[case] stdin_is_terminal: bool,
         #[case] input: &str,
-        #[case] expected: (bool, &str, &str),
+        #[case] expected: (bool, bool, &str, &str),
     ) {
         let mut reader = io::Cursor::new(input.as_bytes());
         let mut output = Vec::new();
 
-        let confirmed = confirm_deletion(yes, &mut reader, &mut output);
+        let mut terminal_check_invoked = false;
+        let confirmed = confirm_deletion(yes, &mut reader, &mut output, || {
+            terminal_check_invoked = true;
+            stdin_is_terminal
+        });
 
         let mut unread = String::new();
         io::Read::read_to_string(&mut reader, &mut unread).expect("read remaining input");
         assert_eq!(
             (
                 confirmed,
+                terminal_check_invoked,
                 String::from_utf8(output).expect("utf8 prompt").as_str(),
                 unread.as_str()
             ),
@@ -721,7 +768,7 @@ mod tests {
     fn test_confirm_deletion_declines_when_prompt_cannot_be_written() {
         let mut reader = io::Cursor::new("y\n".as_bytes());
 
-        let confirmed = confirm_deletion(false, &mut reader, &mut ClosedWriter);
+        let confirmed = confirm_deletion(false, &mut reader, &mut ClosedWriter, || true);
 
         let mut unread = String::new();
         io::Read::read_to_string(&mut reader, &mut unread).expect("read remaining input");
