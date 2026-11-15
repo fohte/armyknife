@@ -19,7 +19,7 @@ pub(crate) mod test_support {
 
     use rstest::fixture;
 
-    use super::{AgentConfig, AgentStatusConfig, AgentStatusState, AgentStatusWebKind};
+    use super::{AgentConfig, AgentStatusConfig, AgentStatusState};
 
     #[fixture]
     pub(crate) fn agent_config() -> AgentConfig {
@@ -29,21 +29,18 @@ pub(crate) mod test_support {
                     "needs_attention".to_string(),
                     AgentStatusConfig {
                         state: AgentStatusState::User,
-                        watch_web_kind: AgentStatusWebKind::Question,
                     },
                 ),
                 (
                     "awaiting_build".to_string(),
                     AgentStatusConfig {
                         state: AgentStatusState::Waiting,
-                        watch_web_kind: AgentStatusWebKind::Stopped,
                     },
                 ),
                 (
                     "finished_work".to_string(),
                     AgentStatusConfig {
                         state: AgentStatusState::Done,
-                        watch_web_kind: AgentStatusWebKind::Stopped,
                     },
                 ),
             ]),
@@ -55,10 +52,8 @@ pub(crate) mod test_support {
 #[cfg(feature = "schema-gen")]
 mod schema;
 mod work_type;
-pub use agent::{
-    AgentConfig, BgTaskReminderConfig, CodexStatusInferenceConfig, StatusInferenceStatusConfig,
-};
-pub use agent_status::{AgentStatusConfig, AgentStatusState, AgentStatusWebKind};
+pub use agent::{AgentConfig, BgTaskReminderConfig};
+pub use agent_status::{AgentStatusConfig, AgentStatusState};
 pub use codex::CodexConfig;
 use env_overlay::env_overlay;
 pub use launch_profile::{
@@ -822,7 +817,6 @@ mod tests {
     use super::env_overlay::env_overlay_from;
     use super::*;
     use crate::commands::agent::types::ReasoningEffort;
-    use crate::shared::testing::capture_json_events;
     use indoc::{formatdoc, indoc};
     use rstest::{fixture, rstest};
     use std::fs;
@@ -877,8 +871,6 @@ mod tests {
                     profiles: HashMap::new(),
                     merge_notification: None,
                     stop_hook_instruction: None,
-                    status_inference_prompt: None,
-                    codex_status_inference: CodexStatusInferenceConfig::default(),
                     bg_task_reminder: BgTaskReminderConfig::default(),
                     codex: CodexConfig {
                         model: None,
@@ -1018,7 +1010,6 @@ mod tests {
         let yaml = indoc! {"
             agent:
               stop_hook_instruction: Please summarize the result before stopping.
-              status_inference_prompt: 'Infer the current status and return JSON with kind and note.'
         "};
         let config: Config = serde_yaml::from_str(yaml).unwrap();
 
@@ -1028,222 +1019,13 @@ mod tests {
                 stop_hook_instruction: Some(
                     "Please summarize the result before stopping.".to_string()
                 ),
-                status_inference_prompt: Some(
-                    "Infer the current status and return JSON with kind and note.".to_string()
-                ),
                 ..Default::default()
             }
         );
     }
 
     #[test]
-    fn status_inference_prompt_round_trips_through_yaml() {
-        let config = Config {
-            agent: AgentConfig {
-                status_inference_prompt: Some(
-                    indoc! {"
-                        Infer the current status from the full conversation.
-                        Return one JSON object with kind and note.
-                    "}
-                    .to_string(),
-                ),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let yaml = serde_yaml::to_string(&config).unwrap();
-        let round_tripped: Config = serde_yaml::from_str(&yaml).unwrap();
-
-        assert_eq!(round_tripped, config);
-    }
-
-    #[fixture]
-    fn valid_codex_inference_agent_config() -> AgentConfig {
-        AgentConfig {
-            status_inference_prompt: Some("Classify the stopped work.".to_string()),
-            codex_status_inference: CodexStatusInferenceConfig {
-                enabled: true,
-                shadow_mode: true,
-                failure_status: Some(StatusInferenceStatusConfig {
-                    kind: "needs_review".to_string(),
-                    note: "status inference failure investigation".to_string(),
-                }),
-                background_status: Some(StatusInferenceStatusConfig {
-                    kind: "waiting_on_worker".to_string(),
-                    note: "background task completion".to_string(),
-                }),
-            },
-            statuses: HashMap::from([
-                (
-                    "needs_review".to_string(),
-                    AgentStatusConfig {
-                        state: AgentStatusState::User,
-                        watch_web_kind: AgentStatusWebKind::Review,
-                    },
-                ),
-                (
-                    "waiting_on_worker".to_string(),
-                    AgentStatusConfig {
-                        state: AgentStatusState::Waiting,
-                        watch_web_kind: AgentStatusWebKind::Stopped,
-                    },
-                ),
-                (
-                    "work_wrapped".to_string(),
-                    AgentStatusConfig {
-                        state: AgentStatusState::Done,
-                        watch_web_kind: AgentStatusWebKind::Stopped,
-                    },
-                ),
-            ]),
-            ..AgentConfig::default()
-        }
-    }
-
-    #[rstest]
-    fn parse_codex_status_inference_config(valid_codex_inference_agent_config: AgentConfig) {
-        let yaml = indoc! {"
-            agent:
-              status_inference_prompt: Classify the stopped work.
-              statuses:
-                needs_review: { state: user, watch_web_kind: review }
-                waiting_on_worker: { state: waiting }
-                work_wrapped: { state: done }
-              codex_status_inference:
-                enabled: true
-                shadow_mode: true
-                failure_status:
-                  kind: needs_review
-                  note: status inference failure investigation
-                background_status:
-                  kind: waiting_on_worker
-                  note: background task completion
-        "};
-        let config: Config = serde_yaml::from_str(yaml).unwrap();
-        let validation = config.agent.validate();
-
-        assert_eq!(
-            (config.agent, validation),
-            (valid_codex_inference_agent_config, Ok(())),
-        );
-    }
-
-    #[derive(Clone, Copy)]
-    enum InvalidCodexInferenceConfig {
-        MissingFailureStatus,
-        MissingBackgroundStatus,
-        UnknownKind,
-        EmptyKind,
-        MultilineNote,
-        UnicodeLineSeparator,
-        MissingPrompt,
-    }
-
-    #[rstest]
-    #[case::missing_failure_status(
-        InvalidCodexInferenceConfig::MissingFailureStatus,
-        Err("agent.codex_status_inference.failure_status is required when Codex inference is enabled".to_string())
-    )]
-    #[case::missing_background_status(
-        InvalidCodexInferenceConfig::MissingBackgroundStatus,
-        Err("agent.codex_status_inference.background_status is required when Codex inference is enabled".to_string())
-    )]
-    #[case::unknown_kind(
-        InvalidCodexInferenceConfig::UnknownKind,
-        Err("agent.codex_status_inference.failure_status.kind `unknown_kind` is not configured in agent.statuses".to_string())
-    )]
-    #[case::empty_kind(
-        InvalidCodexInferenceConfig::EmptyKind,
-        Err("agent.codex_status_inference.failure_status.kind must not be empty".to_string())
-    )]
-    #[case::multiline_note(
-        InvalidCodexInferenceConfig::MultilineNote,
-        Err("agent.codex_status_inference.failure_status.note must be a single line".to_string())
-    )]
-    #[case::unicode_line_separator(
-        InvalidCodexInferenceConfig::UnicodeLineSeparator,
-        Err("agent.codex_status_inference.failure_status.note must be a single line".to_string())
-    )]
-    #[case::missing_prompt(
-        InvalidCodexInferenceConfig::MissingPrompt,
-        Err("agent.status_inference_prompt and at least one agent.statuses entry are required".to_string())
-    )]
-    fn enabled_codex_inference_rejects_incomplete_configuration(
-        #[case] invalid: InvalidCodexInferenceConfig,
-        #[case] expected_error: std::result::Result<(), String>,
-        mut valid_codex_inference_agent_config: AgentConfig,
-    ) {
-        let config = &mut valid_codex_inference_agent_config;
-        match invalid {
-            InvalidCodexInferenceConfig::MissingFailureStatus => {
-                config.codex_status_inference.failure_status = None;
-            }
-            InvalidCodexInferenceConfig::MissingBackgroundStatus => {
-                config.codex_status_inference.background_status = None;
-            }
-            InvalidCodexInferenceConfig::UnknownKind => {
-                if let Some(failure_status) = &mut config.codex_status_inference.failure_status {
-                    failure_status.kind = "unknown_kind".to_string();
-                }
-            }
-            InvalidCodexInferenceConfig::EmptyKind => {
-                if let Some(failure_status) = &mut config.codex_status_inference.failure_status {
-                    failure_status.kind = "  ".to_string();
-                }
-            }
-            InvalidCodexInferenceConfig::MultilineNote => {
-                if let Some(failure_status) = &mut config.codex_status_inference.failure_status {
-                    failure_status.note = "first line\nsecond line".to_string();
-                }
-            }
-            InvalidCodexInferenceConfig::UnicodeLineSeparator => {
-                if let Some(failure_status) = &mut config.codex_status_inference.failure_status {
-                    failure_status.note = "first second".to_string();
-                }
-            }
-            InvalidCodexInferenceConfig::MissingPrompt => {
-                config.status_inference_prompt = None;
-            }
-        }
-
-        assert_eq!(
-            (
-                config.validate(),
-                config.configured_codex_status_inference().is_some(),
-            ),
-            (expected_error, false),
-        );
-    }
-
-    #[test]
-    fn invalid_enabled_codex_inference_logs_a_warning_when_disabled() {
-        let config = AgentConfig {
-            codex_status_inference: CodexStatusInferenceConfig {
-                enabled: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let (configured, log_events) = capture_json_events(tracing::Level::WARN, || {
-            config.configured_codex_status_inference().is_some()
-        });
-
-        assert_eq!(
-            (configured, log_events),
-            (
-                false,
-                vec![serde_json::json!({
-                    "event": "agent.status_inference.config_invalid",
-                    "error": "agent.status_inference_prompt and at least one agent.statuses entry are required",
-                    "message": "Codex status inference is disabled because its configuration is invalid",
-                })],
-            ),
-        );
-    }
-
-    #[test]
-    fn load_config_accepts_invalid_optional_agent_settings() {
+    fn load_config_accepts_optional_profile_values() {
         let config_home = TempDir::new().unwrap();
         let config_dir = config_home.path().join("armyknife");
         std::fs::create_dir_all(&config_dir).unwrap();
@@ -1251,12 +1033,6 @@ mod tests {
             config_dir.join("config.yaml"),
             indoc! {"
                 agent:
-                  status_inference_prompt: Classify the stopped work.
-                  statuses:
-                    follow_up_needed: { state: user }
-                  codex_status_inference:
-                    enabled: true
-                    failure_status: { kind: follow_up_needed, note: investigate failure }
                   profiles:
                     sample-profile:
                       empty-model:
@@ -1271,30 +1047,20 @@ mod tests {
         .unwrap();
         let config_home = config_home.path().to_str().unwrap().to_string();
 
-        let result = temp_env::with_vars(
-            [
-                ("XDG_CONFIG_HOME", Some(config_home.as_str())),
-                (
-                    "ARMYKNIFE_AGENT__CODEX_STATUS_INFERENCE__ENABLED",
-                    None::<&str>,
-                ),
-            ],
-            || {
-                let config = load_config()?;
-                let profile = &config.agent.profiles["sample-profile"];
+        let result = temp_env::with_vars([("XDG_CONFIG_HOME", Some(config_home.as_str()))], || {
+            let config = load_config()?;
+            let profile = &config.agent.profiles["sample-profile"];
 
-                Ok::<_, anyhow::Error>((
-                    config.agent.configured_codex_status_inference().is_some(),
-                    profile["empty-model"].model.clone(),
-                    profile["agy-reasoning"].reasoning_effort,
-                ))
-            },
-        )
+            Ok::<_, anyhow::Error>((
+                profile["empty-model"].model.clone(),
+                profile["agy-reasoning"].reasoning_effort,
+            ))
+        })
         .map_err(|error| format!("{error:#}"));
 
         assert_eq!(
             result,
-            Ok((false, Some(String::new()), Some(ReasoningEffort::Low)))
+            Ok((Some(String::new()), Some(ReasoningEffort::Low)))
         );
     }
 
@@ -2373,69 +2139,9 @@ mod tests {
             serde_json::json!({
                 "description": indoc! {"
                     Instruction returned by the Stop hook when it blocks a session.
-                    Codex sessions use this instruction unless Codex status inference is
-                    enabled; Claude sessions use it when status inference is not configured.
                     At least one status must be configured."},
                 "type": ["string", "null"],
                 "default": null,
-            })
-        );
-    }
-
-    #[cfg(feature = "schema-gen")]
-    #[rstest]
-    fn generate_schema_contains_status_inference_prompt_description(
-        schema_value: serde_json::Value,
-    ) {
-        assert_eq!(
-            schema_value["$defs"]["AgentConfig"]["properties"]["status_inference_prompt"],
-            serde_json::json!({
-                "description": indoc! {"
-                    Prompt used by a Claude Code fork or Codex fork to classify a missing
-                    status at Stop."},
-                "type": ["string", "null"],
-                "default": null,
-            })
-        );
-    }
-
-    #[cfg(feature = "schema-gen")]
-    #[rstest]
-    fn generate_schema_describes_codex_status_inference_settings(schema_value: serde_json::Value) {
-        assert_eq!(
-            schema_value["$defs"]["CodexStatusInferenceConfig"],
-            serde_json::json!({
-                "description": "Opt-in settings for inferring Codex Stop status with a fork of the saved conversation. Inference requires the built-in OpenAI provider; enabling requires a non-empty `agent.status_inference_prompt` and at least one `agent.statuses` entry.",
-                "type": "object",
-                "properties": {
-                    "background_status": {
-                        "description": "Status recorded while armyknife background work is still pending.",
-                        "anyOf": [
-                            { "$ref": "#/$defs/StatusInferenceStatusConfig" },
-                            { "type": "null" },
-                        ],
-                        "default": null,
-                    },
-                    "enabled": {
-                        "description": "Enable Codex Stop inference. When enabled, failure and background statuses are required.",
-                        "type": "boolean",
-                        "default": false,
-                    },
-                    "failure_status": {
-                        "description": "Status recorded if snapshot acquisition, the Codex fork, classification, validation, or worker startup fails.",
-                        "anyOf": [
-                            { "$ref": "#/$defs/StatusInferenceStatusConfig" },
-                            { "type": "null" },
-                        ],
-                        "default": null,
-                    },
-                    "shadow_mode": {
-                        "description": "Log classifications without writing any status to the session database.",
-                        "type": "boolean",
-                        "default": false,
-                    },
-                },
-                "additionalProperties": false,
             })
         );
     }

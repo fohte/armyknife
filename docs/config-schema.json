@@ -27,17 +27,10 @@
           "model": null,
           "reasoning_effort": null
         },
-        "codex_status_inference": {
-          "background_status": null,
-          "enabled": false,
-          "failure_status": null,
-          "shadow_mode": false
-        },
         "default_engine": "claude",
         "launch_profiles": {},
         "merge_notification": null,
         "profiles": {},
-        "status_inference_prompt": null,
         "statuses": {},
         "stop_hook_instruction": null,
         "vibe_marker": null,
@@ -143,16 +136,6 @@
             "reasoning_effort": null
           }
         },
-        "codex_status_inference": {
-          "description": "Explicit opt-in for Codex Stop status inference. Enabling this requires\na non-empty `agent.status_inference_prompt`, at least one\n`agent.statuses` entry, and valid failure and background statuses from\n`agent.statuses`.",
-          "$ref": "#/$defs/CodexStatusInferenceConfig",
-          "default": {
-            "background_status": null,
-            "enabled": false,
-            "failure_status": null,
-            "shadow_mode": false
-          }
-        },
         "default_engine": {
           "description": "Fallback CLI when `--type` and `--engine` are omitted and the matching\nlaunch profile's engine is unset (default: \"claude\"). Overridable for a\nsingle invocation via `ARMYKNIFE_AGENT__DEFAULT_ENGINE`.",
           "$ref": "#/$defs/Engine",
@@ -185,14 +168,6 @@
           },
           "default": {}
         },
-        "status_inference_prompt": {
-          "description": "Prompt used by a Claude Code fork or Codex fork to classify a missing\nstatus at Stop.",
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
         "statuses": {
           "description": "User-defined status names and the state each name represents.",
           "type": "object",
@@ -202,7 +177,7 @@
           "default": {}
         },
         "stop_hook_instruction": {
-          "description": "Instruction returned by the Stop hook when it blocks a session.\nCodex sessions use this instruction unless Codex status inference is\nenabled; Claude sessions use it when status inference is not configured.\nAt least one status must be configured.",
+          "description": "Instruction returned by the Stop hook when it blocks a session.\nAt least one status must be configured.",
           "type": [
             "string",
             "null"
@@ -403,11 +378,6 @@
       "properties": {
         "state": {
           "$ref": "#/$defs/AgentStatusState"
-        },
-        "watch_web_kind": {
-          "description": "Call kind shown in watch-web. Omitted values default to `stopped`.",
-          "$ref": "#/$defs/AgentStatusWebKind",
-          "default": "stopped"
         }
       },
       "additionalProperties": false,
@@ -422,15 +392,6 @@
         "user",
         "waiting",
         "done"
-      ]
-    },
-    "AgentStatusWebKind": {
-      "description": "Call kind shown in watch-web for a configured agent status.",
-      "type": "string",
-      "enum": [
-        "question",
-        "review",
-        "stopped"
       ]
     },
     "AgentWorkTypeColor": {
@@ -654,47 +615,6 @@
       },
       "additionalProperties": false
     },
-    "CodexStatusInferenceConfig": {
-      "description": "Opt-in settings for inferring Codex Stop status with a fork of the saved conversation. Inference requires the built-in OpenAI provider; enabling requires a non-empty `agent.status_inference_prompt` and at least one `agent.statuses` entry.",
-      "type": "object",
-      "properties": {
-        "background_status": {
-          "description": "Status recorded while armyknife background work is still pending.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/StatusInferenceStatusConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "enabled": {
-          "description": "Enable Codex Stop inference. When enabled, failure and background statuses are required.",
-          "type": "boolean",
-          "default": false
-        },
-        "failure_status": {
-          "description": "Status recorded if snapshot acquisition, the Codex fork, classification, validation, or worker startup fails.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/StatusInferenceStatusConfig"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "shadow_mode": {
-          "description": "Log classifications without writing any status to the session database.",
-          "type": "boolean",
-          "default": false
-        }
-      },
-      "additionalProperties": false
-    },
     "EditorConfig": {
       "description": "Terminal/editor configuration for human-in-the-loop reviews.",
       "type": "object",
@@ -902,25 +822,6 @@
           "type": "string",
           "const": "vertical"
         }
-      ]
-    },
-    "StatusInferenceStatusConfig": {
-      "description": "Status written when Codex status inference cannot be started or completed,\nor when the Stop hook observes background work.",
-      "type": "object",
-      "properties": {
-        "kind": {
-          "description": "Name from `agent.statuses`.",
-          "type": "string"
-        },
-        "note": {
-          "description": "One-line explanation stored with the inferred status.",
-          "type": "string"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "kind",
-        "note"
       ]
     },
     "Terminal": {

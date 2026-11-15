@@ -53,72 +53,6 @@ pub(super) fn block_reason_for_hook<'a>(
     )
 }
 
-pub(super) fn should_infer_status_for_hook(
-    input: &HookInput,
-    session: &Session,
-    was_waiting_for_input: bool,
-    was_asking_user: bool,
-    has_pending_agent_requests: bool,
-    inference_prompt: Option<&str>,
-    codex_inference_enabled: bool,
-) -> bool {
-    match session.engine {
-        Engine::Claude => should_infer_status(
-            stop_conditions_for_hook(
-                input,
-                session,
-                was_waiting_for_input,
-                was_asking_user,
-                has_pending_agent_requests,
-            ),
-            inference_prompt,
-        ),
-        Engine::Codex => {
-            codex_inference_enabled
-                && should_infer_status(
-                    stop_conditions_for_hook(
-                        input,
-                        session,
-                        was_waiting_for_input,
-                        was_asking_user,
-                        has_pending_agent_requests,
-                    ),
-                    inference_prompt,
-                )
-        }
-    }
-}
-
-pub(super) fn should_set_background_status_for_hook(
-    input: &HookInput,
-    session: &Session,
-    was_waiting_for_input: bool,
-    was_asking_user: bool,
-    has_pending_agent_requests: bool,
-    codex_inference_enabled: bool,
-) -> bool {
-    let conditions = stop_conditions_for_hook(
-        input,
-        session,
-        was_waiting_for_input,
-        was_asking_user,
-        has_pending_agent_requests,
-    );
-    session.engine == Engine::Codex
-        && codex_inference_enabled
-        && conditions.has_pending_work
-        && !conditions.stop_hook_active
-        && !conditions.has_agent_status
-        && !conditions.has_pending_agent_requests
-        && !conditions.permission_pending
-        && !conditions.asking_user
-        && !conditions.paused
-}
-
-fn should_infer_status(conditions: StopConditions, inference_prompt: Option<&str>) -> bool {
-    inference_prompt.is_some() && !has_known_stop_reason(conditions)
-}
-
 fn stop_conditions_for_hook(
     input: &HookInput,
     session: &Session,
@@ -217,25 +151,6 @@ mod tests {
 
     const TEST_INSTRUCTION: &str = "Please summarize the result before stopping.";
 
-    #[rstest]
-    #[case::configured(true, Some("infer the status"), Some("infer the status"))]
-    #[case::no_statuses(false, Some("infer the status"), None)]
-    #[case::empty_prompt(true, Some("  "), None)]
-    #[case::missing_prompt(true, None, None)]
-    fn status_inference_prompt_requires_configured_statuses(
-        #[case] has_statuses: bool,
-        #[case] prompt: Option<&str>,
-        #[case] expected: Option<&str>,
-    ) {
-        let mut agent_config = crate::shared::config::test_support::agent_config();
-        if !has_statuses {
-            agent_config.statuses.clear();
-        }
-        agent_config.status_inference_prompt = prompt.map(str::to_string);
-
-        assert_eq!(agent_config.configured_status_inference_prompt(), expected);
-    }
-
     #[derive(Debug, Clone, Copy)]
     enum KnownStopReason {
         StopHookAlreadyContinued,
@@ -279,39 +194,6 @@ mod tests {
     ) {
         assert_eq!(
             block_reason(StopConditions::default(), instruction),
-            expected
-        );
-    }
-
-    #[rstest]
-    #[case::stop_hook_already_continued(KnownStopReason::StopHookAlreadyContinued)]
-    #[case::status_set(KnownStopReason::StatusSet)]
-    #[case::background_work_pending(KnownStopReason::BackgroundWorkPending)]
-    #[case::pending_agent_request(KnownStopReason::PendingAgentRequest)]
-    #[case::permission_pending(KnownStopReason::PermissionPending)]
-    #[case::asking_user(KnownStopReason::AskingUser)]
-    #[case::paused(KnownStopReason::Paused)]
-    fn known_stop_reasons_do_not_start_inference(#[case] reason: KnownStopReason) {
-        let mut conditions = StopConditions::default();
-        match reason {
-            KnownStopReason::StopHookAlreadyContinued => conditions.stop_hook_active = true,
-            KnownStopReason::StatusSet => conditions.has_agent_status = true,
-            KnownStopReason::BackgroundWorkPending => conditions.has_pending_work = true,
-            KnownStopReason::PendingAgentRequest => conditions.has_pending_agent_requests = true,
-            KnownStopReason::PermissionPending => conditions.permission_pending = true,
-            KnownStopReason::AskingUser => conditions.asking_user = true,
-            KnownStopReason::Paused => conditions.paused = true,
-        }
-
-        assert!(!should_infer_status(conditions, Some("prompt")));
-    }
-
-    #[rstest]
-    #[case::configured(Some("prompt"), true)]
-    #[case::missing(None, false)]
-    fn status_inference_requires_a_prompt(#[case] prompt: Option<&str>, #[case] expected: bool) {
-        assert_eq!(
-            should_infer_status(StopConditions::default(), prompt),
             expected
         );
     }

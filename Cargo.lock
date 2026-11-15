@@ -110,7 +110,6 @@ dependencies = [
  "crossterm",
  "flate2",
  "futures-util",
- "httparse",
  "include_dir",
  "indicatif",
  "indoc",
@@ -3568,9 +3567,6 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.10.3",
- "rustls",
- "rustls-native-certs",
- "rustls-pki-types",
  "sha1 0.11.0",
  "thiserror",
 ]

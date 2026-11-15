@@ -28,7 +28,6 @@ mod history;
 mod interrupt;
 mod launch_lock;
 mod rpc;
-pub(crate) mod status_inference;
 mod subagent;
 
 use rpc::{

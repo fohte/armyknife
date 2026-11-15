@@ -23,9 +23,8 @@ pub fn run(_args: &DoctorArgs) -> Result<()> {
 }
 
 /// Filters [`ExternalTool::ALL`] down to the tools the current config actually
-/// uses. Non-selected terminal alternatives, a non-nvim editor, disabled
-/// notifications, and an unset status-inference feature are dropped so users
-/// aren't flagged for tools they will never invoke.
+/// uses. Non-selected terminal alternatives, a non-nvim editor, and disabled
+/// notifications are dropped so users aren't flagged for tools they will never invoke.
 fn selected_tools(config: &Config) -> Vec<ExternalTool> {
     ExternalTool::ALL
         .iter()
@@ -37,9 +36,6 @@ fn selected_tools(config: &Config) -> Vec<ExternalTool> {
             // probe `nvim`, so silently skip when the user picked something else.
             ExternalTool::Nvim => config.editor.editor_command == "nvim",
             ExternalTool::Hammerspoon => config.notification.enabled,
-            ExternalTool::Codex | ExternalTool::SandboxRuntime => {
-                config.agent.codex_status_inference.enabled
-            }
             // Image conversion is an optional enhancement; notifications work without it.
             ExternalTool::ImageMagick => false,
             _ => true,
@@ -257,22 +253,6 @@ mod tests {
             ExternalTool::Git, ExternalTool::Gh, ExternalTool::Tmux,
             ExternalTool::Nvim, ExternalTool::Wezterm, ExternalTool::Delta,
             ExternalTool::Claude, ExternalTool::Opencode,
-            ExternalTool::Tq, ExternalTool::Lsof,
-            ExternalTool::Crit, ExternalTool::Shpool, ExternalTool::TerminalBrowser,
-            ExternalTool::Open, ExternalTool::XdgOpen,
-        ],
-    )]
-    #[case::codex_inference_enabled(
-        {
-            let mut c = Config::default();
-            c.agent.codex_status_inference.enabled = true;
-            c
-        },
-        &[
-            ExternalTool::Git, ExternalTool::Gh, ExternalTool::Tmux,
-            ExternalTool::Nvim, ExternalTool::Wezterm, ExternalTool::Delta,
-            ExternalTool::Claude, ExternalTool::Codex, ExternalTool::SandboxRuntime,
-            ExternalTool::Opencode, ExternalTool::Hammerspoon,
             ExternalTool::Tq, ExternalTool::Lsof,
             ExternalTool::Crit, ExternalTool::Shpool, ExternalTool::TerminalBrowser,
             ExternalTool::Open, ExternalTool::XdgOpen,

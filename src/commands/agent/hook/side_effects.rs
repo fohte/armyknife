@@ -1,9 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::Result;
-
-use super::super::status_inference::StatusInferenceSpawnRequest;
 use super::super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
 #[cfg(test)]
 use super::super::types::HookEvent;
@@ -25,9 +22,6 @@ pub(super) struct SideEffects {
     /// Spawn the detached `a agent auto-compact schedule` worker on Stop events.
     /// Off in tests (would fork a real process and survive past the test).
     pub(super) auto_compact: bool,
-    /// Spawn the detached status inference worker on eligible Stop events.
-    /// Off in tests (would fork a real process and survive past the test).
-    pub(super) status_inference: bool,
     pub(super) capture_pr_context: Option<PrContextCapture>,
     /// Spawn the detached `a agent archive-tq-session-detached` worker on a
     /// genuine Ended transition. Off in tests (would fork a real process).
@@ -56,12 +50,6 @@ pub(super) struct SideEffects {
     /// Test-only sink that records sessions passed to the auto-compact worker.
     #[cfg(test)]
     pub(super) auto_compact_calls: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
-    /// Test-only sink that records each Stop snapshot passed to the worker.
-    #[cfg(test)]
-    pub(super) status_inference_calls: Option<StatusInferenceCallSink>,
-    /// Test-only failure injected at the detached status inference spawn boundary.
-    #[cfg(test)]
-    pub(super) status_inference_spawn_error: Option<String>,
     /// Test-only sink that records sessions passed to the redelivery worker.
     #[cfg(test)]
     pub(super) redelivery_calls: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
@@ -76,16 +64,12 @@ type TmuxSyncCall = (
 );
 #[cfg(test)]
 type TmuxSyncCallSink = std::sync::Arc<std::sync::Mutex<Vec<TmuxSyncCall>>>;
-#[cfg(test)]
-type StatusInferenceCallSink = std::sync::Arc<std::sync::Mutex<Vec<StatusInferenceSpawnRequest>>>;
-
 impl SideEffects {
     pub(super) fn all() -> Self {
         Self {
             tmux: true,
             notifications: true,
             auto_compact: true,
-            status_inference: true,
             capture_pr_context: Some(Arc::new(super::super::session_pr_context::capture)),
             tq_archive: true,
             track_bg_run_tasks: true,
@@ -101,10 +85,6 @@ impl SideEffects {
             #[cfg(test)]
             auto_compact_calls: None,
             #[cfg(test)]
-            status_inference_calls: None,
-            #[cfg(test)]
-            status_inference_spawn_error: None,
-            #[cfg(test)]
             redelivery_calls: None,
         }
     }
@@ -115,7 +95,6 @@ impl SideEffects {
             tmux: false,
             notifications: false,
             auto_compact: false,
-            status_inference: false,
             capture_pr_context: None,
             tq_archive: false,
             track_bg_run_tasks: false,
@@ -125,8 +104,6 @@ impl SideEffects {
             tq_archive_calls: None,
             notification_calls: None,
             auto_compact_calls: None,
-            status_inference_calls: None,
-            status_inference_spawn_error: None,
             redelivery_calls: None,
         }
     }
@@ -151,30 +128,6 @@ impl SideEffects {
         }
         #[cfg(not(test))]
         super::super::auto_compact::spawn_in_background(session_id);
-    }
-
-    pub(super) fn schedule_status_inference(
-        &self,
-        request: &StatusInferenceSpawnRequest,
-    ) -> Result<()> {
-        if !self.status_inference {
-            return Ok(());
-        }
-        #[cfg(test)]
-        if let Some(calls) = &self.status_inference_calls {
-            calls
-                .lock()
-                .expect("status_inference_calls mutex poisoned")
-                .push(request.clone());
-            if let Some(error) = &self.status_inference_spawn_error {
-                return Err(anyhow::anyhow!(error.clone()));
-            }
-            return Ok(());
-        }
-        #[cfg(not(test))]
-        return super::super::status_inference::spawn_in_background(request);
-        #[cfg(test)]
-        Ok(())
     }
 
     pub(super) fn redeliver_bg_notifications(&self, session_id: &str) {
