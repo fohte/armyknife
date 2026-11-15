@@ -13,7 +13,7 @@ use crate::infra::git::GitRepo;
 use crate::infra::process;
 use crate::infra::tmux;
 use crate::shared::worktree::{
-    delete_branch_if_exists, delete_worktree, ensure_clean_for_deletion, find_worktree_name,
+    delete_branch_if_exists, delete_worktree, delete_worktree_if_clean, find_worktree_name,
     get_main_repo, get_worktree_branch,
 };
 
@@ -148,11 +148,11 @@ fn delete_worktree_and_branch(
     worktree_path: &Path,
     force: bool,
 ) -> anyhow::Result<WorktreeCleanupResult> {
-    ensure_clean_for_deletion(worktree_path, force)?;
-
     let branch_name = get_worktree_branch(repo, worktree_name);
 
-    let worktree_deleted = delete_worktree(repo, worktree_name).unwrap_or(false);
+    let worktree_deleted = delete_worktree_if_clean(worktree_path, force, || {
+        Ok(delete_worktree(repo, worktree_name).unwrap_or(false))
+    })?;
 
     let branch_deleted = if worktree_deleted {
         branch_name.filter(|branch| delete_branch_if_exists(repo, branch))
@@ -999,48 +999,6 @@ mod tests {
 
         assert!(!result.worktree_deleted);
         assert!(result.branch_deleted.is_none());
-    }
-
-    #[rstest]
-    #[case::tracked_change_without_force(true, false, false)]
-    #[case::untracked_file_without_force(false, false, false)]
-    #[case::clean_without_force(false, false, true)]
-    #[case::tracked_change_with_force(true, true, true)]
-    #[case::untracked_file_with_force(false, true, true)]
-    fn delete_worktree_guards_uncommitted_data(
-        #[case] tracked_change: bool,
-        #[case] force: bool,
-        #[case] expected_deleted: bool,
-    ) {
-        let test_repo = TestRepo::new();
-        if tracked_change {
-            test_repo.commit_file("tracked.txt", "original");
-        }
-        test_repo.create_worktree("cleanup-test");
-
-        let worktree_path = test_repo.worktree_path("cleanup-test");
-        if tracked_change {
-            std::fs::write(worktree_path.join("tracked.txt"), "modified")
-                .expect("tracked file should be modified");
-        } else if !expected_deleted {
-            std::fs::write(worktree_path.join("untracked.txt"), "untracked")
-                .expect("untracked file should be created");
-        }
-
-        let result =
-            delete_worktree_and_branch(&test_repo.open(), "cleanup-test", &worktree_path, force)
-                .map(|result| (result.worktree_deleted, worktree_path.exists()))
-                .map_err(|error| {
-                    format!("{error:#}")
-                        .replace(worktree_path.to_string_lossy().as_ref(), "<worktree>")
-                });
-
-        let expected = if expected_deleted {
-            Ok((true, false))
-        } else {
-            Err("Worktree contains uncommitted changes or untracked files: <worktree>; pass --force to delete it".to_string())
-        };
-        assert_eq!(result, expected);
     }
 
     #[test]

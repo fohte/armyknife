@@ -368,27 +368,6 @@ mod tests {
     use crate::shared::testing::TestRepo;
 
     #[tokio::test]
-    async fn prepare_rejects_uncommitted_worktree_changes() {
-        let test_repo = TestRepo::new();
-        test_repo.create_worktree("dirty-worktree");
-        let worktree_path = test_repo.worktree_path("dirty-worktree");
-        std::fs::write(worktree_path.join("untracked.txt"), "untracked")
-            .expect("untracked file should be created");
-
-        let result = prepare(&worktree_path, false, UnmergedWorktreePolicy::Reject)
-            .await
-            .map(|_| ())
-            .map_err(|error| {
-                format!("{error:#}").replace(worktree_path.to_string_lossy().as_ref(), "<worktree>")
-            });
-
-        assert_eq!(
-            result,
-            Err("Worktree contains uncommitted changes or untracked files: <worktree>; pass --force to delete it".to_string()),
-        );
-    }
-
-    #[tokio::test]
     async fn check_merge_status_uses_the_selected_repository_branch() {
         let mut looked_up_branch = None;
         let result = check_merge_status_with(

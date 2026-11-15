@@ -56,6 +56,7 @@ struct CleanWorktreeInfo {
     /// kept for that reason (overrides merge-status-based deletion unless
     /// `--force` is set).
     has_active_session: bool,
+    has_uncommitted_changes: bool,
 }
 
 pub async fn run(args: &CleanArgs) -> Result<()> {
@@ -70,6 +71,7 @@ pub async fn run(args: &CleanArgs) -> Result<()> {
 
     let (mut to_delete, mut to_keep) = collect_worktrees(&main_repo, None).await?;
 
+    apply_worktree_change_protection(&mut to_delete, &mut to_keep, args.force)?;
     apply_active_session_protection(&mut to_delete, &mut to_keep, args.force);
 
     if to_delete.is_empty() && to_keep.is_empty() {
@@ -231,6 +233,7 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
                 status,
                 repo_name: Some(rd.repo_name.clone()),
                 has_active_session: false,
+                has_uncommitted_changes: false,
             };
 
             if should_delete {
@@ -243,6 +246,7 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
 
     spinner.finish_and_clear();
 
+    apply_worktree_change_protection(&mut all_to_delete, &mut all_to_keep, args.force)?;
     apply_active_session_protection(&mut all_to_delete, &mut all_to_keep, args.force);
 
     if all_to_delete.is_empty() && all_to_keep.is_empty() {
@@ -314,6 +318,48 @@ fn apply_active_session_protection(
     protect_active_worktrees(to_delete, to_keep, &sessions, timeout, &TmuxDraftProbe);
 }
 
+fn apply_worktree_change_protection(
+    to_delete: &mut Vec<CleanWorktreeInfo>,
+    to_keep: &mut Vec<CleanWorktreeInfo>,
+    force: bool,
+) -> Result<()> {
+    apply_worktree_change_protection_with(to_delete, to_keep, force, |info| {
+        match crate::shared::worktree::ensure_clean_for_deletion(&info.wt.path, false) {
+            Ok(()) => Ok(false),
+            Err(error)
+                if error
+                    .downcast_ref::<crate::shared::worktree::DirtyWorktreeError>()
+                    .is_some() =>
+            {
+                Ok(true)
+            }
+            Err(error) => Err(error),
+        }
+    })
+}
+
+fn apply_worktree_change_protection_with(
+    to_delete: &mut Vec<CleanWorktreeInfo>,
+    to_keep: &mut Vec<CleanWorktreeInfo>,
+    force: bool,
+    mut has_changes: impl FnMut(&CleanWorktreeInfo) -> Result<bool>,
+) -> Result<()> {
+    if force {
+        return Ok(());
+    }
+
+    for mut info in std::mem::take(to_delete) {
+        if has_changes(&info)? {
+            info.has_uncommitted_changes = true;
+            to_keep.push(info);
+        } else {
+            to_delete.push(info);
+        }
+    }
+
+    Ok(())
+}
+
 /// Pure core of [`apply_active_session_protection`]. Exposed for tests so the
 /// session list, timeout, and activity probe can be injected without
 /// touching disk or tmux.
@@ -334,6 +380,7 @@ fn protect_active_worktrees<P: DraftProbe>(
                 status: info.status.clone(),
                 repo_name: info.repo_name.clone(),
                 has_active_session: true,
+                has_uncommitted_changes: info.has_uncommitted_changes,
             });
             false
         } else {
@@ -454,16 +501,21 @@ fn render_worktrees_table<W: Write>(
             format!("{icon} ")
         };
         let base_status = format!("{status_col}{icon_part}{status_text}{}", color::RESET);
-        let colored_status = if info.has_active_session {
-            format!(
-                "{}{} ⏵ active session{}",
-                base_status,
+        let mut colored_status = base_status;
+        if info.has_active_session {
+            colored_status.push_str(&format!(
+                "{} ⏵ active session{}",
                 color::YELLOW,
                 color::RESET
-            )
-        } else {
-            base_status
-        };
+            ));
+        }
+        if info.has_uncommitted_changes {
+            colored_status.push_str(&format!(
+                "{} ⏵ uncommitted changes{}",
+                color::YELLOW,
+                color::RESET
+            ));
+        }
 
         if show_repo {
             let repo_cell = pad_or_truncate(info.repo_name.as_deref().unwrap_or(""), REPO_WIDTH);
@@ -675,6 +727,7 @@ async fn collect_worktrees(
             status,
             repo_name: repo_name.map(|s| s.to_string()),
             has_active_session: false,
+            has_uncommitted_changes: false,
         };
 
         if should_delete {
@@ -861,6 +914,7 @@ mod tests {
             status,
             repo_name: None,
             has_active_session: false,
+            has_uncommitted_changes: false,
         }
     }
 
@@ -881,7 +935,76 @@ mod tests {
             status,
             repo_name: Some(repo_name.to_string()),
             has_active_session: false,
+            has_uncommitted_changes: false,
         }
+    }
+
+    #[test]
+    fn dirty_worktrees_are_kept_before_confirmation() {
+        let mut to_delete = vec![
+            make_clean_info(
+                "dirty",
+                PathBuf::from("/worktrees/dirty"),
+                "fohte/dirty",
+                MergeStatus::Merged {
+                    reason: "merged".to_string(),
+                },
+            ),
+            make_clean_info(
+                "clean",
+                PathBuf::from("/worktrees/clean"),
+                "fohte/clean",
+                MergeStatus::Merged {
+                    reason: "merged".to_string(),
+                },
+            ),
+        ];
+        let mut to_keep = Vec::new();
+
+        apply_worktree_change_protection_with(&mut to_delete, &mut to_keep, false, |info| {
+            Ok(info.wt.name == "dirty")
+        })
+        .expect("worktree change protection should finish");
+
+        assert_eq!(
+            (
+                to_delete
+                    .iter()
+                    .map(|info| info.wt.name.as_str())
+                    .collect::<Vec<_>>(),
+                to_keep
+                    .iter()
+                    .map(|info| (info.wt.name.as_str(), info.has_uncommitted_changes))
+                    .collect::<Vec<_>>(),
+            ),
+            (vec!["clean"], vec![("dirty", true)]),
+        );
+    }
+
+    #[test]
+    fn dirty_worktree_rows_explain_why_they_are_kept() {
+        let mut dirty = make_clean_info(
+            "dirty",
+            PathBuf::from("/worktrees/dirty"),
+            "fohte/dirty",
+            MergeStatus::Merged {
+                reason: "merged".to_string(),
+            },
+        );
+        dirty.has_uncommitted_changes = true;
+
+        let mut output = Vec::new();
+        render_worktrees_table(&mut output, &[], &[dirty], false).expect("render should succeed");
+
+        assert_eq!(
+            String::from_utf8(output).expect("valid utf8"),
+            format!(
+                "ACTION NAME                         BRANCH                       STATUS\n\
+                 KEEP   dirty                        fohte/dirty                  \x1b[35m✓ merged\x1b[0m{} ⏵ uncommitted changes{}\n",
+                color::YELLOW,
+                color::RESET,
+            ),
+        );
     }
 
     // delete_worktrees_single_repo and delete_worktrees_all_repos are not

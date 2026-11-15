@@ -21,15 +21,21 @@ pub fn ensure_clean_for_deletion(
     worktree_path: &std::path::Path,
     force: bool,
 ) -> anyhow::Result<()> {
+    ensure_clean_for_deletion_with(worktree_path, force, |path| {
+        run_git(path, ["status", "--porcelain", "--untracked-files=normal"])
+    })
+}
+
+fn ensure_clean_for_deletion_with(
+    worktree_path: &std::path::Path,
+    force: bool,
+    status: impl FnOnce(&std::path::Path) -> anyhow::Result<String>,
+) -> anyhow::Result<()> {
     if force || !worktree_path.is_dir() {
         return Ok(());
     }
 
-    let status = run_git(
-        worktree_path,
-        ["status", "--porcelain", "--untracked-files=normal"],
-    )?;
-    if !status.is_empty() {
+    if !status(worktree_path)?.is_empty() {
         return Err(DirtyWorktreeError {
             worktree_path: worktree_path.to_path_buf(),
         }
@@ -37,6 +43,29 @@ pub fn ensure_clean_for_deletion(
     }
 
     Ok(())
+}
+
+pub(crate) fn delete_worktree_if_clean(
+    worktree_path: &std::path::Path,
+    force: bool,
+    delete: impl FnOnce() -> anyhow::Result<bool>,
+) -> anyhow::Result<bool> {
+    delete_worktree_if_clean_with(
+        worktree_path,
+        force,
+        |path| run_git(path, ["status", "--porcelain", "--untracked-files=normal"]),
+        delete,
+    )
+}
+
+fn delete_worktree_if_clean_with(
+    worktree_path: &std::path::Path,
+    force: bool,
+    status: impl FnOnce(&std::path::Path) -> anyhow::Result<String>,
+    delete: impl FnOnce() -> anyhow::Result<bool>,
+) -> anyhow::Result<bool> {
+    ensure_clean_for_deletion_with(worktree_path, force, status)?;
+    delete()
 }
 
 /// Normalize a branch name to a worktree directory name.
@@ -239,9 +268,61 @@ fn parse_worktree_porcelain(text: &str) -> Vec<WorktreeEntry> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
     use crate::shared::testing::TestRepo;
     use rstest::rstest;
+
+    #[rstest]
+    #[case::clean_without_force("", false, true, (true, false, true, true))]
+    #[case::tracked_change_without_force(" M tracked.txt\n", false, true, (false, true, true, false))]
+    #[case::untracked_file_without_force("?? scratch.txt\n", false, true, (false, true, true, false))]
+    #[case::untracked_file_with_force("?? scratch.txt\n", true, true, (true, false, false, true))]
+    #[case::missing_worktree_skips_status("?? scratch.txt\n", false, false, (true, false, false, true))]
+    fn delete_worktree_checks_status_before_removal(
+        #[case] status: &str,
+        #[case] force: bool,
+        #[case] worktree_exists: bool,
+        #[case] expected: (bool, bool, bool, bool),
+    ) {
+        let directory = tempfile::tempdir().expect("temporary worktree should be created");
+        let status_queried = Cell::new(false);
+        let removed = Cell::new(false);
+        let missing_path = directory.path().join("missing");
+
+        let worktree_path = if worktree_exists {
+            directory.path()
+        } else {
+            &missing_path
+        };
+        let result = delete_worktree_if_clean_with(
+            worktree_path,
+            force,
+            |_| {
+                status_queried.set(true);
+                Ok(status.to_string())
+            },
+            || {
+                removed.set(true);
+                Ok(true)
+            },
+        );
+        let rejected_as_dirty = result
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.downcast_ref::<DirtyWorktreeError>().is_some());
+
+        assert_eq!(
+            (
+                result.is_ok(),
+                rejected_as_dirty,
+                status_queried.get(),
+                removed.get()
+            ),
+            expected,
+        );
+    }
 
     #[rstest]
     #[case::simple("feature-branch", BRANCH_PREFIX, "feature-branch")]
