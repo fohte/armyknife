@@ -995,9 +995,11 @@ it('executes a bang command from a todo card in the conversation', async () => {
     comment: null,
   }
   const commandRequests: Array<{ url: string; body: unknown }> = []
+  let messageFetchCount = 0
   const fetcher = vi.fn<typeof fetch>((input, init) => {
     const url = requestUrl(input)
-    if (url.endsWith('/messages?limit=100')) {
+    if (url.includes('/messages?')) {
+      messageFetchCount += 1
       return Promise.resolve(jsonResponse(messagesResponse([todo])))
     }
     if (url.endsWith('/actions')) {
@@ -1043,6 +1045,7 @@ it('executes a bang command from a todo card in the conversation', async () => {
       ? container.querySelector<HTMLButtonElement>('.chat-todo-detail button')
       : null,
   )
+  const messageFetchCountBeforeCommand = messageFetchCount
   await act(async () => userEvent.click(runButton))
   const dialog = requireElement(
     (await waitForState(() =>
@@ -1059,15 +1062,19 @@ it('executes a bang command from a todo card in the conversation', async () => {
   }
   await act(async () => userEvent.click(confirmButton))
   const completed = await waitForState(
-    () => runButton.textContent === 'Succeeded',
+    () =>
+      runButton.textContent === 'Succeeded' &&
+      messageFetchCount > messageFetchCountBeforeCommand,
   )
 
   const getActual = () => ({
     commandCompleted: completed,
+    conversationRefreshed: messageFetchCount > messageFetchCountBeforeCommand,
     commandRequests,
   })
   expect(getActual()).toEqual({
     commandCompleted: true,
+    conversationRefreshed: true,
     commandRequests: [
       {
         url: '/api/sessions/sample-session/commands/preview',
