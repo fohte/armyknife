@@ -209,27 +209,54 @@ it.each([
       throw new Error('Review document layout elements were not rendered.')
     }
 
+    const readActionBounds = () => {
+      const panelRect = panel.getBoundingClientRect()
+      const footerRect = footer.getBoundingClientRect()
+      const actionButtonRects = Array.from(
+        footer.querySelectorAll<HTMLButtonElement>('button'),
+        (button) => button.getBoundingClientRect(),
+      )
+
+      return {
+        footer: { top: footerRect.top, bottom: footerRect.bottom },
+        footerWithinPanel:
+          footerRect.top >= panelRect.top &&
+          footerRect.bottom <= panelRect.bottom,
+        buttons: actionButtonRects.map((rect) => ({
+          top: rect.top,
+          bottom: rect.bottom,
+          withinPanel:
+            rect.top >= panelRect.top && rect.bottom <= panelRect.bottom,
+        })),
+      }
+    }
+
+    const boundsAtStart = readActionBounds()
     act(() => {
       content.scrollTop = content.scrollHeight
     })
-
-    const panelRect = panel.getBoundingClientRect()
-    const footerRect = footer.getBoundingClientRect()
-    const actionButtonRects = Array.from(
-      footer.querySelectorAll<HTMLButtonElement>('button'),
-      (button) => button.getBoundingClientRect(),
-    )
+    const boundsAtEnd = readActionBounds()
     const maxScrollTop = content.scrollHeight - content.clientHeight
 
     const snapshot = () => ({
       contentOverflowY: getComputedStyle(content).overflowY,
       contentCanScroll: maxScrollTop > 0,
       contentReachedEnd: content.scrollTop >= maxScrollTop,
-      footerWithinPanel:
-        footerRect.top >= panelRect.top &&
-        footerRect.bottom <= panelRect.bottom,
-      actionButtonsWithinPanel: actionButtonRects.map(
-        (rect) => rect.top >= panelRect.top && rect.bottom <= panelRect.bottom,
+      footerWithinPanelAtStart: boundsAtStart.footerWithinPanel,
+      footerWithinPanelAtEnd: boundsAtEnd.footerWithinPanel,
+      actionButtonsWithinPanelAtStart: boundsAtStart.buttons.map(
+        (button) => button.withinPanel,
+      ),
+      actionButtonsWithinPanelAtEnd: boundsAtEnd.buttons.map(
+        (button) => button.withinPanel,
+      ),
+      footerStayedInPlace:
+        boundsAtStart.footer.top === boundsAtEnd.footer.top &&
+        boundsAtStart.footer.bottom === boundsAtEnd.footer.bottom,
+      actionButtonsStayedInPlace: boundsAtStart.buttons.every(
+        (button, index) =>
+          button.top === boundsAtEnd.buttons[index].top &&
+          button.bottom === boundsAtEnd.buttons[index].bottom,
       ),
     })
 
@@ -237,8 +264,12 @@ it.each([
       contentOverflowY: 'auto',
       contentCanScroll: true,
       contentReachedEnd: true,
-      footerWithinPanel: true,
-      actionButtonsWithinPanel: [true, true],
+      footerWithinPanelAtStart: true,
+      footerWithinPanelAtEnd: true,
+      actionButtonsWithinPanelAtStart: [true, true],
+      actionButtonsWithinPanelAtEnd: [true, true],
+      footerStayedInPlace: true,
+      actionButtonsStayedInPlace: true,
     })
   },
 )
