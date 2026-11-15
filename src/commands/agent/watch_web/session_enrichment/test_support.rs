@@ -59,6 +59,7 @@ pub(super) fn session(session_id: &str, pr_context: Option<SessionPrContext>) ->
         session_id: session_id.to_string(),
         archived_at: None,
         pr_context,
+        submitted_pr_contexts: Vec::new(),
         crit_urls: Vec::new(),
         web_uis: Vec::new(),
         pending_human_review_ids: Default::default(),

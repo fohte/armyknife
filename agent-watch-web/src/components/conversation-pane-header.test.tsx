@@ -225,6 +225,61 @@ it('starts a fresh editor when the selected session changes', () => {
   })
 })
 
+it('shows every pull request linked to the session in order', () => {
+  renderHeader(
+    false,
+    vi.fn(() => Promise.resolve(true)),
+    {
+      ...session,
+      pullRequest: {
+        number: 42,
+        state: 'Open',
+        owner: 'example-org',
+        repo: 'example-repo',
+        url: 'https://github.com/example-org/example-repo/pull/42',
+        headSha: 'sample-head-sha',
+      },
+      pullRequests: [
+        {
+          number: 42,
+          state: 'Open',
+          owner: 'example-org',
+          repo: 'example-repo',
+          url: 'https://github.com/example-org/example-repo/pull/42',
+          headSha: 'sample-head-sha',
+        },
+        {
+          number: 43,
+          state: 'Open',
+          owner: 'example-org',
+          repo: 'example-repo',
+          url: 'https://github.com/example-org/example-repo/pull/43',
+          headSha: 'other-head-sha',
+        },
+      ],
+    },
+  )
+
+  expect(
+    Array.from(
+      container.querySelectorAll<HTMLAnchorElement>('.conversation-pr-link'),
+      (link) => ({
+        text: link.textContent,
+        href: link.getAttribute('href'),
+      }),
+    ),
+  ).toEqual([
+    {
+      text: '#42 PR',
+      href: 'https://github.com/example-org/example-repo/pull/42',
+    },
+    {
+      text: '#43 PR',
+      href: 'https://github.com/example-org/example-repo/pull/43',
+    },
+  ])
+})
+
 it('merges the session pull request after confirming its head SHA', async () => {
   let resolveMerge: (response: Response) => void = () => undefined
   const mergeResponse = new Promise<Response>((resolve) => {

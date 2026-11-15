@@ -69,6 +69,7 @@ mod tests {
             archived_at: None,
             session_id: "target-session".to_string(),
             pr_context: None,
+            submitted_pr_contexts: Vec::new(),
             crit_urls: Vec::new(),
             web_uis: Vec::new(),
             pending_human_review_ids: BTreeSet::new(),

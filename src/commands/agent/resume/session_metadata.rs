@@ -39,6 +39,7 @@ pub(super) fn record_codex_resume_metadata_if_needed(
     let mut session = existing_session.unwrap_or_else(|| Session {
         archived_at: None,
         pr_context,
+        submitted_pr_contexts: Vec::new(),
         session_id: session_id.to_string(),
         work_type: None,
         work_type_pinned: false,
@@ -134,6 +135,7 @@ mod tests {
         Session {
             archived_at: None,
             pr_context: None,
+            submitted_pr_contexts: Vec::new(),
             session_id: "resume-target".to_string(),
             work_type: None,
             work_type_pinned: false,

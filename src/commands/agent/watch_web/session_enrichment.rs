@@ -11,6 +11,7 @@ use crate::commands::agent::tq_session_tasks::{
     order_tasks_by_priority, task_priority_metadata,
 };
 use crate::commands::agent::types::Session;
+use crate::commands::agent::types::SessionPrContext;
 use crate::infra::github::{BranchPrQuery, GitHubClient, PrHeadInfo};
 use crate::infra::tq::{TqClient, TqProjectSummary, TqTaskSummary};
 
@@ -34,6 +35,12 @@ type TaskMetadataFetcher = Arc<
 type PullRequestFetcher = Arc<
     dyn Fn(Vec<Session>) -> FetchFuture<HashMap<BranchPrKey, Option<PrHeadInfo>>> + Send + Sync,
 >;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SessionPullRequestInfo {
+    pub(super) context: SessionPrContext,
+    pub(super) progress: PrHeadInfo,
+}
 
 #[derive(Clone)]
 pub(super) struct SessionEnrichmentCache {
@@ -100,7 +107,7 @@ impl SessionEnrichmentCache {
     pub(super) async fn pull_requests(
         &self,
         sessions: &[Session],
-    ) -> HashMap<String, Option<PrHeadInfo>> {
+    ) -> HashMap<String, Vec<SessionPullRequestInfo>> {
         let query_keys = pull_request_keys(sessions);
         if query_keys.is_empty() {
             return HashMap::new();
@@ -123,18 +130,32 @@ impl SessionEnrichmentCache {
 
         sessions
             .iter()
-            .filter_map(|session| {
-                let context = session.pr_context.as_ref()?;
-                let key = BranchPrQuery {
-                    owner: context.owner.clone(),
-                    repo: context.repo.clone(),
-                    branch: context.branch.clone(),
-                }
-                .key();
-                Some((
-                    session.session_id.clone(),
-                    cached.get(&key).cloned().unwrap_or(None),
-                ))
+            .filter(|session| session_pr_contexts(session).next().is_some())
+            .map(|session| {
+                let mut seen_pull_requests = HashSet::new();
+                let pull_requests = session_pr_contexts(session)
+                    .filter_map(|context| {
+                        let key = BranchPrQuery {
+                            owner: context.owner.clone(),
+                            repo: context.repo.clone(),
+                            branch: context.branch.clone(),
+                        }
+                        .key();
+                        let pull_request = cached.get(&key).cloned().flatten()?;
+                        let pull_request_key = (
+                            context.owner.clone(),
+                            context.repo.clone(),
+                            pull_request.pull_request.number,
+                        );
+                        seen_pull_requests.insert(pull_request_key).then_some(
+                            SessionPullRequestInfo {
+                                context: context.clone(),
+                                progress: pull_request,
+                            },
+                        )
+                    })
+                    .collect();
+                (session.session_id.clone(), pull_requests)
             })
             .collect()
     }
@@ -353,18 +374,35 @@ fn task_project_names(
 }
 
 fn pull_request_keys(sessions: &[Session]) -> HashSet<BranchPrKey> {
-    sessions
-        .iter()
-        .filter_map(|session| session.pr_context.as_ref())
-        .map(|context| {
-            BranchPrQuery {
+    branch_pr_queries(sessions)
+        .into_iter()
+        .map(|query| query.key())
+        .collect()
+}
+
+fn branch_pr_queries(sessions: &[Session]) -> Vec<BranchPrQuery> {
+    let mut queries = Vec::new();
+    let mut seen = HashSet::new();
+    for session in sessions {
+        for context in session_pr_contexts(session) {
+            let query = BranchPrQuery {
                 owner: context.owner.clone(),
                 repo: context.repo.clone(),
                 branch: context.branch.clone(),
+            };
+            if seen.insert(query.key()) {
+                queries.push(query);
             }
-            .key()
-        })
-        .collect()
+        }
+    }
+    queries
+}
+
+fn session_pr_contexts(session: &Session) -> impl Iterator<Item = &SessionPrContext> {
+    session
+        .pr_context
+        .iter()
+        .chain(session.submitted_pr_contexts.iter())
 }
 
 async fn detected_tq_client() -> Result<Option<TqClient>, String> {
@@ -376,21 +414,7 @@ async fn detected_tq_client() -> Result<Option<TqClient>, String> {
 async fn fetch_pull_requests(
     sessions: &[Session],
 ) -> Result<HashMap<BranchPrKey, Option<PrHeadInfo>>, String> {
-    let mut queries = Vec::new();
-    let mut seen = HashSet::new();
-    for session in sessions {
-        let Some(context) = session.pr_context.as_ref() else {
-            continue;
-        };
-        let query = BranchPrQuery {
-            owner: context.owner.clone(),
-            repo: context.repo.clone(),
-            branch: context.branch.clone(),
-        };
-        if seen.insert(query.key()) {
-            queries.push(query.clone());
-        }
-    }
+    let queries = branch_pr_queries(sessions);
     if queries.is_empty() {
         return Ok(HashMap::new());
     }
@@ -410,7 +434,8 @@ async fn fetch_pull_requests(
 #[cfg(test)]
 mod tests {
     use super::test_support::{
-        cache_with_fetchers, metadata, session, session_with_branch, wait_for_refresh,
+        branch_key, cache_with_fetchers, metadata, session, session_with_branch,
+        session_with_branch_name, wait_for_refresh,
     };
     use super::*;
     use crate::commands::agent::tq_session_tasks::task_priority_metadata;
@@ -821,15 +846,97 @@ mod tests {
         wait_for_refresh(&mut receiver).await;
         let shared_branch = cache.pull_requests(&[first.clone(), second.clone()]).await;
 
+        let first_pr = SessionPullRequestInfo {
+            context: first.pr_context.clone().expect("first context exists"),
+            progress: head_info(17),
+        };
+        let second_pr = SessionPullRequestInfo {
+            context: second.pr_context.clone().expect("second context exists"),
+            progress: head_info(17),
+        };
         assert_eq!(
             (initial, shared_branch, calls.load(Ordering::SeqCst)),
             (
-                HashMap::from([("session-one".to_string(), None)]),
+                HashMap::from([("session-one".to_string(), Vec::new())]),
                 HashMap::from([
-                    ("session-one".to_string(), Some(head_info(17)),),
-                    ("session-two".to_string(), Some(head_info(17)),),
+                    ("session-one".to_string(), vec![first_pr]),
+                    ("session-two".to_string(), vec![second_pr]),
                 ]),
                 1,
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn submitted_branch_prs_follow_the_cwd_pr_and_duplicate_prs_are_removed() {
+        let updates = EnrichmentUpdates::new();
+        let mut receiver = updates.subscribe();
+        let pull_request_fetcher: PullRequestFetcher = Arc::new(|_| {
+            Box::pin(async move {
+                Ok(HashMap::from([
+                    (branch_key("cwd-branch"), Some(head_info(17))),
+                    (branch_key("submitted-branch"), Some(head_info(23))),
+                ]))
+            })
+        });
+        let task_fetcher: TaskMetadataFetcher =
+            Arc::new(|_, previous| Box::pin(async move { Ok(previous) }));
+        let cache = cache_with_fetchers(updates, FETCH_TIMEOUT, task_fetcher, pull_request_fetcher);
+        let mut current_session = session_with_branch_name("session-multiple", "cwd-branch");
+        let cwd_context = current_session
+            .pr_context
+            .clone()
+            .expect("cwd context exists");
+        let submitted_context = SessionPrContext {
+            owner: "example-owner".to_string(),
+            repo: "example-repository".to_string(),
+            branch: "submitted-branch".to_string(),
+            checklist_item_id: None,
+        };
+        current_session.submitted_pr_contexts =
+            vec![submitted_context.clone(), submitted_context.clone()];
+
+        let initial = cache
+            .pull_requests(std::slice::from_ref(&current_session))
+            .await;
+        wait_for_refresh(&mut receiver).await;
+        let pull_requests = cache
+            .pull_requests(std::slice::from_ref(&current_session))
+            .await;
+
+        assert_eq!(
+            (
+                initial,
+                pull_requests,
+                branch_pr_queries(&[current_session])
+            ),
+            (
+                HashMap::from([("session-multiple".to_string(), Vec::new())]),
+                HashMap::from([(
+                    "session-multiple".to_string(),
+                    vec![
+                        SessionPullRequestInfo {
+                            context: cwd_context,
+                            progress: head_info(17),
+                        },
+                        SessionPullRequestInfo {
+                            context: submitted_context,
+                            progress: head_info(23),
+                        },
+                    ],
+                )]),
+                vec![
+                    BranchPrQuery {
+                        owner: "example-owner".to_string(),
+                        repo: "example-repository".to_string(),
+                        branch: "cwd-branch".to_string(),
+                    },
+                    BranchPrQuery {
+                        owner: "example-owner".to_string(),
+                        repo: "example-repository".to_string(),
+                        branch: "submitted-branch".to_string(),
+                    },
+                ],
             ),
         );
     }

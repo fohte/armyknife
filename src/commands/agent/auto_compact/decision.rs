@@ -157,6 +157,7 @@ mod tests {
         Session {
             archived_at: None,
             pr_context: None,
+            submitted_pr_contexts: Vec::new(),
             session_id: "sess".to_string(),
             work_type: None,
             work_type_pinned: false,

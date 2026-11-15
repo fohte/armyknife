@@ -104,6 +104,7 @@ fn record_in(
     let mut session = session_lock.load()?.unwrap_or_else(|| Session {
         archived_at: None,
         pr_context,
+        submitted_pr_contexts: Vec::new(),
         session_id: session_id.to_string(),
         work_type: None,
         child_launch: ChildLaunchPermission::Allow,
@@ -182,6 +183,7 @@ mod tests {
         Session {
             archived_at: None,
             pr_context: None,
+            submitted_pr_contexts: Vec::new(),
             session_id: "thread-a".to_string(),
             work_type: Some("detected-skill".to_string()),
             work_type_pinned: false,

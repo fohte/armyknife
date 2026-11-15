@@ -13,7 +13,9 @@ use serde::Serialize;
 
 use super::EnrichmentUpdates;
 use super::interrupted::interrupted_session_ids;
-use super::session_enrichment::{SessionEnrichmentCache, SessionTaskMetadata};
+use super::session_enrichment::{
+    SessionEnrichmentCache, SessionPullRequestInfo, SessionTaskMetadata,
+};
 use crate::commands::agent::proposal::ProposalBody;
 use crate::commands::agent::review_queue::{ReviewDocumentQueue, review_document_queue};
 use crate::commands::agent::session_title::title_display_name;
@@ -22,7 +24,7 @@ use crate::commands::agent::store;
 use crate::commands::agent::tq_session_tasks::SessionTask as LinkedSessionTask;
 use crate::commands::agent::types::{Engine, Session, SessionStatus, WebUiRegistration};
 use crate::commands::agent::user_turn::user_turns;
-use crate::infra::github::{PrHeadInfo, PrState};
+use crate::infra::github::PrState;
 use crate::shared::config::{self, AgentConfig};
 
 mod category;
@@ -84,20 +86,16 @@ struct SessionPullRequestView {
     state: PrState,
 }
 
-fn session_pull_request_view(
-    session: &Session,
-    progress: &PrHeadInfo,
-) -> Option<SessionPullRequestView> {
-    let context = session.pr_context.as_ref()?;
-    Some(SessionPullRequestView {
-        number: progress.pull_request.number,
-        owner: context.owner.clone(),
-        repo: context.repo.clone(),
-        title: progress.pull_request.title.clone(),
-        url: progress.pull_request.url.clone(),
-        head_sha: progress.head_sha.clone(),
-        state: progress.pull_request.state.clone(),
-    })
+fn session_pull_request_view(pull_request: &SessionPullRequestInfo) -> SessionPullRequestView {
+    SessionPullRequestView {
+        number: pull_request.progress.pull_request.number,
+        owner: pull_request.context.owner.clone(),
+        repo: pull_request.context.repo.clone(),
+        title: pull_request.progress.pull_request.title.clone(),
+        url: pull_request.progress.pull_request.url.clone(),
+        head_sha: pull_request.progress.head_sha.clone(),
+        state: pull_request.progress.pull_request.state.clone(),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -138,6 +136,7 @@ struct SessionView {
     has_session_tree: bool,
     ancestor_session_ids: Vec<String>,
     pull_request: Option<SessionPullRequestView>,
+    pull_requests: Vec<SessionPullRequestView>,
     crit_url: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     web_uis: Vec<WebUiRegistration>,
@@ -189,7 +188,7 @@ trait SessionSource: Clone + Send + Sync + 'static {
     fn fetch_pull_requests(
         &self,
         sessions: &[Session],
-    ) -> impl Future<Output = HashMap<String, Option<PrHeadInfo>>> + Send;
+    ) -> impl Future<Output = HashMap<String, Vec<SessionPullRequestInfo>>> + Send;
 
     fn running_background_task_session_ids(
         &self,
@@ -232,7 +231,7 @@ impl SessionSource for LiveSessionSource {
     async fn fetch_pull_requests(
         &self,
         sessions: &[Session],
-    ) -> HashMap<String, Option<PrHeadInfo>> {
+    ) -> HashMap<String, Vec<SessionPullRequestInfo>> {
         self.enrichment.pull_requests(sessions).await
     }
 
@@ -447,10 +446,13 @@ async fn list_sessions<S: SessionSource>(
             let task_project = task
                 .as_ref()
                 .and_then(|task| task_metadata.task_projects.get(&task.id));
-            let pull_request = pull_requests
+            let session_pull_requests = pull_requests
                 .get(&session.session_id)
-                .and_then(Option::as_ref)
-                .and_then(|progress| session_pull_request_view(session, progress));
+                .into_iter()
+                .flatten()
+                .map(session_pull_request_view)
+                .collect::<Vec<_>>();
+            let pull_request = session_pull_requests.first().cloned();
 
             let turn = turn_kinds.get(session.session_id.as_str()).copied();
             let interrupted = interrupted_session_ids.contains(&session.session_id);
@@ -571,6 +573,7 @@ async fn list_sessions<S: SessionSource>(
                 has_session_tree: tree_related_session_ids.contains(&session.session_id),
                 ancestor_session_ids: session.ancestor_session_ids.clone(),
                 pull_request,
+                pull_requests: session_pull_requests,
                 crit_url,
                 web_uis,
                 later_until: state.and_then(|state| state.later_until),
@@ -704,6 +707,7 @@ mod tests {
             session_id: "session".to_string(),
             archived_at: None,
             pr_context: None,
+            submitted_pr_contexts: Vec::new(),
             crit_urls: Vec::new(),
             web_uis: Vec::new(),
             pending_human_review_ids: Default::default(),
@@ -754,7 +758,7 @@ mod tests {
         task_priorities: HashMap<String, Option<i32>>,
         task_priority_order: HashMap<String, usize>,
         task_projects: HashMap<String, String>,
-        pull_requests: HashMap<String, Option<PrHeadInfo>>,
+        pull_requests: HashMap<String, Vec<SessionPullRequestInfo>>,
         decision_counts: HashMap<String, store::AgentDecisionCounts>,
         work_type_nav_labels: HashMap<String, String>,
         agent_statuses: HashMap<String, AgentStatusConfig>,
@@ -822,7 +826,7 @@ mod tests {
         async fn fetch_pull_requests(
             &self,
             _sessions: &[Session],
-        ) -> HashMap<String, Option<PrHeadInfo>> {
+        ) -> HashMap<String, Vec<SessionPullRequestInfo>> {
             self.pull_requests.clone()
         }
 
@@ -904,7 +908,7 @@ mod tests {
         async fn fetch_pull_requests(
             &self,
             sessions: &[Session],
-        ) -> HashMap<String, Option<PrHeadInfo>> {
+        ) -> HashMap<String, Vec<SessionPullRequestInfo>> {
             self.source.fetch_pull_requests(sessions).await
         }
 
@@ -943,6 +947,17 @@ mod tests {
             branch: "feature-example".to_string(),
             checklist_item_id: None,
         });
+        child_session.submitted_pr_contexts =
+            vec![crate::commands::agent::types::SessionPrContext {
+                owner: "example-org".to_string(),
+                repo: "example-repo".to_string(),
+                branch: "designer-pr-branch".to_string(),
+                checklist_item_id: None,
+            }];
+        let pull_request_context = child_session
+            .pr_context
+            .clone()
+            .expect("fixture has a pull request context");
 
         let mut parent = session(SessionStatus::Ended);
         parent.session_id = "parent-session".to_string();
@@ -1008,15 +1023,37 @@ mod tests {
             ]),
             pull_requests: HashMap::from([(
                 "child-session".to_string(),
-                Some(PrHeadInfo {
-                    pull_request: crate::infra::github::PrInfo {
-                        number: 42,
-                        title: "example pull request".to_string(),
-                        state: PrState::Open,
-                        url: "https://example.com/pull/42".to_string(),
+                vec![
+                    SessionPullRequestInfo {
+                        context: pull_request_context,
+                        progress: crate::infra::github::PrHeadInfo {
+                            pull_request: crate::infra::github::PrInfo {
+                                number: 42,
+                                title: "example pull request".to_string(),
+                                state: PrState::Open,
+                                url: "https://example.com/pull/42".to_string(),
+                            },
+                            head_sha: Some("fixture-head".to_string()),
+                        },
                     },
-                    head_sha: Some("fixture-head".to_string()),
-                }),
+                    SessionPullRequestInfo {
+                        context: crate::commands::agent::types::SessionPrContext {
+                            owner: "example-org".to_string(),
+                            repo: "example-repo".to_string(),
+                            branch: "designer-pr-branch".to_string(),
+                            checklist_item_id: None,
+                        },
+                        progress: crate::infra::github::PrHeadInfo {
+                            pull_request: crate::infra::github::PrInfo {
+                                number: 43,
+                                title: "submitted pull request".to_string(),
+                                state: PrState::Open,
+                                url: "https://example.com/pull/43".to_string(),
+                            },
+                            head_sha: Some("submitted-head".to_string()),
+                        },
+                    },
+                ],
             )]),
             decision_counts: HashMap::from([(
                 "child-session".to_string(),
@@ -1125,6 +1162,10 @@ mod tests {
                         "repo": "example-org/example-repo",
                         "decisionCount": 4,
                         "pullRequest": { "number": 42, "state": "Open" },
+                        "pullRequests": [
+                            { "number": 42, "state": "Open" },
+                            { "number": 43, "state": "Open" },
+                        ],
                     },
                 ],
                 }),
@@ -1169,6 +1210,10 @@ mod tests {
                         "repo": "example-org/example-repo",
                         "decisionCount": 4,
                         "pullRequest": { "number": 42, "state": "Open" },
+                        "pullRequests": [
+                            { "number": 42, "state": "Open" },
+                            { "number": 43, "state": "Open" },
+                        ],
                     }],
                 }),
             ),
@@ -1235,6 +1280,10 @@ mod tests {
                         "repo": "example-org/example-repo",
                         "decisionCount": 4,
                         "pullRequest": { "number": 42, "state": "Open" },
+                        "pullRequests": [
+                            { "number": 42, "state": "Open" },
+                            { "number": 43, "state": "Open" },
+                        ],
                     },
                     {
                         "id": "grandchild-session",
@@ -1249,6 +1298,7 @@ mod tests {
                         "repo": "example-org/grandchild-repo",
                         "decisionCount": 0,
                         "pullRequest": null,
+                        "pullRequests": [],
                     },
                 ],
                 }),
@@ -1371,6 +1421,23 @@ mod tests {
                     "headSha": "fixture-head",
                     "state": "Open"
                 },
+                "pullRequests": [{
+                    "number": 42,
+                    "owner": "example-org",
+                    "repo": "example-repo",
+                    "title": "example pull request",
+                    "url": "https://example.com/pull/42",
+                    "headSha": "fixture-head",
+                    "state": "Open"
+                }, {
+                    "number": 43,
+                    "owner": "example-org",
+                    "repo": "example-repo",
+                    "title": "submitted pull request",
+                    "url": "https://example.com/pull/43",
+                    "headSha": "submitted-head",
+                    "state": "Open"
+                }],
                 "laterUntil": later_until,
                 "isToday": is_today,
                 "isCompacting": false,

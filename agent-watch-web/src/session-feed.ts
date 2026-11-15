@@ -79,8 +79,12 @@ function isSession(value: unknown): value is Session {
   const kind = value['kind']
   const task = value['task']
   const pullRequest = value['pullRequest']
+  const pullRequests = value['pullRequests']
   const validTask = task === null || isSessionTask(task)
   const validPullRequest = pullRequest === null || isPullRequest(pullRequest)
+  const validPullRequests =
+    pullRequests === undefined ||
+    (Array.isArray(pullRequests) && pullRequests.every(isPullRequest))
 
   return (
     typeof value['id'] === 'string' &&
@@ -110,7 +114,8 @@ function isSession(value: unknown): value is Session {
     typeof value['unread'] === 'boolean' &&
     validTask &&
     typeof value['repo'] === 'string' &&
-    validPullRequest
+    validPullRequest &&
+    validPullRequests
   )
 }
 

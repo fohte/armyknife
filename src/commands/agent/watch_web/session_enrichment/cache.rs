@@ -154,6 +154,7 @@ pub(super) fn prune_session_task_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent::types::Session;
     use crate::infra::github::{PrHeadInfo, PrInfo, PrState};
     use rstest::{fixture, rstest};
     use std::sync::Arc;
@@ -165,7 +166,8 @@ mod tests {
         wait_for_refresh,
     };
     use super::super::{
-        FETCH_TIMEOUT, PullRequestFetcher, SessionTaskMetadata, TaskMetadataFetcher,
+        FETCH_TIMEOUT, PullRequestFetcher, SessionPullRequestInfo, SessionTaskMetadata,
+        TaskMetadataFetcher,
     };
 
     fn head_info(number: u64, title: impl Into<String>, url: impl Into<String>) -> PrHeadInfo {
@@ -177,6 +179,16 @@ mod tests {
                 url: url.into(),
             },
             head_sha: Some("sample-head".to_string()),
+        }
+    }
+
+    fn session_pull_request(session: &Session, progress: PrHeadInfo) -> SessionPullRequestInfo {
+        SessionPullRequestInfo {
+            context: session
+                .pr_context
+                .clone()
+                .expect("session has a pull request context"),
+            progress,
         }
     }
 
@@ -294,31 +306,28 @@ mod tests {
                 cached_b_after_refresh,
             ),
             (
-                HashMap::from([("session-a".to_string(), None)]),
+                HashMap::from([("session-a".to_string(), Vec::new())]),
                 HashMap::from([(
                     "session-a".to_string(),
-                    Some(head_info(
-                        17,
-                        "Change for branch-a",
-                        "https://example.test/branch-a"
-                    )),
+                    vec![session_pull_request(
+                        &session_a,
+                        head_info(17, "Change for branch-a", "https://example.test/branch-a"),
+                    )],
                 )]),
-                HashMap::from([("session-b".to_string(), None)]),
+                HashMap::from([("session-b".to_string(), Vec::new())]),
                 HashMap::from([(
                     "session-a".to_string(),
-                    Some(head_info(
-                        17,
-                        "Change for branch-a",
-                        "https://example.test/branch-a"
-                    )),
+                    vec![session_pull_request(
+                        &session_a,
+                        head_info(17, "Change for branch-a", "https://example.test/branch-a"),
+                    )],
                 )]),
                 HashMap::from([(
                     "session-b".to_string(),
-                    Some(head_info(
-                        23,
-                        "Change for branch-b",
-                        "https://example.test/branch-b"
-                    )),
+                    vec![session_pull_request(
+                        &session_b,
+                        head_info(23, "Change for branch-b", "https://example.test/branch-b"),
+                    )],
                 )]),
             )
         );

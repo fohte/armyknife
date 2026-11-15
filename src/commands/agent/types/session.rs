@@ -73,6 +73,9 @@ pub struct Session {
     /// GitHub lookup data retained after a worktree is removed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_context: Option<SessionPrContext>,
+    /// Branches whose pull requests were submitted by this session.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_pr_contexts: Vec<SessionPrContext>,
     /// Crit review URLs opened by this session, ordered by most recently requested.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub crit_urls: Vec<String>,
@@ -285,6 +288,7 @@ mod tests {
                     session.model,
                     session.effort,
                     session.web_uis,
+                    session.submitted_pr_contexts,
                 ),
             ),
             (
@@ -299,7 +303,7 @@ mod tests {
                     false,
                     BTreeSet::new(),
                 ),
-                (None, false, false, None, None, None, Vec::new()),
+                (None, false, false, None, None, None, Vec::new(), Vec::new()),
             )
         );
     }

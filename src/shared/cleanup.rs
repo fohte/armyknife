@@ -528,6 +528,7 @@ mod tests {
         Session {
             archived_at: None,
             pr_context: None,
+            submitted_pr_contexts: Vec::new(),
             session_id: session_id.to_string(),
             crit_urls: Vec::new(),
             web_uis: Vec::new(),

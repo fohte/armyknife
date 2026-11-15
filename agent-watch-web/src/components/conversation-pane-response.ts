@@ -385,7 +385,10 @@ export function isSessionTreeResponse(
         typeof session['decisionCount'] === 'number' &&
         Number.isInteger(session['decisionCount']) &&
         (session['pullRequest'] === null ||
-          isPullRequest(session['pullRequest'])),
+          isPullRequest(session['pullRequest'])) &&
+        (session['pullRequests'] === undefined ||
+          (Array.isArray(session['pullRequests']) &&
+            session['pullRequests'].every(isPullRequest))),
     )
   )
 }

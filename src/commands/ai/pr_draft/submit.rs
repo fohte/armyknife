@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use super::common::{DraftFile, PrDraftError, RepoInfo, contains_japanese, repo_allows_japanese};
 use super::hooks::{HookContext, HookRunner, PRE_PR_SUBMIT_HOOK, default_runner, run_pr_hook};
 use super::stack::stack_created_pull_request;
+use crate::commands::agent::store;
+use crate::commands::agent::types::SessionPrContext;
 use crate::commands::agent::{ensure_no_review_access, is_vibe_enabled};
 use crate::commands::ai::pr_series::{
     PrSeriesPlan, has_managed_section, load_plan_if_present, preserve_managed_section,
@@ -18,6 +20,7 @@ use crate::infra::github::{
 };
 use crate::infra::tq::TqClient;
 use crate::shared::config::load_config;
+use crate::shared::env_var::EnvVars;
 use crate::shared::human_in_the_loop::LockGuard;
 
 const SERIES_MARKERS_REQUIRED_ERROR: &str = indoc::indoc! {"
@@ -363,6 +366,8 @@ async fn run_impl(
         }
     };
 
+    record_submitted_pr_context(&target);
+
     if target_is_current_repo {
         let config_key = format!("branch.{}.pr-url", target.branch);
         if let Err(error) = write_config(&config_key, &pr_url) {
@@ -390,6 +395,54 @@ async fn run_impl(
     // Cleanup
     draft.cleanup()?;
 
+    Ok(())
+}
+
+fn record_submitted_pr_context(target: &PrTarget) {
+    let Some(session_id) = EnvVars::load().own_session_id() else {
+        return;
+    };
+    let sessions_dir = match store::sessions_dir() {
+        Ok(sessions_dir) => sessions_dir,
+        Err(error) => {
+            tracing::warn!(%error, "failed to locate session store for submitted PR context");
+            return;
+        }
+    };
+    if let Err(error) = record_submitted_pr_context_in(
+        &sessions_dir,
+        &session_id,
+        SessionPrContext {
+            owner: target.owner.clone(),
+            repo: target.repo.clone(),
+            branch: target.branch.clone(),
+            checklist_item_id: None,
+        },
+    ) {
+        tracing::warn!(
+            session_id,
+            error = %error,
+            "failed to record submitted PR context"
+        );
+    }
+}
+
+fn record_submitted_pr_context_in(
+    sessions_dir: &Path,
+    session_id: &str,
+    context: SessionPrContext,
+) -> anyhow::Result<()> {
+    store::update_session_in(sessions_dir, session_id, |session| {
+        if session.submitted_pr_contexts.iter().any(|existing| {
+            existing.owner == context.owner
+                && existing.repo == context.repo
+                && existing.branch == context.branch
+        }) {
+            return false;
+        }
+        session.submitted_pr_contexts.push(context);
+        true
+    })?;
     Ok(())
 }
 
@@ -596,6 +649,66 @@ mod tests {
 
     fn no_vibe_access(_owner: &str, _repo: &str) -> anyhow::Result<()> {
         anyhow::bail!("The --no-review option is only available when vibe mode is enabled.")
+    }
+
+    #[test]
+    fn submitted_pr_context_is_saved_once_without_replacing_the_cwd_context() {
+        let sessions_dir = tempfile::tempdir().expect("temporary session directory should exist");
+        let mut session: crate::commands::agent::types::Session =
+            serde_json::from_value(serde_json::json!({
+                "session_id": "sample-session",
+                "pr_context": {
+                    "owner": "example-owner",
+                    "repo": "example-repository",
+                    "branch": "cwd-branch",
+                },
+                "cwd": "/workspace/example",
+                "transcript_path": null,
+                "tmux_info": null,
+                "status": "stopped",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "last_message": null,
+            }))
+            .expect("fixture session should deserialize");
+        crate::commands::agent::store::save_session_to(sessions_dir.path(), &session)
+            .expect("fixture session should save");
+        let submitted_context = SessionPrContext {
+            owner: "example-owner".to_string(),
+            repo: "example-repository".to_string(),
+            branch: "submitted-branch".to_string(),
+            checklist_item_id: None,
+        };
+
+        record_submitted_pr_context_in(
+            sessions_dir.path(),
+            "sample-session",
+            submitted_context.clone(),
+        )
+        .expect("submitted context should be recorded");
+        record_submitted_pr_context_in(
+            sessions_dir.path(),
+            "sample-session",
+            submitted_context.clone(),
+        )
+        .expect("repeated submission should be idempotent");
+
+        session =
+            crate::commands::agent::store::load_session_from(sessions_dir.path(), "sample-session")
+                .expect("session store should be readable")
+                .expect("session should remain stored");
+        assert_eq!(
+            (session.pr_context, session.submitted_pr_contexts),
+            (
+                Some(SessionPrContext {
+                    owner: "example-owner".to_string(),
+                    repo: "example-repository".to_string(),
+                    branch: "cwd-branch".to_string(),
+                    checklist_item_id: None,
+                }),
+                vec![submitted_context],
+            ),
+        );
     }
 
     /// Captures every hook invocation so tests can assert on hook name, env,
