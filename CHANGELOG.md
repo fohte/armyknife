@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.739](https://github.com/fohte/armyknife/compare/v0.1.738...v0.1.739) (2026-11-15)
+
+
+### Bug Fixes
+
+* **agent:** protect local worktree changes ([#1861](https://github.com/fohte/armyknife/issues/1861)) ([c50d643](https://github.com/fohte/armyknife/commit/c50d6438bd9158fc1d1ed3b9b432cf9c02aaabed))
+
 ## [0.1.738](https://github.com/fohte/armyknife/compare/v0.1.737...v0.1.738) (2026-11-15)
 
 
