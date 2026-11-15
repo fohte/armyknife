@@ -1,6 +1,5 @@
-use std::future::Future;
 use std::io::{self, BufRead, IsTerminal, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -21,12 +20,12 @@ use crate::infra::git::{github_owner_and_repo, merge_status_from_git, merge_stat
 use crate::infra::github::{BranchPrQuery, GitHubClient};
 use crate::shared::active_session::{DraftProbe, TmuxDraftProbe, contains_active_session};
 use crate::shared::config::load_config;
-use crate::shared::hooks;
-use crate::shared::merge_notify::notify_delegator_of_merge;
 use crate::shared::repos_root::{discover_repos_with_worktrees, resolve_repos_root};
 use crate::shared::table::{color, pad_or_truncate};
 use crate::shared::worktree::{LinkedWorktree, get_main_repo, list_linked_worktrees};
 use crate::shared::worktree_error::{Result, WmError};
+
+mod delete;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct CleanArgs {
@@ -74,7 +73,7 @@ pub async fn run(args: &CleanArgs) -> Result<()> {
 
     let (mut to_delete, mut to_keep) = collect_worktrees(&main_repo, None).await?;
 
-    apply_worktree_change_protection(&mut to_delete, &mut to_keep, args.force);
+    let check_failures = apply_worktree_change_protection(&mut to_delete, &mut to_keep, args.force);
     apply_active_session_protection(&mut to_delete, &mut to_keep, args.force);
 
     if to_delete.is_empty() && to_keep.is_empty() {
@@ -87,12 +86,18 @@ pub async fn run(args: &CleanArgs) -> Result<()> {
     if to_delete.is_empty() {
         println!();
         println!("No merged worktrees to delete.");
+        if check_failures > 0 {
+            anyhow::bail!("Failed to check {check_failures} worktree(s)");
+        }
         return Ok(());
     }
 
     if args.dry_run {
         println!();
         println!("(dry-run mode, no changes made)");
+        if check_failures > 0 {
+            anyhow::bail!("Failed to check {check_failures} worktree(s)");
+        }
         return Ok(());
     }
 
@@ -103,7 +108,14 @@ pub async fn run(args: &CleanArgs) -> Result<()> {
     }
 
     println!();
-    delete_worktrees_single_repo(&main_repo, &to_delete, args.force).await?;
+    let delete_failures =
+        delete::delete_worktrees_single_repo(&main_repo, &to_delete, args.force).await?;
+    if check_failures + delete_failures > 0 {
+        anyhow::bail!(
+            "Failed to check or clean {} worktree(s)",
+            check_failures + delete_failures
+        );
+    }
 
     Ok(())
 }
@@ -250,7 +262,8 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
 
     spinner.finish_and_clear();
 
-    apply_worktree_change_protection(&mut all_to_delete, &mut all_to_keep, args.force);
+    let check_failures =
+        apply_worktree_change_protection(&mut all_to_delete, &mut all_to_keep, args.force);
     apply_active_session_protection(&mut all_to_delete, &mut all_to_keep, args.force);
 
     if all_to_delete.is_empty() && all_to_keep.is_empty() {
@@ -263,12 +276,18 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
     if all_to_delete.is_empty() {
         println!();
         println!("No merged worktrees to delete.");
+        if check_failures > 0 {
+            anyhow::bail!("Failed to check {check_failures} worktree(s)");
+        }
         return Ok(());
     }
 
     if args.dry_run {
         println!();
         println!("(dry-run mode, no changes made)");
+        if check_failures > 0 {
+            anyhow::bail!("Failed to check {check_failures} worktree(s)");
+        }
         return Ok(());
     }
 
@@ -279,7 +298,14 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
     }
 
     println!();
-    delete_worktrees_all_repos(&repos_root, &all_to_delete, args.force).await?;
+    let delete_failures =
+        delete::delete_worktrees_all_repos(&repos_root, &all_to_delete, args.force).await?;
+    if check_failures + delete_failures > 0 {
+        anyhow::bail!(
+            "Failed to check or clean {} worktree(s)",
+            check_failures + delete_failures
+        );
+    }
 
     Ok(())
 }
@@ -326,7 +352,7 @@ fn apply_worktree_change_protection(
     to_delete: &mut Vec<CleanWorktreeInfo>,
     to_keep: &mut Vec<CleanWorktreeInfo>,
     force: bool,
-) {
+) -> usize {
     apply_worktree_change_protection_with(to_delete, to_keep, force, |info| {
         match crate::shared::worktree::ensure_clean_for_deletion(&info.wt.path, false) {
             Ok(()) => Ok(false),
@@ -347,11 +373,12 @@ fn apply_worktree_change_protection_with(
     to_keep: &mut Vec<CleanWorktreeInfo>,
     force: bool,
     mut has_changes: impl FnMut(&CleanWorktreeInfo) -> Result<bool>,
-) {
+) -> usize {
     if force {
-        return;
+        return 0;
     }
 
+    let mut failure_count = 0;
     for mut info in std::mem::take(to_delete) {
         match has_changes(&info) {
             Ok(true) => {
@@ -360,11 +387,13 @@ fn apply_worktree_change_protection_with(
             }
             Ok(false) => to_delete.push(info),
             Err(error) => {
+                failure_count += 1;
                 info.change_check_error = Some(format!("{error:#}"));
                 to_keep.push(info);
             }
         }
     }
+    failure_count
 }
 
 /// Pure core of [`apply_active_session_protection`]. Exposed for tests so the
@@ -577,167 +606,6 @@ fn confirm_deletion<R: BufRead, W: Write>(
             false
         }
     }
-}
-
-/// Prints the indented detail lines for a successful worktree cleanup
-/// (branch/tmux/session/process results), shared by the single-repo and
-/// all-repos deletion loops.
-fn print_cleanup_result(result: &crate::shared::cleanup::WorktreeCleanupResult) {
-    if let Some(branch) = &result.branch_deleted {
-        println!("  Branch deleted: {branch}");
-    }
-    if result.windows_closed > 0 {
-        println!("  Tmux windows closed: {}", result.windows_closed);
-    }
-    if result.sessions_cleaned > 0 {
-        println!("  Sessions cleaned: {}", result.sessions_cleaned);
-    }
-    if result.process_groups_signaled > 0 {
-        println!(
-            "  Process groups signaled: {}",
-            result.process_groups_signaled
-        );
-    }
-}
-
-/// Delete all worktrees and their branches for a single repository.
-async fn delete_worktrees_single_repo(
-    repo: &GitRepo,
-    worktrees: &[CleanWorktreeInfo],
-    force: bool,
-) -> Result<()> {
-    let mut deleted_count = 0;
-
-    delete_worktrees_sequentially(
-        worktrees.iter().cloned(),
-        |info| async move { delete_one_worktree(repo, &info, force).await },
-        |info, result| {
-            let result = match result {
-                Ok(result) => result,
-                Err(error) => {
-                    eprintln!("Skipped {}: {error:#}", info.wt.name);
-                    return;
-                }
-            };
-
-            if result.worktree_deleted {
-                println!("Deleted: {}", info.wt.name);
-                deleted_count += 1;
-                print_cleanup_result(&result);
-            }
-        },
-    )
-    .await;
-
-    println!();
-    println!("Done. Deleted {deleted_count} worktree(s).");
-
-    Ok(())
-}
-
-/// Delete worktrees across multiple repositories (--all mode).
-/// Groups worktrees by repo_name to avoid reopening the same repository.
-async fn delete_worktrees_all_repos(
-    repos_root: &Path,
-    worktrees: &[CleanWorktreeInfo],
-    force: bool,
-) -> Result<()> {
-    let mut deleted_count = 0;
-
-    // Group worktrees by repository so input order doesn't matter
-    let mut by_repo: std::collections::BTreeMap<&str, Vec<&CleanWorktreeInfo>> =
-        std::collections::BTreeMap::new();
-    for info in worktrees {
-        let repo_name = info.repo_name.as_deref().unwrap_or("");
-        by_repo.entry(repo_name).or_default().push(info);
-    }
-
-    for (repo_name, infos) in &by_repo {
-        let repo_path = repos_root.join(repo_name);
-        let repo = match GitRepo::open_at(&repo_path) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("Warning: Failed to open {repo_name}: {e}");
-                continue;
-            }
-        };
-
-        let repo_ref = &repo;
-        delete_worktrees_sequentially(
-            infos.iter().map(|info| (**info).clone()),
-            |info| async move { delete_one_worktree(repo_ref, &info, force).await },
-            |info, result| {
-                let result = match result {
-                    Ok(result) => result,
-                    Err(error) => {
-                        eprintln!("Skipped {repo_name}/{}: {error:#}", info.wt.name);
-                        return;
-                    }
-                };
-
-                if result.worktree_deleted {
-                    println!("Deleted: {repo_name}/{}", info.wt.name);
-                    deleted_count += 1;
-                    print_cleanup_result(&result);
-                }
-            },
-        )
-        .await;
-    }
-
-    println!();
-    println!("Done. Deleted {deleted_count} worktree(s).");
-
-    Ok(())
-}
-
-async fn delete_worktrees_sequentially<F, Fut>(
-    worktrees: impl IntoIterator<Item = CleanWorktreeInfo>,
-    mut delete: F,
-    mut handle_result: impl FnMut(
-        CleanWorktreeInfo,
-        anyhow::Result<crate::shared::cleanup::WorktreeCleanupResult>,
-    ),
-) where
-    F: FnMut(CleanWorktreeInfo) -> Fut,
-    Fut: Future<Output = anyhow::Result<crate::shared::cleanup::WorktreeCleanupResult>>,
-{
-    for info in worktrees {
-        let result = delete(info.clone()).await;
-        handle_result(info, result);
-    }
-}
-
-async fn delete_one_worktree(
-    repo: &GitRepo,
-    info: &CleanWorktreeInfo,
-    force: bool,
-) -> Result<crate::shared::cleanup::WorktreeCleanupResult> {
-    crate::shared::worktree::ensure_clean_for_deletion(&info.wt.path, force)?;
-
-    // Delegate metadata is stored in session records that cleanup removes.
-    if info.status.is_merged() {
-        notify_delegator_of_merge(repo, &info.wt.branch, &info.wt.path).await;
-    }
-
-    crate::shared::cleanup::cleanup_worktree_by_name(
-        repo,
-        &info.wt.name,
-        &info.wt.path,
-        force,
-        || {
-            hooks::spawn_post_worktree_delete_hook(
-                repo.workdir(),
-                &info.wt.path,
-                hook_branch_name(&info.wt.branch),
-                info.status.is_merged(),
-            );
-        },
-    )
-}
-
-fn hook_branch_name(branch: &str) -> Option<&str> {
-    (!branch.is_empty() && branch != "(unknown)" && branch != "(detached)").then_some(branch)
 }
 
 /// Collect all worktrees and categorize them by merge status
@@ -1039,14 +907,15 @@ mod tests {
         let mut to_keep = Vec::new();
         let mut checked = Vec::new();
 
-        apply_worktree_change_protection_with(&mut to_delete, &mut to_keep, false, |info| {
-            checked.push(info.wt.name.clone());
-            if info.wt.name == "unreadable" {
-                Err(anyhow::anyhow!("git status failed"))
-            } else {
-                Ok(false)
-            }
-        });
+        let failure_count =
+            apply_worktree_change_protection_with(&mut to_delete, &mut to_keep, false, |info| {
+                checked.push(info.wt.name.clone());
+                if info.wt.name == "unreadable" {
+                    Err(anyhow::anyhow!("git status failed"))
+                } else {
+                    Ok(false)
+                }
+            });
 
         assert_eq!(
             (
@@ -1059,11 +928,13 @@ mod tests {
                     .iter()
                     .map(|info| (info.wt.name.as_str(), info.change_check_error.as_deref()))
                     .collect::<Vec<_>>(),
+                failure_count,
             ),
             (
                 vec!["unreadable".to_string(), "clean".to_string()],
                 vec!["clean"],
                 vec![("unreadable", Some("git status failed"))],
+                1,
             ),
         );
     }
@@ -1118,7 +989,7 @@ mod tests {
         let attempted = RefCell::new(Vec::new());
         let outcomes = RefCell::new(Vec::new());
 
-        delete_worktrees_sequentially(
+        let failed_count = delete::delete_worktrees_sequentially(
             worktrees,
             |info| {
                 let attempted = &attempted;
@@ -1146,7 +1017,7 @@ mod tests {
         .await;
 
         assert_eq!(
-            (attempted.into_inner(), outcomes.into_inner()),
+            (attempted.into_inner(), outcomes.into_inner(), failed_count),
             (
                 vec!["unreadable".to_string(), "clean".to_string()],
                 vec![
@@ -1156,6 +1027,7 @@ mod tests {
                     ),
                     ("clean".to_string(), Ok(true)),
                 ],
+                1,
             ),
         );
     }
