@@ -9,7 +9,8 @@ use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
 use crate::shared::merge_notify::notify_delegator_of_merge;
 use crate::shared::worktree::{
-    branch_to_worktree_name, find_worktree_name, get_main_repo, get_worktree_branch,
+    branch_to_worktree_name, ensure_clean_for_deletion, find_worktree_name, get_main_repo,
+    get_worktree_branch,
 };
 use crate::shared::worktree_error::WmError;
 
@@ -19,6 +20,7 @@ pub(crate) struct WorktreeDeletePlan {
     branch_name: Option<String>,
     worktree_path: PathBuf,
     merge_status: Option<MergeStatus>,
+    force: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -58,6 +60,8 @@ pub(crate) async fn prepare(
     let worktree_name = find_worktree_name(&main_repo, &worktree_path_str)?;
     let branch_name = get_worktree_branch(&main_repo, &worktree_name);
 
+    ensure_clean_for_deletion(&worktree_path, force)?;
+
     let merge_status =
         check_merge_status(&main_repo, branch_name.as_deref(), force, unmerged_policy).await?;
 
@@ -67,6 +71,7 @@ pub(crate) async fn prepare(
         branch_name,
         worktree_path,
         merge_status,
+        force,
     })
 }
 
@@ -77,8 +82,11 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
         branch_name,
         worktree_path,
         merge_status,
+        force,
     } = plan;
     let worktree_path_str = worktree_path.to_string_lossy();
+
+    ensure_clean_for_deletion(&worktree_path, force)?;
 
     // Must complete before cleanup_worktree_by_name below: it deletes this
     // worktree's session records and, when the command runs from the
@@ -101,8 +109,12 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
     // so we can close the window we're sitting in
     let current_window_id = tmux::get_window_id_if_in_path(&worktree_path_str);
 
-    let result =
-        cleanup::cleanup_worktree_by_name(&main_repo, &worktree_name, &worktree_path, || {
+    let result = cleanup::cleanup_worktree_by_name(
+        &main_repo,
+        &worktree_name,
+        &worktree_path,
+        force,
+        || {
             if !skip_hooks {
                 hooks::spawn_post_worktree_delete_hook(
                     main_repo.workdir(),
@@ -111,7 +123,21 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
                     merged,
                 );
             }
-        })?;
+        },
+    );
+
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            if hook_ran {
+                eprintln!(
+                    "note: the pre-worktree-delete hook already ran before this failure; \
+                     any process it stopped will not be restarted automatically"
+                );
+            }
+            return Err(error);
+        }
+    };
 
     if !result.worktree_deleted {
         if hook_ran {

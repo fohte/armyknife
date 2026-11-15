@@ -76,6 +76,20 @@ impl TestRepo {
         );
     }
 
+    /// Add and commit a tracked file in the main repository.
+    pub fn commit_file(&self, relative_path: &str, contents: &str) {
+        let file_path = self.path().join(relative_path);
+        if let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent).expect("Failed to create file parent directory");
+        }
+        std::fs::write(file_path, contents).expect("Failed to write file");
+        git(&self.path(), &["add", relative_path]);
+        git(
+            &self.path(),
+            &["commit", "-q", "-m", "Add tracked test file"],
+        );
+    }
+
     /// Get the path to a worktree.
     pub fn worktree_path(&self, branch_name: &str) -> PathBuf {
         self.path().join(".worktrees").join(branch_name)

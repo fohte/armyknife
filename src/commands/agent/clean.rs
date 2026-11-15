@@ -1,5 +1,5 @@
 use std::io::{self, BufRead, IsTerminal, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -20,12 +20,12 @@ use crate::infra::git::{github_owner_and_repo, merge_status_from_git, merge_stat
 use crate::infra::github::{BranchPrQuery, GitHubClient};
 use crate::shared::active_session::{DraftProbe, TmuxDraftProbe, contains_active_session};
 use crate::shared::config::load_config;
-use crate::shared::hooks;
-use crate::shared::merge_notify::notify_delegator_of_merge;
 use crate::shared::repos_root::{discover_repos_with_worktrees, resolve_repos_root};
 use crate::shared::table::{color, pad_or_truncate};
 use crate::shared::worktree::{LinkedWorktree, get_main_repo, list_linked_worktrees};
 use crate::shared::worktree_error::{Result, WmError};
+
+mod delete;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct CleanArgs {
@@ -37,8 +37,7 @@ pub struct CleanArgs {
     #[arg(long)]
     pub all: bool,
 
-    /// Delete even worktrees that currently host an active Claude Code session.
-    /// Without this flag, such worktrees are kept regardless of merge status.
+    /// Delete worktrees with active sessions or uncommitted changes.
     #[arg(long)]
     pub force: bool,
 
@@ -48,6 +47,7 @@ pub struct CleanArgs {
 }
 
 /// Worktree with merge status for clean command.
+#[derive(Clone)]
 struct CleanWorktreeInfo {
     wt: LinkedWorktree,
     status: MergeStatus,
@@ -57,6 +57,8 @@ struct CleanWorktreeInfo {
     /// kept for that reason (overrides merge-status-based deletion unless
     /// `--force` is set).
     has_active_session: bool,
+    has_uncommitted_changes: bool,
+    change_check_error: Option<String>,
 }
 
 pub async fn run(args: &CleanArgs) -> Result<()> {
@@ -71,6 +73,7 @@ pub async fn run(args: &CleanArgs) -> Result<()> {
 
     let (mut to_delete, mut to_keep) = collect_worktrees(&main_repo, None).await?;
 
+    let check_failures = apply_worktree_change_protection(&mut to_delete, &mut to_keep, args.force);
     apply_active_session_protection(&mut to_delete, &mut to_keep, args.force);
 
     if to_delete.is_empty() && to_keep.is_empty() {
@@ -83,12 +86,18 @@ pub async fn run(args: &CleanArgs) -> Result<()> {
     if to_delete.is_empty() {
         println!();
         println!("No merged worktrees to delete.");
+        if check_failures > 0 {
+            anyhow::bail!("Failed to check {check_failures} worktree(s)");
+        }
         return Ok(());
     }
 
     if args.dry_run {
         println!();
         println!("(dry-run mode, no changes made)");
+        if check_failures > 0 {
+            anyhow::bail!("Failed to check {check_failures} worktree(s)");
+        }
         return Ok(());
     }
 
@@ -99,7 +108,14 @@ pub async fn run(args: &CleanArgs) -> Result<()> {
     }
 
     println!();
-    delete_worktrees_single_repo(&main_repo, &to_delete).await?;
+    let delete_failures =
+        delete::delete_worktrees_single_repo(&main_repo, &to_delete, args.force).await?;
+    if check_failures + delete_failures > 0 {
+        anyhow::bail!(
+            "Failed to check or clean {} worktree(s)",
+            check_failures + delete_failures
+        );
+    }
 
     Ok(())
 }
@@ -232,6 +248,8 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
                 status,
                 repo_name: Some(rd.repo_name.clone()),
                 has_active_session: false,
+                has_uncommitted_changes: false,
+                change_check_error: None,
             };
 
             if should_delete {
@@ -244,6 +262,8 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
 
     spinner.finish_and_clear();
 
+    let check_failures =
+        apply_worktree_change_protection(&mut all_to_delete, &mut all_to_keep, args.force);
     apply_active_session_protection(&mut all_to_delete, &mut all_to_keep, args.force);
 
     if all_to_delete.is_empty() && all_to_keep.is_empty() {
@@ -256,12 +276,18 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
     if all_to_delete.is_empty() {
         println!();
         println!("No merged worktrees to delete.");
+        if check_failures > 0 {
+            anyhow::bail!("Failed to check {check_failures} worktree(s)");
+        }
         return Ok(());
     }
 
     if args.dry_run {
         println!();
         println!("(dry-run mode, no changes made)");
+        if check_failures > 0 {
+            anyhow::bail!("Failed to check {check_failures} worktree(s)");
+        }
         return Ok(());
     }
 
@@ -272,7 +298,14 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
     }
 
     println!();
-    delete_worktrees_all_repos(&repos_root, &all_to_delete).await?;
+    let delete_failures =
+        delete::delete_worktrees_all_repos(&repos_root, &all_to_delete, args.force).await?;
+    if check_failures + delete_failures > 0 {
+        anyhow::bail!(
+            "Failed to check or clean {} worktree(s)",
+            check_failures + delete_failures
+        );
+    }
 
     Ok(())
 }
@@ -315,6 +348,54 @@ fn apply_active_session_protection(
     protect_active_worktrees(to_delete, to_keep, &sessions, timeout, &TmuxDraftProbe);
 }
 
+fn apply_worktree_change_protection(
+    to_delete: &mut Vec<CleanWorktreeInfo>,
+    to_keep: &mut Vec<CleanWorktreeInfo>,
+    force: bool,
+) -> usize {
+    apply_worktree_change_protection_with(to_delete, to_keep, force, |info| {
+        match crate::shared::worktree::ensure_clean_for_deletion(&info.wt.path, false) {
+            Ok(()) => Ok(false),
+            Err(error)
+                if error
+                    .downcast_ref::<crate::shared::worktree::DirtyWorktreeError>()
+                    .is_some() =>
+            {
+                Ok(true)
+            }
+            Err(error) => Err(error),
+        }
+    })
+}
+
+fn apply_worktree_change_protection_with(
+    to_delete: &mut Vec<CleanWorktreeInfo>,
+    to_keep: &mut Vec<CleanWorktreeInfo>,
+    force: bool,
+    mut has_changes: impl FnMut(&CleanWorktreeInfo) -> Result<bool>,
+) -> usize {
+    if force {
+        return 0;
+    }
+
+    let mut failure_count = 0;
+    for mut info in std::mem::take(to_delete) {
+        match has_changes(&info) {
+            Ok(true) => {
+                info.has_uncommitted_changes = true;
+                to_keep.push(info);
+            }
+            Ok(false) => to_delete.push(info),
+            Err(error) => {
+                failure_count += 1;
+                info.change_check_error = Some(format!("{error:#}"));
+                to_keep.push(info);
+            }
+        }
+    }
+    failure_count
+}
+
 /// Pure core of [`apply_active_session_protection`]. Exposed for tests so the
 /// session list, timeout, and activity probe can be injected without
 /// touching disk or tmux.
@@ -335,6 +416,8 @@ fn protect_active_worktrees<P: DraftProbe>(
                 status: info.status.clone(),
                 repo_name: info.repo_name.clone(),
                 has_active_session: true,
+                has_uncommitted_changes: info.has_uncommitted_changes,
+                change_check_error: info.change_check_error.clone(),
             });
             false
         } else {
@@ -455,16 +538,28 @@ fn render_worktrees_table<W: Write>(
             format!("{icon} ")
         };
         let base_status = format!("{status_col}{icon_part}{status_text}{}", color::RESET);
-        let colored_status = if info.has_active_session {
-            format!(
-                "{}{} ⏵ active session{}",
-                base_status,
+        let mut colored_status = base_status;
+        if info.has_active_session {
+            colored_status.push_str(&format!(
+                "{} ⏵ active session{}",
                 color::YELLOW,
                 color::RESET
-            )
-        } else {
-            base_status
-        };
+            ));
+        }
+        if info.has_uncommitted_changes {
+            colored_status.push_str(&format!(
+                "{} ⏵ uncommitted changes{}",
+                color::YELLOW,
+                color::RESET
+            ));
+        }
+        if let Some(error) = &info.change_check_error {
+            colored_status.push_str(&format!(
+                "{} ⏵ change check failed: {error}{}",
+                color::YELLOW,
+                color::RESET
+            ));
+        }
 
         if show_repo {
             let repo_cell = pad_or_truncate(info.repo_name.as_deref().unwrap_or(""), REPO_WIDTH);
@@ -513,116 +608,6 @@ fn confirm_deletion<R: BufRead, W: Write>(
     }
 }
 
-/// Prints the indented detail lines for a successful worktree cleanup
-/// (branch/tmux/session/process results), shared by the single-repo and
-/// all-repos deletion loops.
-fn print_cleanup_result(result: &crate::shared::cleanup::WorktreeCleanupResult) {
-    if let Some(branch) = &result.branch_deleted {
-        println!("  Branch deleted: {branch}");
-    }
-    if result.windows_closed > 0 {
-        println!("  Tmux windows closed: {}", result.windows_closed);
-    }
-    if result.sessions_cleaned > 0 {
-        println!("  Sessions cleaned: {}", result.sessions_cleaned);
-    }
-    if result.process_groups_signaled > 0 {
-        println!(
-            "  Process groups signaled: {}",
-            result.process_groups_signaled
-        );
-    }
-}
-
-/// Delete all worktrees and their branches for a single repository.
-async fn delete_worktrees_single_repo(
-    repo: &GitRepo,
-    worktrees: &[CleanWorktreeInfo],
-) -> Result<()> {
-    let mut deleted_count = 0;
-
-    for info in worktrees {
-        let result = delete_one_worktree(repo, info).await?;
-
-        if result.worktree_deleted {
-            println!("Deleted: {}", info.wt.name);
-            deleted_count += 1;
-            print_cleanup_result(&result);
-        }
-    }
-
-    println!();
-    println!("Done. Deleted {deleted_count} worktree(s).");
-
-    Ok(())
-}
-
-/// Delete worktrees across multiple repositories (--all mode).
-/// Groups worktrees by repo_name to avoid reopening the same repository.
-async fn delete_worktrees_all_repos(
-    repos_root: &Path,
-    worktrees: &[CleanWorktreeInfo],
-) -> Result<()> {
-    let mut deleted_count = 0;
-
-    // Group worktrees by repository so input order doesn't matter
-    let mut by_repo: std::collections::BTreeMap<&str, Vec<&CleanWorktreeInfo>> =
-        std::collections::BTreeMap::new();
-    for info in worktrees {
-        let repo_name = info.repo_name.as_deref().unwrap_or("");
-        by_repo.entry(repo_name).or_default().push(info);
-    }
-
-    for (repo_name, infos) in &by_repo {
-        let repo_path = repos_root.join(repo_name);
-        let repo = match GitRepo::open_at(&repo_path) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("Warning: Failed to open {repo_name}: {e}");
-                continue;
-            }
-        };
-
-        for info in infos {
-            let result = delete_one_worktree(&repo, info).await?;
-
-            if result.worktree_deleted {
-                println!("Deleted: {repo_name}/{}", info.wt.name);
-                deleted_count += 1;
-                print_cleanup_result(&result);
-            }
-        }
-    }
-
-    println!();
-    println!("Done. Deleted {deleted_count} worktree(s).");
-
-    Ok(())
-}
-
-async fn delete_one_worktree(
-    repo: &GitRepo,
-    info: &CleanWorktreeInfo,
-) -> Result<crate::shared::cleanup::WorktreeCleanupResult> {
-    // Delegate metadata is stored in session records that cleanup removes.
-    if info.status.is_merged() {
-        notify_delegator_of_merge(repo, &info.wt.branch, &info.wt.path).await;
-    }
-
-    crate::shared::cleanup::cleanup_worktree_by_name(repo, &info.wt.name, &info.wt.path, || {
-        hooks::spawn_post_worktree_delete_hook(
-            repo.workdir(),
-            &info.wt.path,
-            hook_branch_name(&info.wt.branch),
-            info.status.is_merged(),
-        );
-    })
-}
-
-fn hook_branch_name(branch: &str) -> Option<&str> {
-    (!branch.is_empty() && branch != "(unknown)" && branch != "(detached)").then_some(branch)
-}
-
 /// Collect all worktrees and categorize them by merge status
 async fn collect_worktrees(
     repo: &GitRepo,
@@ -643,6 +628,8 @@ async fn collect_worktrees(
             status,
             repo_name: repo_name.map(|s| s.to_string()),
             has_active_session: false,
+            has_uncommitted_changes: false,
+            change_check_error: None,
         };
 
         if should_delete {
@@ -829,6 +816,8 @@ mod tests {
             status,
             repo_name: None,
             has_active_session: false,
+            has_uncommitted_changes: false,
+            change_check_error: None,
         }
     }
 
@@ -849,7 +838,158 @@ mod tests {
             status,
             repo_name: Some(repo_name.to_string()),
             has_active_session: false,
+            has_uncommitted_changes: false,
+            change_check_error: None,
         }
+    }
+
+    #[test]
+    fn dirty_worktrees_are_kept_before_confirmation() {
+        let mut to_delete = vec![
+            make_clean_info(
+                "dirty",
+                PathBuf::from("/worktrees/dirty"),
+                "fohte/dirty",
+                MergeStatus::Merged {
+                    reason: "merged".to_string(),
+                },
+            ),
+            make_clean_info(
+                "clean",
+                PathBuf::from("/worktrees/clean"),
+                "fohte/clean",
+                MergeStatus::Merged {
+                    reason: "merged".to_string(),
+                },
+            ),
+        ];
+        let mut to_keep = Vec::new();
+
+        apply_worktree_change_protection_with(&mut to_delete, &mut to_keep, false, |info| {
+            Ok(info.wt.name == "dirty")
+        });
+
+        assert_eq!(
+            (
+                to_delete
+                    .iter()
+                    .map(|info| info.wt.name.as_str())
+                    .collect::<Vec<_>>(),
+                to_keep
+                    .iter()
+                    .map(|info| (info.wt.name.as_str(), info.has_uncommitted_changes))
+                    .collect::<Vec<_>>(),
+            ),
+            (vec!["clean"], vec![("dirty", true)]),
+        );
+    }
+
+    #[test]
+    fn worktree_check_errors_are_kept_and_do_not_block_later_worktrees() {
+        let mut to_delete = vec![
+            make_clean_info(
+                "unreadable",
+                PathBuf::from("/worktrees/unreadable"),
+                "fohte/unreadable",
+                MergeStatus::Merged {
+                    reason: "merged".to_string(),
+                },
+            ),
+            make_clean_info(
+                "clean",
+                PathBuf::from("/worktrees/clean"),
+                "fohte/clean",
+                MergeStatus::Merged {
+                    reason: "merged".to_string(),
+                },
+            ),
+        ];
+        let mut to_keep = Vec::new();
+        let mut checked = Vec::new();
+
+        let failure_count =
+            apply_worktree_change_protection_with(&mut to_delete, &mut to_keep, false, |info| {
+                checked.push(info.wt.name.clone());
+                if info.wt.name == "unreadable" {
+                    Err(anyhow::anyhow!("git status failed"))
+                } else {
+                    Ok(false)
+                }
+            });
+
+        assert_eq!(
+            (
+                checked,
+                to_delete
+                    .iter()
+                    .map(|info| info.wt.name.as_str())
+                    .collect::<Vec<_>>(),
+                to_keep
+                    .iter()
+                    .map(|info| (info.wt.name.as_str(), info.change_check_error.as_deref()))
+                    .collect::<Vec<_>>(),
+                failure_count,
+            ),
+            (
+                vec!["unreadable".to_string(), "clean".to_string()],
+                vec!["clean"],
+                vec![("unreadable", Some("git status failed"))],
+                1,
+            ),
+        );
+    }
+
+    #[test]
+    fn worktree_check_errors_are_shown_in_the_keep_reason() {
+        let mut unreadable = make_clean_info(
+            "unreadable",
+            PathBuf::from("/worktrees/unreadable"),
+            "fohte/unreadable",
+            MergeStatus::Merged {
+                reason: "merged".to_string(),
+            },
+        );
+        unreadable.change_check_error = Some("git status failed".to_string());
+
+        let mut output = Vec::new();
+        render_worktrees_table(&mut output, &[], &[unreadable], false)
+            .expect("render should succeed");
+
+        assert_eq!(
+            String::from_utf8(output).expect("valid utf8"),
+            format!(
+                "ACTION NAME                         BRANCH                       STATUS\n\
+                 KEEP   unreadable                   fohte/unreadable             \x1b[35m✓ merged\x1b[0m{} ⏵ change check failed: git status failed{}\n",
+                color::YELLOW,
+                color::RESET,
+            ),
+        );
+    }
+
+    #[test]
+    fn dirty_worktree_rows_explain_why_they_are_kept() {
+        let mut dirty = make_clean_info(
+            "dirty",
+            PathBuf::from("/worktrees/dirty"),
+            "fohte/dirty",
+            MergeStatus::Merged {
+                reason: "merged".to_string(),
+            },
+        );
+        dirty.has_uncommitted_changes = true;
+
+        let mut output = Vec::new();
+        render_worktrees_table(&mut output, &[], &[dirty], false).expect("render should succeed");
+
+        assert_eq!(
+            String::from_utf8(output).expect("valid utf8"),
+            format!(
+                "ACTION NAME                         BRANCH                       STATUS\n\
+                 KEEP   dirty                        fohte/dirty                  \x1b[35m✓ merged\x1b[0m{} ⏵ uncommitted changes{}\n",
+                color::YELLOW,
+                color::RESET,
+            ),
+        );
     }
 
     // delete_worktrees_single_repo and delete_worktrees_all_repos are not

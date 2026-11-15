@@ -46,7 +46,7 @@ pub struct CloseArgs {
     #[arg(long, requires = "target")]
     pub child: bool,
 
-    /// Override session safety checks and unmerged-worktree confirmation.
+    /// Override session safety checks, unmerged-worktree confirmation, and worktree change protection.
     #[arg(long)]
     pub force: bool,
 

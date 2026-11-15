@@ -110,7 +110,7 @@ export function useCommandPaletteController({
           if (batch === undefined) continue
 
           let failure: string | null = null
-          let unmergedSessionId: string | null = null
+          let keepWorktreeSessionId: string | null = null
           for (const session of batch.sessions) {
             const result = await runOperation({
               type: 'close',
@@ -120,8 +120,11 @@ export function useCommandPaletteController({
             if (result.isErr()) {
               failure =
                 result.error.message || `Could not close ${session.title}.`
-              if (result.error.code === 'unmerged_worktree') {
-                unmergedSessionId = session.id
+              if (
+                result.error.code === 'unmerged_worktree' ||
+                result.error.code === 'dirty_worktree'
+              ) {
+                keepWorktreeSessionId = session.id
               }
               break
             }
@@ -132,7 +135,7 @@ export function useCommandPaletteController({
           if (failure !== null) {
             lastFailure = failure
             setError(failure)
-            setCloseRetrySessionId(unmergedSessionId)
+            setCloseRetrySessionId(keepWorktreeSessionId)
           } else {
             batch.sessions.forEach(({ id }) => {
               clearSessionAttachments(id)

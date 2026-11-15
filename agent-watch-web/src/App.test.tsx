@@ -2715,68 +2715,87 @@ it('closes all Done sessions from the Inbox heading and reports failures', async
   })
 })
 
-it('offers to keep an unmerged worktree and retries Close with that choice', async () => {
-  const closeBodies: string[] = []
-  const fetchMock = vi.fn<typeof fetch>().mockImplementation((input, init) => {
-    if (!requestUrl(input).endsWith('/close')) {
-      return mockSessionActionFetch(input)
-    }
-    closeBodies.push(typeof init?.body === 'string' ? init.body : '')
-    return Promise.resolve(
-      closeBodies.length === 1
-        ? new Response(
-            JSON.stringify({
-              error:
-                'Branch `sample-branch` is not merged (pull request is open); close the session while keeping its worktree to continue',
-              code: 'unmerged_worktree',
-            }),
-            { status: 409 },
-          )
-        : new Response(null, { status: 204 }),
-    )
-  })
-  vi.stubGlobal('fetch', fetchMock)
-  renderApp()
-  publishSessions({
-    revision: 1,
-    sessions: [session('session-unmerged', 'Unmerged session', 'done')],
-  })
-  act(() => {
-    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
-  })
-  await act(async () => {
-    await flushAsyncState()
-  })
-  await act(async () => {
-    container.querySelector<HTMLButtonElement>('.conversation-close')?.click()
-    await flushAsyncState()
-  })
-  function closeFailureSnapshot() {
-    return {
+it.each([
+  {
+    caseName: 'unmerged worktree',
+    code: 'unmerged_worktree',
+    message:
+      'Branch `sample-branch` is not merged (pull request is open); close the session while keeping its worktree to continue',
+    sessionId: 'session-unmerged',
+  },
+  {
+    caseName: 'dirty worktree',
+    code: 'dirty_worktree',
+    message:
+      'Worktree contains uncommitted changes or untracked files: /worktrees/sample; commit or move them before closing',
+    sessionId: 'session-dirty',
+  },
+])(
+  'offers to keep a $caseName and retries Close with that choice',
+  async ({ code, message, sessionId }) => {
+    const closeBodies: string[] = []
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementation((input, init) => {
+        if (!requestUrl(input).endsWith('/close')) {
+          return mockSessionActionFetch(input)
+        }
+        closeBodies.push(typeof init?.body === 'string' ? init.body : '')
+        return Promise.resolve(
+          closeBodies.length === 1
+            ? new Response(
+                JSON.stringify({
+                  error: message,
+                  code,
+                }),
+                { status: 409 },
+              )
+            : new Response(null, { status: 204 }),
+        )
+      })
+    vi.stubGlobal('fetch', fetchMock)
+    renderApp()
+    publishSessions({
+      revision: 1,
+      sessions: [session(sessionId, 'Session with retained worktree', 'done')],
+    })
+    act(() => {
+      container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+    })
+    await act(async () => {
+      await flushAsyncState()
+    })
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('.conversation-close')?.click()
+      await flushAsyncState()
+    })
+    const initialFailure = {
       error: container.querySelector('.load-message.is-error p')?.textContent,
       choice: container.querySelector('.load-message.is-error button')
         ?.textContent,
-      closeBodies: closeBodies.map((body) => JSON.parse(body) as unknown),
     }
-  }
-  expect(closeFailureSnapshot()).toEqual({
-    error:
-      'Branch `sample-branch` is not merged (pull request is open); close the session while keeping its worktree to continue',
-    choice: 'Close and keep worktree',
-    closeBodies: [{ keepWorktree: false }],
-  })
-  await act(async () => {
-    container
-      .querySelector<HTMLButtonElement>('.load-message.is-error button')
-      ?.click()
-    await flushAsyncState()
-  })
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('.load-message.is-error button')
+        ?.click()
+      await flushAsyncState()
+    })
 
-  expect(closeBodies.map((body) => JSON.parse(body) as unknown)).toEqual([
-    { keepWorktree: false },
-    { keepWorktree: true },
-  ])
-})
+    function closeRetrySnapshot() {
+      return {
+        initialFailure,
+        closeBodies: closeBodies.map((body) => JSON.parse(body) as unknown),
+      }
+    }
+    expect(closeRetrySnapshot()).toEqual({
+      initialFailure: {
+        error: message,
+        choice: 'Close and keep worktree',
+      },
+      closeBodies: [{ keepWorktree: false }, { keepWorktree: true }],
+    })
+  },
+)
 
 it('closes the selected Done session with E and leaves other categories alone', async () => {
   const fetchMock = vi
