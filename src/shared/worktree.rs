@@ -55,12 +55,14 @@ fn ensure_clean_for_deletion_with(
 pub(crate) fn delete_worktree_if_clean(
     worktree_path: &std::path::Path,
     force: bool,
+    before_delete: impl FnOnce() -> anyhow::Result<()>,
     delete: impl FnOnce() -> anyhow::Result<bool>,
 ) -> anyhow::Result<bool> {
     delete_worktree_if_clean_with(
         worktree_path,
         force,
         |path| run_git(path, ["status", "--porcelain", "--untracked-files=normal"]),
+        before_delete,
         delete,
     )
 }
@@ -69,9 +71,11 @@ fn delete_worktree_if_clean_with(
     worktree_path: &std::path::Path,
     force: bool,
     status: impl FnOnce(&std::path::Path) -> anyhow::Result<String>,
+    before_delete: impl FnOnce() -> anyhow::Result<()>,
     delete: impl FnOnce() -> anyhow::Result<bool>,
 ) -> anyhow::Result<bool> {
     ensure_clean_for_deletion_with(worktree_path, force, status)?;
+    before_delete()?;
     delete()
 }
 
@@ -282,19 +286,20 @@ mod tests {
     use rstest::rstest;
 
     #[rstest]
-    #[case::clean_without_force("", false, true, (true, false, true, true))]
-    #[case::tracked_change_without_force(" M tracked.txt\n", false, true, (false, true, true, false))]
-    #[case::untracked_file_without_force("?? scratch.txt\n", false, true, (false, true, true, false))]
-    #[case::untracked_file_with_force("?? scratch.txt\n", true, true, (true, false, false, true))]
-    #[case::missing_worktree_skips_status("?? scratch.txt\n", false, false, (true, false, false, true))]
+    #[case::clean_without_force("", false, true, (true, false, true, true, true))]
+    #[case::tracked_change_without_force(" M tracked.txt\n", false, true, (false, true, true, false, false))]
+    #[case::untracked_file_without_force("?? scratch.txt\n", false, true, (false, true, true, false, false))]
+    #[case::untracked_file_with_force("?? scratch.txt\n", true, true, (true, false, false, true, true))]
+    #[case::missing_worktree_skips_status("?? scratch.txt\n", false, false, (true, false, false, true, true))]
     fn delete_worktree_checks_status_before_removal(
         #[case] status: &str,
         #[case] force: bool,
         #[case] worktree_exists: bool,
-        #[case] expected: (bool, bool, bool, bool),
+        #[case] expected: (bool, bool, bool, bool, bool),
     ) {
         let directory = tempfile::tempdir().expect("temporary worktree should be created");
         let status_queried = Cell::new(false);
+        let before_delete_called = Cell::new(false);
         let removed = Cell::new(false);
         let missing_path = directory.path().join("missing");
 
@@ -311,6 +316,10 @@ mod tests {
                 Ok(status.to_string())
             },
             || {
+                before_delete_called.set(true);
+                Ok(())
+            },
+            || {
                 removed.set(true);
                 Ok(true)
             },
@@ -325,6 +334,7 @@ mod tests {
                 result.is_ok(),
                 rejected_as_dirty,
                 status_queried.get(),
+                before_delete_called.get(),
                 removed.get()
             ),
             expected,

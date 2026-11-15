@@ -2741,7 +2741,7 @@ it.each([
     caseName: 'worktree whose processes cannot be checked',
     code: 'worktree_process_guard',
     message:
-      "Cannot check for running processes in worktree '/worktrees/sample'. Make lsof and ps available, or close the session while keeping the worktree.",
+      "Could not inspect processes in worktree '/worktrees/sample'. Ensure lsof and ps are available and working, or close the session while keeping the worktree.",
     sessionId: 'session-uncheckable-processes',
   },
 ])(

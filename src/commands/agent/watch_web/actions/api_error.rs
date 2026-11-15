@@ -83,9 +83,24 @@ impl ApiError {
         if let Some(process_guard) =
             error.downcast_ref::<crate::shared::cleanup::WorktreeProcessGuardError>()
         {
+            let message = match process_guard {
+                crate::shared::cleanup::WorktreeProcessGuardError::ActiveProcesses {
+                    worktree_path,
+                    process_list,
+                } => format!(
+                    "Worktree '{}' contains running processes: {process_list}. Stop them and retry, or close the session while keeping the worktree.",
+                    worktree_path.display(),
+                ),
+                crate::shared::cleanup::WorktreeProcessGuardError::InspectionUnavailable {
+                    worktree_path,
+                } => format!(
+                    "Could not inspect processes in worktree '{}'. Ensure lsof and ps are available and working, or close the session while keeping the worktree.",
+                    worktree_path.display(),
+                ),
+            };
             return Self {
                 status: StatusCode::CONFLICT,
-                message: process_guard.watch_web_message(),
+                message,
                 code: Some("worktree_process_guard"),
             };
         }
@@ -182,7 +197,7 @@ mod tests {
             (error.status, error.message, error.code),
             (
                 StatusCode::CONFLICT,
-                "Cannot check for running processes in worktree '/worktrees/uncheckable'. Make lsof and ps available, or close the session while keeping the worktree.".to_string(),
+                "Could not inspect processes in worktree '/worktrees/uncheckable'. Ensure lsof and ps are available and working, or close the session while keeping the worktree.".to_string(),
                 Some("worktree_process_guard"),
             ),
         );

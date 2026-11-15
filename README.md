@@ -1270,7 +1270,7 @@ cargo build
 
 ### `a agent clean`
 
-Delete merged or closed worktrees in the current repository. Without `--force`, worktrees with non-shell processes, uncommitted changes, or untracked files are kept and reported while cleanup continues. Pass `--all` to scan repositories under `agent.worktree.repos_root`. The `ACTION` column shows `DELETE` for worktrees the confirmation will remove and `KEEP` for the rest. Confirmation must be entered through terminal stdin; piped input is not accepted. To remove a single worktree, use `a agent close <worktree>`.
+Delete merged or closed worktrees in the current repository. Without `--force`, worktrees with non-shell processes, uncommitted changes, or untracked files are kept and reported while cleanup continues. Pass `--all` to scan repositories under `agent.worktree.repos_root`. The `ACTION` column marks `DELETE` candidates based on the checks available before confirmation; process inspection happens during cleanup and may still keep a candidate worktree. `KEEP` marks worktrees already known to be ineligible. Confirmation must be entered through terminal stdin; piped input is not accepted. To remove a single worktree, use `a agent close <worktree>`.
 
 Unless deletion is cancelled, failures checking or deleting a worktree or reopening a repository with `--all` are reported; cleanup continues with the remaining worktrees and the command exits with an error afterward. A failed status check also causes a non-zero exit in `--dry-run` mode.
 
@@ -1278,7 +1278,7 @@ When `a agent close`, `a agent clean`, or the TUI clean view's background cleanu
 
 After `a agent close`, `a agent clean`, or the TUI clean view removes a worktree successfully, armyknife starts the configured `post-worktree-delete` hook in a detached session. The hook receives the deleted worktree path, branch, repository root, and whether the branch was merged; see [Hooks](docs/hooks.md#post-worktree-delete).
 
-Without `--force`, worktree cleanup checks for non-shell processes whose current working directory is inside the worktree and stops if any are found. Shell-only panes are closed with the worktree. The check requires `lsof` and `ps`; deletion stops if either tool is unavailable. With `--force`, cleanup sends SIGTERM to process groups rooted in the worktree (for example, a dev server left running by a detached background job). The calling process and its ancestors are never targeted. A process that ignores SIGTERM may remain running.
+Without `--force`, worktree cleanup checks for non-shell processes whose current working directory is inside the worktree and stops if any are found. Shell-only panes are closed with the worktree. The check requires `lsof` and `ps`; deletion stops if either tool is unavailable or fails. With `--force`, cleanup sends SIGTERM to process groups rooted in the worktree (for example, a dev server left running by a detached background job). If `lsof` or `ps` cannot inspect processes, deletion proceeds without signaling process groups. The calling process and its ancestors are never targeted. A process that ignores SIGTERM may remain running.
 
 Options:
 

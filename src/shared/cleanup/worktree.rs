@@ -18,27 +18,9 @@ pub enum WorktreeProcessGuardError {
         process_list: String,
     },
     #[error(
-        "Could not check for active processes in worktree '{worktree_path}' because lsof or ps is unavailable; ensure both are available or pass --force to delete the worktree"
+        "Could not inspect processes in worktree '{worktree_path}'; ensure lsof and ps are available and working, or pass --force to delete the worktree"
     )]
     InspectionUnavailable { worktree_path: PathBuf },
-}
-
-impl WorktreeProcessGuardError {
-    pub fn watch_web_message(&self) -> String {
-        match self {
-            Self::ActiveProcesses {
-                worktree_path,
-                process_list,
-            } => format!(
-                "Worktree '{}' contains running processes: {process_list}. Stop them and retry, or close the session while keeping the worktree.",
-                worktree_path.display(),
-            ),
-            Self::InspectionUnavailable { worktree_path } => format!(
-                "Cannot check for running processes in worktree '{}'. Make lsof and ps available, or close the session while keeping the worktree.",
-                worktree_path.display(),
-            ),
-        }
-    }
 }
 
 /// Result of worktree resource cleanup.
@@ -129,8 +111,6 @@ pub fn cleanup_worktree_by_name(
     after_delete: impl FnOnce(),
 ) -> anyhow::Result<WorktreeCleanupResult> {
     cleanup_worktree_by_name_with_operations(
-        repo,
-        worktree_name,
         worktree_path,
         force,
         after_delete,
@@ -143,6 +123,11 @@ pub fn cleanup_worktree_by_name(
             },
             kill_groups: process::kill_process_groups,
             kill_window: |window_id: &str| tmux::kill_window(window_id).is_ok(),
+            delete_worktree: |force, path: PathBuf, detect_processes| {
+                delete_worktree_and_branch(repo, worktree_name, &path, force, || {
+                    check_process_guard(&path, force, detect_processes)
+                })
+            },
         },
     )
 }
@@ -154,6 +139,7 @@ struct WorktreeCleanupOperations<
     CleanSessions,
     KillGroups,
     KillWindow,
+    DeleteWorktree,
 > {
     detect_processes: DetectProcesses,
     find_windows: FindWindows,
@@ -161,6 +147,7 @@ struct WorktreeCleanupOperations<
     clean_sessions: CleanSessions,
     kill_groups: KillGroups,
     kill_window: KillWindow,
+    delete_worktree: DeleteWorktree,
 }
 
 fn cleanup_worktree_by_name_with_operations<
@@ -170,9 +157,8 @@ fn cleanup_worktree_by_name_with_operations<
     CleanSessions,
     KillGroups,
     KillWindow,
+    DeleteWorktree,
 >(
-    repo: &GitRepo,
-    worktree_name: &str,
     worktree_path: &Path,
     force: bool,
     after_delete: impl FnOnce(),
@@ -183,6 +169,7 @@ fn cleanup_worktree_by_name_with_operations<
         CleanSessions,
         KillGroups,
         KillWindow,
+        DeleteWorktree,
     >,
 ) -> anyhow::Result<WorktreeCleanupResult>
 where
@@ -192,6 +179,7 @@ where
     CleanSessions: FnOnce(&Path, bool) -> usize,
     KillGroups: FnOnce(&[libc::pid_t]) -> usize,
     KillWindow: FnMut(&str) -> bool,
+    DeleteWorktree: FnOnce(bool, PathBuf, DetectProcesses) -> anyhow::Result<WorktreeCleanupResult>,
 {
     let WorktreeCleanupOperations {
         detect_processes,
@@ -200,27 +188,8 @@ where
         clean_sessions,
         kill_groups,
         mut kill_window,
+        delete_worktree,
     } = operations;
-
-    if !force {
-        let processes = detect_processes(worktree_path).ok_or_else(|| {
-            WorktreeProcessGuardError::InspectionUnavailable {
-                worktree_path: worktree_path.to_path_buf(),
-            }
-        })?;
-        if !processes.is_empty() {
-            let process_list = processes
-                .iter()
-                .map(|process| format!("{} ({})", process.pid, process.comm))
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(WorktreeProcessGuardError::ActiveProcesses {
-                worktree_path: worktree_path.to_path_buf(),
-                process_list,
-            }
-            .into());
-        }
-    }
 
     // Collect tmux window IDs before deleting because the path is needed for matching.
     let window_ids = find_windows(worktree_path);
@@ -230,7 +199,7 @@ where
         Vec::new()
     };
 
-    let mut result = delete_worktree_and_branch(repo, worktree_name, worktree_path, force)?;
+    let mut result = delete_worktree(force, worktree_path.to_path_buf(), detect_processes)?;
 
     // Clean up sessions before killing panes so a caller in the window can finish.
     run_post_delete_cleanup(result.worktree_deleted, after_delete, || {
@@ -245,6 +214,34 @@ where
     });
 
     Ok(result)
+}
+
+fn check_process_guard(
+    worktree_path: &Path,
+    force: bool,
+    detect_processes: impl FnOnce(&Path) -> Option<Vec<ProcessInPath>>,
+) -> anyhow::Result<()> {
+    if force {
+        return Ok(());
+    }
+    let processes = detect_processes(worktree_path).ok_or_else(|| {
+        WorktreeProcessGuardError::InspectionUnavailable {
+            worktree_path: worktree_path.to_path_buf(),
+        }
+    })?;
+    if !processes.is_empty() {
+        let process_list = processes
+            .iter()
+            .map(|process| format!("{} ({})", process.pid, process.comm))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(WorktreeProcessGuardError::ActiveProcesses {
+            worktree_path: worktree_path.to_path_buf(),
+            process_list,
+        }
+        .into());
+    }
+    Ok(())
 }
 
 fn run_post_delete_cleanup(
@@ -263,10 +260,11 @@ fn delete_worktree_and_branch(
     worktree_name: &str,
     worktree_path: &Path,
     force: bool,
+    before_delete: impl FnOnce() -> anyhow::Result<()>,
 ) -> anyhow::Result<WorktreeCleanupResult> {
     let branch_name = get_worktree_branch(repo, worktree_name);
 
-    let worktree_deleted = delete_worktree_if_clean(worktree_path, force, || {
+    let worktree_deleted = delete_worktree_if_clean(worktree_path, force, before_delete, || {
         Ok(delete_worktree(repo, worktree_name).unwrap_or(false))
     })?;
 
@@ -289,6 +287,7 @@ mod tests {
     use crate::shared::testing::TestRepo;
     use rstest::rstest;
     use std::cell::RefCell;
+    use tempfile::TempDir;
 
     #[test]
     fn delete_worktree_and_branch_deletes_both() {
@@ -301,6 +300,7 @@ mod tests {
             "cleanup-test",
             &test_repo.worktree_path("cleanup-test"),
             false,
+            || Ok(()),
         )
         .expect("clean worktree should be deleted");
 
@@ -320,37 +320,34 @@ mod tests {
     #[case::active_process_without_force(
         false,
         Some(vec![ProcessInPath { pid: 42, comm: "editor".to_string() }]),
-        (false, Some("active"), true, vec!["detect"]),
+        (false, Some("active"), true, vec!["windows", "detect"]),
     )]
     #[case::inspection_unavailable_without_force(
         false,
         None,
-        (false, Some("unavailable"), true, vec!["detect"]),
+        (false, Some("unavailable"), true, vec!["windows", "detect"]),
     )]
     #[case::shell_only_without_force(
         false,
         Some(vec![]),
-        (true, None, false, vec!["detect", "windows", "after_delete", "sessions:false", "window_closed"]),
+        (true, None, false, vec!["windows", "detect", "delete:false", "after_delete", "sessions:false", "window_closed"]),
     )]
     #[case::force_skips_the_guard_and_signals_process_groups(
         true,
         None,
-        (true, None, false, vec!["windows", "groups_detect", "after_delete", "sessions:true", "groups:[77]", "window_closed"]),
+        (true, None, false, vec!["windows", "groups_detect", "delete:true", "after_delete", "sessions:true", "groups:[77]", "window_closed"]),
     )]
     fn cleanup_checks_processes_before_deleting_and_signals_only_with_force(
         #[case] force: bool,
         #[case] detected_processes: Option<Vec<ProcessInPath>>,
         #[case] expected: (bool, Option<&'static str>, bool, Vec<&'static str>),
     ) {
-        let test_repo = TestRepo::new();
-        test_repo.create_worktree("process-guard-test");
-        let worktree_path = test_repo.worktree_path("process-guard-test");
-        let repo = test_repo.open();
+        let temp_dir = TempDir::new().expect("temporary worktree directory should be created");
+        let worktree_path = temp_dir.path().join("worktree");
+        std::fs::create_dir(&worktree_path).expect("worktree directory should be created");
         let events = RefCell::new(Vec::new());
 
         let result = cleanup_worktree_by_name_with_operations(
-            &repo,
-            "process-guard-test",
             &worktree_path,
             force,
             || events.borrow_mut().push("after_delete"),
@@ -386,6 +383,17 @@ mod tests {
                 kill_window: |_: &str| {
                     events.borrow_mut().push("window_closed");
                     true
+                },
+                delete_worktree: |force, path: PathBuf, detect_processes| {
+                    check_process_guard(&path, force, detect_processes)?;
+                    events
+                        .borrow_mut()
+                        .push(if force { "delete:true" } else { "delete:false" });
+                    std::fs::remove_dir_all(path).expect("worktree directory should be deleted");
+                    Ok(WorktreeCleanupResult {
+                        worktree_deleted: true,
+                        ..WorktreeCleanupResult::default()
+                    })
                 },
             },
         );
@@ -442,7 +450,8 @@ mod tests {
             .expect("configure git to hide untracked files by default");
         }
 
-        let result = delete_worktree_and_branch(&repo, "dirty-worktree", &worktree_path, force);
+        let result =
+            delete_worktree_and_branch(&repo, "dirty-worktree", &worktree_path, force, || Ok(()));
         let observed = (
             result.as_ref().is_ok_and(|result| result.worktree_deleted),
             result.as_ref().err().is_some_and(|error| {
@@ -465,8 +474,9 @@ mod tests {
         let test_repo = TestRepo::new();
         let repo = test_repo.open();
 
-        let result = delete_worktree_and_branch(&repo, "nonexistent", &test_repo.path(), false)
-            .expect("missing worktree should return false");
+        let result =
+            delete_worktree_and_branch(&repo, "nonexistent", &test_repo.path(), false, || Ok(()))
+                .expect("missing worktree should return false");
 
         assert!(!result.worktree_deleted);
         assert!(result.branch_deleted.is_none());
