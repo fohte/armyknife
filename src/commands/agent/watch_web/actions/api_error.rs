@@ -80,6 +80,16 @@ impl ApiError {
             };
         }
 
+        if let Some(process_guard) =
+            error.downcast_ref::<crate::shared::cleanup::WorktreeProcessGuardError>()
+        {
+            return Self {
+                status: StatusCode::CONFLICT,
+                message: process_guard.watch_web_message(),
+                code: Some("worktree_process_guard"),
+            };
+        }
+
         let code = error
             .downcast_ref::<crate::shared::worktree_delete::UnmergedWorktreeError>()
             .map(|_| "unmerged_worktree");
@@ -137,6 +147,43 @@ mod tests {
                 StatusCode::CONFLICT,
                 "Worktree contains uncommitted changes or untracked files: /worktrees/dirty; commit or move them before closing".to_string(),
                 Some("dirty_worktree"),
+            ),
+        );
+    }
+
+    #[test]
+    fn close_process_guard_errors_offer_a_keep_worktree_retry() {
+        let error = ApiError::close(anyhow::Error::new(
+            crate::shared::cleanup::WorktreeProcessGuardError::ActiveProcesses {
+                worktree_path: std::path::PathBuf::from("/worktrees/busy"),
+                process_list: "42 (editor)".to_string(),
+            },
+        ));
+
+        assert_eq!(
+            (error.status, error.message, error.code),
+            (
+                StatusCode::CONFLICT,
+                "Worktree '/worktrees/busy' contains running processes: 42 (editor). Stop them and retry, or close the session while keeping the worktree.".to_string(),
+                Some("worktree_process_guard"),
+            ),
+        );
+    }
+
+    #[test]
+    fn close_process_inspection_errors_offer_a_keep_worktree_retry() {
+        let error = ApiError::close(anyhow::Error::new(
+            crate::shared::cleanup::WorktreeProcessGuardError::InspectionUnavailable {
+                worktree_path: std::path::PathBuf::from("/worktrees/uncheckable"),
+            },
+        ));
+
+        assert_eq!(
+            (error.status, error.message, error.code),
+            (
+                StatusCode::CONFLICT,
+                "Cannot check for running processes in worktree '/worktrees/uncheckable'. Make lsof and ps available, or close the session while keeping the worktree.".to_string(),
+                Some("worktree_process_guard"),
             ),
         );
     }

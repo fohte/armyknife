@@ -37,7 +37,7 @@ pub struct CleanArgs {
     #[arg(long)]
     pub all: bool,
 
-    /// Delete worktrees with active sessions or uncommitted changes.
+    /// Delete worktrees with active sessions, non-shell processes, or uncommitted changes.
     #[arg(long)]
     pub force: bool,
 

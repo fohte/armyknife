@@ -2730,6 +2730,20 @@ it.each([
       'Worktree contains uncommitted changes or untracked files: /worktrees/sample; commit or move them before closing',
     sessionId: 'session-dirty',
   },
+  {
+    caseName: 'worktree with running processes',
+    code: 'worktree_process_guard',
+    message:
+      "Worktree '/worktrees/sample' contains running processes: 42 (editor). Stop them and retry, or close the session while keeping the worktree.",
+    sessionId: 'session-busy-processes',
+  },
+  {
+    caseName: 'worktree whose processes cannot be checked',
+    code: 'worktree_process_guard',
+    message:
+      "Cannot check for running processes in worktree '/worktrees/sample'. Make lsof and ps available, or close the session while keeping the worktree.",
+    sessionId: 'session-uncheckable-processes',
+  },
 ])(
   'offers to keep a $caseName and retries Close with that choice',
   async ({ code, message, sessionId }) => {
