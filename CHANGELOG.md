@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.725](https://github.com/fohte/armyknife/compare/v0.1.724...v0.1.725) (2026-11-15)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** linkify session IDs in cards ([#1832](https://github.com/fohte/armyknife/issues/1832)) ([de8e049](https://github.com/fohte/armyknife/commit/de8e049c34480418f044b7ffeac756215b01ed5a))
+
 ## [0.1.724](https://github.com/fohte/armyknife/compare/v0.1.723...v0.1.724) (2026-11-15)
 
 
