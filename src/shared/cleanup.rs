@@ -120,11 +120,11 @@ pub fn cleanup_worktree_by_name(
         result.sessions_cleaned = cleanup_sessions_in_path(worktree_path).unwrap_or(0);
         result.process_groups_signaled = process::kill_process_groups(&orphan_pgids);
 
-        for pane_id in &pane_ids {
-            if tmux::kill_pane(pane_id).is_ok() {
-                result.panes_closed += 1;
-            }
-        }
+        result.panes_closed = kill_worktree_panes(
+            &pane_ids,
+            tmux::current_pane_id_from_env().as_deref(),
+            |pane_id| tmux::kill_pane(pane_id).is_ok(),
+        );
     });
 
     Ok(result)
@@ -139,6 +139,35 @@ fn run_post_delete_cleanup(
         after_delete();
         cleanup();
     }
+}
+
+fn kill_worktree_panes(
+    pane_ids: &[String],
+    caller_pane_id: Option<&str>,
+    mut kill_pane: impl FnMut(&str) -> bool,
+) -> usize {
+    let caller_pane_id = caller_pane_id.and_then(|caller_pane_id| {
+        pane_ids
+            .iter()
+            .any(|pane_id| pane_id == caller_pane_id)
+            .then_some(caller_pane_id)
+    });
+
+    let mut panes_closed = 0;
+    for pane_id in pane_ids
+        .iter()
+        .filter(|pane_id| Some(pane_id.as_str()) != caller_pane_id)
+    {
+        if kill_pane(pane_id) {
+            panes_closed += 1;
+        }
+    }
+    if let Some(caller_pane_id) = caller_pane_id
+        && kill_pane(caller_pane_id)
+    {
+        panes_closed += 1;
+    }
+    panes_closed
 }
 
 /// Deletes a git worktree and its associated branch.
@@ -943,6 +972,22 @@ mod tests {
         );
 
         assert_eq!(events.into_inner(), expected);
+    }
+
+    #[test]
+    fn kill_worktree_panes_closes_caller_last_and_counts_successes() {
+        let pane_ids = vec!["pane-a".to_string(), "pane-b".to_string()];
+        let killed_panes = RefCell::new(Vec::new());
+
+        let panes_closed = kill_worktree_panes(&pane_ids, Some("pane-a"), |pane_id| {
+            killed_panes.borrow_mut().push(pane_id.to_string());
+            pane_id != "pane-a"
+        });
+
+        assert_eq!(
+            (killed_panes.into_inner(), panes_closed),
+            (vec!["pane-b".to_string(), "pane-a".to_string()], 1),
+        );
     }
 
     // Tests exercise delete_worktree_and_branch directly to avoid depending

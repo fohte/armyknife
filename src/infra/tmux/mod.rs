@@ -172,10 +172,10 @@ pub fn in_tmux() -> bool {
 /// Returns the value of `$TMUX_PANE` — the id of the pane the calling
 /// process is running in, set by tmux at process spawn time.
 ///
-/// Unlike `current_window_id`/`current_session` (which query the terminal's
-/// currently focused pane via `display-message`), this reads the env var
-/// directly, so it resolves to the pane that actually invoked the calling
-/// process even if the user has since switched focus elsewhere.
+/// Unlike `current_session` (which queries the terminal's currently focused
+/// pane via `display-message`), this reads the env var directly, so it resolves
+/// to the pane that actually invoked the calling process even if the user has
+/// since switched focus elsewhere.
 pub fn current_pane_id_from_env() -> Option<String> {
     std::env::var("TMUX_PANE").ok().filter(|v| !v.is_empty())
 }
@@ -250,16 +250,6 @@ pub fn switch_to_session(target_session: &str) -> Result<()> {
     run_tmux_in_session(&["switch-client", "-t", target_session])
 }
 
-/// Get the current pane's working directory.
-pub fn current_pane_path() -> Option<String> {
-    query_tmux_value("#{pane_current_path}")
-}
-
-/// Get the current window ID.
-pub fn current_window_id() -> Option<String> {
-    query_tmux_value("#{window_id}")
-}
-
 /// Returns the name of the tmux session containing `pane_id`.
 ///
 /// Unlike `current_session`, this targets a specific pane rather than the
@@ -272,32 +262,15 @@ pub fn get_session_name_for_pane(pane_id: &str) -> Option<String> {
 
 /// Returns the window ID (e.g. `@3`) of the window containing `pane_id`.
 ///
-/// Unlike `current_window_id`, this targets a specific pane, so it resolves
-/// the window of a known pane rather than the caller's own — needed by
+/// Unlike querying the currently focused window, this targets a specific pane,
+/// so it resolves the window of a known pane rather than the caller's own —
+/// needed by
 /// detached processes (e.g. an `a agent hook` invocation) that must update the
 /// window of the session that fired the hook.
 ///
 /// Returns None if the pane no longer exists or tmux is unavailable.
 pub fn get_window_id_for_pane(pane_id: &str) -> Option<String> {
     query_pane_value(pane_id, "#{window_id}")
-}
-
-/// Get the current window ID if the pane is inside the given path.
-pub fn get_window_id_if_in_path(path: &str) -> Option<String> {
-    let pane_path = current_pane_path()?;
-
-    // Use Path::starts_with for proper path comparison
-    // (avoids /tmp/foo matching /tmp/foo2)
-    if std::path::Path::new(&pane_path).starts_with(path) {
-        current_window_id()
-    } else {
-        None
-    }
-}
-
-/// Kill a tmux window by its ID.
-pub fn kill_window(window_id: &str) -> Result<()> {
-    run_tmux(&["kill-window", "-t", window_id])
 }
 
 /// Kill a tmux pane by its ID.
@@ -307,15 +280,11 @@ pub fn kill_pane(pane_id: &str) -> Result<()> {
 
 /// Get all pane IDs whose working directories are inside the given path.
 pub fn get_pane_ids_in_path(path: &str) -> Vec<String> {
-    let output = match run_tmux_output(&[
-        "list-panes",
-        "-a",
-        "-F",
-        "#{pane_id}\t#{window_id}\t#{pane_current_path}",
-    ]) {
-        Ok(output) => output,
-        Err(_) => return Vec::new(),
-    };
+    let output =
+        match run_tmux_output(&["list-panes", "-a", "-F", "#{pane_current_path}\t#{pane_id}"]) {
+            Ok(output) => output,
+            Err(_) => return Vec::new(),
+        };
 
     pane_ids_in_path(&output, path)
 }
@@ -325,10 +294,7 @@ fn pane_ids_in_path(output: &str, path: &str) -> Vec<String> {
     let mut pane_ids: Vec<String> = output
         .lines()
         .filter_map(|line| {
-            let mut fields = line.splitn(3, '\t');
-            let pane_id = fields.next()?;
-            fields.next()?;
-            let pane_path = fields.next()?;
+            let (pane_path, pane_id) = line.rsplit_once('\t')?;
 
             if std::path::Path::new(pane_path).starts_with(target_path) {
                 Some(pane_id.to_string())
@@ -719,11 +685,11 @@ mod tests {
 
     #[rstest]
     #[case::outside_pane_in_same_window(
-        "%1\t@1\t/repo/worktrees/target\n%2\t@1\t/repo/other",
+        "/repo/worktrees/target\t%1\n/repo/other\t%2",
         vec!["%1".to_string()],
     )]
     #[case::all_panes_in_worktree(
-        "%3\t@2\t/repo/worktrees/target\n%4\t@2\t/repo/worktrees/target/nested",
+        "/repo/worktrees/target\t%3\n/repo/worktrees/target/nested\t%4",
         vec!["%3".to_string(), "%4".to_string()],
     )]
     fn pane_ids_in_path_selects_only_matching_panes(
