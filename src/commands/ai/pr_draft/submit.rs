@@ -81,6 +81,11 @@ trait PostSubmitProcessor {
     ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure>;
 }
 
+struct SubmitEffects<'a, P, R> {
+    post_submit_processor: &'a P,
+    record_pr_context: R,
+}
+
 struct PrSeriesPostSubmitProcessor<'a> {
     github: &'a GitHubClient,
 }
@@ -172,25 +177,29 @@ fn warn_plan_lookup_failure(metadata: &TqBranchMetadata, error: &anyhow::Error) 
 pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
     let client = GitHubClient::get()?;
     let post_submit_processor = PrSeriesPostSubmitProcessor { github: client };
-    run_impl(
+    let submit_effects = SubmitEffects {
+        post_submit_processor: &post_submit_processor,
+        record_pr_context: record_submitted_pr_context,
+    };
+    run_impl_with_recording(
         args,
         client,
         default_runner(),
         write_pr_url_config,
         read_current_repo_identity,
-        &post_submit_processor,
+        &submit_effects,
         |owner, repo| ensure_no_review_access(is_vibe_enabled, load_config, owner, repo),
     )
     .await
 }
 
-async fn run_impl(
+async fn run_impl_with_recording<P: PostSubmitProcessor, R: Fn(&PrTarget)>(
     args: &SubmitArgs,
     gh_client: &(impl PrBodyClient + PrClient + PrStackClient + RepoClient),
     run_hook: HookRunner<'_>,
     write_config: impl Fn(&str, &str) -> anyhow::Result<()>,
     current_repo_identity: impl FnOnce() -> Option<(String, String)>,
-    post_submit_processor: &impl PostSubmitProcessor,
+    submit_effects: &SubmitEffects<'_, P, R>,
     vibe_access_check: impl FnOnce(&str, &str) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
     // Get draft path and target repo info
@@ -265,12 +274,17 @@ async fn run_impl(
         true
     };
     let tq_metadata = if target_is_current_repo {
-        post_submit_processor.metadata_for_branch(&target.branch)
+        submit_effects
+            .post_submit_processor
+            .metadata_for_branch(&target.branch)
     } else {
         None
     };
     let saved_plan = if let Some(metadata) = &tq_metadata {
-        post_submit_processor.saved_plan(metadata).await
+        submit_effects
+            .post_submit_processor
+            .saved_plan(metadata)
+            .await
     } else {
         None
     };
@@ -366,7 +380,7 @@ async fn run_impl(
         }
     };
 
-    record_submitted_pr_context(&target);
+    (submit_effects.record_pr_context)(&target);
 
     if target_is_current_repo {
         let config_key = format!("branch.{}.pr-url", target.branch);
@@ -382,7 +396,8 @@ async fn run_impl(
     println!("{pr_url}");
 
     if let Some(metadata) = tq_metadata
-        && let Err(failure) = post_submit_processor
+        && let Err(failure) = submit_effects
+            .post_submit_processor
             .link_and_sync(&metadata, &target, &pr_url, saved_plan)
             .await
     {
@@ -405,7 +420,12 @@ fn record_submitted_pr_context(target: &PrTarget) {
     let sessions_dir = match store::sessions_dir() {
         Ok(sessions_dir) => sessions_dir,
         Err(error) => {
-            tracing::warn!(%error, "failed to locate session store for submitted PR context");
+            tracing::warn!(
+                event = "pr_draft.submit.session_store_unavailable",
+                session = %session_id,
+                error = %error,
+                "failed to locate session store for submitted PR context"
+            );
             return;
         }
     };
@@ -420,7 +440,8 @@ fn record_submitted_pr_context(target: &PrTarget) {
         },
     ) {
         tracing::warn!(
-            session_id,
+            event = "pr_draft.submit.session_record_failed",
+            session = %session_id,
             error = %error,
             "failed to record submitted PR context"
         );
@@ -651,18 +672,20 @@ mod tests {
         anyhow::bail!("The --no-review option is only available when vibe mode is enabled.")
     }
 
-    #[test]
-    fn submitted_pr_context_is_saved_once_without_replacing_the_cwd_context() {
+    fn noop_record_submitted_pr_context(_target: &PrTarget) {}
+
+    #[fixture]
+    fn sessions_dir_with_cwd_pr_context() -> tempfile::TempDir {
         let sessions_dir = tempfile::tempdir().expect("temporary session directory should exist");
-        let mut session: crate::commands::agent::types::Session =
+        let session: crate::commands::agent::types::Session =
             serde_json::from_value(serde_json::json!({
                 "session_id": "sample-session",
                 "pr_context": {
-                    "owner": "example-owner",
-                    "repo": "example-repository",
+                    "owner": "sample-owner",
+                    "repo": "sample-repository",
                     "branch": "cwd-branch",
                 },
-                "cwd": "/workspace/example",
+                "cwd": "/workspace/sample",
                 "transcript_path": null,
                 "tmux_info": null,
                 "status": "stopped",
@@ -673,9 +696,42 @@ mod tests {
             .expect("fixture session should deserialize");
         crate::commands::agent::store::save_session_to(sessions_dir.path(), &session)
             .expect("fixture session should save");
+        sessions_dir
+    }
+
+    async fn run_impl(
+        args: &SubmitArgs,
+        gh_client: &(impl PrBodyClient + PrClient + PrStackClient + RepoClient),
+        run_hook: HookRunner<'_>,
+        write_config: impl Fn(&str, &str) -> anyhow::Result<()>,
+        current_repo_identity: impl FnOnce() -> Option<(String, String)>,
+        post_submit_processor: &impl PostSubmitProcessor,
+        vibe_access_check: impl FnOnce(&str, &str) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        let submit_effects = SubmitEffects {
+            post_submit_processor,
+            record_pr_context: noop_record_submitted_pr_context,
+        };
+        super::run_impl_with_recording(
+            args,
+            gh_client,
+            run_hook,
+            write_config,
+            current_repo_identity,
+            &submit_effects,
+            vibe_access_check,
+        )
+        .await
+    }
+
+    #[rstest]
+    fn submitted_pr_context_is_saved_once_without_replacing_the_cwd_context(
+        sessions_dir_with_cwd_pr_context: tempfile::TempDir,
+    ) {
+        let sessions_dir = sessions_dir_with_cwd_pr_context;
         let submitted_context = SessionPrContext {
-            owner: "example-owner".to_string(),
-            repo: "example-repository".to_string(),
+            owner: "sample-owner".to_string(),
+            repo: "sample-repository".to_string(),
             branch: "submitted-branch".to_string(),
             checklist_item_id: None,
         };
@@ -693,7 +749,7 @@ mod tests {
         )
         .expect("repeated submission should be idempotent");
 
-        session =
+        let session =
             crate::commands::agent::store::load_session_from(sessions_dir.path(), "sample-session")
                 .expect("session store should be readable")
                 .expect("session should remain stored");
@@ -701,8 +757,8 @@ mod tests {
             (session.pr_context, session.submitted_pr_contexts),
             (
                 Some(SessionPrContext {
-                    owner: "example-owner".to_string(),
-                    repo: "example-repository".to_string(),
+                    owner: "sample-owner".to_string(),
+                    repo: "sample-repository".to_string(),
                     branch: "cwd-branch".to_string(),
                     checklist_item_id: None,
                 }),
@@ -2122,6 +2178,111 @@ mod tests {
                 format!("branch.{branch}.pr-url"),
                 format!("https://github.com/{}/{}/pull/1", env.owner, env.repo),
             ))),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn submit_records_submitted_pr_context_on_the_calling_session(
+        sessions_dir_with_cwd_pr_context: tempfile::TempDir,
+    ) {
+        let env = setup_test_env("sample-owner", "sample-repository").await;
+        let branch = "feature/submitted-change";
+        let draft_path = create_approved_draft(
+            &env.owner,
+            &env.repo,
+            branch,
+            "Submit a change",
+            "Body content",
+        );
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+        let client = env.mock.client();
+        let sessions_dir = sessions_dir_with_cwd_pr_context.path();
+        let record_pr_context = |target: &PrTarget| {
+            record_submitted_pr_context_in(
+                sessions_dir,
+                "sample-session",
+                SessionPrContext {
+                    owner: target.owner.clone(),
+                    repo: target.repo.clone(),
+                    branch: target.branch.clone(),
+                    checklist_item_id: None,
+                },
+            )
+            .expect("successful submit should record its session context");
+        };
+        let submit_effects = SubmitEffects {
+            post_submit_processor: &NoopPostSubmitProcessor,
+            record_pr_context,
+        };
+        let result = super::run_impl_with_recording(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            no_current_repo,
+            &submit_effects,
+            no_vibe_access,
+        )
+        .await;
+        let session =
+            crate::commands::agent::store::load_session_from(sessions_dir, "sample-session")
+                .expect("session store should be readable")
+                .expect("session should remain stored");
+        let requests = env
+            .mock
+            .received_requests()
+            .await
+            .iter()
+            .map(|request| (request.method.to_string(), request.url.path().to_string()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                (session.pr_context, session.submitted_pr_contexts),
+                requests,
+            ),
+            (
+                Ok(()),
+                (
+                    Some(SessionPrContext {
+                        owner: "sample-owner".to_string(),
+                        repo: "sample-repository".to_string(),
+                        branch: "cwd-branch".to_string(),
+                        checklist_item_id: None,
+                    }),
+                    vec![SessionPrContext {
+                        owner: "sample-owner".to_string(),
+                        repo: "sample-repository".to_string(),
+                        branch: branch.to_string(),
+                        checklist_item_id: None,
+                    }],
+                ),
+                vec![
+                    (
+                        "GET".to_string(),
+                        "/repos/sample-owner/sample-repository".to_string(),
+                    ),
+                    (
+                        "GET".to_string(),
+                        "/repos/sample-owner/sample-repository/pulls".to_string(),
+                    ),
+                    (
+                        "GET".to_string(),
+                        "/repos/sample-owner/sample-repository".to_string(),
+                    ),
+                    (
+                        "POST".to_string(),
+                        "/repos/sample-owner/sample-repository/pulls".to_string(),
+                    ),
+                ],
+            ),
         );
     }
 
