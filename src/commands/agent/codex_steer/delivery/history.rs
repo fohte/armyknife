@@ -218,13 +218,23 @@ pub(super) fn latest_turn_status(thread: &Value) -> Option<&str> {
 }
 
 pub(super) fn latest_turn(thread: &Value) -> Option<(&str, &str)> {
+    let turn = latest_turn_record(thread)?;
+    Some((turn.get("id")?.as_str()?, turn.get("status")?.as_str()?))
+}
+
+pub(super) fn latest_turn_error_message(thread: &Value) -> Option<&str> {
+    latest_turn_record(thread)?
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .filter(|message| !message.trim().is_empty())
+}
+
+fn latest_turn_record(thread: &Value) -> Option<&Value> {
     thread
         .get("turns")
         .and_then(Value::as_array)?
         .iter()
-        .max_by(|left, right| compare_turn_recency(left, right))?
-        .as_object()
-        .and_then(|turn| Some((turn.get("id")?.as_str()?, turn.get("status")?.as_str()?)))
+        .max_by(|left, right| compare_turn_recency(left, right))
 }
 
 fn compare_turn_recency(left: &Value, right: &Value) -> std::cmp::Ordering {
@@ -248,7 +258,10 @@ mod tests {
     use rstest::rstest;
     use serde_json::{Value, json};
 
-    use super::{has_user_message, latest_turn_status, matching_user_message_snapshot};
+    use super::{
+        has_user_message, latest_turn_error_message, latest_turn_status,
+        matching_user_message_snapshot,
+    };
 
     #[rstest]
     #[case::newer_start_time(json!({
@@ -274,6 +287,23 @@ mod tests {
         #[case] expected: Option<&str>,
     ) {
         assert_eq!(latest_turn_status(&thread), expected);
+    }
+
+    #[rstest]
+    #[case::latest_error(json!({
+        "turns": [
+            {"id": "turn-old", "startedAt": 10, "status": "failed", "error": {"message": "Old failure."}},
+            {"id": "turn-new", "startedAt": 20, "status": "failed", "error": {"message": "Latest failure."}},
+        ],
+    }), Some("Latest failure."))]
+    #[case::no_error_message(json!({
+        "turns": [{"id": "turn-new", "startedAt": 20, "status": "failed", "error": {"message": "  "}}],
+    }), None)]
+    fn latest_turn_error_message_reads_the_latest_nonempty_reason(
+        #[case] thread: Value,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(latest_turn_error_message(&thread), expected);
     }
 
     #[test]

@@ -202,6 +202,14 @@ impl Client {
         delivery::latest_turn_status(&mut self.socket, thread_id, request_id)
     }
 
+    pub(crate) fn latest_turn_status_and_error_message(
+        &mut self,
+        thread_id: &str,
+    ) -> anyhow::Result<Option<(String, Option<String>)>> {
+        let request_id = self.next_request_id()?;
+        delivery::latest_turn_status_and_error_message(&mut self.socket, thread_id, request_id)
+    }
+
     fn next_request_id(&mut self) -> anyhow::Result<u64> {
         let request_id = self.next_request_id;
         self.next_request_id = request_id
@@ -540,6 +548,59 @@ mod tests {
                     },
                 }),
                 Some("inProgress".to_string()),
+            ),
+        );
+    }
+
+    #[test]
+    fn reads_latest_turn_status_and_error_message_without_loading_turn_items() {
+        let (mut client, mut server) = connected_client_and_server().expect("connected sockets");
+        let server_thread = std::thread::spawn(move || {
+            let request = server.read().expect("thread/turns/list request");
+            let request: Value = serde_json::from_str(request.to_text().expect("text request"))
+                .expect("request JSON");
+            server
+                .send(Message::Text(
+                    json!({
+                        "id": TURN_STATUS_READ_REQUEST_ID_START,
+                        "result": {
+                            "data": [{
+                                "id": "turn-new",
+                                "status": "failed",
+                                "error": {"message": "Synthetic generation failure."},
+                            }],
+                            "nextCursor": null,
+                            "backwardsCursor": "cursor",
+                        },
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .expect("thread/turns/list response");
+            request
+        });
+
+        let turn = client
+            .latest_turn_status_and_error_message("fixture-thread-id")
+            .expect("turn status and error message");
+        let request = server_thread.join().expect("server thread");
+        assert_eq!(
+            (request, turn),
+            (
+                json!({
+                    "id": TURN_STATUS_READ_REQUEST_ID_START,
+                    "method": "thread/turns/list",
+                    "params": {
+                        "threadId": "fixture-thread-id",
+                        "limit": 1,
+                        "sortDirection": "desc",
+                        "itemsView": "notLoaded",
+                    },
+                }),
+                Some((
+                    "failed".to_string(),
+                    Some("Synthetic generation failure.".to_string()),
+                )),
             ),
         );
     }

@@ -15,7 +15,10 @@ struct AppServerTurnStatusReader {
 }
 
 impl AppServerTurnStatusReader {
-    fn latest_turn_status(&mut self, thread_id: &str) -> Result<Option<String>> {
+    fn latest_turn_status_and_error_message(
+        &mut self,
+        thread_id: &str,
+    ) -> Result<Option<(String, Option<String>)>> {
         if !self.connection_attempted {
             self.connection_attempted = true;
             self.client = Some(Client::connect()?);
@@ -24,7 +27,7 @@ impl AppServerTurnStatusReader {
         let Some(client) = &mut self.client else {
             return Ok(None);
         };
-        let result = client.latest_turn_status(thread_id);
+        let result = client.latest_turn_status_and_error_message(thread_id);
         if result.is_err() {
             self.client = None;
         }
@@ -51,7 +54,7 @@ pub(super) fn mark_finished_codex_sessions<T: TmuxStatusSyncer>(
 ) -> Result<CodexTurnUpdates> {
     let mut reader = AppServerTurnStatusReader::default();
     mark_finished_codex_sessions_with_reader(sessions_dir, syncer, dry_run, |thread_id| {
-        reader.latest_turn_status(thread_id)
+        reader.latest_turn_status_and_error_message(thread_id)
     })
 }
 
@@ -59,11 +62,11 @@ fn mark_finished_codex_sessions_with_reader<T, F>(
     sessions_dir: &Path,
     syncer: &T,
     dry_run: bool,
-    mut read_latest_turn_status: F,
+    mut read_latest_turn_status_and_error_message: F,
 ) -> Result<CodexTurnUpdates>
 where
     T: TmuxStatusSyncer,
-    F: FnMut(&str) -> Result<Option<String>>,
+    F: FnMut(&str) -> Result<Option<(String, Option<String>)>>,
 {
     let mut updates = CodexTurnUpdates::default();
 
@@ -89,18 +92,19 @@ where
         }
 
         let expected_updated_at = session.updated_at;
-        let latest_status = match read_latest_turn_status(&session.session_id) {
-            Ok(Some(status)) => status,
-            Ok(None) => continue,
-            Err(error) => {
-                tracing::warn!(
-                    event = "agent.sweep.codex_turn_read_failed",
-                    session = %session.session_id,
-                    error = %error,
-                );
-                continue;
-            }
-        };
+        let (latest_status, error_message) =
+            match read_latest_turn_status_and_error_message(&session.session_id) {
+                Ok(Some(turn)) => turn,
+                Ok(None) => continue,
+                Err(error) => {
+                    tracing::warn!(
+                        event = "agent.sweep.codex_turn_read_failed",
+                        session = %session.session_id,
+                        error = %error,
+                    );
+                    continue;
+                }
+            };
         let next_status = match latest_status.as_str() {
             "failed" => SessionStatus::Failed,
             "interrupted" => session.status_after_interrupted_codex_turn(),
@@ -129,6 +133,13 @@ where
             }
 
             current.status = next_status;
+            if is_failed {
+                current.last_message = Some(
+                    error_message
+                        .clone()
+                        .unwrap_or_else(|| "Codex turn failed".to_string()),
+                );
+            }
             if !is_failed {
                 current.current_tool = None;
                 current.current_tool_name = None;
@@ -255,13 +266,26 @@ mod tests {
     }
 
     #[rstest]
-    #[case::failed("failed", SessionStatus::Failed)]
-    #[case::interrupted("interrupted", SessionStatus::Stopped)]
-    #[case::interrupted_with_pending_permission("interrupted", SessionStatus::WaitingInput)]
+    #[case::failed_with_reason(
+        "failed",
+        Some("Synthetic generation failure."),
+        SessionStatus::Failed,
+        Some("Synthetic generation failure.")
+    )]
+    #[case::failed_without_reason("failed", None, SessionStatus::Failed, Some("Codex turn failed"))]
+    #[case::interrupted("interrupted", None, SessionStatus::Stopped, Some("previous response"))]
+    #[case::interrupted_with_pending_permission(
+        "interrupted",
+        None,
+        SessionStatus::WaitingInput,
+        Some("previous response")
+    )]
     fn marks_finished_running_codex_turn_and_syncs_tmux(
         sessions_dir: TempDir,
         #[case] latest_status: &str,
+        #[case] error_message: Option<&str>,
         #[case] expected_status: SessionStatus,
+        #[case] expected_last_message: Option<&str>,
     ) {
         let mut session = session(
             "fixture-thread-id",
@@ -294,7 +318,10 @@ mod tests {
             false,
             |thread_id| {
                 requested_threads.push(thread_id.to_string());
-                Ok(Some(latest_status.to_string()))
+                Ok(Some((
+                    latest_status.to_string(),
+                    error_message.map(str::to_string),
+                )))
             },
         )
         .expect("mark finished turn");
@@ -344,7 +371,7 @@ mod tests {
                     expected_current_tool,
                     expected_current_tool_name,
                     expected_read_at,
-                    Some("previous response".to_string()),
+                    expected_last_message.map(str::to_string),
                 ),
                 vec!["fixture-thread-id".to_string()],
                 expected_sync,
@@ -377,7 +404,7 @@ mod tests {
             false,
             |thread_id| {
                 requested_threads.push(thread_id.to_string());
-                Ok(latest_status.map(str::to_string))
+                Ok(latest_status.map(|status| (status.to_string(), None)))
             },
         )
         .expect("inspect turn status");
@@ -427,7 +454,7 @@ mod tests {
                 if thread_id == "fixture-error-session" {
                     anyhow::bail!("fixture app-server unavailable");
                 }
-                Ok(Some("failed".to_string()))
+                Ok(Some(("failed".to_string(), None)))
             },
         )
         .expect("reader failures must not fail sweep");
@@ -543,7 +570,7 @@ mod tests {
                 false,
                 |thread_id| {
                     requested_threads.push(thread_id.to_string());
-                    Ok(Some("failed".to_string()))
+                    Ok(Some(("failed".to_string(), None)))
                 },
             )
         });
@@ -604,7 +631,7 @@ mod tests {
                     current.last_message = Some("new response".to_string());
                     true
                 })?;
-                Ok(Some("failed".to_string()))
+                Ok(Some(("failed".to_string(), None)))
             })
             .expect("inspect turn status");
         let reloaded = load_session(sessions_dir.path(), "fixture-thread-id");
@@ -649,7 +676,7 @@ mod tests {
 
         let updates =
             mark_finished_codex_sessions_with_reader(sessions_dir.path(), &syncer, true, |_| {
-                Ok(Some(latest_status.to_string()))
+                Ok(Some((latest_status.to_string(), None)))
             })
             .expect("inspect turn status");
 
