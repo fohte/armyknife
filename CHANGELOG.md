@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.728](https://github.com/fohte/armyknife/compare/v0.1.727...v0.1.728) (2026-11-15)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show archived Codex chats ([#1838](https://github.com/fohte/armyknife/issues/1838)) ([498ee16](https://github.com/fohte/armyknife/commit/498ee165eeeb9964a0820914e202cf8875a53162))
+
 ## [0.1.727](https://github.com/fohte/armyknife/compare/v0.1.726...v0.1.727) (2026-11-15)
 
 
