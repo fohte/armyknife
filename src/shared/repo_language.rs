@@ -10,11 +10,15 @@ pub(crate) fn copier_answers_path_for_current_repo(
     let repo = git::open_repo().ok()?;
     if let Some(expected_repo_id) = expected_repo_id {
         let (owner, name) = git::github_owner_and_repo(&repo).ok()?;
-        if format!("{owner}/{name}") != expected_repo_id {
+        if !repo_ids_match(&format!("{owner}/{name}"), expected_repo_id) {
             return None;
         }
     }
     Some(repo.workdir().join(".copier-answers.yml"))
+}
+
+fn repo_ids_match(actual: &str, expected: &str) -> bool {
+    actual.eq_ignore_ascii_case(expected)
 }
 
 pub(crate) async fn resolve_repo_language<F, Fut>(
@@ -49,11 +53,35 @@ fn read_copier_repo_language(answers_path: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_repo_language;
+    use super::{repo_ids_match, resolve_repo_language};
     use indoc::indoc;
     use rstest::rstest;
     use serde_json::{Value, json};
     use std::fs;
+
+    #[rstest]
+    #[case::same_id(
+        "example-owner/sample-repository",
+        "example-owner/sample-repository",
+        true
+    )]
+    #[case::case_variant(
+        "example-owner/sample-repository",
+        "Example-Owner/Sample-Repository",
+        true
+    )]
+    #[case::different_repository(
+        "example-owner/sample-repository",
+        "example-owner/other-repository",
+        false
+    )]
+    fn repo_id_matching_ignores_case_only(
+        #[case] actual: &str,
+        #[case] expected: &str,
+        #[case] matches: bool,
+    ) {
+        assert_eq!(repo_ids_match(actual, expected), matches);
+    }
 
     #[rstest]
     #[case::config_overrides_copier_and_visibility(
