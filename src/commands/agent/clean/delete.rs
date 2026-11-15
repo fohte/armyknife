@@ -118,7 +118,7 @@ pub(super) async fn delete_worktrees_all_repos(
     Ok(failed_count)
 }
 
-pub(super) async fn delete_worktrees_sequentially<F, Fut>(
+async fn delete_worktrees_sequentially<F, Fut>(
     worktrees: impl IntoIterator<Item = CleanWorktreeInfo>,
     mut delete: F,
     mut handle_result: impl FnMut(
@@ -171,4 +171,83 @@ async fn delete_one_worktree(
 
 fn hook_branch_name(branch: &str) -> Option<&str> {
     (!branch.is_empty() && branch != "(unknown)" && branch != "(detached)").then_some(branch)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::infra::git::MergeStatus;
+    use crate::shared::worktree::LinkedWorktree;
+    use std::cell::RefCell;
+    use std::path::PathBuf;
+
+    fn make_worktree_info(name: &str) -> CleanWorktreeInfo {
+        CleanWorktreeInfo {
+            wt: LinkedWorktree {
+                name: name.to_string(),
+                path: PathBuf::from(format!("/worktrees/{name}")),
+                branch: format!("fohte/{name}"),
+                commit: "abc1234".to_string(),
+            },
+            status: MergeStatus::Merged {
+                reason: "merged".to_string(),
+            },
+            repo_name: None,
+            has_active_session: false,
+            has_uncommitted_changes: false,
+            change_check_error: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn deletion_continues_after_a_worktree_error() {
+        let worktrees = vec![
+            make_worktree_info("unreadable"),
+            make_worktree_info("clean"),
+        ];
+        let attempted = RefCell::new(Vec::new());
+        let outcomes = RefCell::new(Vec::new());
+
+        let failed_count = delete_worktrees_sequentially(
+            worktrees,
+            |info| {
+                let attempted = &attempted;
+                async move {
+                    attempted.borrow_mut().push(info.wt.name.clone());
+                    if info.wt.name == "unreadable" {
+                        Err(anyhow::anyhow!("git status failed"))
+                    } else {
+                        Ok(crate::shared::cleanup::WorktreeCleanupResult {
+                            worktree_deleted: true,
+                            ..Default::default()
+                        })
+                    }
+                }
+            },
+            |info, result| {
+                outcomes.borrow_mut().push((
+                    info.wt.name,
+                    result
+                        .map(|result| result.worktree_deleted)
+                        .map_err(|error| error.to_string()),
+                ));
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (attempted.into_inner(), outcomes.into_inner(), failed_count),
+            (
+                vec!["unreadable".to_string(), "clean".to_string()],
+                vec![
+                    (
+                        "unreadable".to_string(),
+                        Err("git status failed".to_string())
+                    ),
+                    ("clean".to_string(), Ok(true)),
+                ],
+                1,
+            ),
+        );
+    }
 }
