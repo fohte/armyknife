@@ -180,7 +180,7 @@ fn should_sigterm_session(status: SessionStatus) -> bool {
 ///    after this cleanup process exits.
 /// 2. If the session's Claude process is still expected to be alive and the
 ///    tmux pane is alive, sends SIGTERM to it
-/// 3. Withdraws unanswered todos and proposals so they no longer need a reply
+/// 3. Attempts to withdraw unanswered todos and proposals; failures are warned and cleanup continues
 /// 4. Removes the notification group on a best-effort basis
 ///
 /// Returns the number of sessions cleaned up.
@@ -202,8 +202,9 @@ pub fn cleanup_sessions_in_path(worktree_path: &Path) -> anyhow::Result<usize> {
         SessionCleanupOperations {
             send_sigterm: tmux::send_sigterm_to_pane_for_socket,
             delete_session: store::delete_session_without_archive,
-            withdraw_pending_cards: |session_id: &str| {
-                withdraw_pending_cards(&store::sessions_dir()?, session_id)
+            withdraw_pending_cards: |session_id: &str| match store::sessions_dir() {
+                Ok(sessions_dir) => withdraw_pending_cards(&sessions_dir, session_id),
+                Err(error) => PendingCardCleanup::failed(error),
             },
             remove_notification_group: crate::infra::notification::remove_group,
             archive_codex_thread: crate::commands::agent::codex_steer::archive_thread,
@@ -251,6 +252,27 @@ struct SessionCleanupOperations<
     defer_archive: DeferArchive,
 }
 
+struct PendingCardCleanup {
+    _todo_resolution_lock: Option<std::fs::File>,
+    error: Option<anyhow::Error>,
+}
+
+impl PendingCardCleanup {
+    fn succeeded(todo_resolution_lock: std::fs::File) -> Self {
+        Self {
+            _todo_resolution_lock: Some(todo_resolution_lock),
+            error: None,
+        }
+    }
+
+    fn failed(error: anyhow::Error) -> Self {
+        Self {
+            _todo_resolution_lock: None,
+            error: Some(error),
+        }
+    }
+}
+
 fn cleanup_sessions_with_deferred_archive<
     SendSigterm,
     DeleteSession,
@@ -273,7 +295,7 @@ fn cleanup_sessions_with_deferred_archive<
 where
     SendSigterm: FnMut(Option<&str>, &str),
     DeleteSession: FnMut(&str) -> anyhow::Result<bool>,
-    WithdrawCards: FnMut(&str) -> anyhow::Result<()>,
+    WithdrawCards: FnMut(&str) -> PendingCardCleanup,
     RemoveNotification: FnMut(&str) -> anyhow::Result<()>,
     Archive: FnMut(&str) -> anyhow::Result<()>,
     DeferArchive: FnMut(&str) -> anyhow::Result<()>,
@@ -336,7 +358,7 @@ fn cleanup_sessions(
     context: SessionCleanupContext<'_>,
     mut send_sigterm: impl FnMut(Option<&str>, &str),
     mut delete_session: impl FnMut(&str) -> anyhow::Result<bool>,
-    mut withdraw_pending_cards: impl FnMut(&str) -> anyhow::Result<()>,
+    mut withdraw_pending_cards: impl FnMut(&str) -> PendingCardCleanup,
     mut remove_notification_group: impl FnMut(&str) -> anyhow::Result<()>,
     mut archive_codex_thread: impl FnMut(&str) -> anyhow::Result<()>,
 ) -> usize {
@@ -366,7 +388,8 @@ fn cleanup_sessions(
                 send_sigterm(tmux_info.socket_path.as_deref(), &tmux_info.pane_id);
             }
 
-            if let Err(error) = withdraw_pending_cards(&session.session_id) {
+            let pending_card_cleanup = withdraw_pending_cards(&session.session_id);
+            if let Some(error) = &pending_card_cleanup.error {
                 eprintln!(
                     "Warning: Failed to withdraw pending cards for session {}: {error:#}",
                     session.session_id
@@ -392,6 +415,8 @@ fn cleanup_sessions(
                 }
             }
 
+            drop(pending_card_cleanup);
+
             if let Err(e) = remove_notification_group(&session.session_id) {
                 eprintln!(
                     "Warning: Failed to remove notification group for session {}: {e}",
@@ -411,7 +436,6 @@ fn cleanup_sessions(
 }
 
 fn withdraw_pending_todos(sessions_dir: &Path, session_id: &str) -> anyhow::Result<()> {
-    let _lock = store::lock_agent_todo_resolution(sessions_dir, session_id)?;
     let todos = store::agent_todos_from(sessions_dir, session_id)?;
     let mut errors = Vec::new();
 
@@ -466,7 +490,11 @@ fn withdraw_pending_proposals(sessions_dir: &Path, session_id: &str) -> anyhow::
     }
 }
 
-fn withdraw_pending_cards(sessions_dir: &Path, session_id: &str) -> anyhow::Result<()> {
+fn withdraw_pending_cards(sessions_dir: &Path, session_id: &str) -> PendingCardCleanup {
+    let todo_resolution_lock = match store::lock_agent_todo_resolution(sessions_dir, session_id) {
+        Ok(lock) => lock,
+        Err(error) => return PendingCardCleanup::failed(error),
+    };
     let todo_result = withdraw_pending_todos(sessions_dir, session_id);
     let proposal_result = withdraw_pending_proposals(sessions_dir, session_id);
     let errors = [todo_result.err(), proposal_result.err()]
@@ -476,9 +504,12 @@ fn withdraw_pending_cards(sessions_dir: &Path, session_id: &str) -> anyhow::Resu
         .collect::<Vec<_>>();
 
     if errors.is_empty() {
-        Ok(())
+        PendingCardCleanup::succeeded(todo_resolution_lock)
     } else {
-        anyhow::bail!(errors.join("; "))
+        PendingCardCleanup {
+            _todo_resolution_lock: Some(todo_resolution_lock),
+            error: Some(anyhow::anyhow!(errors.join("; "))),
+        }
     }
 }
 
@@ -559,7 +590,10 @@ mod tests {
             },
             |_, _| {},
             |_| Ok(false),
-            |_| Ok(()),
+            |_| PendingCardCleanup {
+                _todo_resolution_lock: None,
+                error: None,
+            },
             |_| Ok(()),
             |_| Ok(()),
         );
@@ -647,6 +681,7 @@ mod tests {
                     .map(|proposal| {
                         (
                             proposal.seq,
+                            proposal.resolution,
                             proposal.resolved_at.is_some(),
                             proposal.comment.as_deref(),
                         )
@@ -667,8 +702,13 @@ mod tests {
                     ),
                 ],
                 vec![
-                    (1, true, None),
-                    (2, true, Some("Withdrawn during worktree cleanup."),),
+                    (1, None, true, None),
+                    (
+                        2,
+                        Some(store::ProposalResolution::Withdrawn),
+                        true,
+                        Some("Withdrawn during worktree cleanup."),
+                    ),
                 ],
                 vec![],
                 vec![],
@@ -694,7 +734,7 @@ mod tests {
                 events.borrow_mut().push(format!("delete:{session_id}"));
                 Ok(true)
             },
-            |_| Err(anyhow::anyhow!("card database is unavailable")),
+            |_| PendingCardCleanup::failed(anyhow::anyhow!("card database is unavailable")),
             |session_id| {
                 events
                     .borrow_mut()
@@ -784,7 +824,10 @@ mod tests {
                     .push((socket_path.map(str::to_string), pane_id.to_string()));
             },
             |_| Ok(true),
-            |_| Ok(()),
+            |_| PendingCardCleanup {
+                _todo_resolution_lock: None,
+                error: None,
+            },
             |_| Ok(()),
             |_| Ok(()),
         );
@@ -830,7 +873,10 @@ mod tests {
                     events.borrow_mut().push(format!("delete:{session_id}"));
                     Ok(true)
                 },
-                withdraw_pending_cards: |_session_id: &str| Ok(()),
+                withdraw_pending_cards: |_session_id: &str| PendingCardCleanup {
+                    _todo_resolution_lock: None,
+                    error: None,
+                },
                 remove_notification_group: |session_id: &str| {
                     events
                         .borrow_mut()

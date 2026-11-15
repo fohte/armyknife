@@ -62,6 +62,8 @@ pub(crate) fn add_agent_todo(
     detail: Option<&str>,
 ) -> Result<i64> {
     validate_session_id(session_id)?;
+    // Cleanup holds this lock through session deletion so a new todo cannot race with withdrawal.
+    let _todo_lock = lock_agent_todo_resolution(sessions_dir, session_id)?;
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let session_exists: bool = transaction.query_row(
