@@ -16,6 +16,29 @@ pub struct PrNumberQuery {
 }
 
 impl PrNumberQuery {
+    /// Parses a canonical GitHub pull request URL.
+    pub fn from_github_url(value: &str) -> Option<Self> {
+        let url = reqwest::Url::parse(value).ok()?;
+        if url.scheme() != "https" || url.host_str() != Some("github.com") {
+            return None;
+        }
+        let mut segments = url.path_segments()?;
+        let owner = segments.next()?;
+        let repo = segments.next()?;
+        if segments.next()? != "pull" {
+            return None;
+        }
+        let number = segments.next()?.parse::<u64>().ok()?;
+        if owner.is_empty() || repo.is_empty() || number == 0 || segments.next().is_some() {
+            return None;
+        }
+        Some(Self {
+            owner: owner.to_owned(),
+            repo: repo.to_owned(),
+            number,
+        })
+    }
+
     /// Returns the map key used for this query.
     pub fn key(&self) -> (String, String, u64) {
         (self.owner.clone(), self.repo.clone(), self.number)

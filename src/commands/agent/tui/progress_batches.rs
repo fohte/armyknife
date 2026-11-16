@@ -154,25 +154,7 @@ pub(super) fn pull_request_queries(
 }
 
 pub(super) fn pr_number_query_from_url(url: &str) -> Option<PrNumberQuery> {
-    let url = reqwest::Url::parse(url).ok()?;
-    if url.scheme() != "https" || url.host_str() != Some("github.com") {
-        return None;
-    }
-    let mut segments = url.path_segments()?;
-    let owner = segments.next()?;
-    let repo = segments.next()?;
-    if segments.next()? != "pull" {
-        return None;
-    }
-    let number = segments.next()?.parse::<u64>().ok()?;
-    if owner.is_empty() || repo.is_empty() || number == 0 || segments.next().is_some() {
-        return None;
-    }
-    Some(PrNumberQuery {
-        owner: owner.to_owned(),
-        repo: repo.to_owned(),
-        number,
-    })
+    PrNumberQuery::from_github_url(url)
 }
 
 pub(super) fn created_pr_queries(urls: &[String]) -> Vec<PrNumberQuery> {

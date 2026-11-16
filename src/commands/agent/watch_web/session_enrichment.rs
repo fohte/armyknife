@@ -445,31 +445,9 @@ fn created_pr_queries_for_sessions(sessions: &[Session]) -> Vec<PrNumberQuery> {
 fn created_pr_queries(urls: &[String]) -> Vec<PrNumberQuery> {
     let mut seen = HashSet::new();
     urls.iter()
-        .filter_map(|url| pr_number_query_from_url(url))
+        .filter_map(|url| PrNumberQuery::from_github_url(url))
         .filter(|query| seen.insert(query.key()))
         .collect()
-}
-
-fn pr_number_query_from_url(value: &str) -> Option<PrNumberQuery> {
-    let url = reqwest::Url::parse(value).ok()?;
-    if url.scheme() != "https" || url.host_str() != Some("github.com") {
-        return None;
-    }
-    let mut segments = url.path_segments()?;
-    let owner = segments.next()?;
-    let repo = segments.next()?;
-    if segments.next()? != "pull" {
-        return None;
-    }
-    let number = segments.next()?.parse::<u64>().ok()?;
-    if owner.is_empty() || repo.is_empty() || number == 0 || segments.next().is_some() {
-        return None;
-    }
-    Some(PrNumberQuery {
-        owner: owner.to_owned(),
-        repo: repo.to_owned(),
-        number,
-    })
 }
 
 async fn detected_tq_client() -> Result<Option<TqClient>, String> {
