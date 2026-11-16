@@ -81,13 +81,13 @@ export const SessionHasMultipleLinkedTasks: Story = {
   name: 'The task menu hides completed secondary tasks by default',
 }
 
-export const SessionShowsCompletedLinkedTasks: Story = {
+export const SessionShowsActiveSecondaryTaskMenu: Story = {
   args: {
-    tasks: linkedTasks,
+    task: completedTask,
+    tasks: [completedTask, openTask, secondaryTask],
     taskListOpen: true,
-    completedTasksExpanded: true,
   },
-  name: 'The task menu shows completed secondary tasks when expanded',
+  name: 'The task menu lets an active secondary task become primary',
 }
 
 export const SessionHasOnlyCompletedSecondaryTasks: Story = {
@@ -119,7 +119,7 @@ export const SessionHasOnlyCompletedSecondaryTasks: Story = {
     ],
     taskListOpen: true,
   },
-  name: 'A completed primary keeps other completed tasks reachable',
+  name: 'A completed primary stays visible without a menu for closed tasks',
 }
 
 export const SessionHasMultipleLinkedTasksInNarrowPane: Story = {

@@ -808,7 +808,7 @@ it('labels a Starred mobile session for removal', async () => {
   })
 })
 
-it('sets the primary linked task from desktop and mobile headers', async () => {
+it('sets the primary linked task from the desktop header', async () => {
   const primaryTask = {
     id: 'sample-primary-task',
     number: 2048,
@@ -828,31 +828,28 @@ it('sets the primary linked task from desktop and mobile headers', async () => {
   }
   const onAction = vi.fn(() => Promise.resolve(true))
 
-  for (const isMobile of [false, true]) {
-    renderView(
-      onAction,
-      sessionWithLinkedTasks,
-      undefined,
-      [],
-      actions,
-      isMobile,
-      [],
-      [sessionWithLinkedTasks],
-    )
-    await act(async () => {
-      container.querySelector('summary')?.click()
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
-    })
-    await act(async () => {
-      document.body
-        .querySelector<HTMLButtonElement>('.session-task-links-make-primary')
-        ?.click()
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
-    })
-  }
+  renderView(
+    onAction,
+    sessionWithLinkedTasks,
+    undefined,
+    [],
+    actions,
+    false,
+    [],
+    [sessionWithLinkedTasks],
+  )
+  await act(async () => {
+    container.querySelector('summary')?.click()
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+  })
+  await act(async () => {
+    document.body
+      .querySelector<HTMLButtonElement>('.session-task-links-make-primary')
+      ?.click()
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+  })
 
   expect(onAction.mock.calls).toEqual([
-    ['primary-task', { taskId: 'sample-secondary-task' }],
     ['primary-task', { taskId: 'sample-secondary-task' }],
   ])
 })
@@ -861,7 +858,7 @@ it('places the session ID copy action in the mobile menu', async () => {
   renderView(() => Promise.resolve(true), session, undefined, [], actions, true)
 
   const titleRow = container.querySelector(
-    '.mobile-conversation-heading .session-heading-title-row',
+    '.mobile-conversation-title .session-heading-title-row',
   )
   await openMobileActionsMenu()
   const copyMenuItem = mobileActionMenuItem('Copy session ID')
@@ -4842,7 +4839,7 @@ it('opens and closes the existing status panel over the mobile conversation', as
   })
 })
 
-it('shows the paused state in the conversation header', () => {
+it('omits the paused badge from the conversation header', () => {
   renderView(
     vi.fn().mockResolvedValue(true),
     { ...session, category: 'done', kind: null, isPaused: true },
@@ -4853,16 +4850,17 @@ it('shows the paused state in the conversation header', () => {
 
   const snapshot = () => ({
     title: container.querySelector('.conversation-header h1')?.textContent,
-    paused: container.querySelector('.conversation-header [data-slot="chip"]')
-      ?.textContent,
+    pausedBadge:
+      container.querySelector('.conversation-header [data-slot="chip"]') !==
+      null,
   })
   expect(snapshot()).toEqual({
     title: 'Choose a retry policy',
-    paused: 'Paused',
+    pausedBadge: false,
   })
 })
 
-it('shows the paused state in the mobile conversation header', () => {
+it('omits the paused badge from the mobile conversation header', () => {
   renderView(
     vi.fn().mockResolvedValue(true),
     { ...session, category: 'done', kind: null, isPaused: true },
@@ -4876,16 +4874,69 @@ it('shows the paused state in the mobile conversation header', () => {
     mobile: container
       .querySelector('.conversation-pane')
       ?.getAttribute('data-mobile'),
-    title: container.querySelector('.mobile-conversation-heading h1')
+    title: container.querySelector('.mobile-conversation-title h1')
       ?.textContent,
-    paused: container.querySelector(
-      '.mobile-conversation-heading [data-slot="chip"]',
-    )?.textContent,
+    pausedBadge:
+      container.querySelector(
+        '.mobile-conversation-title [data-slot="chip"]',
+      ) !== null,
   })
   expect(snapshot()).toEqual({
     mobile: 'true',
     title: 'Choose a retry policy',
-    paused: 'Paused',
+    pausedBadge: false,
+  })
+})
+
+it('shows only the task and full repository in the mobile context row', () => {
+  const task = {
+    id: 'example-open-task',
+    number: 2048,
+    title: 'Improve request reliability across several delivery paths',
+    priority: 1,
+  }
+  renderView(
+    vi.fn().mockResolvedValue(true),
+    {
+      ...session,
+      task,
+      tasks: [task, { ...task, id: 'example-secondary-task', number: 2049 }],
+      repo: 'example/long-running-service-name',
+    },
+    undefined,
+    [],
+    null,
+    true,
+  )
+
+  const taskLink = container.querySelector<HTMLElement>(
+    '.mobile-conversation-context a',
+  )
+  const repo = container.querySelector<HTMLElement>('.mobile-conversation-repo')
+  const snapshot = () => ({
+    task: taskLink?.textContent,
+    repo: repo?.textContent,
+    disclosure: container.querySelector('.mobile-conversation-context summary')
+      ?.textContent,
+    taskTextOverflow:
+      taskLink === null ? null : window.getComputedStyle(taskLink).textOverflow,
+    repoFlexShrink:
+      repo === null ? null : window.getComputedStyle(repo).flexShrink,
+    separators: Array.from(
+      container.querySelectorAll(
+        '.mobile-conversation-context > span[aria-hidden="true"]',
+      ),
+      (separator) => separator.textContent,
+    ),
+  })
+
+  expect(snapshot()).toEqual({
+    task: 'P1 #2048 Improve request reliability across several delivery paths',
+    repo: 'example/long-running-service-name',
+    disclosure: undefined,
+    taskTextOverflow: 'ellipsis',
+    repoFlexShrink: '0',
+    separators: ['·'],
   })
 })
 

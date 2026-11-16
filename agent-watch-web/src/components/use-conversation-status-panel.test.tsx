@@ -112,7 +112,62 @@ it('shows the Review tab only for sessions with an active review document', () =
   expect(states).toBe('|\nReview|Review\n|')
 })
 
-it('does not show a PRs tab when the session belongs to a task tree', () => {
+it('shows linked open and completed tasks in the Tasks tab', () => {
+  act(() => {
+    root?.render(
+      <StatusPanelHarness
+        currentSession={{
+          ...session,
+          task: {
+            id: 'example-open-task',
+            number: 18,
+            title: 'Improve request reliability',
+            priority: 1,
+          },
+          tasks: [
+            {
+              id: 'example-open-task',
+              number: 18,
+              title: 'Improve request reliability',
+              priority: 1,
+            },
+            {
+              id: 'example-completed-task',
+              number: 17,
+              title: 'Document request behavior',
+              priority: null,
+              isClosed: true,
+            },
+          ],
+        }}
+      />,
+    )
+  })
+
+  const snapshot = () => ({
+    tabs: Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+      (tab) => ({
+        text: tab.textContent,
+        selected: tab.getAttribute('aria-selected'),
+      }),
+    ),
+    tasks: Array.from(
+      container.querySelectorAll('.session-tasks-panel-item'),
+      (task) => task.textContent,
+    ),
+  })
+
+  expect(snapshot()).toEqual({
+    tabs: [{ text: 'Tasks2', selected: 'true' }],
+    tasks: [
+      '●#18 Improve request reliabilityP1 · fixture/toolkit',
+      '✓#17 Document request behavior',
+    ],
+  })
+})
+
+it('shows linked tasks without adding a PRs tab', () => {
   act(() => {
     root?.render(
       <StatusPanelHarness
@@ -135,7 +190,7 @@ it('does not show a PRs tab when the session belongs to a task tree', () => {
       container.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
       (tab) => tab.textContent,
     ),
-  ).toEqual([])
+  ).toEqual(['Tasks1'])
 })
 
 it('fetches and renders the review document when the status panel opens', async () => {

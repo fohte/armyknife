@@ -441,10 +441,15 @@ html[data-mobile-layout='true'] {
 }
 
 .conversation-pane[data-mobile='true'] .conversation-header {
-  min-height: calc(50px + max(8px, env(safe-area-inset-top)));
-  flex: 0 0 calc(50px + max(8px, env(safe-area-inset-top)));
-  gap: 4px;
-  padding: max(8px, env(safe-area-inset-top)) 8px 6px 4px;
+  display: grid;
+  min-height: calc(74px + max(8px, env(safe-area-inset-top)));
+  flex: 0 0 calc(74px + max(8px, env(safe-area-inset-top)));
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  grid-template-rows: 44px 24px;
+  align-items: center;
+  column-gap: 4px;
+  row-gap: 0;
+  padding: max(8px, env(safe-area-inset-top)) 8px 6px 0;
   border-bottom-color: var(--aw-border);
 }
 
@@ -522,6 +527,8 @@ html[data-mobile-layout='true'] {
 }
 
 .mobile-conversation-header-actions {
+  grid-column: 3;
+  grid-row: 1;
   position: relative;
   display: flex;
   flex: 0 0 auto;
@@ -615,13 +622,12 @@ html[data-mobile-layout='true'] {
 }
 
 .mobile-conversation-heading {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  flex-direction: column;
+  display: contents;
 }
 
-.mobile-conversation-heading .session-heading-title-row {
+.conversation-pane[data-mobile='true']
+  .mobile-conversation-title
+  .session-heading-title-row {
   display: flex;
   min-width: 0;
   align-items: center;
@@ -629,6 +635,8 @@ html[data-mobile-layout='true'] {
 }
 
 .mobile-conversation-title {
+  grid-column: 2;
+  grid-row: 1;
   display: flex;
   min-width: 0;
   align-items: center;
@@ -647,7 +655,7 @@ html[data-mobile-layout='true'] {
   flex: 1;
 }
 
-.mobile-conversation-heading h1 {
+.conversation-pane[data-mobile='true'] .mobile-conversation-title h1 {
   overflow: hidden;
   min-width: 0;
   flex: 1;
@@ -659,12 +667,22 @@ html[data-mobile-layout='true'] {
 }
 
 .mobile-conversation-context {
+  display: flex;
+  min-width: 0;
+  grid-column: 1 / -1;
+  grid-row: 2;
+  align-items: baseline;
+  gap: 6px;
   overflow: hidden;
+  padding-left: 14px;
   color: var(--aw-text-muted);
   font-family: var(--font-mono);
   font-size: 11.5px;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.mobile-conversation-repo {
+  flex: 0 0 auto;
 }
 
 .conversation-pane[data-mobile='true'] .conversation-scroll {
