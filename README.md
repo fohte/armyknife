@@ -550,6 +550,8 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `todo withdraw <seq> [--comment <reason>]`                                                            |         | Withdraw a pending task from the calling session                                            |
 | `title set <TITLE>`                                                                                   |         | Set the calling session's title; an empty title restores the automatic title                |
 | `web-ui add <url> --name <name>`                                                                      |         | Register a named local web interface for the watch-web status panel                         |
+| `web-ui remove <name>`                                                                                |         | Remove a named web interface from the calling session                                       |
+| `web-ui list`                                                                                         |         | List web interfaces registered by the calling session                                       |
 | `profile use <profile> / show`                                                                        |         | Select a profile and show its effective settings for every type                             |
 | `vibe on / off / status / grant <session-id>`                                                         |         | Enable, disable, check, or grant vibe mode to a descendant session                          |
 | `resume [session_id]`                                                                                 | `r`     | Resume the pane's Claude Code session (reads pane option if no argument)                    |
@@ -696,9 +698,20 @@ Within a session, registering an interface with an existing trimmed name replace
 When watch-web starts or observes a registration change, it calls the executable `web-ui-expose` hook from `~/.config/armyknife/hooks/`, or `$XDG_CONFIG_HOME/armyknife/hooks/` when `XDG_CONFIG_HOME` is set. The hook receives the relay URL in `ARMYKNIFE_WEB_UI_URL` (including the registered path and query) and the relay port in `ARMYKNIFE_WEB_UI_PORT`, then prints the external URL to stdout. A missing hook, failure, or empty output leaves the interface without an external URL. When a registration disappears or watch-web shuts down, it calls `web-ui-unexpose` with the relay URL and port and `ARMYKNIFE_WEB_UI_EXPOSED_URL`; unexpose failures do not interrupt cleanup. See [Hooks](docs/hooks.md#web-ui-expose-and-web-ui-unexpose) for details.
 
 ```console
-$ a agent web-ui add http://127.0.0.1:48761/design/sample/ --name "Design editor"
-Recorded web UI 'Design editor'
+$ a agent web-ui add http://127.0.0.1:49321/editor/ --name "Sample editor"
+Recorded web UI 'Sample editor'
+$ a agent web-ui add http://127.0.0.1:49322/preview/ --name "Sample interface"
+Recorded web UI 'Sample interface'
+$ a agent web-ui list
+Sample editor: http://127.0.0.1:49321/editor/
+Sample interface: http://127.0.0.1:49322/preview/
+$ a agent web-ui remove "Sample interface"
+Removed web UI 'Sample interface'
+$ a agent web-ui list
+Sample editor: http://127.0.0.1:49321/editor/
 ```
+
+Names are matched after trimming whitespace. The reserved name `crit` cannot be removed with this command. Removing a registration lets watch-web stop its relay and run the `web-ui-unexpose` hook.
 
 [`crit`](https://github.com/tomasz-tomczyk/crit) review URLs passed to `a agent crit add <url>` must include an explicit port. The command records crit through the same web UI registration path, labels it `crit`, and keeps the existing notification, queue, and lifecycle-monitor behavior. When a tracked session is available, the command associates the URL with that session and sends a desktop notification. Its lifecycle monitor needs `crit` on `PATH`; without it, automatic cleanup is unavailable. If no tracked session ID is available, the command opens a review pane in the current tmux pane when `TMUX_PANE` is set; otherwise, macOS opens the URL with `open` and other platforms use `xdg-open`.
 
