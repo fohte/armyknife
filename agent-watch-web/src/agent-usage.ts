@@ -88,7 +88,7 @@ function isEngineQuota(value: unknown): value is EngineQuota {
   )
 }
 
-export function isAgentUsage(value: unknown): value is AgentUsage {
+function isAgentUsage(value: unknown): value is AgentUsage {
   return (
     isRecord(value) &&
     Array.isArray(value['sessions']) &&

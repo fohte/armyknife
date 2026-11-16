@@ -1,4 +1,5 @@
-import { expect, it } from 'vitest'
+import { err, ok } from 'neverthrow'
+import { afterEach, expect, it, vi } from 'vitest'
 
 import {
   formatResetTime,
@@ -6,8 +7,21 @@ import {
   getExpectedUsagePercentage,
   getUsagePaceStatus,
   getUsageSeverity,
-  isAgentUsage,
+  requestAgentUsage,
 } from '#agent-usage'
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+function stubFetchJson(body: unknown) {
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+    new Response(JSON.stringify(body), {
+      headers: { 'content-type': 'application/json' },
+    }),
+  )
+  vi.stubGlobal('fetch', fetchMock)
+}
 
 it.each([
   ['sub-thousand token counts stay exact', 842, '842'],
@@ -70,7 +84,7 @@ it.each([
   expect(getUsageSeverity(used)).toEqual(expected)
 })
 
-it('accepts a complete usage response', () => {
+it('accepts a complete usage response through the request API', async () => {
   const complete = {
     sessions: [
       {
@@ -120,14 +134,18 @@ it('accepts a complete usage response', () => {
     },
   }
 
-  expect(isAgentUsage(complete)).toEqual(true)
+  stubFetchJson(complete)
+  expect(await requestAgentUsage()).toEqual(ok(complete))
 })
 
-it('rejects a usage response without both quota entries', () => {
+it('rejects an incomplete usage response through the request API', async () => {
   const incomplete = {
     sessions: [],
     quotas: { claude: null },
   }
 
-  expect(isAgentUsage(incomplete)).toEqual(false)
+  stubFetchJson(incomplete)
+  expect(await requestAgentUsage()).toEqual(
+    err(new Error('The server returned an invalid response')),
+  )
 })
