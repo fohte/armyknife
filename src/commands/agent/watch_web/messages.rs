@@ -227,6 +227,7 @@ mod tests {
         WatchWebQueuedPrompt,
     };
     use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
+    use crate::shared::config::Config;
 
     fn stored_session() -> Session {
         serde_json::from_value(json!({
@@ -3949,6 +3950,146 @@ mod tests {
                 Some("application/json".to_string()),
                 r#"{"messages":[{"type":"tool_in_progress","tool":"exec","target":"cargo check"}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
             )
+        );
+    }
+
+    #[rstest]
+    #[case::explicit(true, false, false, true, "enabled", None)]
+    #[case::inherited(false, true, true, true, "inherited", Some("fixture-parent"))]
+    #[case::disabled(false, false, true, true, "disabled", None)]
+    #[case::repository_disabled(true, false, false, false, "repo_disabled", None)]
+    #[tokio::test]
+    async fn messages_route_includes_vibe_state(
+        #[case] explicit: bool,
+        #[case] launched_with_vibe: bool,
+        #[case] has_parent: bool,
+        #[case] repo_vibe_allowed: bool,
+        #[case] expected_mode: &str,
+        #[case] expected_ancestor: Option<&str>,
+    ) {
+        let mut session = stored_session();
+        session.vibe_enabled = explicit;
+        session.launched_with_vibe = launched_with_vibe;
+        let parent = if has_parent {
+            session.ancestor_session_ids = vec!["fixture-parent".to_string()];
+            let mut parent = stored_session();
+            parent.session_id = "fixture-parent".to_string();
+            parent.vibe_enabled = true;
+            Some(parent)
+        } else {
+            None
+        };
+        let loaders = RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
+        .with_vibe_context(
+            move || {
+                if !repo_vibe_allowed {
+                    return Config::default();
+                }
+                serde_yaml::from_str::<Config>(indoc::indoc! {"
+                    orgs:
+                      example-org:
+                        vibe: true
+                "})
+                .unwrap()
+            },
+            |_| Some(("example-org".to_string(), "example-repo".to_string())),
+        );
+        let router = routes_with_proposals_and_peer_out_messages(
+            move |id| match id {
+                "fixture-session" => Ok(Some(session.clone())),
+                "fixture-parent" => Ok(parent.clone()),
+                _ => Ok(None),
+            },
+            |_| Ok(None),
+            loaders,
+        );
+        let mut vibe_mode = json!({ "mode": expected_mode });
+        if let Some(ancestor_session_id) = expected_ancestor {
+            vibe_mode["ancestorSessionId"] = json!(ancestor_session_id);
+        }
+
+        assert_eq!(
+            message_response(&router).await,
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                json!({
+                    "messages": [],
+                    "backgroundTasks": [],
+                    "start": 0,
+                    "total": 0,
+                    "decisions": [],
+                    "hasUnansweredProposal": false,
+                    "activeQuestionIndex": null,
+                    "vibeMode": vibe_mode,
+                }),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_older_ancestor_does_not_break_messages_or_vibe_state() {
+        let mut session = stored_session();
+        session.launched_with_vibe = true;
+        session.ancestor_session_ids = vec![
+            "../stale-ancestor".to_string(),
+            "fixture-parent".to_string(),
+        ];
+        let mut parent = stored_session();
+        parent.session_id = "fixture-parent".to_string();
+        let loaders = RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
+        .with_vibe_context(
+            || {
+                serde_yaml::from_str::<Config>(indoc::indoc! {"
+                    orgs:
+                      example-org:
+                        vibe: true
+                "})
+                .unwrap()
+            },
+            |_| Some(("example-org".to_string(), "example-repo".to_string())),
+        );
+        let router = routes_with_proposals_and_peer_out_messages(
+            move |id| match id {
+                "fixture-session" => Ok(Some(session.clone())),
+                "fixture-parent" => Ok(Some(parent.clone())),
+                "../stale-ancestor" => Err(
+                    crate::commands::agent::error::CcError::InvalidSessionId(id.to_string()).into(),
+                ),
+                _ => Ok(None),
+            },
+            |_| Ok(None),
+            loaders,
+        );
+
+        assert_eq!(
+            message_response(&router).await,
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                json!({
+                    "messages": [],
+                    "backgroundTasks": [],
+                    "start": 0,
+                    "total": 0,
+                    "decisions": [],
+                    "hasUnansweredProposal": false,
+                    "activeQuestionIndex": null,
+                    "vibeMode": { "mode": "disabled" },
+                }),
+            ),
         );
     }
 }

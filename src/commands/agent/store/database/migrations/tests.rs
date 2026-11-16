@@ -364,3 +364,57 @@ fn adds_agent_file_schema_to_version_seventeen_database(database_fixture: Databa
         (17, (true, true, true), current_version()),
     );
 }
+
+#[rstest]
+fn adds_vibe_setting_revision_to_version_twenty_two_database(database_fixture: DatabaseFixture) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
+    Migrations::from_slice(&MIGRATION_ENTRIES[..22])
+        .to_latest(&mut connection)
+        .expect("version twenty-two schema should be created");
+    connection
+        .execute(
+            "INSERT INTO sessions (session_id, data, rev) VALUES ('fixture-session', '{}', 0)",
+            [],
+        )
+        .expect("session row should be inserted");
+    drop(connection);
+
+    let connection = super::super::open_connection(temp_dir.path())
+        .expect("version twenty-two database should migrate");
+    connection
+        .execute(
+            "INSERT INTO session_vibe_setting_revision (session_id, revision)
+             VALUES ('fixture-session', 'fixture-token')",
+            [],
+        )
+        .expect("vibe revision row should be inserted");
+    connection
+        .execute(
+            "DELETE FROM sessions WHERE session_id = 'fixture-session'",
+            [],
+        )
+        .expect("session row should be deleted");
+    let actual = connection
+        .query_row(
+            "SELECT
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_vibe_setting_revision'),
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'session_vibe_setting_revision_delete_session'),
+                EXISTS(SELECT 1 FROM session_vibe_setting_revision WHERE session_id = 'fixture-session'),
+                (SELECT user_version FROM pragma_user_version)",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, bool>(0)?,
+                    row.get::<_, bool>(1)?,
+                    row.get::<_, bool>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            },
+        )
+        .expect("vibe revision schema should be queryable");
+
+    assert_eq!(actual, (true, true, false, current_version()));
+}

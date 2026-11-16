@@ -1,10 +1,128 @@
 use anyhow::{Result, bail};
 use clap::Subcommand;
+use serde::Serialize;
 
 use super::error::CcError;
 use super::store;
+use crate::commands::agent::types::Session;
 use crate::shared::config::Config;
 use crate::shared::env_var::EnvVars;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(
+    tag = "mode",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub(crate) enum VibeState {
+    Enabled,
+    Inherited { ancestor_session_id: String },
+    Disabled,
+    RepoDisabled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VibeSettingChange {
+    previous_enabled: bool,
+    requested_enabled: bool,
+    revision: String,
+}
+
+pub(crate) fn state_for(
+    session: &Session,
+    repo_identity: Option<(&str, &str)>,
+    config: &Config,
+    ancestors: &[Session],
+) -> VibeState {
+    if !repo_vibe_allowed(repo_identity, config) {
+        return VibeState::RepoDisabled;
+    }
+    if session.vibe_enabled {
+        return VibeState::Enabled;
+    }
+    inherited_vibe_ancestor(session, ancestors)
+        .map(|ancestor_session_id| VibeState::Inherited {
+            ancestor_session_id: ancestor_session_id.to_string(),
+        })
+        .unwrap_or(VibeState::Disabled)
+}
+
+pub(crate) fn state_for_with_ancestor_loader(
+    session: &Session,
+    repo_identity: Option<(&str, &str)>,
+    config: &Config,
+    load_ancestor: impl FnMut(&str) -> Result<Option<Session>>,
+) -> Result<VibeState> {
+    if !repo_vibe_allowed(repo_identity, config) {
+        return Ok(VibeState::RepoDisabled);
+    }
+    if session.vibe_enabled {
+        return Ok(VibeState::Enabled);
+    }
+    let Some(ancestor_session_id) = inherited_vibe_ancestor_from(session, load_ancestor)? else {
+        return Ok(VibeState::Disabled);
+    };
+    Ok(VibeState::Inherited {
+        ancestor_session_id,
+    })
+}
+
+fn repo_vibe_allowed(repo_identity: Option<(&str, &str)>, config: &Config) -> bool {
+    repo_identity.is_some_and(|(owner, repo)| config.is_vibe_allowed_for_repo(owner, repo))
+}
+
+pub(crate) fn inherited_vibe_ancestor<'a>(
+    session: &Session,
+    ancestors: &'a [Session],
+) -> Option<&'a str> {
+    if !session.launched_with_vibe {
+        return None;
+    }
+
+    session
+        .ancestor_session_ids
+        .iter()
+        .rev()
+        .find_map(|ancestor_id| {
+            ancestors
+                .iter()
+                .find(|ancestor| ancestor.session_id == *ancestor_id && ancestor.vibe_enabled)
+                .map(|ancestor| ancestor.session_id.as_str())
+        })
+}
+
+pub(crate) fn inherited_vibe_ancestor_from(
+    session: &Session,
+    mut load_ancestor: impl FnMut(&str) -> Result<Option<Session>>,
+) -> Result<Option<String>> {
+    if !session.launched_with_vibe {
+        return Ok(None);
+    }
+
+    for ancestor_session_id in session.ancestor_session_ids.iter().rev() {
+        let ancestor = match load_ancestor(ancestor_session_id) {
+            Ok(ancestor) => ancestor,
+            Err(error)
+                if error
+                    .downcast_ref::<CcError>()
+                    .is_some_and(|error| matches!(error, CcError::InvalidSessionId(_))) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        if ancestor.is_some_and(|ancestor| ancestor.vibe_enabled) {
+            return Ok(Some(ancestor_session_id.clone()));
+        }
+    }
+
+    Ok(None)
+}
+
+pub(crate) fn repo_identity_for_path(path: &std::path::Path) -> Option<(String, String)> {
+    let repo = crate::infra::git::open_repo_at(path).ok()?;
+    crate::infra::git::github_owner_and_repo(&repo).ok()
+}
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum VibeCommands {
@@ -79,16 +197,12 @@ fn is_vibe_enabled_for(sessions_dir: &std::path::Path, session_id: &str) -> Resu
     if !session.launched_with_vibe {
         return Ok(false);
     }
-
-    for ancestor_session_id in session.ancestor_session_ids {
-        if store::load_session_from(sessions_dir, &ancestor_session_id)?
-            .is_some_and(|ancestor| ancestor.vibe_enabled)
-        {
-            return Ok(true);
-        }
-    }
-
-    Ok(false)
+    Ok(
+        inherited_vibe_ancestor_from(&session, |ancestor_session_id| {
+            store::load_session_from(sessions_dir, ancestor_session_id)
+        })?
+        .is_some(),
+    )
 }
 
 fn set(enabled: bool) -> Result<()> {
@@ -144,14 +258,43 @@ fn grant_in(
     Ok(())
 }
 
-fn set_in(sessions_dir: &std::path::Path, session_id: &str, enabled: bool) -> Result<()> {
+pub(crate) fn set_in(
+    sessions_dir: &std::path::Path,
+    session_id: &str,
+    enabled: bool,
+) -> Result<VibeSettingChange> {
     let lock = store::lock_session_for_update(sessions_dir, session_id)?;
     let mut session = lock
         .load()?
         .ok_or_else(|| CcError::SessionNotFound(session_id.to_string()))?;
+    let previous_enabled = session.vibe_enabled;
     session.vibe_enabled = enabled;
+    let revision = lock.save_vibe_setting(&session)?;
+    Ok(VibeSettingChange {
+        previous_enabled,
+        requested_enabled: enabled,
+        revision,
+    })
+}
+
+pub(crate) fn restore_in_if_unchanged(
+    sessions_dir: &std::path::Path,
+    session_id: &str,
+    change: VibeSettingChange,
+) -> Result<bool> {
+    let lock = store::lock_session_for_update(sessions_dir, session_id)?;
+    if lock.vibe_setting_revision()?.as_deref() != Some(change.revision.as_str()) {
+        return Ok(false);
+    }
+    let Some(mut session) = lock.load()? else {
+        return Ok(false);
+    };
+    if session.vibe_enabled != change.requested_enabled {
+        return Ok(false);
+    }
+    session.vibe_enabled = change.previous_enabled;
     lock.save(&session)?;
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -276,6 +419,48 @@ mod tests {
             ensure_repo_vibe_access(&config, "example-org", "example-repo")
                 .map_err(|error| error.to_string()),
             expected.map_err(str::to_owned),
+        );
+    }
+
+    #[rstest]
+    #[case::explicit(true, false, false, true, true, VibeState::Enabled)]
+    #[case::inherited(false, true, true, true, true, VibeState::Inherited { ancestor_session_id: "fixture-parent".to_string() })]
+    #[case::disabled(false, false, true, true, true, VibeState::Disabled)]
+    #[case::repository_unknown(true, false, false, false, true, VibeState::RepoDisabled)]
+    #[case::repository_disallowed(true, false, false, true, false, VibeState::RepoDisabled)]
+    fn state_for_distinguishes_repo_access_and_vibe_sources(
+        #[case] explicit: bool,
+        #[case] launched_with_vibe: bool,
+        #[case] has_enabled_ancestor: bool,
+        #[case] repo_identity_available: bool,
+        #[case] repo_vibe_allowed: bool,
+        #[case] expected: VibeState,
+    ) {
+        let allowed_config: Config = serde_yaml::from_str(indoc! {"
+            orgs:
+              example-org:
+                vibe: true
+        "})
+        .unwrap();
+        let config = if repo_vibe_allowed {
+            allowed_config
+        } else {
+            Config::default()
+        };
+        let mut current_session = session("fixture-session", &[], explicit);
+        current_session.launched_with_vibe = launched_with_vibe;
+        let mut ancestors = Vec::new();
+        if has_enabled_ancestor {
+            current_session.ancestor_session_ids = vec!["fixture-parent".to_string()];
+            let mut parent = session("fixture-parent", &[], true);
+            parent.vibe_enabled = true;
+            ancestors.push(parent);
+        }
+        let repo_identity = repo_identity_available.then_some(("example-org", "example-repo"));
+
+        assert_eq!(
+            state_for(&current_session, repo_identity, &config, &ancestors),
+            expected,
         );
     }
 

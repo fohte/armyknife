@@ -27,7 +27,9 @@ use crate::commands::agent::types::{
     DisplayStatus, Engine, Session, SessionStatus, WebUiRegistration,
 };
 use crate::commands::agent::user_turn::user_turns;
+use crate::commands::agent::vibe::VibeState;
 use crate::infra::github::PrState;
+use crate::shared::config::Config;
 use crate::shared::config::{self, AgentConfig};
 
 mod category;
@@ -42,6 +44,8 @@ mod project;
 use self::project::{
     resolve_parent_project, resolve_project, resolve_repo, resolve_repos_for_sessions,
 };
+mod vibe;
+use self::vibe::{VibeAncestorLoader, states_for_sessions};
 mod feed;
 mod task_selection;
 mod tree;
@@ -140,6 +144,7 @@ struct SessionView {
     task: Option<TqTaskView>,
     tasks: Vec<TqTaskView>,
     repo: String,
+    vibe_mode: VibeState,
     branch: Option<String>,
     can_open_in_terminal: bool,
     project: String,
@@ -180,6 +185,8 @@ struct SessionSnapshot {
     unanswered_proposal_titles: HashMap<String, String>,
     unanswered_todo_titles: HashMap<String, String>,
     agent_config: AgentConfig,
+    vibe_config: Arc<Config>,
+    vibe_ancestor_loader: VibeAncestorLoader,
 }
 
 trait SessionSource: Clone + Send + Sync + 'static {
@@ -375,10 +382,34 @@ async fn list_sessions<S: SessionSource>(
     let unanswered_proposal_titles = snapshot.unanswered_proposal_titles;
     let unanswered_todo_titles = snapshot.unanswered_todo_titles;
     let tree_related_session_ids = session_tree_related_ids(&snapshot.all_sessions);
+    let all_sessions_for_vibe = snapshot.all_sessions;
+    let sessions_for_vibe = response_sessions.clone();
+    let repo_by_id_for_vibe = snapshot.repo_by_id.clone();
+    let vibe_config = snapshot.vibe_config;
+    let vibe_ancestor_loader = snapshot.vibe_ancestor_loader;
+    let vibe_modes = tokio::task::spawn_blocking(move || {
+        states_for_sessions(
+            &sessions_for_vibe,
+            &all_sessions_for_vibe,
+            &repo_by_id_for_vibe,
+            &vibe_config,
+            |session_id| vibe_ancestor_loader(session_id),
+        )
+    })
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "failed to resolve session vibe states");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?
+    .map_err(|error| {
+        tracing::warn!(%error, "failed to load session vibe state");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     let mut sessions = response_sessions
         .iter()
-        .map(|session| {
+        .zip(vibe_modes)
+        .map(|(session, vibe_mode)| {
             let tasks = task_metadata
                 .links
                 .get(&session.session_id)
@@ -547,6 +578,7 @@ async fn list_sessions<S: SessionSource>(
                 task,
                 tasks,
                 repo: repo.clone(),
+                vibe_mode,
                 branch: session
                     .pr_context
                     .as_ref()
@@ -628,6 +660,7 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         .collect();
     let repo_by_id = resolve_repos_for_sessions(&sessions, &all_sessions, resolve_repo);
     let sessions_dir = store::sessions_dir()?;
+    let vibe_sessions_dir = sessions_dir.clone();
     let decision_counts = store::agent_decision_counts_by_session_from(&sessions_dir)?;
     let mut unanswered_proposal_titles = HashMap::new();
     let mut unanswered_todo_titles = HashMap::new();
@@ -647,6 +680,9 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         unanswered_todo_titles.entry(session_id).or_insert(title);
     }
 
+    let mut config = config::load_config_or_default();
+    let agent_config = std::mem::take(&mut config.agent);
+
     Ok(SessionSnapshot {
         revision,
         sessions,
@@ -657,7 +693,11 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         decision_counts,
         unanswered_proposal_titles,
         unanswered_todo_titles,
-        agent_config: config::load_config_or_default().agent,
+        agent_config,
+        vibe_config: Arc::new(config),
+        vibe_ancestor_loader: Arc::new(move |session_id| {
+            store::load_session_from(&vibe_sessions_dir, session_id)
+        }),
     })
 }
 
@@ -746,6 +786,7 @@ mod tests {
         revision: i64,
         sessions: Vec<Session>,
         all_sessions: Vec<Session>,
+        archived_ancestors: HashMap<String, Session>,
         web_states: Vec<store::WatchWebSessionState>,
         title_by_id: HashMap<String, String>,
         repo_by_id: HashMap<String, String>,
@@ -760,6 +801,7 @@ mod tests {
         work_type_nav_labels: HashMap<String, String>,
         agent_statuses: HashMap<String, AgentStatusConfig>,
         message_loaders: super::super::messages::RouteLoaders,
+        vibe_config: Arc<Config>,
         question_preview_error: bool,
         review_document_queue_calls: Arc<AtomicUsize>,
         review_document_queue_thread_id: Arc<Mutex<Option<std::thread::ThreadId>>>,
@@ -795,6 +837,11 @@ mod tests {
                         .collect(),
                     statuses: self.agent_statuses.clone(),
                     ..AgentConfig::default()
+                },
+                vibe_config: self.vibe_config.clone(),
+                vibe_ancestor_loader: {
+                    let archived_ancestors = self.archived_ancestors.clone();
+                    Arc::new(move |session_id| Ok(archived_ancestors.get(session_id).cloned()))
                 },
             })
         }
@@ -939,6 +986,7 @@ mod tests {
             revision: 7,
             sessions: vec![child_session.clone()],
             all_sessions: vec![child_session, parent],
+            archived_ancestors: HashMap::new(),
             web_states: vec![store::WatchWebSessionState {
                 session_id: "child-session".to_string(),
                 later_until: Some(Utc.timestamp_opt(4_700, 0).unwrap()),
@@ -1041,6 +1089,7 @@ mod tests {
                 |_, _| Ok(()),
                 |_| Ok(Vec::new()),
             ),
+            vibe_config: Arc::new(Config::default()),
             question_preview_error: false,
             review_document_queue_calls: Arc::default(),
             review_document_queue_thread_id: Arc::default(),
@@ -1070,6 +1119,117 @@ mod tests {
             object.remove("token");
         }
         (status, response)
+    }
+
+    #[rstest]
+    #[case::explicit(true, false, true, "enabled", None)]
+    #[case::inherited(false, true, true, "inherited", Some("parent-session"))]
+    #[case::disabled(false, false, true, "disabled", None)]
+    #[case::repository_disabled(true, false, false, "repo_disabled", None)]
+    #[tokio::test]
+    async fn sessions_feed_reports_vibe_state(
+        mut source: TestSessionSource,
+        #[case] explicit: bool,
+        #[case] launched_with_vibe: bool,
+        #[case] repo_vibe_allowed: bool,
+        #[case] expected_mode: &str,
+        #[case] expected_ancestor: Option<&str>,
+    ) {
+        source.vibe_config = Arc::new(if repo_vibe_allowed {
+            serde_yaml::from_str(indoc::indoc! {"
+                orgs:
+                  example-org:
+                    vibe: true
+            "})
+            .unwrap()
+        } else {
+            Config::default()
+        });
+        source.sessions[0].vibe_enabled = explicit;
+        source.sessions[0].launched_with_vibe = launched_with_vibe;
+        source.sessions[0].status = SessionStatus::Running;
+        source.all_sessions[0] = source.sessions[0].clone();
+        source.all_sessions[1].vibe_enabled = true;
+        source.web_states[0].later_until = None;
+        let mut expected = expected_response(
+            "in_progress",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: None,
+                category_when_not_later: "in_progress",
+                is_paused: false,
+                unread: false,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        let mut vibe_mode = serde_json::json!({ "mode": expected_mode });
+        if let Some(ancestor_session_id) = expected_ancestor {
+            vibe_mode["ancestorSessionId"] = serde_json::json!(ancestor_session_id);
+        }
+        expected["sessions"][0]["vibeMode"] = vibe_mode;
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_feed_reports_inherited_vibe_from_archived_ancestor(
+        mut source: TestSessionSource,
+    ) {
+        source.vibe_config = Arc::new(
+            serde_yaml::from_str(indoc::indoc! {"
+                orgs:
+                  example-org:
+                    vibe: true
+            "})
+            .unwrap(),
+        );
+        source.sessions[0].launched_with_vibe = true;
+        source.sessions[0].status = SessionStatus::Running;
+        source.all_sessions[0] = source.sessions[0].clone();
+        let mut archived_ancestor = source.all_sessions.remove(1);
+        archived_ancestor.vibe_enabled = true;
+        archived_ancestor.archived_at = Some(Utc.timestamp_opt(900, 0).unwrap());
+        source
+            .archived_ancestors
+            .insert(archived_ancestor.session_id.clone(), archived_ancestor);
+        source.web_states[0].later_until = None;
+
+        let mut expected = expected_response(
+            "in_progress",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: None,
+                category_when_not_later: "in_progress",
+                is_paused: false,
+                unread: false,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["vibeMode"] = serde_json::json!({
+            "mode": "inherited",
+            "ancestorSessionId": "parent-session",
+        });
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
 
     #[rstest]
@@ -1430,7 +1590,7 @@ mod tests {
         details: ExpectedSessionDetails<'_>,
         response: ExpectedSessionResponse<'_>,
     ) -> serde_json::Value {
-        serde_json::json!({
+        let mut expected = serde_json::json!({
             "revision": 7,
             "workTypeNavLabels": response.work_type_nav_labels,
             "sessions": [{
@@ -1507,7 +1667,9 @@ mod tests {
                 "unreviewedDecisionCount": 2,
                 "critUrl": details.crit_url
             }]
-        })
+        });
+        expected["sessions"][0]["vibeMode"] = serde_json::json!({ "mode": "repo_disabled" });
+        expected
     }
 
     fn question_inbox_response(kind: &str, preview: Option<&str>) -> serde_json::Value {

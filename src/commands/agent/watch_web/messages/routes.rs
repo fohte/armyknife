@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -11,6 +11,7 @@ use axum::http::StatusCode;
 use axum::http::header::CONTENT_TYPE;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use serde::Serialize;
 
 use crate::commands::agent::store::{
     AgentDecision, AgentFile, AgentProposal, AgentTodo, PermissionDeniedOperation,
@@ -44,6 +45,8 @@ pub(super) type AgentFileLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentFile>> + S
 pub(super) type AgentFileStorageRootLoader = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
 pub(super) type BackgroundTaskLoader =
     Arc<dyn Fn(&str) -> Result<Vec<BackgroundTask>> + Send + Sync>;
+type RepoIdentityLoader = Arc<dyn Fn(&Path) -> Option<(String, String)> + Send + Sync>;
+type VibeConfigLoader = Arc<dyn Fn() -> crate::shared::config::Config + Send + Sync>;
 
 #[derive(Clone)]
 pub(in crate::commands::agent::watch_web) struct RouteLoaders {
@@ -58,6 +61,8 @@ pub(in crate::commands::agent::watch_web) struct RouteLoaders {
     pub(super) agent_files: AgentFileLoader,
     pub(super) agent_file_storage_root: AgentFileStorageRootLoader,
     pub(super) background_tasks: BackgroundTaskLoader,
+    vibe_config: Option<VibeConfigLoader>,
+    repo_identity: Option<RepoIdentityLoader>,
     pub(super) message_cache: MessageCache,
     pub(super) question_preview_cache: question_preview::QuestionPreviewCache,
 }
@@ -85,6 +90,8 @@ impl RouteLoaders {
             agent_files: Arc::new(|_| Ok(Vec::new())),
             agent_file_storage_root: Arc::new(|| None),
             background_tasks: Arc::new(|_| Ok(Vec::new())),
+            vibe_config: None,
+            repo_identity: None,
             message_cache: MessageCache::default(),
             question_preview_cache: question_preview::QuestionPreviewCache::default(),
         }
@@ -144,6 +151,16 @@ impl RouteLoaders {
         self
     }
 
+    pub(in crate::commands::agent::watch_web) fn with_vibe_context(
+        mut self,
+        config: impl Fn() -> crate::shared::config::Config + Send + Sync + 'static,
+        repo_identity: impl Fn(&Path) -> Option<(String, String)> + Send + Sync + 'static,
+    ) -> Self {
+        self.vibe_config = Some(Arc::new(config));
+        self.repo_identity = Some(Arc::new(repo_identity));
+        self
+    }
+
     pub(super) fn background_tasks(&self, session_id: &str) -> Result<Vec<BackgroundTask>> {
         (self.background_tasks)(session_id)
     }
@@ -178,26 +195,71 @@ async fn get_messages(
     }
     let tail_window_limit = range.initial_tail_window_limit();
 
-    match tokio::task::spawn_blocking(move || match tail_window_limit {
-        Some(limit) => load_conversation_with_initial_tail_window(
-            &session_id,
-            |id| load_session(id),
-            |id| load_user_marker(id),
-            &loaders,
-            limit,
-        ),
-        None => load_conversation_with_queued_prompts(
-            &session_id,
-            |id| load_session(id),
-            |id| load_user_marker(id),
-            &loaders,
-        ),
+    match tokio::task::spawn_blocking(move || -> Result<Option<(
+        super::ConversationResponse,
+        Option<crate::commands::agent::vibe::VibeState>,
+    )>> {
+        let Some(session) = load_session(&session_id)? else {
+            return Ok(None);
+        };
+        let vibe_mode = match (&loaders.vibe_config, &loaders.repo_identity) {
+            (Some(config_loader), Some(repo_identity)) => {
+                let config = config_loader();
+                let repo = repo_identity(&session.cwd);
+                let identity = repo
+                    .as_ref()
+                    .map(|(owner, repo)| (owner.as_str(), repo.as_str()));
+                let initial_state = crate::commands::agent::vibe::state_for(
+                    &session,
+                    identity,
+                    &config,
+                    &[],
+                );
+                if session.vibe_enabled
+                    || !session.launched_with_vibe
+                    || matches!(
+                        initial_state,
+                        crate::commands::agent::vibe::VibeState::RepoDisabled
+                    )
+                {
+                    Some(initial_state)
+                } else {
+                    crate::commands::agent::vibe::state_for_with_ancestor_loader(
+                        &session,
+                        identity,
+                        &config,
+                        |ancestor_id| load_session(ancestor_id),
+                    )
+                    .ok()
+                }
+            }
+            _ => None,
+        };
+        let conversation = match tail_window_limit {
+            Some(limit) => load_conversation_with_initial_tail_window(
+                &session_id,
+                |id| load_session(id),
+                |id| load_user_marker(id),
+                &loaders,
+                limit,
+            ),
+            None => load_conversation_with_queued_prompts(
+                &session_id,
+                |id| load_session(id),
+                |id| load_user_marker(id),
+                &loaders,
+            ),
+        }?;
+        Ok(conversation.map(|conversation| (conversation, vibe_mode)))
     })
     .await
     {
-        Ok(Ok(Some(mut conversation))) => {
+        Ok(Ok(Some((mut conversation, vibe_mode)))) => {
             conversation.apply_range(range);
-            match serde_json::to_vec(&conversation) {
+            match serde_json::to_vec(&ConversationApiResponse {
+                conversation: &conversation,
+                vibe_mode,
+            }) {
                 Ok(body) => (
                     StatusCode::OK,
                     [(CONTENT_TYPE, "application/json")],
@@ -220,4 +282,13 @@ async fn get_messages(
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConversationApiResponse<'a> {
+    #[serde(flatten)]
+    conversation: &'a super::ConversationResponse,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vibe_mode: Option<crate::commands::agent::vibe::VibeState>,
 }

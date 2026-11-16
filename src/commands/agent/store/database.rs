@@ -23,6 +23,7 @@ mod queued_prompts;
 mod replacements;
 mod resolution_lock;
 mod todos;
+mod vibe_setting_revision;
 mod wake;
 mod web_state;
 
@@ -251,6 +252,31 @@ impl SessionLock {
         Ok(())
     }
 
+    pub(crate) fn save_vibe_setting(&self, session: &Session) -> Result<String> {
+        ensure!(
+            session.session_id == self.session_id,
+            "session ID cannot change while its store lock is held"
+        );
+        self.ensure_transaction()?;
+        let current_vibe_enabled = self.load()?.map(|current| current.vibe_enabled);
+        let vibe_setting_changed = current_vibe_enabled
+            .map(|current| current != session.vibe_enabled)
+            .unwrap_or(session.vibe_enabled);
+        write_session(&self.connection, session)?;
+        if !vibe_setting_changed {
+            vibe_setting_revision::rotate(&self.connection, &self.session_id)?;
+        }
+        let revision = vibe_setting_revision::current(&self.connection, &self.session_id)?
+            .ok_or_else(|| anyhow!("vibe setting token is missing after save"))?;
+        self.connection.execute_batch("COMMIT")?;
+        self.transaction_active.set(false);
+        Ok(revision)
+    }
+
+    pub(crate) fn vibe_setting_revision(&self) -> Result<Option<String>> {
+        vibe_setting_revision::current(&self.connection, &self.session_id)
+    }
+
     pub(crate) fn delete(&self) -> Result<bool> {
         self.ensure_transaction()?;
         let removed = delete_session_row(&self.connection, &self.session_id)?;
@@ -463,14 +489,20 @@ pub(crate) fn serialize_session(session: &Session) -> Result<String> {
 }
 
 pub(crate) fn write_session(connection: &Connection, session: &Session) -> Result<i64> {
+    let stored_session = read_stored_session(connection, &session.session_id)?;
     ensure!(
-        !matches!(
-            read_stored_session(connection, &session.session_id)?,
-            StoredSession::Undecodable
-        ),
+        !matches!(stored_session, StoredSession::Undecodable),
         "refusing to overwrite undecodable session {}",
         session.session_id
     );
+    let vibe_setting_changed = match &stored_session {
+        StoredSession::Missing => session.vibe_enabled,
+        StoredSession::Decoded(previous) => previous.vibe_enabled != session.vibe_enabled,
+        StoredSession::Undecodable => false,
+    };
+    if vibe_setting_changed {
+        vibe_setting_revision::rotate(connection, &session.session_id)?;
+    }
     let data = serialize_session(session)?;
     let revision = increment_revision(connection)?;
     connection.execute(
