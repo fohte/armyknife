@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.751](https://github.com/fohte/armyknife/compare/v0.1.750...v0.1.751) (2026-11-16)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** list submitted PRs ([#1881](https://github.com/fohte/armyknife/issues/1881)) ([09f03f4](https://github.com/fohte/armyknife/commit/09f03f48e0c50922ed05d42c81bed1891e96b011))
+
 ## [0.1.750](https://github.com/fohte/armyknife/compare/v0.1.749...v0.1.750) (2026-11-16)
 
 
