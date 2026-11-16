@@ -1,5 +1,5 @@
 import { Menu } from '@base-ui/react/menu'
-import { Clock3, Copy, Ellipsis, Pencil, Star, X } from 'lucide-react'
+import { Check, Clock3, Copy, Ellipsis, Pencil, Star, X } from 'lucide-react'
 import { useState } from 'react'
 
 import { useCopySessionId } from '#components/use-copy-session-id'
@@ -111,7 +111,15 @@ export function MobileConversationActionsMenu({
         </Menu.Portal>
       </Menu.Root>
       {copySessionIdStatus === 'idle' ? null : (
-        <span className="sr-only" role="status">
+        <span
+          className={`mobile-conversation-copy-status${copySessionIdStatus === 'failed' ? ' is-failed' : ''}`}
+          role="status"
+        >
+          {copySessionIdStatus === 'copied' ? (
+            <Check aria-hidden="true" size={15} />
+          ) : (
+            <X aria-hidden="true" size={15} />
+          )}
           {copySessionIdStatus === 'copied'
             ? 'Session ID copied'
             : 'Could not copy session ID'}

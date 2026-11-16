@@ -522,6 +522,7 @@ html[data-mobile-layout='true'] {
 }
 
 .mobile-conversation-header-actions {
+  position: relative;
   display: flex;
   flex: 0 0 auto;
   align-items: center;
@@ -587,6 +588,30 @@ html[data-mobile-layout='true'] {
 
 .mobile-conversation-actions-menu-item[data-highlighted] {
   background: var(--aw-bg-pressed);
+}
+
+.mobile-conversation-copy-status {
+  position: absolute;
+  z-index: 8;
+  top: calc(100% + 4px);
+  right: 0;
+  display: flex;
+  min-height: 36px;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--aw-border-emphasis);
+  background: var(--aw-bg-surface);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 24%);
+  color: var(--aw-color-success);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.mobile-conversation-copy-status.is-failed {
+  color: var(--aw-color-error);
 }
 
 .mobile-conversation-heading {

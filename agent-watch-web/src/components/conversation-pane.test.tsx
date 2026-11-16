@@ -725,6 +725,18 @@ function mobileActionMenuItem(label: string) {
   )
 }
 
+function mobileCopyStatus() {
+  const status = container.querySelector<HTMLElement>(
+    '.mobile-conversation-copy-status[role="status"]',
+  )
+  return status === null
+    ? null
+    : {
+        text: status.textContent,
+        hidden: status.classList.contains('sr-only'),
+      }
+}
+
 it('toggles Starred from the mobile actions menu', async () => {
   const onToggleToday = vi.fn()
   renderView(
@@ -1871,14 +1883,14 @@ it('copies the session ID from desktop and mobile headers', async () => {
     writeCalls: writeText.mock.calls,
     desktopButtonText,
     mobileCopyAction: mobileCopyItem.textContent,
-    mobileLiveStatus: container.querySelector('[role="status"]')?.textContent,
+    mobileLiveStatus: mobileCopyStatus(),
   })
   expect(snapshot()).toEqual({
     copiedText: session.id,
     writeCalls: [[session.id], [session.id]],
     desktopButtonText: 'Copied',
     mobileCopyAction: 'Session ID copied',
-    mobileLiveStatus: 'Session ID copied',
+    mobileLiveStatus: { text: 'Session ID copied', hidden: false },
   })
 })
 
@@ -1922,14 +1934,14 @@ it('copies the session ID through the HTTP-compatible clipboard fallback', async
     copyCalls: copyCommand.mock.calls,
     copyCallsAtClickReturn,
     temporaryTextareaCount: document.body.querySelectorAll('textarea').length,
-    liveStatus: container.querySelector('[role="status"]')?.textContent,
+    liveStatus: mobileCopyStatus(),
   })
   expect(snapshot()).toEqual({
     copiedText: session.id,
     copyCalls: [['copy']],
     copyCallsAtClickReturn: 1,
     temporaryTextareaCount: 1,
-    liveStatus: 'Session ID copied',
+    liveStatus: { text: 'Session ID copied', hidden: false },
   })
 })
 
@@ -1969,13 +1981,13 @@ it('falls back when the Clipboard API rejects the copy request', async () => {
     clipboardCalls: writeText.mock.calls,
     fallbackCalls: copyCommand.mock.calls,
     copiedText,
-    liveStatus: container.querySelector('[role="status"]')?.textContent,
+    liveStatus: mobileCopyStatus(),
   })
   expect(snapshot()).toEqual({
     clipboardCalls: [[session.id]],
     fallbackCalls: [['copy']],
     copiedText: session.id,
-    liveStatus: 'Session ID copied',
+    liveStatus: { text: 'Session ID copied', hidden: false },
   })
 })
 
@@ -2009,11 +2021,11 @@ it('announces when neither clipboard method can copy the session ID', async () =
       container
         .querySelector('button[aria-label="More actions"]')
         ?.getAttribute('aria-expanded') === 'false',
-    liveStatus: container.querySelector('.sr-only[role="status"]')?.textContent,
+    liveStatus: mobileCopyStatus(),
   })
   expect(snapshot()).toEqual({
     menuClosed: true,
-    liveStatus: 'Could not copy session ID',
+    liveStatus: { text: 'Could not copy session ID', hidden: false },
   })
 })
 
@@ -2048,12 +2060,12 @@ it('announces copy failure and removes the textarea when execCommand throws', as
   const snapshot = () => ({
     copyCalls: copyCommand.mock.calls,
     temporaryTextareaCount: document.body.querySelectorAll('textarea').length,
-    liveStatus: container.querySelector('.sr-only[role="status"]')?.textContent,
+    liveStatus: mobileCopyStatus(),
   })
   expect(snapshot()).toEqual({
     copyCalls: [['copy']],
     temporaryTextareaCount: 1,
-    liveStatus: 'Could not copy session ID',
+    liveStatus: { text: 'Could not copy session ID', hidden: false },
   })
 })
 
