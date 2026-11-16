@@ -15,7 +15,7 @@ export type LaunchSessionRequest = {
   initialMessage?: string
 }
 
-export type LaunchSessionResponse = { launchId: string }
+type LaunchSessionResponse = { launchId: string }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
