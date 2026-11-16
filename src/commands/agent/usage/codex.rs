@@ -116,7 +116,6 @@ pub(crate) fn read_transcript(path: &Path, session_id: &str) -> Option<SessionUs
 }
 
 pub(crate) fn read_latest_quota_from(codex_home: &Path) -> Result<Option<EngineQuota>> {
-    let mut latest_quota: Option<EngineQuota> = None;
     let mut paths = Vec::new();
     for root in [
         codex_home.join("sessions"),
@@ -127,31 +126,40 @@ pub(crate) fn read_latest_quota_from(codex_home: &Path) -> Result<Option<EngineQ
     paths.sort();
     paths.dedup();
 
-    let current_paths = paths.iter().cloned().collect::<HashSet<_>>();
+    let mut rollouts = Vec::new();
     for path in paths {
-        let Some(quota) = cached_quota_from(&path)? else {
-            continue;
-        };
-        if latest_quota
-            .as_ref()
-            .is_none_or(|latest| quota.observed_at > latest.observed_at)
-        {
-            latest_quota = Some(quota);
+        if let Some(signature) = file_signature(&path)? {
+            rollouts.push((path, signature));
         }
     }
+    // Quotas follow the latest rollout update, so older files are only fallbacks.
+    rollouts.sort_by(|(left_path, left), (right_path, right)| {
+        right
+            .modified
+            .cmp(&left.modified)
+            .then_with(|| left_path.cmp(right_path))
+    });
+
+    let current_paths = rollouts
+        .iter()
+        .map(|(path, _)| path.clone())
+        .collect::<HashSet<_>>();
     let cache = ROLLOUT_QUOTA_CACHE.get_or_init(Default::default);
     cache
         .lock()
         .map_err(|_| anyhow!("Codex quota cache lock is poisoned"))?
         .retain(|path, _| !path.starts_with(codex_home) || current_paths.contains(path));
 
-    Ok(latest_quota)
+    for (path, signature) in rollouts {
+        if let Some(quota) = cached_quota_from(&path, signature)? {
+            return Ok(Some(quota));
+        }
+    }
+
+    Ok(None)
 }
 
-fn cached_quota_from(path: &Path) -> Result<Option<EngineQuota>> {
-    let Some(signature) = file_signature(path)? else {
-        return Ok(None);
-    };
+fn cached_quota_from(path: &Path, signature: FileSignature) -> Result<Option<EngineQuota>> {
     let cache = ROLLOUT_QUOTA_CACHE.get_or_init(Default::default);
     if let Some(cached) = cache
         .lock()
@@ -417,7 +425,8 @@ fn parse_timestamp(value: &str) -> Option<DateTime<Utc>> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::fs::{self, File};
+    use std::time::{Duration, SystemTime};
 
     use chrono::{TimeZone, Utc};
     use indoc::indoc;
@@ -594,6 +603,77 @@ mod tests {
                 read_latest_quota_from(directory.path()).unwrap()
             ],
             [initial, updated],
+        );
+    }
+
+    #[test]
+    fn stops_at_the_first_quota_in_modification_time_order() {
+        let directory = tempdir().expect("temporary directory should be created");
+        let archived_path = directory
+            .path()
+            .join("archived_sessions/rollout-older.jsonl");
+        let session_path = directory
+            .path()
+            .join("sessions/2026/11/17/rollout-quota.jsonl");
+        let newest_path = directory
+            .path()
+            .join("sessions/2026/11/17/rollout-newest.jsonl");
+        for path in [&archived_path, &session_path, &newest_path] {
+            fs::create_dir_all(
+                path.parent()
+                    .expect("fixture rollout should have a parent directory"),
+            )
+            .expect("fixture rollout directory should be created");
+        }
+        fs::write(
+            &archived_path,
+            indoc! {r#"
+                {"type":"event_msg","timestamp":"2026-11-17T13:00:00Z","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":12,"window_minutes":300,"resets_at":1794841200}}}}
+            "#},
+        )
+        .expect("older archived rollout should be written");
+        fs::write(
+            &session_path,
+            indoc! {r#"
+                {"type":"event_msg","timestamp":"2026-11-17T12:00:00Z","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":72,"window_minutes":300,"resets_at":1794841200}}}}
+            "#},
+        )
+        .expect("quota rollout should be written");
+        fs::write(
+            &newest_path,
+            indoc! {r#"
+                {"type":"event_msg","timestamp":"2026-11-17T14:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":243},"model_context_window":1000}}}
+            "#},
+        )
+        .expect("newest rollout without quota should be written");
+        let base_time = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        File::open(&archived_path)
+            .expect("older archived rollout should open")
+            .set_modified(base_time)
+            .expect("older archived rollout mtime should be set");
+        File::open(&session_path)
+            .expect("quota rollout should open")
+            .set_modified(base_time + Duration::from_secs(10))
+            .expect("quota rollout mtime should be set");
+        File::open(&newest_path)
+            .expect("newest rollout should open")
+            .set_modified(base_time + Duration::from_secs(20))
+            .expect("newest rollout mtime should be set");
+
+        assert_eq!(
+            read_latest_quota_from(directory.path()).unwrap(),
+            Some(EngineQuota {
+                engine: Engine::Codex,
+                rate_limits: RateLimits {
+                    five_hour: Some(RateLimitWindow {
+                        used_percentage: 72.0,
+                        resets_at: Some(1794841200),
+                        window_seconds: 18000,
+                    }),
+                    seven_day: None,
+                },
+                observed_at: Utc.with_ymd_and_hms(2026, 11, 17, 12, 0, 0).unwrap(),
+            }),
         );
     }
 }
