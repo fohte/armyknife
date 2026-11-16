@@ -310,6 +310,20 @@ fn new_session_record(
     }
 }
 
+fn tmux_info_from_pane(pane_info: Option<&tmux::PaneInfo>) -> Result<Option<TmuxInfo>> {
+    pane_info
+        .map(|info| {
+            Ok(TmuxInfo {
+                session_name: info.session_name.clone(),
+                window_name: info.window_name.clone(),
+                window_index: info.window_index,
+                pane_id: info.pane_id.clone(),
+                socket_path: tmux::current_socket_path()?,
+            })
+        })
+        .transpose()
+}
+
 fn ensure_watch_web_user_marker(
     session_lock: &store::SessionLock,
     event: HookEvent,
@@ -368,8 +382,24 @@ fn process_hook_event_impl_with_instruction(
     side_effects: &SideEffects,
     stop_hook_instruction: Option<&str>,
 ) -> Result<ProcessResult> {
-    let env = EnvVars::load();
+    process_hook_event_impl_with_env(
+        event,
+        input,
+        sessions_dir,
+        side_effects,
+        stop_hook_instruction,
+        EnvVars::load(),
+    )
+}
 
+fn process_hook_event_impl_with_env(
+    event: HookEvent,
+    input: HookInput,
+    sessions_dir: &Path,
+    side_effects: &SideEffects,
+    stop_hook_instruction: Option<&str>,
+    env: EnvVars,
+) -> Result<ProcessResult> {
     // Claude's SessionEnd confirms termination; Codex's hook does not because
     // the app-server also fires it during daemon shutdown.
     //
@@ -440,8 +470,8 @@ fn process_hook_event_impl_with_instruction(
         None
     };
 
-    // A `claude -c` resume can emit startup for a temporary ID before resume
-    // supplies the restored ID. Keep startup metadata without binding its ID to the pane.
+    // A `claude -c` resume can emit startup for a temporary ID; watch-web's
+    // launch ID identifies a new session that can be bound before its first prompt.
     if event == HookEvent::SessionStart {
         // Export session ID to CLAUDE_ENV_FILE so that subsequent Bash commands
         // (e.g., `a agent new`) can automatically discover the parent session ID.
@@ -451,6 +481,7 @@ fn process_hook_event_impl_with_instruction(
 
         // Startup can carry the only model value before a session row exists.
         if input.source.as_deref() == Some("startup") {
+            let is_watch_web_launch = env.session_launch_id.is_some();
             let initialized = session_init::load_or_capture(
                 sessions_dir,
                 &input.session_id,
@@ -464,7 +495,7 @@ fn process_hook_event_impl_with_instruction(
                         None,
                         input.transcript_path.as_deref(),
                     );
-                    if !metadata_update.apply(&mut model, &mut effort) {
+                    if !metadata_update.apply(&mut model, &mut effort) && !is_watch_web_launch {
                         return None;
                     }
 
@@ -514,6 +545,24 @@ fn process_hook_event_impl_with_instruction(
                 drop(session_lock);
                 return Ok(ProcessResult::Skipped);
             };
+            let tmux_info = if is_watch_web_launch {
+                if let Some(pane_info) = pane_info.as_ref() {
+                    let _ = tmux::set_pane_option(
+                        &pane_info.pane_id,
+                        TMUX_SESSION_OPTION,
+                        &input.session_id,
+                    );
+                    end_sessions_on_pane_takeover(
+                        sessions_dir,
+                        &pane_info.pane_id,
+                        &input.session_id,
+                        side_effects,
+                    );
+                }
+                tmux_info_from_pane(pane_info.as_ref())?
+            } else {
+                None
+            };
             let now = Utc::now();
             let mut session = new_session_record(
                 &input,
@@ -521,8 +570,12 @@ fn process_hook_event_impl_with_instruction(
                 now,
                 pr_context,
                 work_type_pinned,
-                None,
-                SessionStatus::Ended,
+                tmux_info,
+                if is_watch_web_launch {
+                    SessionStatus::Running
+                } else {
+                    SessionStatus::Ended
+                },
             );
             session.model = model;
             session.effort = effort;
@@ -565,17 +618,7 @@ fn process_hook_event_impl_with_instruction(
         );
     }
 
-    let tmux_info = if let Some(info) = pane_info {
-        Some(TmuxInfo {
-            session_name: info.session_name,
-            window_name: info.window_name,
-            window_index: info.window_index,
-            pane_id: info.pane_id,
-            socket_path: tmux::current_socket_path()?,
-        })
-    } else {
-        None
-    };
+    let tmux_info = tmux_info_from_pane(pane_info.as_ref())?;
 
     let mut status = determine_status(event, &input);
     let may_contain_work_type = work_type::may_contain_work_type(event, &input);
@@ -1856,34 +1899,25 @@ mod tests {
     #[test]
     fn session_start_persists_launch_id_from_environment() {
         let temp_dir = tempfile::TempDir::new().expect("temporary directory should be created");
-
-        let actual = temp_env::with_vars(
-            [
-                (EnvVars::session_launch_id_name(), Some("launch-fixture")),
-                (EnvVars::session_label_name(), None::<&str>),
-                (EnvVars::session_work_type_name(), None::<&str>),
-                (EnvVars::session_child_launch_name(), None::<&str>),
-                (EnvVars::session_vibe_launch_name(), None::<&str>),
-                (EnvVars::ancestor_session_ids_name(), None::<&str>),
-            ],
-            || {
-                process_hook_event_impl(
-                    HookEvent::SessionStart,
-                    create_test_input(None),
-                    temp_dir.path(),
-                    &SideEffects::none(),
-                )
-                .expect("session-start should save the session");
-
-                let session = store::load_session_from(temp_dir.path(), "test-123")
-                    .expect("session should load")
-                    .expect("session should exist");
-                let mut actual = serde_json::to_value(session).expect("session should serialize");
-                actual["created_at"] = serde_json::json!("<timestamp>");
-                actual["updated_at"] = serde_json::json!("<timestamp>");
-                actual
-            },
-        );
+        let env = EnvVars {
+            session_launch_id: Some("launch-fixture".to_string()),
+            ..EnvVars::default()
+        };
+        process_hook_event_impl_with_env(
+            HookEvent::SessionStart,
+            create_test_input(None),
+            temp_dir.path(),
+            &SideEffects::none(),
+            None,
+            env,
+        )
+        .expect("session-start should save the session");
+        let session = store::load_session_from(temp_dir.path(), "test-123")
+            .expect("session should load")
+            .expect("session should exist");
+        let mut actual = serde_json::to_value(session).expect("session should serialize");
+        actual["created_at"] = serde_json::json!("<timestamp>");
+        actual["updated_at"] = serde_json::json!("<timestamp>");
 
         let mut expected = create_test_session(None);
         expected.launch_id = Some("launch-fixture".to_string());
@@ -1893,6 +1927,38 @@ mod tests {
         expected["updated_at"] = serde_json::json!("<timestamp>");
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn promptless_watch_web_session_is_saved_on_startup() {
+        let temp_dir = tempfile::TempDir::new().expect("temporary directory should be created");
+        let env = EnvVars {
+            session_launch_id: Some("launch-fixture".to_string()),
+            ..EnvVars::default()
+        };
+        let result = process_hook_event_impl_with_env(
+            HookEvent::SessionStart,
+            create_test_input_with_source(None, Some("startup")),
+            temp_dir.path(),
+            &SideEffects::none(),
+            None,
+            env,
+        )
+        .expect("startup should save the session");
+        let session = store::load_session_from(temp_dir.path(), "test-123")
+            .expect("session should load")
+            .expect("session should exist");
+        let mut actual = serde_json::to_value(session).expect("session should serialize");
+        actual["created_at"] = serde_json::json!("<timestamp>");
+        actual["updated_at"] = serde_json::json!("<timestamp>");
+
+        let mut expected = create_test_session(None);
+        expected.launch_id = Some("launch-fixture".to_string());
+        let mut expected = serde_json::to_value(expected).expect("session should serialize");
+        expected["created_at"] = serde_json::json!("<timestamp>");
+        expected["updated_at"] = serde_json::json!("<timestamp>");
+
+        assert_eq!((result, actual), (ProcessResult::SessionSaved, expected));
     }
 
     #[rstest]

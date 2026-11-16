@@ -33,6 +33,7 @@ const PR_HEAD_SHA: &str = "ARMYKNIFE_PR_HEAD_SHA";
 const SESSION_LAUNCH_ID: &str = "ARMYKNIFE_SESSION_LAUNCH_ID";
 
 /// Snapshot of all ARMYKNIFE_* environment variables at load time.
+#[derive(Default)]
 pub struct EnvVars {
     /// When set, hooks are skipped entirely.
     /// Used by `claude -p` invocations to prevent infinite recursion.
