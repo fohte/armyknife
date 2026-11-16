@@ -143,3 +143,38 @@ export const SessionPullRequestCanBeMerged: Story = {
     },
   },
 }
+
+export const SessionHasMultiplePullRequests: Story = {
+  name: 'The header shows every pull request submitted by the session',
+  args: {
+    session: {
+      ...session,
+      pullRequest: {
+        number: 42,
+        state: 'Open',
+        owner: 'example-org',
+        repo: 'example-repo',
+        url: 'https://github.com/example-org/example-repo/pull/42',
+        headSha: 'sample-head-sha',
+      },
+      pullRequests: [
+        {
+          number: 42,
+          state: 'Open',
+          owner: 'example-org',
+          repo: 'example-repo',
+          url: 'https://github.com/example-org/example-repo/pull/42',
+          headSha: 'sample-head-sha',
+        },
+        {
+          number: 43,
+          state: 'Open',
+          owner: 'example-org',
+          repo: 'example-repo',
+          url: 'https://github.com/example-org/example-repo/pull/43',
+          headSha: 'other-head-sha',
+        },
+      ],
+    },
+  },
+}

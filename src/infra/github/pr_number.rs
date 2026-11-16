@@ -16,6 +16,29 @@ pub struct PrNumberQuery {
 }
 
 impl PrNumberQuery {
+    /// Parses a canonical GitHub pull request URL.
+    pub fn from_github_url(value: &str) -> Option<Self> {
+        let url = reqwest::Url::parse(value).ok()?;
+        if url.scheme() != "https" || url.host_str() != Some("github.com") {
+            return None;
+        }
+        let mut segments = url.path_segments()?;
+        let owner = segments.next()?;
+        let repo = segments.next()?;
+        if segments.next()? != "pull" {
+            return None;
+        }
+        let number = segments.next()?.parse::<u64>().ok()?;
+        if owner.is_empty() || repo.is_empty() || number == 0 || segments.next().is_some() {
+            return None;
+        }
+        Some(Self {
+            owner: owner.to_owned(),
+            repo: repo.to_owned(),
+            number,
+        })
+    }
+
     /// Returns the map key used for this query.
     pub fn key(&self) -> (String, String, u64) {
         (self.owner.clone(), self.repo.clone(), self.number)
@@ -131,6 +154,24 @@ mod tests {
 
     use super::*;
     use crate::infra::github::{PrCiState, PrInfo, PrState};
+
+    #[rstest::rstest]
+    #[case::canonical("https://github.com/sample-org/sample-project/pull/17", Some(PrNumberQuery {
+        owner: "sample-org".to_string(),
+        repo: "sample-project".to_string(),
+        number: 17,
+    }))]
+    #[case::wrong_scheme("http://github.com/sample-org/sample-project/pull/17", None)]
+    #[case::wrong_host("https://example.com/sample-org/sample-project/pull/17", None)]
+    #[case::wrong_path("https://github.com/sample-org/sample-project/issues/17", None)]
+    #[case::zero_number("https://github.com/sample-org/sample-project/pull/0", None)]
+    #[case::extra_segment("https://github.com/sample-org/sample-project/pull/17/files", None)]
+    fn parses_canonical_pull_request_urls(
+        #[case] url: &str,
+        #[case] expected: Option<PrNumberQuery>,
+    ) {
+        assert_eq!(PrNumberQuery::from_github_url(url), expected);
+    }
 
     #[tokio::test]
     async fn looks_up_pr_status_by_number() {

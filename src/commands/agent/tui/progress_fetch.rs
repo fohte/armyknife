@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use super::super::session_pr_context::{self, Resolution};
 use super::progress::{FetchedDelegate, FetchedProgress, ProgressFetchScope};
 use super::progress_batches::{
-    append_created_pull_requests, build_implementation_plan, created_pr_queries,
-    pr_number_query_from_url, pull_request_queries, session_progress_plan,
+    append_submitted_pull_requests, build_implementation_plan, pr_number_query_from_url,
+    pull_request_queries, session_progress_plan, submitted_pr_queries,
 };
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Session, SessionPrContext};
@@ -28,7 +28,7 @@ async fn fetch_progress_for_sessions(
     request_scope: ProgressFetchScope,
     sessions: Vec<Session>,
 ) -> Result<FetchedProgress, String> {
-    let created_pr_urls = sessions
+    let submitted_pr_urls = sessions
         .iter()
         .find(|session| session.session_id == selected_session_id)
         .map(|session| session.created_pr_urls.clone())
@@ -64,7 +64,7 @@ async fn fetch_progress_for_sessions(
         .iter()
         .map(PrNumberQuery::key)
         .collect::<HashSet<_>>();
-    for query in created_pr_queries(&created_pr_urls) {
+    for query in submitted_pr_queries(&submitted_pr_urls) {
         if seen_number_queries.insert(query.key()) {
             number_queries.push(query);
         }
@@ -138,7 +138,7 @@ async fn fetch_progress_for_sessions(
             }
         })
         .collect();
-    let has_created_pr_urls = created_pr_urls
+    let has_submitted_pr_urls = submitted_pr_urls
         .iter()
         .any(|url| pr_number_query_from_url(url).is_some());
     let mut implementation = implementation_checklist
@@ -151,12 +151,12 @@ async fn fetch_progress_for_sessions(
                 linked_pr_lookup_failed,
             )
         })
-        .or_else(|| has_created_pr_urls.then(|| session_progress_plan(&delegated)));
-    if has_created_pr_urls && let Some(plan) = implementation.as_mut() {
-        append_created_pull_requests(
+        .or_else(|| has_submitted_pr_urls.then(|| session_progress_plan(&delegated)));
+    if has_submitted_pr_urls && let Some(plan) = implementation.as_mut() {
+        append_submitted_pull_requests(
             plan,
             &selected_session_id,
-            &created_pr_urls,
+            &submitted_pr_urls,
             &linked_prs,
             linked_pr_lookup_failed,
         );

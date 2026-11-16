@@ -7,7 +7,7 @@ use crate::commands::agent::tui::progress::{
     ProgressSelectionKey, StageMarks, WorkProgressRow, build_progress_rows,
 };
 use crate::commands::agent::tui::progress_batches::{
-    ImplementationPlan, append_created_pull_requests, build_implementation_plan,
+    ImplementationPlan, append_submitted_pull_requests, build_implementation_plan,
     session_progress_plan,
 };
 use crate::commands::agent::tui::session_rows::SessionTask;
@@ -125,7 +125,7 @@ fn created_pr_plan_for_session(session_id: &str, number: u64) -> ImplementationP
         head_sha: None,
     };
     let mut plan = session_progress_plan(&[]);
-    append_created_pull_requests(
+    append_submitted_pull_requests(
         &mut plan,
         session_id,
         &[url],
@@ -153,16 +153,16 @@ fn expected_task_created_pr_rows(session_id: &str, number: u64) -> Vec<ProgressR
             collapsed: false,
         },
         ProgressRow::BatchHeader {
-            batch_id: format!("created-prs:{session_id}"),
-            title: "Created by this session".to_string(),
+            batch_id: format!("submitted-prs:{session_id}"),
+            title: "Submitted by this session".to_string(),
             merged_pr_count: 0,
             collapsed: false,
         },
         ProgressRow::ChecklistPullRequest {
-            batch_id: format!("created-prs:{session_id}"),
+            batch_id: format!("submitted-prs:{session_id}"),
             row: PrProgressRow {
                 session_id: format!(
-                    "checklist-item:created-pr:{session_id}:sample-org:sample-project:{number}"
+                    "checklist-item:submitted-pr:{session_id}:sample-org:sample-project:{number}"
                 ),
                 repo: Some("sample-project".to_string()),
                 title: "Add a sample design".to_string(),
@@ -744,16 +744,16 @@ fn project_manager_progress_keeps_its_created_pr_plan() {
                 collapsed: false,
             },
             ProgressRow::BatchHeader {
-                batch_id: "created-prs:project-manager".to_string(),
-                title: "Created by this session".to_string(),
+                batch_id: "submitted-prs:project-manager".to_string(),
+                title: "Submitted by this session".to_string(),
                 merged_pr_count: 0,
                 collapsed: false,
             },
             ProgressRow::ChecklistPullRequest {
-                batch_id: "created-prs:project-manager".to_string(),
+                batch_id: "submitted-prs:project-manager".to_string(),
                 row: PrProgressRow {
                     session_id:
-                        "checklist-item:created-pr:project-manager:sample-org:sample-project:23"
+                        "checklist-item:submitted-pr:project-manager:sample-org:sample-project:23"
                             .to_string(),
                     repo: Some("sample-project".to_string()),
                     title: "Add a sample design".to_string(),

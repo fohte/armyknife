@@ -78,14 +78,14 @@ impl App {
                     progress
                         .implementation
                         .map(|fresh| match cached_implementation.as_ref() {
-                            Some(cached) => fresh.with_cached_created_pull_requests(cached),
+                            Some(cached) => fresh.with_cached_submitted_pull_requests(cached),
                             None => fresh,
                         })
                         .or(cached_implementation)
                 } else {
                     progress
                         .implementation
-                        .filter(ImplementationPlan::has_created_pull_requests)
+                        .filter(ImplementationPlan::has_submitted_pull_requests)
                 };
                 let display_implementation = implementation
                     .as_ref()

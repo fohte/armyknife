@@ -73,7 +73,7 @@ pub struct Session {
     /// GitHub lookup data retained after a worktree is removed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_context: Option<SessionPrContext>,
-    /// Pull requests created by this session through `a ai pr-draft submit`.
+    /// Pull request URLs submitted by this session through `a ai pr-draft submit`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub created_pr_urls: Vec<String>,
     /// Crit review URLs opened by this session, ordered by most recently requested.

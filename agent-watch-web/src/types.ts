@@ -65,6 +65,7 @@ export type Session = {
   hasSessionTree?: boolean
   ancestorSessionIds: string[]
   pullRequest: PullRequest | null
+  pullRequests?: PullRequest[]
   critUrl?: string | null
   webUis?: { name: string; url: string; exposedUrl?: string | null }[]
   reviewDocumentId?: string | null
@@ -87,6 +88,7 @@ export type SessionTreeNode = {
   repo: string
   decisionCount: number
   pullRequest: PullRequest | null
+  pullRequests?: PullRequest[]
 }
 
 export type SessionLinkTarget = Pick<Session, 'id' | 'repo'> & {

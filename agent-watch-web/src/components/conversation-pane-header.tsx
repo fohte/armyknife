@@ -100,7 +100,13 @@ export function ConversationPaneHeader({
   } | null>(null)
   const { pendingOperations, run } = useSessionOperations()
   const parent = session.parent
-  const pullRequest = session.pullRequest
+  const pullRequests =
+    session.pullRequests !== undefined && session.pullRequests.length > 0
+      ? session.pullRequests
+      : session.pullRequest === null
+        ? []
+        : [session.pullRequest]
+  const pullRequest = pullRequests[0] ?? null
   const mergeOperation =
     pullRequest?.state === 'Open' &&
     pullRequest.owner !== undefined &&
@@ -384,19 +390,24 @@ export function ConversationPaneHeader({
                   isStarred={isToday}
                   onToggleToday={onToggleToday}
                 />
-                {pullRequest ? (
+                {pullRequests.map((pr) => (
                   <a
+                    key={`${pr.owner ?? session.repo}/${pr.repo ?? ''}/${String(pr.number)}`}
                     className="conversation-pr-link"
                     href={
-                      pullRequest.url ??
-                      `https://github.com/${session.repo}/pull/${String(pullRequest.number)}`
+                      pr.url ??
+                      `https://github.com/${
+                        pr.owner !== undefined && pr.repo !== undefined
+                          ? `${pr.owner}/${pr.repo}`
+                          : session.repo
+                      }/pull/${String(pr.number)}`
                     }
                     target="_blank"
                     rel="noreferrer"
                   >
-                    #{pullRequest.number} PR
+                    #{pr.number} PR
                   </a>
-                ) : null}
+                ))}
                 {mergeOperation === null ||
                 (mergeFeedback?.kind === 'success' &&
                   mergeFeedback.number === mergeOperation.number) ? null : (
