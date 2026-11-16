@@ -32,11 +32,18 @@ function QuotaWindow({
   window: RateLimitWindow | null
   nowSeconds: number
 }) {
+  // A stored snapshot cannot tell us how much quota was used after its reset.
+  const currentWindow =
+    window !== null && window.resetsAt !== null && window.resetsAt <= nowSeconds
+      ? null
+      : window
   const usedPercentage =
-    window === null ? null : Math.round(window.usedPercentage)
-  const actualPercentage = window?.usedPercentage ?? null
+    currentWindow === null ? null : Math.round(currentWindow.usedPercentage)
+  const actualPercentage = currentWindow?.usedPercentage ?? null
   const expectedPercentage =
-    window === null ? null : getExpectedUsagePercentage(window, nowSeconds)
+    currentWindow === null
+      ? null
+      : getExpectedUsagePercentage(currentWindow, nowSeconds)
   const paceStatus = getUsagePaceStatus(
     actualPercentage ?? 0,
     expectedPercentage,
@@ -49,7 +56,9 @@ function QuotaWindow({
         ? '#fbbf24'
         : '#d4d4d8'
   const reset =
-    window === null ? '--' : formatResetTime(window.resetsAt, nowSeconds)
+    currentWindow === null
+      ? '--'
+      : formatResetTime(currentWindow.resetsAt, nowSeconds)
   return (
     <div className="quota-window">
       <span>{label}</span>

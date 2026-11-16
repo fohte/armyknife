@@ -39,6 +39,18 @@ const codexQuota: EngineQuota = {
   observedAt: '2026-11-16T12:00:00Z',
 }
 
+const expiredClaudeQuota: EngineQuota = {
+  ...claudeQuota,
+  rateLimits: {
+    fiveHour: {
+      usedPercentage: 95,
+      resetsAt: nowSeconds - 60,
+      windowSeconds: 18_000,
+    },
+    sevenDay: claudeQuota.rateLimits.sevenDay,
+  },
+}
+
 const meta = {
   component: QuotaPanel,
   args: {
@@ -94,6 +106,11 @@ export const UsageRequestFailed: Story = {
 export const RefreshFailedWithStaleQuota: Story = {
   name: 'The panel labels retained quota after a refresh failure',
   args: { error: true },
+}
+
+export const ExpiredFiveHourQuota: Story = {
+  name: 'The panel hides an expired 5h quota until a fresh snapshot arrives',
+  args: { quotas: { claude: expiredClaudeQuota, codex: null } },
 }
 
 export const MobileQuotaPanel: Story = {
