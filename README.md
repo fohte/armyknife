@@ -1280,6 +1280,8 @@ After `a agent close`, `a agent clean`, or the TUI clean view removes a worktree
 
 Without `--force`, worktree cleanup checks for non-shell processes whose current working directory is inside the worktree, except descendants of the shared Codex app-server, and stops if any are found. Shell-only panes are closed with the worktree. After successful deletion, cleanup sends SIGTERM to process groups of the excluded descendants. The check requires `lsof` and `ps`; deletion stops if either tool is unavailable or fails. With `--force`, cleanup sends SIGTERM to process groups rooted in the worktree (for example, a dev server left running by a detached background job). If `lsof` or `ps` cannot inspect processes, deletion proceeds without signaling process groups. The calling process and its ancestors are never targeted. A process that ignores SIGTERM may remain running.
 
+Daemon matching accepts any command line whose executable is `codex` and first argument is `app-server`, regardless of later arguments. Only descendants whose current working directory is inside the worktree are selected for non-forced signaling; process groups shared with the app-server or caller are excluded. The `--force` path continues to signal its separately discovered process groups.
+
 Options:
 
 | Option          | Description                                                                        |
