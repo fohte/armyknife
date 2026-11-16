@@ -2,7 +2,6 @@ import { expect, it } from 'vitest'
 
 import {
   defaultExpandedSessionIds,
-  directSessionChildCounts,
   needsActionDescendantCount,
   visibleSessionTreeRows,
 } from '#session-tree-model'
@@ -109,13 +108,5 @@ it('opens the selected path and its descendants while counting action descendant
       { id: 'other-branch', depth: 1, expanded: false, actionDescendants: 0 },
     ],
     1,
-  ])
-})
-
-it('counts direct session children by parent', () => {
-  expect([...directSessionChildCounts(sessions)].sort()).toEqual([
-    ['action-child', 1],
-    ['root', 2],
-    ['selected', 1],
   ])
 })
