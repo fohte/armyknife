@@ -1,6 +1,6 @@
-import { err, ok, ResultAsync } from 'neverthrow'
+import { ResultAsync } from 'neverthrow'
 
-import { errorFromResponse } from '#api-requests'
+import { jsonFromResponse } from '#api-requests'
 
 function toError(error: unknown) {
   return error instanceof Error
@@ -19,14 +19,5 @@ export function postNewSession<T>(
       body: JSON.stringify(body),
     }),
     toError,
-  ).andThen((response) => {
-    if (!response.ok) {
-      return errorFromResponse(response).andThen((error) => err(error))
-    }
-    return ResultAsync.fromPromise(response.json(), toError).andThen((value) =>
-      validate(value)
-        ? ok<T, Error>(value)
-        : err<T, Error>(new Error('The server returned an invalid response')),
-    )
-  })
+  ).andThen((response) => jsonFromResponse(response, validate))
 }
