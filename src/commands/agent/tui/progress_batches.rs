@@ -40,6 +40,32 @@ impl ImplementationPlan {
             .any(|batch| batch.id.starts_with("created-prs:"))
     }
 
+    pub(super) fn with_cached_created_pull_requests(&self, cached: &Self) -> Self {
+        let mut plan = self.clone();
+        let mut batch_ids = plan
+            .batches
+            .iter()
+            .map(|batch| batch.id.clone())
+            .collect::<HashSet<_>>();
+        for batch in &cached.batches {
+            if batch.id.starts_with("created-prs:") && batch_ids.insert(batch.id.clone()) {
+                plan.batches.push(batch.clone());
+            }
+        }
+        plan
+    }
+
+    pub(super) fn for_session(&self, session_id: &str) -> Self {
+        let mut plan = self.clone();
+        plan.batches.retain(|batch| {
+            batch
+                .id
+                .strip_prefix("created-prs:")
+                .is_none_or(|owner| owner == session_id)
+        });
+        plan
+    }
+
     pub(super) fn batch_id_for_delegate(&self, session_id: &str) -> Option<&str> {
         self.batches.iter().find_map(|batch| {
             batch
