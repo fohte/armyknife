@@ -1,13 +1,33 @@
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::SystemTime;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use super::model::{ContextUsage, EngineQuota, RateLimitWindow, RateLimits, SessionUsage};
 use crate::commands::agent::types::Engine;
+
+const INITIAL_QUOTA_READ_SIZE: usize = 8 * 1024;
+const MAX_QUOTA_READ_SIZE: usize = 64 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FileSignature {
+    modified: SystemTime,
+    length: u64,
+}
+
+#[derive(Clone)]
+struct CachedQuota {
+    signature: FileSignature,
+    quota: Option<EngineQuota>,
+}
+
+static ROLLOUT_QUOTA_CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedQuota>>> = OnceLock::new();
 
 pub(crate) fn read_transcript(path: &Path, session_id: &str) -> Option<SessionUsage> {
     let file = File::open(path).ok()?;
@@ -61,11 +81,14 @@ pub(crate) fn read_transcript(path: &Path, session_id: &str) -> Option<SessionUs
                 {
                     context = codex_context(usage, info.get("model_context_window"));
                 }
-                rate_limits = codex_rate_limits(
+                let parsed_rate_limits = codex_rate_limits(
                     payload
                         .and_then(|payload| payload.get("rate_limits"))
                         .or_else(|| info.and_then(|info| info.get("rate_limits"))),
                 );
+                if parsed_rate_limits.has_any() {
+                    rate_limits = parsed_rate_limits;
+                }
                 observed_at = record
                     .get("timestamp")
                     .and_then(Value::as_str)
@@ -94,31 +117,179 @@ pub(crate) fn read_transcript(path: &Path, session_id: &str) -> Option<SessionUs
 
 pub(crate) fn read_latest_quota_from(codex_home: &Path) -> Result<Option<EngineQuota>> {
     let mut latest_quota: Option<EngineQuota> = None;
+    let mut paths = Vec::new();
     for root in [
         codex_home.join("sessions"),
         codex_home.join("archived_sessions"),
     ] {
-        for path in rollout_paths_from(&root)? {
-            let Some(usage) = read_transcript(&path, "") else {
-                continue;
-            };
-            if !usage.rate_limits.has_any() {
-                continue;
-            }
-            let quota = EngineQuota {
-                engine: Engine::Codex,
-                rate_limits: usage.rate_limits,
-                observed_at: usage.observed_at,
-            };
-            if latest_quota
-                .as_ref()
-                .is_none_or(|latest| quota.observed_at > latest.observed_at)
-            {
-                latest_quota = Some(quota);
-            }
+        paths.extend(rollout_paths_from(&root)?);
+    }
+    paths.sort();
+    paths.dedup();
+
+    let current_paths = paths.iter().cloned().collect::<HashSet<_>>();
+    for path in paths {
+        let Some(quota) = cached_quota_from(&path)? else {
+            continue;
+        };
+        if latest_quota
+            .as_ref()
+            .is_none_or(|latest| quota.observed_at > latest.observed_at)
+        {
+            latest_quota = Some(quota);
+        }
+    }
+    let cache = ROLLOUT_QUOTA_CACHE.get_or_init(Default::default);
+    cache
+        .lock()
+        .map_err(|_| anyhow!("Codex quota cache lock is poisoned"))?
+        .retain(|path, _| !path.starts_with(codex_home) || current_paths.contains(path));
+
+    Ok(latest_quota)
+}
+
+fn cached_quota_from(path: &Path) -> Result<Option<EngineQuota>> {
+    let Some(signature) = file_signature(path)? else {
+        return Ok(None);
+    };
+    let cache = ROLLOUT_QUOTA_CACHE.get_or_init(Default::default);
+    if let Some(cached) = cache
+        .lock()
+        .map_err(|_| anyhow!("Codex quota cache lock is poisoned"))?
+        .get(path)
+        .filter(|cached| cached.signature == signature)
+        .cloned()
+    {
+        return Ok(cached.quota);
+    }
+
+    let quota = read_latest_quota_from_transcript(path)?;
+    if file_signature(path)?.as_ref() == Some(&signature) {
+        cache
+            .lock()
+            .map_err(|_| anyhow!("Codex quota cache lock is poisoned"))?
+            .insert(
+                path.to_path_buf(),
+                CachedQuota {
+                    signature,
+                    quota: quota.clone(),
+                },
+            );
+    }
+    Ok(quota)
+}
+
+fn file_signature(path: &Path) -> Result<Option<FileSignature>> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("inspecting Codex transcript {}", path.display()));
+        }
+    };
+    let modified = metadata
+        .modified()
+        .with_context(|| format!("reading modification time for {}", path.display()))?;
+    Ok(Some(FileSignature {
+        modified,
+        length: metadata.len(),
+    }))
+}
+
+fn read_latest_quota_from_transcript(path: &Path) -> Result<Option<EngineQuota>> {
+    let file =
+        File::open(path).with_context(|| format!("opening Codex transcript {}", path.display()))?;
+    let file_size = file
+        .metadata()
+        .with_context(|| format!("inspecting Codex transcript {}", path.display()))?
+        .len();
+    let file_size_as_usize = usize::try_from(file_size).unwrap_or(usize::MAX);
+    let mut read_size = INITIAL_QUOTA_READ_SIZE.min(file_size_as_usize);
+    while read_size > 0 {
+        if let Some(quota) = read_latest_quota_window(&file, read_size, file_size)? {
+            return Ok(Some(quota));
+        }
+        if read_size == file_size_as_usize || read_size == MAX_QUOTA_READ_SIZE {
+            break;
+        }
+        read_size = (read_size.saturating_mul(2)).min(MAX_QUOTA_READ_SIZE);
+    }
+
+    read_latest_quota_forward(&file, path)
+}
+
+fn read_latest_quota_window(
+    file: &File,
+    read_size: usize,
+    file_size: u64,
+) -> Result<Option<EngineQuota>> {
+    let file = file
+        .try_clone()
+        .context("cloning Codex transcript before seeking")?;
+    let mut reader = BufReader::new(file);
+    let read_size_from_end = i64::try_from(read_size).context("converting transcript read size")?;
+    reader
+        .seek(SeekFrom::End(-read_size_from_end))
+        .context("seeking to the end of Codex transcript")?;
+    let mut buffer = vec![0_u8; read_size];
+    reader
+        .read_exact(&mut buffer)
+        .context("reading the end of Codex transcript")?;
+    let content = String::from_utf8_lossy(&buffer);
+    let complete_content = if u64::try_from(read_size).is_ok_and(|size| size >= file_size) {
+        &content[..]
+    } else if let Some(newline) = content.find('\n') {
+        &content[newline + 1..]
+    } else {
+        return Ok(None);
+    };
+
+    Ok(complete_content.lines().rev().find_map(quota_from_line))
+}
+
+fn read_latest_quota_forward(file: &File, path: &Path) -> Result<Option<EngineQuota>> {
+    let mut latest_quota = None;
+    let file = file
+        .try_clone()
+        .context("cloning Codex transcript before scanning")?;
+    let mut reader = BufReader::new(file);
+    reader
+        .seek(SeekFrom::Start(0))
+        .with_context(|| format!("rewinding Codex transcript {}", path.display()))?;
+    for line in reader.lines() {
+        let line = line.with_context(|| format!("reading Codex transcript {}", path.display()))?;
+        if let Some(quota) = quota_from_line(&line) {
+            latest_quota = Some(quota);
         }
     }
     Ok(latest_quota)
+}
+
+fn quota_from_line(line: &str) -> Option<EngineQuota> {
+    let record = serde_json::from_str::<Value>(line).ok()?;
+    if record.pointer("/payload/type").and_then(Value::as_str) != Some("token_count") {
+        return None;
+    }
+    let payload = record.get("payload");
+    let info = payload.and_then(|payload| payload.get("info"));
+    let rate_limits = codex_rate_limits(
+        payload
+            .and_then(|payload| payload.get("rate_limits"))
+            .or_else(|| info.and_then(|info| info.get("rate_limits"))),
+    );
+    if !rate_limits.has_any() {
+        return None;
+    }
+    Some(EngineQuota {
+        engine: Engine::Codex,
+        rate_limits,
+        observed_at: record
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(parse_timestamp)
+            .unwrap_or_else(Utc::now),
+    })
 }
 
 fn rollout_paths_from(root: &Path) -> Result<Vec<PathBuf>> {
@@ -252,10 +423,10 @@ mod tests {
     use indoc::indoc;
     use tempfile::tempdir;
 
-    use super::read_transcript;
+    use super::{read_latest_quota_from, read_transcript};
     use crate::commands::agent::types::Engine;
     use crate::commands::agent::usage::model::{
-        ContextUsage, RateLimitWindow, RateLimits, SessionUsage,
+        ContextUsage, EngineQuota, RateLimitWindow, RateLimits, SessionUsage,
     };
 
     #[test]
@@ -302,6 +473,127 @@ mod tests {
                 version: Some("0.99.0".to_owned()),
                 observed_at: Utc.with_ymd_and_hms(2026, 11, 16, 12, 0, 0).unwrap(),
             }),
+        );
+    }
+
+    #[test]
+    fn keeps_previous_quota_when_a_longer_rollout_tail_has_no_rate_limits() {
+        let directory = tempdir().expect("temporary directory should be created");
+        let codex_home = directory.path();
+        let session_dir = codex_home.join("sessions/2026/11/16");
+        fs::create_dir_all(&session_dir).expect("session directory should be created");
+        let transcript = session_dir.join("rollout-fixture.jsonl");
+        let quota_event = indoc! {r#"
+            {"type":"event_msg","timestamp":"2026-11-16T12:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":210},"model_context_window":1000},"rate_limits":{"primary":{"used_percent":22.5,"window_minutes":300,"resets_at":1794841200},"secondary":{"used_percent":17,"window_minutes":10080,"resets_at":1795435200}}}}
+        "#};
+        let no_quota_event = indoc! {r#"
+            {"type":"event_msg","timestamp":"2026-11-16T13:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"total_tokens":243},"model_context_window":1000}}}
+        "#};
+        let long_tail = no_quota_event.repeat(2048);
+        fs::write(&transcript, format!("{quota_event}{long_tail}"))
+            .expect("fixture rollout should be written");
+
+        assert_eq!(
+            read_transcript(&transcript, "fixture-session"),
+            Some(SessionUsage {
+                session_id: "fixture-session".to_owned(),
+                engine: Engine::Codex,
+                model: None,
+                effort: None,
+                context: Some(ContextUsage {
+                    used_tokens: 243,
+                    window_tokens: 1000,
+                    used_percentage: 24,
+                }),
+                rate_limits: RateLimits {
+                    five_hour: Some(RateLimitWindow {
+                        used_percentage: 22.5,
+                        resets_at: Some(1794841200),
+                        window_seconds: 18000,
+                    }),
+                    seven_day: Some(RateLimitWindow {
+                        used_percentage: 17.0,
+                        resets_at: Some(1795435200),
+                        window_seconds: 604800,
+                    }),
+                },
+                version: None,
+                observed_at: Utc.with_ymd_and_hms(2026, 11, 16, 13, 0, 0).unwrap(),
+            }),
+        );
+        assert_eq!(
+            read_latest_quota_from(codex_home).unwrap(),
+            Some(EngineQuota {
+                engine: Engine::Codex,
+                rate_limits: RateLimits {
+                    five_hour: Some(RateLimitWindow {
+                        used_percentage: 22.5,
+                        resets_at: Some(1794841200),
+                        window_seconds: 18000,
+                    }),
+                    seven_day: Some(RateLimitWindow {
+                        used_percentage: 17.0,
+                        resets_at: Some(1795435200),
+                        window_seconds: 604800,
+                    }),
+                },
+                observed_at: Utc.with_ymd_and_hms(2026, 11, 16, 12, 0, 0).unwrap(),
+            }),
+        );
+    }
+
+    #[test]
+    fn refreshes_cached_quota_when_a_rollout_changes() {
+        let directory = tempdir().expect("temporary directory should be created");
+        let transcript_dir = directory.path().join("sessions/2026/11/16");
+        fs::create_dir_all(&transcript_dir).expect("session directory should be created");
+        let transcript = transcript_dir.join("rollout-fixture.jsonl");
+        fs::write(
+            &transcript,
+            indoc! {r#"
+                {"type":"event_msg","timestamp":"2026-11-16T12:00:00Z","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":22,"window_minutes":300,"resets_at":1794841200}}}}
+            "#},
+        )
+        .expect("initial rollout should be written");
+        let initial = Some(EngineQuota {
+            engine: Engine::Codex,
+            rate_limits: RateLimits {
+                five_hour: Some(RateLimitWindow {
+                    used_percentage: 22.0,
+                    resets_at: Some(1794841200),
+                    window_seconds: 18000,
+                }),
+                seven_day: None,
+            },
+            observed_at: Utc.with_ymd_and_hms(2026, 11, 16, 12, 0, 0).unwrap(),
+        });
+        let updated = Some(EngineQuota {
+            engine: Engine::Codex,
+            rate_limits: RateLimits {
+                five_hour: Some(RateLimitWindow {
+                    used_percentage: 100.0,
+                    resets_at: Some(1794844800),
+                    window_seconds: 18000,
+                }),
+                seven_day: None,
+            },
+            observed_at: Utc.with_ymd_and_hms(2026, 11, 16, 13, 0, 0).unwrap(),
+        });
+        let first_read = read_latest_quota_from(directory.path()).unwrap();
+        fs::write(
+            &transcript,
+            indoc! {r#"
+                {"type":"event_msg","timestamp":"2026-11-16T13:00:00Z","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":100,"window_minutes":300,"resets_at":1794844800}}}}
+            "#},
+        )
+        .expect("updated rollout should be written");
+
+        assert_eq!(
+            [
+                first_read,
+                read_latest_quota_from(directory.path()).unwrap()
+            ],
+            [initial, updated],
         );
     }
 }
