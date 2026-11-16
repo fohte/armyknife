@@ -444,7 +444,7 @@ html[data-mobile-layout='true'] {
   min-height: calc(50px + max(8px, env(safe-area-inset-top)));
   flex: 0 0 calc(50px + max(8px, env(safe-area-inset-top)));
   gap: 4px;
-  padding: max(8px, env(safe-area-inset-top)) 12px 6px 4px;
+  padding: max(8px, env(safe-area-inset-top)) 8px 6px 4px;
   border-bottom-color: var(--aw-border);
 }
 
@@ -521,15 +521,72 @@ html[data-mobile-layout='true'] {
   border: 0;
 }
 
-.mobile-conversation-later,
-.mobile-conversation-close {
-  min-width: 36px;
-  min-height: 36px;
-  align-self: center;
-  padding: 0 10px;
+.mobile-conversation-header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.mobile-conversation-more {
+  display: grid;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 0;
   border: 1px solid var(--aw-border-control);
+  background: transparent;
   color: var(--aw-text-body);
+  cursor: pointer;
+  font: inherit;
+}
+
+.mobile-conversation-more[aria-expanded='true'] {
+  border-color: var(--aw-border-emphasis);
+  background: var(--aw-bg-pressed);
+  color: var(--aw-text-primary);
+}
+
+.mobile-conversation-actions-menu {
+  width: 248px;
+  max-width: calc(100vw - 16px);
+  overflow: hidden;
+  border: 1px solid var(--aw-border);
+  background: var(--aw-bg-surface);
+  box-shadow: 0 12px 36px rgb(0 0 0 / 24%);
+  color: var(--aw-text-primary);
+}
+
+.mobile-conversation-actions-menu-item {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px;
+  color: var(--aw-text-primary);
+  cursor: pointer;
   font-size: 13px;
+}
+
+.mobile-conversation-actions-menu-item
+  + .mobile-conversation-actions-menu-item {
+  border-top: 1px solid var(--aw-border);
+}
+
+.mobile-conversation-actions-menu-item svg {
+  flex: 0 0 auto;
+  color: var(--aw-text-muted);
+}
+
+.mobile-conversation-actions-menu-item .mobile-conversation-actions-menu-star {
+  color: var(--aw-color-warning);
+}
+
+.mobile-conversation-actions-menu-item[data-highlighted] {
+  background: var(--aw-bg-pressed);
 }
 
 .mobile-conversation-heading {
@@ -546,10 +603,29 @@ html[data-mobile-layout='true'] {
   gap: 6px;
 }
 
+.mobile-conversation-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+}
+
+.mobile-conversation-title .mobile-conversation-starred {
+  flex: 0 0 auto;
+  color: var(--aw-color-warning);
+  fill: currentColor;
+}
+
+.mobile-conversation-title .session-title-heading,
+.mobile-conversation-title .session-title-editor {
+  min-width: 0;
+  flex: 1;
+}
+
 .mobile-conversation-heading h1 {
   overflow: hidden;
   min-width: 0;
-  flex: 0 1 auto;
+  flex: 1;
   margin: 2px 0 0;
   font-size: 15px;
   line-height: 1.25;

@@ -5,8 +5,19 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ConversationPaneHeader } from '#components/conversation-pane-header'
 import type { Session, SessionActions } from '#types'
 
+const { copySessionIdMock } = vi.hoisted(() => ({
+  copySessionIdMock: vi.fn(),
+}))
+
 vi.mock('#components/copy-session-id-control', () => ({
   CopySessionIdControl: () => null,
+}))
+
+vi.mock('#components/use-copy-session-id', () => ({
+  useCopySessionId: () => ({
+    status: 'idle',
+    copySessionId: copySessionIdMock,
+  }),
 }))
 
 let container: HTMLDivElement
@@ -51,6 +62,14 @@ function renderHeader(
     payload?: Record<string, unknown>,
   ) => Promise<boolean>,
   currentSession = session,
+  options: {
+    onLater?: () => void
+    onClose?: () => void
+    onToggleToday?: (isToday: boolean) => void
+    onToggleStatusPanel?: () => void
+    mobileActionsMenuOpen?: boolean
+    isToday?: boolean
+  } = {},
 ) {
   act(() => {
     root?.render(
@@ -63,11 +82,19 @@ function renderHeader(
         statusPanelOpen={false}
         backgroundTasks={[]}
         openInTerminalStatus={null}
-        isToday={false}
+        isToday={options.isToday ?? false}
+        {...(options.mobileActionsMenuOpen === undefined
+          ? {}
+          : { mobileActionsMenuOpen: options.mobileActionsMenuOpen })}
         onAction={onAction}
         onOpenInTerminal={() => undefined}
         onSelectSession={() => undefined}
-        onToggleStatusPanel={() => undefined}
+        onToggleStatusPanel={options.onToggleStatusPanel ?? (() => undefined)}
+        {...(options.onLater === undefined ? {} : { onLater: options.onLater })}
+        {...(options.onClose === undefined ? {} : { onClose: options.onClose })}
+        {...(options.onToggleToday === undefined
+          ? {}
+          : { onToggleToday: options.onToggleToday })}
       />,
     )
   })
@@ -83,6 +110,7 @@ function setInputValue(input: HTMLInputElement, value: string) {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks()
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
   document.body.append(container)
@@ -130,9 +158,22 @@ it.each([
         : Promise.resolve(false)
     },
   )
-  renderHeader(isMobile, onAction)
+  renderHeader(
+    isMobile,
+    onAction,
+    session,
+    isMobile ? { mobileActionsMenuOpen: true } : {},
+  )
 
   act(() => {
+    if (isMobile) {
+      requireElement(
+        document.body.querySelector<HTMLElement>(
+          '[role="menuitem"]:last-child',
+        ),
+      ).click()
+      return
+    }
     requireElement(
       container.querySelector<HTMLButtonElement>(
         '[aria-label="Edit session title"]',
@@ -222,6 +263,144 @@ it('starts a fresh editor when the selected session changes', () => {
     action: [],
     editButtonVisible: true,
     editorVisible: false,
+  })
+})
+
+it('keeps mobile actions in the menu and preserves their callbacks', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  const onLater = vi.fn()
+  const onClose = vi.fn()
+  const onToggleToday = vi.fn()
+  const onToggleStatusPanel = vi.fn()
+  renderHeader(
+    true,
+    onAction,
+    { ...session, category: 'done' },
+    { onLater, onClose, onToggleToday, onToggleStatusPanel, isToday: true },
+  )
+
+  const menuItems = () =>
+    Array.from(document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+  const clickMenuItem = async (label: string) => {
+    const item = menuItems().find(
+      (candidate) => candidate.textContent === label,
+    )
+    if (item === undefined) throw new Error(`Expected ${label} menu item`)
+    await act(async () => {
+      item.click()
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    })
+  }
+  const openMenu = async () => {
+    await act(async () => {
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          'button[aria-label="More actions"]',
+        ),
+      ).click()
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    })
+  }
+  const menuClosed = () =>
+    container
+      .querySelector('button[aria-label="More actions"]')
+      ?.getAttribute('aria-expanded') === 'false'
+
+  const headerButtons = Array.from(
+    container.querySelectorAll<HTMLButtonElement>(
+      '.mobile-conversation-back, .mobile-conversation-status-toggle, .mobile-conversation-more',
+    ),
+  ).map((button) => button.getAttribute('aria-label'))
+  const starBeforeTitle =
+    container.querySelector('.mobile-conversation-starred') !== null
+  const hiddenTitleActions =
+    container.querySelector('[aria-label="Edit session title"]') === null &&
+    container.querySelector('[aria-label="Copy session ID"]') === null
+
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="Open session status panel"]',
+      ),
+    ).click()
+  })
+  const statusButtonOpensPanel = onToggleStatusPanel.mock.calls.length === 1
+  const statusButtonLeavesMenuClosed = menuClosed()
+
+  await openMenu()
+  const menuLabels = menuItems().map((item) => item.textContent)
+  const menuOpen = document.body.querySelector('[role="menu"]') !== null
+  await clickMenuItem('Later')
+  const closesAfterLater = menuClosed()
+
+  await openMenu()
+  await clickMenuItem('Close')
+  const closesAfterClose = menuClosed()
+
+  await openMenu()
+  await clickMenuItem('Remove from Starred')
+  const closesAfterStarToggle = menuClosed()
+
+  await openMenu()
+  await clickMenuItem('Copy session ID')
+  const closesAfterCopy = menuClosed()
+
+  await openMenu()
+  await clickMenuItem('Edit title')
+  const closesAfterEdit = menuClosed()
+
+  const snapshot = () => ({
+    headerButtons,
+    starBeforeTitle,
+    hiddenTitleActions,
+    statusButtonOpensPanel,
+    statusButtonLeavesMenuClosed,
+    menuOpen,
+    menuLabels,
+    closesAfterActions: [
+      closesAfterLater,
+      closesAfterClose,
+      closesAfterStarToggle,
+      closesAfterCopy,
+      closesAfterEdit,
+    ],
+    callbacks: {
+      later: onLater.mock.calls,
+      close: onClose.mock.calls,
+      toggleToday: onToggleToday.mock.calls,
+      copySessionId: copySessionIdMock.mock.calls,
+      titleAction: onAction.mock.calls,
+    },
+    titleEditorVisible:
+      container.querySelector('input[aria-label="Session title"]') !== null,
+  })
+  expect(snapshot()).toEqual({
+    headerButtons: [
+      'Back to Inbox',
+      'Open session status panel',
+      'More actions',
+    ],
+    starBeforeTitle: true,
+    hiddenTitleActions: true,
+    statusButtonOpensPanel: true,
+    statusButtonLeavesMenuClosed: true,
+    menuOpen: true,
+    menuLabels: [
+      'Later',
+      'Close',
+      'Remove from Starred',
+      'Copy session ID',
+      'Edit title',
+    ],
+    closesAfterActions: [true, true, true, true, true],
+    callbacks: {
+      later: [[]],
+      close: [[]],
+      toggleToday: [[false]],
+      copySessionId: [[]],
+      titleAction: [],
+    },
+    titleEditorVisible: true,
   })
 })
 

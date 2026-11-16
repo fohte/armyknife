@@ -705,19 +705,27 @@ it('refetches the initial tree when a member changes while it loads', async () =
   })
 })
 
-function starredToggleSnapshot(onToggleToday: ReturnType<typeof vi.fn>) {
-  const toggle = container.querySelector<HTMLButtonElement>(
-    '.mobile-conversation-today',
+async function openMobileActionsMenu() {
+  const trigger = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      'button[aria-label="More actions"]',
+    ),
   )
-  return {
-    label: toggle?.getAttribute('aria-label'),
-    pressed: toggle?.getAttribute('aria-pressed'),
-    title: toggle?.getAttribute('title'),
-    calls: onToggleToday.mock.calls,
-  }
+  await act(async () => {
+    trigger.click()
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+  })
 }
 
-it('toggles Starred from the iPhone conversation header', () => {
+function mobileActionMenuItem(label: string) {
+  return requireElement(
+    Array.from(
+      document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+    ).find((item) => item.textContent === label) ?? null,
+  )
+}
+
+it('toggles Starred from the mobile actions menu', async () => {
   const onToggleToday = vi.fn()
   renderView(
     () => Promise.resolve(true),
@@ -734,22 +742,29 @@ it('toggles Starred from the iPhone conversation header', () => {
     { isToday: false, onToggleToday },
   )
 
-  const toggle = container.querySelector<HTMLButtonElement>(
-    '.mobile-conversation-today',
-  )
-  act(() => {
-    toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  await openMobileActionsMenu()
+  const toggle = mobileActionMenuItem('Add to Starred')
+  await act(async () => {
+    toggle.click()
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
   })
 
-  expect(starredToggleSnapshot(onToggleToday)).toEqual({
-    label: 'Add to Starred',
-    pressed: 'false',
-    title: 'Add to Starred',
+  const snapshot = () => ({
+    menuItem: toggle.textContent,
+    calls: onToggleToday.mock.calls,
+    menuClosed:
+      container
+        .querySelector('button[aria-label="More actions"]')
+        ?.getAttribute('aria-expanded') === 'false',
+  })
+  expect(snapshot()).toEqual({
+    menuItem: 'Add to Starred',
     calls: [[true]],
+    menuClosed: true,
   })
 })
 
-it('labels a Starred iPhone session for removal', () => {
+it('labels a Starred mobile session for removal', async () => {
   const onToggleToday = vi.fn()
   renderView(
     () => Promise.resolve(true),
@@ -766,11 +781,18 @@ it('labels a Starred iPhone session for removal', () => {
     { isToday: true, onToggleToday },
   )
 
-  expect(starredToggleSnapshot(onToggleToday)).toEqual({
-    label: 'Remove from Starred',
-    pressed: 'true',
-    title: 'Remove from Starred',
+  await openMobileActionsMenu()
+
+  const snapshot = () => ({
+    menuItem: mobileActionMenuItem('Remove from Starred').textContent,
+    calls: onToggleToday.mock.calls,
+    starBeforeTitle:
+      container.querySelector('.mobile-conversation-starred') !== null,
+  })
+  expect(snapshot()).toEqual({
+    menuItem: 'Remove from Starred',
     calls: [],
+    starBeforeTitle: true,
   })
 })
 
@@ -823,36 +845,26 @@ it('sets the primary linked task from desktop and mobile headers', async () => {
   ])
 })
 
-it('places the session ID copy control beside the iPhone title', () => {
+it('places the session ID copy action in the mobile menu', async () => {
   renderView(() => Promise.resolve(true), session, undefined, [], actions, true)
 
   const titleRow = container.querySelector(
     '.mobile-conversation-heading .session-heading-title-row',
   )
-  const copyButton = titleRow?.querySelector<HTMLButtonElement>(
-    '.conversation-copy-session-id',
-  )
+  await openMobileActionsMenu()
+  const copyMenuItem = mobileActionMenuItem('Copy session ID')
 
   const snapshot = () => ({
     title: titleRow?.querySelector('h1')?.textContent,
-    copyButton: {
-      ariaLabel: copyButton?.getAttribute('aria-label'),
-      title: copyButton?.getAttribute('title'),
-      compact: copyButton?.getAttribute('data-compact') ?? null,
-    },
-    compactCopyControl: container.querySelector(
-      '.conversation-copy-session-id[data-compact="true"]',
-    ),
+    copyAction: copyMenuItem.textContent,
+    copyControlBesideTitle:
+      titleRow?.querySelector('.conversation-copy-session-id') !== null,
   })
 
   expect(snapshot()).toEqual({
     title: 'Choose a retry policy',
-    copyButton: {
-      ariaLabel: 'Copy session ID',
-      title: 'Copy session ID',
-      compact: null,
-    },
-    compactCopyControl: null,
+    copyAction: 'Copy session ID',
+    copyControlBesideTitle: false,
   })
 })
 
@@ -1847,13 +1859,10 @@ it('copies the session ID from desktop and mobile headers', async () => {
   const desktopButtonText = desktopButton.textContent
 
   renderView(onAction, session, undefined, [], actions, true)
-  const mobileButton = requireElement(
-    container.querySelector<HTMLButtonElement>(
-      ".conversation-pane[data-mobile='true'] .conversation-copy-session-id",
-    ),
-  )
+  await openMobileActionsMenu()
+  const mobileCopyItem = mobileActionMenuItem('Copy session ID')
   await act(async () => {
-    mobileButton.click()
+    mobileCopyItem.click()
     await new Promise((resolve) => window.setTimeout(resolve, 0))
   })
 
@@ -1861,15 +1870,15 @@ it('copies the session ID from desktop and mobile headers', async () => {
     copiedText,
     writeCalls: writeText.mock.calls,
     desktopButtonText,
-    mobileButtonText: mobileButton.textContent,
-    mobileAccessibleName: mobileButton.getAttribute('aria-label'),
+    mobileCopyAction: mobileCopyItem.textContent,
+    mobileLiveStatus: container.querySelector('[role="status"]')?.textContent,
   })
   expect(snapshot()).toEqual({
     copiedText: session.id,
     writeCalls: [[session.id], [session.id]],
     desktopButtonText: 'Copied',
-    mobileButtonText: 'Copied',
-    mobileAccessibleName: 'Session ID copied',
+    mobileCopyAction: 'Session ID copied',
+    mobileLiveStatus: 'Session ID copied',
   })
 })
 
@@ -1897,14 +1906,11 @@ it('copies the session ID through the HTTP-compatible clipboard fallback', async
     true,
   )
 
-  const copyButton = requireElement(
-    container.querySelector<HTMLButtonElement>(
-      ".conversation-pane[data-mobile='true'] .conversation-copy-session-id",
-    ),
-  )
+  await openMobileActionsMenu()
+  const copyMenuItem = mobileActionMenuItem('Copy session ID')
   let copyCallsAtClickReturn = 0
   act(() => {
-    copyButton.click()
+    copyMenuItem.click()
     copyCallsAtClickReturn = copyCommand.mock.calls.length
   })
   await act(async () => {
@@ -1916,14 +1922,14 @@ it('copies the session ID through the HTTP-compatible clipboard fallback', async
     copyCalls: copyCommand.mock.calls,
     copyCallsAtClickReturn,
     temporaryTextareaCount: document.body.querySelectorAll('textarea').length,
-    buttonText: copyButton.textContent,
+    liveStatus: container.querySelector('[role="status"]')?.textContent,
   })
   expect(snapshot()).toEqual({
     copiedText: session.id,
     copyCalls: [['copy']],
     copyCallsAtClickReturn: 1,
     temporaryTextareaCount: 1,
-    buttonText: 'Copied',
+    liveStatus: 'Session ID copied',
   })
 })
 
@@ -1952,13 +1958,10 @@ it('falls back when the Clipboard API rejects the copy request', async () => {
     true,
   )
 
-  const copyButton = requireElement(
-    container.querySelector<HTMLButtonElement>(
-      ".conversation-pane[data-mobile='true'] .conversation-copy-session-id",
-    ),
-  )
+  await openMobileActionsMenu()
+  const copyMenuItem = mobileActionMenuItem('Copy session ID')
   await act(async () => {
-    copyButton.click()
+    copyMenuItem.click()
     await new Promise((resolve) => window.setTimeout(resolve, 0))
   })
 
@@ -1966,13 +1969,13 @@ it('falls back when the Clipboard API rejects the copy request', async () => {
     clipboardCalls: writeText.mock.calls,
     fallbackCalls: copyCommand.mock.calls,
     copiedText,
-    buttonText: copyButton.textContent,
+    liveStatus: container.querySelector('[role="status"]')?.textContent,
   })
   expect(snapshot()).toEqual({
     clipboardCalls: [[session.id]],
     fallbackCalls: [['copy']],
     copiedText: session.id,
-    buttonText: 'Copied',
+    liveStatus: 'Session ID copied',
   })
 })
 
@@ -1994,24 +1997,22 @@ it('announces when neither clipboard method can copy the session ID', async () =
     true,
   )
 
-  const copyButton = requireElement(
-    container.querySelector<HTMLButtonElement>(
-      ".conversation-pane[data-mobile='true'] .conversation-copy-session-id",
-    ),
-  )
+  await openMobileActionsMenu()
+  const copyMenuItem = mobileActionMenuItem('Copy session ID')
   await act(async () => {
-    copyButton.click()
+    copyMenuItem.click()
     await new Promise((resolve) => window.setTimeout(resolve, 0))
   })
 
   const snapshot = () => ({
-    buttonText: copyButton.textContent,
-    accessibleName: copyButton.getAttribute('aria-label'),
+    menuClosed:
+      container
+        .querySelector('button[aria-label="More actions"]')
+        ?.getAttribute('aria-expanded') === 'false',
     liveStatus: container.querySelector('.sr-only[role="status"]')?.textContent,
   })
   expect(snapshot()).toEqual({
-    buttonText: 'Copy failed',
-    accessibleName: 'Could not copy session ID',
+    menuClosed: true,
     liveStatus: 'Could not copy session ID',
   })
 })
@@ -2037,26 +2038,21 @@ it('announces copy failure and removes the textarea when execCommand throws', as
     true,
   )
 
-  const copyButton = requireElement(
-    container.querySelector<HTMLButtonElement>(
-      ".conversation-pane[data-mobile='true'] .conversation-copy-session-id",
-    ),
-  )
+  await openMobileActionsMenu()
+  const copyMenuItem = mobileActionMenuItem('Copy session ID')
   await act(async () => {
-    copyButton.click()
+    copyMenuItem.click()
     await new Promise((resolve) => window.setTimeout(resolve, 0))
   })
 
   const snapshot = () => ({
     copyCalls: copyCommand.mock.calls,
     temporaryTextareaCount: document.body.querySelectorAll('textarea').length,
-    buttonText: copyButton.textContent,
     liveStatus: container.querySelector('.sr-only[role="status"]')?.textContent,
   })
   expect(snapshot()).toEqual({
     copyCalls: [['copy']],
     temporaryTextareaCount: 1,
-    buttonText: 'Copy failed',
     liveStatus: 'Could not copy session ID',
   })
 })

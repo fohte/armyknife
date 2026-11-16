@@ -6,9 +6,11 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Pencil,
+  Star,
 } from 'lucide-react'
 import { type SubmitEvent, useState } from 'react'
 
+import { MobileConversationActionsMenu } from '#components/mobile-conversation-actions-menu'
 import { OpenInTerminalAction } from '#components/open-in-terminal-action'
 import { PullRequestMergeAction } from '#components/pull-request-merge-action'
 import { PullRequestMergeConfirmation } from '#components/pull-request-merge-confirmation'
@@ -52,6 +54,7 @@ type ConversationPaneHeaderProps = {
   openInTerminalStatus: OpenInTerminalStatus
   isToday: boolean
   titleEditing?: boolean
+  mobileActionsMenuOpen?: boolean
   onAction: (
     action: string,
     payload?: Record<string, unknown>,
@@ -75,6 +78,7 @@ export function ConversationPaneHeader({
   openInTerminalStatus,
   isToday,
   titleEditing = false,
+  mobileActionsMenuOpen,
   onAction,
   onOpenInTerminal,
   onSelectSession,
@@ -213,18 +217,20 @@ export function ConversationPaneHeader({
       <SessionHeading
         title={session.title}
         isPaused={session.isPaused}
-        sessionId={session.id}
+        {...(isMobile ? {} : { sessionId: session.id })}
       />
-      <Button
-        className="session-title-edit cursor-pointer"
-        type="button"
-        variant="plain"
-        aria-label="Edit session title"
-        title="Edit session title"
-        onClick={editTitle}
-      >
-        <Pencil aria-hidden="true" size={15} />
-      </Button>
+      {isMobile ? null : (
+        <Button
+          className="session-title-edit cursor-pointer"
+          type="button"
+          variant="plain"
+          aria-label="Edit session title"
+          title="Edit session title"
+          onClick={editTitle}
+        >
+          <Pencil aria-hidden="true" size={15} />
+        </Button>
+      )}
     </div>
   )
 
@@ -242,7 +248,17 @@ export function ConversationPaneHeader({
             <ChevronLeft aria-hidden="true" size={30} strokeWidth={2.5} />
           </Button>
           <div className="mobile-conversation-heading">
-            {titleHeading}
+            <div className="mobile-conversation-title">
+              {isToday ? (
+                <Star
+                  aria-label="Starred"
+                  className="mobile-conversation-starred"
+                  role="img"
+                  size={13}
+                />
+              ) : null}
+              {titleHeading}
+            </div>
             <div className="mobile-conversation-context">
               <SessionTaskLinks
                 task={session.task}
@@ -254,61 +270,53 @@ export function ConversationPaneHeader({
               <span>{session.repo.split('/').at(-1)}</span>
             </div>
           </div>
-          <Button
-            className="mobile-conversation-status-toggle"
-            type="button"
-            variant="plain"
-            aria-label={
-              statusPanelOpen
-                ? 'Close session status panel'
-                : 'Open session status panel'
-            }
-            aria-expanded={statusPanelOpen}
-            aria-controls="session-status-panel"
-            title={
-              statusPanelOpen
-                ? 'Close session status panel'
-                : 'Open session status panel'
-            }
-            onClick={() => {
-              onToggleStatusPanel()
-            }}
-          >
-            {statusPanelOpen ? (
-              <PanelRightClose aria-hidden="true" size={18} />
-            ) : (
-              <PanelRightOpen aria-hidden="true" size={18} />
-            )}
-            {backgroundTasks.length > 0 ? (
-              <span className="conversation-status-panel-count">
-                {backgroundTasks.length}
-              </span>
-            ) : null}
-          </Button>
-          <Button
-            className="mobile-conversation-later cursor-pointer"
-            type="button"
-            variant="plain"
-            onClick={onLater}
-          >
-            Later
-          </Button>
-          {session.category === 'done' && onClose !== undefined ? (
+          <div className="mobile-conversation-header-actions">
             <Button
-              className="mobile-conversation-close cursor-pointer"
+              className="mobile-conversation-status-toggle"
               type="button"
               variant="plain"
-              onClick={onClose}
+              aria-label={
+                statusPanelOpen
+                  ? 'Close session status panel'
+                  : 'Open session status panel'
+              }
+              aria-expanded={statusPanelOpen}
+              aria-controls="session-status-panel"
+              title={
+                statusPanelOpen
+                  ? 'Close session status panel'
+                  : 'Open session status panel'
+              }
+              onClick={() => {
+                onToggleStatusPanel()
+              }}
             >
-              Close
+              {statusPanelOpen ? (
+                <PanelRightClose aria-hidden="true" size={18} />
+              ) : (
+                <PanelRightOpen aria-hidden="true" size={18} />
+              )}
+              {backgroundTasks.length > 0 ? (
+                <span className="conversation-status-panel-count">
+                  {backgroundTasks.length}
+                </span>
+              ) : null}
             </Button>
-          ) : null}
-          <StarredSessionToggle
-            className="mobile-conversation-today cursor-pointer"
-            size="mobile"
-            isStarred={isToday}
-            onToggleToday={onToggleToday}
-          />
+            <MobileConversationActionsMenu
+              sessionId={session.id}
+              isDone={session.category === 'done'}
+              isStarred={isToday}
+              {...(mobileActionsMenuOpen === undefined
+                ? {}
+                : { open: mobileActionsMenuOpen })}
+              {...(onLater === undefined ? {} : { onLater })}
+              {...(onClose === undefined ? {} : { onClose })}
+              {...(onToggleToday === undefined
+                ? {}
+                : { onToggleStarred: onToggleToday })}
+              onEditTitle={editTitle}
+            />
+          </div>
         </>
       ) : (
         <>

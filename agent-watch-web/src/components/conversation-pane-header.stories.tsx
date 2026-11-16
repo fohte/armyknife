@@ -78,6 +78,64 @@ export const EditingTheSessionTitleOnMobile: Story = {
   },
 }
 
+export const MobileHeaderKeepsManySessionDetailsAndShowsActionsMenu: Story = {
+  name: 'The mobile header keeps a busy session compact with its actions menu open',
+  args: {
+    isMobile: true,
+    mobileActionsMenuOpen: true,
+    isToday: true,
+    session: {
+      ...session,
+      category: 'done',
+      title:
+        'Review the retry strategy and keep the delivery schedule consistent across services',
+      repo: 'example/long-running-service-name',
+      task: {
+        id: 'sample-task-primary',
+        number: 2048,
+        title: 'Improve request reliability',
+        priority: 1,
+      },
+      tasks: [
+        {
+          id: 'sample-task-primary',
+          number: 2048,
+          title: 'Improve request reliability',
+          priority: 1,
+        },
+        {
+          id: 'sample-task-secondary',
+          number: 2049,
+          title: 'Document retry limits',
+          priority: 2,
+        },
+        {
+          id: 'sample-task-tertiary',
+          number: 2050,
+          title: 'Add delivery metrics',
+          priority: 3,
+        },
+      ],
+    },
+    backgroundTasks: [
+      {
+        id: 'sample-background-task-a',
+        description: 'Review the request flow',
+        elapsedSeconds: 24,
+        kind: 'subagent',
+      },
+      {
+        id: 'sample-background-task-b',
+        description: 'Check delivery tests',
+        elapsedSeconds: 12,
+        kind: 'background_task',
+      },
+    ],
+    onLater: () => undefined,
+    onClose: () => undefined,
+  },
+}
+
 export const SessionPullRequestCanBeMerged: Story = {
   name: 'The header offers to merge the session pull request',
   args: {
