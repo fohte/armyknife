@@ -329,35 +329,90 @@ fn attach_permission_request_id(messages: &mut [ChatItem], request_id: Option<&s
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::io::Write;
+
     use serde_json::json;
 
-    use super::attach_permission_request_id;
-    use crate::commands::agent::watch_web::messages::{ChatItem, ToolGroupItem};
+    use super::load_conversation_with_queued_prompts;
+    use crate::commands::agent::store::PermissionRequestData;
+    use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
+    use crate::commands::agent::watch_web::messages::RouteLoaders;
 
     #[test]
-    fn attaches_request_id_to_permission_cards_with_grouped_thinking() {
-        let mut messages = vec![ChatItem::PermissionWithThinking {
-            request_id: None,
-            tool: "Bash".to_string(),
-            description: String::new(),
-            command: Some("echo awaiting approval".to_string()),
-            items: vec![
-                ToolGroupItem::Thinking {
-                    text: "Review the fictional request.".to_string(),
-                    thinking_duration_ms: Some(63),
+    fn conversation_load_attaches_request_id_to_grouped_thinking_permission() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("fixture-session.jsonl");
+        let records = [
+            json!({
+                "type": "assistant",
+                "thinkingDurationMs": 63,
+                "message": {
+                    "content": [{
+                        "type": "thinking",
+                        "thinking": "Review the fictional request.",
+                    }],
                 },
-                ToolGroupItem::ToolUse {
-                    tool: "Bash".to_string(),
-                    target: Some("echo awaiting approval".to_string()),
-                    failed: false,
+            }),
+            json!({
+                "type": "assistant",
+                "message": {
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "fixture-pending-tool-id",
+                        "name": "Bash",
+                        "input": {"command": "echo awaiting approval"},
+                    }],
                 },
-            ],
-        }];
+            }),
+        ];
+        let mut transcript_file = std::fs::File::create(&transcript_path).unwrap();
+        for record in records {
+            writeln!(transcript_file, "{record}").unwrap();
+        }
 
-        attach_permission_request_id(&mut messages, Some("permission-request-fixture"));
+        let mut session: Session = serde_json::from_value(json!({
+            "session_id": "fixture-session",
+            "cwd": "/fixture/project",
+            "status": "ended",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": null,
+        }))
+        .unwrap();
+        session.engine = Engine::Claude;
+        session.transcript_path = Some(transcript_path);
+        session.pending_permission_agent_ids = BTreeSet::from([MAIN_THREAD_AGENT_KEY.to_string()]);
+        session.pending_permission_request_ids = BTreeMap::from([(
+            MAIN_THREAD_AGENT_KEY.to_string(),
+            "permission-request-fixture".to_string(),
+        )]);
+
+        let loaders = RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
+        .with_permission_request_data_loader(|_, _| {
+            Ok(Some(PermissionRequestData {
+                tool_name: Some("Bash".to_string()),
+                tool_input: json!({"command": "echo awaiting approval"}),
+                pending: true,
+            }))
+        });
+        let conversation = load_conversation_with_queued_prompts(
+            "fixture-session",
+            |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            &loaders,
+        )
+        .unwrap()
+        .unwrap();
 
         assert_eq!(
-            serde_json::to_value(messages).unwrap(),
+            serde_json::to_value(conversation.messages).unwrap(),
             json!([{
                 "type": "permission",
                 "requestId": "permission-request-fixture",
@@ -373,7 +428,6 @@ mod tests {
                     {
                         "type": "tool_use",
                         "tool": "Bash",
-                        "target": "echo awaiting approval",
                         "failed": false,
                     },
                 ],

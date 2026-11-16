@@ -591,6 +591,27 @@ mod tests {
             }),
             json!({
                 "type": "assistant",
+                "message": {
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "fixture-second-completed-tool-id",
+                        "name": "Read",
+                        "input": {"file_path": "fixture/secondary.rs"},
+                    }],
+                },
+            }),
+            json!({
+                "type": "user",
+                "message": {
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": "fixture-second-completed-tool-id",
+                        "content": "Synthetic secondary source output.",
+                    }],
+                },
+            }),
+            json!({
+                "type": "assistant",
                 "thinkingDurationMs": 53,
                 "message": {
                     "content": [{
@@ -630,12 +651,19 @@ mod tests {
             json!([
                 {
                     "type": "tool_summary",
-                    "summary": "Read ×1",
-                    "operations": [{
-                        "tool": "Read",
-                        "target": "fixture/source.rs",
-                        "failed": false,
-                    }],
+                    "summary": "Read ×2",
+                    "operations": [
+                        {
+                            "tool": "Read",
+                            "target": "fixture/source.rs",
+                            "failed": false,
+                        },
+                        {
+                            "tool": "Read",
+                            "target": "fixture/secondary.rs",
+                            "failed": false,
+                        },
+                    ],
                 },
                 {
                     "type": "permission",
