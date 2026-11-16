@@ -24,7 +24,7 @@ CREATE TRIGGER agent_file_delete_session
         DELETE FROM agent_file WHERE session_id = OLD.session_id;
     END;";
 
-static MIGRATION_ENTRIES: [M<'static>; 21] = [
+static MIGRATION_ENTRIES: [M<'static>; 22] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -212,6 +212,17 @@ static MIGRATION_ENTRIES: [M<'static>; 21] = [
             session_id TEXT PRIMARY KEY,
             created_at INTEGER NOT NULL
         );",
+    ),
+    M::up(
+        "CREATE TABLE session_vibe_setting_revision (
+            session_id TEXT PRIMARY KEY,
+            revision TEXT NOT NULL
+        );
+        CREATE TRIGGER session_vibe_setting_revision_delete_session
+            AFTER DELETE ON sessions
+            BEGIN
+                DELETE FROM session_vibe_setting_revision WHERE session_id = OLD.session_id;
+            END;",
     ),
 ];
 

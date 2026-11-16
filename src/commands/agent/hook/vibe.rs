@@ -3,7 +3,11 @@ use super::prompt_skill;
 
 const ENABLE_VIBE_CODING_SKILL: &str = "enable-vibe-coding";
 
-pub(super) fn enable_on_prompt_submit(event: HookEvent, input: &HookInput, session: &mut Session) {
+pub(super) fn enable_on_prompt_submit(
+    event: HookEvent,
+    input: &HookInput,
+    session: &mut Session,
+) -> bool {
     if event == HookEvent::UserPromptSubmit
         && input.agent_id.is_none()
         && input.prompt.as_deref().is_some_and(|prompt| {
@@ -12,7 +16,9 @@ pub(super) fn enable_on_prompt_submit(event: HookEvent, input: &HookInput, sessi
         })
     {
         session.vibe_enabled = true;
+        return true;
     }
+    false
 }
 
 #[cfg(test)]

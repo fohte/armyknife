@@ -21,10 +21,11 @@ pub(crate) enum VibeState {
     RepoDisabled,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct VibeSettingChange {
     previous_enabled: bool,
-    revision: i64,
+    requested_enabled: bool,
+    revision: String,
 }
 
 pub(crate) fn state_for(
@@ -268,9 +269,10 @@ pub(crate) fn set_in(
         .ok_or_else(|| CcError::SessionNotFound(session_id.to_string()))?;
     let previous_enabled = session.vibe_enabled;
     session.vibe_enabled = enabled;
-    let revision = lock.save_with_revision(&session)?;
+    let revision = lock.save_vibe_setting(&session)?;
     Ok(VibeSettingChange {
         previous_enabled,
+        requested_enabled: enabled,
         revision,
     })
 }
@@ -281,12 +283,15 @@ pub(crate) fn restore_in_if_unchanged(
     change: VibeSettingChange,
 ) -> Result<bool> {
     let lock = store::lock_session_for_update(sessions_dir, session_id)?;
-    if lock.revision()? != Some(change.revision) {
+    if lock.vibe_setting_revision()?.as_deref() != Some(change.revision.as_str()) {
         return Ok(false);
     }
     let Some(mut session) = lock.load()? else {
         return Ok(false);
     };
+    if session.vibe_enabled != change.requested_enabled {
+        return Ok(false);
+    }
     session.vibe_enabled = change.previous_enabled;
     lock.save(&session)?;
     Ok(true)

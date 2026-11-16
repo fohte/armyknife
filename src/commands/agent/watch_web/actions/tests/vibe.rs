@@ -169,6 +169,48 @@ async fn failed_delivery_does_not_restore_over_a_concurrent_vibe_setting(
 
 #[rstest]
 #[tokio::test]
+async fn failed_delivery_restores_vibe_after_an_unrelated_session_touch(
+    action_context: ActionContext,
+) {
+    action_context.save_session(&session("fixture-session"));
+    action_context.set_message_error("message transport failed");
+    let sessions_dir = action_context.temp_dir.path().join("sessions");
+    action_context.set_after_message(move || {
+        store::touch_session_in(&sessions_dir, "fixture-session").unwrap();
+    });
+
+    let response = action_context
+        .router_with_vibe_config(allowed_config)
+        .oneshot(post(
+            "/sessions/fixture-session/vibe",
+            json!({ "enabled": true }),
+        ))
+        .await
+        .unwrap();
+    let actual = (
+        response_snapshot(response, &action_context).await,
+        action_context.load_session("fixture-session").vibe_enabled,
+    );
+
+    assert_eq!(
+        actual,
+        (
+            json!({
+                "status": StatusCode::BAD_GATEWAY.as_u16(),
+                "body": { "error": "message transport failed" },
+                "calls": [{
+                    "kind": "message",
+                    "sessionId": "fixture-session",
+                    "content": "watch-web からユーザーが vibe mode を on にしました。",
+                }],
+            }),
+            false,
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn enabling_vibe_is_rejected_when_repo_policy_disallows_it(action_context: ActionContext) {
     action_context.save_session(&session("fixture-session"));
 

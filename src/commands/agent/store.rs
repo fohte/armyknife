@@ -247,7 +247,11 @@ pub(crate) fn update_session_in(
 
 /// Rewrites an existing session so file watchers observe derived status changes.
 pub(crate) fn touch_session(session_id: &str) -> Result<()> {
-    database::touch_session(&sessions_dir()?, session_id)
+    touch_session_in(&sessions_dir()?, session_id)
+}
+
+pub(crate) fn touch_session_in(sessions_dir: &Path, session_id: &str) -> Result<()> {
+    database::touch_session(sessions_dir, session_id)
 }
 
 /// Atomically marks a `Stopped` session as read by setting `read_at = Some(now)`.

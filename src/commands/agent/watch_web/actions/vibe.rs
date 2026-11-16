@@ -68,7 +68,7 @@ pub(super) async fn set_vibe(
     } else {
         None
     };
-    // Creating the marker advances the session revision used by rollback on delivery failure.
+    // Delivery metadata must be available before persisting the requested setting.
     let marker = if session.engine == Engine::Claude {
         let sessions_dir = sessions_dir.clone();
         let session_id = session.session_id.clone();

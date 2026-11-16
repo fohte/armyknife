@@ -892,7 +892,7 @@ fn process_hook_event_impl_with_env(
     if let Some(config) = &work_type_config {
         work_type::update_session_work_type(&mut session, event, &input, &config.agent);
     }
-    vibe::enable_on_prompt_submit(event, &input, &mut session);
+    let vibe_setting_requested = vibe::enable_on_prompt_submit(event, &input, &mut session);
 
     // Commit before transcript and tmux work so they do not hold SQLite's
     // database-wide writer lock. `sync_tmux` also reloads this session.
@@ -919,7 +919,11 @@ fn process_hook_event_impl_with_env(
             )?;
         }
     }
-    session_lock.save(&session)?;
+    if vibe_setting_requested {
+        session_lock.save_vibe_setting(&session)?;
+    } else {
+        session_lock.save(&session)?;
+    }
     drop(session_lock);
 
     if event == HookEvent::PermissionDenied && input.engine == Engine::Claude {
