@@ -270,6 +270,7 @@ fn new_session_record(
     Session {
         archived_at: None,
         pr_context,
+        created_pr_urls: Vec::new(),
         session_id: input.session_id.clone(),
         work_type: env.session_work_type.clone(),
         // A new ID in a pane that already tracked a session is a restart or
@@ -2707,6 +2708,7 @@ mod tests {
         let session = Session {
             archived_at: None,
             pr_context: None,
+            created_pr_urls: Vec::new(),
             session_id: "paused-sess".to_string(),
             work_type: None,
             work_type_pinned: false,
@@ -3200,6 +3202,7 @@ mod tests {
         let session = Session {
             archived_at: Some(Utc::now()),
             pr_context: None,
+            created_pr_urls: Vec::new(),
             session_id: "end-sess".to_string(),
             work_type: None,
             work_type_pinned: false,
@@ -3920,6 +3923,7 @@ mod tests {
         Session {
             archived_at: None,
             pr_context: None,
+            created_pr_urls: Vec::new(),
             session_id: "test-123".to_string(),
             work_type: None,
             work_type_pinned: false,
@@ -6095,6 +6099,7 @@ mod tests {
             Session {
                 archived_at: None,
                 pr_context: None,
+                created_pr_urls: Vec::new(),
                 session_id: session_id.to_string(),
                 work_type: None,
                 work_type_pinned: false,

@@ -19,7 +19,27 @@ pub(super) struct ImplementationPlan {
     unmatched_delegates: Vec<UnmatchedDelegate>,
 }
 
+pub(super) fn session_progress_plan(delegates: &[FetchedDelegate]) -> ImplementationPlan {
+    ImplementationPlan {
+        batches: Vec::new(),
+        unmatched_delegates: delegates
+            .iter()
+            .map(|delegate| UnmatchedDelegate {
+                session_id: delegate.session.session_id.clone(),
+                pull_request: delegate.pull_request.clone(),
+                lookup_unavailable: delegate.lookup_unavailable,
+            })
+            .collect(),
+    }
+}
+
 impl ImplementationPlan {
+    pub(super) fn has_created_pull_requests(&self) -> bool {
+        self.batches
+            .iter()
+            .any(|batch| batch.id.starts_with("created-prs:"))
+    }
+
     pub(super) fn batch_id_for_delegate(&self, session_id: &str) -> Option<&str> {
         self.batches.iter().find_map(|batch| {
             batch
@@ -105,6 +125,116 @@ pub(super) fn pull_request_queries(
     }
 
     queries
+}
+
+pub(super) fn pr_number_query_from_url(url: &str) -> Option<PrNumberQuery> {
+    let url = reqwest::Url::parse(url).ok()?;
+    if url.scheme() != "https" || url.host_str() != Some("github.com") {
+        return None;
+    }
+    let mut segments = url.path_segments()?;
+    let owner = segments.next()?;
+    let repo = segments.next()?;
+    if segments.next()? != "pull" {
+        return None;
+    }
+    let number = segments.next()?.parse::<u64>().ok()?;
+    if owner.is_empty() || repo.is_empty() || number == 0 || segments.next().is_some() {
+        return None;
+    }
+    Some(PrNumberQuery {
+        owner: owner.to_owned(),
+        repo: repo.to_owned(),
+        number,
+    })
+}
+
+pub(super) fn created_pr_queries(urls: &[String]) -> Vec<PrNumberQuery> {
+    let mut seen = HashSet::new();
+    urls.iter()
+        .filter_map(|url| pr_number_query_from_url(url))
+        .filter(|query| seen.insert(query.key()))
+        .collect()
+}
+
+pub(super) fn append_created_pull_requests(
+    plan: &mut ImplementationPlan,
+    session_id: &str,
+    urls: &[String],
+    pull_requests: &HashMap<(String, String, u64), Option<PrProgressInfo>>,
+    lookup_failed: bool,
+) {
+    let mut known_queries = plan
+        .batches
+        .iter()
+        .flat_map(|batch| &batch.items)
+        .filter_map(|item| {
+            item.github_link
+                .as_ref()
+                .and_then(pr_number_query)
+                .or_else(|| {
+                    item.pull_request
+                        .as_ref()
+                        .and_then(|progress| pr_number_query_from_url(&progress.pull_request.url))
+                })
+        })
+        .collect::<HashSet<_>>();
+    known_queries.extend(plan.unmatched_delegates.iter().filter_map(|delegate| {
+        delegate
+            .pull_request
+            .as_ref()
+            .and_then(|progress| pr_number_query_from_url(&progress.pull_request.url))
+    }));
+
+    let mut items = Vec::new();
+    for url in urls {
+        let Some(query) = pr_number_query_from_url(url) else {
+            continue;
+        };
+        if !known_queries.insert(query.clone()) {
+            continue;
+        }
+        let query_key = query.key();
+        let id = format!(
+            "created-pr:{session_id}:{}:{}:{}",
+            query.owner, query.repo, query.number
+        );
+        let pull_request = pull_requests
+            .get(&query_key)
+            .and_then(Option::as_ref)
+            .cloned();
+        let title = pull_request
+            .as_ref()
+            .map(|progress| progress.pull_request.title.clone())
+            .unwrap_or_else(|| format!("PR {}", query.number));
+        items.push(ImplementationItem {
+            github_link: Some(TqGithubLink {
+                id: id.clone(),
+                kind: Some("pull_request".to_owned()),
+                owner: Some(query.owner),
+                repo: Some(query.repo),
+                number: Some(query.number),
+                title: Some(title.clone()),
+                url: Some(url.clone()),
+                state: None,
+            }),
+            id,
+            title,
+            delegate_session_id: None,
+            pull_request,
+            lookup_unavailable: lookup_failed
+                || !pull_requests.contains_key(&query_key)
+                || pull_requests.get(&query_key).is_some_and(Option::is_none),
+        });
+    }
+
+    if !items.is_empty() {
+        plan.batches.push(ImplementationBatch {
+            id: format!("created-prs:{session_id}"),
+            title: "Created by this session".to_owned(),
+            items,
+        });
+    }
 }
 
 pub(super) fn build_implementation_plan(
@@ -530,6 +660,153 @@ mod tests {
             ci_state: PrCiState::Successful,
             head_sha: None,
         }
+    }
+
+    fn open_progress() -> PrProgressInfo {
+        PrProgressInfo {
+            pull_request: PrInfo {
+                number: 23,
+                title: "Add a sample design".to_string(),
+                state: PrState::Open,
+                url: "https://github.com/sample-org/sample-project/pull/23".to_string(),
+            },
+            ci_state: PrCiState::Unknown,
+            head_sha: None,
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::canonical("https://github.com/sample-org/sample-project/pull/23", Some(("sample-org", "sample-project", 23)))]
+    #[case::wrong_host("https://example.test/sample-org/sample-project/pull/23", None)]
+    #[case::wrong_path("https://github.com/sample-org/sample-project/issues/23", None)]
+    #[case::invalid_number("https://github.com/sample-org/sample-project/pull/nope", None)]
+    fn parses_recorded_pull_request_url(
+        #[case] url: &str,
+        #[case] expected: Option<(&str, &str, u64)>,
+    ) {
+        assert_eq!(
+            pr_number_query_from_url(url).map(|query| (query.owner, query.repo, query.number)),
+            expected.map(|(owner, repo, number)| (owner.to_owned(), repo.to_owned(), number)),
+        );
+    }
+
+    #[test]
+    fn builds_distinct_queries_from_created_pr_urls() {
+        let urls = vec![
+            "https://github.com/sample-org/sample-project/pull/23".to_string(),
+            "https://github.com/sample-org/sample-project/pull/23".to_string(),
+            "https://github.com/sample-org/sample-project/issues/24".to_string(),
+        ];
+
+        assert_eq!(
+            created_pr_queries(&urls),
+            vec![PrNumberQuery {
+                owner: "sample-org".to_string(),
+                repo: "sample-project".to_string(),
+                number: 23,
+            }],
+        );
+    }
+
+    #[test]
+    fn includes_a_session_created_pull_request_in_the_list() {
+        let mut plan = session_progress_plan(&[]);
+        let url = "https://github.com/sample-org/sample-project/pull/23".to_string();
+        append_created_pull_requests(
+            &mut plan,
+            "selected-session",
+            std::slice::from_ref(&url),
+            &HashMap::from([(
+                ("sample-org".to_string(), "sample-project".to_string(), 23),
+                Some(open_progress()),
+            )]),
+            false,
+        );
+        let rows = build_progress_rows(
+            &create_test_session("selected-session"),
+            &[],
+            &plan,
+            true,
+            &HashMap::new(),
+            &AgentConfig::default(),
+        );
+
+        assert_eq!(
+            rows,
+            vec![
+                ProgressRow::Work(super::super::progress::WorkProgressRow {
+                    session_id: "selected-session".to_string(),
+                    role: "session".to_string(),
+                    mark: ProgressMark::Working,
+                    status_label: None,
+                    note: None,
+                    pane_id: None,
+                }),
+                ProgressRow::ImplementationHeader {
+                    merged_pr_count: 0,
+                    total_pr_count: 1,
+                    collapsed: false,
+                },
+                ProgressRow::BatchHeader {
+                    batch_id: "created-prs:selected-session".to_string(),
+                    title: "Created by this session".to_string(),
+                    merged_pr_count: 0,
+                    collapsed: false,
+                },
+                ProgressRow::ChecklistPullRequest {
+                    batch_id: "created-prs:selected-session".to_string(),
+                    row: PrProgressRow {
+                        session_id: "checklist-item:created-pr:selected-session:sample-org:sample-project:23".to_string(),
+                        repo: Some("sample-project".to_string()),
+                        title: "Add a sample design".to_string(),
+                        number: Some(23),
+                        url: Some(url),
+                        pane_id: None,
+                        is_ended: true,
+                        lookup_unavailable: false,
+                        stages: StageMarks {
+                            implementation: ProgressMark::Done,
+                            diff_review: ProgressMark::NotStarted,
+                            pr_body: ProgressMark::NotStarted,
+                            ci: ProgressMark::NotStarted,
+                            merge: ProgressMark::NotStarted,
+                        },
+                    },
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn deduplicates_a_session_pr_already_in_the_checklist() {
+        let mut plan = build_implementation_plan(
+            &checklist(),
+            &[github_link()],
+            &[],
+            &HashMap::from([(
+                ("sample-org".to_string(), "sample-project".to_string(), 17),
+                Some(merged_progress()),
+            )]),
+            false,
+        );
+        append_created_pull_requests(
+            &mut plan,
+            "selected-session",
+            &["https://github.com/sample-org/sample-project/pull/17".to_string()],
+            &HashMap::from([(
+                ("sample-org".to_string(), "sample-project".to_string(), 17),
+                Some(merged_progress()),
+            )]),
+            false,
+        );
+
+        assert_eq!(
+            plan.batches
+                .iter()
+                .map(|batch| batch.id.clone())
+                .collect::<Vec<_>>(),
+            vec!["batch-1".to_string(), "batch-2".to_string()],
+        );
     }
 
     #[test]

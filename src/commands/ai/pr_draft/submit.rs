@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use super::common::{DraftFile, PrDraftError, RepoInfo, contains_japanese, repo_allows_japanese};
 use super::hooks::{HookContext, HookRunner, PRE_PR_SUBMIT_HOOK, default_runner, run_pr_hook};
 use super::stack::stack_created_pull_request;
+use crate::commands::agent;
 use crate::commands::agent::{ensure_no_review_access, is_vibe_enabled};
 use crate::commands::ai::pr_series::{
     PrSeriesPlan, has_managed_section, load_plan_if_present, preserve_managed_section,
@@ -18,6 +19,7 @@ use crate::infra::github::{
 };
 use crate::infra::tq::TqClient;
 use crate::shared::config::load_config;
+use crate::shared::env_var::EnvVars;
 use crate::shared::human_in_the_loop::LockGuard;
 
 const SERIES_MARKERS_REQUIRED_ERROR: &str = indoc::indoc! {"
@@ -76,6 +78,8 @@ trait PostSubmitProcessor {
         pr_url: &str,
         saved_plan: Option<SavedPrSeriesPlan>,
     ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure>;
+
+    fn record_created_pr_url(&self, _pr_url: &str) {}
 }
 
 struct PrSeriesPostSubmitProcessor<'a> {
@@ -155,6 +159,39 @@ impl PostSubmitProcessor for PrSeriesPostSubmitProcessor<'_> {
         )
         .await
     }
+
+    fn record_created_pr_url(&self, pr_url: &str) {
+        if let Err(error) = record_created_pr_url(pr_url) {
+            tracing::warn!(
+                event = "pr_draft.submit.session_pr_record_failed",
+                error = %error,
+                "failed to record pull request on the calling session"
+            );
+        }
+    }
+}
+
+fn record_created_pr_url(pr_url: &str) -> anyhow::Result<()> {
+    let Some(session_id) = EnvVars::load().own_session_id() else {
+        anyhow::bail!("calling agent session is unavailable");
+    };
+    record_created_pr_url_in(&agent::store::sessions_dir()?, &session_id, pr_url)
+}
+
+fn record_created_pr_url_in(
+    sessions_dir: &Path,
+    session_id: &str,
+    pr_url: &str,
+) -> anyhow::Result<()> {
+    let lock = agent::store::lock_session_for_update(sessions_dir, session_id)?;
+    let Some(mut session) = lock.load()? else {
+        anyhow::bail!("agent session not found: {session_id}");
+    };
+    if !session.created_pr_urls.iter().any(|url| url == pr_url) {
+        session.created_pr_urls.push(pr_url.to_owned());
+        lock.save(&session)?;
+    }
+    Ok(())
 }
 
 fn warn_plan_lookup_failure(metadata: &TqBranchMetadata, error: &anyhow::Error) {
@@ -309,7 +346,7 @@ async fn run_impl(
         run_hook,
     )?;
 
-    let pr_url = match update_target {
+    let (pr_url, created) = match update_target {
         Some(number) => {
             // Update existing PR
             let body = body_for_existing_pr_update(
@@ -322,15 +359,18 @@ async fn run_impl(
                 tq_metadata.as_ref(),
             )
             .await;
-            gh_client
-                .update_pull_request(UpdatePrParams {
-                    owner: target.owner.clone(),
-                    repo: target.repo.clone(),
-                    number,
-                    title: draft.frontmatter.title.clone(),
-                    body,
-                })
-                .await?
+            (
+                gh_client
+                    .update_pull_request(UpdatePrParams {
+                        owner: target.owner.clone(),
+                        repo: target.repo.clone(),
+                        number,
+                        title: draft.frontmatter.title.clone(),
+                        body,
+                    })
+                    .await?,
+                false,
+            )
         }
         None => {
             // Create new PR
@@ -359,7 +399,7 @@ async fn run_impl(
                 eprintln!("{warning}");
             }
 
-            created_pr.url
+            (created_pr.url, true)
         }
     };
 
@@ -372,6 +412,10 @@ async fn run_impl(
                 "failed to cache pull request URL"
             );
         }
+    }
+
+    if created {
+        post_submit_processor.record_created_pr_url(&pr_url);
     }
 
     println!("{pr_url}");
@@ -598,6 +642,35 @@ mod tests {
         anyhow::bail!("The --no-review option is only available when vibe mode is enabled.")
     }
 
+    #[test]
+    fn records_created_pr_url_on_the_session() {
+        let sessions_dir = tempfile::tempdir().expect("session directory should be created");
+        let session: crate::commands::agent::types::Session =
+            serde_json::from_value(serde_json::json!({
+                "session_id": "fixture-session",
+                "cwd": "/fixture-worktree",
+                "status": "running",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z"
+            }))
+            .expect("fixture session should deserialize");
+        agent::store::save_session_to(sessions_dir.path(), &session)
+            .expect("fixture session should be saved");
+        let url = "https://github.com/example-owner/example-repo/pull/17";
+
+        record_created_pr_url_in(sessions_dir.path(), "fixture-session", url)
+            .expect("created pull request should be recorded");
+        record_created_pr_url_in(sessions_dir.path(), "fixture-session", url)
+            .expect("repeated recording should succeed");
+
+        assert_eq!(
+            agent::store::load_session_from(sessions_dir.path(), "fixture-session")
+                .expect("session should load")
+                .map(|session| session.created_pr_urls),
+            Some(vec![url.to_owned()]),
+        );
+    }
+
     /// Captures every hook invocation so tests can assert on hook name, env,
     /// and the contents of any temp file referenced by env. The body file is
     /// read **inside** the hook closure because `run_pr_hook` deletes the
@@ -612,6 +685,7 @@ mod tests {
     #[derive(Default)]
     struct PostSubmitSpy {
         calls: Mutex<Vec<PostSubmitCall>>,
+        created_pr_urls: Mutex<Vec<String>>,
         failure_stage: Option<SubmitSyncStage>,
         metadata: Option<TqBranchMetadata>,
         plan_pull_request_count: Option<usize>,
@@ -650,6 +724,13 @@ mod tests {
                 }),
                 None => Ok(SubmitSyncOutcome::Synchronized),
             }
+        }
+
+        fn record_created_pr_url(&self, pr_url: &str) {
+            self.created_pr_urls
+                .lock()
+                .expect("session PR spy mutex")
+                .push(pr_url.to_owned());
         }
     }
 
@@ -2009,6 +2090,54 @@ mod tests {
                 format!("branch.{branch}.pr-url"),
                 format!("https://github.com/{}/{}/pull/1", env.owner, env.repo),
             ))),
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_records_the_url_of_a_newly_created_pr() {
+        let env = setup_test_env("owner", "repo_submit_session_record").await;
+        let draft_path = create_approved_draft(
+            &env.owner,
+            &env.repo,
+            "feature/session-record",
+            "Ready title",
+            "Body content",
+        );
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+        let processor = PostSubmitSpy::default();
+
+        let result = run_impl(
+            &args,
+            &env.mock.client(),
+            &noop_hook,
+            noop_config,
+            || Some((env.owner.clone(), env.repo.clone())),
+            &processor,
+            no_vibe_access,
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                processor
+                    .created_pr_urls
+                    .lock()
+                    .expect("session PR spy mutex")
+                    .clone(),
+            ),
+            (
+                Ok(()),
+                vec![format!(
+                    "https://github.com/{}/{}/pull/1",
+                    env.owner, env.repo
+                )],
+            ),
         );
     }
 

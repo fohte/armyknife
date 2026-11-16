@@ -70,9 +70,13 @@ impl App {
                 });
                 let cached_implementation =
                     reusable_cache.and_then(|cached| cached.implementation.clone());
-                let implementation = includes_fetched_progress
-                    .then(|| progress.implementation.or(cached_implementation))
-                    .flatten();
+                let implementation = if includes_fetched_progress {
+                    progress.implementation.or(cached_implementation)
+                } else {
+                    progress
+                        .implementation
+                        .filter(ImplementationPlan::has_created_pull_requests)
+                };
                 let mut delegated = if includes_fetched_progress {
                     progress
                         .delegated
