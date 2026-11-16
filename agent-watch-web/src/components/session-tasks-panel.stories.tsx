@@ -7,6 +7,7 @@ const meta = {
   args: {
     repo: 'example/service',
     primaryTaskId: 'example-open-task',
+    onMakePrimary: () => Promise.resolve(true),
     tasks: [
       {
         id: 'example-open-task',
