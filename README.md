@@ -104,7 +104,7 @@ agent:
   worktree:
     dir: .worktrees # worktree directory name (default: ".worktrees")
     branch_prefix: fohte/ # branch name prefix for `a agent new --worktree` (default: "fohte/")
-    repos_root: ~/ghq # root directory for repo discovery in `a agent clean --all` (default: GHQ_ROOT or ghq.root or ~/ghq)
+    repos_root: ~/ghq # root directory for repository discovery by `a agent clean --all` and watch-web directory search (default: GHQ_ROOT or ghq.root or ~/ghq)
     layout: # tmux pane layout for `a agent new --worktree`
       direction: horizontal
       first:
