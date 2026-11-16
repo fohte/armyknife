@@ -161,21 +161,28 @@ impl PostSubmitProcessor for PrSeriesPostSubmitProcessor<'_> {
     }
 
     fn record_created_pr_url(&self, pr_url: &str) {
-        if let Err(error) = record_created_pr_url(pr_url) {
-            tracing::warn!(
-                event = "pr_draft.submit.session_pr_record_failed",
-                error = %error,
-                "failed to record pull request on the calling session"
-            );
-        }
+        record_created_pr_url(pr_url);
     }
 }
 
-fn record_created_pr_url(pr_url: &str) -> anyhow::Result<()> {
+fn record_created_pr_url(pr_url: &str) {
     let Some(session_id) = EnvVars::load().own_session_id() else {
-        anyhow::bail!("calling agent session is unavailable");
+        tracing::warn!(
+            event = "pr_draft.submit.session_pr_record_failed",
+            "calling agent session is unavailable"
+        );
+        return;
     };
-    record_created_pr_url_in(&agent::store::sessions_dir()?, &session_id, pr_url)
+    let result = agent::store::sessions_dir()
+        .and_then(|sessions_dir| record_created_pr_url_in(&sessions_dir, &session_id, pr_url));
+    if let Err(error) = result {
+        tracing::warn!(
+            event = "pr_draft.submit.session_pr_record_failed",
+            session = %session_id,
+            error = %error,
+            "failed to record pull request on the calling session"
+        );
+    }
 }
 
 fn record_created_pr_url_in(
@@ -1765,6 +1772,11 @@ mod tests {
                 result
                     .map(|()| cached_config.into_inner().expect("cache spy mutex"))
                     .map_err(|error| error.to_string()),
+                post_submit_spy
+                    .created_pr_urls
+                    .lock()
+                    .expect("session PR spy mutex")
+                    .clone(),
                 update_payloads,
             ),
             (
@@ -1772,6 +1784,7 @@ mod tests {
                     "branch.feature/existing-pr.pr-url".to_string(),
                     "https://github.com/owner/repo_submit_update/pull/42".to_string(),
                 ))),
+                Vec::new(),
                 vec![serde_json::json!({
                     "title": "Updated title",
                     "body": updated_body,

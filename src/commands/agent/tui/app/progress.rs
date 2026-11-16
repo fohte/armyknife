@@ -56,7 +56,7 @@ impl App {
                     return;
                 };
                 let scope = self.progress_scope(&selected);
-                let request_scope = scope.kind.fetch_scope();
+                let request_scope = Some(scope.kind.fetch_scope());
                 if progress
                     .request_scope
                     .as_ref()
@@ -183,7 +183,7 @@ impl App {
         existing_rows: &[ProgressRow],
     ) -> CachedProgress {
         let scope = self.progress_scope(selected);
-        let current_request_scope = scope.kind.fetch_scope();
+        let current_request_scope = Some(scope.kind.fetch_scope());
         let cached = self.cached_progress(&selected.session_id);
         let reusable_cache = cached.filter(|snapshot| {
             same_implementation_scope(

@@ -25,27 +25,27 @@ impl ProgressScopeKind {
         !matches!(self, Self::OwnOnly)
     }
 
-    pub(in crate::commands::agent::tui) fn fetch_scope(&self) -> Option<ProgressFetchScope> {
+    pub(in crate::commands::agent::tui) fn fetch_scope(&self) -> ProgressFetchScope {
         match self {
-            Self::OwnOnly => Some(ProgressFetchScope {
+            Self::OwnOnly => ProgressFetchScope {
                 task_id: None,
                 session_ids: Some(Vec::new()),
                 other_task_session_ids: Vec::new(),
-            }),
-            Self::Direct => Some(ProgressFetchScope {
+            },
+            Self::Direct => ProgressFetchScope {
                 task_id: None,
                 session_ids: None,
                 other_task_session_ids: Vec::new(),
-            }),
+            },
             Self::Task {
                 task_id,
                 session_ids,
                 other_task_session_ids,
-            } => Some(ProgressFetchScope {
+            } => ProgressFetchScope {
                 task_id: Some(task_id.clone()),
                 session_ids: Some(session_ids.clone()),
                 other_task_session_ids: other_task_session_ids.clone(),
-            }),
+            },
         }
     }
 }
