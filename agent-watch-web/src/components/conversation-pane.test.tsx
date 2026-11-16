@@ -1882,14 +1882,12 @@ it('copies the session ID from desktop and mobile headers', async () => {
     copiedText,
     writeCalls: writeText.mock.calls,
     desktopButtonText,
-    mobileCopyAction: mobileCopyItem.textContent,
     mobileLiveStatus: mobileCopyStatus(),
   })
   expect(snapshot()).toEqual({
     copiedText: session.id,
     writeCalls: [[session.id], [session.id]],
     desktopButtonText: 'Copied',
-    mobileCopyAction: 'Session ID copied',
     mobileLiveStatus: { text: 'Session ID copied', hidden: false },
   })
 })
