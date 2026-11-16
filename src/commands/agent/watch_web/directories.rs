@@ -253,7 +253,7 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::Request;
     use chrono::{TimeZone, Utc};
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use serde_json::Value;
     use tower::ServiceExt;
 
@@ -345,20 +345,35 @@ mod tests {
         (status, serde_json::from_slice(&bytes).unwrap())
     }
 
+    struct RepositoryFixture {
+        root: tempfile::TempDir,
+        path: PathBuf,
+    }
+
+    fn create_repository(root: &Path, name: &str) -> PathBuf {
+        let path = root.join(format!("github.com/example.invalid/{name}"));
+        std::fs::create_dir_all(path.join(".git")).unwrap();
+        path
+    }
+
+    #[fixture]
+    fn sample_repository() -> RepositoryFixture {
+        let root = tempfile::tempdir().unwrap();
+        let path = create_repository(root.path(), "sample-app");
+        RepositoryFixture { root, path }
+    }
+
+    #[rstest]
     #[tokio::test]
-    async fn returns_recent_repositories_newest_first_without_worktrees_or_outside_paths() {
-        let repos_root = tempfile::tempdir().unwrap();
-        let older_repo = repos_root
-            .path()
-            .join("github.com/example.invalid/older-repo");
-        let newer_repo = repos_root
-            .path()
-            .join("github.com/example.invalid/newer-repo");
+    async fn returns_recent_repositories_newest_first_without_worktrees_or_outside_paths(
+        sample_repository: RepositoryFixture,
+    ) {
+        let repos_root = sample_repository.root;
+        let newer_repo = sample_repository.path;
+        let older_repo = create_repository(repos_root.path(), "older-repo");
         let older_worktree = older_repo.join(".worktrees/topic");
         let newer_worktree = newer_repo.join(".worktrees/topic");
         let outside = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(older_repo.join(".git")).unwrap();
-        std::fs::create_dir_all(newer_repo.join(".git")).unwrap();
         std::fs::create_dir_all(older_worktree.join("src")).unwrap();
         std::fs::create_dir_all(&newer_worktree).unwrap();
         let source = FakeDirectorySource {
@@ -387,13 +402,13 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn omits_session_directories_that_are_no_longer_available() {
-        let repos_root = tempfile::tempdir().unwrap();
-        let repo = repos_root
-            .path()
-            .join("github.com/example.invalid/active-repo");
-        std::fs::create_dir_all(repo.join(".git")).unwrap();
+    async fn omits_session_directories_that_are_no_longer_available(
+        sample_repository: RepositoryFixture,
+    ) {
+        let repo = sample_repository.path;
+        let repos_root = sample_repository.root;
         let stale = repo.join(".worktrees/removed-directory");
         let source = FakeDirectorySource {
             sessions: vec![session(repo.clone(), 20), session(stale, 30)],
@@ -415,12 +430,12 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn search_includes_matching_ghq_repositories() {
+    async fn search_includes_matching_ghq_repositories(sample_repository: RepositoryFixture) {
         let home = tempfile::tempdir().unwrap();
-        let ghq = tempfile::tempdir().unwrap();
-        let repo = ghq.path().join("github.com/example.invalid/sample-app");
-        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        let repo = sample_repository.path;
+        let ghq = sample_repository.root;
         let source = FakeDirectorySource {
             sessions: Vec::new(),
             ghq_root: Some(ghq.path().to_path_buf()),
@@ -467,14 +482,14 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn search_matches_recent_repository_by_relative_path() {
-        let repos_root = tempfile::tempdir().unwrap();
-        let repo = repos_root
-            .path()
-            .join("github.com/example.invalid/sample-app");
+    async fn search_matches_recent_repository_by_relative_path(
+        sample_repository: RepositoryFixture,
+    ) {
+        let repo = sample_repository.path;
+        let repos_root = sample_repository.root;
         let worktree = repo.join(".worktrees/topic");
-        std::fs::create_dir_all(repo.join(".git")).unwrap();
         std::fs::create_dir_all(&worktree).unwrap();
         let source = FakeDirectorySource {
             sessions: vec![session(worktree, 10)],
