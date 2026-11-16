@@ -2,7 +2,10 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
-import { SessionStatusPanel } from '#components/session-status-panel'
+import {
+  SessionStatusPanel,
+  type SessionStatusPanelTab,
+} from '#components/session-status-panel'
 
 let container: HTMLDivElement
 let root: Root | null = null
@@ -12,20 +15,23 @@ function renderPanel(
   onTabChange = vi.fn(),
   onClose = vi.fn(),
   runningCount = 0,
+  tabs?: readonly SessionStatusPanelTab[],
 ) {
   root = createRoot(container)
   act(() => {
     root?.render(
       <SessionStatusPanel
-        tabs={[
-          {
-            id: 'running',
-            label: 'Running',
-            count: runningCount,
-            content: 'Running',
-          },
-          { id: 'crit', label: 'crit', count: 1, content: 'Crit content' },
-        ]}
+        tabs={
+          tabs ?? [
+            {
+              id: 'running',
+              label: 'Running',
+              count: runningCount,
+              content: 'Running',
+            },
+            { id: 'crit', label: 'crit', count: 1, content: 'Crit content' },
+          ]
+        }
         activeTabId={activeTabId}
         onTabChange={onTabChange}
         onClose={onClose}
@@ -72,6 +78,70 @@ it('reports the selected tab when a visible tab is clicked', () => {
   })
 
   expect(onTabChange.mock.calls).toEqual([['crit']])
+})
+
+it('keeps overflowing tabs selectable and scrolls the active tab beside the close button', () => {
+  const tabs = Array.from({ length: 8 }, (_, index) => ({
+    id: `view-${String(index + 1)}`,
+    label: `Integration view ${String(index + 1)} with a long label`,
+    count: 1,
+    content: `View ${String(index + 1)}`,
+  }))
+  const onTabChange = vi.fn()
+  container.style.width = '320px'
+  container.style.height = '480px'
+  renderPanel('view-1', onTabChange, undefined, 0, tabs)
+
+  const tabList = container.querySelector<HTMLElement>('[role="tablist"]')
+  const lastTab = container.querySelector<HTMLButtonElement>(
+    '#session-status-tab-view-8',
+  )
+  const closeButton = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Close session status panel"]',
+  )
+  const header = container.querySelector<HTMLElement>(
+    '.session-status-panel-tabs',
+  )
+
+  act(() => lastTab?.click())
+  act(() => {
+    root?.render(
+      <SessionStatusPanel
+        tabs={tabs}
+        activeTabId="view-8"
+        onTabChange={onTabChange}
+        onClose={vi.fn()}
+      />,
+    )
+  })
+
+  const activeTabBounds = lastTab?.getBoundingClientRect()
+  const tabListBounds = tabList?.getBoundingClientRect()
+  const closeButtonBounds = closeButton?.getBoundingClientRect()
+  const headerBounds = header?.getBoundingClientRect()
+  const snapshot = () => ({
+    tabCount: container.querySelectorAll('[role="tab"]').length,
+    lastTabSelectable: onTabChange.mock.calls,
+    tabListOverflows: (tabList?.scrollWidth ?? 0) > (tabList?.clientWidth ?? 0),
+    activeTabVisible:
+      activeTabBounds !== undefined &&
+      tabListBounds !== undefined &&
+      activeTabBounds.left >= tabListBounds.left &&
+      activeTabBounds.right <= tabListBounds.right + 1,
+    closeButtonVisible:
+      closeButtonBounds !== undefined &&
+      tabListBounds !== undefined &&
+      headerBounds !== undefined &&
+      closeButtonBounds.left >= tabListBounds.right &&
+      closeButtonBounds.right <= headerBounds.right,
+  })
+  expect(snapshot()).toEqual({
+    tabCount: 8,
+    lastTabSelectable: [['view-8']],
+    tabListOverflows: true,
+    activeTabVisible: true,
+    closeButtonVisible: true,
+  })
 })
 
 it('shows the count for a single running item', () => {
