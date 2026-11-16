@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.748](https://github.com/fohte/armyknife/compare/v0.1.747...v0.1.748) (2026-11-16)
+
+
+### Features
+
+* **agent/web-ui:** allow removing and listing ([#1879](https://github.com/fohte/armyknife/issues/1879)) ([1c8eab3](https://github.com/fohte/armyknife/commit/1c8eab3aa933591247180ba6f8dc429f12d0c244))
+
 ## [0.1.747](https://github.com/fohte/armyknife/compare/v0.1.746...v0.1.747) (2026-11-16)
 
 
