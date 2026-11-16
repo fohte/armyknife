@@ -67,6 +67,8 @@ const appTestFiles = [
   'src/components/session-tasks-panel.test.tsx',
   'src/components/decision-card.test.tsx',
   'src/components/decisions-panel.test.tsx',
+  'src/components/agent-usage-context.browser.test.tsx',
+  'src/components/quota-panel.browser.test.tsx',
 ]
 const unitTestExcludedFiles = [
   ...configDefaults.exclude,

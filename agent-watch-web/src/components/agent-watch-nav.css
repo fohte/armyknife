@@ -43,6 +43,12 @@
   letter-spacing: 0.04em;
 }
 
+.agent-watch-nav-scroll {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
 .saved-views-nav ul {
   margin: 0;
   padding: 0;

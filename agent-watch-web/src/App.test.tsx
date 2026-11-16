@@ -4362,10 +4362,12 @@ it('reloads only the selected conversation when its session changes', async () =
   expect(snapshot()).toEqual({
     transcript: 'After feed update',
     requestsAfterUnrelatedChange: [
+      '/api/usage',
       '/api/sessions/session-a/messages',
       '/api/sessions/session-a/actions',
     ],
     requestPaths: [
+      '/api/usage',
       '/api/sessions/session-a/messages',
       '/api/sessions/session-a/actions',
       '/api/sessions/session-a/messages',
@@ -4526,6 +4528,11 @@ it('answers an Inbox question with its request ID and selected answer', async ()
   expect(snapshot()).toEqual({
     selectedTitle: 'Choose a cache window',
     requests: [
+      {
+        path: '/api/usage',
+        method: 'GET',
+        body: null,
+      },
       {
         path: '/api/sessions/session-question/messages',
         method: 'GET',

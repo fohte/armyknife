@@ -14,6 +14,8 @@ import {
 
 import type { WorkTypeNavGroup } from '#board-model'
 import type { CommandPaletteShortcut } from '#command-palette-shortcut'
+import { useAgentUsageContext } from '#components/agent-usage-context'
+import { QuotaPanel } from '#components/quota-panel'
 import { SessionRow } from '#components/session-row'
 import { cn } from '#lib/utils'
 import type { SavedInboxView } from '#saved-inbox-views'
@@ -65,6 +67,7 @@ export function AgentWatchNav({
   inboxCollapsed = false,
   onToggleInbox = () => undefined,
 }: AgentWatchNavProps) {
+  const { usage, error } = useAgentUsageContext()
   const recentSessions = sessions
     .filter((session) => session.lastPromptedAt != null)
     .toSorted(
@@ -76,171 +79,151 @@ export function AgentWatchNav({
 
   return (
     <nav className="agent-watch-nav" aria-label="Main navigation">
-      <div className="brand-row">
-        <span className="brand-mark" aria-hidden="true">
-          &gt;
-        </span>
-        <span className="brand-name">agent watch</span>
-        <button
-          aria-label={
-            isMobile
-              ? 'Open command palette'
-              : `Jump to with ${paletteShortcut.ariaLabel}`
-          }
-          className="agent-watch-command agent-watch-command-key"
-          onClick={onOpenPalette}
-          type="button"
-        >
-          <Search aria-hidden="true" size={13} />
-          {!isMobile ? <span>{paletteShortcut.label}</span> : null}
-        </button>
-        {!isMobile ? (
+      <div className="agent-watch-nav-scroll">
+        <div className="brand-row">
+          <span className="brand-mark" aria-hidden="true">
+            &gt;
+          </span>
+          <span className="brand-name">agent watch</span>
           <button
-            aria-label="New session"
-            className="agent-watch-new-session"
-            onClick={() => {
-              onNewSession()
-            }}
-            title="New session"
+            aria-label={
+              isMobile
+                ? 'Open command palette'
+                : `Jump to with ${paletteShortcut.ariaLabel}`
+            }
+            className="agent-watch-command agent-watch-command-key"
+            onClick={onOpenPalette}
             type="button"
           >
-            <Plus aria-hidden="true" size={16} />
+            <Search aria-hidden="true" size={13} />
+            {!isMobile ? <span>{paletteShortcut.label}</span> : null}
           </button>
-        ) : null}
-        {!isMobile ? (
-          <button
-            aria-label={inboxCollapsed ? 'Show Inbox' : 'Hide Inbox'}
-            aria-pressed={inboxCollapsed}
-            className={`agent-watch-inbox-toggle${inboxCollapsed ? ' is-active' : ''}`}
-            onClick={() => {
-              onToggleInbox()
-            }}
-            title={inboxCollapsed ? 'Show Inbox' : 'Hide Inbox'}
+          {!isMobile ? (
+            <button
+              aria-label="New session"
+              className="agent-watch-new-session"
+              onClick={() => {
+                onNewSession()
+              }}
+              title="New session"
+              type="button"
+            >
+              <Plus aria-hidden="true" size={16} />
+            </button>
+          ) : null}
+          {!isMobile ? (
+            <button
+              aria-label={inboxCollapsed ? 'Show Inbox' : 'Hide Inbox'}
+              aria-pressed={inboxCollapsed}
+              className={`agent-watch-inbox-toggle${inboxCollapsed ? ' is-active' : ''}`}
+              onClick={() => {
+                onToggleInbox()
+              }}
+              title={inboxCollapsed ? 'Show Inbox' : 'Hide Inbox'}
+              type="button"
+            >
+              {inboxCollapsed ? (
+                <PanelLeftOpen aria-hidden="true" size={15} />
+              ) : (
+                <PanelLeftClose aria-hidden="true" size={15} />
+              )}
+            </button>
+          ) : null}
+        </div>
+        <div className="view-switch" role="group" aria-label="Views">
+          <Button
             type="button"
-          >
-            {inboxCollapsed ? (
-              <PanelLeftOpen aria-hidden="true" size={15} />
-            ) : (
-              <PanelLeftClose aria-hidden="true" size={15} />
+            aria-pressed={activeView === 'inbox'}
+            variant="plain"
+            className={cn(
+              'view-switch-button cursor-pointer',
+              activeView === 'inbox' && 'is-active',
             )}
-          </button>
-        ) : null}
-      </div>
-      <div className="view-switch" role="group" aria-label="Views">
-        <Button
-          type="button"
-          aria-pressed={activeView === 'inbox'}
-          variant="plain"
-          className={cn(
-            'view-switch-button cursor-pointer',
-            activeView === 'inbox' && 'is-active',
-          )}
-          onClick={() => {
-            onViewChange('inbox')
-          }}
-        >
-          <span>Inbox&nbsp;</span>
-          <Chip data-view-count="" tone="strong">
-            {needsActionCount}
-          </Chip>
-        </Button>
-        <Button
-          type="button"
-          aria-pressed={activeView === 'board'}
-          variant="plain"
-          className={cn(
-            'view-switch-button cursor-pointer',
-            activeView === 'board' && 'is-active',
-          )}
-          onClick={() => {
-            onViewChange('board')
-          }}
-        >
-          Board
-        </Button>
-      </div>
-      {savedViews.length > 0 ? (
-        <section
-          className="saved-views-nav"
-          aria-labelledby="saved-views-title"
-        >
-          <h2 id="saved-views-title">VIEWS</h2>
-          <ul>
-            {savedViews.map((savedView) => (
-              <li key={savedView.id} className="saved-view-item">
-                <Button
-                  type="button"
-                  variant="plain"
-                  aria-pressed={selectedSavedViewId === savedView.id}
-                  className={cn(
-                    'saved-view-link cursor-pointer',
-                    selectedSavedViewId === savedView.id && 'is-active',
-                  )}
-                  onClick={() => {
-                    onSelectSavedView(savedView.id)
-                  }}
-                >
-                  <Filter aria-hidden="true" size={12} />
-                  <span className="saved-view-name">{savedView.name}</span>
-                  <span
+            onClick={() => {
+              onViewChange('inbox')
+            }}
+          >
+            <span>Inbox&nbsp;</span>
+            <Chip data-view-count="" tone="strong">
+              {needsActionCount}
+            </Chip>
+          </Button>
+          <Button
+            type="button"
+            aria-pressed={activeView === 'board'}
+            variant="plain"
+            className={cn(
+              'view-switch-button cursor-pointer',
+              activeView === 'board' && 'is-active',
+            )}
+            onClick={() => {
+              onViewChange('board')
+            }}
+          >
+            Board
+          </Button>
+        </div>
+        {savedViews.length > 0 ? (
+          <section
+            className="saved-views-nav"
+            aria-labelledby="saved-views-title"
+          >
+            <h2 id="saved-views-title">VIEWS</h2>
+            <ul>
+              {savedViews.map((savedView) => (
+                <li key={savedView.id} className="saved-view-item">
+                  <Button
+                    type="button"
+                    variant="plain"
+                    aria-pressed={selectedSavedViewId === savedView.id}
                     className={cn(
-                      'saved-view-count',
-                      savedView.countTone !== null &&
-                        `is-${savedView.countTone}`,
+                      'saved-view-link cursor-pointer',
+                      selectedSavedViewId === savedView.id && 'is-active',
                     )}
+                    onClick={() => {
+                      onSelectSavedView(savedView.id)
+                    }}
                   >
-                    {savedView.count}
-                  </span>
-                </Button>
-                <Button
-                  type="button"
-                  variant="plain"
-                  aria-label={`Delete ${savedView.name} view`}
-                  className="saved-view-delete cursor-pointer"
-                  onClick={() => {
-                    onDeleteSavedView(savedView.id)
-                  }}
-                >
-                  <X aria-hidden="true" size={13} />
-                </Button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-      <section className="today-nav" aria-labelledby="today-nav-title">
-        <h2 id="today-nav-title">Starred</h2>
-        <ul>
-          {todaySessions.map((session) => (
-            <li key={session.id}>
-              <Button
-                type="button"
-                variant="plain"
-                className="session-row cursor-pointer"
-                aria-label={`Open starred session ${session.title}`}
-                onClick={() => {
-                  onSelectToday(session.id)
-                }}
-              >
-                <SessionRow session={session} density="compact" />
-              </Button>
-            </li>
-          ))}
-        </ul>
-      </section>
-      {recentSessions.length > 0 ? (
-        <section className="recent-nav" aria-labelledby="recent-nav-title">
-          <h2 id="recent-nav-title">Recent</h2>
+                    <Filter aria-hidden="true" size={12} />
+                    <span className="saved-view-name">{savedView.name}</span>
+                    <span
+                      className={cn(
+                        'saved-view-count',
+                        savedView.countTone !== null &&
+                          `is-${savedView.countTone}`,
+                      )}
+                    >
+                      {savedView.count}
+                    </span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="plain"
+                    aria-label={`Delete ${savedView.name} view`}
+                    className="saved-view-delete cursor-pointer"
+                    onClick={() => {
+                      onDeleteSavedView(savedView.id)
+                    }}
+                  >
+                    <X aria-hidden="true" size={13} />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+        <section className="today-nav" aria-labelledby="today-nav-title">
+          <h2 id="today-nav-title">Starred</h2>
           <ul>
-            {recentSessions.map((session) => (
+            {todaySessions.map((session) => (
               <li key={session.id}>
                 <Button
                   type="button"
                   variant="plain"
                   className="session-row cursor-pointer"
-                  aria-label={`Open ${session.title} recent session`}
+                  aria-label={`Open starred session ${session.title}`}
                   onClick={() => {
-                    onSelectSession(session.id)
+                    onSelectToday(session.id)
                   }}
                 >
                   <SessionRow session={session} density="compact" />
@@ -249,33 +232,60 @@ export function AgentWatchNav({
             ))}
           </ul>
         </section>
-      ) : null}
-      {workTypeNavGroups.map((group, index) => (
-        <section
-          key={group.label}
-          className="work-type-nav"
-          aria-labelledby={`work-type-nav-title-${String(index)}`}
-        >
-          <h2 id={`work-type-nav-title-${String(index)}`}>{group.label}</h2>
-          <ul>
-            {group.sessions.map((session) => (
-              <li key={session.id}>
-                <Button
-                  type="button"
-                  variant="plain"
-                  className="session-row cursor-pointer"
-                  aria-label={`Open ${session.title} ${group.label} session in Inbox`}
-                  onClick={() => {
-                    onSelectSession(session.id)
-                  }}
-                >
-                  <SessionRow session={session} density="compact" />
-                </Button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ))}
+        {recentSessions.length > 0 ? (
+          <section className="recent-nav" aria-labelledby="recent-nav-title">
+            <h2 id="recent-nav-title">Recent</h2>
+            <ul>
+              {recentSessions.map((session) => (
+                <li key={session.id}>
+                  <Button
+                    type="button"
+                    variant="plain"
+                    className="session-row cursor-pointer"
+                    aria-label={`Open ${session.title} recent session`}
+                    onClick={() => {
+                      onSelectSession(session.id)
+                    }}
+                  >
+                    <SessionRow session={session} density="compact" />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+        {workTypeNavGroups.map((group, index) => (
+          <section
+            key={group.label}
+            className="work-type-nav"
+            aria-labelledby={`work-type-nav-title-${String(index)}`}
+          >
+            <h2 id={`work-type-nav-title-${String(index)}`}>{group.label}</h2>
+            <ul>
+              {group.sessions.map((session) => (
+                <li key={session.id}>
+                  <Button
+                    type="button"
+                    variant="plain"
+                    className="session-row cursor-pointer"
+                    aria-label={`Open ${session.title} ${group.label} session in Inbox`}
+                    onClick={() => {
+                      onSelectSession(session.id)
+                    }}
+                  >
+                    <SessionRow session={session} density="compact" />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ))}
+      </div>
+      <QuotaPanel
+        error={error}
+        isMobile={isMobile}
+        quotas={usage?.quotas ?? null}
+      />
     </nav>
   )
 }

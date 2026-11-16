@@ -11,6 +11,7 @@ import {
   useState,
 } from 'react'
 
+import { useAgentUsageContext } from '#components/agent-usage-context'
 import { ConversationPaneHeader } from '#components/conversation-pane-header'
 import { ConversationSelectionReply } from '#components/conversation-selection-reply'
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
@@ -21,6 +22,7 @@ import type {
   PermissionRequestIdentity,
 } from '#components/permission-card'
 import { SessionLinkElapsedSecondsContext } from '#components/session-link-elapsed-seconds'
+import { SessionUsageRow } from '#components/session-usage-row'
 import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
 import { useConversationFileDrop } from '#components/use-conversation-file-drop'
@@ -133,6 +135,9 @@ export function ConversationPaneView({
   isToday = false,
   onToggleToday,
 }: ConversationPaneViewProps) {
+  const { usage } = useAgentUsageContext()
+  const sessionUsage =
+    usage?.sessions.find((entry) => entry.sessionId === session.id) ?? null
   const interruptInFlight = useRef(false)
   const [isInterrupting, setIsInterrupting] = useState(false)
   const currentDate = new Date()
@@ -441,6 +446,7 @@ export function ConversationPaneView({
           interrupt()
         }}
       />
+      <SessionUsageRow isMobile={isMobile} usage={sessionUsage} />
       <ConversationSelectionReply
         position={selectionReplyPosition}
         onReply={replyToSelection}
