@@ -9,6 +9,7 @@ mod incremental;
 mod questions;
 mod render;
 mod state;
+mod thinking;
 mod transcript_branch;
 mod user_input;
 
@@ -249,6 +250,8 @@ mod tests {
     use std::io::{self, BufRead, Cursor, Read, Seek, SeekFrom};
     use std::path::Path;
 
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
     use chrono::{DateTime, TimeZone, Utc};
     use indoc::{formatdoc, indoc};
     use rstest::rstest;
@@ -336,6 +339,231 @@ mod tests {
         ChatItem, ParentSession, PeerDirection, ProposalOption, QuestionChoice, SkillSuggestion,
         ToolOperation, UserContentPart,
     };
+
+    fn signature_with_block_kind(block_kind: &str) -> String {
+        fn length_delimited_field(field_number: u8, value: &[u8]) -> Vec<u8> {
+            let mut field = vec![(field_number << 3) | 2, value.len() as u8];
+            field.extend_from_slice(value);
+            field
+        }
+
+        let block_kind = length_delimited_field(8, block_kind.as_bytes());
+        let metadata = length_delimited_field(1, &block_kind);
+        STANDARD.encode(length_delimited_field(2, &metadata))
+    }
+
+    #[test]
+    fn groups_summarized_thinking_with_tool_use_in_transcript_order() {
+        let transcript = [
+            json!({
+                "type": "assistant",
+                "thinkingDurationMs": 63,
+                "message": {
+                    "id": "fixture-message-id",
+                    "content": [
+                        {
+                            "type": "thinking",
+                            "thinking": "Review the fictional request.",
+                            "signature": signature_with_block_kind("thinking"),
+                        },
+                        {
+                            "type": "thinking",
+                            "thinking": "",
+                            "signature": signature_with_block_kind("narration"),
+                        },
+                    ],
+                },
+            }),
+            json!({
+                "type": "assistant",
+                "thinkingDurationMs": 84,
+                "message": {
+                    "id": "fixture-message-id",
+                    "content": [{
+                        "type": "thinking",
+                        "thinking": "Inspect the fictional source.",
+                        "signature": signature_with_block_kind("thinking"),
+                    }],
+                },
+            }),
+            json!({
+                "type": "assistant",
+                "message": {
+                    "id": "fixture-message-id",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "fixture-tool-id",
+                        "name": "Read",
+                        "input": {"file_path": "fixture/source.rs"},
+                    }],
+                },
+            }),
+            json!({
+                "type": "user",
+                "message": {
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": "fixture-tool-id",
+                        "content": "Synthetic source output.",
+                    }],
+                },
+            }),
+        ]
+        .into_iter()
+        .map(|record| record.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+        assert_eq!(
+            serde_json::to_value(parse(Cursor::new(transcript), None, None, None).unwrap())
+                .unwrap(),
+            json!([{
+                "type": "tool_summary",
+                "summary": "Read ×1",
+                "operations": [{
+                    "tool": "Read",
+                    "target": "fixture/source.rs",
+                    "failed": false,
+                }],
+                "items": [
+                    {
+                        "type": "thinking",
+                        "text": "Review the fictional request.",
+                        "thinkingDurationMs": 63,
+                    },
+                    {
+                        "type": "thinking",
+                        "text": "Inspect the fictional source.",
+                        "thinkingDurationMs": 84,
+                    },
+                    {
+                        "type": "tool_use",
+                        "tool": "Read",
+                        "target": "fixture/source.rs",
+                        "failed": false,
+                    },
+                ],
+            }]),
+        );
+    }
+
+    #[test]
+    fn groups_thinking_with_a_tool_use_without_a_result_record() {
+        let transcript = [
+            json!({
+                "type": "assistant",
+                "thinkingDurationMs": 63,
+                "message": {
+                    "content": [{
+                        "type": "thinking",
+                        "thinking": "Review the fictional request.",
+                        "signature": signature_with_block_kind("thinking"),
+                    }],
+                },
+            }),
+            json!({
+                "type": "assistant",
+                "message": {
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "fixture-tool-id",
+                        "name": "Read",
+                        "input": {"file_path": "fixture/source.rs"},
+                    }],
+                },
+            }),
+        ]
+        .into_iter()
+        .map(|record| record.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+        assert_eq!(
+            serde_json::to_value(parse(Cursor::new(transcript), None, None, None).unwrap())
+                .unwrap(),
+            json!([{
+                "type": "tool_in_progress",
+                "tool": "Read",
+                "target": "fixture/source.rs",
+                "items": [
+                    {
+                        "type": "thinking",
+                        "text": "Review the fictional request.",
+                        "thinkingDurationMs": 63,
+                    },
+                    {
+                        "type": "tool_use",
+                        "tool": "Read",
+                        "target": "fixture/source.rs",
+                        "failed": false,
+                    },
+                ],
+            }]),
+        );
+    }
+
+    #[test]
+    fn returns_narration_as_a_distinct_conversation_item() {
+        let transcript = [
+            json!({
+                "type": "assistant",
+                "thinkingDurationMs": 47,
+                "message": {
+                    "content": [{
+                        "type": "thinking",
+                        "thinking": "I will inspect the fictional source.",
+                        "signature": signature_with_block_kind("narration"),
+                    }],
+                },
+            }),
+            json!({
+                "type": "assistant",
+                "message": {
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "fixture-tool-id",
+                        "name": "Read",
+                        "input": {"file_path": "fixture/source.rs"},
+                    }],
+                },
+            }),
+            json!({
+                "type": "user",
+                "message": {
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": "fixture-tool-id",
+                        "content": "Synthetic source output.",
+                    }],
+                },
+            }),
+        ]
+        .into_iter()
+        .map(|record| record.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+        assert_eq!(
+            serde_json::to_value(parse(Cursor::new(transcript), None, None, None).unwrap())
+                .unwrap(),
+            json!([
+                {
+                    "type": "narration",
+                    "text": "I will inspect the fictional source.",
+                    "thinkingDurationMs": 47,
+                },
+                {
+                    "type": "tool_summary",
+                    "summary": "Read ×1",
+                    "operations": [{
+                        "tool": "Read",
+                        "target": "fixture/source.rs",
+                        "failed": false,
+                    }],
+                },
+            ]),
+        );
+    }
 
     #[test]
     fn user_message_keeps_its_transcript_uuid_for_rewind() {

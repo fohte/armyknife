@@ -16,6 +16,14 @@ pub(super) enum ClaudeEffect {
     AssistantText {
         text: String,
     },
+    Narration {
+        text: String,
+        duration_ms: Option<u64>,
+    },
+    Thinking {
+        text: String,
+        duration_ms: Option<u64>,
+    },
     Inbound {
         record: Value,
         text: String,

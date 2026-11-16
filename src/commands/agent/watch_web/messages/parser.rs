@@ -11,7 +11,7 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use super::{ChatItem, ParentSession, ToolOperation, UserContentPart};
+use super::{ChatItem, ParentSession, ToolGroupItem, ToolOperation, UserContentPart};
 
 pub(super) fn record_timestamp(record: &Value) -> Option<DateTime<Utc>> {
     record
@@ -48,16 +48,23 @@ pub(super) struct ToolSummary {
     actions: usize,
     edited_files: Vec<String>,
     operations: Vec<ToolOperation>,
+    group_items: Vec<ToolGroupItem>,
 }
 
 impl ToolSummary {
     pub(super) fn record(&mut self, name: &str, input: Option<&serde_json::Value>, failed: bool) {
         self.actions += 1;
-        self.operations.push(ToolOperation {
+        let operation = ToolOperation {
             tool: name.to_owned(),
             target: operation_target(name, input),
             failed,
+        };
+        self.group_items.push(ToolGroupItem::ToolUse {
+            tool: operation.tool.clone(),
+            target: operation.target.clone(),
+            failed: operation.failed,
         });
+        self.operations.push(operation);
         if matches!(name, "Edit" | "Write" | "MultiEdit" | "NotebookEdit")
             && let Some(path) = input
                 .and_then(|value| value.get("file_path").or_else(|| value.get("path")))
@@ -70,8 +77,27 @@ impl ToolSummary {
 
     pub(super) fn record_codex_action(&mut self, action: CodexToolSummaryRecord) {
         self.actions += 1;
+        self.group_items.push(ToolGroupItem::ToolUse {
+            tool: action.operation.tool.clone(),
+            target: action.operation.target.clone(),
+            failed: action.operation.failed,
+        });
         self.operations.push(action.operation);
         self.record_codex_edited_files(action.edited_files);
+    }
+
+    pub(super) fn record_thinking(&mut self, text: String, duration_ms: Option<u64>) {
+        self.group_items.push(ToolGroupItem::Thinking {
+            text,
+            thinking_duration_ms: duration_ms,
+        });
+    }
+
+    pub(super) fn take_pending_thinking(&mut self) -> Vec<ToolGroupItem> {
+        if self.actions > 0 {
+            return Vec::new();
+        }
+        std::mem::take(&mut self.group_items)
     }
 
     pub(super) fn record_codex_edited_files(&mut self, paths: Vec<String>) {
@@ -84,6 +110,21 @@ impl ToolSummary {
 
     pub(super) fn flush_into(&mut self, items: &mut Vec<ChatItem>) {
         if self.actions == 0 {
+            items.extend(
+                std::mem::take(&mut self.group_items)
+                    .into_iter()
+                    .filter_map(|item| match item {
+                        ToolGroupItem::Thinking {
+                            text,
+                            thinking_duration_ms,
+                        } => Some(ChatItem::Thinking {
+                            text,
+                            thinking_duration_ms,
+                        }),
+                        ToolGroupItem::ToolUse { .. } => None,
+                    }),
+            );
+            *self = Self::default();
             return;
         }
         let mut summary_parts = Vec::new();
@@ -129,10 +170,23 @@ impl ToolSummary {
         } else {
             format!("{} · {failed_count} failed", summary_parts.join("  "))
         };
-        items.push(ChatItem::ToolSummary {
-            summary,
-            operations: std::mem::take(&mut self.operations),
-        });
+        let operations = std::mem::take(&mut self.operations);
+        let group_items = std::mem::take(&mut self.group_items);
+        if group_items
+            .iter()
+            .any(|item| matches!(item, ToolGroupItem::Thinking { .. }))
+        {
+            items.push(ChatItem::ToolSummaryWithThinking {
+                summary,
+                operations,
+                items: group_items,
+            });
+        } else {
+            items.push(ChatItem::ToolSummary {
+                summary,
+                operations,
+            });
+        }
         *self = Self::default();
     }
 }

@@ -89,7 +89,11 @@ function getConversationMessageIdentity(message: ChatItem): string {
         : `${message.type}:${message.requestId}`
     case 'permission':
       return message.requestId === undefined
-        ? `${message.type}:${JSON.stringify([message.tool, message.description])}`
+        ? `${message.type}:${JSON.stringify([
+            message.tool,
+            message.description,
+            message.items ?? [],
+          ])}`
         : `${message.type}:${message.requestId}`
     case 'permission_denied':
       return `${message.type}:${String(message.seq)}`
@@ -97,10 +101,15 @@ function getConversationMessageIdentity(message: ChatItem): string {
       return `${message.type}:${JSON.stringify([
         message.summary,
         message.operations ?? [],
+        message.items ?? [],
       ])}`
     }
     case 'tool_in_progress':
-      return `${message.type}:${JSON.stringify([message.tool, message.target ?? ''])}`
+      return `${message.type}:${JSON.stringify([
+        message.tool,
+        message.target ?? '',
+        message.items ?? [],
+      ])}`
     case 'user':
       return message.timestamp === undefined
         ? `${message.type}:${JSON.stringify([message.from ?? '', message.text])}`
@@ -135,6 +144,8 @@ function getConversationMessageIdentity(message: ChatItem): string {
           ])}`
         : `${message.type}:${JSON.stringify([message.kind, message.timestamp])}`
     case 'assistant':
+    case 'narration':
+    case 'thinking':
       return `${message.type}:${JSON.stringify([message.text])}`
     case 'file_attachment':
       return `${message.type}:${JSON.stringify([

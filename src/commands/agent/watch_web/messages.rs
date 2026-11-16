@@ -760,14 +760,37 @@ enum ChatItem {
     Assistant {
         text: String,
     },
+    Narration {
+        text: String,
+        #[serde(rename = "thinkingDurationMs", skip_serializing_if = "Option::is_none")]
+        thinking_duration_ms: Option<u64>,
+    },
+    Thinking {
+        text: String,
+        #[serde(rename = "thinkingDurationMs", skip_serializing_if = "Option::is_none")]
+        thinking_duration_ms: Option<u64>,
+    },
     ToolSummary {
         summary: String,
         operations: Vec<ToolOperation>,
+    },
+    #[serde(rename = "tool_summary")]
+    ToolSummaryWithThinking {
+        summary: String,
+        operations: Vec<ToolOperation>,
+        items: Vec<ToolGroupItem>,
     },
     ToolInProgress {
         tool: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         target: Option<String>,
+    },
+    #[serde(rename = "tool_in_progress")]
+    ToolInProgressWithThinking {
+        tool: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        target: Option<String>,
+        items: Vec<ToolGroupItem>,
     },
     Question {
         #[serde(rename = "requestId", skip_serializing_if = "Option::is_none")]
@@ -800,6 +823,16 @@ enum ChatItem {
         #[serde(skip_serializing_if = "Option::is_none")]
         command: Option<String>,
     },
+    #[serde(rename = "permission")]
+    PermissionWithThinking {
+        #[serde(rename = "requestId", skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
+        tool: String,
+        description: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        command: Option<String>,
+        items: Vec<ToolGroupItem>,
+    },
     PermissionDenied {
         seq: i64,
         #[serde(rename = "toolUseId", skip_serializing_if = "Option::is_none")]
@@ -823,6 +856,23 @@ enum ChatItem {
         review: Option<String>,
         #[serde(rename = "createdAt")]
         created_at: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ToolGroupItem {
+    Thinking {
+        text: String,
+        #[serde(rename = "thinkingDurationMs", skip_serializing_if = "Option::is_none")]
+        thinking_duration_ms: Option<u64>,
+    },
+    #[serde(rename = "tool_use")]
+    ToolUse {
+        tool: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        target: Option<String>,
+        failed: bool,
     },
 }
 

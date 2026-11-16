@@ -49,6 +49,80 @@ it('accepts a compact boundary event from the conversation API', () => {
   ).toBe(true)
 })
 
+it('accepts narration and grouped thinking from the conversation API', () => {
+  expect(
+    isConversationResponse({
+      messages: [
+        {
+          type: 'narration',
+          text: 'I will inspect the fictional source.',
+          thinkingDurationMs: 47,
+        },
+        {
+          type: 'tool_summary',
+          summary: 'Read ×1',
+          operations: [
+            { tool: 'Read', target: 'fixture/source.rs', failed: false },
+          ],
+          items: [
+            {
+              type: 'thinking',
+              text: 'Review the fictional request.',
+              thinkingDurationMs: 63,
+            },
+            {
+              type: 'tool_use',
+              tool: 'Read',
+              target: 'fixture/source.rs',
+              failed: false,
+            },
+          ],
+        },
+        {
+          type: 'tool_in_progress',
+          tool: 'Read',
+          target: 'fixture/source.rs',
+          items: [
+            {
+              type: 'thinking',
+              text: 'Review the fictional request.',
+              thinkingDurationMs: 63,
+            },
+            {
+              type: 'tool_use',
+              tool: 'Read',
+              target: 'fixture/source.rs',
+              failed: false,
+            },
+          ],
+        },
+        {
+          type: 'permission',
+          tool: 'Read',
+          description: '',
+          items: [
+            {
+              type: 'thinking',
+              text: 'Review the fictional request.',
+            },
+            {
+              type: 'tool_use',
+              tool: 'Read',
+              failed: false,
+            },
+          ],
+        },
+      ],
+      backgroundTasks: [],
+      start: 0,
+      total: 4,
+      decisions: [],
+      hasUnansweredProposal: false,
+      activeQuestionIndex: null,
+    }),
+  ).toBe(true)
+})
+
 it('accepts an epoch response without an older cursor', () => {
   expect(
     isConversationResponse({

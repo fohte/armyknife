@@ -30,6 +30,8 @@ function areConversationMessagePropsEqual(
     case 'peer':
     case 'subagent_report':
     case 'assistant':
+    case 'narration':
+    case 'thinking':
       return (
         previous.onSelectSession === next.onSelectSession &&
         previous.onCommandExecuted === next.onCommandExecuted &&

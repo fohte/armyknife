@@ -229,6 +229,29 @@ impl ClaudeParserState {
                 {
                     for block in content_blocks(content) {
                         match block.get("type").and_then(Value::as_str) {
+                            Some("thinking") => {
+                                let Some(text) = block.get("thinking").and_then(Value::as_str)
+                                else {
+                                    continue;
+                                };
+                                if text.trim().is_empty() {
+                                    continue;
+                                }
+                                let duration_ms =
+                                    record.get("thinkingDurationMs").and_then(Value::as_u64);
+                                let signature = block.get("signature").and_then(Value::as_str);
+                                if signature.is_some_and(super::thinking::is_narration_signature) {
+                                    effects.push(ClaudeEffect::Narration {
+                                        text: text.to_owned(),
+                                        duration_ms,
+                                    });
+                                } else {
+                                    effects.push(ClaudeEffect::Thinking {
+                                        text: text.to_owned(),
+                                        duration_ms,
+                                    });
+                                }
+                            }
                             Some("text") => {
                                 if let Some(text) = block.get("text").and_then(Value::as_str) {
                                     effects.push(ClaudeEffect::FlushTools);
