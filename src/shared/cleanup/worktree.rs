@@ -336,9 +336,27 @@ fn delete_worktree_and_branch(
 mod tests {
     use super::*;
     use crate::shared::testing::TestRepo;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use std::cell::RefCell;
     use tempfile::TempDir;
+
+    struct CleanupTestContext {
+        _temp_dir: TempDir,
+        worktree_path: PathBuf,
+        events: RefCell<Vec<&'static str>>,
+    }
+
+    #[fixture]
+    fn cleanup_test_context() -> CleanupTestContext {
+        let temp_dir = TempDir::new().expect("temporary worktree directory should be created");
+        let worktree_path = temp_dir.path().join("worktree");
+        std::fs::create_dir(&worktree_path).expect("worktree directory should be created");
+        CleanupTestContext {
+            _temp_dir: temp_dir,
+            worktree_path,
+            events: RefCell::new(Vec::new()),
+        }
+    }
 
     #[test]
     fn closes_caller_pane_last_and_counts_successes() {
@@ -416,14 +434,16 @@ mod tests {
         (true, None, false, 1, vec!["panes", "groups_detect", "delete:true", "after_delete", "sessions:true", "groups:[77]", "pane_closed"]),
     )]
     fn cleanup_checks_processes_before_deleting_and_signals_after_success(
+        cleanup_test_context: CleanupTestContext,
         #[case] force: bool,
         #[case] detected_processes: Option<WorktreeProcessInspection>,
         #[case] expected: (bool, Option<&'static str>, bool, usize, Vec<&'static str>),
     ) {
-        let temp_dir = TempDir::new().expect("temporary worktree directory should be created");
-        let worktree_path = temp_dir.path().join("worktree");
-        std::fs::create_dir(&worktree_path).expect("worktree directory should be created");
-        let events = RefCell::new(Vec::new());
+        let CleanupTestContext {
+            worktree_path,
+            events,
+            ..
+        } = cleanup_test_context;
 
         let result = cleanup_worktree_by_name_with_operations(
             &worktree_path,
@@ -499,12 +519,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn cleanup_does_not_signal_codex_groups_when_deletion_fails() {
-        let temp_dir = TempDir::new().expect("temporary worktree directory should be created");
-        let worktree_path = temp_dir.path().join("worktree");
-        std::fs::create_dir(&worktree_path).expect("worktree directory should be created");
-        let events = RefCell::new(Vec::new());
+    #[rstest]
+    fn cleanup_does_not_signal_codex_groups_when_deletion_fails(
+        cleanup_test_context: CleanupTestContext,
+    ) {
+        let CleanupTestContext {
+            worktree_path,
+            events,
+            ..
+        } = cleanup_test_context;
 
         let result = cleanup_worktree_by_name_with_operations(
             &worktree_path,
