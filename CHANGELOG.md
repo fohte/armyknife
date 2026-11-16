@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.757](https://github.com/fohte/armyknife/compare/v0.1.756...v0.1.757) (2026-11-16)
+
+
+### Features
+
+* **agent:** expose usage and engine quotas ([#1894](https://github.com/fohte/armyknife/issues/1894)) ([69ab4a5](https://github.com/fohte/armyknife/commit/69ab4a5f748f7fa40f1301ad1a5abe7d2bb62b07))
+
 ## [0.1.756](https://github.com/fohte/armyknife/compare/v0.1.755...v0.1.756) (2026-11-16)
 
 
