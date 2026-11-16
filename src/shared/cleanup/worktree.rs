@@ -1,7 +1,9 @@
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use crate::infra::git::GitRepo;
-use crate::infra::process::{self, ProcessInPath};
+use crate::infra::process::{self, ProcessInPath, WorktreeProcessInspection};
 use crate::infra::tmux;
 use crate::shared::worktree::{
     delete_branch_if_exists, delete_worktree, delete_worktree_if_clean, find_worktree_name,
@@ -36,8 +38,7 @@ pub struct WorktreeCleanupResult {
     pub panes_closed: usize,
     /// Number of agent sessions cleaned up.
     pub sessions_cleaned: usize,
-    /// Number of process groups killed that were rooted in the worktree
-    /// (identified by a member process whose cwd was inside it).
+    /// Number of process groups signaled after deletion.
     pub process_groups_signaled: usize,
     /// The resolved worktree root path (set when worktree_deleted is true).
     /// Use this instead of raw cwd for path matching, since cwd may be a
@@ -117,7 +118,7 @@ pub fn cleanup_worktree_by_name(
         force,
         after_delete,
         WorktreeCleanupOperations {
-            detect_processes: process::find_non_shell_processes_in_path,
+            inspect_processes: process::inspect_worktree_processes,
             find_panes: |path: &Path| tmux::get_pane_ids_in_path(&path.to_string_lossy()),
             find_groups: process::find_pgids_in_path,
             clean_sessions: |path: &Path, signal_agents: bool| {
@@ -133,7 +134,7 @@ pub fn cleanup_worktree_by_name(
 }
 
 struct WorktreeCleanupOperations<
-    DetectProcesses,
+    InspectProcesses,
     FindPanes,
     FindGroups,
     CleanSessions,
@@ -141,7 +142,7 @@ struct WorktreeCleanupOperations<
     KillPane,
     DeleteWorktree,
 > {
-    detect_processes: DetectProcesses,
+    inspect_processes: InspectProcesses,
     find_panes: FindPanes,
     find_groups: FindGroups,
     clean_sessions: CleanSessions,
@@ -152,7 +153,7 @@ struct WorktreeCleanupOperations<
 
 fn cleanup_worktree_by_name_with_operations<
     'a,
-    DetectProcesses,
+    InspectProcesses,
     FindPanes,
     FindGroups,
     CleanSessions,
@@ -164,7 +165,7 @@ fn cleanup_worktree_by_name_with_operations<
     force: bool,
     after_delete: impl FnOnce(),
     operations: WorktreeCleanupOperations<
-        DetectProcesses,
+        InspectProcesses,
         FindPanes,
         FindGroups,
         CleanSessions,
@@ -174,7 +175,7 @@ fn cleanup_worktree_by_name_with_operations<
     >,
 ) -> anyhow::Result<WorktreeCleanupResult>
 where
-    DetectProcesses: FnOnce(&Path) -> Option<Vec<ProcessInPath>> + 'a,
+    InspectProcesses: FnOnce(&Path) -> Option<WorktreeProcessInspection> + 'a,
     FindPanes: FnOnce(&Path) -> Vec<String>,
     FindGroups: FnOnce(&Path) -> Vec<libc::pid_t>,
     CleanSessions: FnOnce(&Path, bool) -> usize,
@@ -184,7 +185,7 @@ where
         FnOnce(bool, PathBuf, BeforeWorktreeDelete<'a>) -> anyhow::Result<WorktreeCleanupResult>,
 {
     let WorktreeCleanupOperations {
-        detect_processes,
+        inspect_processes,
         find_panes,
         find_groups,
         clean_sessions,
@@ -202,14 +203,31 @@ where
     };
 
     let guard_path = worktree_path.to_path_buf();
-    let before_delete: BeforeWorktreeDelete =
-        Box::new(move || check_process_guard(&guard_path, force, detect_processes));
+    let daemon_descendant_pgids = Rc::new(RefCell::new(Vec::new()));
+    let guard_pgids = Rc::clone(&daemon_descendant_pgids);
+    let before_delete: BeforeWorktreeDelete = Box::new(move || {
+        check_process_guard(&guard_path, force, |path| {
+            let inspection = inspect_processes(path)?;
+            *guard_pgids.borrow_mut() = inspection.daemon_descendant_pgids;
+            Some(inspection.non_shell_processes)
+        })
+    });
     let mut result = delete_worktree(force, worktree_path.to_path_buf(), before_delete)?;
+    let daemon_descendant_pgids = daemon_descendant_pgids.borrow().clone();
 
     // Clean up sessions before killing panes so a caller in the pane can finish.
     run_post_delete_cleanup(result.worktree_deleted, after_delete, || {
         result.sessions_cleaned = clean_sessions(worktree_path, force);
-        result.process_groups_signaled = if force { kill_groups(&orphan_pgids) } else { 0 };
+        let process_groups = if force {
+            &orphan_pgids
+        } else {
+            &daemon_descendant_pgids
+        };
+        result.process_groups_signaled = if process_groups.is_empty() {
+            0
+        } else {
+            kill_groups(process_groups)
+        };
         result.panes_closed = kill_worktree_panes(
             &pane_ids,
             tmux::current_pane_id_from_env().as_deref(),
@@ -318,9 +336,27 @@ fn delete_worktree_and_branch(
 mod tests {
     use super::*;
     use crate::shared::testing::TestRepo;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use std::cell::RefCell;
     use tempfile::TempDir;
+
+    struct CleanupTestContext {
+        _temp_dir: TempDir,
+        worktree_path: PathBuf,
+        events: RefCell<Vec<&'static str>>,
+    }
+
+    #[fixture]
+    fn cleanup_test_context() -> CleanupTestContext {
+        let temp_dir = TempDir::new().expect("temporary worktree directory should be created");
+        let worktree_path = temp_dir.path().join("worktree");
+        std::fs::create_dir(&worktree_path).expect("worktree directory should be created");
+        CleanupTestContext {
+            _temp_dir: temp_dir,
+            worktree_path,
+            events: RefCell::new(Vec::new()),
+        }
+    }
 
     #[test]
     fn closes_caller_pane_last_and_counts_successes() {
@@ -368,40 +404,68 @@ mod tests {
     #[rstest]
     #[case::active_process_without_force(
         false,
-        Some(vec![ProcessInPath { pid: 42, comm: "editor".to_string() }]),
-        (false, Some("active"), true, vec!["panes", "detect"]),
+        Some(WorktreeProcessInspection {
+            non_shell_processes: vec![ProcessInPath { pid: 42, comm: "editor".to_string() }],
+            daemon_descendant_pgids: vec![88],
+        }),
+        true,
+        (false, Some("active"), true, 0, vec!["panes", "detect"]),
     )]
     #[case::inspection_unavailable_without_force(
         false,
         None,
-        (false, Some("unavailable"), true, vec!["panes", "detect"]),
+        true,
+        (false, Some("unavailable"), true, 0, vec!["panes", "detect"]),
     )]
     #[case::shell_only_without_force(
         false,
-        Some(vec![]),
-        (true, None, false, vec!["panes", "detect", "delete:false", "after_delete", "sessions:false", "pane_closed"]),
+        Some(WorktreeProcessInspection::default()),
+        true,
+        (true, None, false, 0, vec!["panes", "detect", "delete:false", "after_delete", "sessions:false", "pane_closed"]),
+    )]
+    #[case::daemon_groups_are_signaled_after_delete(
+        false,
+        Some(WorktreeProcessInspection {
+            non_shell_processes: vec![],
+            daemon_descendant_pgids: vec![88],
+        }),
+        true,
+        (true, None, false, 1, vec!["panes", "detect", "delete:false", "after_delete", "sessions:false", "groups:[88]", "pane_closed"]),
+    )]
+    #[case::daemon_groups_are_not_signaled_when_deletion_returns_false(
+        false,
+        Some(WorktreeProcessInspection {
+            non_shell_processes: vec![],
+            daemon_descendant_pgids: vec![88],
+        }),
+        false,
+        (false, None, true, 0, vec!["panes", "detect", "delete:false"]),
     )]
     #[case::force_skips_the_guard_and_signals_process_groups(
         true,
         None,
-        (true, None, false, vec!["panes", "groups_detect", "delete:true", "after_delete", "sessions:true", "groups:[77]", "pane_closed"]),
+        true,
+        (true, None, false, 1, vec!["panes", "groups_detect", "delete:true", "after_delete", "sessions:true", "groups:[77]", "pane_closed"]),
     )]
-    fn cleanup_checks_processes_before_deleting_and_signals_only_with_force(
+    fn cleanup_checks_processes_before_deleting_and_signals_after_success(
+        cleanup_test_context: CleanupTestContext,
         #[case] force: bool,
-        #[case] detected_processes: Option<Vec<ProcessInPath>>,
-        #[case] expected: (bool, Option<&'static str>, bool, Vec<&'static str>),
+        #[case] detected_processes: Option<WorktreeProcessInspection>,
+        #[case] delete_succeeds: bool,
+        #[case] expected: (bool, Option<&'static str>, bool, usize, Vec<&'static str>),
     ) {
-        let temp_dir = TempDir::new().expect("temporary worktree directory should be created");
-        let worktree_path = temp_dir.path().join("worktree");
-        std::fs::create_dir(&worktree_path).expect("worktree directory should be created");
-        let events = RefCell::new(Vec::new());
+        let CleanupTestContext {
+            worktree_path,
+            events,
+            ..
+        } = cleanup_test_context;
 
         let result = cleanup_worktree_by_name_with_operations(
             &worktree_path,
             force,
             || events.borrow_mut().push("after_delete"),
             WorktreeCleanupOperations {
-                detect_processes: |_: &Path| {
+                inspect_processes: |_: &Path| {
                     events.borrow_mut().push("detect");
                     detected_processes
                 },
@@ -422,10 +486,11 @@ mod tests {
                     0
                 },
                 kill_groups: |pgids: &[libc::pid_t]| {
-                    events.borrow_mut().push(if pgids.is_empty() {
-                        "groups:[]"
-                    } else {
-                        "groups:[77]"
+                    events.borrow_mut().push(match pgids {
+                        [] => "groups:[]",
+                        [77] => "groups:[77]",
+                        [88] => "groups:[88]",
+                        _ => "groups:other",
                     });
                     pgids.len()
                 },
@@ -438,9 +503,12 @@ mod tests {
                     events
                         .borrow_mut()
                         .push(if force { "delete:true" } else { "delete:false" });
-                    std::fs::remove_dir_all(path).expect("worktree directory should be deleted");
+                    if delete_succeeds {
+                        std::fs::remove_dir_all(path)
+                            .expect("worktree directory should be deleted");
+                    }
                     Ok(WorktreeCleanupResult {
-                        worktree_deleted: true,
+                        worktree_deleted: delete_succeeds,
                         ..WorktreeCleanupResult::default()
                     })
                 },
@@ -460,9 +528,62 @@ mod tests {
                 result.as_ref().is_ok_and(|result| result.worktree_deleted),
                 guard_error,
                 worktree_path.is_dir(),
+                result
+                    .as_ref()
+                    .map_or(0, |result| result.process_groups_signaled),
                 events.borrow().clone(),
             ),
             expected,
+        );
+    }
+
+    #[rstest]
+    fn cleanup_does_not_signal_codex_groups_when_deletion_fails(
+        cleanup_test_context: CleanupTestContext,
+    ) {
+        let CleanupTestContext {
+            worktree_path,
+            events,
+            ..
+        } = cleanup_test_context;
+
+        let result = cleanup_worktree_by_name_with_operations(
+            &worktree_path,
+            false,
+            || events.borrow_mut().push("after_delete"),
+            WorktreeCleanupOperations {
+                inspect_processes: |_: &Path| {
+                    events.borrow_mut().push("detect");
+                    Some(WorktreeProcessInspection {
+                        non_shell_processes: vec![],
+                        daemon_descendant_pgids: vec![88],
+                    })
+                },
+                find_panes: |_: &Path| {
+                    events.borrow_mut().push("panes");
+                    vec![]
+                },
+                find_groups: |_: &Path| vec![],
+                clean_sessions: |_: &Path, _: bool| {
+                    events.borrow_mut().push("sessions");
+                    0
+                },
+                kill_groups: |_: &[libc::pid_t]| {
+                    events.borrow_mut().push("groups_signaled");
+                    1
+                },
+                kill_pane: |_: &str| true,
+                delete_worktree: |_, _, before_delete: BeforeWorktreeDelete<'_>| {
+                    before_delete()?;
+                    events.borrow_mut().push("delete_failed");
+                    Err(anyhow::anyhow!("fixture deletion failure"))
+                },
+            },
+        );
+
+        assert_eq!(
+            (result.is_err(), events.into_inner()),
+            (true, vec!["panes", "detect", "delete_failed"]),
         );
     }
 
