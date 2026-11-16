@@ -93,37 +93,45 @@ it('launches Codex when Option+Enter is pressed after choosing a directory', asy
   expect(snapshot()).toEqual([{ callbackType: 'function', engine: 'codex' }])
 })
 
-it('does not launch while the first message is being composed with an IME', async () => {
-  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
-  root = createRoot(container)
-  act(() => {
-    root?.render(<PickerHarness start={start} />)
-  })
-  await act(async () => {
-    await userEvent.click(
-      requireButton(
-        '[aria-label="Select directory /Users/example/work/service"]',
-      ),
-    )
-  })
+it.each([
+  ['composition state', true, undefined],
+  ['legacy key code', false, 229],
+] as const)(
+  'does not launch during IME confirmation reported by %s',
+  async (_signal, isComposing, keyCode) => {
+    const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+    root = createRoot(container)
+    act(() => {
+      root?.render(<PickerHarness start={start} />)
+    })
+    await act(async () => {
+      await userEvent.click(
+        requireButton(
+          '[aria-label="Select directory /Users/example/work/service"]',
+        ),
+      )
+    })
 
-  const firstMessage = container.querySelector<HTMLInputElement>(
-    '[aria-label="First message"]',
-  )
-  if (firstMessage === null)
-    throw new Error('First message input was not rendered')
-  act(() => {
-    firstMessage.dispatchEvent(
-      new KeyboardEvent('keydown', {
-        bubbles: true,
-        isComposing: true,
-        key: 'Enter',
-      }),
+    const firstMessage = container.querySelector<HTMLInputElement>(
+      '[aria-label="First message"]',
     )
-  })
+    if (firstMessage === null)
+      throw new Error('First message input was not rendered')
+    const event = new KeyboardEvent('keydown', {
+      bubbles: true,
+      isComposing,
+      key: 'Enter',
+    })
+    if (keyCode !== undefined) {
+      Object.defineProperty(event, 'keyCode', { value: keyCode })
+    }
+    act(() => {
+      firstMessage.dispatchEvent(event)
+    })
 
-  expect(start.mock.calls).toEqual([])
-})
+    expect(start.mock.calls).toEqual([])
+  },
+)
 
 it('starts the selected engine from the desktop picker button', async () => {
   const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
