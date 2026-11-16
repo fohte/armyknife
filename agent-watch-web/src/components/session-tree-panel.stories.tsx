@@ -12,6 +12,8 @@ const meta = {
       {
         id: 'root-session',
         parentId: null,
+        engine: 'claude',
+        workType: 'PM',
         category: 'in_progress',
         isActive: true,
         kind: null,
@@ -26,6 +28,8 @@ const meta = {
       {
         id: 'selected-session',
         parentId: 'root-session',
+        engine: 'codex',
+        workType: 'development',
         category: 'in_progress',
         isActive: true,
         kind: null,
@@ -40,6 +44,8 @@ const meta = {
       {
         id: 'pending-session',
         parentId: 'selected-session',
+        engine: 'claude',
+        workType: 'research',
         category: 'needs_action',
         isActive: true,
         kind: 'Question',

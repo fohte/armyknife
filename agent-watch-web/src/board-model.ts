@@ -12,16 +12,9 @@ export type BoardProject = {
   status: ProjectStatus
 }
 
-type WorkTypeNavProject = {
-  name: string
-  status: ProjectStatus
-  needsActionCount: number
-  sessionId: string
-}
-
 export type WorkTypeNavGroup = {
   label: string
-  projects: WorkTypeNavProject[]
+  sessions: Session[]
 }
 
 export function buildBoardProjects(
@@ -85,31 +78,16 @@ export function buildWorkTypeNavGroups(
     workTypesByLabel.set(label, workTypes)
   }
 
-  const projects = buildBoardProjects(sessions)
   return Array.from(workTypesByLabel, ([label, workTypes]) => ({
     label,
-    projects: projects.flatMap((project) => {
-      const matchingSessions = project.sessions
-        .filter(
-          (session) =>
-            session.workType !== null &&
-            session.workType !== undefined &&
-            workTypes.has(session.workType),
-        )
-        .sort(compareNavSessions)
-      const session = matchingSessions[0]
-
-      return session === undefined
-        ? []
-        : [
-            {
-              name: project.name,
-              status: project.status,
-              needsActionCount: project.needsActionCount,
-              sessionId: session.id,
-            },
-          ]
-    }),
+    sessions: sessions
+      .filter(
+        (session) =>
+          session.workType !== null &&
+          session.workType !== undefined &&
+          workTypes.has(session.workType),
+      )
+      .toSorted(compareNavSessions),
   })).sort((left, right) => left.label.localeCompare(right.label, 'en'))
 }
 

@@ -135,13 +135,15 @@ const openSessionCases = [
   },
   {
     target: 'configured work type row',
-    selector: '[aria-label="Open sample project Guides session in Inbox"]',
+    selector:
+      '[aria-label="Open Prepare a launch checklist Guides session in Inbox"]',
     expectedTitle: 'Prepare a launch checklist',
     activation: 'click',
   },
   {
     target: 'configured work type row',
-    selector: '[aria-label="Open sample project Guides session in Inbox"]',
+    selector:
+      '[aria-label="Open Prepare a launch checklist Guides session in Inbox"]',
     expectedTitle: 'Prepare a launch checklist',
     activation: 'keyboard',
   },
@@ -180,7 +182,7 @@ it('keeps the Board updated from the session feed while it is active', () => {
       (element) => element.getAttribute('aria-label'),
     ),
     updatedCardTitles: Array.from(
-      container.querySelectorAll<HTMLElement>('.board-card-title'),
+      container.querySelectorAll<HTMLElement>('.board-card .session-title'),
       (element) => element.textContent,
     ),
     activeView: readActiveView(),
@@ -433,7 +435,7 @@ it('shows configured work-type sessions in the empty command palette', () => {
   const snapshot = () => ({
     headings: groups.map((group) => group.querySelector('h2')?.textContent),
     sessionTitle: workTypeGroup?.querySelector(
-      '.command-palette-item-heading strong',
+      '.command-palette-item .session-title',
     )?.textContent,
   })
 
@@ -465,7 +467,7 @@ it('opens a configured Later session from Nav while Later is collapsed', () => {
   act(() => {
     container
       .querySelector<HTMLButtonElement>(
-        '[aria-label="Open sample project Guides session in Inbox"]',
+        '[aria-label="Open Defer a report Guides session in Inbox"]',
       )
       ?.click()
   })
@@ -486,6 +488,50 @@ function requestUrl(input: RequestInfo | URL) {
     return input
   }
   return input instanceof URL ? input.href : input.url
+}
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+const exampleLaunchDirectory = {
+  path: '/Users/example/work/service',
+  source: 'repo' as const,
+}
+
+function createSessionLaunchFetcher(
+  launchResponse: Response | Promise<Response>,
+) {
+  return vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (url === '/api/directories') {
+      return Promise.resolve(
+        jsonResponse({ directories: [exampleLaunchDirectory] }),
+      )
+    }
+    if (url === '/api/sessions' && init?.method === 'POST') {
+      return Promise.resolve(launchResponse)
+    }
+    return mockPendingResponse()
+  })
+}
+
+async function waitForDirectoryResults() {
+  await act(async () => {
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 200))
+  })
+}
+
+async function clickButtonAndFlush(selector: string) {
+  const button = container.querySelector<HTMLButtonElement>(selector)
+  if (button === null) throw new Error(`Button not found: ${selector}`)
+  await act(async () => {
+    button.click()
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+  })
 }
 
 function requestPath(input: RequestInfo | URL) {
@@ -2444,7 +2490,7 @@ it('closes the mobile navigation after opening a session from a work type', () =
   act(() => {
     container
       .querySelector<HTMLButtonElement>(
-        '[aria-label="Open sample project Guides session in Inbox"]',
+        '[aria-label="Open Prepare a launch checklist Guides session in Inbox"]',
       )
       ?.click()
   })
@@ -2530,6 +2576,160 @@ it('opens a session in the Inbox when selected from the palette on Board', async
   expect(snapshot()).toEqual({
     view: 'Inbox',
     title: 'Distinctive review session',
+  })
+})
+
+it('opens a mobile new-session form from the Board header', async () => {
+  vi.stubGlobal(
+    'fetch',
+    createSessionLaunchFetcher(jsonResponse({ launchId: 'launch-fixture' })),
+  )
+  renderMobileApp('Board')
+  publishSessions({ revision: 1, sessions: [] })
+
+  clickButton('.board-header [aria-label="New session"]')
+  await waitForDirectoryResults()
+
+  const snapshot = () => ({
+    activeView: readActiveView(),
+    newSessionFormOpen: container.querySelector('.new-session-view') !== null,
+    mobileScreen: container
+      .querySelector('.agent-watch-shell')
+      ?.getAttribute('data-mobile-screen'),
+  })
+  expect(snapshot()).toEqual({
+    activeView: 'Inbox',
+    newSessionFormOpen: true,
+    mobileScreen: 'conversation',
+  })
+})
+
+it('opens an existing conversation after selecting it from the open new-session form', async () => {
+  vi.stubGlobal(
+    'fetch',
+    createSessionLaunchFetcher(jsonResponse({ launchId: 'launch-fixture' })),
+  )
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-existing', 'Existing session')],
+  })
+  clickButton('[aria-label="New session"]')
+  await waitForDirectoryResults()
+  clickButton('[data-session-row]')
+
+  const snapshot = () => ({
+    newSessionFormOpen: container.querySelector('.new-session-view') !== null,
+    conversationOpen: container.querySelector('.conversation-pane') !== null,
+    selectedTitle: readSelectedTitle(),
+  })
+  expect(snapshot()).toEqual({
+    newSessionFormOpen: false,
+    conversationOpen: true,
+    selectedTitle: 'Existing session',
+  })
+})
+
+it('opens the session when its launch ID appears in the feed', async () => {
+  const fetcher = createSessionLaunchFetcher(
+    jsonResponse({ launchId: 'launch-fixture' }),
+  )
+  vi.stubGlobal('fetch', fetcher)
+  renderApp()
+  publishSessions({ revision: 1, sessions: [] })
+  clickButton('[aria-label="New session"]')
+  await waitForDirectoryResults()
+  clickButton('.new-session-directory-button')
+  clickButton('[aria-label="Select directory /Users/example/work/service"]')
+  await clickButtonAndFlush('.new-session-start')
+  publishSessions({
+    revision: 2,
+    sessions: [
+      {
+        ...session('session-launched', 'Created session'),
+        launchId: 'launch-fixture',
+      },
+    ],
+  })
+
+  const snapshot = () => ({
+    newSessionFormOpen: container.querySelector('.new-session-view') !== null,
+    selectedTitle: readSelectedTitle(),
+    selectedId: new URLSearchParams(window.location.search).get('session'),
+  })
+  expect(snapshot()).toEqual({
+    newSessionFormOpen: false,
+    selectedTitle: 'Created session',
+    selectedId: 'session-launched',
+  })
+})
+
+it('shows a launch failure and allows another attempt', async () => {
+  const fetcher = createSessionLaunchFetcher(
+    jsonResponse({ error: 'The session could not be started.' }, 400),
+  )
+  vi.stubGlobal('fetch', fetcher)
+  renderApp()
+  publishSessions({ revision: 1, sessions: [] })
+  clickButton('[aria-label="New session"]')
+  await waitForDirectoryResults()
+  clickButton('.new-session-directory-button')
+  clickButton('[aria-label="Select directory /Users/example/work/service"]')
+  await clickButtonAndFlush('.new-session-start')
+
+  const snapshot = () => ({
+    error: container.querySelector('.new-session-launch-status')?.textContent,
+    startDisabled:
+      container.querySelector<HTMLButtonElement>('.new-session-start')
+        ?.disabled,
+  })
+  expect(snapshot()).toEqual({
+    error: 'The session could not be started.',
+    startDisabled: false,
+  })
+})
+
+it('ignores a launch response after the new session form is closed', async () => {
+  let resolveLaunchResponse: (response: Response) => void = () => undefined
+  const launchResponse = new Promise<Response>((resolve) => {
+    resolveLaunchResponse = resolve
+  })
+  const fetcher = createSessionLaunchFetcher(launchResponse)
+  vi.stubGlobal('fetch', fetcher)
+  renderApp()
+  publishSessions({ revision: 1, sessions: [] })
+  clickButton('[aria-label="New session"]')
+  await waitForDirectoryResults()
+  clickButton('.new-session-directory-button')
+  clickButton('[aria-label="Select directory /Users/example/work/service"]')
+  clickButton('.new-session-start')
+  clickButton('.new-session-close')
+  clickButton('[aria-label="New session"]')
+
+  await act(async () => {
+    resolveLaunchResponse(jsonResponse({ launchId: 'launch-stale' }))
+    await launchResponse
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+  })
+  publishSessions({
+    revision: 2,
+    sessions: [
+      { ...session('session-stale', 'Old session'), launchId: 'launch-stale' },
+    ],
+  })
+
+  const snapshot = () => ({
+    newSessionFormOpen: container.querySelector('.new-session-view') !== null,
+    placeholder: container.querySelector('.new-session-placeholder')
+      ?.textContent,
+    startDisabled:
+      container.querySelector<HTMLButtonElement>('.new-session-start')
+        ?.disabled,
+  })
+  expect(snapshot()).toEqual({
+    newSessionFormOpen: true,
+    placeholder: 'The conversation opens here when the session starts.',
+    startDisabled: true,
   })
 })
 
@@ -4063,10 +4263,10 @@ it('advances elapsed time for all rows with one shared timer', async () => {
   })
 
   expect(snapshot()).toEqual({
-    before: ['8s', 'Working · 30s'],
-    afterFirstTick: ['9s', 'Working · 31s'],
-    afterUpdate: ['9s', 'Working · 31s'],
-    afterSecondTick: ['10s', 'Working · 32s'],
+    before: ['8s', '30s'],
+    afterFirstTick: ['9s', '31s'],
+    afterUpdate: ['9s', '31s'],
+    afterSecondTick: ['10s', '32s'],
     intervalCount: 1,
   })
 })

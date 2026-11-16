@@ -2,54 +2,6 @@
   margin-top: 12px;
 }
 
-.today-nav-item {
-  display: block;
-  width: 100%;
-  min-width: 0;
-  padding: 0;
-}
-
-.today-nav-link {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
-  color: var(--aw-text-primary);
-  text-align: left;
-}
-
-.today-star {
-  color: var(--aw-color-warning);
-  font-size: 10px;
-}
-
-.today-session-title {
-  overflow: hidden;
-  flex: 1;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--aw-text-body);
-}
-
-.today-session-title.is-needs-action {
-  color: var(--aw-text-primary);
-  font-weight: 700;
-}
-
-.today-session-meta {
-  display: block;
-  overflow: hidden;
-  margin-left: 18px;
-  padding: 0 8px 5px 0;
-  color: var(--aw-text-secondary);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .session-row-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -182,40 +134,6 @@
     border-top: 1px solid var(--aw-border);
   }
 
-  .inbox-view .session-title-line {
-    gap: 8px;
-  }
-
-  .inbox-view .session-row {
-    gap: 10px;
-  }
-
-  .inbox-view .session-content {
-    gap: 0;
-  }
-
-  .inbox-view .in-progress-section .session-status-dot {
-    border-radius: 50%;
-  }
-
-  .inbox-view .in-progress-section .session-age {
-    color: var(--aw-text-secondary);
-  }
-
-  .inbox-view .session-preview {
-    color: var(--aw-text-body);
-  }
-
-  .inbox-view .session-meta-line {
-    gap: 8px;
-    color: var(--aw-text-secondary);
-  }
-
-  .inbox-view .session-task-reference {
-    color: var(--aw-text-muted);
-    font-family: var(--font-mono);
-  }
-
   .inbox-view .later-collapsed-row {
     gap: 8px;
     padding-right: 18px;
@@ -251,16 +169,6 @@
     background: transparent;
     color: var(--aw-text-secondary);
     font-size: 11.5px;
-  }
-
-  .inbox-view .done-section .session-status-dot::before {
-    padding-top: 3px;
-    color: var(--aw-text-muted);
-    font-size: 10px;
-  }
-
-  .inbox-view .done-section .session-status-dot {
-    width: 7px;
   }
 }
 

@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.1.758](https://github.com/fohte/armyknife/compare/v0.1.757...v0.1.758) (2026-11-16)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** return thinking blocks ([#1897](https://github.com/fohte/armyknife/issues/1897)) ([d554d07](https://github.com/fohte/armyknife/commit/d554d07959ae3f33bd4b72ef13918a0615084868))
+
+## [0.1.757](https://github.com/fohte/armyknife/compare/v0.1.756...v0.1.757) (2026-11-16)
+
+
+### Features
+
+* **agent:** expose usage and engine quotas ([#1894](https://github.com/fohte/armyknife/issues/1894)) ([69ab4a5](https://github.com/fohte/armyknife/commit/69ab4a5f748f7fa40f1301ad1a5abe7d2bb62b07))
+
+## [0.1.756](https://github.com/fohte/armyknife/compare/v0.1.755...v0.1.756) (2026-11-16)
+
+
+### Features
+
+* **agent-watch-web:** unify session rows ([#1895](https://github.com/fohte/armyknife/issues/1895)) ([c588937](https://github.com/fohte/armyknife/commit/c5889370a4ebee85b15983ecd05ddd42a3a7dfa2))
+
+## [0.1.755](https://github.com/fohte/armyknife/compare/v0.1.754...v0.1.755) (2026-11-16)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show repository roots ([#1896](https://github.com/fohte/armyknife/issues/1896)) ([ecacd61](https://github.com/fohte/armyknife/commit/ecacd61d30977d07f423e8e7796bcd18536199e8))
+
+## [0.1.754](https://github.com/fohte/armyknife/compare/v0.1.753...v0.1.754) (2026-11-16)
+
+
+### Features
+
+* **agent-watch-web:** start sessions anywhere ([#1890](https://github.com/fohte/armyknife/issues/1890)) ([8740a91](https://github.com/fohte/armyknife/commit/8740a91db8c6470c26b74593eb751896980542b6))
+
 ## [0.1.753](https://github.com/fohte/armyknife/compare/v0.1.752...v0.1.753) (2026-11-16)
 
 

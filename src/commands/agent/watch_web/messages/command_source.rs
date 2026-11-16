@@ -8,7 +8,9 @@ pub(super) fn contains_markdown_source(messages: &[ChatItem], expected: &str) ->
 
 fn message_contains_markdown_source(message: &ChatItem, expected: &str) -> bool {
     match message {
-        ChatItem::User { text, .. } | ChatItem::Assistant { text } => text == expected,
+        ChatItem::User { text, .. }
+        | ChatItem::Assistant { text }
+        | ChatItem::Narration { text, .. } => text == expected,
         ChatItem::QueuedUser { content, .. }
         | ChatItem::UserWithContent { content, .. }
         | ChatItem::Peer { content, .. } => content_contains_markdown_source(content, expected),
@@ -52,9 +54,13 @@ fn message_contains_markdown_source(message: &ChatItem, expected: &str) -> bool 
         }
         ChatItem::Event { .. }
         | ChatItem::FileAttachment { .. }
+        | ChatItem::Thinking { .. }
         | ChatItem::ToolSummary { .. }
+        | ChatItem::ToolSummaryWithThinking { .. }
         | ChatItem::ToolInProgress { .. }
+        | ChatItem::ToolInProgressWithThinking { .. }
         | ChatItem::Permission { .. }
+        | ChatItem::PermissionWithThinking { .. }
         | ChatItem::PermissionDenied { .. } => false,
     }
 }
@@ -79,6 +85,14 @@ mod tests {
         let messages = vec![
             ChatItem::Assistant {
                 text: "assistant text".to_string(),
+            },
+            ChatItem::Narration {
+                text: "narration text".to_string(),
+                thinking_duration_ms: Some(42),
+            },
+            ChatItem::Thinking {
+                text: "thinking text".to_string(),
+                thinking_duration_ms: Some(58),
             },
             ChatItem::User {
                 text: "user text".to_string(),
@@ -155,6 +169,8 @@ mod tests {
         ];
         let sources = [
             "assistant text",
+            "narration text",
+            "thinking text",
             "user text",
             "peer text",
             "subagent text",
@@ -180,8 +196,8 @@ mod tests {
                 .map(|source| contains_markdown_source(&messages, source))
                 .collect::<Vec<_>>(),
             [
-                true, true, true, true, true, true, true, true, true, true, true, true, true, true,
-                true, true, false, false,
+                true, true, false, true, true, true, true, true, true, true, true, true, true,
+                true, true, true, true, true, false, false,
             ],
         );
     }

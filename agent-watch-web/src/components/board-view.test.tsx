@@ -43,6 +43,7 @@ function renderBoard(sessions: Session[]) {
         error={null}
         hideQuietProjects={false}
         onHideQuietProjectsChange={() => undefined}
+        onNewSession={() => undefined}
         onSelectSession={() => undefined}
       />,
     )
@@ -138,9 +139,16 @@ it('shows the primary task and the count of other linked tasks on a card', () =>
     },
   ])
 
-  expect(container.querySelector('.board-card-task')?.textContent).toBe(
-    'P1 #42 Improve delivery reliability +1',
-  )
+  const rowSnapshot = () => ({
+    title: container.querySelector('.board-card .session-title')?.textContent,
+    task: container.querySelector('.board-card .session-task')?.textContent,
+    repo: container.querySelector('.board-card .session-repo')?.textContent,
+  })
+  expect(rowSnapshot()).toEqual({
+    title: 'Document the deployment procedure',
+    task: 'P1 #42 Improve delivery reliability +1',
+    repo: 'example/service',
+  })
 })
 
 it('shows the task placeholder on cards without an assigned task', () => {
@@ -153,9 +161,11 @@ it('shows the task placeholder on cards without an assigned task', () => {
     },
   ])
 
-  expect(container.querySelector('.board-card-task')?.textContent).toBe(
-    '— No task',
-  )
+  const rowSnapshot = () => ({
+    task: container.querySelector('.board-card .session-task')?.textContent,
+    repo: container.querySelector('.board-card .session-repo')?.textContent,
+  })
+  expect(rowSnapshot()).toEqual({ task: '— No task', repo: 'example/service' })
 })
 
 it('keeps the overflow hint at the visible edge while projects are scrolled', async () => {

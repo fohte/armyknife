@@ -119,14 +119,3 @@ export function needsActionDescendantCount(
       ?.needsActionDescendantCount ?? 0
   )
 }
-
-export function directSessionChildCounts(
-  sessions: readonly SessionTreeNode[],
-): ReadonlyMap<string, number> {
-  const counts = new Map<string, number>()
-  for (const session of sessions) {
-    if (session.parentId === null) continue
-    counts.set(session.parentId, (counts.get(session.parentId) ?? 0) + 1)
-  }
-  return counts
-}

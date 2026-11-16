@@ -44,10 +44,23 @@ pub(super) fn render(
         );
     }
 
-    let active_tool = active_tool_item(&state.tool_uses, additions.pending_tool);
+    let active_tool =
+        active_tool_item(&state.tool_uses, additions.pending_tool).map(|(item, timestamp)| {
+            let mut thinking_items = tools.take_pending_thinking();
+            if thinking_items.is_empty() {
+                return (item, timestamp);
+            }
+            (
+                active_tool_with_thinking(item, &mut thinking_items),
+                timestamp,
+            )
+        });
     tools.flush_into(&mut items);
     if let Some((item, timestamp)) = active_tool {
-        if matches!(item, ChatItem::Permission { .. }) {
+        if matches!(
+            item,
+            ChatItem::Permission { .. } | ChatItem::PermissionWithThinking { .. }
+        ) {
             if !card_timeline.update_pending(CardKind::Permission, 0, timestamp, item.clone()) {
                 card_timeline.push(TimedCard::new(
                     CardKind::Permission,
@@ -89,6 +102,46 @@ pub(super) fn render(
     )
 }
 
+fn active_tool_with_thinking(
+    item: ChatItem,
+    thinking_items: &mut Vec<super::super::super::ToolGroupItem>,
+) -> ChatItem {
+    match item {
+        ChatItem::ToolInProgress { tool, target } => {
+            thinking_items.push(super::super::super::ToolGroupItem::ToolUse {
+                tool: tool.clone(),
+                target: target.clone(),
+                failed: false,
+            });
+            ChatItem::ToolInProgressWithThinking {
+                tool,
+                target,
+                items: std::mem::take(thinking_items),
+            }
+        }
+        ChatItem::Permission {
+            request_id,
+            tool,
+            description,
+            command,
+        } => {
+            thinking_items.push(super::super::super::ToolGroupItem::ToolUse {
+                tool: tool.clone(),
+                target: None,
+                failed: false,
+            });
+            ChatItem::PermissionWithThinking {
+                request_id,
+                tool,
+                description,
+                command,
+                items: std::mem::take(thinking_items),
+            }
+        }
+        item => item,
+    }
+}
+
 fn render_timed_event(
     event: &TimedClaudeEvent,
     image_directory: Option<&Path>,
@@ -112,6 +165,16 @@ fn render_timed_event(
                     image_directory,
                     None,
                 );
+            }
+            ClaudeEffect::Narration { text, duration_ms } => {
+                tools.flush_into(items);
+                items.push(ChatItem::Narration {
+                    text: text.clone(),
+                    thinking_duration_ms: *duration_ms,
+                });
+            }
+            ClaudeEffect::Thinking { text, duration_ms } => {
+                tools.record_thinking(text.clone(), *duration_ms);
             }
             ClaudeEffect::Inbound {
                 record,

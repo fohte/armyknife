@@ -3,17 +3,20 @@ import '#components/later-today.css'
 
 import { Button } from '@fohte/ui/button'
 import { Chip } from '@fohte/ui/chip'
-import { Filter, PanelLeftClose, PanelLeftOpen, Search, X } from 'lucide-react'
+import {
+  Filter,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
+  Search,
+  X,
+} from 'lucide-react'
 
 import type { WorkTypeNavGroup } from '#board-model'
 import type { CommandPaletteShortcut } from '#command-palette-shortcut'
+import { SessionRow } from '#components/session-row'
 import { cn } from '#lib/utils'
 import type { SavedInboxView } from '#saved-inbox-views'
-import {
-  sessionKindIcon,
-  sessionKindLabel,
-  sessionKindTone,
-} from '#session-kind-label'
 import type { Session } from '#types'
 
 type View = 'inbox' | 'board'
@@ -36,6 +39,7 @@ type AgentWatchNavProps = {
   onSelectToday: (id: string) => void
   onSelectSession: (id: string) => void
   onOpenPalette: () => void
+  onNewSession?: () => void
   isMobile?: boolean
   inboxCollapsed?: boolean
   onToggleInbox?: () => void
@@ -56,6 +60,7 @@ export function AgentWatchNav({
   onSelectToday,
   onSelectSession,
   onOpenPalette,
+  onNewSession = () => undefined,
   isMobile = false,
   inboxCollapsed = false,
   onToggleInbox = () => undefined,
@@ -89,6 +94,19 @@ export function AgentWatchNav({
           <Search aria-hidden="true" size={13} />
           {!isMobile ? <span>{paletteShortcut.label}</span> : null}
         </button>
+        {!isMobile ? (
+          <button
+            aria-label="New session"
+            className="agent-watch-new-session"
+            onClick={() => {
+              onNewSession()
+            }}
+            title="New session"
+            type="button"
+          >
+            <Plus aria-hidden="true" size={16} />
+          </button>
+        ) : null}
         {!isMobile ? (
           <button
             aria-label={inboxCollapsed ? 'Show Inbox' : 'Hide Inbox'}
@@ -192,58 +210,23 @@ export function AgentWatchNav({
       ) : null}
       <section className="today-nav" aria-labelledby="today-nav-title">
         <h2 id="today-nav-title">Starred</h2>
-        {todaySessions.map((session) => {
-          const tone = sessionKindTone(session)
-          const label = sessionKindLabel(session)
-          const KindIcon =
-            session.kind === null ? null : sessionKindIcon(session.kind)
-          return (
-            <div key={session.id} className="today-nav-item">
+        <ul>
+          {todaySessions.map((session) => (
+            <li key={session.id}>
               <Button
                 type="button"
                 variant="plain"
-                className="today-nav-link cursor-pointer"
+                className="session-row cursor-pointer"
+                aria-label={`Open starred session ${session.title}`}
                 onClick={() => {
                   onSelectToday(session.id)
                 }}
               >
-                <span className="today-star" aria-hidden="true">
-                  ★
-                </span>
-                <span
-                  className={cn(
-                    'today-session-title',
-                    session.category === 'needs_action' && 'is-needs-action',
-                  )}
-                >
-                  {session.title}
-                </span>
-                <span
-                  className={cn(
-                    'today-session-status',
-                    tone === 'needs-action' && 'is-needs-action',
-                    tone === 'in-progress' && 'is-working',
-                    tone === 'error' && 'is-error',
-                  )}
-                  aria-label={KindIcon === null ? undefined : label}
-                  role={KindIcon === null ? undefined : 'img'}
-                  title={label}
-                >
-                  {KindIcon === null ? (
-                    label
-                  ) : (
-                    <KindIcon aria-hidden="true" size={13} />
-                  )}
-                </span>
+                <SessionRow session={session} density="compact" />
               </Button>
-              {session.task !== null ? (
-                <span className="today-session-meta">
-                  #{String(session.task.number)} · {session.repo}
-                </span>
-              ) : null}
-            </div>
-          )
-        })}
+            </li>
+          ))}
+        </ul>
       </section>
       {recentSessions.length > 0 ? (
         <section className="recent-nav" aria-labelledby="recent-nav-title">
@@ -254,14 +237,13 @@ export function AgentWatchNav({
                 <Button
                   type="button"
                   variant="plain"
-                  className="recent-nav-link cursor-pointer"
+                  className="session-row cursor-pointer"
                   aria-label={`Open ${session.title} recent session`}
                   onClick={() => {
                     onSelectSession(session.id)
                   }}
                 >
-                  <span className="recent-session-title">{session.title}</span>
-                  <span className="recent-session-repo">{session.repo}</span>
+                  <SessionRow session={session} density="compact" />
                 </Button>
               </li>
             ))}
@@ -276,27 +258,18 @@ export function AgentWatchNav({
         >
           <h2 id={`work-type-nav-title-${String(index)}`}>{group.label}</h2>
           <ul>
-            {group.projects.map((project) => (
-              <li key={project.name}>
+            {group.sessions.map((session) => (
+              <li key={session.id}>
                 <Button
                   type="button"
                   variant="plain"
-                  className={cn(
-                    'work-type-project grid w-full',
-                    'work-type-project-' + project.status.toLowerCase(),
-                    project.needsActionCount > 0 && 'has-needs-action',
-                    'cursor-pointer hover:text-foreground',
-                  )}
-                  aria-label={`Open ${project.name} ${group.label} session in Inbox`}
+                  className="session-row cursor-pointer"
+                  aria-label={`Open ${session.title} ${group.label} session in Inbox`}
                   onClick={() => {
-                    onSelectSession(project.sessionId)
+                    onSelectSession(session.id)
                   }}
                 >
-                  <span className="work-type-project-dot" aria-hidden="true" />
-                  <span className="work-type-project-name">{project.name}</span>
-                  <span className="work-type-project-status">
-                    {project.status}
-                  </span>
+                  <SessionRow session={session} density="compact" />
                 </Button>
               </li>
             ))}

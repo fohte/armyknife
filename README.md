@@ -143,7 +143,7 @@ repos: # per-repository overrides, keyed by "owner/repo"
     standalone_fork: true # independently maintained fork; consumed externally, only stored and exposed by armyknife
 ```
 
-`agent.work_types` associates exact skill names with icon and color metadata. `nav_label` is optional; when set, it adds a navigation list headed by that value to `a agent watch-web`, containing sessions of the matching work type grouped by project. Work types without `nav_label` do not add a navigation list. `agent.work_type_fallback` supplies the icon and color shown by `a agent watch` for sessions without a recorded work type; if omitted, those rows remain blank. Unconfigured recorded names remain blank. When a session starts without `a agent new --kind <skill>`, hooks record configured main-thread skill invocations as the session work type; subagent skill calls do not change it. A session started with `--kind` keeps that kind when hooks detect other skills. Configured icons appear before session titles in `a agent watch`. The mapping does not trigger skill detection. Colors accept the snake_case names `reset`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `gray`, `dark_gray`, `light_red`, `light_green`, `light_yellow`, `light_blue`, `light_magenta`, `light_cyan`, and `white`, RGB triplets (`[r, g, b]`), or numeric indices from `0` through `255`.
+`agent.work_types` associates exact skill names with icon and color metadata. `nav_label` is optional; when set, it adds a navigation list headed by that value to `a agent watch-web`, containing every session of the matching work type. Work types without `nav_label` do not add a navigation list. `agent.work_type_fallback` supplies the icon and color shown by `a agent watch` for sessions without a recorded work type; if omitted, those rows remain blank. Unconfigured recorded names remain blank. When a session starts without `a agent new --kind <skill>`, hooks record configured main-thread skill invocations as the session work type; subagent skill calls do not change it. A session started with `--kind` keeps that kind when hooks detect other skills. Configured icons appear before session titles in `a agent watch`. The mapping does not trigger skill detection. Colors accept the snake_case names `reset`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `gray`, `dark_gray`, `light_red`, `light_green`, `light_yellow`, `light_blue`, `light_magenta`, `light_cyan`, and `white`, RGB triplets (`[r, g, b]`), or numeric indices from `0` through `255`.
 
 `agent.vibe_marker` controls the icon and color for vibe-related sessions in the TASKS tree. Its icon appears after the name, unlike work type icons, and it uses the same icon and color formats as `agent.work_types`. Sessions that enabled vibe themselves use the configured color; sessions with a vibe-enabled ancestor show the icon dimmed. The dimmed marker shows the ancestor's state; a session inherits vibe mode when it was launched with `a agent new` while its caller's effective vibe was enabled, or when an enabled ancestor granted inheritance. If unset, no vibe marker is shown.
 
@@ -630,6 +630,14 @@ Recorded todo 1
 ```console
 $ a agent todo withdraw 1 --comment "The plan changed."
 Withdrew todo 1
+```
+
+### `a agent usage record`
+
+Read a Claude Code status-line JSON object from stdin and save its latest model, effort, context usage, rate limits, and CLI version for watch-web. The command is best-effort and exits successfully when recording fails so callers can keep their status-line output. `GET /api/usage` returns saved Claude Code usage, Codex usage parsed from session transcripts, and the latest quota for each engine.
+
+```console
+$ cat status-line.json | a agent usage record
 ```
 
 ### `a agent file send`
@@ -1198,12 +1206,14 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 
 By default, watch-web accepts loopback Host values. To access it through a proxy or tunnel, set `ARMYKNIFE_WATCH_WEB_ALLOWED_HOSTS` to the comma-separated DNS hostnames it will receive, then forward requests to `127.0.0.1:4317` with matching Host and Origin authorities.
 
+`GET /api/usage` returns per-session usage for Claude Code and Codex plus the latest quota for each engine.
+
 Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` only when recorded for that session, or by `GET /api/sessions/{id}/transcript-files/{tool_use_id}/{index}` only when the session transcript contains the matching file-send record and file index.
 
 - `POST /api/sessions/{id}/review-document/save` with `{"id":"review-id","frontmatter":{"approved":true},"body":"Updated Markdown."}` saves edits to the active review document path recorded by the server.
 - `POST /api/sessions/{id}/review-document/finish` accepts the same payload, saves the edits, then asks the review process to close its editor and run the completion handler.
 - `POST /api/sessions` with `{"directory":"/workspace/example","engine":"claude","worktree":false,"initialMessage":"Inspect this project."}` starts a Claude Code or Codex session in an existing directory and returns `{"launchId":"..."}`. `engine` accepts `claude` or `codex`; `initialMessage` is optional.
-- `GET /api/directories` returns recent session directories. Add `?q=<search>` to filter recent directories and repositories under the configured ghq root; an existing absolute or `~/` directory matching the query is also included.
+- `GET /api/directories` returns recent repository roots for sessions under the configured ghq root, ordered by recent activity with one result per repository. Sessions outside discovered repositories are omitted. Add `?q=<search>` to match paths relative to the ghq root and include matching repositories; an existing absolute or `~/` directory matching the query is also included.
 
 - `GET /api/sessions/{id}/actions`
 - `GET /api/sessions/{id}/tree` returns the ancestor-rooted session tree, excluding ended sessions.

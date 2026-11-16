@@ -207,6 +207,36 @@ it('requests deltas and restores the ordered full session response', async () =>
   })
 })
 
+it('preserves a launch ID from a newly started session in the feed', async () => {
+  const source = new FakeEventSource()
+  const received = deferred<undefined>()
+  const launchedSession = {
+    ...session('session-launched', 'New session', 0),
+    launchId: 'launch-fixture',
+  }
+  const responses: unknown[] = []
+  const stop = startSessionFeed(
+    (response) => {
+      responses.push(response)
+      received.resolve(undefined)
+    },
+    () => undefined,
+    {
+      fetcher: vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ revision: 1, sessions: [launchedSession] }),
+        ),
+      createEventSource: () => source,
+    },
+  )
+
+  await received.promise
+  stop()
+
+  expect(responses).toEqual([{ revision: 1, sessions: [launchedSession] }])
+})
+
 it('preserves fractional elapsed time across unchanged session deltas', async () => {
   const source = new FakeEventSource()
   const responseReceived = Array.from({ length: 5 }, () =>

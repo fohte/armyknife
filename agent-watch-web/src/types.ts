@@ -40,6 +40,7 @@ type ParentSession = {
 
 export type Session = {
   id: string
+  launchId?: string | null
   engine?: 'claude' | 'codex'
   workType?: string | null
   category: SessionCategory
@@ -78,6 +79,8 @@ export type Session = {
 export type SessionTreeNode = {
   id: string
   parentId: string | null
+  engine?: 'claude' | 'codex'
+  workType?: string | null
   category: SessionCategory
   isActive: boolean
   kind: SessionKind | null
@@ -175,12 +178,20 @@ export type ChatItem =
       timestamp?: string
     }
   | { type: 'assistant'; text: string }
+  | { type: 'narration'; text: string; thinkingDurationMs?: number }
+  | { type: 'thinking'; text: string; thinkingDurationMs?: number }
   | {
       type: 'tool_summary'
       summary: string
       operations?: ToolOperation[]
+      items?: ToolGroupItem[]
     }
-  | { type: 'tool_in_progress'; tool: string; target?: string }
+  | {
+      type: 'tool_in_progress'
+      tool: string
+      target?: string
+      items?: ToolGroupItem[]
+    }
   | {
       type: 'question'
       requestId?: string
@@ -212,6 +223,7 @@ export type ChatItem =
       tool: string
       description: string
       command?: string
+      items?: ToolGroupItem[]
     }
   | {
       type: 'permission_denied'
@@ -271,6 +283,15 @@ export type ToolOperation = {
   target?: string
   failed?: boolean
 }
+
+export type ToolGroupItem =
+  | { type: 'thinking'; text: string; thinkingDurationMs?: number }
+  | {
+      type: 'tool_use'
+      tool: string
+      target?: string
+      failed: boolean
+    }
 
 export type BackgroundTask = {
   id: string

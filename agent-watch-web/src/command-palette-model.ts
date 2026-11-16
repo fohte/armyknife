@@ -159,6 +159,12 @@ function baseCommands(): PaletteCommandItem[] {
   return [
     {
       type: 'command',
+      id: 'new-session',
+      label: 'New session',
+      description: 'Start Claude Code or Codex in a directory',
+    },
+    {
+      type: 'command',
       id: 'switch-board',
       label: 'Switch to Board',
       description: 'Show projects and sessions',
@@ -239,9 +245,8 @@ export function buildCommandPaletteGroups(
     const workTypeGroups = buildWorkTypeNavGroups(sessions, workTypeNavLabels)
       .map((group) => ({
         heading: group.label,
-        items: group.projects.flatMap(({ sessionId }) => {
-          const session = sessionsById.get(sessionId)
-          return session === undefined || displayedSessionIds.has(sessionId)
+        items: group.sessions.flatMap((session) => {
+          return displayedSessionIds.has(session.id)
             ? []
             : [sessionItem(session)]
         }),

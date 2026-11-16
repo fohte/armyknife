@@ -366,14 +366,14 @@ fn adds_agent_file_schema_to_version_seventeen_database(database_fixture: Databa
 }
 
 #[rstest]
-fn adds_vibe_setting_revision_to_version_twenty_one_database(database_fixture: DatabaseFixture) {
+fn adds_vibe_setting_revision_to_version_twenty_two_database(database_fixture: DatabaseFixture) {
     let DatabaseFixture {
         temp_dir,
         mut connection,
     } = database_fixture;
-    Migrations::from_slice(&MIGRATION_ENTRIES[..21])
+    Migrations::from_slice(&MIGRATION_ENTRIES[..22])
         .to_latest(&mut connection)
-        .expect("version twenty-one schema should be created");
+        .expect("version twenty-two schema should be created");
     connection
         .execute(
             "INSERT INTO sessions (session_id, data, rev) VALUES ('fixture-session', '{}', 0)",
@@ -383,7 +383,7 @@ fn adds_vibe_setting_revision_to_version_twenty_one_database(database_fixture: D
     drop(connection);
 
     let connection = super::super::open_connection(temp_dir.path())
-        .expect("version twenty-one database should migrate");
+        .expect("version twenty-two database should migrate");
     connection
         .execute(
             "INSERT INTO session_vibe_setting_revision (session_id, revision)

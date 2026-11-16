@@ -8,6 +8,7 @@ import type {
   SessionActions,
   SessionTreeNode,
   SkillSuggestion,
+  ToolGroupItem,
 } from '#types'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -32,6 +33,34 @@ function isUserContentPart(value: unknown): boolean {
         value['source'],
       )) &&
     typeof value['available'] === 'boolean'
+  )
+}
+
+function isToolGroupItem(value: unknown): value is ToolGroupItem {
+  if (!isRecord(value) || typeof value['type'] !== 'string') return false
+  if (value['type'] === 'thinking') {
+    return (
+      typeof value['text'] === 'string' &&
+      (value['thinkingDurationMs'] === undefined ||
+        (typeof value['thinkingDurationMs'] === 'number' &&
+          Number.isInteger(value['thinkingDurationMs']) &&
+          value['thinkingDurationMs'] >= 0))
+    )
+  }
+  return (
+    value['type'] === 'tool_use' &&
+    typeof value['tool'] === 'string' &&
+    (value['target'] === undefined || typeof value['target'] === 'string') &&
+    typeof value['failed'] === 'boolean'
+  )
+}
+
+function hasValidOptionalToolGroupItems(
+  value: Record<string, unknown>,
+): boolean {
+  return (
+    value['items'] === undefined ||
+    (Array.isArray(value['items']) && value['items'].every(isToolGroupItem))
   )
 }
 
@@ -65,6 +94,15 @@ function isChatItem(value: unknown): value is ChatItem {
   switch (value['type']) {
     case 'assistant':
       return typeof value['text'] === 'string'
+    case 'narration':
+    case 'thinking':
+      return (
+        typeof value['text'] === 'string' &&
+        (value['thinkingDurationMs'] === undefined ||
+          (typeof value['thinkingDurationMs'] === 'number' &&
+            Number.isInteger(value['thinkingDurationMs']) &&
+            value['thinkingDurationMs'] >= 0))
+      )
     case 'user':
       return (
         typeof value['text'] === 'string' &&
@@ -156,6 +194,7 @@ function isChatItem(value: unknown): value is ChatItem {
     case 'tool_summary':
       return (
         typeof value['summary'] === 'string' &&
+        hasValidOptionalToolGroupItems(value) &&
         (value['operations'] === undefined ||
           (Array.isArray(value['operations']) &&
             value['operations'].every(
@@ -171,7 +210,9 @@ function isChatItem(value: unknown): value is ChatItem {
     case 'tool_in_progress':
       return (
         typeof value['tool'] === 'string' &&
-        (value['target'] === undefined || typeof value['target'] === 'string')
+        (value['target'] === undefined ||
+          typeof value['target'] === 'string') &&
+        hasValidOptionalToolGroupItems(value)
       )
     case 'question':
       return (
@@ -225,7 +266,8 @@ function isChatItem(value: unknown): value is ChatItem {
         (value['requestId'] === undefined ||
           typeof value['requestId'] === 'string') &&
         typeof value['tool'] === 'string' &&
-        typeof value['description'] === 'string'
+        typeof value['description'] === 'string' &&
+        hasValidOptionalToolGroupItems(value)
       )
     case 'permission_denied':
       return (
@@ -383,6 +425,12 @@ export function isSessionTreeResponse(
         typeof session['id'] === 'string' &&
         (session['parentId'] === null ||
           typeof session['parentId'] === 'string') &&
+        (session['engine'] === undefined ||
+          session['engine'] === 'claude' ||
+          session['engine'] === 'codex') &&
+        (session['workType'] === undefined ||
+          session['workType'] === null ||
+          typeof session['workType'] === 'string') &&
         typeof session['category'] === 'string' &&
         typeof session['isActive'] === 'boolean' &&
         (session['kind'] === null || typeof session['kind'] === 'string') &&

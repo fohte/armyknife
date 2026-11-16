@@ -17,6 +17,7 @@ mod session_enrichment;
 mod session_state;
 mod sessions;
 mod stale_session_cleanup;
+mod usage;
 mod web_ui_proxy;
 mod web_ui_relays;
 
@@ -273,6 +274,7 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
             enrichment_updates.clone(),
             loaders.clone(),
         ))
+        .merge(usage::router())
         .merge(directories::router())
         .merge(events::router(enrichment_updates, restart_signal))
         .merge(messages::routes_with_proposals_and_peer_out_messages(

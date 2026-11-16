@@ -54,6 +54,7 @@ pub(crate) mod tq_session_tasks;
 mod transcript;
 pub(super) mod tui;
 pub(crate) mod types;
+pub(crate) mod usage;
 pub(crate) mod user_turn;
 mod vibe;
 mod watch;
@@ -98,6 +99,7 @@ pub use status::StatusCommands;
 pub use sweep::SweepArgs;
 pub use title::TitleCommands;
 pub use todo::TodoCommands;
+pub use usage::{RecordArgs, UsageCommands};
 pub use vibe::{VibeCommands, is_vibe_enabled};
 pub(crate) use vibe::{ensure_no_review_access, ensure_repo_vibe_access};
 pub use watch::WatchArgs;
@@ -186,6 +188,10 @@ pub enum AgentCommands {
     #[command(subcommand)]
     Todo(TodoCommands),
 
+    /// Record Claude Code status-line usage for watch-web
+    #[command(subcommand)]
+    Usage(usage::UsageCommands),
+
     /// Set the calling session's title
     #[command(subcommand)]
     Title(TitleCommands),
@@ -272,6 +278,7 @@ impl AgentCommands {
             Self::Decision(command) => decision::run(command)?,
             Self::Proposal(command) => proposal::run(command)?,
             Self::Todo(command) => todo::run(command)?,
+            Self::Usage(command) => usage::run(command)?,
             Self::Title(command) => title::run(command)?,
             Self::Profile(command) => profile::run(command)?,
             Self::Vibe(command) => vibe::run(command)?,
