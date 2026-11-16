@@ -28,6 +28,13 @@ const fileAttachment = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 })
 
+const groupedToolSummary = (items: unknown[]) => ({
+  type: 'tool_summary',
+  summary: 'Read ×1',
+  operations: [{ tool: 'Read', target: 'fixture/source.rs', failed: false }],
+  items,
+})
+
 it('accepts a compact boundary event from the conversation API', () => {
   expect(
     isConversationResponse({
@@ -121,6 +128,36 @@ it('accepts narration and grouped thinking from the conversation API', () => {
       activeQuestionIndex: null,
     }),
   ).toBe(true)
+})
+
+it.each([
+  {
+    name: 'a tool use with a non-boolean failure state',
+    message: response(
+      groupedToolSummary([
+        {
+          type: 'tool_use',
+          tool: 'Read',
+          target: 'fixture/source.rs',
+          failed: 'false',
+        },
+      ]),
+    ),
+  },
+  {
+    name: 'thinking with a negative duration',
+    message: response(
+      groupedToolSummary([
+        {
+          type: 'thinking',
+          text: 'Review the fictional request.',
+          thinkingDurationMs: -1,
+        },
+      ]),
+    ),
+  },
+])('rejects grouped items with $name', ({ message }) => {
+  expect(isConversationResponse(message)).toBe(false)
 })
 
 it('accepts an epoch response without an older cursor', () => {

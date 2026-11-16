@@ -503,6 +503,68 @@ mod tests {
     }
 
     #[test]
+    fn keeps_thinking_inside_a_pending_permission_tool_group() {
+        let transcript = [
+            json!({
+                "type": "assistant",
+                "thinkingDurationMs": 63,
+                "message": {
+                    "content": [{
+                        "type": "thinking",
+                        "thinking": "Review the fictional request.",
+                        "signature": signature_with_block_kind("thinking"),
+                    }],
+                },
+            }),
+            json!({
+                "type": "assistant",
+                "message": {
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "fixture-pending-tool-id",
+                        "name": "Bash",
+                        "input": {"command": "echo awaiting approval"},
+                    }],
+                },
+            }),
+        ]
+        .into_iter()
+        .map(|record| record.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+        let pending_tool = PermissionRequestData {
+            tool_name: Some("Bash".to_string()),
+            tool_input: json!({"command": "echo awaiting approval"}),
+            pending: true,
+        };
+
+        assert_eq!(
+            serde_json::to_value(
+                parse(Cursor::new(transcript), None, Some(&pending_tool), None).unwrap()
+            )
+            .unwrap(),
+            json!([{
+                "type": "permission",
+                "tool": "Bash",
+                "description": "",
+                "command": "echo awaiting approval",
+                "items": [
+                    {
+                        "type": "thinking",
+                        "text": "Review the fictional request.",
+                        "thinkingDurationMs": 63,
+                    },
+                    {
+                        "type": "tool_use",
+                        "tool": "Bash",
+                        "failed": false,
+                    },
+                ],
+            }]),
+        );
+    }
+
+    #[test]
     fn returns_narration_as_a_distinct_conversation_item() {
         let transcript = [
             json!({

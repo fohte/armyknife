@@ -570,13 +570,10 @@ fn load_conversation_with_tail_window_from(
         main_permission_data.as_ref(),
     );
 
-    for message in &mut conversation.messages {
-        if let ChatItem::Permission { request_id, .. } = message
-            && request_id.is_none()
-        {
-            *request_id = main_permission_request_id.clone();
-        }
-    }
+    attach_permission_request_id(
+        &mut conversation.messages,
+        main_permission_request_id.as_deref(),
+    );
 
     conversation.messages.extend(pending_permissions.questions);
 
@@ -604,6 +601,26 @@ fn load_conversation_with_tail_window_from(
         .background_tasks
         .extend(loaders.background_tasks(session_id)?);
     Ok(Some(conversation))
+}
+
+fn attach_permission_request_id(messages: &mut [ChatItem], request_id: Option<&str>) {
+    let Some(request_id) = request_id else {
+        return;
+    };
+    for message in messages {
+        if let ChatItem::Permission {
+            request_id: current,
+            ..
+        }
+        | ChatItem::PermissionWithThinking {
+            request_id: current,
+            ..
+        } = message
+            && current.is_none()
+        {
+            *current = Some(request_id.to_owned());
+        }
+    }
 }
 
 pub(in crate::commands::agent::watch_web::messages) struct TranscriptInput<'a> {
@@ -3164,6 +3181,53 @@ mod tests {
                 "description": "Waiting for permission",
                 "command": "cargo test -p sample",
             }),
+        );
+    }
+
+    #[test]
+    fn attaches_request_id_to_permission_cards_with_grouped_thinking() {
+        let mut messages = vec![ChatItem::PermissionWithThinking {
+            request_id: None,
+            tool: "Bash".to_string(),
+            description: String::new(),
+            command: Some("cargo test -p sample".to_string()),
+            items: vec![
+                super::ToolGroupItem::Thinking {
+                    text: "Review the fictional request.".to_string(),
+                    thinking_duration_ms: Some(63),
+                },
+                super::ToolGroupItem::ToolUse {
+                    tool: "Bash".to_string(),
+                    target: Some("cargo test -p sample".to_string()),
+                    failed: false,
+                },
+            ],
+        }];
+
+        super::attach_permission_request_id(&mut messages, Some("permission-request-main"));
+
+        assert_eq!(
+            serde_json::to_value(messages).unwrap(),
+            json!([{
+                "type": "permission",
+                "requestId": "permission-request-main",
+                "tool": "Bash",
+                "description": "",
+                "command": "cargo test -p sample",
+                "items": [
+                    {
+                        "type": "thinking",
+                        "text": "Review the fictional request.",
+                        "thinkingDurationMs": 63,
+                    },
+                    {
+                        "type": "tool_use",
+                        "tool": "Bash",
+                        "target": "cargo test -p sample",
+                        "failed": false,
+                    },
+                ],
+            }]),
         );
     }
 
