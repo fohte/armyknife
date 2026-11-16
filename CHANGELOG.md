@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.759](https://github.com/fohte/armyknife/compare/v0.1.758...v0.1.759) (2026-11-16)
+
+
+### Features
+
+* **agent/watch-web:** add a vibe mode API ([#1899](https://github.com/fohte/armyknife/issues/1899)) ([32b86d3](https://github.com/fohte/armyknife/commit/32b86d347492c1f5765441511348b672a3f8f1fa))
+
 ## [0.1.758](https://github.com/fohte/armyknife/compare/v0.1.757...v0.1.758) (2026-11-16)
 
 
