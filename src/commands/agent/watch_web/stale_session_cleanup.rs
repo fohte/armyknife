@@ -30,6 +30,7 @@ async fn run_periodic(
     cleanup: Arc<Cleanup>,
 ) {
     let mut interval = time::interval(interval_duration);
+    interval.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
     interval.tick().await;
     if !*shutdown.borrow() {
         run_cleanup(Arc::clone(&cleanup)).await;
@@ -37,12 +38,13 @@ async fn run_periodic(
 
     loop {
         tokio::select! {
-            _ = interval.tick() => run_cleanup(Arc::clone(&cleanup)).await,
+            biased;
             result = shutdown.changed() => {
                 if result.is_err() || *shutdown.borrow() {
                     break;
                 }
             }
+            _ = interval.tick() => run_cleanup(Arc::clone(&cleanup)).await,
         }
     }
 }
@@ -64,26 +66,30 @@ mod tests {
     use tokio::time::timeout;
 
     #[tokio::test]
-    async fn runs_cleanup_at_start_and_repeats_until_shutdown() {
+    async fn runs_cleanup_at_start_and_retries_after_an_error_until_shutdown() {
         let (shutdown_sender, shutdown_receiver) = watch::channel(false);
         let (cleanup_sender, mut cleanup_receiver) = tokio::sync::mpsc::unbounded_channel();
         let cleanup_calls = Arc::new(AtomicUsize::new(0));
         let cleanup_call_counter = Arc::clone(&cleanup_calls);
+        let cleanup_shutdown_sender = shutdown_sender.clone();
         let manager = start_with_cleanup(shutdown_receiver, Duration::from_millis(10), move || {
-            cleanup_call_counter.fetch_add(1, Ordering::SeqCst);
+            let call = cleanup_call_counter.fetch_add(1, Ordering::SeqCst) + 1;
             let _ = cleanup_sender.send(());
+            if call == 2 {
+                return Err(anyhow::anyhow!("fixture cleanup failure"));
+            }
+            if call == 3 {
+                cleanup_shutdown_sender.send_replace(true);
+            }
             Ok(false)
         });
 
-        timeout(Duration::from_secs(1), cleanup_receiver.recv())
-            .await
-            .expect("startup cleanup should run")
-            .expect("cleanup task should remain active");
-        timeout(Duration::from_secs(1), cleanup_receiver.recv())
-            .await
-            .expect("periodic cleanup should run")
-            .expect("cleanup task should remain active");
-        shutdown_sender.send_replace(true);
+        for _ in 0..3 {
+            timeout(Duration::from_secs(1), cleanup_receiver.recv())
+                .await
+                .expect("cleanup should run")
+                .expect("cleanup task should remain active");
+        }
         timeout(Duration::from_secs(1), manager)
             .await
             .expect("cleanup task should stop")
@@ -91,7 +97,7 @@ mod tests {
 
         assert_eq!(
             (cleanup_calls.load(Ordering::SeqCst), CLEANUP_INTERVAL,),
-            (2, Duration::from_secs(30)),
+            (3, Duration::from_secs(30)),
         );
     }
 }
