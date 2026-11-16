@@ -263,6 +263,7 @@ mod tests {
         Session {
             archived_at: None,
             pr_context: None,
+            created_pr_urls: Vec::new(),
             session_id: session_id.to_string(),
             work_type: None,
             work_type_pinned: false,

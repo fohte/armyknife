@@ -403,6 +403,7 @@ mod tests {
         Session {
             archived_at: None,
             pr_context: None,
+            created_pr_urls: Vec::new(),
             session_id: session_id.to_string(),
             crit_urls: Vec::new(),
             web_uis: Vec::new(),
