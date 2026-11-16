@@ -20,7 +20,7 @@ use super::session_status;
 use super::store;
 use super::types::{
     ChildLaunchPermission, Engine, HookEvent, HookInput, MAIN_THREAD_AGENT_KEY, Session,
-    SessionPrContext, SessionStatus, TMUX_SESSION_OPTION, TmuxInfo,
+    SessionPrContext, SessionStatus, TmuxInfo,
 };
 use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::tmux;
@@ -310,7 +310,10 @@ fn new_session_record(
     }
 }
 
-fn tmux_info_from_pane(pane_info: Option<&tmux::PaneInfo>) -> Result<Option<TmuxInfo>> {
+fn tmux_info_from_pane(
+    pane_info: Option<&tmux::PaneInfo>,
+    side_effects: &SideEffects,
+) -> Result<Option<TmuxInfo>> {
     pane_info
         .map(|info| {
             Ok(TmuxInfo {
@@ -318,10 +321,20 @@ fn tmux_info_from_pane(pane_info: Option<&tmux::PaneInfo>) -> Result<Option<Tmux
                 window_name: info.window_name.clone(),
                 window_index: info.window_index,
                 pane_id: info.pane_id.clone(),
-                socket_path: tmux::current_socket_path()?,
+                socket_path: side_effects.current_tmux_socket_path()?,
             })
         })
         .transpose()
+}
+
+fn bind_session_to_pane(
+    sessions_dir: &Path,
+    pane_info: &tmux::PaneInfo,
+    session_id: &str,
+    side_effects: &SideEffects,
+) {
+    side_effects.set_pane_session_id(&pane_info.pane_id, session_id);
+    end_sessions_on_pane_takeover(sessions_dir, &pane_info.pane_id, session_id, side_effects);
 }
 
 fn ensure_watch_web_user_marker(
@@ -464,11 +477,7 @@ fn process_hook_event_impl_with_env(
     // Resolved once and shared by the pane option, the pane takeover check and
     // `Session::tmux_info` below: all three want the same pane, and the lookup
     // shells out to tmux.
-    let pane_info = if side_effects.tmux {
-        pane_binding::resolve(&input)
-    } else {
-        None
-    };
+    let pane_info = side_effects.resolve_pane(&input);
 
     // A `claude -c` resume can emit startup for a temporary ID; watch-web's
     // launch ID identifies a new session that can be bound before its first prompt.
@@ -547,19 +556,9 @@ fn process_hook_event_impl_with_env(
             };
             let tmux_info = if is_watch_web_launch {
                 if let Some(pane_info) = pane_info.as_ref() {
-                    let _ = tmux::set_pane_option(
-                        &pane_info.pane_id,
-                        TMUX_SESSION_OPTION,
-                        &input.session_id,
-                    );
-                    end_sessions_on_pane_takeover(
-                        sessions_dir,
-                        &pane_info.pane_id,
-                        &input.session_id,
-                        side_effects,
-                    );
+                    bind_session_to_pane(sessions_dir, pane_info, &input.session_id, side_effects);
                 }
-                tmux_info_from_pane(pane_info.as_ref())?
+                tmux_info_from_pane(pane_info.as_ref(), side_effects)?
             } else {
                 None
             };
@@ -586,15 +585,7 @@ fn process_hook_event_impl_with_env(
         }
 
         if let Some(pane_info) = pane_info.as_ref() {
-            // Ignore errors; pane option is nice-to-have, not critical
-            let _ =
-                tmux::set_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION, &input.session_id);
-            end_sessions_on_pane_takeover(
-                sessions_dir,
-                &pane_info.pane_id,
-                &input.session_id,
-                side_effects,
-            );
+            bind_session_to_pane(sessions_dir, pane_info, &input.session_id, side_effects);
         }
     }
 
@@ -609,16 +600,10 @@ fn process_hook_event_impl_with_env(
         && session_needs_pane_binding(sessions_dir, &input.session_id)?
         && let Some(pane_info) = pane_info.as_ref()
     {
-        let _ = tmux::set_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION, &input.session_id);
-        end_sessions_on_pane_takeover(
-            sessions_dir,
-            &pane_info.pane_id,
-            &input.session_id,
-            side_effects,
-        );
+        bind_session_to_pane(sessions_dir, pane_info, &input.session_id, side_effects);
     }
 
-    let tmux_info = tmux_info_from_pane(pane_info.as_ref())?;
+    let tmux_info = tmux_info_from_pane(pane_info.as_ref(), side_effects)?;
 
     let mut status = determine_status(event, &input);
     let may_contain_work_type = work_type::may_contain_work_type(event, &input);
@@ -1612,9 +1597,10 @@ fn build_subtitle(session: &Session) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::side_effects::PaneBindingOperations;
     use super::*;
     use crate::commands::agent::session_pr_context::fixed_context_capture;
-    use crate::commands::agent::types::{AgentStatus, WebUiRegistration};
+    use crate::commands::agent::types::{AgentStatus, TMUX_SESSION_OPTION, WebUiRegistration};
     use rstest::{fixture, rstest};
 
     fn process_hook_event_without_instruction(
@@ -1649,6 +1635,32 @@ mod tests {
         temp_dir: tempfile::TempDir,
         archived_calls: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
         side_effects: SideEffects,
+    }
+
+    struct RecordingPaneBinding {
+        pane_info: tmux::PaneInfo,
+        option_writes: std::sync::Arc<std::sync::Mutex<Vec<(String, String, String)>>>,
+    }
+
+    impl PaneBindingOperations for RecordingPaneBinding {
+        fn resolve(&self, _input: &HookInput) -> Option<tmux::PaneInfo> {
+            Some(self.pane_info.clone())
+        }
+
+        fn set_session_id(&self, pane_id: &str, session_id: &str) {
+            self.option_writes
+                .lock()
+                .expect("pane option writes lock should not be poisoned")
+                .push((
+                    pane_id.to_string(),
+                    TMUX_SESSION_OPTION.to_string(),
+                    session_id.to_string(),
+                ));
+        }
+
+        fn current_socket_path(&self) -> anyhow::Result<Option<String>> {
+            Ok(Some("test-socket".to_string()))
+        }
     }
 
     #[fixture]
@@ -1936,11 +1948,25 @@ mod tests {
             session_launch_id: Some("launch-fixture".to_string()),
             ..EnvVars::default()
         };
+        let option_writes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let pane_info = tmux::PaneInfo {
+            session_name: "main".to_string(),
+            window_name: "claude".to_string(),
+            window_index: 0,
+            pane_id: "%42".to_string(),
+        };
+        let side_effects = SideEffects {
+            pane_binding: Some(std::sync::Arc::new(RecordingPaneBinding {
+                pane_info,
+                option_writes: option_writes.clone(),
+            })),
+            ..SideEffects::none()
+        };
         let result = process_hook_event_impl_with_env(
             HookEvent::SessionStart,
             create_test_input_with_source(None, Some("startup")),
             temp_dir.path(),
-            &SideEffects::none(),
+            &side_effects,
             None,
             env,
         )
@@ -1954,11 +1980,36 @@ mod tests {
 
         let mut expected = create_test_session(None);
         expected.launch_id = Some("launch-fixture".to_string());
+        expected.tmux_info = Some(TmuxInfo {
+            session_name: "main".to_string(),
+            window_name: "claude".to_string(),
+            window_index: 0,
+            pane_id: "%42".to_string(),
+            socket_path: Some("test-socket".to_string()),
+        });
         let mut expected = serde_json::to_value(expected).expect("session should serialize");
         expected["created_at"] = serde_json::json!("<timestamp>");
         expected["updated_at"] = serde_json::json!("<timestamp>");
 
-        assert_eq!((result, actual), (ProcessResult::SessionSaved, expected));
+        assert_eq!(
+            (
+                result,
+                actual,
+                option_writes
+                    .lock()
+                    .expect("pane option writes lock should not be poisoned")
+                    .clone(),
+            ),
+            (
+                ProcessResult::SessionSaved,
+                expected,
+                vec![(
+                    "%42".to_string(),
+                    TMUX_SESSION_OPTION.to_string(),
+                    "test-123".to_string(),
+                )],
+            ),
+        );
     }
 
     #[rstest]
@@ -3481,6 +3532,7 @@ mod tests {
             tq_archive: false,
             track_bg_run_tasks: false,
             redeliver_bg_notifications: false,
+            pane_binding: None,
             removed_notification_groups: None,
             tmux_sync_calls: Some(calls.clone()),
             tq_archive_calls: None,
@@ -3944,6 +3996,7 @@ mod tests {
             tq_archive: false,
             track_bg_run_tasks: false,
             redeliver_bg_notifications: false,
+            pane_binding: None,
             removed_notification_groups: Some(removed.clone()),
             tmux_sync_calls: None,
             tq_archive_calls: None,
@@ -4625,6 +4678,7 @@ mod tests {
             tq_archive: false,
             track_bg_run_tasks: false,
             redeliver_bg_notifications: false,
+            pane_binding: None,
             removed_notification_groups: Some(removed_notification_groups.clone()),
             tmux_sync_calls: Some(tmux_sync_calls.clone()),
             tq_archive_calls: None,

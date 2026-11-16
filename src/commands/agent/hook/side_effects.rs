@@ -4,12 +4,38 @@ use std::sync::Arc;
 use super::super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
 #[cfg(test)]
 use super::super::types::HookEvent;
-use super::super::types::{Session, SessionPrContext, SessionStatus};
+use super::super::types::{
+    HookInput, Session, SessionPrContext, SessionStatus, TMUX_SESSION_OPTION,
+};
 #[cfg(not(test))]
 use super::super::{archive_tq_session_detached, bg};
 use crate::shared::config::AgentConfig;
+use crate::{infra::tmux, infra::tmux::PaneInfo};
 
 pub(super) type PrContextCapture = Arc<dyn Fn(&Path) -> Option<SessionPrContext> + Send + Sync>;
+
+pub(super) trait PaneBindingOperations: Send + Sync {
+    fn resolve(&self, input: &HookInput) -> Option<PaneInfo>;
+    fn set_session_id(&self, pane_id: &str, session_id: &str);
+    fn current_socket_path(&self) -> anyhow::Result<Option<String>>;
+}
+
+struct LivePaneBindingOperations;
+
+impl PaneBindingOperations for LivePaneBindingOperations {
+    fn resolve(&self, input: &HookInput) -> Option<PaneInfo> {
+        super::pane_binding::resolve(input)
+    }
+
+    fn set_session_id(&self, pane_id: &str, session_id: &str) {
+        // Session metadata remains useful if tmux cannot persist the pane option.
+        let _ = tmux::set_pane_option(pane_id, TMUX_SESSION_OPTION, session_id);
+    }
+
+    fn current_socket_path(&self) -> anyhow::Result<Option<String>> {
+        Ok(tmux::current_socket_path()?)
+    }
+}
 
 /// Controls which side effects `process_hook_event_impl` executes.
 /// Production code uses `SideEffects::all()`; tests use `SideEffects::none()`
@@ -30,6 +56,7 @@ pub(super) struct SideEffects {
     pub(super) track_bg_run_tasks: bool,
     /// Keep SessionStart(resume) from waiting for message delivery readiness.
     pub(super) redeliver_bg_notifications: bool,
+    pub(super) pane_binding: Option<Arc<dyn PaneBindingOperations>>,
     /// Test-only sink that records the group ids passed to
     /// `remove_notification_group`. Lets tests assert the call happened
     /// without invoking hammerspoon.
@@ -74,6 +101,7 @@ impl SideEffects {
             tq_archive: true,
             track_bg_run_tasks: true,
             redeliver_bg_notifications: true,
+            pane_binding: Some(Arc::new(LivePaneBindingOperations)),
             #[cfg(test)]
             removed_notification_groups: None,
             #[cfg(test)]
@@ -99,6 +127,7 @@ impl SideEffects {
             tq_archive: false,
             track_bg_run_tasks: false,
             redeliver_bg_notifications: false,
+            pane_binding: None,
             removed_notification_groups: None,
             tmux_sync_calls: None,
             tq_archive_calls: None,
@@ -106,6 +135,24 @@ impl SideEffects {
             auto_compact_calls: None,
             redelivery_calls: None,
         }
+    }
+
+    pub(super) fn resolve_pane(&self, input: &HookInput) -> Option<PaneInfo> {
+        self.pane_binding
+            .as_ref()
+            .and_then(|binding| binding.resolve(input))
+    }
+
+    pub(super) fn set_pane_session_id(&self, pane_id: &str, session_id: &str) {
+        if let Some(binding) = &self.pane_binding {
+            binding.set_session_id(pane_id, session_id);
+        }
+    }
+
+    pub(super) fn current_tmux_socket_path(&self) -> anyhow::Result<Option<String>> {
+        self.pane_binding
+            .as_ref()
+            .map_or(Ok(None), |binding| binding.current_socket_path())
     }
 
     #[cfg(test)]
