@@ -144,6 +144,9 @@ export function renderConversationMessage({
       </article>
     )
   }
+  if (message.type === 'narration' || message.type === 'thinking') {
+    return null
+  }
   if (message.type === 'tool_summary') {
     return (
       <ToolSummary
