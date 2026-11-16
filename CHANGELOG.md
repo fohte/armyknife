@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.743](https://github.com/fohte/armyknife/compare/v0.1.742...v0.1.743) (2026-11-16)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** compact mobile header ([#1869](https://github.com/fohte/armyknife/issues/1869)) ([ec2c787](https://github.com/fohte/armyknife/commit/ec2c787ccf663e5f4e99e6c29c7cde1178a05c55))
+
 ## [0.1.742](https://github.com/fohte/armyknife/compare/v0.1.741...v0.1.742) (2026-11-16)
 
 
