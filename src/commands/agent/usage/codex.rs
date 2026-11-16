@@ -180,6 +180,9 @@ mod tests {
         fs::write(
             &transcript,
             indoc! {r#"
+                {"type":"session_meta","payload":{"cli_version":"0.98.0"}}
+                {"type":"turn_context","payload":{"model":"fixture-model-amber","effort":"low"}}
+                {"type":"event_msg","timestamp":"2026-11-16T11:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":80,"output_tokens":4,"total_tokens":84},"model_context_window":500,"rate_limits":{"primary":{"used_percent":8,"window_duration_ms":18000000,"resets_at":1794837600},"secondary":{"used_percent":5,"window_duration_ms":604800000,"resets_at":1795431600}}}}}
                 {"type":"session_meta","payload":{"cli_version":"0.99.0"}}
                 {"type":"turn_context","payload":{"model":"fixture-model-cobalt","effort":"high"}}
                 {"type":"event_msg","timestamp":"2026-11-16T12:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":210,"cached_input_tokens":34,"output_tokens":13,"reasoning_output_tokens":8,"total_tokens":243},"total_token_usage":{"input_tokens":800,"output_tokens":55,"total_tokens":900},"model_context_window":1000,"rate_limits":{"primary":{"used_percent":22.5,"window_duration_ms":18000000,"resets_at":1794841200},"secondary":{"used_percent":17,"window_duration_ms":604800000,"resets_at":1795435200}}}}}

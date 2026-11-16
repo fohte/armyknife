@@ -11,14 +11,15 @@ pub(crate) fn record_usage_from(sessions_dir: &Path, usage: &SessionUsage) -> Re
     let mut connection = database::open_usage_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let usage_json = serde_json::to_string(usage).context("serializing session usage")?;
-    let observed_at = usage.observed_at.to_rfc3339();
+    let observed_at = usage.observed_at.timestamp_micros();
     transaction.execute(
         "INSERT INTO agent_session_usage (session_id, engine, data, observed_at)
          VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT(session_id) DO UPDATE SET
              engine = excluded.engine,
              data = excluded.data,
-             observed_at = excluded.observed_at",
+             observed_at = excluded.observed_at
+         WHERE excluded.observed_at > agent_session_usage.observed_at",
         params![
             usage.session_id,
             engine_name(usage.engine),
@@ -27,7 +28,7 @@ pub(crate) fn record_usage_from(sessions_dir: &Path, usage: &SessionUsage) -> Re
         ],
     )?;
 
-    if has_rate_limits(&usage.rate_limits) {
+    if usage.rate_limits.has_any() {
         let quota = EngineQuota {
             engine: usage.engine,
             rate_limits: usage.rate_limits.clone(),
@@ -39,7 +40,8 @@ pub(crate) fn record_usage_from(sessions_dir: &Path, usage: &SessionUsage) -> Re
              VALUES (?1, ?2, ?3)
              ON CONFLICT(engine) DO UPDATE SET
                  data = excluded.data,
-                 observed_at = excluded.observed_at",
+                 observed_at = excluded.observed_at
+             WHERE excluded.observed_at > agent_engine_quota.observed_at",
             params![engine_name(usage.engine), quota_json, observed_at],
         )?;
     }
@@ -66,10 +68,6 @@ pub(crate) fn engine_quotas_from(sessions_dir: &Path) -> Result<Vec<EngineQuota>
         .collect()
 }
 
-fn has_rate_limits(rate_limits: &crate::commands::agent::usage::model::RateLimits) -> bool {
-    rate_limits.five_hour.is_some() || rate_limits.seven_day.is_some()
-}
-
 fn engine_name(engine: Engine) -> &'static str {
     match engine {
         Engine::Claude => "claude",
@@ -85,6 +83,13 @@ mod tests {
         ContextUsage, RateLimitWindow, RateLimits, SessionUsage,
     };
     use chrono::{TimeZone, Utc};
+    use rstest::{fixture, rstest};
+    use tempfile::TempDir;
+
+    #[fixture]
+    fn sessions_dir() -> TempDir {
+        tempfile::tempdir().expect("temporary sessions directory should exist")
+    }
 
     fn usage() -> SessionUsage {
         SessionUsage {
@@ -110,9 +115,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn records_and_reads_session_usage_and_latest_engine_quota() {
-        let sessions_dir = tempfile::tempdir().expect("temporary sessions directory should exist");
+    #[rstest]
+    fn records_and_reads_session_usage_and_latest_engine_quota(sessions_dir: TempDir) {
         record_usage_from(sessions_dir.path(), &usage()).expect("usage should be recorded");
 
         assert_eq!(
@@ -131,13 +135,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn keeps_the_previous_engine_quota_when_an_update_has_no_quota_data() {
-        let sessions_dir = tempfile::tempdir().expect("temporary sessions directory should exist");
+    #[rstest]
+    fn keeps_the_previous_engine_quota_when_an_update_has_no_quota_data(sessions_dir: TempDir) {
         record_usage_from(sessions_dir.path(), &usage()).expect("initial usage should be recorded");
         let mut update = usage();
         update.model = Some("fixture-model-cobalt".to_owned());
         update.rate_limits = RateLimits::default();
+        update.observed_at += chrono::Duration::seconds(1);
         record_usage_from(sessions_dir.path(), &update).expect("latest usage should be recorded");
 
         assert_eq!(
@@ -147,6 +151,36 @@ mod tests {
             ),
             (
                 vec![update],
+                vec![crate::commands::agent::usage::model::EngineQuota {
+                    engine: Engine::Claude,
+                    rate_limits: usage().rate_limits,
+                    observed_at: usage().observed_at,
+                }],
+            ),
+        );
+    }
+
+    #[rstest]
+    fn ignores_an_older_session_usage_and_quota_update(sessions_dir: TempDir) {
+        record_usage_from(sessions_dir.path(), &usage()).expect("initial usage should be recorded");
+        let mut stale_update = usage();
+        stale_update.model = Some("fixture-model-cobalt".to_owned());
+        stale_update.rate_limits.five_hour = Some(RateLimitWindow {
+            used_percentage: 84.0,
+            resets_at: Some(1_800_000_000),
+            window_seconds: 18_000,
+        });
+        stale_update.observed_at -= chrono::Duration::seconds(1);
+        record_usage_from(sessions_dir.path(), &stale_update)
+            .expect("stale usage should not fail the record command");
+
+        assert_eq!(
+            (
+                usage_snapshots_from(sessions_dir.path()).expect("session usage should load"),
+                engine_quotas_from(sessions_dir.path()).expect("engine quota should load"),
+            ),
+            (
+                vec![usage()],
                 vec![crate::commands::agent::usage::model::EngineQuota {
                     engine: Engine::Claude,
                     rate_limits: usage().rate_limits,

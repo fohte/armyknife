@@ -31,6 +31,12 @@ pub(crate) struct RateLimits {
     pub(crate) seven_day: Option<RateLimitWindow>,
 }
 
+impl RateLimits {
+    pub(crate) fn has_any(&self) -> bool {
+        self.five_hour.is_some() || self.seven_day.is_some()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RateLimitWindow {

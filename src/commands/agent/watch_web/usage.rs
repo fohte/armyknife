@@ -10,7 +10,7 @@ use axum::routing::get;
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, Session};
 use crate::commands::agent::usage::codex;
-use crate::commands::agent::usage::model::{EngineQuota, EngineQuotas, RateLimits, UsageResponse};
+use crate::commands::agent::usage::model::{EngineQuota, EngineQuotas, UsageResponse};
 
 trait UsageSource: Clone + Send + Sync + 'static {
     fn load(&self) -> impl Future<Output = anyhow::Result<UsageResponse>> + Send;
@@ -78,7 +78,7 @@ fn usage_response(
         let Some(usage) = usage else {
             continue;
         };
-        if session.engine == Engine::Codex && has_rate_limits(&usage.rate_limits) {
+        if session.engine == Engine::Codex && usage.rate_limits.has_any() {
             let should_replace = quotas
                 .codex
                 .as_ref()
@@ -101,10 +101,6 @@ fn usage_response(
     }
 }
 
-fn has_rate_limits(rate_limits: &RateLimits) -> bool {
-    rate_limits.five_hour.is_some() || rate_limits.seven_day.is_some()
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -112,6 +108,7 @@ mod tests {
 
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
+    use indoc::indoc;
     use serde_json::{Value, json};
     use tower::ServiceExt;
 
@@ -185,11 +182,11 @@ mod tests {
         let transcript_path = directory.path().join("fixture-rollout.jsonl");
         std::fs::write(
             &transcript_path,
-            concat!(
-                "{\"type\":\"turn_context\",\"payload\":{\"model\":\"fixture-model-cobalt\",\"effort\":\"high\"}}\n",
-                "{\"type\":\"session_meta\",\"payload\":{\"cli_version\":\"0.99.0\"}}\n",
-                "{\"type\":\"event_msg\",\"timestamp\":\"2026-11-16T12:00:00Z\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"input_tokens\":500,\"total_tokens\":520},\"model_context_window\":1000,\"rate_limits\":{\"primary\":{\"used_percent\":31,\"window_duration_ms\":18000000,\"resets_at\":1794841200},\"secondary\":{\"used_percent\":16,\"window_duration_ms\":604800000,\"resets_at\":1795435200}}}}}\n",
-            ),
+            indoc! {r#"
+                {"type":"turn_context","payload":{"model":"fixture-model-cobalt","effort":"high"}}
+                {"type":"session_meta","payload":{"cli_version":"0.99.0"}}
+                {"type":"event_msg","timestamp":"2026-11-16T12:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":500,"total_tokens":520},"model_context_window":1000,"rate_limits":{"primary":{"used_percent":31,"window_duration_ms":18000000,"resets_at":1794841200},"secondary":{"used_percent":16,"window_duration_ms":604800000,"resets_at":1795435200}}}}}
+            "#},
         )
         .expect("fixture rollout should be written");
 

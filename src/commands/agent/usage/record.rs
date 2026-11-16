@@ -62,27 +62,32 @@ pub fn run(command: &UsageCommands) -> Result<()> {
     match command {
         UsageCommands::Record(_) => {
             let stdin = std::io::stdin();
-            let result = store::sessions_dir().and_then(|sessions_dir| {
-                record_status_line_from(&sessions_dir, stdin.lock(), Utc::now()).map(|_| ())
-            });
-            if let Err(error) = result {
-                tracing::warn!(%error, "could not record Claude Code usage");
-            }
+            record_status_line_best_effort(store::sessions_dir(), stdin.lock());
             Ok(())
         }
+    }
+}
+
+fn record_status_line_best_effort(sessions_dir: Result<PathBuf>, input: impl Read) {
+    let result = sessions_dir.and_then(|sessions_dir| {
+        record_status_line_from(&sessions_dir, input, Utc::now).map(|_| ())
+    });
+    if let Err(error) = result {
+        tracing::warn!(%error, "could not record Claude Code usage");
     }
 }
 
 fn record_status_line_from(
     sessions_dir: &Path,
     input: impl Read,
-    observed_at: DateTime<Utc>,
+    observed_at: impl FnOnce() -> DateTime<Utc>,
 ) -> Result<Option<SessionUsage>> {
     let mut raw = String::new();
     let mut input = input;
     input
         .read_to_string(&mut raw)
         .context("reading Claude Code status-line JSON from stdin")?;
+    let observed_at = observed_at();
     let Some(usage) = parse_claude_status_line(&raw, observed_at)? else {
         return Ok(None);
     };
@@ -108,28 +113,33 @@ pub(crate) fn parse_claude_status_line(
         .context_window
         .and_then(|window| window.context_window_size)
         .unwrap_or(200_000);
-    let used_tokens = data
-        .transcript_path
-        .as_deref()
-        .map(read_total_tokens)
-        .unwrap_or_default();
-    let auto_compact_limit = window_tokens as f64 * 0.8;
-    let used_percentage = if auto_compact_limit <= 0.0 {
-        0
-    } else {
-        ((used_tokens as f64 / auto_compact_limit) * 100.0).round() as u64
-    };
+    let context = data.transcript_path.as_deref().and_then(|path| {
+        let used_tokens = match read_total_tokens(path) {
+            Ok(used_tokens) => used_tokens,
+            Err(error) => {
+                tracing::warn!(path = %path.display(), %error, "could not read Claude transcript usage");
+                return None;
+            }
+        };
+        let auto_compact_limit = window_tokens as f64 * 0.8;
+        let used_percentage = if auto_compact_limit <= 0.0 {
+            0
+        } else {
+            ((used_tokens as f64 / auto_compact_limit) * 100.0).round() as u64
+        };
+        Some(ContextUsage {
+            used_tokens,
+            window_tokens,
+            used_percentage,
+        })
+    });
 
     Ok(Some(SessionUsage {
         session_id,
         engine: Engine::Claude,
         model: data.model.and_then(|model| model.display_name),
         effort: data.effort.and_then(|effort| effort.level),
-        context: Some(ContextUsage {
-            used_tokens,
-            window_tokens,
-            used_percentage,
-        }),
+        context,
         rate_limits: claude_rate_limits(data.rate_limits.unwrap_or_default()),
         version: data.version,
         observed_at,
@@ -164,7 +174,9 @@ mod tests {
     use indoc::indoc;
     use tempfile::tempdir;
 
-    use super::record_status_line_from;
+    use super::{
+        parse_claude_status_line, record_status_line_best_effort, record_status_line_from,
+    };
     use crate::commands::agent::store::{engine_quotas_from, usage_snapshots_from};
     use crate::commands::agent::types::Engine;
     use crate::commands::agent::usage::model::{
@@ -189,7 +201,7 @@ mod tests {
         );
         let observed_at = Utc.with_ymd_and_hms(2026, 11, 16, 12, 0, 0).unwrap();
 
-        record_status_line_from(sessions_dir.path(), Cursor::new(input), observed_at)
+        record_status_line_from(sessions_dir.path(), Cursor::new(input), || observed_at)
             .expect("status-line usage should be recorded");
 
         assert_eq!(
@@ -240,6 +252,47 @@ mod tests {
                     observed_at,
                 }],
             ),
+        );
+    }
+
+    #[test]
+    fn records_metadata_without_context_when_transcript_is_unreadable() {
+        let directory = tempdir().expect("temporary directory should exist");
+        let missing_transcript = directory.path().join("missing-fixture-transcript.jsonl");
+        let observed_at = Utc.with_ymd_and_hms(2026, 11, 16, 12, 0, 0).unwrap();
+        let raw = format!(
+            r#"{{"session_id":"fixture-session","model":{{"display_name":"fixture-model-amber"}},"transcript_path":"{}"}}"#,
+            missing_transcript.display()
+        );
+
+        assert_eq!(
+            parse_claude_status_line(&raw, observed_at)
+                .expect("status-line metadata should be parsed"),
+            Some(SessionUsage {
+                session_id: "fixture-session".to_owned(),
+                engine: Engine::Claude,
+                model: Some("fixture-model-amber".to_owned()),
+                effort: None,
+                context: None,
+                rate_limits: RateLimits::default(),
+                version: None,
+                observed_at,
+            }),
+        );
+    }
+
+    #[test]
+    fn best_effort_recording_succeeds_when_status_line_json_is_invalid() {
+        let sessions_dir = tempdir().expect("temporary sessions directory should exist");
+
+        record_status_line_best_effort(
+            Ok(sessions_dir.path().to_path_buf()),
+            Cursor::new("not json"),
+        );
+
+        assert_eq!(
+            usage_snapshots_from(sessions_dir.path()).expect("session usage should load"),
+            Vec::<SessionUsage>::new(),
         );
     }
 }

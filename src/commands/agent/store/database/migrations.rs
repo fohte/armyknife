@@ -218,12 +218,12 @@ static MIGRATION_ENTRIES: [M<'static>; 22] = [
             session_id TEXT PRIMARY KEY,
             engine TEXT NOT NULL,
             data TEXT NOT NULL,
-            observed_at TEXT NOT NULL
+            observed_at INTEGER NOT NULL
         );
         CREATE TABLE agent_engine_quota (
             engine TEXT PRIMARY KEY,
             data TEXT NOT NULL,
-            observed_at TEXT NOT NULL
+            observed_at INTEGER NOT NULL
         );",
     ),
 ];
