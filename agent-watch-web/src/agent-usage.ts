@@ -6,7 +6,7 @@ export type RateLimitWindow = {
   windowSeconds: number
 }
 
-export type RateLimits = {
+type RateLimits = {
   fiveHour: RateLimitWindow | null
   sevenDay: RateLimitWindow | null
 }
