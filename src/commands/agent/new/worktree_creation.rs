@@ -409,6 +409,8 @@ mod tests {
         "})
         .unwrap();
         let common = super::super::CommonNewArgs {
+            watch_web_launch_id: None,
+            watch_web_directory: None,
             prompt: None,
             child_launch: None,
             label: None,
@@ -623,6 +625,8 @@ mod tests {
         "})
         .unwrap();
         let common = super::super::CommonNewArgs {
+            watch_web_launch_id: None,
+            watch_web_directory: None,
             prompt: None,
             child_launch: None,
             label: None,

@@ -518,6 +518,7 @@ mod tests {
     fn session(id: &str) -> Session {
         let now = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
             session_id: id.to_string(),

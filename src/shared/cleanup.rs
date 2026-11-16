@@ -401,6 +401,7 @@ mod tests {
 
     fn make_session(session_id: &str, cwd: &Path, engine: Engine) -> Session {
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
             session_id: session_id.to_string(),

@@ -268,6 +268,7 @@ fn new_session_record(
         .unwrap_or_default();
 
     Session {
+        launch_id: env.session_launch_id.clone(),
         archived_at: None,
         pr_context,
         session_id: input.session_id.clone(),
@@ -2705,6 +2706,7 @@ mod tests {
         let sessions_dir = temp_dir.path();
 
         let session = Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
             session_id: "paused-sess".to_string(),
@@ -3198,6 +3200,7 @@ mod tests {
         let sessions_dir = temp_dir.path();
 
         let session = Session {
+            launch_id: None,
             archived_at: Some(Utc::now()),
             pr_context: None,
             session_id: "end-sess".to_string(),
@@ -3918,6 +3921,7 @@ mod tests {
 
     fn create_test_session(tmux_info: Option<TmuxInfo>) -> Session {
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
             session_id: "test-123".to_string(),
@@ -6093,6 +6097,7 @@ mod tests {
         fn make_session(session_id: &str, pane_id: &str) -> Session {
             let now = Utc::now();
             Session {
+                launch_id: None,
                 archived_at: None,
                 pr_context: None,
                 session_id: session_id.to_string(),

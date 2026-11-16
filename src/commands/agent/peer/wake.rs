@@ -448,6 +448,7 @@ mod tests {
 
     fn session(engine: Engine, status: SessionStatus) -> Session {
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
             session_id: SESSION_ID.to_string(),

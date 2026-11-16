@@ -148,6 +148,7 @@ mod tests {
 
     fn test_session(id: &str, status: SessionStatus) -> Session {
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
             session_id: id.to_string(),

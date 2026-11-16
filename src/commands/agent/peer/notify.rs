@@ -603,6 +603,7 @@ mod tests {
 
     fn suggestion_session(session_id: &str, status: SessionStatus, engine: Engine) -> Session {
         Session {
+            launch_id: None,
             pr_context: None,
             session_id: session_id.to_string(),
             work_type: None,
@@ -667,6 +668,7 @@ mod tests {
 
     fn session(session_id: &str, cwd: &str, ancestor_session_ids: Vec<String>) -> Session {
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
             session_id: session_id.to_string(),

@@ -35,6 +35,14 @@ use worktree_creation::run_worktree_creation;
 /// CLI args shared by `a agent new`'s worktree and no-worktree modes.
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct CommonNewArgs {
+    /// Internal correlation ID for a session launched through watch-web.
+    #[arg(skip)]
+    pub(crate) watch_web_launch_id: Option<String>,
+
+    /// Exact working directory for watch-web launches outside a Git repository.
+    #[arg(skip)]
+    pub(crate) watch_web_directory: Option<PathBuf>,
+
     /// Initial prompt to send to the agent (Claude Code or Codex).
     /// When provided without a branch name, the branch name is auto-generated from this prompt.
     #[arg(long)]
@@ -203,9 +211,13 @@ fn run_inner(args: &NewArgs) -> Result<()> {
         Some(path) => Some(open_repo_at(path)?),
         None => None,
     };
-    let repo_root = match &repo {
-        Some(repo) => repo.main_workdir_string()?,
-        None => get_repo_root()?,
+    let repo_root = match (&repo, &args.common.watch_web_directory) {
+        (_, Some(directory)) => directory
+            .to_str()
+            .context("Invalid watch-web working directory")?
+            .to_string(),
+        (Some(repo), None) => repo.main_workdir_string()?,
+        (None, None) => get_repo_root()?,
     };
 
     match &args.worktree {
@@ -319,10 +331,13 @@ fn run_session_only_inner(
     repo_root: &str,
     config: &Config,
 ) -> Result<()> {
-    let current_dir = std::env::current_dir()
-        .context("Failed to get current directory")?
-        .to_string_lossy()
-        .to_string();
+    let current_dir = match &args.common.watch_web_directory {
+        Some(directory) => directory.to_string_lossy().to_string(),
+        None => std::env::current_dir()
+            .context("Failed to get current directory")?
+            .to_string_lossy()
+            .to_string(),
+    };
     let caller_repo_root = caller_repo_root(&current_dir);
 
     run_session_only_inner_with_launchers(
@@ -487,6 +502,7 @@ mod tests {
 
     fn session(session_id: &str, ancestors: &[&str], vibe_enabled: bool) -> Session {
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
             session_id: session_id.to_string(),
@@ -1382,6 +1398,8 @@ mod tests {
             ],
             || {
                 let common = CommonNewArgs {
+                    watch_web_launch_id: None,
+                    watch_web_directory: None,
                     prompt: None,
                     child_launch,
                     label: None,
@@ -1495,6 +1513,8 @@ mod tests {
             .to_str()
             .expect("cache path should be valid UTF-8");
         let common = CommonNewArgs {
+            watch_web_launch_id: None,
+            watch_web_directory: None,
             prompt: None,
             child_launch: None,
             label: None,
@@ -1579,6 +1599,8 @@ mod tests {
     #[test]
     fn unavailable_vibe_state_does_not_block_an_ordinary_launch() {
         let common = CommonNewArgs {
+            watch_web_launch_id: None,
+            watch_web_directory: None,
             prompt: None,
             child_launch: None,
             label: None,

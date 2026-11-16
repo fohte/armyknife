@@ -894,6 +894,7 @@ mod tests {
 
     fn create_test_session(id: &str) -> Session {
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
             session_id: id.to_string(),
@@ -2850,6 +2851,7 @@ mod tests {
             updated_at: DateTime<Utc>,
         ) -> Session {
             Session {
+                launch_id: None,
                 archived_at: None,
                 pr_context: None,
                 session_id: id.to_string(),

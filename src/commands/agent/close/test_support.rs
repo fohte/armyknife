@@ -13,6 +13,7 @@ use super::CloseRuntime;
 #[fixture]
 pub(super) fn session() -> Session {
     Session {
+        launch_id: None,
         archived_at: None,
         pr_context: None,
         session_id: "session-1".to_string(),

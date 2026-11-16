@@ -75,6 +75,7 @@ mod tests {
             parent: None,
             has_session_tree: false,
             ancestor_session_ids: Vec::new(),
+            launch_id: None,
             pull_request: None,
             crit_url: None,
             web_uis: Vec::new(),

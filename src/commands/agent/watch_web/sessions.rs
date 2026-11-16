@@ -137,6 +137,7 @@ struct SessionView {
     parent: Option<ParentSessionView>,
     has_session_tree: bool,
     ancestor_session_ids: Vec<String>,
+    launch_id: Option<String>,
     pull_request: Option<SessionPullRequestView>,
     crit_url: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -570,6 +571,7 @@ async fn list_sessions<S: SessionSource>(
                 parent,
                 has_session_tree: tree_related_session_ids.contains(&session.session_id),
                 ancestor_session_ids: session.ancestor_session_ids.clone(),
+                launch_id: session.launch_id.clone(),
                 pull_request,
                 crit_url,
                 web_uis,
@@ -701,6 +703,7 @@ mod tests {
 
     fn session(status: SessionStatus) -> Session {
         Session {
+            launch_id: None,
             session_id: "session".to_string(),
             archived_at: None,
             pr_context: None,
@@ -1051,6 +1054,37 @@ mod tests {
         (status, response)
     }
 
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_feed_includes_the_launch_id(mut source: TestSessionSource) {
+        source.sessions[0].launch_id = Some("launch-fixture".to_string());
+        source.sessions[0].status = SessionStatus::Running;
+        source.web_states[0].later_until = None;
+        let mut expected = expected_response(
+            "in_progress",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: None,
+                category_when_not_later: "in_progress",
+                is_paused: false,
+                unread: false,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["launchId"] = serde_json::json!("launch-fixture");
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
     fn write_transcript(records: &[serde_json::Value]) -> (tempfile::TempDir, PathBuf) {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("transcript.jsonl");
@@ -1362,6 +1396,7 @@ mod tests {
                 },
                 "hasSessionTree": false,
                 "ancestorSessionIds": ["parent-session"],
+                "launchId": null,
                 "pullRequest": {
                     "number": 42,
                     "owner": "example-org",

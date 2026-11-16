@@ -246,6 +246,7 @@ mod tests {
     fn session(crit_urls: &[&str]) -> Session {
         let timestamp = Utc::now();
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
             session_id: "fixture-session".to_string(),

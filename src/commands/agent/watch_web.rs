@@ -1,6 +1,7 @@
 mod actions;
 mod assets;
 mod attachments;
+mod directories;
 mod events;
 pub(super) mod file_attachments;
 mod image_attachments;
@@ -266,6 +267,7 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
             enrichment_updates.clone(),
             loaders.clone(),
         ))
+        .merge(directories::router())
         .merge(events::router(enrichment_updates, restart_signal))
         .merge(messages::routes_with_proposals_and_peer_out_messages(
             load_session,

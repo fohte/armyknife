@@ -920,6 +920,7 @@ mod tests {
 
     fn test_session() -> Session {
         Session {
+            launch_id: None,
             session_id: "fixture-session".to_string(),
             archived_at: None,
             pr_context: None,

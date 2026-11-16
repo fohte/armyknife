@@ -35,6 +35,12 @@ pub(super) fn build_env_vars(
         EnvVars::session_child_launch_name().to_string(),
         child_launch.as_env_str().to_string(),
     ));
+    if let Some(launch_id) = &common.watch_web_launch_id {
+        env_vars.push((
+            EnvVars::session_launch_id_name().to_string(),
+            launch_id.clone(),
+        ));
+    }
     if vibe {
         env_vars.push((
             EnvVars::session_vibe_launch_name().to_string(),
@@ -58,4 +64,46 @@ pub(super) fn build_env_vars(
         env_vars.push(pair);
     }
     Ok(env_vars)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::agent::types::Engine;
+
+    #[test]
+    fn includes_the_watch_web_launch_id_in_the_child_environment() {
+        let common = CommonNewArgs {
+            watch_web_launch_id: Some("launch-fixture".to_string()),
+            watch_web_directory: None,
+            prompt: None,
+            child_launch: None,
+            label: None,
+            kind: None,
+            type_name: None,
+            model: None,
+            parent_session_id: None,
+            repo: None,
+            engine: Some(Engine::Claude),
+            reasoning_effort: None,
+        };
+
+        let env_vars = temp_env::with_vars([("TQ_SESSION_ID", None::<&str>)], || {
+            build_env_vars(&common, false, None).unwrap()
+        });
+
+        assert_eq!(
+            env_vars,
+            vec![
+                (
+                    EnvVars::session_child_launch_name().to_string(),
+                    "allow".to_string(),
+                ),
+                (
+                    EnvVars::session_launch_id_name().to_string(),
+                    "launch-fixture".to_string(),
+                ),
+            ],
+        );
+    }
 }

@@ -439,6 +439,7 @@ mod tests {
         let now = Utc::now();
         let sessions: Vec<Session> = (0..count)
             .map(|i| Session {
+                launch_id: None,
                 archived_at: None,
                 pr_context: None,
                 session_id: format!("session-{}", i),
@@ -951,6 +952,7 @@ mod tests {
     fn app_with_statuses() -> App {
         let sessions: Vec<Session> = vec![
             Session {
+                launch_id: None,
                 archived_at: None,
                 pr_context: None,
                 session_id: "session-running".to_string(),
@@ -989,6 +991,7 @@ mod tests {
                 effort: None,
             },
             Session {
+                launch_id: None,
                 archived_at: None,
                 pr_context: None,
                 session_id: "session-waiting".to_string(),
@@ -1027,6 +1030,7 @@ mod tests {
                 effort: None,
             },
             Session {
+                launch_id: None,
                 archived_at: None,
                 pr_context: None,
                 session_id: "session-stopped".to_string(),
@@ -1065,6 +1069,7 @@ mod tests {
                 effort: None,
             },
             Session {
+                launch_id: None,
                 archived_at: None,
                 pr_context: None,
                 session_id: "session-paused".to_string(),
@@ -1229,6 +1234,7 @@ mod tests {
 
     fn session_with_cwd(id: &str, cwd: PathBuf) -> Session {
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
             session_id: id.to_string(),

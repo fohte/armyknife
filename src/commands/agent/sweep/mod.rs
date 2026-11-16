@@ -871,6 +871,7 @@ mod tests {
 
     fn make_session(id: &str, status: SessionStatus, updated_at: DateTime<Utc>) -> Session {
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
             session_id: id.to_string(),

@@ -304,6 +304,7 @@ mod tests {
         let offset = TEST_SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
         let now = Utc::now();
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
             session_id: id.to_string(),

@@ -56,6 +56,7 @@ pub(super) fn linked_task(task_id: &str) -> SessionTask {
 pub(super) fn session(session_id: &str, pr_context: Option<SessionPrContext>) -> Session {
     let timestamp = Utc.timestamp_opt(1_234_567, 0).single().unwrap();
     Session {
+        launch_id: None,
         session_id: session_id.to_string(),
         archived_at: None,
         pr_context,
