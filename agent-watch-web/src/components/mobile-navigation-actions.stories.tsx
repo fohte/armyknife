@@ -7,6 +7,7 @@ const meta = {
   args: {
     onOpenNavigation: () => undefined,
     onOpenPalette: () => undefined,
+    onNewSession: () => undefined,
   },
   render: (args) => (
     <div className="story-mobile-layout">

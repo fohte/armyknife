@@ -1,4 +1,4 @@
-import type { ComponentProps } from 'react'
+import type { ComponentProps, ReactNode } from 'react'
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 
 import { ConversationPane } from '#components/conversation-pane'
@@ -87,6 +87,8 @@ type InboxConversationPanesProps = {
   onCloseSession: (id: string, keepWorktree?: boolean) => void
   onOptimisticSessionOperation?: (operation: SessionOperation) => void
   onSelectSession: (id: string) => void
+  newSessionPane?: ReactNode
+  showMobileNewSession?: boolean
 }
 
 export function InboxConversationPanes({
@@ -105,6 +107,8 @@ export function InboxConversationPanes({
   onCloseSession,
   onOptimisticSessionOperation,
   onSelectSession,
+  newSessionPane,
+  showMobileNewSession = false,
 }: InboxConversationPanesProps) {
   const sessionConversationCache = useSessionConversationCache()
   const [sessionTrees, setSessionTrees] = useState<
@@ -309,7 +313,8 @@ export function InboxConversationPanes({
     })
   }, [selectedSession?.id])
   const conversationPane =
-    selectedSession != null && (!isMobile || showMobileConversation) ? (
+    newSessionPane ??
+    (selectedSession != null && (!isMobile || showMobileConversation) ? (
       <ConversationPane
         key={selectedSession.id}
         session={selectedSession}
@@ -345,13 +350,13 @@ export function InboxConversationPanes({
         }}
         onSelectSession={onSelectSession}
       />
-    ) : null
+    ) : null)
 
   if (isMobile) {
     return (
       <>
         {inboxView}
-        {conversationPane}
+        {showMobileNewSession ? newSessionPane : conversationPane}
       </>
     )
   }

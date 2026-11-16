@@ -56,6 +56,7 @@ type InboxViewProps = {
   onDeleteSavedView?: (id: string) => void
   onOpenNavigation?: () => void
   onOpenPalette?: () => void
+  onNewSession?: () => void
 }
 
 export function InboxView({
@@ -97,6 +98,7 @@ export function InboxView({
   onDeleteSavedView,
   onOpenNavigation = () => undefined,
   onOpenPalette = () => undefined,
+  onNewSession = () => undefined,
 }: InboxViewProps) {
   const [localFilterQuery, setLocalFilterQuery] = useState('')
   const [localDialogOpen, setLocalDialogOpen] = useState(false)
@@ -195,6 +197,7 @@ export function InboxView({
           <MobileNavigationActions
             onOpenNavigation={onOpenNavigation}
             onOpenPalette={onOpenPalette}
+            onNewSession={onNewSession}
           />
         ) : null}
         <span className="mobile-inbox-connection">
