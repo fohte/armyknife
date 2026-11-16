@@ -376,42 +376,22 @@ impl ProcessSnapshot {
     }
 
     fn from_ps_output(text: &str) -> Self {
+        Self::from_process_table(text, false)
+    }
+
+    fn from_ps_outputs_with_groups(processes: &str, args: &str) -> Self {
+        let mut snapshot = Self::from_process_table(processes, true);
+        snapshot.command_lines = parse_ps_args_output(args);
+        snapshot
+    }
+
+    fn from_process_table(text: &str, includes_groups: bool) -> Self {
         let mut children: HashMap<u32, Vec<(u32, String)>> = HashMap::new();
         let mut parents: HashMap<u32, u32> = HashMap::new();
         let mut comms: HashMap<u32, String> = HashMap::new();
         let mut command_lines: HashMap<u32, String> = HashMap::new();
-        for line in text.lines() {
-            let mut it = line.split_whitespace();
-            let Some(pid) = it.next().and_then(|s| s.parse::<u32>().ok()) else {
-                continue;
-            };
-            let Some(ppid) = it.next().and_then(|s| s.parse::<u32>().ok()) else {
-                continue;
-            };
-            let comm: String = it.collect::<Vec<_>>().join(" ");
-            if comm.is_empty() {
-                continue;
-            }
-            children.entry(ppid).or_default().push((pid, comm.clone()));
-            parents.insert(pid, ppid);
-            comms.insert(pid, comm.clone());
-            command_lines.insert(pid, comm);
-        }
-        Self {
-            children,
-            parents,
-            comms,
-            command_lines,
-            pgids: HashMap::new(),
-        }
-    }
-
-    fn from_ps_outputs_with_groups(processes: &str, args: &str) -> Self {
-        let mut children: HashMap<u32, Vec<(u32, String)>> = HashMap::new();
-        let mut parents: HashMap<u32, u32> = HashMap::new();
-        let mut comms: HashMap<u32, String> = HashMap::new();
         let mut pgids: HashMap<u32, libc::pid_t> = HashMap::new();
-        for line in processes.lines() {
+        for line in text.lines() {
             let mut columns = line.split_whitespace();
             let Some(pid) = columns.next().and_then(|value| value.parse::<u32>().ok()) else {
                 continue;
@@ -419,11 +399,16 @@ impl ProcessSnapshot {
             let Some(ppid) = columns.next().and_then(|value| value.parse::<u32>().ok()) else {
                 continue;
             };
-            let Some(pgid) = columns
-                .next()
-                .and_then(|value| value.parse::<libc::pid_t>().ok())
-            else {
-                continue;
+            let pgid = if includes_groups {
+                let Some(pgid) = columns
+                    .next()
+                    .and_then(|value| value.parse::<libc::pid_t>().ok())
+                else {
+                    continue;
+                };
+                Some(pgid)
+            } else {
+                None
             };
             let comm = columns.collect::<Vec<_>>().join(" ");
             if comm.is_empty() {
@@ -431,18 +416,19 @@ impl ProcessSnapshot {
             }
             children.entry(ppid).or_default().push((pid, comm.clone()));
             parents.insert(pid, ppid);
-            comms.insert(pid, comm);
-            pgids.insert(pid, pgid);
+            comms.insert(pid, comm.clone());
+            command_lines.insert(pid, comm);
+            if let Some(pgid) = pgid {
+                pgids.insert(pid, pgid);
+            }
         }
-        let mut snapshot = Self {
+        Self {
             children,
             parents,
             comms,
-            command_lines: HashMap::new(),
+            command_lines,
             pgids,
-        };
-        snapshot.command_lines = parse_ps_args_output(args);
-        snapshot
+        }
     }
 
     /// Returns `pid` and every ancestor up to (but not including) the point
