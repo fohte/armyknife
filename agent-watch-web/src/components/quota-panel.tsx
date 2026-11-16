@@ -4,6 +4,8 @@ import {
   type EngineQuota,
   formatResetTime,
   getExpectedUsagePercentage,
+  getUsagePaceStatus,
+  getUsageSeverity,
   type RateLimitWindow,
 } from '#agent-usage'
 
@@ -35,18 +37,17 @@ function QuotaWindow({
   const actualPercentage = window?.usedPercentage ?? null
   const expectedPercentage =
     window === null ? null : getExpectedUsagePercentage(window, nowSeconds)
-  const isAhead =
-    actualPercentage !== null &&
-    expectedPercentage !== null &&
-    actualPercentage > expectedPercentage
+  const paceStatus = getUsagePaceStatus(
+    actualPercentage ?? 0,
+    expectedPercentage,
+  )
+  const severity = getUsageSeverity(usedPercentage)
   const color =
-    usedPercentage === null
-      ? '#d4d4d8'
-      : usedPercentage >= 95
-        ? '#f87171'
-        : usedPercentage >= 80
-          ? '#fbbf24'
-          : '#d4d4d8'
+    severity === 'danger'
+      ? '#f87171'
+      : severity === 'warning'
+        ? '#fbbf24'
+        : '#d4d4d8'
   const reset =
     window === null ? '--' : formatResetTime(window.resetsAt, nowSeconds)
   return (
@@ -86,13 +87,13 @@ function QuotaWindow({
         {usedPercentage === null ? '--' : `${String(usedPercentage)}%`}
       </span>
       <span className="quota-window-reset">
-        {expectedPercentage === null ? null : (
+        {paceStatus === null ? null : (
           <span
-            aria-label={`${isAhead ? 'Ahead of pace' : 'On pace'}: ${String(Math.round(expectedPercentage))}% expected by now`}
-            className={`quota-window-mark${isAhead ? ' is-ahead' : ''}`}
-            title={`${isAhead ? 'Ahead of pace' : 'On pace'}: ${String(Math.round(expectedPercentage))}% expected by now`}
+            aria-label={`${paceStatus === 'ahead' ? 'Ahead of pace' : 'On pace'}: ${String(Math.round(expectedPercentage ?? 0))}% expected by now`}
+            className={`quota-window-mark${paceStatus === 'ahead' ? ' is-ahead' : ''}`}
+            title={`${paceStatus === 'ahead' ? 'Ahead of pace' : 'On pace'}: ${String(Math.round(expectedPercentage ?? 0))}% expected by now`}
           >
-            {isAhead ? '▲' : '✓'}
+            {paceStatus === 'ahead' ? '▲' : '✓'}
           </span>
         )}{' '}
         {reset}
@@ -136,9 +137,11 @@ export function QuotaPanel({
           />
         </div>
       ))}
-      {error && quotas === null ? (
+      {error ? (
         <span className="quota-panel-error" role="status">
-          Usage unavailable
+          {quotas === null
+            ? 'Usage unavailable'
+            : 'Refresh failed; showing stale usage'}
         </span>
       ) : null}
     </section>

@@ -3,6 +3,8 @@ import '#components/session-usage-row.css'
 import {
   formatTokenCount,
   getExpectedUsagePercentage,
+  getUsagePaceStatus,
+  getUsageSeverity,
   type SessionUsage,
 } from '#agent-usage'
 
@@ -19,15 +21,15 @@ function UsageMark({
   usedPercentage: number
   expectedPercentage: number | null
 }) {
-  if (expectedPercentage === null) return null
-  const isAhead = usedPercentage > expectedPercentage
-  const mark = isAhead ? '▲' : '✓'
-  const paceLabel = isAhead ? 'Ahead of pace' : 'On pace'
+  const paceStatus = getUsagePaceStatus(usedPercentage, expectedPercentage)
+  if (paceStatus === null) return null
+  const mark = paceStatus === 'ahead' ? '▲' : '✓'
+  const paceLabel = paceStatus === 'ahead' ? 'Ahead of pace' : 'On pace'
   return (
     <span
-      aria-label={`${paceLabel}: ${String(Math.round(expectedPercentage))}% expected by now`}
-      className={`session-usage-mark${isAhead ? ' is-ahead' : ''}`}
-      title={`${paceLabel}: ${String(Math.round(expectedPercentage))}% expected by now`}
+      aria-label={`${paceLabel}: ${String(Math.round(expectedPercentage ?? 0))}% expected by now`}
+      className={`session-usage-mark${paceStatus === 'ahead' ? ' is-ahead' : ''}`}
+      title={`${paceLabel}: ${String(Math.round(expectedPercentage ?? 0))}% expected by now`}
     >
       {mark}
     </span>
@@ -45,19 +47,12 @@ function UsageRate({
 }) {
   if (window === null) return null
   const usedPercentage = Math.round(window.usedPercentage)
+  const severity = getUsageSeverity(window.usedPercentage)
   const expectedPercentage = getExpectedUsagePercentage(window, nowSeconds)
   return (
     <span className="session-usage-rate">
       {label}{' '}
-      <span
-        className={
-          usedPercentage >= 95
-            ? 'is-danger'
-            : usedPercentage >= 80
-              ? 'is-warning'
-              : undefined
-        }
-      >
+      <span className={severity === 'normal' ? undefined : `is-${severity}`}>
         {String(usedPercentage)}%
       </span>{' '}
       <UsageMark

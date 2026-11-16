@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 
 import { type AgentUsage, requestAgentUsage } from '#agent-usage'
 
-const USAGE_REFRESH_INTERVAL = 30_000
+const USAGE_REFRESH_INTERVAL = 60_000
 
 export function useAgentUsage() {
   const [usage, setUsage] = useState<AgentUsage | null>(null)

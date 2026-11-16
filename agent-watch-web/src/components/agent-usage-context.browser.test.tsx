@@ -1,4 +1,4 @@
-import { ok } from 'neverthrow'
+import { err, ok } from 'neverthrow'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -8,21 +8,33 @@ import {
   AgentUsageProvider,
   useAgentUsageContext,
 } from '#components/agent-usage-context'
+import { QuotaPanel } from '#components/quota-panel'
 
 const { requestAgentUsageMock } = vi.hoisted(() => ({
   requestAgentUsageMock: vi.fn(),
 }))
 
-vi.mock('#agent-usage', () => ({
-  requestAgentUsage: requestAgentUsageMock,
+vi.mock('#api-requests', () => ({
+  requestJson: requestAgentUsageMock,
 }))
 
 let container: HTMLDivElement
 let root: Root | null
 
 function UsageSnapshot() {
-  const { usage } = useAgentUsageContext()
-  return <span>{usage?.sessions[0]?.model ?? 'loading'}</span>
+  const { error, usage } = useAgentUsageContext()
+  return (
+    <>
+      <span data-error={String(error)} data-session-model="">
+        {usage?.sessions[0]?.model ?? 'loading'}
+      </span>
+      <QuotaPanel
+        error={error}
+        nowSeconds={1_794_832_000}
+        quotas={usage?.quotas ?? null}
+      />
+    </>
+  )
 }
 
 function usageResponse(model: string): AgentUsage {
@@ -39,7 +51,21 @@ function usageResponse(model: string): AgentUsage {
         observedAt: '2026-11-16T12:00:00Z',
       },
     ],
-    quotas: { claude: null, codex: null },
+    quotas: {
+      claude: {
+        engine: 'claude',
+        rateLimits: {
+          fiveHour: {
+            usedPercentage: 22,
+            resetsAt: 1_794_841_200,
+            windowSeconds: 18_000,
+          },
+          sevenDay: null,
+        },
+        observedAt: '2026-11-16T12:00:00Z',
+      },
+      codex: null,
+    },
   }
 }
 
@@ -61,9 +87,10 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-it('refreshes usage every thirty seconds', async () => {
+it('shows stale usage after a failed refresh and clears the status on recovery', async () => {
   requestAgentUsageMock
     .mockReturnValueOnce(ok(usageResponse('fixture-model-one')))
+    .mockReturnValueOnce(err(new Error('fixture refresh failure')))
     .mockReturnValueOnce(ok(usageResponse('fixture-model-two')))
 
   await act(async () => {
@@ -74,15 +101,46 @@ it('refreshes usage every thirty seconds', async () => {
     )
     await Promise.resolve()
   })
-  expect(container.textContent).toEqual('fixture-model-one')
-
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(30_000)
-  })
-
   const snapshot = () => ({
-    model: container.textContent,
+    model: container.querySelector('[data-session-model]')?.textContent ?? null,
+    error:
+      container
+        .querySelector('[data-session-model]')
+        ?.getAttribute('data-error') ?? null,
+    quotaStatus:
+      container.querySelector('.quota-panel-error')?.textContent ?? null,
     requests: requestAgentUsageMock.mock.calls.length,
   })
-  expect(snapshot()).toEqual({ model: 'fixture-model-two', requests: 2 })
+  const states = [snapshot()]
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(60_000)
+  })
+  states.push(snapshot())
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(60_000)
+  })
+  states.push(snapshot())
+
+  expect(states).toEqual([
+    {
+      model: 'fixture-model-one',
+      error: 'false',
+      quotaStatus: null,
+      requests: 1,
+    },
+    {
+      model: 'fixture-model-one',
+      error: 'true',
+      quotaStatus: 'Refresh failed; showing stale usage',
+      requests: 2,
+    },
+    {
+      model: 'fixture-model-two',
+      error: 'false',
+      quotaStatus: null,
+      requests: 3,
+    },
+  ])
 })

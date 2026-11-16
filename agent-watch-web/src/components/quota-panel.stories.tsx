@@ -91,6 +91,11 @@ export const UsageRequestFailed: Story = {
   args: { quotas: null, error: true },
 }
 
+export const RefreshFailedWithStaleQuota: Story = {
+  name: 'The panel labels retained quota after a refresh failure',
+  args: { error: true },
+}
+
 export const MobileQuotaPanel: Story = {
   name: 'The panel uses compact insets in the mobile drawer',
   args: { isMobile: true },

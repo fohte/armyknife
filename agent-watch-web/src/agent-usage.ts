@@ -117,6 +117,20 @@ export function getExpectedUsagePercentage(
   return Math.max(0, Math.min(100, elapsedRatio * 100))
 }
 
+export function getUsagePaceStatus(
+  usedPercentage: number,
+  expectedPercentage: number | null,
+) {
+  if (expectedPercentage === null) return null
+  return usedPercentage > expectedPercentage ? 'ahead' : 'on-pace'
+}
+
+export function getUsageSeverity(usedPercentage: number | null) {
+  if (usedPercentage === null || usedPercentage < 80) return 'normal'
+  if (usedPercentage < 95) return 'warning'
+  return 'danger'
+}
+
 export function formatTokenCount(tokens: number) {
   if (tokens < 1_000) return String(tokens)
   const value = tokens / 1_000
