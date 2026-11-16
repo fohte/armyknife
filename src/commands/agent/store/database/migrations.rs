@@ -24,7 +24,7 @@ CREATE TRIGGER agent_file_delete_session
         DELETE FROM agent_file WHERE session_id = OLD.session_id;
     END;";
 
-static MIGRATION_ENTRIES: [M<'static>; 21] = [
+static MIGRATION_ENTRIES: [M<'static>; 22] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -211,6 +211,19 @@ static MIGRATION_ENTRIES: [M<'static>; 21] = [
         "CREATE TABLE pending_initial_prompt (
             session_id TEXT PRIMARY KEY,
             created_at INTEGER NOT NULL
+        );",
+    ),
+    M::up(
+        "CREATE TABLE agent_session_usage (
+            session_id TEXT PRIMARY KEY,
+            engine TEXT NOT NULL,
+            data TEXT NOT NULL,
+            observed_at TEXT NOT NULL
+        );
+        CREATE TABLE agent_engine_quota (
+            engine TEXT PRIMARY KEY,
+            data TEXT NOT NULL,
+            observed_at TEXT NOT NULL
         );",
     ),
 ];

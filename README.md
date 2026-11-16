@@ -632,6 +632,14 @@ $ a agent todo withdraw 1 --comment "The plan changed."
 Withdrew todo 1
 ```
 
+### `a agent usage record`
+
+Read a Claude Code status-line JSON object from stdin and save its latest model, effort, context usage, rate limits, and CLI version for watch-web. The command is best-effort and exits successfully when recording fails so callers can keep their status-line output. `GET /api/usage` returns saved Claude Code usage, Codex usage parsed from session transcripts, and the latest quota for each engine.
+
+```console
+$ cat status-line.json | a agent usage record
+```
+
 ### `a agent file send`
 
 Run `a agent file send <path>... [--caption <text>]` from a tracked Claude Code or Codex session to show files in that session's watch-web conversation. The command copies each file at send time, so the conversation keeps the sent contents if the source later changes or disappears. PNG, JPEG, GIF, and WebP images appear inline. Markdown files render in the conversation; other recognized UTF-8 text files appear in a code block, with long previews collapsed. MP4/MOV videos and M4A/MP3 audio files have inline players, and PDFs open in the browser's PDF viewer. HTML files remain download-only so scripts cannot run on the watch-web origin; unsupported files also have download links. A send accepts up to 16 files, each at most 10 MiB, with a combined limit of 50 MiB.
@@ -1195,6 +1203,8 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 `a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` and opens it in the default browser. Pass `--no-open` to keep it from opening a browser, such as when running it as a background service. If the running executable is replaced, the server restarts with the new binary and open pages reload the embedded SPA. It serves the SPA embedded in the binary, with an Inbox grouped into Needs action, Later, In progress, and Done, plus a Board grouped by project. Sessions can be starred for TODAY from the Inbox and Nav. Later sessions return to Needs action when their timer expires or when they change. The Board puts projects that need action first and can hide quiet projects. Both views reload session metadata when the server sends an update. When a session has an active parent or child, the conversation pane adds a Tree tab that shows their hierarchy and lets users open available sessions. A session with an active review document adds a Review tab that displays its frontmatter and Markdown body. The backend provides `GET /api/sessions` for session metadata, including the selected session's own branch PR in `pullRequest` when available and its branch PR plus PRs recorded at submit time in `pullRequests`, `GET /api/events` for session-store and enrichment updates, and `GET /api/sessions/{id}/messages` for conversation items. `GET /api/sessions/{id}/review-document` returns the frontmatter and Markdown body for the active review document, or `404` when no live review lock is active. `GET /api/sessions/{id}/background-tasks/{task_id}/output` returns plain-text output for a running background Bash task, capped to the last 20 lines and 64 KiB. It reads only the output file recorded in that session's transcript. Saved conversation images are served by `GET /api/images/{name}`; the route only serves files in watch-web's image storage directory, and expired images return `404`. Session actions are available through the routes below. If the SPA has not been built, the page shows the build instructions; build it with:
 
 By default, watch-web accepts loopback Host values. To access it through a proxy or tunnel, set `ARMYKNIFE_WATCH_WEB_ALLOWED_HOSTS` to the comma-separated DNS hostnames it will receive, then forward requests to `127.0.0.1:4317` with matching Host and Origin authorities.
+
+`GET /api/usage` returns per-session usage for Claude Code and Codex plus the latest quota for each engine.
 
 Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` only when recorded for that session, or by `GET /api/sessions/{id}/transcript-files/{tool_use_id}/{index}` only when the session transcript contains the matching file-send record and file index.
 
