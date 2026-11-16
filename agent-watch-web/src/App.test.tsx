@@ -577,6 +577,30 @@ function clickButton(selector: string) {
   })
 }
 
+async function clickMobileSessionAction(label: string) {
+  const trigger = container.querySelector<HTMLButtonElement>(
+    'button[aria-label="More actions"]',
+  )
+  if (trigger === null) {
+    throw new Error('Mobile actions trigger not found')
+  }
+  act(() => {
+    trigger.click()
+  })
+  const item = Array.from(
+    document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+  ).find((candidate) => candidate.textContent === label)
+  if (item === undefined) {
+    throw new Error(
+      `Menu item not found: ${label}; screen after opening=${String(container.querySelector('.agent-watch-shell')?.getAttribute('data-mobile-screen'))}`,
+    )
+  }
+  await act(async () => {
+    item.click()
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+  })
+}
+
 function renderMobileApp(view: 'Inbox' | 'Board' = 'Inbox') {
   renderApp()
   act(() => {
@@ -1805,22 +1829,30 @@ it('opens Later for the session shown in a mobile conversation', async () => {
   act(() => {
     container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
   })
-  act(() => {
-    container
-      .querySelector<HTMLButtonElement>('.mobile-conversation-later')
-      ?.click()
+  const conversationState = () => ({
+    screen: container
+      .querySelector('.agent-watch-shell')
+      ?.getAttribute('data-mobile-screen'),
+    url: window.location.search,
   })
+  const initialConversationState = conversationState()
+  await clickMobileSessionAction('Later')
   await act(async () => {
     await flushAsyncState()
   })
 
   const snapshot = () => ({
+    initialConversationState,
     menuTitle: container.querySelector('.later-menu-title')?.textContent,
     menuLabel: container
       .querySelector('.later-menu')
       ?.getAttribute('aria-label'),
   })
   expect(snapshot()).toEqual({
+    initialConversationState: {
+      screen: 'conversation',
+      url: '?session=session-mobile&screen=conversation',
+    },
     menuTitle: 'Later: Reply to the question',
     menuLabel: 'Later: Reply to the question',
   })
@@ -1842,11 +1874,7 @@ it('closes the mobile Later menu with Escape', async () => {
   act(() => {
     container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
   })
-  act(() => {
-    container
-      .querySelector<HTMLButtonElement>('.mobile-conversation-later')
-      ?.click()
-  })
+  await clickMobileSessionAction('Later')
   await act(async () => {
     await flushAsyncState()
   })
@@ -1881,11 +1909,7 @@ it('returns to the Inbox after submitting Later for a mobile conversation', asyn
   act(() => {
     container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
   })
-  act(() => {
-    container
-      .querySelector<HTMLButtonElement>('.mobile-conversation-later')
-      ?.click()
-  })
+  await clickMobileSessionAction('Later')
   await act(async () => {
     await flushAsyncState()
   })
