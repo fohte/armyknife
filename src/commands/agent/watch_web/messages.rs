@@ -4556,6 +4556,66 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn codex_background_task_output_route_uses_registered_output_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let output_path = directory.path().join("registered-output.log");
+        std::fs::write(&output_path, "registered fixture output\n").unwrap();
+
+        let mut session = stored_session();
+        session.engine = Engine::Codex;
+        session.transcript_path = None;
+        let loaders = RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
+        .with_background_task_loader({
+            let output_path = output_path.clone();
+            move |session_id| {
+                Ok((session_id == "fixture-session")
+                    .then(|| super::BackgroundTask {
+                        id: "fixture-background-task-id".to_owned(),
+                        description: "Background command".to_owned(),
+                        elapsed_seconds: 1,
+                        kind: super::BackgroundTaskKind::BackgroundTask,
+                        output_path: Some(output_path.clone()),
+                        agent_type: None,
+                    })
+                    .into_iter()
+                    .collect())
+            }
+        });
+        let router = routes_with_proposals_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            loaders,
+        );
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri(
+                        "/sessions/fixture-session/background-tasks/fixture-background-task-id/output",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec();
+
+        assert_eq!(
+            (status, body),
+            (StatusCode::OK, b"registered fixture output\n".to_vec(),),
+        );
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn background_task_output_route_rejects_symlink_targets() {

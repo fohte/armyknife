@@ -17,6 +17,10 @@ pub use reminder_hook::ReminderHookArgs;
 pub use run::RunArgs;
 pub use worker::RunDetachedArgs;
 
+pub(crate) fn stdout_path(task_id: &str) -> std::path::PathBuf {
+    output::output_dir_path(task_id).join(format!("{task_id}.stdout"))
+}
+
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum BgCommands {
     /// Run a command in the background and notify this session when it finishes

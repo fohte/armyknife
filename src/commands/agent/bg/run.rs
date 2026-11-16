@@ -33,7 +33,7 @@ pub fn run(args: &RunArgs) -> Result<()> {
         std::env::current_exe().context("failed to resolve the armyknife executable")?;
     let task_id = Uuid::new_v4().to_string();
     let output_dir = output::output_dir(&task_id)?;
-    let stdout_path = output_dir.join(format!("{task_id}.stdout"));
+    let stdout_path = super::stdout_path(&task_id);
     let stderr_path = output_dir.join(format!("{task_id}.stderr"));
     let mut guard = BackgroundRunGuard::new(&session_id, &task_id, output_dir);
     output::create_output_file(&stdout_path)

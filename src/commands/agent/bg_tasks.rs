@@ -222,13 +222,9 @@ fn pending_tasks_in(tasks_root: &Path, session_id: &str) -> Result<(Vec<PendingT
                             .and_then(|record| record.description.clone())
                             .unwrap_or_else(|| "Background command".to_owned()),
                         elapsed_seconds,
-                        stdout_path: record.and_then(|record| record.stdout_path).unwrap_or_else(
-                            || {
-                                std::env::temp_dir()
-                                    .join(format!("armyknife-agent-bg-{task_id}"))
-                                    .join(format!("{task_id}.stdout"))
-                            },
-                        ),
+                        stdout_path: record
+                            .and_then(|record| record.stdout_path)
+                            .unwrap_or_else(|| super::bg::stdout_path(task_id)),
                     });
                 }
                 MarkerState::ClearedStale => stale_cleared = true,
@@ -365,9 +361,11 @@ fn with_registry_lock<T>(tasks_root: &Path, operation: impl FnOnce() -> Result<T
 mod tests {
     use std::path::PathBuf;
 
+    use serde_json::json;
     use tempfile::TempDir;
 
     use super::{PendingTask, pending_tasks_in, register_in};
+    use crate::shared::hex;
 
     #[test]
     fn pending_task_listing_returns_registered_task_details() {
@@ -398,6 +396,45 @@ mod tests {
                     description: "Run synthetic task".to_owned(),
                     elapsed_seconds: 0,
                     stdout_path,
+                }],
+                false,
+            ),
+        );
+    }
+
+    #[test]
+    fn pending_task_listing_reads_legacy_task_markers() {
+        let tasks_root = TempDir::new().expect("task registry directory should be created");
+        let session_id = "fixture-session";
+        let task_id = uuid::Uuid::new_v4().to_string();
+        let session_directory = tasks_root.path().join(hex::encode(session_id.as_bytes()));
+        std::fs::create_dir_all(&session_directory)
+            .expect("task registry session directory should be created");
+        std::fs::write(
+            session_directory.join(format!("{task_id}.pending")),
+            serde_json::to_vec(&json!({
+                "parent_pid": std::process::id(),
+                "worker_pid": null,
+                "command_pid": null,
+            }))
+            .expect("legacy task marker should serialize"),
+        )
+        .expect("legacy task marker should be written");
+
+        let (mut tasks, stale_cleared) =
+            pending_tasks_in(tasks_root.path(), session_id).expect("pending tasks should be read");
+        for task in &mut tasks {
+            task.elapsed_seconds = 0;
+        }
+
+        assert_eq!(
+            (tasks, stale_cleared),
+            (
+                vec![PendingTask {
+                    id: task_id.clone(),
+                    description: "Background command".to_owned(),
+                    elapsed_seconds: 0,
+                    stdout_path: super::super::bg::stdout_path(&task_id),
                 }],
                 false,
             ),
