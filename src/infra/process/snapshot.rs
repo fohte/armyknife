@@ -5,9 +5,7 @@ use std::process::Command;
 use crate::infra::external_tool::ExternalTool;
 use crate::shared::command;
 
-#[path = "caller.rs"]
 mod caller;
-#[path = "worktree.rs"]
 mod worktree;
 
 pub use caller::find_caller_pids_in_path;
