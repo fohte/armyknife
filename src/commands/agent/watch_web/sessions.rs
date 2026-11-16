@@ -666,6 +666,9 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         unanswered_todo_titles.entry(session_id).or_insert(title);
     }
 
+    let mut config = config::load_config_or_default();
+    let agent_config = std::mem::take(&mut config.agent);
+
     Ok(SessionSnapshot {
         revision,
         sessions,
@@ -676,8 +679,8 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         decision_counts,
         unanswered_proposal_titles,
         unanswered_todo_titles,
-        agent_config: config::load_config_or_default().agent,
-        vibe_config: Arc::new(config::load_config_or_default()),
+        agent_config,
+        vibe_config: Arc::new(config),
     })
 }
 
@@ -1096,19 +1099,34 @@ mod tests {
     }
 
     #[rstest]
+    #[case::explicit(true, false, true, "enabled", None)]
+    #[case::inherited(false, true, true, "inherited", Some("parent-session"))]
+    #[case::disabled(false, false, true, "disabled", None)]
+    #[case::repository_disabled(true, false, false, "repo_disabled", None)]
     #[tokio::test]
-    async fn sessions_feed_reports_explicit_vibe_state(mut source: TestSessionSource) {
-        source.vibe_config = Arc::new(
+    async fn sessions_feed_reports_vibe_state(
+        mut source: TestSessionSource,
+        #[case] explicit: bool,
+        #[case] launched_with_vibe: bool,
+        #[case] repo_vibe_allowed: bool,
+        #[case] expected_mode: &str,
+        #[case] expected_ancestor: Option<&str>,
+    ) {
+        source.vibe_config = Arc::new(if repo_vibe_allowed {
             serde_yaml::from_str(indoc::indoc! {"
-            orgs:
-              example-org:
-                vibe: true
-        "})
-            .unwrap(),
-        );
-        source.sessions[0].vibe_enabled = true;
+                orgs:
+                  example-org:
+                    vibe: true
+            "})
+            .unwrap()
+        } else {
+            Config::default()
+        });
+        source.sessions[0].vibe_enabled = explicit;
+        source.sessions[0].launched_with_vibe = launched_with_vibe;
         source.sessions[0].status = SessionStatus::Running;
         source.all_sessions[0] = source.sessions[0].clone();
+        source.all_sessions[1].vibe_enabled = true;
         source.web_states[0].later_until = None;
         let mut expected = expected_response(
             "in_progress",
@@ -1130,7 +1148,11 @@ mod tests {
                 can_open_in_terminal: true,
             },
         );
-        expected["sessions"][0]["vibeMode"] = serde_json::json!({ "mode": "enabled" });
+        let mut vibe_mode = serde_json::json!({ "mode": expected_mode });
+        if let Some(ancestor_session_id) = expected_ancestor {
+            vibe_mode["ancestorSessionId"] = serde_json::json!(ancestor_session_id);
+        }
+        expected["sessions"][0]["vibeMode"] = vibe_mode;
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }

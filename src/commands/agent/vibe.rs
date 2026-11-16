@@ -27,10 +27,7 @@ pub(crate) fn state_for(
     config: &Config,
     ancestors: &[Session],
 ) -> VibeState {
-    let Some((owner, repo)) = repo_identity else {
-        return VibeState::RepoDisabled;
-    };
-    if !config.is_vibe_allowed_for_repo(owner, repo) {
+    if !repo_vibe_allowed(repo_identity, config) {
         return VibeState::RepoDisabled;
     }
     if session.vibe_enabled {
@@ -41,6 +38,30 @@ pub(crate) fn state_for(
             ancestor_session_id: ancestor_session_id.to_string(),
         })
         .unwrap_or(VibeState::Disabled)
+}
+
+pub(crate) fn state_for_with_ancestor_loader(
+    session: &Session,
+    repo_identity: Option<(&str, &str)>,
+    config: &Config,
+    load_ancestor: impl FnMut(&str) -> Result<Option<Session>>,
+) -> Result<VibeState> {
+    if !repo_vibe_allowed(repo_identity, config) {
+        return Ok(VibeState::RepoDisabled);
+    }
+    if session.vibe_enabled {
+        return Ok(VibeState::Enabled);
+    }
+    let Some(ancestor_session_id) = inherited_vibe_ancestor_from(session, load_ancestor)? else {
+        return Ok(VibeState::Disabled);
+    };
+    Ok(VibeState::Inherited {
+        ancestor_session_id,
+    })
+}
+
+fn repo_vibe_allowed(repo_identity: Option<(&str, &str)>, config: &Config) -> bool {
+    repo_identity.is_some_and(|(owner, repo)| config.is_vibe_allowed_for_repo(owner, repo))
 }
 
 pub(crate) fn inherited_vibe_ancestor<'a>(
@@ -61,6 +82,34 @@ pub(crate) fn inherited_vibe_ancestor<'a>(
                 .find(|ancestor| ancestor.session_id == *ancestor_id && ancestor.vibe_enabled)
                 .map(|ancestor| ancestor.session_id.as_str())
         })
+}
+
+pub(crate) fn inherited_vibe_ancestor_from(
+    session: &Session,
+    mut load_ancestor: impl FnMut(&str) -> Result<Option<Session>>,
+) -> Result<Option<String>> {
+    if !session.launched_with_vibe {
+        return Ok(None);
+    }
+
+    for ancestor_session_id in session.ancestor_session_ids.iter().rev() {
+        let ancestor = match load_ancestor(ancestor_session_id) {
+            Ok(ancestor) => ancestor,
+            Err(error)
+                if error
+                    .downcast_ref::<CcError>()
+                    .is_some_and(|error| matches!(error, CcError::InvalidSessionId(_))) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        if ancestor.is_some_and(|ancestor| ancestor.vibe_enabled) {
+            return Ok(Some(ancestor_session_id.clone()));
+        }
+    }
+
+    Ok(None)
 }
 
 pub(crate) fn repo_identity_for_path(path: &std::path::Path) -> Option<(String, String)> {
@@ -141,14 +190,12 @@ fn is_vibe_enabled_for(sessions_dir: &std::path::Path, session_id: &str) -> Resu
     if !session.launched_with_vibe {
         return Ok(false);
     }
-    let ancestors = session
-        .ancestor_session_ids
-        .iter()
-        .filter_map(|ancestor_session_id| {
-            store::load_session_from(sessions_dir, ancestor_session_id).transpose()
-        })
-        .collect::<Result<Vec<_>>>()?;
-    Ok(inherited_vibe_ancestor(&session, &ancestors).is_some())
+    Ok(
+        inherited_vibe_ancestor_from(&session, |ancestor_session_id| {
+            store::load_session_from(sessions_dir, ancestor_session_id)
+        })?
+        .is_some(),
+    )
 }
 
 fn set(enabled: bool) -> Result<()> {
@@ -343,62 +390,45 @@ mod tests {
         );
     }
 
-    #[test]
-    fn state_for_distinguishes_repo_access_and_vibe_sources() {
+    #[rstest]
+    #[case::explicit(true, false, false, true, true, VibeState::Enabled)]
+    #[case::inherited(false, true, true, true, true, VibeState::Inherited { ancestor_session_id: "fixture-parent".to_string() })]
+    #[case::disabled(false, false, true, true, true, VibeState::Disabled)]
+    #[case::repository_unknown(true, false, false, false, true, VibeState::RepoDisabled)]
+    #[case::repository_disallowed(true, false, false, true, false, VibeState::RepoDisabled)]
+    fn state_for_distinguishes_repo_access_and_vibe_sources(
+        #[case] explicit: bool,
+        #[case] launched_with_vibe: bool,
+        #[case] has_enabled_ancestor: bool,
+        #[case] repo_identity_available: bool,
+        #[case] repo_vibe_allowed: bool,
+        #[case] expected: VibeState,
+    ) {
         let allowed_config: Config = serde_yaml::from_str(indoc! {"
             orgs:
               example-org:
                 vibe: true
         "})
         .unwrap();
-        let mut explicit = session("explicit", &[], true);
-        explicit.vibe_enabled = true;
-        let mut inherited = session("inherited", &["root", "parent"], false);
-        inherited.launched_with_vibe = true;
-        let ineligible = session("ineligible", &["parent"], false);
-        let mut root = session("root", &[], true);
-        root.vibe_enabled = true;
-        let mut parent = session("parent", &[], true);
-        parent.vibe_enabled = true;
-        let ancestors = vec![root, parent];
+        let config = if repo_vibe_allowed {
+            allowed_config
+        } else {
+            Config::default()
+        };
+        let mut current_session = session("fixture-session", &[], explicit);
+        current_session.launched_with_vibe = launched_with_vibe;
+        let mut ancestors = Vec::new();
+        if has_enabled_ancestor {
+            current_session.ancestor_session_ids = vec!["fixture-parent".to_string()];
+            let mut parent = session("fixture-parent", &[], true);
+            parent.vibe_enabled = true;
+            ancestors.push(parent);
+        }
+        let repo_identity = repo_identity_available.then_some(("example-org", "example-repo"));
 
         assert_eq!(
-            vec![
-                state_for(
-                    &explicit,
-                    Some(("example-org", "example-repo")),
-                    &allowed_config,
-                    &[],
-                ),
-                state_for(
-                    &inherited,
-                    Some(("example-org", "example-repo")),
-                    &allowed_config,
-                    &ancestors,
-                ),
-                state_for(
-                    &ineligible,
-                    Some(("example-org", "example-repo")),
-                    &allowed_config,
-                    &ancestors,
-                ),
-                state_for(&explicit, None, &allowed_config, &[]),
-                state_for(
-                    &explicit,
-                    Some(("example-org", "example-repo")),
-                    &Config::default(),
-                    &[],
-                ),
-            ],
-            vec![
-                VibeState::Enabled,
-                VibeState::Inherited {
-                    ancestor_session_id: "parent".to_string(),
-                },
-                VibeState::Disabled,
-                VibeState::RepoDisabled,
-                VibeState::RepoDisabled,
-            ],
+            state_for(&current_session, repo_identity, &config, &ancestors),
+            expected,
         );
     }
 

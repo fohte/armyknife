@@ -96,6 +96,7 @@ type AgentFileLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentFile>> + Send + Sync>
 type AgentFileStorageRootLoader = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
 type BackgroundTaskLoader = Arc<dyn Fn(&str) -> Result<Vec<BackgroundTask>> + Send + Sync>;
 type RepoIdentityLoader = Arc<dyn Fn(&Path) -> Option<(String, String)> + Send + Sync>;
+type VibeConfigLoader = Arc<dyn Fn() -> crate::shared::config::Config + Send + Sync>;
 
 #[derive(Clone)]
 pub(super) struct RouteLoaders {
@@ -110,7 +111,7 @@ pub(super) struct RouteLoaders {
     agent_files: AgentFileLoader,
     agent_file_storage_root: AgentFileStorageRootLoader,
     background_tasks: BackgroundTaskLoader,
-    vibe_config: Option<Arc<crate::shared::config::Config>>,
+    vibe_config: Option<VibeConfigLoader>,
     repo_identity: Option<RepoIdentityLoader>,
     message_cache: MessageCache,
     question_preview_cache: question_preview::QuestionPreviewCache,
@@ -202,7 +203,7 @@ impl RouteLoaders {
 
     pub(super) fn with_vibe_context(
         mut self,
-        config: crate::shared::config::Config,
+        config: impl Fn() -> crate::shared::config::Config + Send + Sync + 'static,
         repo_identity: impl Fn(&Path) -> Option<(String, String)> + Send + Sync + 'static,
     ) -> Self {
         self.vibe_config = Some(Arc::new(config));
@@ -271,24 +272,35 @@ async fn get_messages(
             return Ok(None);
         };
         let vibe_mode = match (&loaders.vibe_config, &loaders.repo_identity) {
-            (Some(config), Some(repo_identity)) => {
-                let ancestors = session
-                    .ancestor_session_ids
-                    .iter()
-                    .filter_map(|ancestor_id| match load_session(ancestor_id) {
-                        Ok(Some(ancestor)) => Some(Ok(ancestor)),
-                        Ok(None) => None,
-                        Err(error) => Some(Err(error)),
-                    })
-                    .collect::<Result<Vec<_>>>()?;
+            (Some(config_loader), Some(repo_identity)) => {
+                let config = config_loader();
                 let repo = repo_identity(&session.cwd);
-                Some(crate::commands::agent::vibe::state_for(
+                let identity = repo
+                    .as_ref()
+                    .map(|(owner, repo)| (owner.as_str(), repo.as_str()));
+                let initial_state = crate::commands::agent::vibe::state_for(
                     &session,
-                    repo.as_ref()
-                        .map(|(owner, repo)| (owner.as_str(), repo.as_str())),
-                    config,
-                    &ancestors,
-                ))
+                    identity,
+                    &config,
+                    &[],
+                );
+                if session.vibe_enabled
+                    || !session.launched_with_vibe
+                    || matches!(
+                        initial_state,
+                        crate::commands::agent::vibe::VibeState::RepoDisabled
+                    )
+                {
+                    Some(initial_state)
+                } else {
+                    crate::commands::agent::vibe::state_for_with_ancestor_loader(
+                        &session,
+                        identity,
+                        &config,
+                        |ancestor_id| load_session(ancestor_id),
+                    )
+                    .ok()
+                }
             }
             _ => None,
         };
@@ -2522,10 +2534,32 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::explicit(true, false, false, true, "enabled", None)]
+    #[case::inherited(false, true, true, true, "inherited", Some("fixture-parent"))]
+    #[case::disabled(false, false, true, true, "disabled", None)]
+    #[case::repository_disabled(true, false, false, false, "repo_disabled", None)]
     #[tokio::test]
-    async fn messages_route_includes_vibe_state() {
+    async fn messages_route_includes_vibe_state(
+        #[case] explicit: bool,
+        #[case] launched_with_vibe: bool,
+        #[case] has_parent: bool,
+        #[case] repo_vibe_allowed: bool,
+        #[case] expected_mode: &str,
+        #[case] expected_ancestor: Option<&str>,
+    ) {
         let mut session = stored_session();
-        session.vibe_enabled = true;
+        session.vibe_enabled = explicit;
+        session.launched_with_vibe = launched_with_vibe;
+        let parent = if has_parent {
+            session.ancestor_session_ids = vec!["fixture-parent".to_string()];
+            let mut parent = stored_session();
+            parent.session_id = "fixture-parent".to_string();
+            parent.vibe_enabled = true;
+            Some(parent)
+        } else {
+            None
+        };
         let loaders = RouteLoaders::new(
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
@@ -2534,16 +2568,89 @@ mod tests {
             |_| Ok(Vec::new()),
         )
         .with_vibe_context(
-            serde_yaml::from_str::<Config>(indoc::indoc! {"
-                orgs:
-                  example-org:
-                    vibe: true
-            "})
-            .unwrap(),
+            move || {
+                if !repo_vibe_allowed {
+                    return Config::default();
+                }
+                serde_yaml::from_str::<Config>(indoc::indoc! {"
+                    orgs:
+                      example-org:
+                        vibe: true
+                "})
+                .unwrap()
+            },
             |_| Some(("example-org".to_string(), "example-repo".to_string())),
         );
         let router = routes_with_proposals_and_peer_out_messages(
-            move |_| Ok(Some(session.clone())),
+            move |id| match id {
+                "fixture-session" => Ok(Some(session.clone())),
+                "fixture-parent" => Ok(parent.clone()),
+                _ => Ok(None),
+            },
+            |_| Ok(None),
+            loaders,
+        );
+        let mut vibe_mode = json!({ "mode": expected_mode });
+        if let Some(ancestor_session_id) = expected_ancestor {
+            vibe_mode["ancestorSessionId"] = json!(ancestor_session_id);
+        }
+
+        assert_eq!(
+            message_response(&router).await,
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                json!({
+                    "messages": [],
+                    "backgroundTasks": [],
+                    "start": 0,
+                    "total": 0,
+                    "decisions": [],
+                    "hasUnansweredProposal": false,
+                    "activeQuestionIndex": null,
+                    "vibeMode": vibe_mode,
+                }),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_older_ancestor_does_not_break_messages_or_vibe_state() {
+        let mut session = stored_session();
+        session.launched_with_vibe = true;
+        session.ancestor_session_ids = vec![
+            "../stale-ancestor".to_string(),
+            "fixture-parent".to_string(),
+        ];
+        let mut parent = stored_session();
+        parent.session_id = "fixture-parent".to_string();
+        let loaders = RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
+        .with_vibe_context(
+            || {
+                serde_yaml::from_str::<Config>(indoc::indoc! {"
+                    orgs:
+                      example-org:
+                        vibe: true
+                "})
+                .unwrap()
+            },
+            |_| Some(("example-org".to_string(), "example-repo".to_string())),
+        );
+        let router = routes_with_proposals_and_peer_out_messages(
+            move |id| match id {
+                "fixture-session" => Ok(Some(session.clone())),
+                "fixture-parent" => Ok(Some(parent.clone())),
+                "../stale-ancestor" => Err(
+                    crate::commands::agent::error::CcError::InvalidSessionId(id.to_string()).into(),
+                ),
+                _ => Ok(None),
+            },
             |_| Ok(None),
             loaders,
         );
@@ -2561,7 +2668,7 @@ mod tests {
                     "decisions": [],
                     "hasUnansweredProposal": false,
                     "activeQuestionIndex": null,
-                    "vibeMode": { "mode": "enabled" },
+                    "vibeMode": { "mode": "disabled" },
                 }),
             ),
         );

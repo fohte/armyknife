@@ -210,7 +210,7 @@ fn app(restart_signal: watch::Receiver<bool>) -> Router {
         .with_agent_file_storage_root_loader(|| super::file::storage_root().ok())
         .with_background_task_loader(messages::registered_background_tasks)
         .with_vibe_context(
-            crate::shared::config::load_config_or_default(),
+            crate::shared::config::load_config_or_default,
             crate::commands::agent::vibe::repo_identity_for_path,
         ),
         restart_signal,

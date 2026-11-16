@@ -49,7 +49,7 @@ pub(super) fn router(message_loaders: RouteLoaders) -> Router {
         sessions_dir: None,
         attachment_dir: None,
         runtime: Arc::new(LiveActionRuntime),
-        vibe_config: Arc::new(config::load_config_or_default()),
+        vibe_config: Arc::new(config::load_config_or_default),
         repo_identity: Arc::new(crate::commands::agent::vibe::repo_identity_for_path),
         proposal_answer_locks: ProposalAnswerLocks::default(),
         permission_denied_retry_locks: PermissionDeniedRetryLocks::default(),
@@ -127,7 +127,7 @@ struct ActionState {
     sessions_dir: Option<PathBuf>,
     attachment_dir: Option<PathBuf>,
     runtime: Arc<dyn ActionRuntime>,
-    vibe_config: Arc<Config>,
+    vibe_config: VibeConfigLoader,
     repo_identity: RepoIdentityResolver,
     message_loaders: RouteLoaders,
     // Delivery precedes persistence, so repeated answers for one proposal must serialize.
@@ -138,6 +138,7 @@ struct ActionState {
 }
 
 type RepoIdentityResolver = Arc<dyn Fn(&Path) -> Option<(String, String)> + Send + Sync>;
+type VibeConfigLoader = Arc<dyn Fn() -> Config + Send + Sync>;
 
 #[derive(Clone)]
 struct CommandResult {
@@ -779,15 +780,26 @@ mod tests {
             self.router_with_loaders_and_proposal_answer_locks(empty_message_loaders())
         }
 
-        fn router_with_vibe_config(&self, vibe_config: Config) -> Router {
+        fn router_with_vibe_config(
+            &self,
+            vibe_config: impl Fn() -> Config + Send + Sync + 'static,
+        ) -> Router {
+            self.router_with_vibe_context(vibe_config, |_| {
+                Some(("fixture-owner".to_string(), "fixture-repo".to_string()))
+            })
+        }
+
+        fn router_with_vibe_context(
+            &self,
+            vibe_config: impl Fn() -> Config + Send + Sync + 'static,
+            repo_identity: impl Fn(&Path) -> Option<(String, String)> + Send + Sync + 'static,
+        ) -> Router {
             router_with_state(ActionState {
                 sessions_dir: Some(self.temp_dir.path().join("sessions")),
                 attachment_dir: Some(self.temp_dir.path().join("attachments")),
                 runtime: self.runtime.clone(),
                 vibe_config: Arc::new(vibe_config),
-                repo_identity: Arc::new(|_| {
-                    Some(("fixture-owner".to_string(), "fixture-repo".to_string()))
-                }),
+                repo_identity: Arc::new(repo_identity),
                 proposal_answer_locks: ProposalAnswerLocks::default(),
                 permission_denied_retry_locks: PermissionDeniedRetryLocks::default(),
                 bang_command_locks: KeyedMutexRegistry::default(),
@@ -804,7 +816,7 @@ mod tests {
                 sessions_dir: Some(self.temp_dir.path().join("sessions")),
                 attachment_dir: Some(self.temp_dir.path().join("attachments")),
                 runtime: self.runtime.clone(),
-                vibe_config: Arc::new(Config::default()),
+                vibe_config: Arc::new(Config::default),
                 repo_identity: Arc::new(|_| None),
                 proposal_answer_locks: ProposalAnswerLocks::default(),
                 permission_denied_retry_locks: permission_denied_retry_locks.clone(),
@@ -824,7 +836,7 @@ mod tests {
                 sessions_dir: Some(self.temp_dir.path().join("sessions")),
                 attachment_dir: Some(self.temp_dir.path().join("attachments")),
                 runtime: self.runtime.clone(),
-                vibe_config: Arc::new(Config::default()),
+                vibe_config: Arc::new(Config::default),
                 repo_identity: Arc::new(|_| None),
                 proposal_answer_locks: proposal_answer_locks.clone(),
                 permission_denied_retry_locks: PermissionDeniedRetryLocks::default(),

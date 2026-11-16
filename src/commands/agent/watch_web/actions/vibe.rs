@@ -28,24 +28,46 @@ pub(super) async fn set_vibe(
         return Err(ApiError::conflict("session is being stopped"));
     }
 
-    let repo_identity = if request.enabled {
-        let repo_identity = state.repo_identity.clone();
-        let cwd = session.cwd.clone();
-        run_blocking(move || Ok(repo_identity(&cwd))).await?
-    } else {
-        None
-    };
+    let vibe_config = (state.vibe_config)();
+    let repo_identity_resolver = state.repo_identity.clone();
+    let cwd = session.cwd.clone();
+    let repo_identity = run_blocking(move || Ok(repo_identity_resolver(&cwd))).await?;
     if request.enabled {
         let Some((owner, repo)) = repo_identity.as_ref() else {
             return Err(ApiError::conflict(
                 "vibe mode is disabled because the session repository could not be identified",
             ));
         };
-        vibe::ensure_repo_vibe_access(&state.vibe_config, owner, repo)
+        vibe::ensure_repo_vibe_access(&vibe_config, owner, repo)
             .map_err(|error| ApiError::conflict(error.to_string()))?;
     }
 
     let sessions_dir = resolve_sessions_dir(state.sessions_dir).map_err(ApiError::internal)?;
+    let inherited_from = if !request.enabled {
+        let sessions_dir = sessions_dir.clone();
+        let mut session_after_off = session.clone();
+        session_after_off.vibe_enabled = false;
+        let repo_identity = repo_identity.clone();
+        let state = run_blocking(move || {
+            vibe::state_for_with_ancestor_loader(
+                &session_after_off,
+                repo_identity
+                    .as_ref()
+                    .map(|(owner, repo)| (owner.as_str(), repo.as_str())),
+                &vibe_config,
+                |ancestor_session_id| store::load_session_from(&sessions_dir, ancestor_session_id),
+            )
+        })
+        .await?;
+        match state {
+            vibe::VibeState::Inherited {
+                ancestor_session_id,
+            } => Some(ancestor_session_id),
+            _ => None,
+        }
+    } else {
+        None
+    };
     let session_id = session.session_id.clone();
     let enabled = request.enabled;
     run_blocking({
@@ -53,29 +75,6 @@ pub(super) async fn set_vibe(
         move || vibe::set_in(&sessions_dir, &session_id, enabled)
     })
     .await?;
-
-    let ancestors = run_blocking({
-        let sessions_dir = sessions_dir.clone();
-        let ancestor_ids = session.ancestor_session_ids.clone();
-        move || {
-            ancestor_ids
-                .iter()
-                .filter_map(|ancestor_id| {
-                    match store::load_session_from(&sessions_dir, ancestor_id) {
-                        Ok(Some(ancestor)) => Some(Ok(ancestor)),
-                        Ok(None) => None,
-                        Err(error) => Some(Err(error)),
-                    }
-                })
-                .collect::<anyhow::Result<Vec<_>>>()
-        }
-    })
-    .await?;
-    let inherited_from = if request.enabled {
-        None
-    } else {
-        vibe::inherited_vibe_ancestor(&session, &ancestors).map(str::to_string)
-    };
 
     let message = match (request.enabled, inherited_from) {
         (true, _) => "watch-web からユーザーが vibe mode を on にしました。".to_string(),
