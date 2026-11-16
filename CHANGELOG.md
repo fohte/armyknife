@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.746](https://github.com/fohte/armyknife/compare/v0.1.745...v0.1.746) (2026-11-16)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** scroll status panel tabs ([#1876](https://github.com/fohte/armyknife/issues/1876)) ([cb0a5b8](https://github.com/fohte/armyknife/commit/cb0a5b84aee6c7d9f0e164c7d62c776d3666f782))
+
 ## [0.1.745](https://github.com/fohte/armyknife/compare/v0.1.744...v0.1.745) (2026-11-16)
 
 
