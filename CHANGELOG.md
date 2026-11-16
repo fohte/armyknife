@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.760](https://github.com/fohte/armyknife/compare/v0.1.759...v0.1.760) (2026-11-16)
+
+
+### Features
+
+* **agent-watch-web:** support usage and quota ([#1904](https://github.com/fohte/armyknife/issues/1904)) ([c12406b](https://github.com/fohte/armyknife/commit/c12406bfea2fc3fbcb3440e0a877aec4d3a6eda3))
+
 ## [0.1.759](https://github.com/fohte/armyknife/compare/v0.1.758...v0.1.759) (2026-11-16)
 
 
