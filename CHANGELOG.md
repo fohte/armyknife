@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.742](https://github.com/fohte/armyknife/compare/v0.1.741...v0.1.742) (2026-11-16)
+
+
+### Bug Fixes
+
+* **agent:** preserve crit URLs from aliases ([#1867](https://github.com/fohte/armyknife/issues/1867)) ([6aaa21c](https://github.com/fohte/armyknife/commit/6aaa21c5ffba6c8ee3ee1806965a8cf86276cc5e))
+
 ## [0.1.741](https://github.com/fohte/armyknife/compare/v0.1.740...v0.1.741) (2026-11-15)
 
 
