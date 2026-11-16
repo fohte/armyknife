@@ -27,7 +27,9 @@ use crate::commands::agent::types::{
     DisplayStatus, Engine, Session, SessionStatus, WebUiRegistration,
 };
 use crate::commands::agent::user_turn::user_turns;
+use crate::commands::agent::vibe::{self, VibeState};
 use crate::infra::github::PrState;
+use crate::shared::config::Config;
 use crate::shared::config::{self, AgentConfig};
 
 mod category;
@@ -140,6 +142,7 @@ struct SessionView {
     task: Option<TqTaskView>,
     tasks: Vec<TqTaskView>,
     repo: String,
+    vibe_mode: VibeState,
     branch: Option<String>,
     can_open_in_terminal: bool,
     project: String,
@@ -180,6 +183,7 @@ struct SessionSnapshot {
     unanswered_proposal_titles: HashMap<String, String>,
     unanswered_todo_titles: HashMap<String, String>,
     agent_config: AgentConfig,
+    vibe_config: Arc<Config>,
 }
 
 trait SessionSource: Clone + Send + Sync + 'static {
@@ -416,6 +420,20 @@ async fn list_sessions<S: SessionSource>(
                 .get(&session.session_id)
                 .cloned()
                 .unwrap_or_default();
+            let repo_identity = repo.split_once('/');
+            let ancestors = session
+                .ancestor_session_ids
+                .iter()
+                .filter_map(|ancestor_id| {
+                    snapshot
+                        .all_sessions
+                        .iter()
+                        .find(|ancestor| ancestor.session_id == *ancestor_id)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let vibe_mode =
+                vibe::state_for(session, repo_identity, &snapshot.vibe_config, &ancestors);
             let parent_project = resolve_parent_project(
                 &session.ancestor_session_ids,
                 &task_metadata,
@@ -547,6 +565,7 @@ async fn list_sessions<S: SessionSource>(
                 task,
                 tasks,
                 repo: repo.clone(),
+                vibe_mode,
                 branch: session
                     .pr_context
                     .as_ref()
@@ -658,6 +677,7 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         unanswered_proposal_titles,
         unanswered_todo_titles,
         agent_config: config::load_config_or_default().agent,
+        vibe_config: Arc::new(config::load_config_or_default()),
     })
 }
 
@@ -760,6 +780,7 @@ mod tests {
         work_type_nav_labels: HashMap<String, String>,
         agent_statuses: HashMap<String, AgentStatusConfig>,
         message_loaders: super::super::messages::RouteLoaders,
+        vibe_config: Arc<Config>,
         question_preview_error: bool,
         review_document_queue_calls: Arc<AtomicUsize>,
         review_document_queue_thread_id: Arc<Mutex<Option<std::thread::ThreadId>>>,
@@ -796,6 +817,7 @@ mod tests {
                     statuses: self.agent_statuses.clone(),
                     ..AgentConfig::default()
                 },
+                vibe_config: self.vibe_config.clone(),
             })
         }
 
@@ -1041,6 +1063,7 @@ mod tests {
                 |_, _| Ok(()),
                 |_| Ok(Vec::new()),
             ),
+            vibe_config: Arc::new(Config::default()),
             question_preview_error: false,
             review_document_queue_calls: Arc::default(),
             review_document_queue_thread_id: Arc::default(),
@@ -1070,6 +1093,46 @@ mod tests {
             object.remove("token");
         }
         (status, response)
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_feed_reports_explicit_vibe_state(mut source: TestSessionSource) {
+        source.vibe_config = Arc::new(
+            serde_yaml::from_str(indoc::indoc! {"
+            orgs:
+              example-org:
+                vibe: true
+        "})
+            .unwrap(),
+        );
+        source.sessions[0].vibe_enabled = true;
+        source.sessions[0].status = SessionStatus::Running;
+        source.all_sessions[0] = source.sessions[0].clone();
+        source.web_states[0].later_until = None;
+        let mut expected = expected_response(
+            "in_progress",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: None,
+                category_when_not_later: "in_progress",
+                is_paused: false,
+                unread: false,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["vibeMode"] = serde_json::json!({ "mode": "enabled" });
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
 
     #[rstest]
@@ -1420,7 +1483,7 @@ mod tests {
         details: ExpectedSessionDetails<'_>,
         response: ExpectedSessionResponse<'_>,
     ) -> serde_json::Value {
-        serde_json::json!({
+        let mut expected = serde_json::json!({
             "revision": 7,
             "workTypeNavLabels": response.work_type_nav_labels,
             "sessions": [{
@@ -1497,7 +1560,9 @@ mod tests {
                 "unreviewedDecisionCount": 2,
                 "critUrl": details.crit_url
             }]
-        })
+        });
+        expected["sessions"][0]["vibeMode"] = serde_json::json!({ "mode": "repo_disabled" });
+        expected
     }
 
     fn question_inbox_response(kind: &str, preview: Option<&str>) -> serde_json::Value {

@@ -95,6 +95,7 @@ type PermissionDeniedLoader =
 type AgentFileLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentFile>> + Send + Sync>;
 type AgentFileStorageRootLoader = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
 type BackgroundTaskLoader = Arc<dyn Fn(&str) -> Result<Vec<BackgroundTask>> + Send + Sync>;
+type RepoIdentityLoader = Arc<dyn Fn(&Path) -> Option<(String, String)> + Send + Sync>;
 
 #[derive(Clone)]
 pub(super) struct RouteLoaders {
@@ -109,6 +110,8 @@ pub(super) struct RouteLoaders {
     agent_files: AgentFileLoader,
     agent_file_storage_root: AgentFileStorageRootLoader,
     background_tasks: BackgroundTaskLoader,
+    vibe_config: Option<Arc<crate::shared::config::Config>>,
+    repo_identity: Option<RepoIdentityLoader>,
     message_cache: MessageCache,
     question_preview_cache: question_preview::QuestionPreviewCache,
 }
@@ -136,6 +139,8 @@ impl RouteLoaders {
             agent_files: Arc::new(|_| Ok(Vec::new())),
             agent_file_storage_root: Arc::new(|| None),
             background_tasks: Arc::new(|_| Ok(Vec::new())),
+            vibe_config: None,
+            repo_identity: None,
             message_cache: MessageCache::default(),
             question_preview_cache: question_preview::QuestionPreviewCache::default(),
         }
@@ -195,6 +200,16 @@ impl RouteLoaders {
         self
     }
 
+    pub(super) fn with_vibe_context(
+        mut self,
+        config: crate::shared::config::Config,
+        repo_identity: impl Fn(&Path) -> Option<(String, String)> + Send + Sync + 'static,
+    ) -> Self {
+        self.vibe_config = Some(Arc::new(config));
+        self.repo_identity = Some(Arc::new(repo_identity));
+        self
+    }
+
     fn background_tasks(&self, session_id: &str) -> Result<Vec<BackgroundTask>> {
         (self.background_tasks)(session_id)
     }
@@ -251,26 +266,57 @@ async fn get_messages(
     }
     let tail_window_limit = range.initial_tail_window_limit();
 
-    match tokio::task::spawn_blocking(move || match tail_window_limit {
-        Some(limit) => load_conversation_with_initial_tail_window(
-            &session_id,
-            |id| load_session(id),
-            |id| load_user_marker(id),
-            &loaders,
-            limit,
-        ),
-        None => load_conversation_with_queued_prompts(
-            &session_id,
-            |id| load_session(id),
-            |id| load_user_marker(id),
-            &loaders,
-        ),
+    match tokio::task::spawn_blocking(move || -> Result<Option<(ConversationResponse, Option<crate::commands::agent::vibe::VibeState>)>> {
+        let Some(session) = load_session(&session_id)? else {
+            return Ok(None);
+        };
+        let vibe_mode = match (&loaders.vibe_config, &loaders.repo_identity) {
+            (Some(config), Some(repo_identity)) => {
+                let ancestors = session
+                    .ancestor_session_ids
+                    .iter()
+                    .filter_map(|ancestor_id| match load_session(ancestor_id) {
+                        Ok(Some(ancestor)) => Some(Ok(ancestor)),
+                        Ok(None) => None,
+                        Err(error) => Some(Err(error)),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let repo = repo_identity(&session.cwd);
+                Some(crate::commands::agent::vibe::state_for(
+                    &session,
+                    repo.as_ref()
+                        .map(|(owner, repo)| (owner.as_str(), repo.as_str())),
+                    config,
+                    &ancestors,
+                ))
+            }
+            _ => None,
+        };
+        let conversation = match tail_window_limit {
+            Some(limit) => load_conversation_with_initial_tail_window(
+                &session_id,
+                |id| load_session(id),
+                |id| load_user_marker(id),
+                &loaders,
+                limit,
+            ),
+            None => load_conversation_with_queued_prompts(
+                &session_id,
+                |id| load_session(id),
+                |id| load_user_marker(id),
+                &loaders,
+            ),
+        }?;
+        Ok(conversation.map(|conversation| (conversation, vibe_mode)))
     })
     .await
     {
-        Ok(Ok(Some(mut conversation))) => {
+        Ok(Ok(Some((mut conversation, vibe_mode)))) => {
             conversation.apply_range(range);
-            match serde_json::to_vec(&conversation) {
+            match serde_json::to_vec(&ConversationApiResponse {
+                conversation: &conversation,
+                vibe_mode,
+            }) {
                 Ok(body) => (
                     StatusCode::OK,
                     [(CONTENT_TYPE, "application/json")],
@@ -293,6 +339,15 @@ async fn get_messages(
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConversationApiResponse<'a> {
+    #[serde(flatten)]
+    conversation: &'a ConversationResponse,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vibe_mode: Option<crate::commands::agent::vibe::VibeState>,
 }
 
 #[cfg(test)]
@@ -967,6 +1022,7 @@ mod tests {
         WatchWebQueuedPrompt,
     };
     use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
+    use crate::shared::config::Config;
 
     fn stored_session() -> Session {
         serde_json::from_value(json!({
@@ -2463,6 +2519,51 @@ mod tests {
                     ranged_response(2, &[3, 4]),
                 ),
             ],
+        );
+    }
+
+    #[tokio::test]
+    async fn messages_route_includes_vibe_state() {
+        let mut session = stored_session();
+        session.vibe_enabled = true;
+        let loaders = RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
+        .with_vibe_context(
+            serde_yaml::from_str::<Config>(indoc::indoc! {"
+                orgs:
+                  example-org:
+                    vibe: true
+            "})
+            .unwrap(),
+            |_| Some(("example-org".to_string(), "example-repo".to_string())),
+        );
+        let router = routes_with_proposals_and_peer_out_messages(
+            move |_| Ok(Some(session.clone())),
+            |_| Ok(None),
+            loaders,
+        );
+
+        assert_eq!(
+            message_response(&router).await,
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                json!({
+                    "messages": [],
+                    "backgroundTasks": [],
+                    "start": 0,
+                    "total": 0,
+                    "decisions": [],
+                    "hasUnansweredProposal": false,
+                    "activeQuestionIndex": null,
+                    "vibeMode": { "mode": "enabled" },
+                }),
+            ),
         );
     }
 

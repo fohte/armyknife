@@ -69,6 +69,7 @@ mod tests {
             task: task.clone(),
             tasks: task.into_iter().collect(),
             repo: String::new(),
+            vibe_mode: crate::commands::agent::vibe::VibeState::RepoDisabled,
             branch: None,
             can_open_in_terminal: false,
             project: "Unsorted".to_string(),
