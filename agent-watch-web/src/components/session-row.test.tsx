@@ -148,6 +148,25 @@ it('keeps the full layout for mobile Inbox rows', () => {
 })
 
 it.each([
+  ['single unreviewed decision', 'done', 0, 1, '◇ 1 decision to review'],
+  ['multiple decisions', 'needs_action', 2, 0, '◇ 2 decisions'],
+] as const)(
+  'shows the %s count with the shared label',
+  (_label, category, decisionCount, unreviewedDecisionCount, expectedLabel) => {
+    renderRow('compact', {
+      ...session,
+      category,
+      decisionCount,
+      unreviewedDecisionCount,
+    })
+
+    expect(
+      container.querySelector('.session-decision-count')?.textContent,
+    ).toEqual(expectedLabel)
+  },
+)
+
+it.each([
   [
     'question',
     'Question',

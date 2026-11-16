@@ -10,6 +10,7 @@ import {
   Workflow,
 } from 'lucide-react'
 
+import { formatSessionDecisionCount } from '#session-decision-count'
 import { sessionKindIcon } from '#session-kind-label'
 import { formatLinkedTaskCount } from '#session-task-count'
 import type { Session, SessionTask } from '#types'
@@ -103,13 +104,7 @@ export function SessionRow({
   const repo = session.repo.trim() || '—'
   const trimmedBranch = branch?.trim() ?? ''
   const linkedTaskCount = formatLinkedTaskCount(session.tasks)
-  const decisionLabel =
-    session.unreviewedDecisionCount !== undefined &&
-    session.unreviewedDecisionCount > 0
-      ? `${String(session.unreviewedDecisionCount)} to review`
-      : session.decisionCount !== undefined && session.decisionCount > 0
-        ? `${String(session.decisionCount)} decisions`
-        : null
+  const decisionLabel = formatSessionDecisionCount(session)
 
   return (
     <div
