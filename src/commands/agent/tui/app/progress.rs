@@ -29,10 +29,14 @@ pub(super) struct CachedProgress {
 impl App {
     pub(in crate::commands::agent::tui) fn begin_progress_refresh(&mut self, session_id: &str) {
         if let Some(snapshot) = self.cached_progress(session_id).cloned() {
-            let rows = self.refresh_cached_work_rows(session_id, &snapshot.rows);
-            let mut snapshot = snapshot;
-            snapshot.rows = self.rows_with_current_panes(&rows);
-            self.store_progress_snapshot(session_id, snapshot, false);
+            if snapshot.implementation.is_some() {
+                self.refresh_local_progress(session_id, None, false);
+            } else {
+                let rows = self.refresh_cached_work_rows(session_id, &snapshot.rows);
+                let mut snapshot = snapshot;
+                snapshot.rows = self.rows_with_current_panes(&rows);
+                self.store_progress_snapshot(session_id, snapshot, false);
+            }
         } else {
             self.refresh_local_progress(session_id, None, false);
         }

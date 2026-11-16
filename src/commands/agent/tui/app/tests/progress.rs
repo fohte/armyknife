@@ -830,6 +830,8 @@ fn task_progress_keeps_created_prs_private_to_their_session(timestamp: DateTime<
     );
 
     app.list_state.select(Some(2));
+    app.begin_progress_refresh("peer-session");
+    let peer_during_cached_refresh = app.progress_rows.clone();
     let peer_scope = app
         .progress_scope_for_session("peer-session")
         .unwrap()
@@ -863,11 +865,21 @@ fn task_progress_keeps_created_prs_private_to_their_session(timestamp: DateTime<
 
     assert_eq!(
         (
+            peer_during_cached_refresh,
             peer_without_created_pr,
             peer_with_created_pr,
             app.progress_rows,
         ),
         (
+            vec![
+                expected_work_row("owner-session", "session"),
+                expected_work_row("peer-session", "session"),
+                ProgressRow::ImplementationHeader {
+                    merged_pr_count: 0,
+                    total_pr_count: 0,
+                    collapsed: false,
+                },
+            ],
             vec![
                 expected_work_row("owner-session", "session"),
                 expected_work_row("peer-session", "session"),
