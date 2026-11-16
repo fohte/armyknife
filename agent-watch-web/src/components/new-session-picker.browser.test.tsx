@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
 import { NewSessionPicker } from '#components/new-session-picker'
-import { exampleSessionDirectories } from '#new-session-story-fixtures'
+import { exampleSessionDirectories } from '#new-session-story-fixtures.test'
 import type { NewSessionState } from '#use-new-session'
 
 let container: HTMLDivElement

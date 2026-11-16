@@ -4,7 +4,7 @@ import { NewSessionForm } from '#components/new-session-form'
 import {
   createNewSessionStoryState,
   exampleSessionDirectories,
-} from '#new-session-story-fixtures'
+} from '#new-session-story-fixtures.test'
 
 const meta = {
   component: NewSessionForm,

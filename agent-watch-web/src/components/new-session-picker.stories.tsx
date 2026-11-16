@@ -4,7 +4,7 @@ import { NewSessionPicker } from '#components/new-session-picker'
 import {
   createNewSessionStoryState,
   exampleSessionDirectories,
-} from '#new-session-story-fixtures'
+} from '#new-session-story-fixtures.test'
 
 const meta = {
   component: NewSessionPicker,

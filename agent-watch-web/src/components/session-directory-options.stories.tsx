@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 
 import { SessionDirectoryOptions } from '#components/session-directory-options'
-import { exampleSessionDirectories } from '#new-session-story-fixtures'
+import { exampleSessionDirectories } from '#new-session-story-fixtures.test'
 
 const meta = {
   component: SessionDirectoryOptions,
