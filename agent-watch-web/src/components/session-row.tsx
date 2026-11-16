@@ -35,6 +35,7 @@ type SessionRowProps = {
   session: SessionRowData
   density?: 'full' | 'compact'
   isMobile?: boolean
+  branch?: string | null
 }
 
 function formatElapsedTime(totalSeconds: number) {
@@ -94,11 +95,13 @@ export function SessionRow({
   session,
   density = 'full',
   isMobile = false,
+  branch,
 }: SessionRowProps) {
   const role = rolePresentation(session.workType)
   const RoleIcon = role.Icon
   const task = session.task
   const repo = session.repo.trim() || '—'
+  const trimmedBranch = branch?.trim() ?? ''
   const linkedTaskCount = formatLinkedTaskCount(session.tasks)
   const decisionLabel =
     session.unreviewedDecisionCount !== undefined &&
@@ -190,6 +193,14 @@ export function SessionRow({
         {density === 'compact' ? (
           <span className="session-repo-line">
             <span className="session-repo">{repo}</span>
+            {trimmedBranch.length > 0 ? (
+              <>
+                <span className="session-repo-separator" aria-hidden="true">
+                  ·
+                </span>
+                <span className="session-branch">{trimmedBranch}</span>
+              </>
+            ) : null}
           </span>
         ) : null}
       </span>

@@ -146,3 +146,32 @@ it('keeps the full layout for mobile Inbox rows', () => {
     repositoryLines: ['sample/service'],
   })
 })
+
+it.each([
+  [
+    'question',
+    'Question',
+    'lucide lucide-message-circle-question-mark session-row-kind-icon session-row-kind-icon--question',
+  ],
+  [
+    'error',
+    'Error',
+    'lucide lucide-triangle-alert session-row-kind-icon session-row-kind-icon--error',
+  ],
+  [
+    'stopped',
+    'Stopped',
+    'lucide lucide-circle-pause session-row-kind-icon session-row-kind-icon--stopped',
+  ],
+  [
+    'unknown',
+    'SampleKind',
+    'lucide lucide-circle-question-mark session-row-kind-icon session-row-kind-icon--samplekind',
+  ],
+] as const)('uses the %s kind icon', (_name, kind, expectedClass) => {
+  renderRow('compact', { ...session, kind })
+
+  expect(
+    container.querySelector('.session-row-kind-icon')?.getAttribute('class'),
+  ).toEqual(expectedClass)
+})

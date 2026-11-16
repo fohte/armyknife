@@ -29,7 +29,7 @@ const session: Session = {
     priority: 1,
   },
   repo: 'example/web-app',
-  branch: 'feature/notification-preferences',
+  branch: 'feature/sample-change',
   canOpenInTerminal: true,
   project: 'notification refresh',
   parent: null,
@@ -484,21 +484,19 @@ it('runs the selected command with Ctrl-n and Enter', async () => {
 })
 
 it('matches a session by branch name and renders the shared session row', () => {
-  renderPalette({ initialQuery: 'feature/notification-preferences' })
+  renderPalette({ initialQuery: 'feature/sample-change' })
 
   const snapshot = () => ({
     title: container.querySelector('.session-title')?.textContent,
     task: container.querySelector('.session-task')?.textContent,
     repo: container.querySelector('.session-repo')?.textContent,
-    branchVisible: container.textContent.includes(
-      'feature/notification-preferences',
-    ),
+    branch: container.querySelector('.session-branch')?.textContent,
   })
   expect(snapshot()).toEqual({
     title: 'Review notification settings',
     task: 'P1 #42 Improve notifications',
     repo: 'example/web-app',
-    branchVisible: false,
+    branch: 'feature/sample-change',
   })
 })
 
@@ -520,14 +518,12 @@ it.each([
     const snapshot = () => ({
       task: container.querySelector('.session-task')?.textContent,
       repo: container.querySelector('.session-repo')?.textContent,
-      branchVisible: container.textContent.includes(
-        'feature/notification-preferences',
-      ),
+      branch: container.querySelector('.session-branch')?.textContent ?? null,
     })
     expect(snapshot()).toEqual({
       task: 'P1 #42 Improve notifications',
       repo: 'example/web-app',
-      branchVisible: false,
+      branch: null,
     })
   },
 )
@@ -538,7 +534,7 @@ it('keeps the branch after the task when the repository is blank', () => {
       {
         ...session,
         repo: '   ',
-        branch: 'feature/notification-preferences',
+        branch: 'feature/sample-change',
       },
     ],
   })
@@ -546,10 +542,12 @@ it('keeps the branch after the task when the repository is blank', () => {
   const snapshot = () => ({
     task: container.querySelector('.session-task')?.textContent,
     repo: container.querySelector('.session-repo')?.textContent,
+    branch: container.querySelector('.session-branch')?.textContent,
   })
   expect(snapshot()).toEqual({
     task: 'P1 #42 Improve notifications',
     repo: '—',
+    branch: 'feature/sample-change',
   })
 })
 

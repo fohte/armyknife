@@ -7,8 +7,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { InboxFilterBar } from '#components/inbox-filter-bar'
 import { InboxFilterDialog } from '#components/inbox-filter-dialog'
 import { MobileNavigationActions } from '#components/mobile-navigation-actions'
-import { SessionRow } from '#components/session-row'
 import { filterInboxSessions, parseInboxFilterQuery } from '#inbox-filter'
+import { InboxSessionListItem } from '#inbox-session-list-item'
 import { renderInboxSessionSection } from '#inbox-session-section'
 import { nextReturnLabel } from '#inbox-view-utils'
 import type { SavedInboxView } from '#saved-inbox-views'
@@ -355,61 +355,15 @@ export function InboxView({
         {laterExpanded && later.length > 0 ? (
           <ul className="session-list later-session-list">
             {later.map((session) => (
-              <li className="session-list-item" key={session.id}>
-                <div
-                  className={`session-row-layout${session.isToday === true ? ' is-starred' : ''}`}
-                >
-                  <Button
-                    type="button"
-                    variant="plain"
-                    className={`session-row cursor-pointer category-${session.category}${session.id === selectedId ? ' is-selected' : ''}`}
-                    data-session-row=""
-                    aria-current={
-                      session.id === selectedId ? 'true' : undefined
-                    }
-                    onClick={() => {
-                      onSelect(session.id)
-                    }}
-                  >
-                    <SessionRow
-                      session={session}
-                      density="full"
-                      isMobile={isMobile}
-                    />
-                  </Button>
-                  {!isMobile ? (
-                    <div className="session-row-actions">
-                      <Button
-                        type="button"
-                        variant="plain"
-                        aria-label={
-                          session.isToday === true
-                            ? 'Remove from Starred'
-                            : 'Add to Starred'
-                        }
-                        aria-pressed={session.isToday ?? false}
-                        className="session-action-button cursor-pointer"
-                        onClick={() => {
-                          onToggleToday(session.id, session.isToday !== true)
-                        }}
-                      >
-                        {session.isToday === true ? '★' : '☆'}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="plain"
-                        aria-label={`Later: ${session.title}`}
-                        className="session-action-button cursor-pointer"
-                        onClick={() => {
-                          onLater(session.id)
-                        }}
-                      >
-                        ◷
-                      </Button>
-                    </div>
-                  ) : null}
-                </div>
-              </li>
+              <InboxSessionListItem
+                key={session.id}
+                session={session}
+                selectedId={selectedId}
+                onSelect={onSelect}
+                onLater={onLater}
+                onToggleToday={onToggleToday}
+                isMobile={isMobile}
+              />
             ))}
           </ul>
         ) : null}

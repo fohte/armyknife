@@ -423,7 +423,11 @@ export function CommandPalette({
                       type="button"
                     >
                       {item.type === 'session' ? (
-                        <SessionRow session={item.session} density="compact" />
+                        <SessionRow
+                          session={item.session}
+                          density="compact"
+                          branch={item.session.branch ?? null}
+                        />
                       ) : (
                         <>
                           <span
