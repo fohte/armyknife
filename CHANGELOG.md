@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.758](https://github.com/fohte/armyknife/compare/v0.1.757...v0.1.758) (2026-11-16)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** return thinking blocks ([#1897](https://github.com/fohte/armyknife/issues/1897)) ([d554d07](https://github.com/fohte/armyknife/commit/d554d07959ae3f33bd4b72ef13918a0615084868))
+
 ## [0.1.757](https://github.com/fohte/armyknife/compare/v0.1.756...v0.1.757) (2026-11-16)
 
 
