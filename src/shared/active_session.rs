@@ -192,6 +192,7 @@ mod tests {
         cwd: PathBuf,
     ) -> Session {
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
             created_pr_urls: Vec::new(),

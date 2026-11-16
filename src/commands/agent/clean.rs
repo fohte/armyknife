@@ -761,6 +761,7 @@ mod tests {
     fn make_session_at(id: &str, status: SessionStatus, cwd: PathBuf) -> Session {
         let now = Utc::now();
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
             created_pr_urls: Vec::new(),

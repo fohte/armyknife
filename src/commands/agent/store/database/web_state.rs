@@ -474,6 +474,7 @@ pub(super) mod test_support {
     #[fixture]
     pub(super) fn session() -> Session {
         Session {
+            launch_id: None,
             session_id: "state-session".to_string(),
             archived_at: None,
             pr_context: None,

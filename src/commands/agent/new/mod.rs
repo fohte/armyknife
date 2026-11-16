@@ -35,6 +35,14 @@ use worktree_creation::run_worktree_creation;
 /// CLI args shared by `a agent new`'s worktree and no-worktree modes.
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct CommonNewArgs {
+    /// Internal correlation ID for a session launched through watch-web.
+    #[arg(skip)]
+    pub(crate) watch_web_launch_id: Option<String>,
+
+    /// Exact working directory for watch-web launches outside a Git repository.
+    #[arg(skip)]
+    pub(crate) watch_web_directory: Option<PathBuf>,
+
     /// Initial prompt to send to the agent (Claude Code or Codex).
     /// When provided without a branch name, the branch name is auto-generated from this prompt.
     #[arg(long)]
@@ -203,9 +211,13 @@ fn run_inner(args: &NewArgs) -> Result<()> {
         Some(path) => Some(open_repo_at(path)?),
         None => None,
     };
-    let repo_root = match &repo {
-        Some(repo) => repo.main_workdir_string()?,
-        None => get_repo_root()?,
+    let repo_root = match (&repo, &args.common.watch_web_directory) {
+        (_, Some(directory)) => directory
+            .to_str()
+            .context("Invalid watch-web working directory")?
+            .to_string(),
+        (Some(repo), None) => repo.main_workdir_string()?,
+        (None, None) => get_repo_root()?,
     };
 
     match &args.worktree {
@@ -292,7 +304,9 @@ fn tmux_launch_inputs_with_vibe_check(
             }
         };
     // Agent tools can invoke this command without a tmux context, so preserve the user's focus.
-    let background = std::env::var("CLAUDECODE").is_ok() || own_session_id.is_some();
+    let background = std::env::var("CLAUDECODE").is_ok()
+        || own_session_id.is_some()
+        || common.watch_web_launch_id.is_some();
     let env_vars = build_env_vars(common, vibe, own_session_id)?;
     Ok((env_vars, background))
 }
@@ -319,10 +333,13 @@ fn run_session_only_inner(
     repo_root: &str,
     config: &Config,
 ) -> Result<()> {
-    let current_dir = std::env::current_dir()
-        .context("Failed to get current directory")?
-        .to_string_lossy()
-        .to_string();
+    let current_dir = match &args.common.watch_web_directory {
+        Some(directory) => directory.to_string_lossy().to_string(),
+        None => std::env::current_dir()
+            .context("Failed to get current directory")?
+            .to_string_lossy()
+            .to_string(),
+    };
     let caller_repo_root = caller_repo_root(&current_dir);
 
     run_session_only_inner_with_launchers(
@@ -487,6 +504,7 @@ mod tests {
 
     fn session(session_id: &str, ancestors: &[&str], vibe_enabled: bool) -> Session {
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
             created_pr_urls: Vec::new(),
@@ -1383,6 +1401,8 @@ mod tests {
             ],
             || {
                 let common = CommonNewArgs {
+                    watch_web_launch_id: None,
+                    watch_web_directory: None,
                     prompt: None,
                     child_launch,
                     label: None,
@@ -1482,6 +1502,41 @@ mod tests {
         assert_eq!(actual, (expected_env_vars, expected_background));
     }
 
+    #[test]
+    fn watch_web_launches_run_in_the_background() {
+        let mut common = TestCli::try_parse_from(["a"]).unwrap().args.common;
+        common.watch_web_launch_id = Some("launch-fixture".to_string());
+        let actual = temp_env::with_vars(
+            [
+                ("CLAUDECODE", None::<&str>),
+                ("ARMYKNIFE_SESSION_ID", None::<&str>),
+                ("CODEX_SESSION_ID", None::<&str>),
+                ("TMUX", None::<&str>),
+                ("TMUX_PANE", None::<&str>),
+                ("TQ_SESSION_ID", None::<&str>),
+            ],
+            || tmux_launch_inputs_with_vibe_check(&common, false, || Ok(false)),
+        )
+        .unwrap();
+
+        assert_eq!(
+            actual,
+            (
+                vec![
+                    (
+                        EnvVars::session_child_launch_name().to_string(),
+                        "allow".to_string(),
+                    ),
+                    (
+                        EnvVars::session_launch_id_name().to_string(),
+                        "launch-fixture".to_string(),
+                    ),
+                ],
+                true,
+            ),
+        );
+    }
+
     #[rstest]
     fn new_child_and_grandchild_inherit_vibe_until_the_enabling_ancestor_turns_off(
         test_store: TestStore,
@@ -1496,6 +1551,8 @@ mod tests {
             .to_str()
             .expect("cache path should be valid UTF-8");
         let common = CommonNewArgs {
+            watch_web_launch_id: None,
+            watch_web_directory: None,
             prompt: None,
             child_launch: None,
             label: None,
@@ -1580,6 +1637,8 @@ mod tests {
     #[test]
     fn unavailable_vibe_state_does_not_block_an_ordinary_launch() {
         let common = CommonNewArgs {
+            watch_web_launch_id: None,
+            watch_web_directory: None,
             prompt: None,
             child_launch: None,
             label: None,

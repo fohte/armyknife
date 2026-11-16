@@ -12,6 +12,7 @@ use super::chrome::render_with_time;
 
 pub(in crate::commands::agent::tui) fn create_test_session(id: &str) -> Session {
     Session {
+        launch_id: None,
         archived_at: None,
         pr_context: None,
         created_pr_urls: Vec::new(),

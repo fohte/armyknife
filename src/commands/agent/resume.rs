@@ -608,6 +608,7 @@ mod tests {
         fn session(engine: Engine, status: SessionStatus) -> Session {
             let now = Utc::now();
             Session {
+                launch_id: None,
                 archived_at: None,
                 pr_context: None,
                 created_pr_urls: Vec::new(),
@@ -895,6 +896,7 @@ mod tests {
 
         fn session(status: SessionStatus, tmux_info: Option<TmuxInfo>) -> Session {
             Session {
+                launch_id: None,
                 archived_at: None,
                 pr_context: None,
                 created_pr_urls: Vec::new(),

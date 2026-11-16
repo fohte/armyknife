@@ -439,6 +439,7 @@ mod tests {
         let now = Utc::now();
         let sessions: Vec<Session> = (0..count)
             .map(|i| Session {
+                launch_id: None,
                 archived_at: None,
                 pr_context: None,
                 created_pr_urls: Vec::new(),
@@ -952,6 +953,7 @@ mod tests {
     fn app_with_statuses() -> App {
         let sessions: Vec<Session> = vec![
             Session {
+                launch_id: None,
                 archived_at: None,
                 pr_context: None,
                 created_pr_urls: Vec::new(),
@@ -991,6 +993,7 @@ mod tests {
                 effort: None,
             },
             Session {
+                launch_id: None,
                 archived_at: None,
                 pr_context: None,
                 created_pr_urls: Vec::new(),
@@ -1030,6 +1033,7 @@ mod tests {
                 effort: None,
             },
             Session {
+                launch_id: None,
                 archived_at: None,
                 pr_context: None,
                 created_pr_urls: Vec::new(),
@@ -1069,6 +1073,7 @@ mod tests {
                 effort: None,
             },
             Session {
+                launch_id: None,
                 archived_at: None,
                 pr_context: None,
                 created_pr_urls: Vec::new(),
@@ -1234,6 +1239,7 @@ mod tests {
 
     fn session_with_cwd(id: &str, cwd: PathBuf) -> Session {
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
             created_pr_urls: Vec::new(),

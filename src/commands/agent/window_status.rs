@@ -222,6 +222,7 @@ mod tests {
 
     fn session(status: SessionStatus, read_at: Option<chrono::DateTime<Utc>>) -> Session {
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
             created_pr_urls: Vec::new(),

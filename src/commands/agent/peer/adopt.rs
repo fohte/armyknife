@@ -142,6 +142,7 @@ mod tests {
     fn session(session_id: &str, ancestors: &[&str], status: SessionStatus) -> Session {
         let now = Utc::now();
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
             created_pr_urls: Vec::new(),

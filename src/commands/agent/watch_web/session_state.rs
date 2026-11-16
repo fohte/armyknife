@@ -318,6 +318,7 @@ mod tests {
     #[fixture]
     fn session() -> Session {
         Session {
+            launch_id: None,
             session_id: "test-session".to_string(),
             archived_at: None,
             pr_context: None,

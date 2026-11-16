@@ -492,6 +492,7 @@ mod tests {
 
     fn create_test_session_at(id: &str, timestamp: chrono::DateTime<Utc>) -> Session {
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
             created_pr_urls: Vec::new(),

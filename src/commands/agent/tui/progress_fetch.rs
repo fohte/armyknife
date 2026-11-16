@@ -489,6 +489,7 @@ mod tests {
     fn session(session_id: &str, ancestor_session_ids: Vec<&str>, updated_second: i64) -> Session {
         let updated_at = Utc.timestamp_opt(updated_second, 0).single().unwrap();
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
             created_pr_urls: Vec::new(),

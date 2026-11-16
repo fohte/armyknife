@@ -52,6 +52,7 @@ fn record_from_env_in(
         && metadata.child_launch.is_none()
         && !metadata.launched_with_vibe
         && metadata.ancestor_session_ids.is_empty()
+        && metadata.launch_id.is_none()
     {
         return Ok(());
     }
@@ -67,6 +68,7 @@ struct SessionMetadata<'a> {
     child_launch: Option<ChildLaunchPermission>,
     launched_with_vibe: bool,
     ancestor_session_ids: Vec<String>,
+    launch_id: Option<&'a str>,
 }
 
 fn non_empty_env<'a>(env_vars: &[(&str, &'a str)], name: &str) -> Option<&'a str> {
@@ -89,6 +91,7 @@ fn metadata_from_env<'a>(env_vars: &[(&str, &'a str)]) -> SessionMetadata<'a> {
         ancestor_session_ids: non_empty_env(env_vars, EnvVars::ancestor_session_ids_name())
             .map(parse_ancestor_session_ids)
             .unwrap_or_default(),
+        launch_id: non_empty_env(env_vars, EnvVars::session_launch_id_name()),
     }
 }
 
@@ -102,6 +105,7 @@ fn record_in(
     let session_lock = store::lock_session_for_update(sessions_dir, session_id)?;
     let now = Utc::now();
     let mut session = session_lock.load()?.unwrap_or_else(|| Session {
+        launch_id: None,
         archived_at: None,
         pr_context,
         created_pr_urls: Vec::new(),
@@ -156,6 +160,9 @@ fn record_in(
     if !metadata.ancestor_session_ids.is_empty() {
         session.ancestor_session_ids = metadata.ancestor_session_ids;
     }
+    if let Some(launch_id) = metadata.launch_id {
+        session.launch_id = Some(launch_id.to_string());
+    }
 
     session_lock.save(&session)
 }
@@ -181,6 +188,7 @@ mod tests {
             .single()
             .expect("timestamp should be valid");
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
             created_pr_urls: Vec::new(),
@@ -229,6 +237,49 @@ mod tests {
     }
 
     #[rstest]
+    fn records_watch_web_launch_id_from_the_launch_environment(sessions_dir: TempDir) {
+        let env_vars = [(EnvVars::session_launch_id_name(), "launch-fixture")];
+
+        record_from_env_in(
+            sessions_dir.path(),
+            "thread-a",
+            Path::new("/workspace/project"),
+            &env_vars,
+            None,
+        )
+        .unwrap();
+
+        let mut actual = session_json(sessions_dir.path());
+        actual["created_at"] = json!("<timestamp>");
+        actual["updated_at"] = json!("<timestamp>");
+        assert_eq!(
+            actual,
+            json!({
+                "session_id": "thread-a",
+                "launch_id": "launch-fixture",
+                "cwd": "/workspace/project",
+                "transcript_path": null,
+                "tty": null,
+                "tmux_info": null,
+                "status": "running",
+                "created_at": "<timestamp>",
+                "updated_at": "<timestamp>",
+                "last_message": null,
+                "current_tool": null,
+                "label": null,
+                "work_type": null,
+                "ancestor_session_ids": [],
+                "pending_bg_task_ids": [],
+                "pending_agent_task_ids": [],
+                "pending_permission_agent_ids": [],
+                "read_at": null,
+                "sweep_signaled": false,
+                "engine": "codex"
+            }),
+        );
+    }
+
+    #[rstest]
     #[case::with_work_type(Some("sample-skill"), Some("sample-skill"), true)]
     #[case::without_work_type(None, None, false)]
     fn creates_session_before_hook_runs(
@@ -249,6 +300,7 @@ mod tests {
             }),
             SessionMetadata {
                 label: Some("explicit label"),
+                launch_id: None,
                 work_type,
                 child_launch: None,
                 launched_with_vibe: false,
@@ -404,6 +456,7 @@ mod tests {
             None,
             SessionMetadata {
                 label,
+                launch_id: None,
                 work_type,
                 child_launch: None,
                 launched_with_vibe: false,
@@ -431,6 +484,7 @@ mod tests {
             None,
             SessionMetadata {
                 label: None,
+                launch_id: None,
                 work_type: None,
                 child_launch: None,
                 launched_with_vibe: true,
@@ -466,6 +520,7 @@ mod tests {
     fn extracts_child_launch_metadata_from_env() {
         let env_vars = [
             ("UNRELATED", "value"),
+            (EnvVars::session_launch_id_name(), "launch-fixture"),
             (EnvVars::session_label_name(), "delegate label"),
             (EnvVars::session_work_type_name(), "sample-skill"),
             (EnvVars::session_child_launch_name(), "deny"),
@@ -477,6 +532,7 @@ mod tests {
             metadata_from_env(&env_vars),
             SessionMetadata {
                 label: Some("delegate label"),
+                launch_id: Some("launch-fixture"),
                 work_type: Some("sample-skill"),
                 child_launch: Some(ChildLaunchPermission::Deny),
                 launched_with_vibe: true,

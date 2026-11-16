@@ -869,7 +869,7 @@
           }
         },
         "repos_root": {
-          "description": "Root directory containing git repositories.\nUsed by `a agent clean --all` to discover repositories.\nFalls back to GHQ_ROOT env, git config ghq.root, or ~/ghq.",
+          "description": "Root directory containing git repositories.\nUsed by `a agent clean --all` and watch-web directory search to discover repositories.\nFalls back to GHQ_ROOT env, git config ghq.root, or ~/ghq.",
           "type": [
             "string",
             "null"

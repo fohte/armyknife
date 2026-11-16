@@ -225,7 +225,7 @@ pub struct WorktreeConfig {
     pub layout: LayoutNode,
 
     /// Root directory containing git repositories.
-    /// Used by `a agent clean --all` to discover repositories.
+    /// Used by `a agent clean --all` and watch-web directory search to discover repositories.
     /// Falls back to GHQ_ROOT env, git config ghq.root, or ~/ghq.
     #[serde(default)]
     pub repos_root: Option<String>,

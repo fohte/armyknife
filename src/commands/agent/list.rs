@@ -249,6 +249,7 @@ mod tests {
 
     fn create_test_session() -> Session {
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
             created_pr_urls: Vec::new(),
@@ -425,6 +426,7 @@ mod tests {
         let now = Utc::now();
         let sessions = vec![
             Session {
+                launch_id: None,
                 archived_at: None,
                 pr_context: None,
                 created_pr_urls: Vec::new(),
@@ -464,6 +466,7 @@ mod tests {
                 effort: None,
             },
             Session {
+                launch_id: None,
                 archived_at: None,
                 pr_context: None,
                 created_pr_urls: Vec::new(),
@@ -503,6 +506,7 @@ mod tests {
                 effort: None,
             },
             Session {
+                launch_id: None,
                 archived_at: None,
                 pr_context: None,
                 created_pr_urls: Vec::new(),
@@ -542,6 +546,7 @@ mod tests {
                 effort: None,
             },
             Session {
+                launch_id: None,
                 archived_at: None,
                 pr_context: None,
                 created_pr_urls: Vec::new(),
@@ -861,6 +866,7 @@ mod tests {
         let now = Utc::now();
         let sessions = vec![
             Session {
+                launch_id: None,
                 archived_at: None,
                 pr_context: None,
                 created_pr_urls: Vec::new(),
@@ -906,6 +912,7 @@ mod tests {
                 effort: None,
             },
             Session {
+                launch_id: None,
                 archived_at: None,
                 pr_context: None,
                 created_pr_urls: Vec::new(),
@@ -951,6 +958,7 @@ mod tests {
                 effort: None,
             },
             Session {
+                launch_id: None,
                 archived_at: None,
                 pr_context: None,
                 created_pr_urls: Vec::new(),
