@@ -43,6 +43,7 @@ function renderBoard(sessions: Session[]) {
         error={null}
         hideQuietProjects={false}
         onHideQuietProjectsChange={() => undefined}
+        onNewSession={() => undefined}
         onSelectSession={() => undefined}
       />,
     )

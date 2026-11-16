@@ -383,6 +383,7 @@ it('shows an em dash when a task has no priority', () => {
 })
 
 it.each([
+  ['new session', '>New session'],
   ['switch board', '>Switch to Board'],
   ['switch inbox', '>Switch to Inbox'],
   ['close done', '>Close all done'],
@@ -478,6 +479,27 @@ it('runs the selected command with Ctrl-n and Enter', async () => {
         id: 'switch-inbox',
         label: 'Switch to Inbox',
         description: 'Show the session inbox',
+      },
+    ],
+  ])
+})
+
+it('runs New session from the command palette', async () => {
+  const onRunCommand =
+    vi.fn<NonNullable<ComponentProps<typeof CommandPalette>['onRunCommand']>>()
+  renderPalette({ initialQuery: '>New session', onRunCommand })
+
+  await act(async () => {
+    await userEvent.keyboard('{Enter}')
+  })
+
+  expect(onRunCommand.mock.calls).toEqual([
+    [
+      {
+        type: 'command',
+        id: 'new-session',
+        label: 'New session',
+        description: 'Start Claude Code or Codex in a directory',
       },
     ],
   ])

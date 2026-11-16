@@ -27,6 +27,9 @@ const appTestFiles = [
   'src/components/collapsible-text.test.tsx',
   'src/App.test.tsx',
   'src/components/mobile-nav-drawer.test.tsx',
+  'src/components/new-session-form.browser.test.tsx',
+  'src/components/new-session-picker.browser.test.tsx',
+  'src/components/mobile-navigation-actions.browser.test.tsx',
   'src/components/agent-watch-nav.test.tsx',
   'src/components/command-palette.test.tsx',
   'src/components/board-view.test.tsx',
@@ -65,6 +68,12 @@ const appTestFiles = [
   'src/components/decision-card.test.tsx',
   'src/components/decisions-panel.test.tsx',
 ]
+const unitTestExcludedFiles = [
+  ...configDefaults.exclude,
+  ...appTestFiles,
+  // This shared fixture matches Vitest's test-file pattern but has no test suite.
+  'src/new-session-story-fixtures.test.ts',
+]
 
 export default mergeConfig(
   viteConfig,
@@ -75,7 +84,7 @@ export default mergeConfig(
           extends: true,
           test: {
             name: 'unit',
-            exclude: [...configDefaults.exclude, ...appTestFiles],
+            exclude: unitTestExcludedFiles,
           },
         },
         {

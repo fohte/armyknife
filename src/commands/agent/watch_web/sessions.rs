@@ -18,11 +18,14 @@ use super::session_enrichment::{
 };
 use crate::commands::agent::proposal::ProposalBody;
 use crate::commands::agent::review_queue::{ReviewDocumentQueue, review_document_queue};
+use crate::commands::agent::session_status;
 use crate::commands::agent::session_title::title_display_name;
 use crate::commands::agent::store;
 #[cfg(test)]
 use crate::commands::agent::tq_session_tasks::SessionTask as LinkedSessionTask;
-use crate::commands::agent::types::{Engine, Session, SessionStatus, WebUiRegistration};
+use crate::commands::agent::types::{
+    DisplayStatus, Engine, Session, SessionStatus, WebUiRegistration,
+};
 use crate::commands::agent::user_turn::user_turns;
 use crate::infra::github::PrState;
 use crate::shared::config::{self, AgentConfig};
@@ -199,13 +202,6 @@ trait SessionSource: Clone + Send + Sync + 'static {
         sessions: &[Session],
     ) -> impl Future<Output = HashMap<String, Vec<SessionPullRequestInfo>>> + Send;
 
-    fn running_background_task_session_ids(
-        &self,
-        _sessions: Vec<Session>,
-    ) -> impl Future<Output = anyhow::Result<HashSet<String>>> + Send {
-        async { Ok(HashSet::new()) }
-    }
-
     fn review_document_queue(&self, _session: &Session) -> ReviewDocumentQueue {
         ReviewDocumentQueue::Unmanaged
     }
@@ -242,17 +238,6 @@ impl SessionSource for LiveSessionSource {
         sessions: &[Session],
     ) -> HashMap<String, Vec<SessionPullRequestInfo>> {
         self.enrichment.pull_requests(sessions).await
-    }
-
-    async fn running_background_task_session_ids(
-        &self,
-        sessions: Vec<Session>,
-    ) -> anyhow::Result<HashSet<String>> {
-        let loaders = self.message_loaders.clone();
-        Ok(tokio::task::spawn_blocking(move || {
-            loaders.running_background_task_session_ids(&sessions)
-        })
-        .await?)
     }
 
     fn review_document_queue(&self, session: &Session) -> ReviewDocumentQueue {
@@ -349,27 +334,11 @@ async fn list_sessions<S: SessionSource>(
         .collect::<Vec<_>>();
     let interrupted_sessions =
         tokio::task::spawn_blocking(move || interrupted_session_ids(sessions_to_check));
-    let stopped_claude_sessions = response_sessions
-        .iter()
-        .filter(|session| {
-            session.engine == Engine::Claude && session.status == SessionStatus::Stopped
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-
-    let (task_metadata, pull_requests, running_background_task_sessions, question_previews) = tokio::join!(
+    let (task_metadata, pull_requests, question_previews) = tokio::join!(
         source.fetch_task_metadata(&response_sessions),
         source.fetch_pull_requests(&response_sessions),
-        source.running_background_task_session_ids(stopped_claude_sessions),
         source.question_previews(&response_sessions),
     );
-    let running_background_task_sessions = running_background_task_sessions.map_err(|error| {
-        tracing::warn!(
-            event = "agent.watch_web.background_task_lookup_failed",
-            %error,
-        );
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
     let interrupted_session_ids = interrupted_sessions
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -468,8 +437,8 @@ async fn list_sessions<S: SessionSource>(
 
             let turn = turn_kinds.get(session.session_id.as_str()).copied();
             let interrupted = interrupted_session_ids.contains(&session.session_id);
-            let has_running_background_task =
-                running_background_task_sessions.contains(&session.session_id);
+            let display_status = session.display_status();
+            let has_running_background_task = display_status == DisplayStatus::Background;
             let agent_status_state = session
                 .agent_status
                 .as_ref()
@@ -526,7 +495,10 @@ async fn list_sessions<S: SessionSource>(
                 work_type: session.work_type.clone(),
                 category,
                 is_paused: session.status == SessionStatus::Paused,
-                activity_status: if session.status == SessionStatus::Running {
+                activity_status: if matches!(
+                    display_status,
+                    DisplayStatus::Running | DisplayStatus::Background
+                ) {
                     SessionActivityStatus::Working
                 } else if waiting {
                     SessionActivityStatus::Waiting
@@ -571,7 +543,7 @@ async fn list_sessions<S: SessionSource>(
                     .signed_duration_since(session.updated_at)
                     .num_seconds()
                     .max(0) as u64,
-                unread: session.is_unread_stopped(),
+                unread: display_status == DisplayStatus::UnreadStopped,
                 task,
                 tasks,
                 repo: repo.clone(),
@@ -636,9 +608,20 @@ async fn list_sessions<S: SessionSource>(
 }
 
 fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
+    let sessions = session_status::list_sessions_with_bg_run_status()?;
+    let sessions_by_id = sessions
+        .iter()
+        .map(|session| (session.session_id.as_str(), session))
+        .collect::<HashMap<_, _>>();
+    let mut all_sessions = store::list_all_sessions()?;
+    for session in &mut all_sessions {
+        if let Some(active_session) = sessions_by_id.get(session.session_id.as_str()) {
+            *session = (*active_session).clone();
+        } else {
+            session_status::include_pending_status(session);
+        }
+    }
     let revision = store::session_store_revision()?;
-    let sessions = store::list_sessions()?;
-    let all_sessions = store::list_all_sessions()?;
     let title_by_id = all_sessions
         .iter()
         .map(|session| (session.session_id.clone(), title_display_name(session)))
@@ -844,18 +827,6 @@ mod tests {
             self.pull_requests.clone()
         }
 
-        async fn running_background_task_session_ids(
-            &self,
-            sessions: Vec<Session>,
-        ) -> anyhow::Result<HashSet<String>> {
-            let loaders = self.message_loaders.clone();
-            tokio::task::spawn_blocking(move || {
-                loaders.running_background_task_session_ids(&sessions)
-            })
-            .await
-            .map_err(Into::into)
-        }
-
         fn review_document_queue(&self, _session: &Session) -> ReviewDocumentQueue {
             self.review_document_queue_calls
                 .fetch_add(1, Ordering::Relaxed);
@@ -924,15 +895,6 @@ mod tests {
             sessions: &[Session],
         ) -> HashMap<String, Vec<SessionPullRequestInfo>> {
             self.source.fetch_pull_requests(sessions).await
-        }
-
-        async fn running_background_task_session_ids(
-            &self,
-            sessions: Vec<Session>,
-        ) -> anyhow::Result<HashSet<String>> {
-            self.source
-                .running_background_task_session_ids(sessions)
-                .await
         }
 
         fn now(&self) -> DateTime<Utc> {
@@ -1137,6 +1099,42 @@ mod tests {
             },
         );
         expected["sessions"][0]["launchId"] = serde_json::json!("launch-fixture");
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn codex_background_run_uses_shared_display_status_in_the_sessions_feed(
+        mut source: TestSessionSource,
+    ) {
+        source.sessions[0].engine = Engine::Codex;
+        source.sessions[0]
+            .pending_bg_task_ids
+            .insert(crate::commands::agent::types::BG_RUN_PENDING_TASK_MARKER.to_owned());
+        source.all_sessions[0] = source.sessions[0].clone();
+        source.web_states[0].later_until = None;
+        let mut expected = expected_response(
+            "in_progress",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: None,
+                category_when_not_later: "in_progress",
+                is_paused: false,
+                unread: false,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "codex",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["waitingForBackgroundTasks"] = serde_json::json!(true);
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
@@ -2349,39 +2347,17 @@ mod tests {
     }
 
     #[rstest]
-    #[case::without_agent_status(None, true, false)]
-    #[case::configured_done_with_transcript(Some(AgentStatusState::Done), true, false)]
-    #[case::waiting_with_background_task(Some(AgentStatusState::Waiting), false, false)]
-    #[case::pending_task_without_transcript(None, false, false)]
-    #[case::pending_task_with_parse_error(None, false, true)]
+    #[case::without_agent_status(None)]
+    #[case::configured_done_with_pending_task(Some(AgentStatusState::Done))]
+    #[case::waiting_with_background_task(Some(AgentStatusState::Waiting))]
     #[tokio::test]
-    async fn stopped_claude_with_running_background_task_is_in_progress(
+    async fn stopped_claude_with_pending_task_uses_shared_background_status(
         mut source: TestSessionSource,
         #[case] status_state: Option<AgentStatusState>,
-        #[case] has_transcript: bool,
-        #[case] transcript_parse_fails: bool,
     ) {
-        let transcript_file = has_transcript.then(|| tempfile::NamedTempFile::new().unwrap());
-        let transcript_directory = transcript_parse_fails.then(|| tempfile::tempdir().unwrap());
-        if let Some(transcript_file) = &transcript_file {
-            std::fs::write(
-                transcript_file.path(),
-                indoc::indoc! {r#"
-                    {"uuid":"fixture-prompt-row","parentUuid":null,"type":"user","message":{"content":"Watch the fixture build."}}
-                    {"uuid":"fixture-bash-call-row","parentUuid":"fixture-prompt-row","type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-bash-tool-use-id","name":"Bash","input":{"command":"watch fixture build","description":"Watch the synthetic build","run_in_background":true}}]}}
-                    {"uuid":"fixture-bash-result-row","parentUuid":"fixture-bash-call-row","type":"user","sourceToolAssistantUUID":"fixture-bash-call-row","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-bash-tool-use-id","content":"Command running in background with ID: fixture-task-id. Output is being written to: /fixture/task-output.log"}]}}
-                "#},
-            )
-            .unwrap();
-            source.sessions[0].transcript_path = Some(transcript_file.path().to_path_buf());
-        } else {
-            source.sessions[0]
-                .pending_bg_task_ids
-                .insert("fixture-task-id".to_string());
-            source.sessions[0].transcript_path = transcript_directory
-                .as_ref()
-                .map(|directory| directory.path().to_path_buf());
-        }
+        source.sessions[0]
+            .pending_bg_task_ids
+            .insert("fixture-task-id".to_string());
         source.web_states[0].later_until = None;
         if let Some(state) = status_state {
             let status_kind = "work_finished";
@@ -2402,7 +2378,7 @@ mod tests {
                 kind: None,
                 category_when_not_later: "in_progress",
                 is_paused: false,
-                unread: true,
+                unread: false,
                 crit_url: None,
             },
             ExpectedSessionResponse {
@@ -2414,12 +2390,7 @@ mod tests {
                 can_open_in_terminal: true,
             },
         );
-        expected["sessions"][0]["activityStatus"] =
-            serde_json::json!(if status_state == Some(AgentStatusState::Waiting) {
-                "waiting"
-            } else {
-                "stopped"
-            });
+        expected["sessions"][0]["activityStatus"] = serde_json::json!("working");
         expected["sessions"][0]["waitingForBackgroundTasks"] = serde_json::json!(true);
         if status_state == Some(AgentStatusState::Waiting) {
             expected["sessions"][0]["waitingReason"] =

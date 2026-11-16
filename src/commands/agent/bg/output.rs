@@ -6,12 +6,16 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 pub(super) fn output_dir(task_id: &str) -> Result<PathBuf> {
-    let dir = std::env::temp_dir().join(format!("armyknife-agent-bg-{task_id}"));
+    let dir = output_dir_path(task_id);
     fs::DirBuilder::new()
         .mode(0o700)
         .create(&dir)
         .with_context(|| format!("failed to create output directory: {}", dir.display()))?;
     Ok(dir)
+}
+
+pub(super) fn output_dir_path(task_id: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("armyknife-agent-bg-{task_id}"))
 }
 
 pub(super) fn open_output_file(path: &Path) -> io::Result<File> {

@@ -40,6 +40,7 @@ type ParentSession = {
 
 export type Session = {
   id: string
+  launchId?: string | null
   engine?: 'claude' | 'codex'
   workType?: string | null
   category: SessionCategory

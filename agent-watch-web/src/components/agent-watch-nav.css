@@ -155,6 +155,25 @@
   font-weight: 400;
 }
 
+.agent-watch-new-session {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  place-items: center;
+  margin-left: 2px;
+  border: 0;
+  border-radius: var(--aw-radius);
+  background: transparent;
+  color: var(--aw-text-secondary);
+  cursor: pointer;
+}
+
+.agent-watch-new-session:hover {
+  background: var(--aw-bg-pressed);
+  color: var(--aw-text-primary);
+}
+
 .agent-watch-inbox-toggle {
   display: grid;
   width: 28px;

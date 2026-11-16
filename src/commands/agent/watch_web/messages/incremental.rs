@@ -13,7 +13,6 @@ use super::{
 };
 
 mod tail_window;
-pub(super) use tail_window::parse_session_transcript_tail_window_bounded;
 
 pub(super) use tail_window::{filter_after_tail_window, parse_initial_or_full};
 
@@ -261,9 +260,9 @@ fn render_parser(
 mod tests {
     use super::{parse_session_transcript, parse_session_transcript_incrementally};
     use crate::commands::agent::store::{WatchWebQueuedAttachment, WatchWebQueuedPrompt};
-    use crate::commands::agent::types::{Engine, Session};
+    use crate::commands::agent::types::Engine;
     use crate::commands::agent::watch_web::messages::cache::{
-        MessageCache, RunningBackgroundTaskCache,
+        MessageCache, transcript_fingerprint,
     };
     use crate::commands::agent::watch_web::messages::parser::claude::ParserAdditions;
     use crate::commands::agent::watch_web::messages::{
@@ -408,17 +407,7 @@ mod tests {
             br#"{"type":"assistant","message":{"content":[{"type":"text","text":"Fixture response."}]}}"#,
         )
         .unwrap();
-        let session: Session = serde_json::from_value(serde_json::json!({
-            "session_id": "fixture-session",
-            "cwd": "/fixture/project",
-            "status": "ended",
-            "created_at": "2026-01-01T00:00:00Z",
-            "updated_at": "2026-01-01T00:00:00Z",
-            "engine": "claude",
-            "transcript_path": path,
-        }))
-        .unwrap();
-        let fingerprint = RunningBackgroundTaskCache::fingerprint(&session)
+        let fingerprint = transcript_fingerprint(Engine::Claude, Some(&path))
             .unwrap()
             .unwrap();
         std::fs::remove_file(&path).unwrap();
@@ -428,7 +417,7 @@ mod tests {
                 path: Some(&path),
                 engine: Engine::Claude,
                 additions: ParserAdditions {
-                    session_id: &session.session_id,
+                    session_id: "fixture-session",
                     parent: None,
                     pending_tool: None,
                     user_marker: None,

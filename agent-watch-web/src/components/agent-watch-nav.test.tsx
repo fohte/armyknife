@@ -122,6 +122,22 @@ it('renders the configured label and opens the selected session', () => {
   })
 })
 
+it('opens a new session from the desktop navigation', async () => {
+  const onNewSession = vi.fn()
+  renderNav([], { onNewSession })
+  const newSessionButton = container.querySelector<HTMLButtonElement>(
+    '[aria-label="New session"]',
+  )
+  if (newSessionButton === null)
+    throw new Error('New session button is missing')
+
+  await act(async () => {
+    await userEvent.click(newSessionButton)
+  })
+
+  expect(onNewSession.mock.calls).toEqual([[]])
+})
+
 it('renders no work type sections without configured groups', () => {
   renderNav([])
 

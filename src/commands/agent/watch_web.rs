@@ -207,7 +207,8 @@ fn app(restart_signal: watch::Receiver<bool>) -> Router {
             store::permission_denied_operations_from(&store::sessions_dir()?, session_id)
         })
         .with_agent_file_loader(store::agent_files)
-        .with_agent_file_storage_root_loader(|| super::file::storage_root().ok()),
+        .with_agent_file_storage_root_loader(|| super::file::storage_root().ok())
+        .with_background_task_loader(messages::registered_background_tasks),
         restart_signal,
     )
 }

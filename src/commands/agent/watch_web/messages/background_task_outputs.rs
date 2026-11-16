@@ -33,14 +33,14 @@ struct CachedOutputPaths {
 }
 
 pub(super) async fn get_background_task_output(
-    State((load_session, _, _)): State<MessagesRouteState>,
+    State((load_session, _, loaders)): State<MessagesRouteState>,
     AxumPath((session_id, task_id)): AxumPath<(String, String)>,
 ) -> Response {
     let output = match tokio::task::spawn_blocking(move || -> Result<Option<String>> {
         let Some(session) = load_session(&session_id)? else {
             return Ok(None);
         };
-        let Some(path) = output_path_for_task(&session, &task_id)? else {
+        let Some(path) = output_path_for_task(&session, &task_id, &loaders)? else {
             return Ok(None);
         };
         Ok(read_output_tail(&path)?)
@@ -70,7 +70,19 @@ pub(super) async fn get_background_task_output(
         .into_response()
 }
 
-fn output_path_for_task(session: &Session, task_id: &str) -> Result<Option<PathBuf>> {
+fn output_path_for_task(
+    session: &Session,
+    task_id: &str,
+    loaders: &super::RouteLoaders,
+) -> Result<Option<PathBuf>> {
+    if let Some(path) = loaders
+        .background_tasks(&session.session_id)?
+        .into_iter()
+        .find(|task| task.id == task_id)
+        .and_then(|task| task.output_path)
+    {
+        return Ok(Some(path));
+    }
     if session.engine != Engine::Claude {
         return Ok(None);
     }

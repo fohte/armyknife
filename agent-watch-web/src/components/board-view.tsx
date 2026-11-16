@@ -14,6 +14,7 @@ type BoardViewProps = {
   error: string | null
   hideQuietProjects: boolean
   onHideQuietProjectsChange: (checked: boolean) => void
+  onNewSession: () => void
   onSelectSession: (id: string) => void
   focusedProjectName?: string | null
   isMobile?: boolean
@@ -168,6 +169,7 @@ export function BoardView({
   error,
   hideQuietProjects,
   onHideQuietProjectsChange,
+  onNewSession,
   onSelectSession,
   focusedProjectName = null,
   isMobile = false,
@@ -226,6 +228,7 @@ export function BoardView({
             <MobileNavigationActions
               onOpenNavigation={onOpenNavigation}
               onOpenPalette={onOpenPalette}
+              onNewSession={onNewSession}
             />
           ) : null}
           <h1 id="board-title">Board</h1>

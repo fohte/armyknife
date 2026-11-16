@@ -159,6 +159,12 @@ function baseCommands(): PaletteCommandItem[] {
   return [
     {
       type: 'command',
+      id: 'new-session',
+      label: 'New session',
+      description: 'Start Claude Code or Codex in a directory',
+    },
+    {
+      type: 'command',
       id: 'switch-board',
       label: 'Switch to Board',
       description: 'Show projects and sessions',

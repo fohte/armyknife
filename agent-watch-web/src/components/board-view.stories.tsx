@@ -137,6 +137,7 @@ const meta = {
     error: null,
     hideQuietProjects: true,
     onHideQuietProjectsChange: () => undefined,
+    onNewSession: () => undefined,
     onSelectSession: () => undefined,
   },
   decorators: [
