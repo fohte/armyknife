@@ -61,6 +61,7 @@ const appTestFiles = [
   'src/components/pull-request-list-panel.browser.test.tsx',
   'src/components/session-tree-panel.test.tsx',
   'src/components/running-tasks-panel.test.tsx',
+  'src/components/session-tasks-panel.test.tsx',
   'src/components/decision-card.test.tsx',
   'src/components/decisions-panel.test.tsx',
 ]

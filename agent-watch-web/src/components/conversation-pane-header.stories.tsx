@@ -48,8 +48,13 @@ const meta = {
     onToggleToday: () => undefined,
   },
   decorators: [
-    (Story) => (
-      <div className="conversation-pane" style={{ height: 96 }}>
+    (Story, context) => (
+      <div
+        className="conversation-pane"
+        style={{
+          height: context.args.isMobile ? 88 : 96,
+        }}
+      >
         <Story />
       </div>
     ),
@@ -75,45 +80,31 @@ export const EditingTheSessionTitleOnMobile: Story = {
   args: {
     isMobile: true,
     titleEditing: true,
+    session: { ...session, title: 'Edit' },
   },
 }
 
-export const MobileHeaderKeepsManySessionDetailsAndShowsActionsMenu: Story = {
-  name: 'The mobile header keeps a busy session compact with its actions menu open',
+export const MobileHeaderShowsTaskAndRepository: Story = {
+  name: 'The mobile header keeps the task and repository on its second row',
   args: {
     isMobile: true,
-    mobileActionsMenuOpen: true,
-    isToday: true,
     session: {
       ...session,
       category: 'done',
-      title:
-        'Review the retry strategy and keep the delivery schedule consistent across services',
-      repo: 'example/long-running-service-name',
+      title: 'Retry',
+      repo: 'svc',
       task: {
         id: 'sample-task-primary',
-        number: 2048,
-        title: 'Improve request reliability',
-        priority: 1,
+        number: 8,
+        title: 'Fix',
+        priority: null,
       },
       tasks: [
         {
           id: 'sample-task-primary',
-          number: 2048,
-          title: 'Improve request reliability',
-          priority: 1,
-        },
-        {
-          id: 'sample-task-secondary',
-          number: 2049,
-          title: 'Document retry limits',
-          priority: 2,
-        },
-        {
-          id: 'sample-task-tertiary',
-          number: 2050,
-          title: 'Add delivery metrics',
-          priority: 3,
+          number: 8,
+          title: 'Fix',
+          priority: null,
         },
       ],
     },

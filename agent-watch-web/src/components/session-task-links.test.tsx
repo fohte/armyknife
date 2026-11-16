@@ -69,17 +69,6 @@ function snapshot() {
       : null,
     heading: visibleMenu?.querySelector('.session-task-links-heading')
       ?.textContent,
-    completedToggle: (() => {
-      const toggle = visibleMenu?.querySelector<HTMLButtonElement>(
-        '.session-task-links-completed-toggle',
-      )
-      return toggle === null || toggle === undefined
-        ? null
-        : {
-            text: toggle.textContent,
-            expanded: toggle.getAttribute('aria-expanded'),
-          }
-    })(),
     linkedTasks: Array.from(visibleMenu?.querySelectorAll('li') ?? []).map(
       (item) => ({
         href: item.querySelector('a')?.getAttribute('href'),
@@ -125,7 +114,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it('keeps completed secondary tasks collapsed until requested', async () => {
+it('keeps closed secondary tasks out of the header menu', async () => {
   const task = {
     id: 'open-task',
     number: 2048,
@@ -177,15 +166,6 @@ it('keeps completed secondary tasks collapsed until requested', async () => {
   const snapshots = [snapshot()]
 
   await act(async () => {
-    document.body
-      .querySelector<HTMLButtonElement>('.session-task-links-completed-toggle')
-      ?.click()
-    await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
-  })
-
-  snapshots.push(snapshot())
-
-  await act(async () => {
     summary?.click()
     await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
   })
@@ -213,7 +193,6 @@ it('keeps completed secondary tasks collapsed until requested', async () => {
         width: '280px',
       },
       heading: 'Linked tq tasks · Inbox and Board use the primary one',
-      completedToggle: { text: 'Show 1 completed', expanded: 'false' },
       linkedTasks: [
         {
           href: 'https://tq.fohte.net/tasks/open-task',
@@ -229,54 +208,6 @@ it('keeps completed secondary tasks collapsed until requested', async () => {
           text: 'P4 #2046 Add request tracing',
           statuses: [],
           summary: '2 sessions',
-          action: 'Make primary',
-        },
-      ],
-    },
-    {
-      expanded: true,
-      primary: {
-        href: 'https://tq.fohte.net/tasks/open-task',
-        id: 'P1 #2048',
-        text: 'P1 #2048 Improve request reliability',
-      },
-      count: '+1 tasks ▾',
-      summaryLabel: '1 more linked tq tasks',
-      disclosureOwnsMenu: true,
-      summaryControlsMenu: true,
-      menuRole: 'region',
-      menuLabel: 'Linked tq tasks',
-      menuHidden: false,
-      menuPosition: {
-        left: '30px',
-        top: '82px',
-        width: '280px',
-      },
-      heading: 'Linked tq tasks · Inbox and Board use the primary one',
-      completedToggle: { text: 'Hide 1 completed', expanded: 'true' },
-      linkedTasks: [
-        {
-          href: 'https://tq.fohte.net/tasks/open-task',
-          id: 'P1 #2048',
-          text: 'P1 #2048 Improve request reliability',
-          statuses: ['Primary', 'Completed'],
-          summary: '4 sessions · 2 need action',
-          action: null,
-        },
-        {
-          href: 'https://tq.fohte.net/tasks/secondary-task',
-          id: 'P4 #2046',
-          text: 'P4 #2046 Add request tracing',
-          statuses: [],
-          summary: '2 sessions',
-          action: 'Make primary',
-        },
-        {
-          href: 'https://tq.fohte.net/tasks/completed-task',
-          id: '#2047',
-          text: '#2047 Document retry behavior',
-          statuses: ['Completed'],
-          summary: '1 session · Later',
           action: 'Make primary',
         },
       ],
@@ -297,13 +228,12 @@ it('keeps completed secondary tasks collapsed until requested', async () => {
       menuHidden: true,
       menuPosition: null,
       heading: undefined,
-      completedToggle: null,
       linkedTasks: [],
     },
   ])
 })
 
-it('keeps a completed primary visible when every secondary task is completed', async () => {
+it('shows a completed primary without a menu when every secondary task is closed', () => {
   const task = {
     id: 'primary-task',
     number: 2048,
@@ -345,60 +275,19 @@ it('keeps a completed primary visible when every secondary task is completed', a
     )
   })
 
-  const snapshots = [
-    {
-      count: container.querySelector('summary')?.textContent,
-      summaryLabel: container
-        .querySelector('summary')
-        ?.getAttribute('aria-label'),
-      menuTasks: Array.from(
-        document.body.querySelectorAll('.session-task-links-menu li'),
-      ).map((item) => item.querySelector('a')?.textContent),
-      toggle: document.body.querySelector<HTMLButtonElement>(
-        '.session-task-links-completed-toggle',
-      )?.textContent,
-    },
-  ]
-
-  await act(async () => {
-    document.body
-      .querySelector<HTMLButtonElement>('.session-task-links-completed-toggle')
-      ?.click()
-    await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+  const snapshot = () => ({
+    primary: container.querySelector('.session-task-line > a')?.textContent,
+    disclosure: container.querySelector('.session-task-links summary')
+      ?.textContent,
+    menuItems: document.body.querySelectorAll('.session-task-links-menu li')
+      .length,
   })
 
-  snapshots.push({
-    count: container.querySelector('summary')?.textContent,
-    summaryLabel: container
-      .querySelector('summary')
-      ?.getAttribute('aria-label'),
-    menuTasks: Array.from(
-      document.body.querySelectorAll('.session-task-links-menu li'),
-    ).map((item) => item.querySelector('a')?.textContent),
-    toggle: document.body.querySelector<HTMLButtonElement>(
-      '.session-task-links-completed-toggle',
-    )?.textContent,
+  expect(snapshot()).toEqual({
+    primary: 'P1 #2048 Improve request reliability',
+    disclosure: undefined,
+    menuItems: 0,
   })
-
-  expect(snapshots).toEqual([
-    {
-      count: '3 completed ▾',
-      summaryLabel: '3 completed linked tq tasks',
-      menuTasks: ['P1 #2048 Improve request reliability'],
-      toggle: 'Show 3 completed',
-    },
-    {
-      count: '3 completed ▾',
-      summaryLabel: '3 completed linked tq tasks',
-      menuTasks: [
-        'P1 #2048 Improve request reliability',
-        '#2047 Document retry behavior',
-        'P3 #2046 Review request metrics',
-        'P4 #2045 Update retry guide',
-      ],
-      toggle: 'Hide 3 completed',
-    },
-  ])
 })
 
 it('makes a linked task primary from the menu', async () => {

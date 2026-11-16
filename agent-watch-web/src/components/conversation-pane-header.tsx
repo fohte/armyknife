@@ -18,6 +18,7 @@ import { SessionHeading } from '#components/session-heading'
 import { SessionTaskLinks } from '#components/session-task-links'
 import { StarredSessionToggle } from '#components/starred-session-toggle'
 import { useSessionOperations } from '#session-operation-context'
+import { getSessionTasks } from '#session-task-utils'
 import type {
   BackgroundTask,
   OpenInTerminalStatus,
@@ -123,8 +124,7 @@ export function ConversationPaneHeader({
         operation.sessionId === session.id &&
         operation.number === mergeOperation.number,
     )
-  const linkedTasks =
-    session.tasks ?? (session.task === null ? [] : [session.task])
+  const linkedTasks = getSessionTasks(session)
 
   const confirmMerge = async () => {
     if (mergeOperation === null || merging) return
@@ -216,7 +216,6 @@ export function ConversationPaneHeader({
     <div className="session-title-heading">
       <SessionHeading
         title={session.title}
-        isPaused={session.isPaused}
         {...(isMobile ? {} : { sessionId: session.id })}
       />
       {isMobile ? null : (
@@ -247,28 +246,16 @@ export function ConversationPaneHeader({
           >
             <ChevronLeft aria-hidden="true" size={30} strokeWidth={2.5} />
           </Button>
-          <div className="mobile-conversation-heading">
-            <div className="mobile-conversation-title">
-              {isToday ? (
-                <Star
-                  aria-label="Starred"
-                  className="mobile-conversation-starred"
-                  role="img"
-                  size={13}
-                />
-              ) : null}
-              {titleHeading}
-            </div>
-            <div className="mobile-conversation-context">
-              <SessionTaskLinks
-                task={session.task}
-                tasks={linkedTasks}
-                sessions={sessions}
-                onMakePrimary={(taskId) => onAction('primary-task', { taskId })}
+          <div className="mobile-conversation-title">
+            {isToday ? (
+              <Star
+                aria-label="Starred"
+                className="mobile-conversation-starred"
+                role="img"
+                size={13}
               />
-              {session.task ? <span aria-hidden="true">·</span> : null}
-              <span>{session.repo.split('/').at(-1)}</span>
-            </div>
+            ) : null}
+            {titleHeading}
           </div>
           <div className="mobile-conversation-header-actions">
             <Button
@@ -316,6 +303,17 @@ export function ConversationPaneHeader({
                 : { onToggleStarred: onToggleToday })}
               onEditTitle={editTitle}
             />
+          </div>
+          <div className="mobile-conversation-context">
+            <SessionTaskLinks
+              task={session.task}
+              tasks={linkedTasks}
+              sessions={sessions}
+              showTaskMenu={false}
+              onMakePrimary={(taskId) => onAction('primary-task', { taskId })}
+            />
+            {session.task ? <span aria-hidden="true">·</span> : null}
+            <span className="mobile-conversation-repo">{session.repo}</span>
           </div>
         </>
       ) : (
