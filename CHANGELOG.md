@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.752](https://github.com/fohte/armyknife/compare/v0.1.751...v0.1.752) (2026-11-16)
+
+
+### Features
+
+* **watch-web:** start sessions in any directory ([#1885](https://github.com/fohte/armyknife/issues/1885)) ([6610d2f](https://github.com/fohte/armyknife/commit/6610d2ff3ae68f8c69a09b25b2b56839f0ed1a33))
+
 ## [0.1.751](https://github.com/fohte/armyknife/compare/v0.1.750...v0.1.751) (2026-11-16)
 
 
