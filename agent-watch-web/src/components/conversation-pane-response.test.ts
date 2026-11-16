@@ -15,6 +15,7 @@ const response = (message: unknown) => ({
 const validFile = {
   name: 'sample-layout.png',
   source: '/api/sessions/sample-session/files/sample-file',
+  size: 1024,
   isImage: true,
   previewType: 'image',
   available: true,
@@ -192,8 +193,16 @@ it.each([
     message: fileAttachment({ files: [{ ...validFile, source: 1 }] }),
   },
   {
+    name: 'a file without a size',
+    message: fileAttachment({ files: [{ ...validFile, size: undefined }] }),
+  },
+  {
     name: 'a file with a non-boolean image flag',
     message: fileAttachment({ files: [{ ...validFile, isImage: 'yes' }] }),
+  },
+  {
+    name: 'a file with a negative size',
+    message: fileAttachment({ files: [{ ...validFile, size: -1 }] }),
   },
   {
     name: 'a file with a non-boolean availability flag',

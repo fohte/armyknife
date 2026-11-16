@@ -9,8 +9,6 @@ import type { ChatItem } from '#types'
 type FileAttachmentMessage = Extract<ChatItem, { type: 'file_attachment' }>
 export type AttachmentPreviewFile = FileAttachmentMessage['files'][number]
 
-const LARGE_PREVIEW_LENGTH = 2400
-
 const syntaxLanguages: Record<string, string> = {
   bash: 'bash',
   c: 'c',
@@ -52,19 +50,21 @@ function TextPreview({
   file,
   content,
   loading,
+  deferred,
+  onPreviewOpen,
 }: {
   file: AttachmentPreviewFile
   content: string | undefined
   loading: boolean
+  deferred: boolean
+  onPreviewOpen: () => void
 }) {
-  if (content === undefined) {
-    return loading ? (
-      <span className="chat-file-preview-loading">Loading preview…</span>
-    ) : null
-  }
-
   const preview =
-    file.previewType === 'markdown' ? (
+    content === undefined ? (
+      loading ? (
+        <span className="chat-file-preview-loading">Loading preview…</span>
+      ) : null
+    ) : file.previewType === 'markdown' ? (
       <MarkdownMessage className="chat-file-markdown-preview">
         {content}
       </MarkdownMessage>
@@ -76,8 +76,13 @@ function TextPreview({
       />
     )
 
-  return content.length > LARGE_PREVIEW_LENGTH ? (
-    <details className="chat-file-collapsed-preview">
+  return deferred ? (
+    <details
+      className="chat-file-collapsed-preview"
+      onToggle={(event) => {
+        if (event.currentTarget.open) onPreviewOpen()
+      }}
+    >
       <summary>Show file contents</summary>
       {preview}
     </details>
@@ -90,11 +95,17 @@ export function FileContentPreview({
   file,
   textContent,
   loading = false,
+  deferred = false,
+  onPreviewOpen = () => undefined,
+  previewUnavailable = false,
   onEnlargeImage = () => undefined,
 }: {
   file: AttachmentPreviewFile
   textContent?: string
   loading?: boolean
+  deferred?: boolean
+  onPreviewOpen?: () => void
+  previewUnavailable?: boolean
   onEnlargeImage?: (source: string) => void
 }) {
   const [imageFailed, setImageFailed] = useState(false)
@@ -130,7 +141,13 @@ export function FileContentPreview({
       case 'markdown':
       case 'text':
         return (
-          <TextPreview file={file} content={textContent} loading={loading} />
+          <TextPreview
+            file={file}
+            content={textContent}
+            loading={loading}
+            deferred={deferred}
+            onPreviewOpen={onPreviewOpen}
+          />
         )
       case 'video':
         return (
@@ -170,6 +187,11 @@ export function FileContentPreview({
   return (
     <>
       {preview}
+      {previewUnavailable && (
+        <span className="chat-file-preview-unavailable" role="status">
+          Preview unavailable
+        </span>
+      )}
       <a
         className="chat-file-download"
         href={file.source}

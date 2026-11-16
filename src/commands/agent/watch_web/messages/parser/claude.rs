@@ -319,6 +319,7 @@ mod tests {
                     source:
                         "/api/sessions/fixture-session/transcript-files/Zml4dHVyZS10b29sLXVzZQ/0"
                             .to_owned(),
+                    size: 8,
                     is_image: true,
                     preview_type: FilePreviewType::Image,
                     available: true,

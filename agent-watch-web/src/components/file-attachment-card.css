@@ -69,6 +69,11 @@
   font-size: 12px;
 }
 
+.chat-file-preview-unavailable {
+  color: var(--aw-text-muted);
+  font-size: 12px;
+}
+
 .chat-file-text-preview {
   max-width: min(100%, 480px);
   max-height: 360px;

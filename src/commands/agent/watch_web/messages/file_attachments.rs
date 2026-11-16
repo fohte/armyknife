@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 
 use chrono::{DateTime, FixedOffset, Utc};
 
@@ -10,6 +11,7 @@ use super::ChatItem;
 pub(super) fn merge_stored_files(
     session_id: &str,
     files: &[AgentFile],
+    storage_root: Option<&Path>,
     messages: &mut Vec<ChatItem>,
 ) {
     let mut groups: Vec<(Option<String>, DateTime<Utc>, Vec<AgentFile>)> = Vec::new();
@@ -33,7 +35,11 @@ pub(super) fn merge_stored_files(
             (
                 created_at,
                 ChatItem::FileAttachment {
-                    files: file_attachments::stored_chat_files(session_id, &grouped_files),
+                    files: file_attachments::stored_chat_files(
+                        session_id,
+                        &grouped_files,
+                        storage_root,
+                    ),
                     caption,
                     timestamp: Some(created_at.to_rfc3339()),
                 },

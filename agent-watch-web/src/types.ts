@@ -156,6 +156,7 @@ export type ChatItem =
       files: {
         name: string
         source: string
+        size: number
         isImage: boolean
         previewType:
           | 'image'

@@ -42,6 +42,7 @@ struct RoutesState {
 pub(super) struct ChatFile {
     pub(super) name: String,
     pub(super) source: String,
+    pub(super) size: usize,
     pub(super) is_image: bool,
     pub(super) preview_type: FilePreviewType,
     pub(super) available: bool,
@@ -81,18 +82,35 @@ fn routes_with(
         .with_state(state)
 }
 
-pub(super) fn stored_chat_files(session_id: &str, records: &[AgentFile]) -> Vec<ChatFile> {
+pub(super) fn stored_chat_files(
+    session_id: &str,
+    records: &[AgentFile],
+    storage_root: Option<&Path>,
+) -> Vec<ChatFile> {
     records
         .iter()
-        .map(|record| ChatFile {
-            name: record.name.clone(),
-            source: format!("/api/sessions/{session_id}/files/{}", record.id),
-            is_image: matches!(
-                preview_type_from_mime(&record.name, record.mime_type.as_deref()),
-                FilePreviewType::Image
-            ),
-            preview_type: preview_type_from_mime(&record.name, record.mime_type.as_deref()),
-            available: true,
+        .map(|record| {
+            let preview_type = match record.mime_type.as_deref() {
+                Some(mime_type) => preview_type_from_mime(&record.name, Some(mime_type)),
+                None => storage_root
+                    .and_then(|root| match file::read_stored_file(root, session_id, record) {
+                        Ok(Some(bytes)) => Some(file_preview_type(&record.name, &bytes)),
+                        Ok(None) => None,
+                        Err(error) => {
+                            tracing::warn!(%error, file_id = %record.id, "failed to classify stored agent file");
+                            None
+                        }
+                    })
+                    .unwrap_or(FilePreviewType::Download),
+            };
+            ChatFile {
+                name: record.name.clone(),
+                source: format!("/api/sessions/{session_id}/files/{}", record.id),
+                size: usize::try_from(record.size).unwrap_or_default(),
+                is_image: preview_type == FilePreviewType::Image,
+                preview_type,
+                available: true,
+            }
         })
         .collect()
 }
@@ -110,12 +128,12 @@ pub(super) fn transcript_chat_file(
         .map(sanitize_basename)
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| "download".to_owned());
-    let (available, preview_type) = match inspect_transcript_file(path) {
-        Ok(Some(preview_type)) => (true, preview_type),
-        Ok(None) => (false, FilePreviewType::Download),
+    let (available, size, preview_type) = match inspect_transcript_file(path) {
+        Ok(Some((size, preview_type))) => (true, size, preview_type),
+        Ok(None) => (false, 0, FilePreviewType::Download),
         Err(error) => {
             tracing::warn!(path = %path.display(), %error, "failed to check transcript attachment availability");
-            (false, FilePreviewType::Download)
+            (false, 0, FilePreviewType::Download)
         }
     };
     ChatFile {
@@ -124,13 +142,14 @@ pub(super) fn transcript_chat_file(
             "/api/sessions/{session_id}/transcript-files/{}/{index}",
             encode_tool_use_id(tool_use_id)
         ),
+        size,
         is_image: preview_type == FilePreviewType::Image,
         preview_type,
         available,
     }
 }
 
-fn inspect_transcript_file(path: &Path) -> Result<Option<FilePreviewType>> {
+fn inspect_transcript_file(path: &Path) -> Result<Option<(usize, FilePreviewType)>> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_file() && metadata.len() <= MAX_FILE_BYTES => {}
         Ok(_) => return Ok(None),
@@ -162,7 +181,7 @@ fn inspect_transcript_file(path: &Path) -> Result<Option<FilePreviewType>> {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_default();
-    Ok(Some(file_preview_type(name, &bytes)))
+    Ok(Some((bytes.len(), file_preview_type(name, &bytes))))
 }
 
 async fn get_stored_file(
@@ -488,7 +507,7 @@ mod tests {
 
     use super::{
         ChatFile, MAX_FILE_BYTES, encode_tool_use_id, file_response, routes_with,
-        transcript_chat_file, transcript_file_path,
+        stored_chat_files, transcript_chat_file, transcript_file_path,
     };
     use crate::commands::agent::file_attachment_support::FilePreviewType;
     use crate::commands::agent::store::{self, AgentFile};
@@ -520,6 +539,7 @@ mod tests {
                     "/api/sessions/fixture-session/transcript-files/{}/0",
                     encode_tool_use_id("fixture-tool-use")
                 ),
+                size: bytes.len(),
                 is_image: true,
                 preview_type: FilePreviewType::Image,
                 available: true,
@@ -548,6 +568,7 @@ mod tests {
                     "/api/sessions/fixture-session/transcript-files/{}/0",
                     encode_tool_use_id("fixture-tool-use")
                 ),
+                size: b"not image content".len(),
                 is_image: false,
                 preview_type: FilePreviewType::Download,
                 available: true,
@@ -579,10 +600,70 @@ mod tests {
                     "/api/sessions/fixture-session/transcript-files/{}/0",
                     encode_tool_use_id("fixture-tool-use")
                 ),
+                size: 0,
                 is_image: false,
                 preview_type: FilePreviewType::Download,
                 available: false,
             }
+        );
+    }
+
+    #[test]
+    fn stored_cards_use_mime_metadata_and_classify_legacy_file_bytes() {
+        let storage = TempDir::new().unwrap();
+        let session_id = "fixture-session";
+        let storage_root = storage.path().join("attachments");
+        let session_storage = storage_root.join(crate::shared::hex::encode(&Sha256::digest(
+            session_id.as_bytes(),
+        )));
+        std::fs::create_dir_all(&session_storage).unwrap();
+        let legacy_id = uuid::Uuid::new_v4().to_string();
+        let legacy_bytes = b"# Legacy file";
+        std::fs::write(session_storage.join(&legacy_id), legacy_bytes).unwrap();
+        let created_at = Utc::now();
+        let records = vec![
+            AgentFile {
+                id: "fixture-mime-id".to_owned(),
+                position: 0,
+                name: "sample-notes.md".to_owned(),
+                caption: None,
+                mime_type: Some("text/markdown".to_owned()),
+                size: 11,
+                created_at,
+            },
+            AgentFile {
+                id: legacy_id.clone(),
+                position: 1,
+                name: "legacy-notes.md".to_owned(),
+                caption: None,
+                mime_type: None,
+                size: legacy_bytes.len() as i64,
+                created_at,
+            },
+        ];
+
+        let actual = stored_chat_files(session_id, &records, Some(&storage_root));
+
+        assert_eq!(
+            actual,
+            vec![
+                ChatFile {
+                    name: "sample-notes.md".to_owned(),
+                    source: format!("/api/sessions/{session_id}/files/fixture-mime-id"),
+                    size: 11,
+                    is_image: false,
+                    preview_type: FilePreviewType::Markdown,
+                    available: true,
+                },
+                ChatFile {
+                    name: "legacy-notes.md".to_owned(),
+                    source: format!("/api/sessions/{session_id}/files/{legacy_id}"),
+                    size: legacy_bytes.len(),
+                    is_image: false,
+                    preview_type: FilePreviewType::Markdown,
+                    available: true,
+                },
+            ]
         );
     }
 

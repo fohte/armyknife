@@ -12,14 +12,22 @@ import type { ChatItem } from '#types'
 
 type FileAttachmentMessage = Extract<ChatItem, { type: 'file_attachment' }>
 
+const MAX_DEFERRED_PREVIEW_BYTES = 2400
+
 function useTextPreview(file: AttachmentPreviewFile) {
   const [preview, setPreview] = useState<
+    | { status: 'idle' }
     | { status: 'loading' }
     | { status: 'unavailable' }
     | { status: 'loaded'; content: string }
-  >({ status: 'loading' })
+  >(() =>
+    file.size > MAX_DEFERRED_PREVIEW_BYTES
+      ? { status: 'idle' }
+      : { status: 'loading' },
+  )
 
   useEffect(() => {
+    if (preview.status !== 'loading') return
     let active = true
 
     void requestUtf8Text(file.source).match(
@@ -34,17 +42,27 @@ function useTextPreview(file: AttachmentPreviewFile) {
     return () => {
       active = false
     }
-  }, [file.source])
+  }, [file.source, preview.status])
 
-  return preview
+  return {
+    preview,
+    beginPreview: () => {
+      setPreview((current) =>
+        current.status === 'idle' ? { status: 'loading' } : current,
+      )
+    },
+  }
 }
 
 function TextFilePreview({ file }: { file: AttachmentPreviewFile }) {
-  const preview = useTextPreview(file)
+  const { preview, beginPreview } = useTextPreview(file)
   return (
     <FileContentPreview
       file={file}
+      deferred={file.size > MAX_DEFERRED_PREVIEW_BYTES}
       loading={preview.status === 'loading'}
+      onPreviewOpen={beginPreview}
+      previewUnavailable={preview.status === 'unavailable'}
       {...(preview.status === 'loaded' ? { textContent: preview.content } : {})}
     />
   )

@@ -32,6 +32,7 @@ function attachmentFile(
   return {
     name,
     source: `/api/sessions/fixture-session/files/${name}`,
+    size: 128,
     isImage: previewType === 'image',
     previewType,
     available: true,
@@ -54,7 +55,13 @@ async function renderFetchedCard(
   file: AttachmentFile,
   content: string | Uint8Array,
   contentType: string,
-): Promise<string[]> {
+  openDeferred = false,
+): Promise<{
+  initialFetchCalls: string[]
+  initialDetailsOpen: boolean | null
+  initialCodeBlockCount: number
+  fetchCalls: string[]
+}> {
   const responseBody =
     typeof content === 'string' ? content : new Uint8Array(content).buffer
   const response = new Response(responseBody, {
@@ -62,6 +69,58 @@ async function renderFetchedCard(
   })
   const fetcher = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(() =>
     Promise.resolve(response),
+  )
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <FileAttachmentCard
+        message={{ type: 'file_attachment', files: [file], caption: null }}
+      />,
+    )
+  })
+  const fetchCalls = () =>
+    fetcher.mock.calls.map(([input]) =>
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url,
+    )
+  const initialFetchCalls = fetchCalls()
+  const initialDetailsOpen =
+    container.querySelector<HTMLDetailsElement>('.chat-file-collapsed-preview')
+      ?.open ?? null
+  const initialCodeBlockCount = container.querySelectorAll(
+    '.markdown-message, .syntax-code-block',
+  ).length
+  if (openDeferred) {
+    const summary = container
+      .querySelector<HTMLDetailsElement>('.chat-file-collapsed-preview')
+      ?.querySelector('summary')
+    if (summary === null || summary === undefined) {
+      throw new Error('Expected a deferred preview summary')
+    }
+    await act(async () => {
+      summary.click()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+  } else {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+  }
+  return {
+    initialFetchCalls,
+    initialDetailsOpen,
+    initialCodeBlockCount,
+    fetchCalls: fetchCalls(),
+  }
+}
+
+async function renderWithFailedFetch(file: AttachmentFile): Promise<string[]> {
+  const fetcher = vi.fn<(input: RequestInfo | URL) => Promise<Response>>(() =>
+    Promise.reject(new Error('Example request failure')),
   )
   vi.stubGlobal('fetch', fetcher)
   root = createRoot(container)
@@ -166,13 +225,14 @@ it('shows an inline image, a download link, and an enlarged preview', () => {
 
 it('renders Markdown attachment text with the conversation Markdown renderer', async () => {
   const file = attachmentFile('sample-notes.md', 'markdown')
-  const fetchCalls = await renderFetchedCard(
+  const { initialFetchCalls, fetchCalls } = await renderFetchedCard(
     file,
     '# Sample notes\n\nA **bold** note.',
     'text/markdown; charset=utf-8',
   )
 
   const snapshot = () => ({
+    initialFetchCalls,
     fetchCalls,
     headings: Array.from(container.querySelectorAll('h1'), (node) =>
       node.textContent.trim(),
@@ -184,6 +244,7 @@ it('renders Markdown attachment text with the conversation Markdown renderer', a
     downloads: downloadSnapshot(),
   })
   expect(snapshot()).toEqual({
+    initialFetchCalls: [file.source],
     fetchCalls: [file.source],
     headings: ['Sample notes'],
     bold: ['bold'],
@@ -201,13 +262,14 @@ it('renders Markdown attachment text with the conversation Markdown renderer', a
 
 it('renders non-Markdown text as a syntax code block', async () => {
   const file = attachmentFile('sample-config.json', 'text')
-  const fetchCalls = await renderFetchedCard(
+  const { initialFetchCalls, fetchCalls } = await renderFetchedCard(
     file,
     '{"mode":"sample","ready":true}',
     'application/json; charset=utf-8',
   )
 
   const snapshot = () => ({
+    initialFetchCalls,
     fetchCalls,
     codeBlocks: Array.from(
       container.querySelectorAll<HTMLPreElement>('.syntax-code-block'),
@@ -220,6 +282,7 @@ it('renders non-Markdown text as a syntax code block', async () => {
     downloads: downloadSnapshot(),
   })
   expect(snapshot()).toEqual({
+    initialFetchCalls: [file.source],
     fetchCalls: [file.source],
     codeBlocks: [
       {
@@ -240,27 +303,34 @@ it('renders non-Markdown text as a syntax code block', async () => {
 })
 
 it('keeps a long text preview collapsed until the reader opens it', async () => {
-  const file = attachmentFile('sample-output.log', 'text')
+  const file = attachmentFile('sample-output.log', 'text', { size: 3600 })
   const content = 'Example output line.\n'.repeat(180)
-  const fetchCalls = await renderFetchedCard(
-    file,
-    content,
-    'text/plain; charset=utf-8',
-  )
+  const {
+    initialFetchCalls,
+    initialDetailsOpen,
+    initialCodeBlockCount,
+    fetchCalls,
+  } = await renderFetchedCard(file, content, 'text/plain; charset=utf-8', true)
 
   const details = container.querySelector<HTMLDetailsElement>(
     '.chat-file-collapsed-preview',
   )
   const snapshot = () => ({
+    initialFetchCalls,
+    initialDetailsOpen,
+    initialCodeBlockCount,
     fetchCalls,
-    collapsed: details?.open,
+    expanded: details?.open,
     summary: details?.querySelector('summary')?.textContent,
     codeText: details?.querySelector('pre')?.textContent,
     downloads: downloadSnapshot(),
   })
   expect(snapshot()).toEqual({
+    initialFetchCalls: [],
+    initialDetailsOpen: false,
+    initialCodeBlockCount: 0,
     fetchCalls: [file.source],
-    collapsed: false,
+    expanded: true,
     summary: 'Show file contents',
     codeText: content,
     downloads: [
@@ -269,6 +339,57 @@ it('keeps a long text preview collapsed until the reader opens it', async () => 
         href: file.source,
         download: 'sample-output.log',
         label: 'Download sample-output.log',
+      },
+    ],
+  })
+})
+
+it('does not fetch a large Markdown preview before it is opened', async () => {
+  const file = attachmentFile('sample-guide.md', 'markdown', { size: 3600 })
+  const content = '# Sample guide\n\nThe **example** is ready.'
+  const {
+    initialFetchCalls,
+    initialDetailsOpen,
+    initialCodeBlockCount,
+    fetchCalls,
+  } = await renderFetchedCard(
+    file,
+    content,
+    'text/markdown; charset=utf-8',
+    true,
+  )
+
+  const details = container.querySelector<HTMLDetailsElement>(
+    '.chat-file-collapsed-preview',
+  )
+  const snapshot = () => ({
+    initialFetchCalls,
+    initialDetailsOpen,
+    initialCodeBlockCount,
+    fetchCalls,
+    expanded: details?.open,
+    headings: Array.from(container.querySelectorAll('h1'), (node) =>
+      node.textContent.trim(),
+    ),
+    emphasis: Array.from(container.querySelectorAll('strong'), (node) =>
+      node.textContent.trim(),
+    ),
+    downloads: downloadSnapshot(),
+  })
+  expect(snapshot()).toEqual({
+    initialFetchCalls: [],
+    initialDetailsOpen: false,
+    initialCodeBlockCount: 0,
+    fetchCalls: [file.source],
+    expanded: true,
+    headings: ['Sample guide'],
+    emphasis: ['example'],
+    downloads: [
+      {
+        text: '↓sample-guide.md',
+        href: file.source,
+        download: 'sample-guide.md',
+        label: 'Download sample-guide.md',
       },
     ],
   })
@@ -392,7 +513,7 @@ it('does not fetch or render HTML attachments', () => {
 
 it('leaves invalid UTF-8 text as a downloadable file', async () => {
   const file = attachmentFile('sample-text.txt', 'text')
-  const fetchCalls = await renderFetchedCard(
+  const { fetchCalls } = await renderFetchedCard(
     file,
     new Uint8Array([0xff, 0xfe]),
     'text/plain; charset=utf-8',
@@ -401,17 +522,90 @@ it('leaves invalid UTF-8 text as a downloadable file', async () => {
   const snapshot = () => ({
     fetchCalls,
     preview: container.querySelector('.syntax-code-block, .markdown-message'),
+    failure: container.querySelector('.chat-file-preview-unavailable')
+      ?.textContent,
+    nextToDownload:
+      container.querySelector('.chat-file-preview-unavailable')
+        ?.nextElementSibling?.className ?? null,
     downloads: downloadSnapshot(),
   })
   expect(snapshot()).toEqual({
     fetchCalls: [file.source],
     preview: null,
+    failure: 'Preview unavailable',
+    nextToDownload: 'chat-file-download',
     downloads: [
       {
         text: '↓sample-text.txt',
         href: file.source,
         download: 'sample-text.txt',
         label: 'Download sample-text.txt',
+      },
+    ],
+  })
+})
+
+it('shows a download-adjacent status when the attachment request fails', async () => {
+  const file = attachmentFile('sample-config.json', 'text')
+  const fetchCalls = await renderWithFailedFetch(file)
+
+  const snapshot = () => ({
+    fetchCalls,
+    preview: container.querySelector('.syntax-code-block, .markdown-message'),
+    failure: container.querySelector('.chat-file-preview-unavailable')
+      ?.textContent,
+    nextToDownload:
+      container.querySelector('.chat-file-preview-unavailable')
+        ?.nextElementSibling?.className ?? null,
+    downloads: downloadSnapshot(),
+  })
+  expect(snapshot()).toEqual({
+    fetchCalls: [file.source],
+    preview: null,
+    failure: 'Preview unavailable',
+    nextToDownload: 'chat-file-download',
+    downloads: [
+      {
+        text: '↓sample-config.json',
+        href: file.source,
+        download: 'sample-config.json',
+        label: 'Download sample-config.json',
+      },
+    ],
+  })
+})
+
+it('rejects HTML MIME responses before rendering Markdown and keeps the download', async () => {
+  const file = attachmentFile('sample-notes.md', 'markdown')
+  const { fetchCalls } = await renderFetchedCard(
+    file,
+    '<script>runExample()</script>',
+    'text/html; charset=utf-8',
+  )
+
+  const snapshot = () => ({
+    fetchCalls,
+    executableContent: container.querySelector('script, iframe, object, embed'),
+    markdown: container.querySelector('.markdown-message'),
+    failure: container.querySelector('.chat-file-preview-unavailable')
+      ?.textContent,
+    nextToDownload:
+      container.querySelector('.chat-file-preview-unavailable')
+        ?.nextElementSibling?.className ?? null,
+    downloads: downloadSnapshot(),
+  })
+  expect(snapshot()).toEqual({
+    fetchCalls: [file.source],
+    executableContent: null,
+    markdown: null,
+    failure: 'Preview unavailable',
+    nextToDownload: 'chat-file-download',
+    downloads: [
+      {
+        text: '↓sample-notes.md',
+        href: file.source,
+        download: 'sample-notes.md',
+        label: 'Download sample-notes.md',
       },
     ],
   })

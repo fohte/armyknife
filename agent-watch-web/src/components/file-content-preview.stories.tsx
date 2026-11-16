@@ -5,6 +5,7 @@ import { FileContentPreview } from '#components/file-content-preview'
 const markdownFile = {
   name: 'sample-notes.md',
   source: '/api/sessions/fixture-session/files/fixture-markdown',
+  size: 48,
   isImage: false,
   previewType: 'markdown',
   available: true,
@@ -13,6 +14,7 @@ const markdownFile = {
 const textFile = {
   name: 'sample-config.json',
   source: '/api/sessions/fixture-session/files/fixture-text',
+  size: 32,
   isImage: false,
   previewType: 'text',
   available: true,
@@ -48,6 +50,7 @@ export const ImageKeepsItsDownloadLink: Story = {
     file: {
       name: 'sample-image.png',
       source: 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=',
+      size: 68,
       isImage: true,
       previewType: 'image',
       available: true,
@@ -66,7 +69,8 @@ export const TextUsesASyntaxCodeBlock: Story = {
 export const LongTextStartsCollapsed: Story = {
   name: 'Long text starts collapsed and can be expanded',
   args: {
-    file: { ...textFile, name: 'sample-output.log' },
+    deferred: true,
+    file: { ...textFile, name: 'sample-output.log', size: 3600 },
     textContent: Array.from(
       { length: 180 },
       (_, index) => `Example output line ${String(index + 1)}.`,
@@ -80,6 +84,7 @@ export const VideoHasPlaybackAndSeekControls: Story = {
     file: {
       name: 'sample-clip.mp4',
       source: 'data:video/mp4;base64,AA==',
+      size: 2048,
       isImage: false,
       previewType: 'video',
       available: true,
@@ -93,6 +98,7 @@ export const AudioHasPlaybackControls: Story = {
     file: {
       name: 'sample-audio.mp3',
       source: 'data:audio/mpeg;base64,AA==',
+      size: 2048,
       isImage: false,
       previewType: 'audio',
       available: true,
@@ -106,6 +112,7 @@ export const PdfOpensInTheBrowser: Story = {
     file: {
       name: 'sample-report.pdf',
       source: '/api/sessions/fixture-session/files/fixture-pdf',
+      size: 2048,
       isImage: false,
       previewType: 'pdf',
       available: true,
@@ -119,6 +126,7 @@ export const HtmlHasNoInlinePreview: Story = {
     file: {
       name: 'sample-page.html',
       source: '/api/sessions/fixture-session/files/fixture-html',
+      size: 384,
       isImage: false,
       previewType: 'html',
       available: true,
@@ -132,9 +140,19 @@ export const UnrecognizedFileHasNoInlinePreview: Story = {
     file: {
       name: 'sample-shortcut.shortcut',
       source: '/api/sessions/fixture-session/files/fixture-shortcut',
+      size: 32,
       isImage: false,
       previewType: 'download',
       available: true,
     },
+  },
+}
+
+export const PreviewFailureKeepsTheDownloadAvailable: Story = {
+  name: 'A failed text preview shows its status beside the download',
+  args: {
+    file: textFile,
+    textContent: '',
+    previewUnavailable: true,
   },
 }

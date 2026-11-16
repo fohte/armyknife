@@ -11,6 +11,7 @@ const meta = {
         {
           name: 'sample-dashboard.png',
           source: 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=',
+          size: 68,
           isImage: true,
           previewType: 'image',
           available: true,
@@ -43,6 +44,7 @@ export const DownloadablePdf: Story = {
         {
           name: 'sample-report.pdf',
           source: '/api/sessions/fixture-session/files/fixture-file',
+          size: 2048,
           isImage: false,
           previewType: 'pdf',
           available: true,
@@ -62,6 +64,7 @@ export const MissingFile: Story = {
         {
           name: 'sample-report.pdf',
           source: '/api/sessions/fixture-session/files/fixture-file',
+          size: 0,
           isImage: false,
           previewType: 'pdf',
           available: false,
@@ -81,6 +84,7 @@ export const HtmlIsDownloadOnly: Story = {
         {
           name: 'sample-page.html',
           source: '/api/sessions/fixture-session/files/fixture-html',
+          size: 384,
           isImage: false,
           previewType: 'html',
           available: true,

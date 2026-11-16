@@ -90,6 +90,7 @@ type PermissionRequestDataLoader =
 type PermissionDeniedLoader =
     Arc<dyn Fn(&str) -> Result<Vec<PermissionDeniedOperation>> + Send + Sync>;
 type AgentFileLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentFile>> + Send + Sync>;
+type AgentFileStorageRootLoader = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
 
 #[derive(Clone)]
 pub(super) struct RouteLoaders {
@@ -102,6 +103,7 @@ pub(super) struct RouteLoaders {
     permission_request_data: PermissionRequestDataLoader,
     permission_denials: PermissionDeniedLoader,
     agent_files: AgentFileLoader,
+    agent_file_storage_root: AgentFileStorageRootLoader,
     message_cache: MessageCache,
     running_background_task_cache: RunningBackgroundTaskCache,
     question_preview_cache: question_preview::QuestionPreviewCache,
@@ -128,6 +130,7 @@ impl RouteLoaders {
             permission_request_data: Arc::new(|_, _| Ok(None)),
             permission_denials: Arc::new(|_| Ok(Vec::new())),
             agent_files: Arc::new(|_| Ok(Vec::new())),
+            agent_file_storage_root: Arc::new(|| None),
             message_cache: MessageCache::default(),
             running_background_task_cache: RunningBackgroundTaskCache::default(),
             question_preview_cache: question_preview::QuestionPreviewCache::default(),
@@ -169,6 +172,14 @@ impl RouteLoaders {
         load_agent_files: impl Fn(&str) -> Result<Vec<AgentFile>> + Send + Sync + 'static,
     ) -> Self {
         self.agent_files = Arc::new(load_agent_files);
+        self
+    }
+
+    pub(super) fn with_agent_file_storage_root_loader(
+        mut self,
+        load_storage_root: impl Fn() -> Option<PathBuf> + Send + Sync + 'static,
+    ) -> Self {
+        self.agent_file_storage_root = Arc::new(load_storage_root);
         self
     }
 
@@ -528,7 +539,20 @@ fn load_conversation_with_tail_window_from(
     let tail_window_start = conversation.tail_window_start;
     let recent_agent_files =
         filter_after_tail_window(&agent_files, tail_window_start, |file| file.created_at);
-    merge_stored_files(session_id, &recent_agent_files, &mut conversation.messages);
+    let storage_root = if recent_agent_files
+        .iter()
+        .any(|file| file.mime_type.is_none())
+    {
+        (loaders.agent_file_storage_root)()
+    } else {
+        None
+    };
+    merge_stored_files(
+        session_id,
+        &recent_agent_files,
+        storage_root.as_deref(),
+        &mut conversation.messages,
+    );
 
     attach_question_request_if_present(
         &mut conversation.messages,
@@ -1243,12 +1267,14 @@ mod tests {
                     "files": [{
                         "name": "fixture.png",
                         "source": "/api/sessions/fixture-session/files/file-fixture-id",
+                        "size": 3,
                         "isImage": true,
                         "previewType": "image",
                         "available": true,
                     }, {
                         "name": "fixture-report.pdf",
                         "source": "/api/sessions/fixture-session/files/file-fixture-report-id",
+                        "size": 7,
                         "isImage": false,
                         "previewType": "download",
                         "available": true,
@@ -1273,12 +1299,14 @@ mod tests {
                     "files": [{
                         "name": "fixture.png",
                         "source": "/api/sessions/fixture-session/files/file-fixture-id",
+                        "size": 3,
                         "isImage": true,
                         "previewType": "image",
                         "available": true,
                     }, {
                         "name": "fixture-report.pdf",
                         "source": "/api/sessions/fixture-session/files/file-fixture-report-id",
+                        "size": 7,
                         "isImage": false,
                         "previewType": "download",
                         "available": true,

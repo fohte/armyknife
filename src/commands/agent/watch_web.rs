@@ -199,7 +199,8 @@ fn app(restart_signal: watch::Receiver<bool>) -> Router {
         .with_permission_denied_loader(|session_id| {
             store::permission_denied_operations_from(&store::sessions_dir()?, session_id)
         })
-        .with_agent_file_loader(store::agent_files),
+        .with_agent_file_loader(store::agent_files)
+        .with_agent_file_storage_root_loader(|| super::file::storage_root().ok()),
         restart_signal,
     )
 }
