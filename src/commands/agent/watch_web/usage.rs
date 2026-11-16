@@ -49,13 +49,24 @@ fn load_usage_response() -> anyhow::Result<UsageResponse> {
     let sessions = store::list_all_sessions_from(&sessions_dir)?;
     let stored_usage = store::usage_snapshots_from(&sessions_dir)?;
     let stored_quotas = store::engine_quotas_from(&sessions_dir)?;
-    Ok(usage_response(sessions, stored_usage, stored_quotas))
+    let codex_quota = crate::shared::dirs::codex_home_dir()
+        .as_deref()
+        .map(codex::read_latest_quota_from)
+        .transpose()?
+        .flatten();
+    Ok(usage_response(
+        sessions,
+        stored_usage,
+        stored_quotas,
+        codex_quota,
+    ))
 }
 
 fn usage_response(
     sessions: Vec<Session>,
     stored_usage: Vec<crate::commands::agent::usage::model::SessionUsage>,
     stored_quotas: Vec<EngineQuota>,
+    codex_quota: Option<EngineQuota>,
 ) -> UsageResponse {
     let mut usage_by_session = stored_usage
         .into_iter()
@@ -64,6 +75,14 @@ fn usage_response(
     let mut response_sessions = Vec::new();
     let mut quotas = EngineQuotas::default();
     for quota in stored_quotas {
+        quotas.set(quota);
+    }
+    if let Some(quota) = codex_quota
+        && quotas
+            .codex
+            .as_ref()
+            .is_none_or(|current| quota.observed_at > current.observed_at)
+    {
         quotas.set(quota);
     }
 
@@ -78,19 +97,6 @@ fn usage_response(
         let Some(usage) = usage else {
             continue;
         };
-        if session.engine == Engine::Codex && usage.rate_limits.has_any() {
-            let should_replace = quotas
-                .codex
-                .as_ref()
-                .is_none_or(|current| usage.observed_at > current.observed_at);
-            if should_replace {
-                quotas.set(EngineQuota {
-                    engine: Engine::Codex,
-                    rate_limits: usage.rate_limits.clone(),
-                    observed_at: usage.observed_at,
-                });
-            }
-        }
         response_sessions.push(usage);
     }
 
@@ -115,6 +121,7 @@ mod tests {
     use super::{UsageSource, router_with_source, usage_response};
     use crate::commands::agent::types::Engine;
     use crate::commands::agent::types::{Session, SessionStatus};
+    use crate::commands::agent::usage::codex;
     use crate::commands::agent::usage::model::{
         ContextUsage, EngineQuota, EngineQuotas, RateLimitWindow, RateLimits, SessionUsage,
         UsageResponse,
@@ -179,22 +186,33 @@ mod tests {
     #[test]
     fn includes_codex_transcript_usage_and_quota_in_response() {
         let directory = tempfile::tempdir().expect("temporary directory should be created");
-        let transcript_path = directory.path().join("fixture-rollout.jsonl");
+        let transcript_path = directory
+            .path()
+            .join("sessions/2026/11/16/rollout-fixture.jsonl");
+        std::fs::create_dir_all(
+            transcript_path
+                .parent()
+                .expect("fixture rollout should have a parent directory"),
+        )
+        .expect("fixture rollout directory should be created");
         std::fs::write(
             &transcript_path,
             indoc! {r#"
                 {"type":"turn_context","payload":{"model":"fixture-model-cobalt","effort":"high"}}
                 {"type":"session_meta","payload":{"cli_version":"0.99.0"}}
-                {"type":"event_msg","timestamp":"2026-11-16T12:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":500,"total_tokens":520},"model_context_window":1000,"rate_limits":{"primary":{"used_percent":31,"window_duration_ms":18000000,"resets_at":1794841200},"secondary":{"used_percent":16,"window_duration_ms":604800000,"resets_at":1795435200}}}}}
+                {"type":"event_msg","timestamp":"2026-11-16T12:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":500,"total_tokens":520},"model_context_window":1000},"rate_limits":{"primary":{"used_percent":31,"window_minutes":300,"resets_at":1794841200},"secondary":{"used_percent":16,"window_minutes":10080,"resets_at":1795435200}}}}
             "#},
         )
         .expect("fixture rollout should be written");
+        let codex_quota =
+            codex::read_latest_quota_from(directory.path()).expect("Codex quota should load");
 
         assert_eq!(
             usage_response(
                 vec![codex_session("fixture-session", transcript_path)],
                 Vec::new(),
                 Vec::new(),
+                codex_quota,
             ),
             UsageResponse {
                 sessions: vec![SessionUsage {
@@ -241,6 +259,73 @@ mod tests {
                             }),
                         },
                         observed_at: chrono::DateTime::parse_from_rfc3339("2026-11-16T12:00:00Z",)
+                            .unwrap()
+                            .to_utc(),
+                    }),
+                },
+            },
+        );
+    }
+
+    #[test]
+    fn returns_codex_quota_without_a_visible_session() {
+        let directory = tempfile::tempdir().expect("temporary Codex home should exist");
+        let earlier_transcript_path = directory
+            .path()
+            .join("sessions/2026/11/16/rollout-earlier.jsonl");
+        std::fs::create_dir_all(
+            earlier_transcript_path
+                .parent()
+                .expect("fixture rollout should have a parent directory"),
+        )
+        .expect("fixture sessions directory should be created");
+        std::fs::write(
+            &earlier_transcript_path,
+            indoc! {r#"
+                {"type":"event_msg","timestamp":"2026-11-16T11:00:00Z","payload":{"type":"token_count","info":null,"rate_limits":{"primary":{"used_percent":8,"window_minutes":300,"resets_at":1794837600},"secondary":{"used_percent":5,"window_minutes":10080,"resets_at":1795431600}}}}
+            "#},
+        )
+        .expect("earlier fixture rollout should be written");
+        let transcript_path = directory
+            .path()
+            .join("archived_sessions/rollout-fixture.jsonl");
+        std::fs::create_dir_all(
+            transcript_path
+                .parent()
+                .expect("fixture rollout should have a parent directory"),
+        )
+        .expect("fixture archive directory should be created");
+        std::fs::write(
+            &transcript_path,
+            indoc! {r#"
+                {"type":"event_msg","timestamp":"2026-11-16T12:00:00Z","payload":{"type":"token_count","info":null,"rate_limits":{"primary":{"used_percent":42,"window_minutes":300,"resets_at":1794841200},"secondary":{"used_percent":21,"window_minutes":10080,"resets_at":1795435200}}}}
+            "#},
+        )
+        .expect("archived fixture rollout should be written");
+        let codex_quota = codex::read_latest_quota_from(directory.path())
+            .expect("archived Codex quota should load");
+
+        assert_eq!(
+            usage_response(Vec::new(), Vec::new(), Vec::new(), codex_quota),
+            UsageResponse {
+                sessions: Vec::new(),
+                quotas: EngineQuotas {
+                    claude: None,
+                    codex: Some(EngineQuota {
+                        engine: Engine::Codex,
+                        rate_limits: RateLimits {
+                            five_hour: Some(RateLimitWindow {
+                                used_percentage: 42.0,
+                                resets_at: Some(1794841200),
+                                window_seconds: 18_000,
+                            }),
+                            seven_day: Some(RateLimitWindow {
+                                used_percentage: 21.0,
+                                resets_at: Some(1795435200),
+                                window_seconds: 604_800,
+                            }),
+                        },
+                        observed_at: chrono::DateTime::parse_from_rfc3339("2026-11-16T12:00:00Z")
                             .unwrap()
                             .to_utc(),
                     }),

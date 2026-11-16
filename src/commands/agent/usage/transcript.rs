@@ -87,7 +87,11 @@ fn read_last_usage_window(file: &File, read_size: usize, file_size: u64) -> Opti
 
 fn read_last_usage_forward(file: &File) -> Result<u64> {
     let mut last_total = 0;
-    for line in BufReader::new(file).lines() {
+    let mut reader = BufReader::new(file);
+    reader
+        .seek(SeekFrom::Start(0))
+        .context("rewinding transcript before scanning usage")?;
+    for line in reader.lines() {
         if let Some(total) = usage_total_from_line(&line.context("reading transcript line")?) {
             last_total = total;
         }
@@ -140,7 +144,7 @@ mod tests {
         let tail = indoc! {r#"
             {"type":"user","message":{"content":"fixture prompt"}}
         "#}
-        .repeat(24);
+        .repeat(2048);
         fs::write(&transcript, format!("{usage}{tail}"))
             .expect("fixture transcript should be written");
 
