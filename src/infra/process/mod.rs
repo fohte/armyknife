@@ -14,20 +14,19 @@ use std::time::{Duration, Instant};
 
 use crate::shared::command;
 
-mod caller;
 mod output_tail;
 mod snapshot;
-mod worktree;
+
+use snapshot::list_process_cwds;
 
 pub(crate) use output_tail::{
     DrainDeadlineCheck, OutputTail, OutputTailOptions, read_output_tail, set_nonblocking,
 };
-use snapshot::list_process_cwds;
-pub(crate) use worktree::{WorktreeProcessInspection, inspect_worktree_processes};
-
-pub use caller::find_caller_pids_in_path;
-pub use snapshot::{ProcessSnapshot, get_parent_pid};
-pub use worktree::{ProcessInPath, SHELL_COMMANDS, find_non_shell_processes_in_path};
+pub use snapshot::{
+    ProcessInPath, ProcessSnapshot, SHELL_COMMANDS, find_caller_pids_in_path,
+    find_non_shell_processes_in_path, get_parent_pid,
+};
+pub(crate) use snapshot::{WorktreeProcessInspection, inspect_worktree_processes};
 
 /// Upper bound on how long we sleep between exit checks in [`run_with_timeout`].
 const MAX_POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -407,7 +406,6 @@ pub fn kill_process_groups(pgids: &[libc::pid_t]) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use indoc::indoc;
     use rstest::rstest;
 
     use super::*;
@@ -539,57 +537,6 @@ mod tests {
         assert!(
             elapsed < Duration::from_secs(2),
             "expected the timeout to return promptly instead of blocking on the descendant's pipe, took {elapsed:?}"
-        );
-    }
-
-    #[rstest]
-    #[case::nested_under_claude(
-        indoc! {"
-            100 1 init
-            200 100 claude
-            300 200 claude
-            400 300 hook
-        "},
-        400,
-        true,
-    )]
-    #[case::nested_under_codex(
-        indoc! {"
-            100 1 init
-            200 100 claude
-            300 200 /agent/bin/codex
-            400 300 hook
-        "},
-        400,
-        true,
-    )]
-    #[case::direct_agent_process(
-        indoc! {"
-            100 1 init
-            200 100 claude
-            300 200 hook
-        "},
-        300,
-        false,
-    )]
-    #[case::ordinary_shell_ancestor(
-        indoc! {"
-            100 1 init
-            200 100 zsh
-            300 200 hook
-        "},
-        300,
-        false,
-    )]
-    fn has_parent_agent_process_cases(
-        #[case] ps_output: &str,
-        #[case] pid: u32,
-        #[case] expected: bool,
-    ) {
-        let snapshot = ProcessSnapshot::from_ps_output(ps_output);
-        assert_eq!(
-            crate::commands::agent::pane::process::has_parent_agent_process(pid, &snapshot),
-            expected,
         );
     }
 

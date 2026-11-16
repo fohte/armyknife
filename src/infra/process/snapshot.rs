@@ -5,6 +5,15 @@ use std::process::Command;
 use crate::infra::external_tool::ExternalTool;
 use crate::shared::command;
 
+#[path = "caller.rs"]
+mod caller;
+#[path = "worktree.rs"]
+mod worktree;
+
+pub use caller::find_caller_pids_in_path;
+pub use worktree::{ProcessInPath, SHELL_COMMANDS, find_non_shell_processes_in_path};
+pub(crate) use worktree::{WorktreeProcessInspection, inspect_worktree_processes};
+
 /// Looks up the parent PID of `pid` using `ps -o ppid= -p <pid>`.
 /// Returns `None` if the process is gone or `ps` fails.
 pub fn get_parent_pid(pid: u32) -> Option<u32> {
@@ -26,7 +35,7 @@ pub fn get_parent_pid(pid: u32) -> Option<u32> {
 /// Stores a parent → children mapping so callers can search for descendants
 /// without forking `ps` for every lookup.
 pub struct ProcessSnapshot {
-    pub(super) children: HashMap<u32, Vec<(u32, String)>>,
+    children: HashMap<u32, Vec<(u32, String)>>,
     parents: HashMap<u32, u32>,
     comms: HashMap<u32, String>,
     command_lines: HashMap<u32, String>,
@@ -42,7 +51,7 @@ impl ProcessSnapshot {
     }
 
     /// Captures command arguments for checks that distinguish subcommands sharing one executable.
-    pub(super) fn capture_with_command_lines_and_groups() -> Option<Self> {
+    fn capture_with_command_lines_and_groups() -> Option<Self> {
         let processes = capture_process_groups_table()?;
         let args_output = process_args_command().output().ok()?;
         if !args_output.status.success() {
@@ -52,11 +61,11 @@ impl ProcessSnapshot {
         Some(Self::from_ps_outputs_with_groups(&processes, &args_text))
     }
 
-    pub(super) fn from_ps_output(text: &str) -> Self {
+    fn from_ps_output(text: &str) -> Self {
         Self::from_process_table(text, false)
     }
 
-    pub(super) fn from_ps_outputs_with_groups(processes: &str, args: &str) -> Self {
+    fn from_ps_outputs_with_groups(processes: &str, args: &str) -> Self {
         let mut snapshot = Self::from_process_table(processes, true);
         snapshot.command_lines = parse_ps_args_output(args);
         snapshot
@@ -134,7 +143,7 @@ impl ProcessSnapshot {
             .map(|c| c.rsplit('/').next().unwrap_or(c.as_str()))
     }
 
-    pub(super) fn codex_app_server_ancestors(&self, pid: u32) -> impl Iterator<Item = u32> + '_ {
+    fn codex_app_server_ancestors(&self, pid: u32) -> impl Iterator<Item = u32> + '_ {
         self.ancestors(pid)
             .into_iter()
             .filter(move |&ancestor| ancestor != pid)
@@ -151,7 +160,7 @@ impl ProcessSnapshot {
             })
     }
 
-    pub(super) fn pgid(&self, pid: u32) -> Option<libc::pid_t> {
+    fn pgid(&self, pid: u32) -> Option<libc::pid_t> {
         self.pgids.get(&pid).copied()
     }
 
@@ -428,5 +437,56 @@ mod tests {
             .map(|&(pid, path)| (pid, PathBuf::from(path)))
             .collect();
         assert_eq!(got, expected);
+    }
+
+    #[rstest]
+    #[case::nested_under_claude(
+        indoc! {"
+            100 1 init
+            200 100 claude
+            300 200 claude
+            400 300 hook
+        "},
+        400,
+        true,
+    )]
+    #[case::nested_under_codex(
+        indoc! {"
+            100 1 init
+            200 100 claude
+            300 200 /agent/bin/codex
+            400 300 hook
+        "},
+        400,
+        true,
+    )]
+    #[case::direct_agent_process(
+        indoc! {"
+            100 1 init
+            200 100 claude
+            300 200 hook
+        "},
+        300,
+        false,
+    )]
+    #[case::ordinary_shell_ancestor(
+        indoc! {"
+            100 1 init
+            200 100 zsh
+            300 200 hook
+        "},
+        300,
+        false,
+    )]
+    fn has_parent_agent_process_cases(
+        #[case] ps_output: &str,
+        #[case] pid: u32,
+        #[case] expected: bool,
+    ) {
+        let snapshot = ProcessSnapshot::from_ps_output(ps_output);
+        assert_eq!(
+            crate::commands::agent::pane::process::has_parent_agent_process(pid, &snapshot),
+            expected,
+        );
     }
 }
