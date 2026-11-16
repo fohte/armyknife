@@ -189,6 +189,7 @@ mod tests {
             owner: context.owner.clone(),
             repo: context.repo.clone(),
             progress,
+            from_cwd_branch: true,
         }
     }
 

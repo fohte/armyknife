@@ -155,6 +155,24 @@ mod tests {
     use super::*;
     use crate::infra::github::{PrCiState, PrInfo, PrState};
 
+    #[rstest::rstest]
+    #[case::canonical("https://github.com/sample-org/sample-project/pull/17", Some(PrNumberQuery {
+        owner: "sample-org".to_string(),
+        repo: "sample-project".to_string(),
+        number: 17,
+    }))]
+    #[case::wrong_scheme("http://github.com/sample-org/sample-project/pull/17", None)]
+    #[case::wrong_host("https://example.com/sample-org/sample-project/pull/17", None)]
+    #[case::wrong_path("https://github.com/sample-org/sample-project/issues/17", None)]
+    #[case::zero_number("https://github.com/sample-org/sample-project/pull/0", None)]
+    #[case::extra_segment("https://github.com/sample-org/sample-project/pull/17/files", None)]
+    fn parses_canonical_pull_request_urls(
+        #[case] url: &str,
+        #[case] expected: Option<PrNumberQuery>,
+    ) {
+        assert_eq!(PrNumberQuery::from_github_url(url), expected);
+    }
+
     #[tokio::test]
     async fn looks_up_pr_status_by_number() {
         let mock = crate::infra::github::mock::GitHubMockServer::start().await;

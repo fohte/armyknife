@@ -34,13 +34,13 @@ pub(super) fn session_progress_plan(delegates: &[FetchedDelegate]) -> Implementa
 }
 
 impl ImplementationPlan {
-    pub(super) fn has_created_pull_requests(&self) -> bool {
+    pub(super) fn has_submitted_pull_requests(&self) -> bool {
         self.batches
             .iter()
-            .any(|batch| batch.id.starts_with("created-prs:"))
+            .any(|batch| batch.id.starts_with("submitted-prs:"))
     }
 
-    pub(super) fn with_cached_created_pull_requests(&self, cached: &Self) -> Self {
+    pub(super) fn with_cached_submitted_pull_requests(&self, cached: &Self) -> Self {
         let mut plan = self.clone();
         let mut batch_ids = plan
             .batches
@@ -48,7 +48,7 @@ impl ImplementationPlan {
             .map(|batch| batch.id.clone())
             .collect::<HashSet<_>>();
         for batch in &cached.batches {
-            if batch.id.starts_with("created-prs:") && batch_ids.insert(batch.id.clone()) {
+            if batch.id.starts_with("submitted-prs:") && batch_ids.insert(batch.id.clone()) {
                 plan.batches.push(batch.clone());
             }
         }
@@ -60,7 +60,7 @@ impl ImplementationPlan {
         plan.batches.retain(|batch| {
             batch
                 .id
-                .strip_prefix("created-prs:")
+                .strip_prefix("submitted-prs:")
                 .is_none_or(|owner| owner == session_id)
         });
         plan
@@ -157,7 +157,7 @@ pub(super) fn pr_number_query_from_url(url: &str) -> Option<PrNumberQuery> {
     PrNumberQuery::from_github_url(url)
 }
 
-pub(super) fn created_pr_queries(urls: &[String]) -> Vec<PrNumberQuery> {
+pub(super) fn submitted_pr_queries(urls: &[String]) -> Vec<PrNumberQuery> {
     let mut seen = HashSet::new();
     urls.iter()
         .filter_map(|url| pr_number_query_from_url(url))
@@ -165,7 +165,7 @@ pub(super) fn created_pr_queries(urls: &[String]) -> Vec<PrNumberQuery> {
         .collect()
 }
 
-pub(super) fn append_created_pull_requests(
+pub(super) fn append_submitted_pull_requests(
     plan: &mut ImplementationPlan,
     session_id: &str,
     urls: &[String],
@@ -204,7 +204,7 @@ pub(super) fn append_created_pull_requests(
         }
         let query_key = query.key();
         let id = format!(
-            "created-pr:{session_id}:{}:{}:{}",
+            "submitted-pr:{session_id}:{}:{}:{}",
             query.owner, query.repo, query.number
         );
         let pull_request = pull_requests
@@ -238,8 +238,8 @@ pub(super) fn append_created_pull_requests(
 
     if !items.is_empty() {
         plan.batches.push(ImplementationBatch {
-            id: format!("created-prs:{session_id}"),
-            title: "Created by this session".to_owned(),
+            id: format!("submitted-prs:{session_id}"),
+            title: "Submitted by this session".to_owned(),
             items,
         });
     }
@@ -699,7 +699,7 @@ mod tests {
     }
 
     #[test]
-    fn builds_distinct_queries_from_created_pr_urls() {
+    fn builds_distinct_queries_from_submitted_pr_urls() {
         let urls = vec![
             "https://github.com/sample-org/sample-project/pull/23".to_string(),
             "https://github.com/sample-org/sample-project/pull/23".to_string(),
@@ -707,7 +707,7 @@ mod tests {
         ];
 
         assert_eq!(
-            created_pr_queries(&urls),
+            submitted_pr_queries(&urls),
             vec![PrNumberQuery {
                 owner: "sample-org".to_string(),
                 repo: "sample-project".to_string(),
@@ -717,10 +717,10 @@ mod tests {
     }
 
     #[test]
-    fn includes_a_session_created_pull_request_in_the_list() {
+    fn includes_a_session_submitted_pull_request_in_the_list() {
         let mut plan = session_progress_plan(&[]);
         let url = "https://github.com/sample-org/sample-project/pull/23".to_string();
-        append_created_pull_requests(
+        append_submitted_pull_requests(
             &mut plan,
             "selected-session",
             std::slice::from_ref(&url),
@@ -756,15 +756,15 @@ mod tests {
                     collapsed: false,
                 },
                 ProgressRow::BatchHeader {
-                    batch_id: "created-prs:selected-session".to_string(),
-                    title: "Created by this session".to_string(),
+                    batch_id: "submitted-prs:selected-session".to_string(),
+                    title: "Submitted by this session".to_string(),
                     merged_pr_count: 0,
                     collapsed: false,
                 },
                 ProgressRow::ChecklistPullRequest {
-                    batch_id: "created-prs:selected-session".to_string(),
+                    batch_id: "submitted-prs:selected-session".to_string(),
                     row: PrProgressRow {
-                        session_id: "checklist-item:created-pr:selected-session:sample-org:sample-project:23".to_string(),
+                        session_id: "checklist-item:submitted-pr:selected-session:sample-org:sample-project:23".to_string(),
                         repo: Some("sample-project".to_string()),
                         title: "Add a sample design".to_string(),
                         number: Some(23),
@@ -797,7 +797,7 @@ mod tests {
             )]),
             false,
         );
-        append_created_pull_requests(
+        append_submitted_pull_requests(
             &mut plan,
             "selected-session",
             &["https://github.com/sample-org/sample-project/pull/17".to_string()],

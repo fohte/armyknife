@@ -275,7 +275,7 @@ pub(super) async fn session_tree<S: SessionSource>(
                     .map_or(0, |counts| counts.total),
                 pull_request: pull_requests
                     .get(&session.session_id)
-                    .and_then(|progress| progress.first())
+                    .and_then(|pull_requests| current_branch_pull_request(pull_requests))
                     .map(|pull_request| PullRequestView {
                         number: pull_request.progress.pull_request.number,
                         state: pull_request.progress.pull_request.state.clone(),

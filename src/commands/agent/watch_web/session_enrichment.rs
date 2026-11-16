@@ -47,6 +47,7 @@ pub(super) struct SessionPullRequestInfo {
     pub(super) owner: String,
     pub(super) repo: String,
     pub(super) progress: PrHeadInfo,
+    pub(super) from_cwd_branch: bool,
 }
 
 #[derive(Clone)]
@@ -155,11 +156,12 @@ impl SessionEnrichmentCache {
                                 owner: context.owner.clone(),
                                 repo: context.repo.clone(),
                                 progress: pull_request,
+                                from_cwd_branch: true,
                             });
                         }
                     }
                 }
-                for query in created_pr_queries(&session.created_pr_urls) {
+                for query in submitted_pr_queries(&session.created_pr_urls) {
                     let Some(pull_request) = cached
                         .get(&PullRequestKey::Number(query.key()))
                         .cloned()
@@ -173,6 +175,7 @@ impl SessionEnrichmentCache {
                             owner: query.owner,
                             repo: query.repo,
                             progress: pull_request,
+                            from_cwd_branch: false,
                         });
                     }
                 }
@@ -400,7 +403,7 @@ fn pull_request_keys(sessions: &[Session]) -> HashSet<PullRequestKey> {
         .map(|query| PullRequestKey::Branch(query.key()))
         .collect::<HashSet<_>>();
     keys.extend(
-        created_pr_queries_for_sessions(sessions)
+        submitted_pr_queries_for_sessions(sessions)
             .into_iter()
             .map(|query| PullRequestKey::Number(query.key())),
     );
@@ -429,11 +432,11 @@ fn branch_query(context: &SessionPrContext) -> BranchPrQuery {
     }
 }
 
-fn created_pr_queries_for_sessions(sessions: &[Session]) -> Vec<PrNumberQuery> {
+fn submitted_pr_queries_for_sessions(sessions: &[Session]) -> Vec<PrNumberQuery> {
     let mut queries = Vec::new();
     let mut seen = HashSet::new();
     for session in sessions {
-        for query in created_pr_queries(&session.created_pr_urls) {
+        for query in submitted_pr_queries(&session.created_pr_urls) {
             if seen.insert(query.key()) {
                 queries.push(query);
             }
@@ -442,7 +445,7 @@ fn created_pr_queries_for_sessions(sessions: &[Session]) -> Vec<PrNumberQuery> {
     queries
 }
 
-fn created_pr_queries(urls: &[String]) -> Vec<PrNumberQuery> {
+fn submitted_pr_queries(urls: &[String]) -> Vec<PrNumberQuery> {
     let mut seen = HashSet::new();
     urls.iter()
         .filter_map(|url| PrNumberQuery::from_github_url(url))
@@ -460,7 +463,7 @@ async fn fetch_pull_requests(
     sessions: &[Session],
 ) -> Result<HashMap<PullRequestKey, Option<PrHeadInfo>>, String> {
     let branch_queries = branch_pr_queries(sessions);
-    let number_queries = created_pr_queries_for_sessions(sessions);
+    let number_queries = submitted_pr_queries_for_sessions(sessions);
     if branch_queries.is_empty() && number_queries.is_empty() {
         return Ok(HashMap::new());
     }
@@ -919,11 +922,13 @@ mod tests {
             owner: "example-owner".to_string(),
             repo: "example-repository".to_string(),
             progress: head_info(17),
+            from_cwd_branch: true,
         };
         let second_pr = SessionPullRequestInfo {
             owner: "example-owner".to_string(),
             repo: "example-repository".to_string(),
             progress: head_info(17),
+            from_cwd_branch: true,
         };
         assert_eq!(
             (initial, shared_branch, calls.load(Ordering::SeqCst)),
@@ -939,7 +944,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn created_pr_urls_follow_the_cwd_pr_and_duplicate_prs_are_removed() {
+    async fn submitted_pr_urls_follow_the_cwd_pr_and_duplicate_prs_are_removed() {
         let updates = EnrichmentUpdates::new();
         let mut receiver = updates.subscribe();
         let pull_request_fetcher: PullRequestFetcher = Arc::new(|_| {
@@ -993,11 +998,13 @@ mod tests {
                             owner: cwd_context.owner,
                             repo: cwd_context.repo,
                             progress: head_info(17),
+                            from_cwd_branch: true,
                         },
                         SessionPullRequestInfo {
                             owner: "example-owner".to_string(),
                             repo: "example-repository".to_string(),
                             progress: head_info(23),
+                            from_cwd_branch: false,
                         },
                     ],
                 )]),

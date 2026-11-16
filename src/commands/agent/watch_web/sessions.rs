@@ -98,6 +98,14 @@ fn session_pull_request_view(pull_request: &SessionPullRequestInfo) -> SessionPu
     }
 }
 
+fn current_branch_pull_request(
+    pull_requests: &[SessionPullRequestInfo],
+) -> Option<&SessionPullRequestInfo> {
+    pull_requests
+        .iter()
+        .find(|pull_request| pull_request.from_cwd_branch)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum SessionActivityStatus {
@@ -446,13 +454,16 @@ async fn list_sessions<S: SessionSource>(
             let task_project = task
                 .as_ref()
                 .and_then(|task| task_metadata.task_projects.get(&task.id));
-            let session_pull_requests = pull_requests
+            let session_pull_request_infos = pull_requests
                 .get(&session.session_id)
-                .into_iter()
-                .flatten()
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let pull_request = current_branch_pull_request(session_pull_request_infos)
+                .map(session_pull_request_view);
+            let session_pull_requests = session_pull_request_infos
+                .iter()
                 .map(session_pull_request_view)
                 .collect::<Vec<_>>();
-            let pull_request = session_pull_requests.first().cloned();
 
             let turn = turn_kinds.get(session.session_id.as_str()).copied();
             let interrupted = interrupted_session_ids.contains(&session.session_id);
@@ -1031,6 +1042,7 @@ mod tests {
                             },
                             head_sha: Some("fixture-head".to_string()),
                         },
+                        from_cwd_branch: true,
                     },
                     SessionPullRequestInfo {
                         owner: "example-org".to_string(),
@@ -1044,6 +1056,7 @@ mod tests {
                             },
                             head_sha: Some("submitted-head".to_string()),
                         },
+                        from_cwd_branch: false,
                     },
                 ],
             )]),
@@ -1068,6 +1081,20 @@ mod tests {
             review_document_queue_thread_id: Arc::default(),
             now: Utc.timestamp_opt(1_100, 0).unwrap(),
         }
+    }
+
+    #[rstest]
+    fn submitted_pr_does_not_replace_current_branch_pr(source: TestSessionSource) {
+        let submitted_prs = source
+            .pull_requests
+            .get("child-session")
+            .expect("child session has pull requests")
+            .iter()
+            .filter(|pull_request| !pull_request.from_cwd_branch)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        assert_eq!(current_branch_pull_request(&submitted_prs), None);
     }
 
     async fn sessions_response(source: TestSessionSource) -> (StatusCode, serde_json::Value) {
