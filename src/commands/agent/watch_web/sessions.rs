@@ -2343,7 +2343,7 @@ mod tests {
     #[case::pending_task_without_transcript(None, false, false)]
     #[case::pending_task_with_parse_error(None, false, true)]
     #[tokio::test]
-    async fn stopped_claude_with_running_background_task_is_in_progress(
+    async fn stopped_claude_with_pending_task_uses_shared_background_status(
         mut source: TestSessionSource,
         #[case] status_state: Option<AgentStatusState>,
         #[case] has_transcript: bool,
@@ -2351,6 +2351,9 @@ mod tests {
     ) {
         let transcript_file = has_transcript.then(|| tempfile::NamedTempFile::new().unwrap());
         let transcript_directory = transcript_parse_fails.then(|| tempfile::tempdir().unwrap());
+        source.sessions[0]
+            .pending_bg_task_ids
+            .insert("fixture-task-id".to_string());
         if let Some(transcript_file) = &transcript_file {
             std::fs::write(
                 transcript_file.path(),
@@ -2363,9 +2366,6 @@ mod tests {
             .unwrap();
             source.sessions[0].transcript_path = Some(transcript_file.path().to_path_buf());
         } else {
-            source.sessions[0]
-                .pending_bg_task_ids
-                .insert("fixture-task-id".to_string());
             source.sessions[0].transcript_path = transcript_directory
                 .as_ref()
                 .map(|directory| directory.path().to_path_buf());
@@ -2390,7 +2390,7 @@ mod tests {
                 kind: None,
                 category_when_not_later: "in_progress",
                 is_paused: false,
-                unread: true,
+                unread: false,
                 crit_url: None,
             },
             ExpectedSessionResponse {
@@ -2402,12 +2402,7 @@ mod tests {
                 can_open_in_terminal: true,
             },
         );
-        expected["sessions"][0]["activityStatus"] =
-            serde_json::json!(if status_state == Some(AgentStatusState::Waiting) {
-                "waiting"
-            } else {
-                "stopped"
-            });
+        expected["sessions"][0]["activityStatus"] = serde_json::json!("working");
         expected["sessions"][0]["waitingForBackgroundTasks"] = serde_json::json!(true);
         if status_state == Some(AgentStatusState::Waiting) {
             expected["sessions"][0]["waitingReason"] =
