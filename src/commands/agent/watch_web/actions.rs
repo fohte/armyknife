@@ -411,7 +411,7 @@ async fn load_session(state: ActionState, id: String) -> Result<Session, ApiErro
     let session = tokio::task::spawn_blocking(move || {
         let session = match state.sessions_dir {
             Some(dir) => store::load_session_from(&dir, &id),
-            None => store::load_session(&id),
+            None => crate::commands::agent::session_status::load_session_with_bg_run_status(&id),
         }
         .map_err(|error| {
             if super::is_invalid_session_id_error(&error) {

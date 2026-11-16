@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
@@ -56,12 +55,16 @@ use self::questions::{
 use self::range::MessageRange;
 
 mod cache;
-use self::cache::{MessageCache, MessageCacheKey, MessageCacheRecords, RunningBackgroundTaskCache};
+use self::cache::{MessageCache, MessageCacheKey, MessageCacheRecords};
 mod file_attachments;
 use self::file_attachments::merge_stored_files;
 mod session_titles;
 use self::session_titles::{parent_session, resolve_peer_session_titles};
 use self::transcript_path::archived_codex_transcript_path;
+
+pub(super) fn registered_background_tasks(session_id: &str) -> Result<Vec<BackgroundTask>> {
+    background_tasks::registered_background_tasks(session_id)
+}
 
 pub(super) fn claude_content_text(content: Option<&Value>) -> String {
     match content {
@@ -91,6 +94,7 @@ type PermissionDeniedLoader =
     Arc<dyn Fn(&str) -> Result<Vec<PermissionDeniedOperation>> + Send + Sync>;
 type AgentFileLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentFile>> + Send + Sync>;
 type AgentFileStorageRootLoader = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
+type BackgroundTaskLoader = Arc<dyn Fn(&str) -> Result<Vec<BackgroundTask>> + Send + Sync>;
 
 #[derive(Clone)]
 pub(super) struct RouteLoaders {
@@ -104,8 +108,8 @@ pub(super) struct RouteLoaders {
     permission_denials: PermissionDeniedLoader,
     agent_files: AgentFileLoader,
     agent_file_storage_root: AgentFileStorageRootLoader,
+    background_tasks: BackgroundTaskLoader,
     message_cache: MessageCache,
-    running_background_task_cache: RunningBackgroundTaskCache,
     question_preview_cache: question_preview::QuestionPreviewCache,
 }
 
@@ -131,8 +135,8 @@ impl RouteLoaders {
             permission_denials: Arc::new(|_| Ok(Vec::new())),
             agent_files: Arc::new(|_| Ok(Vec::new())),
             agent_file_storage_root: Arc::new(|| None),
+            background_tasks: Arc::new(|_| Ok(Vec::new())),
             message_cache: MessageCache::default(),
-            running_background_task_cache: RunningBackgroundTaskCache::default(),
             question_preview_cache: question_preview::QuestionPreviewCache::default(),
         }
     }
@@ -183,14 +187,16 @@ impl RouteLoaders {
         self
     }
 
-    pub(super) fn running_background_task_session_ids(
-        &self,
-        sessions: &[Session],
-    ) -> HashSet<String> {
-        background_tasks::running_background_task_session_ids(
-            sessions,
-            &self.running_background_task_cache,
-        )
+    pub(super) fn with_background_task_loader(
+        mut self,
+        load_background_tasks: impl Fn(&str) -> Result<Vec<BackgroundTask>> + Send + Sync + 'static,
+    ) -> Self {
+        self.background_tasks = Arc::new(load_background_tasks);
+        self
+    }
+
+    fn background_tasks(&self, session_id: &str) -> Result<Vec<BackgroundTask>> {
+        (self.background_tasks)(session_id)
     }
 }
 
@@ -485,6 +491,10 @@ fn load_conversation_with_tail_window_from(
         );
         resolve_peer_session_titles(&mut cached.conversation.messages, &mut load_session)?;
         cached.conversation.update_metadata();
+        cached
+            .conversation
+            .background_tasks
+            .extend(loaders.background_tasks(session_id)?);
         if mark_resolved_queued_prompts {
             cache::mark_resolved_queued_prompts(
                 loaders,
@@ -590,6 +600,9 @@ fn load_conversation_with_tail_window_from(
             resolved_queued_prompt_ids,
         );
     }
+    conversation
+        .background_tasks
+        .extend(loaders.background_tasks(session_id)?);
     Ok(Some(conversation))
 }
 
@@ -597,12 +610,6 @@ pub(in crate::commands::agent::watch_web::messages) struct TranscriptInput<'a> {
     path: Option<&'a Path>,
     engine: Engine,
     additions: parser::claude::ParserAdditions<'a>,
-}
-
-pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript(
-    input: TranscriptInput<'_>,
-) -> Result<(ConversationResponse, Vec<i64>)> {
-    incremental::parse_session_transcript(input)
 }
 
 trait SeekableBufRead: BufRead + Seek {}
@@ -4313,6 +4320,55 @@ mod tests {
                 ),
                 vec![8],
             ),
+        );
+    }
+
+    #[tokio::test]
+    async fn codex_message_route_includes_registered_background_run_tasks() {
+        let mut session = stored_session();
+        session.engine = Engine::Codex;
+        let loaders = RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
+        .with_background_task_loader(|session_id| {
+            Ok((session_id == "fixture-session")
+                .then(|| super::BackgroundTask {
+                    id: "fixture-background-task-id".to_owned(),
+                    description: "Background command".to_owned(),
+                    elapsed_seconds: 5,
+                    kind: super::BackgroundTaskKind::BackgroundTask,
+                    output_path: None,
+                    agent_type: None,
+                })
+                .into_iter()
+                .collect())
+        });
+        let router = routes_with_proposals_and_peer_out_messages(
+            move |_| Ok(Some(session.clone())),
+            |_| Ok(None),
+            loaders,
+        );
+
+        assert_eq!(
+            message_response(&router).await.2,
+            json!({
+                "messages": [],
+                "backgroundTasks": [{
+                    "id": "fixture-background-task-id",
+                    "description": "Background command",
+                    "elapsedSeconds": 5,
+                    "kind": "background_task",
+                }],
+                "start": 0,
+                "total": 0,
+                "decisions": [],
+                "hasUnansweredProposal": false,
+                "activeQuestionIndex": null,
+            }),
         );
     }
 

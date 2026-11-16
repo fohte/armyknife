@@ -41,7 +41,13 @@ pub fn run(args: &RunArgs) -> Result<()> {
     output::create_output_file(&stderr_path)
         .with_context(|| format!("failed to create stderr file: {}", stderr_path.display()))?;
 
-    bg_tasks::register(&session_id, &task_id)?;
+    let description = args
+        .command
+        .first()
+        .and_then(|command| std::path::Path::new(command).file_name())
+        .map(|command| command.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Background command".to_owned());
+    bg_tasks::register(&session_id, &task_id, &description, &stdout_path)?;
     guard.mark_task_registered();
     window_status::sync_window_status_for_session(&session_id);
     let worker_args = worker_args(

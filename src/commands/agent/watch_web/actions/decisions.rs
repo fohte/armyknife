@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 use super::super::super::{
     store,
-    types::{Engine, Session, SessionStatus},
+    types::{DisplayStatus, Engine, Session, SessionStatus},
 };
 use super::{ActionState, ApiError, Success, load_session, resolve_sessions_dir, run_blocking};
 use crate::commands::agent::watch_web::sessions::decision_category_is_done;
@@ -47,19 +47,7 @@ pub(super) async fn request_change(
     if request.comment.trim().is_empty() {
         return Err(ApiError::bad_request("comment must not be empty"));
     }
-    let has_running_background_task = if session.status == SessionStatus::Stopped {
-        let message_loaders = state.message_loaders.clone();
-        let sessions = vec![session.clone()];
-        let session_id = session.session_id.clone();
-        run_blocking(move || {
-            Ok(message_loaders
-                .running_background_task_session_ids(&sessions)
-                .contains(&session_id))
-        })
-        .await?
-    } else {
-        false
-    };
+    let has_running_background_task = session.display_status() == DisplayStatus::Background;
     let sessions_dir = resolve_sessions_dir(state.sessions_dir).map_err(ApiError::internal)?;
     let runtime = state.runtime;
     enum ChangeOutcome {
