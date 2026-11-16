@@ -119,22 +119,6 @@ impl IncrementalClaudeParser {
         window::new_tail_window(reader, image_directory, message_limit, pending_task_ids)
     }
 
-    pub(in crate::commands::agent::watch_web::messages) fn new_tail_window_bounded(
-        reader: impl BufRead + Seek,
-        image_directory: Option<&Path>,
-        message_limit: usize,
-        pending_task_ids: &[String],
-        max_window_bytes: u64,
-    ) -> io::Result<Option<Self>> {
-        window::new_tail_window_bounded(
-            reader,
-            image_directory,
-            message_limit,
-            pending_task_ids,
-            max_window_bytes,
-        )
-    }
-
     pub(in crate::commands::agent::watch_web::messages) fn tail_window_start(
         &self,
     ) -> Option<DateTime<Utc>> {

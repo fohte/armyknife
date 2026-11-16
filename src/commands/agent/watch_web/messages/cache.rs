@@ -20,7 +20,6 @@ pub(super) use transcript_fingerprint::{
 };
 
 const MAX_CACHED_SESSIONS: usize = 8;
-const MAX_CACHED_BACKGROUND_TASK_SESSIONS: usize = 256;
 
 #[derive(Clone, Default, PartialEq, Eq)]
 pub(super) struct MessageCacheRecords {
@@ -103,63 +102,6 @@ impl MessageCacheKey {
             agent_files: records.agent_files,
             permission_denials: records.permission_denials,
         })
-    }
-}
-
-#[derive(Clone)]
-pub(super) struct RunningBackgroundTaskCache {
-    entries: Arc<Mutex<RunningBackgroundTaskEntries>>,
-}
-
-type RunningBackgroundTaskEntries =
-    LruCache<String, (Option<TranscriptFingerprint>, BTreeSet<String>, bool)>;
-
-impl Default for RunningBackgroundTaskCache {
-    fn default() -> Self {
-        Self {
-            entries: Arc::new(Mutex::new(LruCache::new(
-                MAX_CACHED_BACKGROUND_TASK_SESSIONS,
-            ))),
-        }
-    }
-}
-
-impl RunningBackgroundTaskCache {
-    pub(super) fn fingerprint(session: &Session) -> anyhow::Result<Option<TranscriptFingerprint>> {
-        transcript_fingerprint(session.engine, session.transcript_path.as_deref())
-    }
-
-    pub(super) fn get(
-        &self,
-        session_id: &str,
-        fingerprint: &Option<TranscriptFingerprint>,
-        pending_task_ids: &BTreeSet<String>,
-    ) -> Option<bool> {
-        let mut entries = self
-            .entries
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (cached_fingerprint, cached_pending_task_ids, has_running_task) =
-            entries.get(&session_id.to_string())?;
-        (cached_fingerprint == fingerprint && cached_pending_task_ids == pending_task_ids)
-            .then_some(*has_running_task)
-    }
-
-    pub(super) fn insert(
-        &self,
-        session_id: &str,
-        fingerprint: Option<TranscriptFingerprint>,
-        pending_task_ids: BTreeSet<String>,
-        has_running_task: bool,
-    ) {
-        let mut entries = self
-            .entries
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        entries.insert(
-            session_id.to_string(),
-            (fingerprint, pending_task_ids, has_running_task),
-        );
     }
 }
 
@@ -388,13 +330,11 @@ where
 mod tests {
     use indoc::indoc;
     use serde_json::json;
-    use std::collections::BTreeSet;
     use std::sync::Arc;
 
     use super::{
-        ConversationResponse, MAX_CACHED_BACKGROUND_TASK_SESSIONS, MAX_CACHED_SESSIONS,
-        MessageCache, MessageCacheKey, MessageCacheRecords, RunningBackgroundTaskCache,
-        TranscriptParserCache, refresh_image_availability_with,
+        ConversationResponse, MAX_CACHED_SESSIONS, MessageCache, MessageCacheKey,
+        MessageCacheRecords, TranscriptParserCache, refresh_image_availability_with,
     };
     use crate::commands::agent::types::{MAIN_THREAD_AGENT_KEY, Session};
     use crate::commands::agent::watch_web::messages::{ChatItem, UserContentPart};
@@ -483,52 +423,6 @@ mod tests {
             Arc::ptr_eq(&slots[1], &evicted),
         );
         assert_eq!(result, (true, false));
-    }
-
-    #[test]
-    fn running_background_task_cache_evicts_the_least_recently_used_session() {
-        let cache = RunningBackgroundTaskCache::default();
-        for index in 0..MAX_CACHED_BACKGROUND_TASK_SESSIONS {
-            cache.insert(
-                &format!("fixture-session-{index}"),
-                None,
-                BTreeSet::new(),
-                false,
-            );
-        }
-
-        let was_read = cache.get("fixture-session-0", &None, &BTreeSet::new()) == Some(false);
-        cache.insert("fixture-session-256", None, BTreeSet::new(), false);
-        cache.insert("fixture-session-3", None, BTreeSet::new(), true);
-        cache.insert("fixture-session-257", None, BTreeSet::new(), false);
-
-        let result = (
-            was_read,
-            [
-                cache.get("fixture-session-0", &None, &BTreeSet::new()),
-                cache.get("fixture-session-3", &None, &BTreeSet::new()),
-            ],
-            [
-                cache.get("fixture-session-1", &None, &BTreeSet::new()),
-                cache.get("fixture-session-2", &None, &BTreeSet::new()),
-            ],
-        );
-        assert_eq!(result, (true, [Some(false), Some(true)], [None, None]));
-    }
-
-    #[test]
-    fn running_background_task_cache_invalidates_when_pending_ids_change() {
-        let cache = RunningBackgroundTaskCache::default();
-        let initial_pending_ids = BTreeSet::from(["fixture-task-id".to_string()]);
-        cache.insert("fixture-session", None, initial_pending_ids.clone(), true);
-
-        assert_eq!(
-            (
-                cache.get("fixture-session", &None, &initial_pending_ids),
-                cache.get("fixture-session", &None, &BTreeSet::new()),
-            ),
-            (Some(true), None),
-        );
     }
 
     #[test]
