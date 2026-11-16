@@ -1,0 +1,82 @@
+.quota-panel {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 8px;
+  padding: 10px 8px 12px;
+  border-top: 1px solid #2a2a2a;
+  background: #0f0f0f;
+  color: #fafafa;
+  font-family: var(--font-sans);
+  line-height: 1.55;
+}
+
+.quota-panel[data-mobile='true'] {
+  padding-right: 4px;
+  padding-left: 4px;
+}
+
+.quota-engine {
+  display: grid;
+  gap: 3px;
+}
+
+.quota-engine-name {
+  overflow: hidden;
+  color: #d4d4d8;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quota-window {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 30px auto;
+  align-items: center;
+  gap: 6px;
+  color: #8b8b94;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.quota-meter {
+  position: relative;
+  display: inline-block;
+  width: 100%;
+  height: 4px;
+  background: #262626;
+}
+
+.quota-meter-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+}
+
+.quota-meter-pace {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 1px;
+  background: #a1a1aa;
+}
+
+.quota-window-percentage {
+  text-align: right;
+}
+
+.quota-window-reset {
+  white-space: nowrap;
+}
+
+.quota-window-mark {
+  color: #71717a;
+}
+
+.quota-window-mark.is-ahead {
+  color: #fbbf24;
+}
+
+.quota-panel-error {
+  color: #8b8b94;
+  font-size: 11px;
+}

@@ -10,6 +10,7 @@ import {
 import { buildBoardProjects, buildWorkTypeNavGroups } from '#board-model'
 import { useCommandPaletteController } from '#command-palette-controller'
 import { getCommandPaletteShortcut } from '#command-palette-shortcut'
+import { AgentUsageProvider } from '#components/agent-usage-context'
 import { AgentWatchNav } from '#components/agent-watch-nav'
 import { BoardView } from '#components/board-view'
 import { CommandPalette } from '#components/command-palette'
@@ -51,7 +52,9 @@ export function App() {
   return (
     <SessionOperationProvider>
       <SessionConversationCacheProvider>
-        <AppContent />
+        <AgentUsageProvider>
+          <AppContent />
+        </AgentUsageProvider>
       </SessionConversationCacheProvider>
     </SessionOperationProvider>
   )
