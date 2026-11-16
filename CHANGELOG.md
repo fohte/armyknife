@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.747](https://github.com/fohte/armyknife/compare/v0.1.746...v0.1.747) (2026-11-16)
+
+
+### Bug Fixes
+
+* **cleanup:** clean up Codex daemon descendants ([#1870](https://github.com/fohte/armyknife/issues/1870)) ([e91688a](https://github.com/fohte/armyknife/commit/e91688a7ac2e776be3564633b5c69d9986bcbc7c))
+
 ## [0.1.746](https://github.com/fohte/armyknife/compare/v0.1.745...v0.1.746) (2026-11-16)
 
 
