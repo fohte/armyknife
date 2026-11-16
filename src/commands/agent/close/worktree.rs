@@ -67,8 +67,8 @@ pub(crate) async fn close_worktree_path(worktree_path: &Path) -> Result<()> {
 
 /// Session records keep the launch cwd, so they miss a caller that entered
 /// the worktree later (e.g. Claude Code's EnterWorktree). Check live process
-/// cwds instead: worktree cleanup kills every tmux window with a pane inside
-/// the worktree and every process group with a member inside it.
+/// cwds instead: worktree cleanup kills each tmux pane and process group with
+/// a member inside the worktree.
 fn ensure_caller_outside_worktree(worktree_root: &Path) -> Result<()> {
     let window_pane_pids = match crate::shared::caller_pane::resolve_caller_pane_id() {
         Some(pane_id) => crate::infra::tmux::get_window_pane_pids(&pane_id).ok(),

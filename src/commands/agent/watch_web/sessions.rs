@@ -494,7 +494,7 @@ async fn list_sessions<S: SessionSource>(
                 session
                     .web_uis
                     .iter()
-                    .find(|web_ui| web_ui.name == "crit" && web_ui.url == *url)
+                    .find(|web_ui| web_ui.url == *url)
                     .and_then(|web_ui| web_ui.exposed_url.clone())
             });
             let web_uis = session
@@ -1713,7 +1713,9 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn sessions_route_returns_the_complete_inbox_response(mut source: TestSessionSource) {
+    async fn sessions_route_preserves_crit_exposed_url_from_alias_registration(
+        mut source: TestSessionSource,
+    ) {
         source.web_states[0].later_until = None;
         source.web_states[0].is_today = false;
         source.sessions[0].status = SessionStatus::WaitingInput;
@@ -1727,7 +1729,7 @@ mod tests {
                 exposed_url: Some("https://public.example.test/design/sample/".to_owned()),
             },
             WebUiRegistration {
-                name: "crit".to_owned(),
+                name: "Review panel".to_owned(),
                 url: "http://127.0.0.1:6000".to_owned(),
                 exposed_url: Some("https://review.example.test/crit".to_owned()),
             },

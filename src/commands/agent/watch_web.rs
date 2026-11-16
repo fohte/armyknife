@@ -14,6 +14,7 @@ mod security;
 mod session_enrichment;
 mod session_state;
 mod sessions;
+mod stale_session_cleanup;
 mod web_ui_proxy;
 mod web_ui_relays;
 
@@ -113,8 +114,9 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
         let watch_web_server = async move {
             let (relay_shutdown_sender, relay_shutdown_receiver) = watch::channel(false);
             let relay_task = web_ui_relays::WebUiRelays::new(relay_sessions_dir)
-                .start(relay_shutdown_receiver)
+                .start(relay_shutdown_receiver.clone())
                 .await;
+            let cleanup_task = stale_session_cleanup::start(relay_shutdown_receiver);
             let shutdown_signal_sender = relay_shutdown_sender.clone();
             let result = axum::serve(listener, app(restart_receiver))
                 .with_graceful_shutdown(async move {
@@ -126,6 +128,9 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
                 })
                 .await;
             relay_shutdown_sender.send_replace(true);
+            if let Err(error) = cleanup_task.await {
+                tracing::warn!(%error, "stale session cleanup task failed to stop");
+            }
             if let Err(error) = relay_task.await {
                 tracing::warn!(%error, "web UI relay manager failed to stop");
             }
@@ -199,7 +204,8 @@ fn app(restart_signal: watch::Receiver<bool>) -> Router {
         .with_permission_denied_loader(|session_id| {
             store::permission_denied_operations_from(&store::sessions_dir()?, session_id)
         })
-        .with_agent_file_loader(store::agent_files),
+        .with_agent_file_loader(store::agent_files)
+        .with_agent_file_storage_root_loader(|| super::file::storage_root().ok()),
         restart_signal,
     )
 }

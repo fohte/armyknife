@@ -8,6 +8,77 @@ use super::worktree_error::{Result, WmError};
 use crate::infra::git::GitRepo;
 use crate::infra::git::cmd::run_git;
 
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "Worktree contains uncommitted changes or untracked files: {worktree_path}; pass --force to delete it"
+)]
+pub struct DirtyWorktreeError {
+    worktree_path: PathBuf,
+}
+
+impl DirtyWorktreeError {
+    pub(crate) fn new(worktree_path: PathBuf) -> Self {
+        Self { worktree_path }
+    }
+
+    pub(crate) fn worktree_path(&self) -> &std::path::Path {
+        &self.worktree_path
+    }
+}
+
+/// Refuses deletion when a worktree contains changes that would be discarded.
+pub fn ensure_clean_for_deletion(
+    worktree_path: &std::path::Path,
+    force: bool,
+) -> anyhow::Result<()> {
+    ensure_clean_for_deletion_with(worktree_path, force, |path| {
+        run_git(path, ["status", "--porcelain", "--untracked-files=normal"])
+    })
+}
+
+fn ensure_clean_for_deletion_with(
+    worktree_path: &std::path::Path,
+    force: bool,
+    status: impl FnOnce(&std::path::Path) -> anyhow::Result<String>,
+) -> anyhow::Result<()> {
+    if force || !worktree_path.is_dir() {
+        return Ok(());
+    }
+
+    if !status(worktree_path)?.is_empty() {
+        return Err(DirtyWorktreeError::new(worktree_path.to_path_buf()).into());
+    }
+
+    Ok(())
+}
+
+pub(crate) fn delete_worktree_if_clean(
+    worktree_path: &std::path::Path,
+    force: bool,
+    before_delete: impl FnOnce() -> anyhow::Result<()>,
+    delete: impl FnOnce() -> anyhow::Result<bool>,
+) -> anyhow::Result<bool> {
+    delete_worktree_if_clean_with(
+        worktree_path,
+        force,
+        |path| run_git(path, ["status", "--porcelain", "--untracked-files=normal"]),
+        before_delete,
+        delete,
+    )
+}
+
+fn delete_worktree_if_clean_with(
+    worktree_path: &std::path::Path,
+    force: bool,
+    status: impl FnOnce(&std::path::Path) -> anyhow::Result<String>,
+    before_delete: impl FnOnce() -> anyhow::Result<()>,
+    delete: impl FnOnce() -> anyhow::Result<bool>,
+) -> anyhow::Result<bool> {
+    ensure_clean_for_deletion_with(worktree_path, force, status)?;
+    before_delete()?;
+    delete()
+}
+
 /// Normalize a branch name to a worktree directory name.
 /// - Removes the given branch_prefix
 /// - Replaces slashes with dashes
@@ -208,9 +279,67 @@ fn parse_worktree_porcelain(text: &str) -> Vec<WorktreeEntry> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
     use crate::shared::testing::TestRepo;
     use rstest::rstest;
+
+    #[rstest]
+    #[case::clean_without_force("", false, true, (true, false, true, true, true))]
+    #[case::tracked_change_without_force(" M tracked.txt\n", false, true, (false, true, true, false, false))]
+    #[case::untracked_file_without_force("?? scratch.txt\n", false, true, (false, true, true, false, false))]
+    #[case::untracked_file_with_force("?? scratch.txt\n", true, true, (true, false, false, true, true))]
+    #[case::missing_worktree_skips_status("?? scratch.txt\n", false, false, (true, false, false, true, true))]
+    fn delete_worktree_checks_status_before_removal(
+        #[case] status: &str,
+        #[case] force: bool,
+        #[case] worktree_exists: bool,
+        #[case] expected: (bool, bool, bool, bool, bool),
+    ) {
+        let directory = tempfile::tempdir().expect("temporary worktree should be created");
+        let status_queried = Cell::new(false);
+        let before_delete_called = Cell::new(false);
+        let removed = Cell::new(false);
+        let missing_path = directory.path().join("missing");
+
+        let worktree_path = if worktree_exists {
+            directory.path()
+        } else {
+            &missing_path
+        };
+        let result = delete_worktree_if_clean_with(
+            worktree_path,
+            force,
+            |_| {
+                status_queried.set(true);
+                Ok(status.to_string())
+            },
+            || {
+                before_delete_called.set(true);
+                Ok(())
+            },
+            || {
+                removed.set(true);
+                Ok(true)
+            },
+        );
+        let rejected_as_dirty = result
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.downcast_ref::<DirtyWorktreeError>().is_some());
+
+        assert_eq!(
+            (
+                result.is_ok(),
+                rejected_as_dirty,
+                status_queried.get(),
+                before_delete_called.get(),
+                removed.get()
+            ),
+            expected,
+        );
+    }
 
     #[rstest]
     #[case::simple("feature-branch", BRANCH_PREFIX, "feature-branch")]

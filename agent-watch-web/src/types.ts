@@ -158,7 +158,17 @@ export type ChatItem =
       files: {
         name: string
         source: string
+        size: number
         isImage: boolean
+        previewType:
+          | 'image'
+          | 'markdown'
+          | 'text'
+          | 'video'
+          | 'audio'
+          | 'pdf'
+          | 'html'
+          | 'download'
         available: boolean
       }[]
       caption: string | null

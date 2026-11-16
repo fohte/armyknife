@@ -63,3 +63,29 @@ export function requestText(url: string) {
     return ResultAsync.fromPromise(response.text(), toError)
   })
 }
+
+export function requestUtf8Text(url: string) {
+  return ResultAsync.fromPromise(fetch(url), toError).andThen((response) => {
+    if (!response.ok) {
+      return errorFromResponse(response).andThen((error) =>
+        err<string, Error>(error),
+      )
+    }
+
+    const contentType = response.headers.get('content-type') ?? ''
+    const mediaType = contentType.split(';', 1)[0]?.trim().toLowerCase()
+    if (mediaType === 'text/html' || mediaType === 'application/xhtml+xml') {
+      return err<string, Error>(
+        new Error('HTML attachments cannot be previewed as text'),
+      )
+    }
+
+    return ResultAsync.fromPromise(response.arrayBuffer(), toError).andThen(
+      (body) =>
+        Result.fromThrowable(
+          () => new TextDecoder('utf-8', { fatal: true }).decode(body),
+          toError,
+        )(),
+    )
+  })
+}

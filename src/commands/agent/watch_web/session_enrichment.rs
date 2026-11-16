@@ -477,11 +477,19 @@ mod tests {
     }
 
     #[rstest]
-    #[case::unset_priority_is_left_unranked(
-        vec![task("task-a", None), task("task-b", Some(-1))],
+    #[case::unset_priority_keeps_its_tq_position(
+        vec![task("task-a", Some(0)), task("task-b", None), task("task-c", Some(-1))],
         (
-            HashMap::from([("task-a".to_string(), None), ("task-b".to_string(), Some(-1))]),
-            HashMap::from([("task-b".to_string(), 0)]),
+            HashMap::from([
+                ("task-a".to_string(), Some(0)),
+                ("task-b".to_string(), None),
+                ("task-c".to_string(), Some(-1)),
+            ]),
+            HashMap::from([
+                ("task-a".to_string(), 0),
+                ("task-b".to_string(), 1),
+                ("task-c".to_string(), 2),
+            ]),
         ),
     )]
     #[case::same_priority_shares_order(
