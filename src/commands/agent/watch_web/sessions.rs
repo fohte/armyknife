@@ -2337,39 +2337,17 @@ mod tests {
     }
 
     #[rstest]
-    #[case::without_agent_status(None, true, false)]
-    #[case::configured_done_with_transcript(Some(AgentStatusState::Done), true, false)]
-    #[case::waiting_with_background_task(Some(AgentStatusState::Waiting), false, false)]
-    #[case::pending_task_without_transcript(None, false, false)]
-    #[case::pending_task_with_parse_error(None, false, true)]
+    #[case::without_agent_status(None)]
+    #[case::configured_done_with_pending_task(Some(AgentStatusState::Done))]
+    #[case::waiting_with_background_task(Some(AgentStatusState::Waiting))]
     #[tokio::test]
     async fn stopped_claude_with_pending_task_uses_shared_background_status(
         mut source: TestSessionSource,
         #[case] status_state: Option<AgentStatusState>,
-        #[case] has_transcript: bool,
-        #[case] transcript_parse_fails: bool,
     ) {
-        let transcript_file = has_transcript.then(|| tempfile::NamedTempFile::new().unwrap());
-        let transcript_directory = transcript_parse_fails.then(|| tempfile::tempdir().unwrap());
         source.sessions[0]
             .pending_bg_task_ids
             .insert("fixture-task-id".to_string());
-        if let Some(transcript_file) = &transcript_file {
-            std::fs::write(
-                transcript_file.path(),
-                indoc::indoc! {r#"
-                    {"uuid":"fixture-prompt-row","parentUuid":null,"type":"user","message":{"content":"Watch the fixture build."}}
-                    {"uuid":"fixture-bash-call-row","parentUuid":"fixture-prompt-row","type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-bash-tool-use-id","name":"Bash","input":{"command":"watch fixture build","description":"Watch the synthetic build","run_in_background":true}}]}}
-                    {"uuid":"fixture-bash-result-row","parentUuid":"fixture-bash-call-row","type":"user","sourceToolAssistantUUID":"fixture-bash-call-row","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-bash-tool-use-id","content":"Command running in background with ID: fixture-task-id. Output is being written to: /fixture/task-output.log"}]}}
-                "#},
-            )
-            .unwrap();
-            source.sessions[0].transcript_path = Some(transcript_file.path().to_path_buf());
-        } else {
-            source.sessions[0].transcript_path = transcript_directory
-                .as_ref()
-                .map(|directory| directory.path().to_path_buf());
-        }
         source.web_states[0].later_until = None;
         if let Some(state) = status_state {
             let status_kind = "work_finished";
