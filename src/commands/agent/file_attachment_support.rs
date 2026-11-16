@@ -108,6 +108,8 @@ pub(crate) fn file_preview_type(name: &str, bytes: &[u8]) -> FilePreviewType {
         .unwrap_or_default()
         .to_ascii_lowercase();
 
+    // Keep mismatched suffixes downloadable so a misleading name cannot select inline
+    // media handling.
     if let Some((_, image_extension)) = image_format_from_bytes(bytes)
         && (extension.is_empty()
             || matches!(
@@ -261,6 +263,7 @@ mod tests {
     #[case::mismatched_pdf("report.pdf", b"plain text", FilePreviewType::Download)]
     #[case::binary_text("source.rs", &[0xff, 0xfe], FilePreviewType::Download)]
     #[case::mismatched_image("photo.png", b"ordinary text", FilePreviewType::Download)]
+    #[case::mismatched_image_extension("photo.jpg", &[137, 80, 78, 71, 13, 10, 26, 10], FilePreviewType::Download)]
     fn classifies_files_from_name_and_content(
         #[case] name: &str,
         #[case] bytes: &[u8],
