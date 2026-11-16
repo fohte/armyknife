@@ -340,7 +340,7 @@ pub fn get_parent_pid(pid: u32) -> Option<u32> {
         .ok()
 }
 
-/// A single snapshot of the process table, taken once and queried many times.
+/// Process topology and command lines captured from the process table.
 ///
 /// Stores a parent → children mapping so callers can search for descendants
 /// without forking `ps` for every lookup.
@@ -352,8 +352,8 @@ pub struct ProcessSnapshot {
 }
 
 impl ProcessSnapshot {
-    /// Captures the current process table via `ps -A`.
-    /// Returns `None` if `ps` fails.
+    /// Captures process topology and command lines from separate `ps -A` queries.
+    /// Returns `None` if either query fails.
     pub fn capture() -> Option<Self> {
         let output = command::new("ps")
             .args(["-A", "-o", "pid=,ppid=,comm="])
