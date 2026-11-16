@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.744](https://github.com/fohte/armyknife/compare/v0.1.743...v0.1.744) (2026-11-16)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** remove stale sessions ([#1872](https://github.com/fohte/armyknife/issues/1872)) ([e80242e](https://github.com/fohte/armyknife/commit/e80242e27cc7d9a14a292238b3413d3a5676bea5))
+
 ## [0.1.743](https://github.com/fohte/armyknife/compare/v0.1.742...v0.1.743) (2026-11-16)
 
 
