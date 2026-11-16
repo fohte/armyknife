@@ -604,7 +604,10 @@ function AppContent() {
     onShowMore: () => {
       setShowAllInProgress(true)
     },
-    onSelect: openConversation,
+    onSelect: (id: string) => {
+      if (newSessionMode === 'form') closeNewSession()
+      openConversation(id)
+    },
     laterExpanded,
     onToggleLater: () => {
       setLaterExpanded((expanded) => !expanded)
@@ -696,9 +699,9 @@ function AppContent() {
           onCloseSession={closeDoneSession}
           onOptimisticSessionOperation={dispatchSessionOperation}
           onSelectSession={(id) => {
-            if (orderedSessions.some((session) => session.id === id)) {
-              navigate((current) => ({ ...current, selectedId: id }))
-            }
+            if (!orderedSessions.some((session) => session.id === id)) return
+            if (newSessionMode === 'form') closeNewSession()
+            navigate((current) => ({ ...current, selectedId: id }))
           }}
         />
       ) : (
@@ -707,6 +710,9 @@ function AppContent() {
           hideQuietProjects={hideQuietProjects}
           loaded={loaded}
           onHideQuietProjectsChange={setHideQuietProjects}
+          onNewSession={() => {
+            openNewSession('form')
+          }}
           onSelectSession={openSessionInInbox}
           projects={projects}
           focusedProjectName={focusedProjectName}

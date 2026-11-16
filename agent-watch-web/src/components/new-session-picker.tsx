@@ -1,10 +1,23 @@
 import '#components/new-session.css'
 
 import { Folder, GitBranch, X } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  useEffect,
+  useRef,
+  useState,
+} from 'react'
 
 import { SessionDirectoryOptions } from '#components/session-directory-options'
 import type { NewSessionState } from '#use-new-session'
+
+function isImeEnter(event: ReactKeyboardEvent) {
+  if (event.key !== 'Enter') return false
+  if (event.nativeEvent.isComposing) return true
+  // Some browsers clear isComposing before dispatching the IME confirmation Enter.
+  // eslint-disable-next-line @typescript-eslint/no-deprecated -- keyCode 229 identifies that IME event.
+  return event.nativeEvent.keyCode === 229
+}
 
 type NewSessionPickerProps = {
   state: NewSessionState
@@ -36,6 +49,7 @@ export function NewSessionPicker({
         aria-modal="true"
         className={`new-session-picker${isMobile ? ' is-mobile' : ''}`}
         onKeyDown={(event) => {
+          if (isImeEnter(event)) return
           if (
             event.key === 'Enter' &&
             event.target instanceof HTMLButtonElement
@@ -172,8 +186,21 @@ export function NewSessionPicker({
             <button
               aria-selected={state.engine === 'claude'}
               className="new-session-picker-option"
+              disabled={state.isStarting || launchPending}
               onClick={() => {
                 state.setEngine('claude')
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' || isImeEnter(event)) {
+                  return
+                }
+                event.preventDefault()
+                if (!state.isStarting && !launchPending) {
+                  void state.start(
+                    onLaunched,
+                    event.altKey ? 'codex' : 'claude',
+                  )
+                }
               }}
               role="option"
               type="button"
@@ -187,8 +214,18 @@ export function NewSessionPicker({
             <button
               aria-selected={state.engine === 'codex'}
               className="new-session-picker-option"
+              disabled={state.isStarting || launchPending}
               onClick={() => {
                 state.setEngine('codex')
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' || isImeEnter(event)) {
+                  return
+                }
+                event.preventDefault()
+                if (!state.isStarting && !launchPending) {
+                  void state.start(onLaunched, 'codex')
+                }
               }}
               role="option"
               type="button"
@@ -228,7 +265,7 @@ export function NewSessionPicker({
                 selectedDirectory === null || state.isStarting || launchPending
               }
               onClick={() => {
-                if (!launchPending) void state.start(onLaunched)
+                if (!launchPending) void state.start(onLaunched, state.engine)
               }}
               type="button"
             >
@@ -238,10 +275,24 @@ export function NewSessionPicker({
             </button>
           ) : (
             <>
-              <span>↵ Start</span>
               <span>↑↓ Engine</span>
               <span>⌥W Worktree</span>
               <span>⌫ Change directory</span>
+              <button
+                aria-label={`Start session with ${state.engine === 'claude' ? 'Claude Code' : 'Codex'}`}
+                className="new-session-picker-start new-session-picker-start-desktop"
+                disabled={
+                  selectedDirectory === null ||
+                  state.isStarting ||
+                  launchPending
+                }
+                onClick={() => {
+                  if (!launchPending) void state.start(onLaunched, state.engine)
+                }}
+                type="button"
+              >
+                ↵ Start
+              </button>
               <span className="new-session-picker-summary">
                 {launchPending
                   ? 'Waiting for session feed…'

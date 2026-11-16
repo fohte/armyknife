@@ -2577,6 +2577,57 @@ it('opens a session in the Inbox when selected from the palette on Board', async
   })
 })
 
+it('opens a mobile new-session form from the Board header', async () => {
+  vi.stubGlobal(
+    'fetch',
+    createSessionLaunchFetcher(jsonResponse({ launchId: 'launch-fixture' })),
+  )
+  renderMobileApp('Board')
+  publishSessions({ revision: 1, sessions: [] })
+
+  clickButton('.board-header [aria-label="New session"]')
+  await waitForDirectoryResults()
+
+  const snapshot = () => ({
+    activeView: readActiveView(),
+    newSessionFormOpen: container.querySelector('.new-session-view') !== null,
+    mobileScreen: container
+      .querySelector('.agent-watch-shell')
+      ?.getAttribute('data-mobile-screen'),
+  })
+  expect(snapshot()).toEqual({
+    activeView: 'Inbox',
+    newSessionFormOpen: true,
+    mobileScreen: 'conversation',
+  })
+})
+
+it('opens an existing conversation after selecting it from the open new-session form', async () => {
+  vi.stubGlobal(
+    'fetch',
+    createSessionLaunchFetcher(jsonResponse({ launchId: 'launch-fixture' })),
+  )
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-existing', 'Existing session')],
+  })
+  clickButton('[aria-label="New session"]')
+  await waitForDirectoryResults()
+  clickButton('[data-session-row]')
+
+  const snapshot = () => ({
+    newSessionFormOpen: container.querySelector('.new-session-view') !== null,
+    conversationOpen: container.querySelector('.conversation-pane') !== null,
+    selectedTitle: readSelectedTitle(),
+  })
+  expect(snapshot()).toEqual({
+    newSessionFormOpen: false,
+    conversationOpen: true,
+    selectedTitle: 'Existing session',
+  })
+})
+
 it('opens the session when its launch ID appears in the feed', async () => {
   const fetcher = createSessionLaunchFetcher(
     jsonResponse({ launchId: 'launch-fixture' }),

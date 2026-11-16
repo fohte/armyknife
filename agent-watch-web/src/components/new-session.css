@@ -305,6 +305,13 @@
   cursor: not-allowed;
 }
 
+.new-session-picker-start-desktop {
+  min-height: 26px;
+  margin-left: auto;
+  padding: 0 9px;
+  font-size: 11px;
+}
+
 .new-session-picker-overlay {
   position: fixed;
   z-index: 110;
