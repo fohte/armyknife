@@ -6,7 +6,8 @@ use crate::{
 };
 
 use super::{
-    MergeOutcome, PrMergeClient, PrSnapshot, ensure_pr_is_open_and_safe, unmerged_lower_pr,
+    MergeOutcome, MergedPr, PrMergeClient, PrSnapshot, ensure_pr_is_open_and_safe,
+    unmerged_lower_pr,
 };
 
 #[derive(Clone, Copy)]
@@ -16,6 +17,14 @@ pub(super) struct MergeOptions<'a> {
     pub run_branch_commit_checks: bool,
 }
 
+#[derive(Clone, Copy)]
+struct PostMergeCheckContext<'a> {
+    owner: &'a str,
+    repo: &'a str,
+    pr_number: u64,
+    base_checks_reported: bool,
+}
+
 fn check_base_branch_before_merge(
     client: &impl PrMergeClient,
     owner: &str,
@@ -23,7 +32,7 @@ fn check_base_branch_before_merge(
     pr_number: u64,
     branch: &str,
     allow_failing_base: bool,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     client
         .wait_for_base_branch_checks(owner, repo, branch, allow_failing_base)
         .with_context(|| {
@@ -100,7 +109,7 @@ pub(super) async fn run_merge_with_options(
         bail!("PR #{pr_number} head changed since confirmation.");
     }
 
-    if options.run_branch_commit_checks {
+    let mut base_checks_reported = if options.run_branch_commit_checks {
         check_base_branch_before_merge(
             client,
             owner,
@@ -108,8 +117,10 @@ pub(super) async fn run_merge_with_options(
             pr_number,
             &initial.base_ref_name,
             options.allow_failing_base,
-        )?;
-    }
+        )?
+    } else {
+        false
+    };
 
     let is_stacked = if let Some(stack) = client
         .get_stack_for_pull_request(owner, repo, pr_number)
@@ -142,12 +153,15 @@ pub(super) async fn run_merge_with_options(
 
     let current = client.view_pr(owner, repo, pr_number)?;
     if current.state == PrState::Merged {
-        return Ok(MergeOutcome::Merged(current));
+        return Ok(MergeOutcome::Merged(MergedPr {
+            snapshot: current,
+            base_checks_reported,
+        }));
     }
     ensure_pr_is_open_and_safe(&current, pr_number, Some(&initial.head_sha))?;
 
     if options.run_branch_commit_checks {
-        check_base_branch_before_merge(
+        base_checks_reported = check_base_branch_before_merge(
             client,
             owner,
             repo,
@@ -157,6 +171,13 @@ pub(super) async fn run_merge_with_options(
         )?;
     }
 
+    let post_merge_check_context = PostMergeCheckContext {
+        owner,
+        repo,
+        pr_number,
+        base_checks_reported,
+    };
+
     let merge_result = match client
         .merge_async(owner, repo, pr_number, &initial.head_sha)
         .await
@@ -164,7 +185,11 @@ pub(super) async fn run_merge_with_options(
         Ok(result) => result,
         Err(error) => {
             return recover_async_merge_error(
-                client, owner, repo, pr_number, &initial, is_stacked, error,
+                client,
+                &initial,
+                is_stacked,
+                post_merge_check_context,
+                error,
             )
             .await;
         }
@@ -172,7 +197,10 @@ pub(super) async fn run_merge_with_options(
 
     match merge_result {
         AsyncMergeResult::Merged { sha } => Ok(merged_outcome_after_refresh(
-            client, owner, repo, pr_number, current, sha,
+            client,
+            post_merge_check_context,
+            current,
+            sha,
         )),
         AsyncMergeResult::Enqueued { message } => {
             Ok(MergeOutcome::Enqueued(message.unwrap_or_else(|| {
@@ -184,80 +212,105 @@ pub(super) async fn run_merge_with_options(
 
 async fn recover_async_merge_error(
     client: &impl PrMergeClient,
-    owner: &str,
-    repo: &str,
-    pr_number: u64,
     initial: &PrSnapshot,
     is_stacked: bool,
+    context: PostMergeCheckContext<'_>,
     merge_error: anyhow::Error,
 ) -> anyhow::Result<MergeOutcome> {
     let Some(fallback) = merge_error.downcast_ref::<AsyncMergeFallback>().cloned() else {
-        if let Some(merged) = already_merged(client, owner, repo, pr_number) {
-            return Ok(MergeOutcome::Merged(merged));
+        if let Some(merged) = already_merged(client, context.owner, context.repo, context.pr_number)
+        {
+            return Ok(MergeOutcome::Merged(MergedPr {
+                snapshot: merged,
+                base_checks_reported: context.base_checks_reported,
+            }));
         }
         return Err(merge_error);
     };
     if is_stacked {
-        if let Some(merged) = already_merged(client, owner, repo, pr_number) {
-            return Ok(MergeOutcome::Merged(merged));
+        if let Some(merged) = already_merged(client, context.owner, context.repo, context.pr_number)
+        {
+            return Ok(MergeOutcome::Merged(MergedPr {
+                snapshot: merged,
+                base_checks_reported: context.base_checks_reported,
+            }));
         }
         return Err(merge_error).context(format!(
-            "Cannot use synchronous fallback for stacked PR #{pr_number}. {}",
+            "Cannot use synchronous fallback for stacked PR #{}. {}",
+            context.pr_number,
             pending_request_retry_note(&fallback),
         ));
     }
 
-    fallback_to_sync_merge(client, owner, repo, pr_number, &initial.head_sha, &fallback).await
+    fallback_to_sync_merge(client, context, &initial.head_sha, &fallback).await
 }
 
 async fn fallback_to_sync_merge(
     client: &impl PrMergeClient,
-    owner: &str,
-    repo: &str,
-    pr_number: u64,
+    context: PostMergeCheckContext<'_>,
     confirmed_head_sha: &str,
     fallback: &AsyncMergeFallback,
 ) -> anyhow::Result<MergeOutcome> {
     let request_uuid = fallback.request_uuid();
-    let before_sync = client.view_pr(owner, repo, pr_number).with_context(|| {
+    let before_sync = client
+        .view_pr(context.owner, context.repo, context.pr_number)
+        .with_context(|| {
         format!(
-            "Could not verify PR #{pr_number} before synchronous fallback for async merge request {request_uuid}"
+            "Could not verify PR #{} before synchronous fallback for async merge request {request_uuid}",
+            context.pr_number
         )
     })?;
     if before_sync.state == PrState::Merged {
-        return Ok(MergeOutcome::Merged(before_sync));
+        return Ok(MergeOutcome::Merged(MergedPr {
+            snapshot: before_sync,
+            base_checks_reported: context.base_checks_reported,
+        }));
     }
-    ensure_pr_is_open_and_safe(&before_sync, pr_number, Some(confirmed_head_sha)).with_context(
-        || format!("Cannot fall back to synchronous merge for async merge request {request_uuid}"),
-    )?;
+    ensure_pr_is_open_and_safe(&before_sync, context.pr_number, Some(confirmed_head_sha))
+        .with_context(|| {
+            format!("Cannot fall back to synchronous merge for async merge request {request_uuid}")
+        })?;
     let merge_queue_enabled = client
-        .branch_requires_merge_queue(owner, repo, &before_sync.base_ref_name)
+        .branch_requires_merge_queue(context.owner, context.repo, &before_sync.base_ref_name)
         .await
         .with_context(|| {
             format!(
-                "Could not determine whether PR #{pr_number} uses a merge queue before synchronous fallback for async merge request {request_uuid}"
+                "Could not determine whether PR #{} uses a merge queue before synchronous fallback for async merge request {request_uuid}",
+                context.pr_number
             )
         })?;
     if merge_queue_enabled {
         bail!(
-            "Cannot use synchronous fallback for PR #{pr_number} because base branch `{}` requires a merge queue. {}",
+            "Cannot use synchronous fallback for PR #{} because base branch `{}` requires a merge queue. {}",
+            context.pr_number,
             before_sync.base_ref_name,
             pending_request_retry_note(fallback),
         );
     }
 
     let merge_result = match client
-        .merge_sync(owner, repo, pr_number, confirmed_head_sha)
+        .merge_sync(
+            context.owner,
+            context.repo,
+            context.pr_number,
+            confirmed_head_sha,
+        )
         .await
     {
         Ok(result) => result,
         Err(sync_error) => {
-            if let Some(merged) = already_merged(client, owner, repo, pr_number) {
-                return Ok(MergeOutcome::Merged(merged));
+            if let Some(merged) =
+                already_merged(client, context.owner, context.repo, context.pr_number)
+            {
+                return Ok(MergeOutcome::Merged(MergedPr {
+                    snapshot: merged,
+                    base_checks_reported: context.base_checks_reported,
+                }));
             }
             return Err(sync_error).with_context(|| {
                 format!(
-                    "Synchronous merge fallback failed for PR #{pr_number} after async merge request {request_uuid}"
+                    "Synchronous merge fallback failed for PR #{} after async merge request {request_uuid}",
+                    context.pr_number
                 )
             });
         }
@@ -265,9 +318,7 @@ async fn fallback_to_sync_merge(
 
     Ok(merged_outcome_after_refresh(
         client,
-        owner,
-        repo,
-        pr_number,
+        context,
         before_sync,
         match merge_result {
             crate::infra::github::MergeResult::Merged { sha } => sha,
@@ -298,33 +349,41 @@ fn already_merged(
 
 fn merged_outcome_after_refresh(
     client: &impl PrMergeClient,
-    owner: &str,
-    repo: &str,
-    pr_number: u64,
+    context: PostMergeCheckContext<'_>,
     fallback_snapshot: PrSnapshot,
     merge_sha: Option<String>,
 ) -> MergeOutcome {
-    match client.view_pr(owner, repo, pr_number) {
+    match client.view_pr(context.owner, context.repo, context.pr_number) {
         Ok(mut merged) if merged.state == PrState::Merged => {
             merged.merge_commit_sha = merge_sha.or(merged.merge_commit_sha);
-            MergeOutcome::Merged(merged)
+            MergeOutcome::Merged(MergedPr {
+                snapshot: merged,
+                base_checks_reported: context.base_checks_reported,
+            })
         }
         Ok(refreshed) => {
             eprintln!(
-                "PR #{pr_number} was merged, but GitHub reports state {:?}; continuing with worktree close.",
-                refreshed.state,
+                "PR #{} was merged, but GitHub reports state {:?}; continuing with worktree close.",
+                context.pr_number, refreshed.state,
             );
             let mut refreshed = refreshed;
             refreshed.merge_commit_sha = merge_sha.or(refreshed.merge_commit_sha);
-            MergeOutcome::Merged(refreshed)
+            MergeOutcome::Merged(MergedPr {
+                snapshot: refreshed,
+                base_checks_reported: context.base_checks_reported,
+            })
         }
         Err(error) => {
             eprintln!(
-                "PR #{pr_number} was merged, but its state could not be refreshed: {error:#}; continuing with worktree close."
+                "PR #{} was merged, but its state could not be refreshed: {error:#}; continuing with worktree close.",
+                context.pr_number
             );
             let mut fallback_snapshot = fallback_snapshot;
             fallback_snapshot.merge_commit_sha = merge_sha.or(fallback_snapshot.merge_commit_sha);
-            MergeOutcome::Merged(fallback_snapshot)
+            MergeOutcome::Merged(MergedPr {
+                snapshot: fallback_snapshot,
+                base_checks_reported: context.base_checks_reported,
+            })
         }
     }
 }

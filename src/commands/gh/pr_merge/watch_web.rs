@@ -100,10 +100,10 @@ where
         MergeOutcome::Merged(merged) => {
             println!("PR #{pr_number} merged.");
             let _ = std::io::stdout().flush();
-            if let Err(error) = close_worktree(merged.clone()).await {
+            if let Err(error) = close_worktree(merged.snapshot.clone()).await {
                 eprintln!(
                     "Could not close worktree for merged PR #{pr_number} (branch `{}`): {error:#}",
-                    merged.head_ref_name,
+                    merged.snapshot.head_ref_name,
                 );
             }
             if options.run_branch_commit_checks {
@@ -111,8 +111,9 @@ where
                     .wait_for_merge_commit_checks(
                         owner,
                         repo,
-                        &merged.base_ref_name,
-                        merged.merge_commit_sha.as_deref(),
+                        &merged.snapshot.base_ref_name,
+                        merged.snapshot.merge_commit_sha.as_deref(),
+                        merged.base_checks_reported,
                     )
                     .with_context(|| {
                         format!(

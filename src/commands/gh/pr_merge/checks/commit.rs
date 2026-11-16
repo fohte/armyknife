@@ -19,24 +19,34 @@ pub(super) fn wait_for_base_branch_checks(
     repo: &str,
     branch: &str,
     allow_failures: bool,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     let required_contexts = fetch_required_status_check_contexts(owner, repo, branch)?;
     if required_contexts.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
 
     wait_for_latest_base_tip_checks(
         branch,
         || fetch_branch_tip_sha(owner, repo, branch),
-        |sha| wait_for_commit_checks(owner, repo, branch, sha, &required_contexts, allow_failures),
+        |sha| {
+            wait_for_commit_checks(
+                owner,
+                repo,
+                branch,
+                sha,
+                &required_contexts,
+                allow_failures,
+                None,
+            )
+        },
     )
 }
 
 fn wait_for_latest_base_tip_checks(
     branch: &str,
     mut fetch_tip: impl FnMut() -> anyhow::Result<String>,
-    mut wait_for_checks: impl FnMut(&str) -> anyhow::Result<()>,
-) -> anyhow::Result<()> {
+    mut wait_for_checks: impl FnMut(&str) -> anyhow::Result<bool>,
+) -> anyhow::Result<bool> {
     loop {
         let sha = fetch_tip()?;
         println!("Checking required checks on base branch `{branch}` ({sha})...");
@@ -48,8 +58,7 @@ fn wait_for_latest_base_tip_checks(
             );
             continue;
         }
-        check_result?;
-        return Ok(());
+        return check_result;
     }
 }
 
@@ -58,6 +67,7 @@ pub(super) fn wait_for_merge_commit_checks(
     repo: &str,
     branch: &str,
     merge_sha: Option<&str>,
+    base_checks_reported: bool,
 ) -> anyhow::Result<()> {
     let required_contexts = fetch_required_status_check_contexts(owner, repo, branch)?;
     if required_contexts.is_empty() {
@@ -66,7 +76,16 @@ pub(super) fn wait_for_merge_commit_checks(
 
     let merge_sha = merge_sha.context("GitHub did not report the confirmed merge commit SHA")?;
     println!("Waiting for required checks on merge commit {merge_sha}...");
-    wait_for_commit_checks(owner, repo, branch, merge_sha, &required_contexts, false)
+    wait_for_commit_checks(
+        owner,
+        repo,
+        branch,
+        merge_sha,
+        &required_contexts,
+        false,
+        base_checks_reported.then_some(COMMIT_CHECK_DISCOVERY_TIMEOUT),
+    )?;
+    Ok(())
 }
 
 fn wait_for_commit_checks(
@@ -76,8 +95,9 @@ fn wait_for_commit_checks(
     sha: &str,
     required_contexts: &[RequiredStatusCheckContext],
     allow_failures: bool,
-) -> anyhow::Result<()> {
-    wait_for_commit_checks_with(
+    discovery_timeout: Option<Duration>,
+) -> anyhow::Result<bool> {
+    let outcome = wait_for_commit_checks_with(
         required_contexts,
         allow_failures,
         || fetch_commit_checks(owner, repo, sha),
@@ -88,8 +108,11 @@ fn wait_for_commit_checks(
             thread::sleep(CHECK_POLL_INTERVAL);
         },
         Instant::now,
-        COMMIT_CHECK_DISCOVERY_TIMEOUT,
-    )
+        discovery_timeout,
+    )?;
+    Ok(finish_commit_check_wait(sha, outcome, |warning| {
+        eprintln!("{warning}")
+    }))
 }
 
 fn wait_for_commit_checks_with(
@@ -98,25 +121,70 @@ fn wait_for_commit_checks_with(
     mut fetch_checks: impl FnMut() -> anyhow::Result<Vec<GhCheck>>,
     wait: impl FnMut(&str),
     mut now: impl FnMut() -> Instant,
-    discovery_timeout: Duration,
-) -> anyhow::Result<()> {
-    let discovery_deadline = now() + discovery_timeout;
+    discovery_timeout: Option<Duration>,
+) -> anyhow::Result<CommitCheckWaitOutcome> {
+    let discovery_deadline = discovery_timeout.map(|timeout| now() + timeout);
+    let mut reported = false;
+    let mut discovery_timed_out = false;
     wait_until_complete(
         || {
             let checks = fetch_checks()?;
             match classify_required_commit_checks(&checks, required_contexts, allow_failures)? {
-                CommitCheckStatus::Complete => Ok(CheckWaitStatus::Complete),
-                CommitCheckStatus::Pending(details) => Ok(CheckWaitStatus::Pending(details)),
-                CommitCheckStatus::Unreported if now() < discovery_deadline => {
+                CommitCheckStatus::Complete => {
+                    reported = true;
+                    Ok(CheckWaitStatus::Complete)
+                }
+                CommitCheckStatus::Pending(details) => {
+                    reported = true;
+                    Ok(CheckWaitStatus::Pending(details))
+                }
+                CommitCheckStatus::Unreported
+                    if discovery_deadline.is_some_and(|deadline| now() < deadline) =>
+                {
                     Ok(CheckWaitStatus::Pending(
                         "No required checks have been reported yet".to_string(),
                     ))
                 }
-                CommitCheckStatus::Unreported => Ok(CheckWaitStatus::Complete),
+                CommitCheckStatus::Unreported => {
+                    discovery_timed_out = discovery_deadline.is_some();
+                    Ok(CheckWaitStatus::Complete)
+                }
             }
         },
         wait,
-    )
+    )?;
+
+    Ok(if reported {
+        CommitCheckWaitOutcome::Reported
+    } else if discovery_timed_out {
+        CommitCheckWaitOutcome::DiscoveryTimedOut
+    } else {
+        CommitCheckWaitOutcome::Unreported
+    })
+}
+
+fn finish_commit_check_wait(
+    sha: &str,
+    outcome: CommitCheckWaitOutcome,
+    mut warn: impl FnMut(&str),
+) -> bool {
+    match outcome {
+        CommitCheckWaitOutcome::Reported => true,
+        CommitCheckWaitOutcome::Unreported => false,
+        CommitCheckWaitOutcome::DiscoveryTimedOut => {
+            warn(&format!(
+                "Required checks were not reported on {sha}; CI was not verified"
+            ));
+            false
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CommitCheckWaitOutcome {
+    Reported,
+    Unreported,
+    DiscoveryTimedOut,
 }
 
 fn classify_required_commit_checks(
@@ -514,7 +582,7 @@ mod tests {
                 elapsed.set(elapsed.get() + CHECK_POLL_INTERVAL);
             },
             || started_at + elapsed.get(),
-            COMMIT_CHECK_DISCOVERY_TIMEOUT,
+            Some(COMMIT_CHECK_DISCOVERY_TIMEOUT),
         )
         .map_err(|error| error.to_string());
 
@@ -532,7 +600,84 @@ mod tests {
     }
 
     #[test]
-    fn stops_waiting_when_no_required_check_is_reported_before_the_deadline() {
+    fn base_check_does_not_wait_for_an_unreported_required_context() {
+        let mut client = FakeCommitCheckClient {
+            responses: VecDeque::from([vec![]]),
+            request_count: 0,
+        };
+        let started_at = Instant::now();
+        let elapsed = Cell::new(Duration::ZERO);
+        let mut waits = 0;
+        let mut warnings = Vec::new();
+
+        let result = wait_for_commit_checks_with(
+            &[required("unit", None)],
+            false,
+            || client.fetch(),
+            |_| {
+                waits += 1;
+                elapsed.set(elapsed.get() + CHECK_POLL_INTERVAL);
+            },
+            || started_at + elapsed.get(),
+            None,
+        )
+        .map(|outcome| {
+            finish_commit_check_wait("base-tip", outcome, |warning| {
+                warnings.push(warning.to_string());
+            })
+        })
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, client.request_count, waits, warnings),
+            (Ok(false), 1, 0, vec![])
+        );
+    }
+
+    #[test]
+    fn base_check_keeps_waiting_for_a_reported_pending_context() {
+        let mut client = FakeCommitCheckClient {
+            responses: VecDeque::from([
+                vec![gh_check(
+                    "unit",
+                    "IN_PROGRESS",
+                    CheckBucket::Pending,
+                    "https://example.invalid/checks/unit",
+                )],
+                vec![gh_check(
+                    "unit",
+                    "SUCCESS",
+                    CheckBucket::Pass,
+                    "https://example.invalid/checks/unit",
+                )],
+            ]),
+            request_count: 0,
+        };
+        let started_at = Instant::now();
+        let elapsed = Cell::new(Duration::ZERO);
+        let mut waits = 0;
+
+        let result = wait_for_commit_checks_with(
+            &[required("unit", None)],
+            false,
+            || client.fetch(),
+            |_| {
+                waits += 1;
+                elapsed.set(elapsed.get() + CHECK_POLL_INTERVAL);
+            },
+            || started_at + elapsed.get(),
+            None,
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, client.request_count, waits),
+            (Ok(CommitCheckWaitOutcome::Reported), 2, 1),
+        );
+    }
+
+    #[test]
+    fn warns_when_merge_commit_checks_are_unreported_after_the_deadline() {
         let mut client = FakeCommitCheckClient {
             responses: VecDeque::from([vec![], vec![]]),
             request_count: 0,
@@ -551,11 +696,31 @@ mod tests {
                 elapsed.set(elapsed.get() + discovery_timeout);
             },
             || started_at + elapsed.get(),
-            discovery_timeout,
+            Some(discovery_timeout),
         )
+        .map(|outcome| {
+            let mut warnings = Vec::new();
+            let reported = finish_commit_check_wait("merge-tip", outcome, |warning| {
+                warnings.push(warning.to_string());
+            });
+            (reported, warnings)
+        })
         .map_err(|error| error.to_string());
 
-        assert_eq!((result, client.request_count, waits), (Ok(()), 2, 1));
+        assert_eq!(
+            (result, client.request_count, waits),
+            (
+                Ok((
+                    false,
+                    vec![
+                        "Required checks were not reported on merge-tip; CI was not verified"
+                            .to_string(),
+                    ],
+                )),
+                2,
+                1,
+            ),
+        );
     }
 
     #[test]
@@ -580,7 +745,7 @@ mod tests {
                 if sha == "base-tip-before" {
                     anyhow::bail!("Required checks failed on the previous base tip");
                 }
-                Ok(())
+                Ok(true)
             },
         )
         .map_err(|error| error.to_string());
@@ -588,7 +753,7 @@ mod tests {
         assert_eq!(
             (result, checked_shas),
             (
-                Ok(()),
+                Ok(true),
                 vec!["base-tip-before".to_string(), "base-tip-after".to_string(),],
             ),
         );

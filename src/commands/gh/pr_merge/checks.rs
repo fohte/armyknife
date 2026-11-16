@@ -12,7 +12,7 @@ pub(super) fn wait_for_base_branch_checks(
     repo: &str,
     branch: &str,
     allow_failures: bool,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     commit::wait_for_base_branch_checks(owner, repo, branch, allow_failures)
 }
 
@@ -21,8 +21,9 @@ pub(super) fn wait_for_merge_commit_checks(
     repo: &str,
     branch: &str,
     merge_sha: Option<&str>,
+    base_checks_reported: bool,
 ) -> anyhow::Result<()> {
-    commit::wait_for_merge_commit_checks(owner, repo, branch, merge_sha)
+    commit::wait_for_merge_commit_checks(owner, repo, branch, merge_sha, base_checks_reported)
 }
 
 const GH_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
