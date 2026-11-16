@@ -172,6 +172,8 @@ struct SessionsResponse {
     sessions: Vec<SessionView>,
 }
 
+type VibeAncestorLoader = Arc<dyn Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync>;
+
 struct SessionSnapshot {
     revision: i64,
     sessions: Vec<Session>,
@@ -184,6 +186,7 @@ struct SessionSnapshot {
     unanswered_todo_titles: HashMap<String, String>,
     agent_config: AgentConfig,
     vibe_config: Arc<Config>,
+    vibe_ancestor_loader: VibeAncestorLoader,
 }
 
 trait SessionSource: Clone + Send + Sync + 'static {
@@ -379,10 +382,34 @@ async fn list_sessions<S: SessionSource>(
     let unanswered_proposal_titles = snapshot.unanswered_proposal_titles;
     let unanswered_todo_titles = snapshot.unanswered_todo_titles;
     let tree_related_session_ids = session_tree_related_ids(&snapshot.all_sessions);
+    let all_sessions_for_vibe = snapshot.all_sessions;
+    let sessions_for_vibe = response_sessions.clone();
+    let repo_by_id_for_vibe = snapshot.repo_by_id.clone();
+    let vibe_config = snapshot.vibe_config;
+    let vibe_ancestor_loader = snapshot.vibe_ancestor_loader;
+    let vibe_modes = tokio::task::spawn_blocking(move || {
+        vibe_states_for_sessions(
+            &sessions_for_vibe,
+            &all_sessions_for_vibe,
+            &repo_by_id_for_vibe,
+            &vibe_config,
+            |session_id| vibe_ancestor_loader(session_id),
+        )
+    })
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "failed to resolve session vibe states");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?
+    .map_err(|error| {
+        tracing::warn!(%error, "failed to load session vibe state");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
     let mut sessions = response_sessions
         .iter()
-        .map(|session| {
+        .zip(vibe_modes)
+        .map(|(session, vibe_mode)| {
             let tasks = task_metadata
                 .links
                 .get(&session.session_id)
@@ -420,20 +447,6 @@ async fn list_sessions<S: SessionSource>(
                 .get(&session.session_id)
                 .cloned()
                 .unwrap_or_default();
-            let repo_identity = repo.split_once('/');
-            let ancestors = session
-                .ancestor_session_ids
-                .iter()
-                .filter_map(|ancestor_id| {
-                    snapshot
-                        .all_sessions
-                        .iter()
-                        .find(|ancestor| ancestor.session_id == *ancestor_id)
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            let vibe_mode =
-                vibe::state_for(session, repo_identity, &snapshot.vibe_config, &ancestors);
             let parent_project = resolve_parent_project(
                 &session.ancestor_session_ids,
                 &task_metadata,
@@ -647,6 +660,7 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         .collect();
     let repo_by_id = resolve_repos_for_sessions(&sessions, &all_sessions, resolve_repo);
     let sessions_dir = store::sessions_dir()?;
+    let vibe_sessions_dir = sessions_dir.clone();
     let decision_counts = store::agent_decision_counts_by_session_from(&sessions_dir)?;
     let mut unanswered_proposal_titles = HashMap::new();
     let mut unanswered_todo_titles = HashMap::new();
@@ -681,6 +695,9 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         unanswered_todo_titles,
         agent_config,
         vibe_config: Arc::new(config),
+        vibe_ancestor_loader: Arc::new(move |session_id| {
+            store::load_session_from(&vibe_sessions_dir, session_id)
+        }),
     })
 }
 
@@ -703,6 +720,41 @@ fn session_tree_related_ids(sessions: &[Session]) -> HashSet<String> {
         }
     }
     related_ids
+}
+
+fn vibe_states_for_sessions(
+    sessions: &[Session],
+    all_sessions: &[Session],
+    repo_by_id: &HashMap<String, String>,
+    config: &Config,
+    mut load_missing_ancestor: impl FnMut(&str) -> anyhow::Result<Option<Session>>,
+) -> anyhow::Result<Vec<VibeState>> {
+    let all_sessions_by_id = all_sessions
+        .iter()
+        .map(|session| (session.session_id.as_str(), session))
+        .collect::<HashMap<_, _>>();
+    let mut missing_ancestors_by_id: HashMap<String, Option<Session>> = HashMap::new();
+
+    sessions
+        .iter()
+        .map(|session| {
+            let repo_identity = repo_by_id
+                .get(&session.session_id)
+                .and_then(|repo| repo.split_once('/'));
+            vibe::state_for_with_ancestor_loader(session, repo_identity, config, |ancestor_id| {
+                if let Some(ancestor) = all_sessions_by_id.get(ancestor_id) {
+                    return Ok(Some((*ancestor).clone()));
+                }
+                if let Some(ancestor) = missing_ancestors_by_id.get(ancestor_id) {
+                    return Ok(ancestor.clone());
+                }
+
+                let ancestor = load_missing_ancestor(ancestor_id)?;
+                missing_ancestors_by_id.insert(ancestor_id.to_owned(), ancestor.clone());
+                Ok(ancestor)
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -769,6 +821,7 @@ mod tests {
         revision: i64,
         sessions: Vec<Session>,
         all_sessions: Vec<Session>,
+        archived_ancestors: HashMap<String, Session>,
         web_states: Vec<store::WatchWebSessionState>,
         title_by_id: HashMap<String, String>,
         repo_by_id: HashMap<String, String>,
@@ -821,6 +874,10 @@ mod tests {
                     ..AgentConfig::default()
                 },
                 vibe_config: self.vibe_config.clone(),
+                vibe_ancestor_loader: {
+                    let archived_ancestors = self.archived_ancestors.clone();
+                    Arc::new(move |session_id| Ok(archived_ancestors.get(session_id).cloned()))
+                },
             })
         }
 
@@ -964,6 +1021,7 @@ mod tests {
             revision: 7,
             sessions: vec![child_session.clone()],
             all_sessions: vec![child_session, parent],
+            archived_ancestors: HashMap::new(),
             web_states: vec![store::WatchWebSessionState {
                 session_id: "child-session".to_string(),
                 later_until: Some(Utc.timestamp_opt(4_700, 0).unwrap()),
@@ -1153,6 +1211,58 @@ mod tests {
             vibe_mode["ancestorSessionId"] = serde_json::json!(ancestor_session_id);
         }
         expected["sessions"][0]["vibeMode"] = vibe_mode;
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_feed_reports_inherited_vibe_from_archived_ancestor(
+        mut source: TestSessionSource,
+    ) {
+        source.vibe_config = Arc::new(
+            serde_yaml::from_str(indoc::indoc! {"
+                orgs:
+                  example-org:
+                    vibe: true
+            "})
+            .unwrap(),
+        );
+        source.sessions[0].launched_with_vibe = true;
+        source.sessions[0].status = SessionStatus::Running;
+        source.all_sessions[0] = source.sessions[0].clone();
+        let mut archived_ancestor = source.all_sessions.remove(1);
+        archived_ancestor.vibe_enabled = true;
+        archived_ancestor.archived_at = Some(Utc.timestamp_opt(900, 0).unwrap());
+        source
+            .archived_ancestors
+            .insert(archived_ancestor.session_id.clone(), archived_ancestor);
+        source.web_states[0].later_until = None;
+
+        let mut expected = expected_response(
+            "in_progress",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: None,
+                category_when_not_later: "in_progress",
+                is_paused: false,
+                unread: false,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["vibeMode"] = serde_json::json!({
+            "mode": "inherited",
+            "ancestorSessionId": "parent-session",
+        });
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
