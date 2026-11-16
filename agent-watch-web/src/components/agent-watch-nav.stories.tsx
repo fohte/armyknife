@@ -91,6 +91,7 @@ const meta = {
     onSelectToday: () => undefined,
     onSelectSession: () => undefined,
     onOpenPalette: () => undefined,
+    onNewSession: () => undefined,
     inboxCollapsed: false,
     onToggleInbox: () => undefined,
   },

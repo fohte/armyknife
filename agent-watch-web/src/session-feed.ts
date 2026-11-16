@@ -88,6 +88,9 @@ function isSession(value: unknown): value is Session {
 
   return (
     typeof value['id'] === 'string' &&
+    (value['launchId'] === undefined ||
+      value['launchId'] === null ||
+      typeof value['launchId'] === 'string') &&
     typeof value['isPaused'] === 'boolean' &&
     (value['activityStatus'] === undefined ||
       value['activityStatus'] === 'working' ||

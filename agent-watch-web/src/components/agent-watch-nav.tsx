@@ -3,7 +3,14 @@ import '#components/later-today.css'
 
 import { Button } from '@fohte/ui/button'
 import { Chip } from '@fohte/ui/chip'
-import { Filter, PanelLeftClose, PanelLeftOpen, Search, X } from 'lucide-react'
+import {
+  Filter,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
+  Search,
+  X,
+} from 'lucide-react'
 
 import type { WorkTypeNavGroup } from '#board-model'
 import type { CommandPaletteShortcut } from '#command-palette-shortcut'
@@ -36,6 +43,7 @@ type AgentWatchNavProps = {
   onSelectToday: (id: string) => void
   onSelectSession: (id: string) => void
   onOpenPalette: () => void
+  onNewSession?: () => void
   isMobile?: boolean
   inboxCollapsed?: boolean
   onToggleInbox?: () => void
@@ -56,6 +64,7 @@ export function AgentWatchNav({
   onSelectToday,
   onSelectSession,
   onOpenPalette,
+  onNewSession = () => undefined,
   isMobile = false,
   inboxCollapsed = false,
   onToggleInbox = () => undefined,
@@ -89,6 +98,19 @@ export function AgentWatchNav({
           <Search aria-hidden="true" size={13} />
           {!isMobile ? <span>{paletteShortcut.label}</span> : null}
         </button>
+        {!isMobile ? (
+          <button
+            aria-label="New session"
+            className="agent-watch-new-session"
+            onClick={() => {
+              onNewSession()
+            }}
+            title="New session"
+            type="button"
+          >
+            <Plus aria-hidden="true" size={16} />
+          </button>
+        ) : null}
         {!isMobile ? (
           <button
             aria-label={inboxCollapsed ? 'Show Inbox' : 'Hide Inbox'}

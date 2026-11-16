@@ -16,6 +16,8 @@ import { CommandPalette } from '#components/command-palette'
 import { InboxConversationPanes } from '#components/inbox-conversation-panes'
 import { LaterMenu } from '#components/later-menu'
 import { MobileNavDrawer } from '#components/mobile-nav-drawer'
+import { NewSessionForm } from '#components/new-session-form'
+import { NewSessionPicker } from '#components/new-session-picker'
 import { ResizableColumns } from '#components/resizable-columns'
 import { SessionConversationCacheProvider } from '#components/session-conversation-cache'
 import {
@@ -24,6 +26,7 @@ import {
   parseInboxFilterQuery,
 } from '#inbox-filter'
 import { useMobileLayout, useSessionMobileNavigation } from '#mobile-layout'
+import { findLaunchedSession } from '#new-session-navigation'
 import { getLaterPresetTimes } from '#session-actions'
 import { startSessionFeed } from '#session-feed'
 import { useSessionHistory } from '#session-history'
@@ -40,6 +43,7 @@ import {
   type SessionOperation,
 } from '#session-operations'
 import type { Session } from '#types'
+import { useNewSession } from '#use-new-session'
 import { useSavedInboxViews } from '#use-saved-inbox-views'
 import { useSessionRefreshRevisions } from '#use-session-refresh-revisions'
 
@@ -117,6 +121,10 @@ function AppContent() {
   const [inboxFilterQuery, setInboxFilterQuery] = useState('')
   const [statusPanelOpen, setStatusPanelOpen] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [newSessionMode, setNewSessionMode] = useState<
+    'form' | 'palette' | null
+  >(null)
+  const [pendingLaunchId, setPendingLaunchId] = useState<string | null>(null)
   const [manualInboxCollapsed, setManualInboxCollapsed] = useState<
     boolean | null
   >(null)
@@ -132,6 +140,7 @@ function AppContent() {
     null,
   )
   const [loaded, setLoaded] = useState(false)
+  const newSession = useNewSession(newSessionMode !== null)
   const inboxCollapsed = manualInboxCollapsed ?? statusPanelOpen
   const toggleInbox = useCallback(() => {
     setManualInboxCollapsed((manual) => !(manual ?? statusPanelOpen))
@@ -524,6 +533,28 @@ function AppContent() {
     closeMobileNav()
     setCommandPaletteOpen(true)
   }, [closeMobileNav])
+  const openNewSession = useCallback(
+    (mode: 'form' | 'palette') => {
+      newSession.reset()
+      setPendingLaunchId(null)
+      setNewSessionMode(mode)
+      setCommandPaletteOpen(false)
+      closeMobileNav()
+      if (mode === 'form') {
+        navigate((current) => ({
+          ...current,
+          view: 'inbox',
+          selectedId: null,
+          conversationOpen: false,
+        }))
+      }
+    },
+    [closeMobileNav, navigate, newSession.reset, setCommandPaletteOpen],
+  )
+  const closeNewSession = useCallback(() => {
+    setPendingLaunchId(null)
+    setNewSessionMode(null)
+  }, [])
   const openSessionFromNavigation = useCallback(
     (id: string) => {
       closeMobileNav()
@@ -538,6 +569,18 @@ function AppContent() {
     },
     [closeMobileNav, selectInboxSavedView],
   )
+  useEffect(() => {
+    if (pendingLaunchId === null) return
+    const launchedSession = findLaunchedSession(
+      sessionsWithElapsedTime,
+      pendingLaunchId,
+    )
+    if (launchedSession === undefined) return
+    setPendingLaunchId(null)
+    setNewSessionMode(null)
+    setCommandPaletteOpen(false)
+    openSessionInInbox(launchedSession.id)
+  }, [openSessionInInbox, pendingLaunchId, sessionsWithElapsedTime])
   const inboxProps = {
     error: error ?? savedViews.storageError,
     connectionError: error,
@@ -585,6 +628,9 @@ function AppContent() {
       setMobileNavOpen(true)
     },
     onOpenPalette: openMobilePalette,
+    onNewSession: () => {
+      openNewSession('form')
+    },
     onCloseKeepWorktree: (sessionId: string) => {
       closeDoneSession(sessionId, true)
     },
@@ -609,6 +655,9 @@ function AppContent() {
       onSelectToday={openSessionFromNavigation}
       onSelectSession={openSessionFromNavigation}
       onOpenPalette={openMobilePalette}
+      onNewSession={() => {
+        openNewSession('form')
+      }}
       inboxCollapsed={inboxCollapsed}
       onToggleInbox={toggleInbox}
     />
@@ -630,6 +679,18 @@ function AppContent() {
             setStatusPanelOpen(false)
           }}
           onBack={backToInbox}
+          newSessionPane={
+            newSessionMode === 'form' ? (
+              <NewSessionForm
+                isMobile={isMobile}
+                launchPending={pendingLaunchId !== null}
+                onClose={closeNewSession}
+                onLaunched={setPendingLaunchId}
+                state={newSession}
+              />
+            ) : undefined
+          }
+          showMobileNewSession={newSessionMode === 'form'}
           onLater={openLater}
           onCloseSession={closeDoneSession}
           onOptimisticSessionOperation={dispatchSessionOperation}
@@ -661,7 +722,11 @@ function AppContent() {
     <div
       className="agent-watch-shell"
       data-layout={isMobile ? 'mobile' : 'desktop'}
-      data-mobile-screen={showMobileConversation ? 'conversation' : 'inbox'}
+      data-mobile-screen={
+        showMobileConversation || newSessionMode === 'form'
+          ? 'conversation'
+          : 'inbox'
+      }
     >
       {isMobile ? (
         main
@@ -734,12 +799,25 @@ function AppContent() {
             setCommandPaletteOpen(false)
           }}
           onRunCommand={(command) => {
+            if (command.id === 'new-session') {
+              openNewSession('palette')
+              return
+            }
             void runPaletteCommand(command)
           }}
           recentSessionIds={recentSessionIds}
           sessions={sessionsWithElapsedTime}
           workTypeNavLabels={workTypeNavLabels}
           pendingFocusSessionId={pendingFocusSessionId}
+        />
+      ) : null}
+      {newSessionMode === 'palette' ? (
+        <NewSessionPicker
+          isMobile={isMobile}
+          launchPending={pendingLaunchId !== null}
+          onClose={closeNewSession}
+          onLaunched={setPendingLaunchId}
+          state={newSession}
         />
       ) : null}
     </div>

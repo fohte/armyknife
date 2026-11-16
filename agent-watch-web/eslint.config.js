@@ -22,6 +22,7 @@ export default config(
     files: ['src/**/*.{ts,tsx}'],
     ignores: [
       'src/session-operation-http.ts',
+      'src/new-session-http.ts',
       'src/api-requests.ts',
       'src/session-feed.ts',
       'src/**/*.test.*',
