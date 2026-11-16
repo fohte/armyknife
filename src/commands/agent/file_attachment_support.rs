@@ -1,4 +1,5 @@
 pub(crate) const MAX_AGENT_FILE_BYTES: u64 = 10 * 1024 * 1024;
+pub(crate) const FILE_TYPE_PREFIX_BYTES: usize = 64 * 1024;
 
 const TEXT_EXTENSIONS: &[&str] = &[
     "txt",
@@ -100,6 +101,7 @@ pub(crate) enum FilePreviewType {
 }
 
 pub(crate) fn file_preview_type(name: &str, bytes: &[u8]) -> FilePreviewType {
+    let bytes = &bytes[..bytes.len().min(FILE_TYPE_PREFIX_BYTES)];
     let extension = std::path::Path::new(name)
         .extension()
         .and_then(|extension| extension.to_str())
@@ -123,7 +125,7 @@ pub(crate) fn file_preview_type(name: &str, bytes: &[u8]) -> FilePreviewType {
     if extension == "pdf" && bytes.starts_with(b"%PDF-") {
         return FilePreviewType::Pdf;
     }
-    if matches!(extension.as_str(), "html" | "htm") && std::str::from_utf8(bytes).is_ok() {
+    if matches!(extension.as_str(), "html" | "htm") && is_utf8_prefix(bytes) {
         return FilePreviewType::Html;
     }
     if matches!(extension.as_str(), "mp4" | "mov") && bytes.get(4..8) == Some(b"ftyp") {
@@ -139,7 +141,7 @@ pub(crate) fn file_preview_type(name: &str, bytes: &[u8]) -> FilePreviewType {
         return FilePreviewType::Audio;
     }
 
-    if std::str::from_utf8(bytes).is_err() {
+    if !is_utf8_prefix(bytes) {
         return FilePreviewType::Download;
     }
     if matches!(extension.as_str(), "md" | "markdown") {
@@ -149,6 +151,13 @@ pub(crate) fn file_preview_type(name: &str, bytes: &[u8]) -> FilePreviewType {
         return FilePreviewType::Text;
     }
     FilePreviewType::Download
+}
+
+fn is_utf8_prefix(bytes: &[u8]) -> bool {
+    match std::str::from_utf8(bytes) {
+        Ok(_) => true,
+        Err(error) => error.error_len().is_none(),
+    }
 }
 
 pub(crate) fn preview_type_from_mime(name: &str, mime_type: Option<&str>) -> FilePreviewType {
@@ -242,7 +251,7 @@ pub(crate) fn sanitize_basename(name: &str) -> String {
 mod tests {
     use rstest::rstest;
 
-    use super::{FilePreviewType, file_preview_type};
+    use super::{FILE_TYPE_PREFIX_BYTES, FilePreviewType, file_preview_type};
 
     #[rstest]
     #[case::markdown("notes.md", b"# Heading", FilePreviewType::Markdown)]
@@ -258,5 +267,16 @@ mod tests {
         #[case] expected: FilePreviewType,
     ) {
         assert_eq!(file_preview_type(name, bytes), expected);
+    }
+
+    #[test]
+    fn classifies_text_when_the_detection_prefix_ends_mid_character() {
+        let mut bytes = vec![b'a'; FILE_TYPE_PREFIX_BYTES - 1];
+        bytes.push(0xe3);
+
+        assert_eq!(
+            file_preview_type("notes.md", &bytes),
+            FilePreviewType::Markdown
+        );
     }
 }

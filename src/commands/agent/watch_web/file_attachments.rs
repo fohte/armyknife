@@ -90,11 +90,15 @@ pub(super) fn stored_chat_files(
     records
         .iter()
         .map(|record| {
+            let mut size = usize::try_from(record.size).unwrap_or_default();
             let preview_type = match record.mime_type.as_deref() {
                 Some(mime_type) => preview_type_from_mime(&record.name, Some(mime_type)),
                 None => storage_root
-                    .and_then(|root| match file::read_stored_file(root, session_id, record) {
-                        Ok(Some(bytes)) => Some(file_preview_type(&record.name, &bytes)),
+                    .and_then(|root| match file::read_stored_file_prefix(root, session_id, record) {
+                        Ok(Some((bytes, stored_size))) => {
+                            size = stored_size;
+                            Some(file_preview_type(&record.name, &bytes))
+                        }
                         Ok(None) => None,
                         Err(error) => {
                             tracing::warn!(%error, file_id = %record.id, "failed to classify stored agent file");
@@ -106,7 +110,7 @@ pub(super) fn stored_chat_files(
             ChatFile {
                 name: record.name.clone(),
                 source: format!("/api/sessions/{session_id}/files/{}", record.id),
-                size: usize::try_from(record.size).unwrap_or_default(),
+                size,
                 is_image: preview_type == FilePreviewType::Image,
                 preview_type,
                 available: true,
@@ -163,7 +167,7 @@ fn inspect_transcript_file(path: &Path) -> Result<Option<(usize, FilePreviewType
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NOFOLLOW);
     }
-    let file = match options.open(path) {
+    let mut file = match options.open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
@@ -172,16 +176,15 @@ fn inspect_transcript_file(path: &Path) -> Result<Option<(usize, FilePreviewType
     if !metadata.is_file() || metadata.len() > MAX_FILE_BYTES {
         return Ok(None);
     }
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_FILE_BYTES {
+    let size = metadata.len();
+    let Some(bytes) = file::read_file_type_prefix(&mut file, size)? else {
         return Ok(None);
-    }
+    };
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_default();
-    Ok(Some((bytes.len(), file_preview_type(name, &bytes))))
+    Ok(Some((size as usize, file_preview_type(name, &bytes))))
 }
 
 async fn get_stored_file(
@@ -509,7 +512,9 @@ mod tests {
         ChatFile, MAX_FILE_BYTES, encode_tool_use_id, file_response, routes_with,
         stored_chat_files, transcript_chat_file, transcript_file_path,
     };
-    use crate::commands::agent::file_attachment_support::FilePreviewType;
+    use crate::commands::agent::file_attachment_support::{
+        FILE_TYPE_PREFIX_BYTES, FilePreviewType,
+    };
     use crate::commands::agent::store::{self, AgentFile};
     use crate::commands::agent::types::Session;
 
@@ -604,6 +609,38 @@ mod tests {
                 is_image: false,
                 preview_type: FilePreviewType::Download,
                 available: false,
+            }
+        );
+    }
+
+    #[test]
+    fn transcript_card_uses_metadata_size_when_the_type_prefix_ends_mid_character() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("large-notes.md");
+        let mut bytes = vec![b'a'; FILE_TYPE_PREFIX_BYTES - 1];
+        bytes.push(0xe3);
+        bytes.extend_from_slice(b"tail");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let actual = transcript_chat_file(
+            "fixture-session",
+            "fixture-tool-use",
+            0,
+            path.to_str().unwrap(),
+        );
+
+        assert_eq!(
+            actual,
+            ChatFile {
+                name: "large-notes.md".to_owned(),
+                source: format!(
+                    "/api/sessions/fixture-session/transcript-files/{}/0",
+                    encode_tool_use_id("fixture-tool-use")
+                ),
+                size: bytes.len(),
+                is_image: false,
+                preview_type: FilePreviewType::Markdown,
+                available: true,
             }
         );
     }
