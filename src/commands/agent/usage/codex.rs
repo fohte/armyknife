@@ -206,8 +206,14 @@ fn file_signature(path: &Path) -> Result<Option<FileSignature>> {
 }
 
 fn read_latest_quota_from_transcript(path: &Path) -> Result<Option<EngineQuota>> {
-    let file =
-        File::open(path).with_context(|| format!("opening Codex transcript {}", path.display()))?;
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("opening Codex transcript {}", path.display()));
+        }
+    };
     let file_size = file
         .metadata()
         .with_context(|| format!("inspecting Codex transcript {}", path.display()))?
