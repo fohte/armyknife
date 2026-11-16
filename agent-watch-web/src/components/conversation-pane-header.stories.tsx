@@ -48,8 +48,13 @@ const meta = {
     onToggleToday: () => undefined,
   },
   decorators: [
-    (Story) => (
-      <div className="conversation-pane" style={{ height: 96 }}>
+    (Story, context) => (
+      <div
+        className="conversation-pane"
+        style={{
+          height: context.args.isMobile ? 88 : 96,
+        }}
+      >
         <Story />
       </div>
     ),
@@ -75,6 +80,50 @@ export const EditingTheSessionTitleOnMobile: Story = {
   args: {
     isMobile: true,
     titleEditing: true,
+    session: { ...session, title: 'Edit' },
+  },
+}
+
+export const MobileHeaderShowsTaskAndRepository: Story = {
+  name: 'The mobile header keeps the task and repository on its second row',
+  args: {
+    isMobile: true,
+    session: {
+      ...session,
+      category: 'done',
+      title: 'Retry',
+      repo: 'svc',
+      task: {
+        id: 'sample-task-primary',
+        number: 8,
+        title: 'Fix',
+        priority: null,
+      },
+      tasks: [
+        {
+          id: 'sample-task-primary',
+          number: 8,
+          title: 'Fix',
+          priority: null,
+        },
+      ],
+    },
+    backgroundTasks: [
+      {
+        id: 'sample-background-task-a',
+        description: 'Review the request flow',
+        elapsedSeconds: 24,
+        kind: 'subagent',
+      },
+      {
+        id: 'sample-background-task-b',
+        description: 'Check delivery tests',
+        elapsedSeconds: 12,
+        kind: 'background_task',
+      },
+    ],
+    onLater: () => undefined,
+    onClose: () => undefined,
   },
 }
 
@@ -91,6 +140,41 @@ export const SessionPullRequestCanBeMerged: Story = {
         url: 'https://github.com/example/service/pull/42',
         headSha: 'sample-head-sha',
       },
+    },
+  },
+}
+
+export const SessionHasMultiplePullRequests: Story = {
+  name: 'The header shows every pull request submitted by the session',
+  args: {
+    session: {
+      ...session,
+      pullRequest: {
+        number: 42,
+        state: 'Open',
+        owner: 'example-org',
+        repo: 'example-repo',
+        url: 'https://github.com/example-org/example-repo/pull/42',
+        headSha: 'sample-head-sha',
+      },
+      pullRequests: [
+        {
+          number: 42,
+          state: 'Open',
+          owner: 'example-org',
+          repo: 'example-repo',
+          url: 'https://github.com/example-org/example-repo/pull/42',
+          headSha: 'sample-head-sha',
+        },
+        {
+          number: 43,
+          state: 'Open',
+          owner: 'example-org',
+          repo: 'example-repo',
+          url: 'https://github.com/example-org/example-repo/pull/43',
+          headSha: 'other-head-sha',
+        },
+      ],
     },
   },
 }

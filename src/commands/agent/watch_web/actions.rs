@@ -11,10 +11,10 @@ use axum::{Json, Router};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use super::super::resume::SHELL_COMMANDS;
 use super::super::store;
 use super::super::types::{Engine, Session, SessionStatus, TmuxInfo};
 use super::messages::RouteLoaders;
+use crate::infra::process::SHELL_COMMANDS;
 
 mod answer_question;
 mod api_error;
@@ -23,6 +23,7 @@ mod close;
 mod decisions;
 mod interrupt_locks;
 mod keyed_mutex_registry;
+mod launch_sessions;
 mod merge_pull_request;
 mod messages;
 mod permission_denied;
@@ -113,6 +114,7 @@ fn router_with_state(state: ActionState) -> Router {
             post(merge_pull_request::merge_pull_request),
         )
         .with_state(state)
+        .merge(launch_sessions::router())
 }
 
 #[derive(Clone)]
@@ -936,9 +938,11 @@ mod tests {
 
     fn session(session_id: &str) -> Session {
         Session {
+            launch_id: None,
             session_id: session_id.to_string(),
             archived_at: None,
             pr_context: None,
+            created_pr_urls: Vec::new(),
             crit_urls: Vec::new(),
             web_uis: Vec::new(),
             pending_human_review_ids: BTreeSet::new(),

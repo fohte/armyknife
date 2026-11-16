@@ -67,12 +67,18 @@ fn is_false(value: &bool) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub session_id: String,
+    /// ID of the watch-web request that launched this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_id: Option<String>,
     /// When set, the session is hidden from active listings until restored or collected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived_at: Option<DateTime<Utc>>,
     /// GitHub lookup data retained after a worktree is removed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_context: Option<SessionPrContext>,
+    /// Pull request URLs submitted by this session through `a ai pr-draft submit`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub created_pr_urls: Vec<String>,
     /// Crit review URLs opened by this session, ordered by most recently requested.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub crit_urls: Vec<String>,
@@ -282,6 +288,7 @@ mod tests {
                     session.stop_blocked_by_armyknife,
                     session.agent_status_clear_pending,
                     session.pr_context,
+                    session.created_pr_urls,
                     session.model,
                     session.effort,
                     session.web_uis,
@@ -299,7 +306,7 @@ mod tests {
                     false,
                     BTreeSet::new(),
                 ),
-                (None, false, false, None, None, None, Vec::new()),
+                (None, false, false, None, Vec::new(), None, None, Vec::new()),
             )
         );
     }

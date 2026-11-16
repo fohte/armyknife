@@ -14,13 +14,15 @@ impl ReviewDetector for DevinDetector {
     }
 
     fn start_method(&self) -> StartDetection {
-        StartDetection::CheckRun {
-            name: "devin-review",
+        StartDetection::CommitStatusOrCheckRun {
+            context: "Devin Review",
+            check_name: "devin-review",
         }
     }
 
     fn completion_method(&self) -> CompletionDetection {
-        CompletionDetection::ReviewOrCheckRun {
+        CompletionDetection::ReviewOnHeadOrCommitStatusOrCheckRun {
+            context: "Devin Review",
             check_name: "devin-review",
         }
     }

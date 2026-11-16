@@ -37,8 +37,10 @@ pub(super) fn record_codex_resume_metadata_if_needed(
     let pr_context = captured.flatten();
     let now = Utc::now();
     let mut session = existing_session.unwrap_or_else(|| Session {
+        launch_id: None,
         archived_at: None,
         pr_context,
+        created_pr_urls: Vec::new(),
         session_id: session_id.to_string(),
         work_type: None,
         work_type_pinned: false,
@@ -132,8 +134,10 @@ mod tests {
     fn session(ancestor_session_ids: Vec<String>) -> Session {
         let now = Utc::now();
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
+            created_pr_urls: Vec::new(),
             session_id: "resume-target".to_string(),
             work_type: None,
             work_type_pinned: false,

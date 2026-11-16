@@ -29,10 +29,14 @@ pub(super) struct CachedProgress {
 impl App {
     pub(in crate::commands::agent::tui) fn begin_progress_refresh(&mut self, session_id: &str) {
         if let Some(snapshot) = self.cached_progress(session_id).cloned() {
-            let rows = self.refresh_cached_work_rows(session_id, &snapshot.rows);
-            let mut snapshot = snapshot;
-            snapshot.rows = self.rows_with_current_panes(&rows);
-            self.store_progress_snapshot(session_id, snapshot, false);
+            if snapshot.implementation.is_some() {
+                self.refresh_local_progress(session_id, None, false);
+            } else {
+                let rows = self.refresh_cached_work_rows(session_id, &snapshot.rows);
+                let mut snapshot = snapshot;
+                snapshot.rows = self.rows_with_current_panes(&rows);
+                self.store_progress_snapshot(session_id, snapshot, false);
+            }
         } else {
             self.refresh_local_progress(session_id, None, false);
         }
@@ -56,7 +60,7 @@ impl App {
                     return;
                 };
                 let scope = self.progress_scope(&selected);
-                let request_scope = scope.kind.fetch_scope();
+                let request_scope = Some(scope.kind.fetch_scope());
                 if progress
                     .request_scope
                     .as_ref()
@@ -70,9 +74,22 @@ impl App {
                 });
                 let cached_implementation =
                     reusable_cache.and_then(|cached| cached.implementation.clone());
-                let implementation = includes_fetched_progress
-                    .then(|| progress.implementation.or(cached_implementation))
-                    .flatten();
+                let implementation = if includes_fetched_progress {
+                    progress
+                        .implementation
+                        .map(|fresh| match cached_implementation.as_ref() {
+                            Some(cached) => fresh.with_cached_submitted_pull_requests(cached),
+                            None => fresh,
+                        })
+                        .or(cached_implementation)
+                } else {
+                    progress
+                        .implementation
+                        .filter(ImplementationPlan::has_submitted_pull_requests)
+                };
+                let display_implementation = implementation
+                    .as_ref()
+                    .map(|plan| plan.for_session(&selected.session_id));
                 let mut delegated = if includes_fetched_progress {
                     progress
                         .delegated
@@ -112,7 +129,7 @@ impl App {
                     });
                 }
                 let has_delegates = !delegated.is_empty();
-                let rows = if let Some(plan) = implementation.as_ref() {
+                let rows = if let Some(plan) = display_implementation.as_ref() {
                     self.checklist_rows(
                         &scope.work_sessions,
                         &delegated
@@ -179,7 +196,7 @@ impl App {
         existing_rows: &[ProgressRow],
     ) -> CachedProgress {
         let scope = self.progress_scope(selected);
-        let current_request_scope = scope.kind.fetch_scope();
+        let current_request_scope = Some(scope.kind.fetch_scope());
         let cached = self.cached_progress(&selected.session_id);
         let reusable_cache = cached.filter(|snapshot| {
             same_implementation_scope(
@@ -188,12 +205,15 @@ impl App {
             )
         });
         let implementation = reusable_cache.and_then(|snapshot| snapshot.implementation.clone());
+        let display_implementation = implementation
+            .as_ref()
+            .map(|plan| plan.for_session(&selected.session_id));
         let cached_delegates = reusable_cache
             .map(|snapshot| snapshot.delegated_sessions.as_slice())
             .unwrap_or_default();
         let delegated =
             self.delegates_with_missing_cached_sessions(&scope.children, cached_delegates);
-        let rows = if let Some(plan) = implementation.as_ref() {
+        let rows = if let Some(plan) = display_implementation.as_ref() {
             self.checklist_rows(&scope.work_sessions, &delegated, plan)
         } else {
             refresh_task_rows_from_sessions(

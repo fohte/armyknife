@@ -278,8 +278,8 @@ export const QuestionShowsFreeformAnswer: Story = {
   },
 }
 
-export const PausedSessionIsVisible: Story = {
-  name: 'The conversation header shows when its session is paused',
+export const PausedSessionHasNoHeaderBadge: Story = {
+  name: 'The desktop conversation header shows its title without a paused badge',
   args: {
     session: {
       ...session,
@@ -291,8 +291,8 @@ export const PausedSessionIsVisible: Story = {
   },
 }
 
-export const PausedSessionIsVisibleOnIPhone: Story = {
-  name: 'The iPhone conversation header shows when its session is paused',
+export const PausedSessionHasNoHeaderBadgeOnIPhone: Story = {
+  name: 'The iPhone conversation header shows its title without a paused badge',
   args: {
     isMobile: true,
     session: {

@@ -10,7 +10,8 @@ use super::store;
 use super::types::{
     Engine, Session, SessionStatus, TMUX_SESSION_OPTION, TmuxInfo, resolve_session_option,
 };
-use crate::infra::{process, tmux};
+use crate::infra::process::{self, SHELL_COMMANDS};
+use crate::infra::tmux;
 use crate::shared::command::{self, find_command_path};
 use crate::shared::env_var::EnvVars;
 
@@ -321,8 +322,6 @@ fn current_pane_id() -> Result<String> {
 /// Programs a `Paused` session's pane may be sitting at for its respawn to
 /// be safe. Anything else means a foreground program is running that a
 /// blind `respawn-pane -k` would kill.
-pub(crate) const SHELL_COMMANDS: &[&str] = &["zsh", "bash", "fish", "sh", "dash"];
-
 /// Failure modes of [`respawn_paused_session`]. Both the TUI's resume key
 /// and `a agent peer wake` render these as user-facing messages.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -609,8 +608,10 @@ mod tests {
         fn session(engine: Engine, status: SessionStatus) -> Session {
             let now = Utc::now();
             Session {
+                launch_id: None,
                 archived_at: None,
                 pr_context: None,
+                created_pr_urls: Vec::new(),
                 session_id: "resume-target".to_string(),
                 work_type: None,
                 work_type_pinned: false,
@@ -895,8 +896,10 @@ mod tests {
 
         fn session(status: SessionStatus, tmux_info: Option<TmuxInfo>) -> Session {
             Session {
+                launch_id: None,
                 archived_at: None,
                 pr_context: None,
+                created_pr_urls: Vec::new(),
                 session_id: "guard-test".to_string(),
                 work_type: None,
                 work_type_pinned: false,

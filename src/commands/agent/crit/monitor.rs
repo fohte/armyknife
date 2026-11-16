@@ -621,8 +621,10 @@ mod tests {
         fn fixture_session(id: &str, urls: &[&str], archived: bool) -> Session {
             let timestamp = Utc::now();
             Session {
+                launch_id: None,
                 archived_at: archived.then_some(timestamp),
                 pr_context: None,
+                created_pr_urls: Vec::new(),
                 session_id: id.to_string(),
                 crit_urls: urls.iter().map(|url| (*url).to_string()).collect(),
                 web_uis: Vec::new(),

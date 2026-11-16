@@ -28,6 +28,7 @@ use crate::commands::agent::user_turn::is_ask_user_question;
 
 mod background_task_outputs;
 mod background_tasks;
+mod command_source;
 mod incremental;
 mod parser;
 mod pending_permissions;
@@ -37,6 +38,7 @@ mod questions;
 pub(in crate::commands::agent::watch_web) mod queued_prompt;
 mod range;
 mod subagent_reports;
+mod transcript_path;
 
 use self::incremental::{filter_after_tail_window, parse_initial_or_full};
 #[cfg(test)]
@@ -59,6 +61,7 @@ mod file_attachments;
 use self::file_attachments::merge_stored_files;
 mod session_titles;
 use self::session_titles::{parent_session, resolve_peer_session_titles};
+use self::transcript_path::archived_codex_transcript_path;
 
 pub(super) fn claude_content_text(content: Option<&Value>) -> String {
     match content {
@@ -87,6 +90,7 @@ type PermissionRequestDataLoader =
 type PermissionDeniedLoader =
     Arc<dyn Fn(&str) -> Result<Vec<PermissionDeniedOperation>> + Send + Sync>;
 type AgentFileLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentFile>> + Send + Sync>;
+type AgentFileStorageRootLoader = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
 
 #[derive(Clone)]
 pub(super) struct RouteLoaders {
@@ -99,6 +103,7 @@ pub(super) struct RouteLoaders {
     permission_request_data: PermissionRequestDataLoader,
     permission_denials: PermissionDeniedLoader,
     agent_files: AgentFileLoader,
+    agent_file_storage_root: AgentFileStorageRootLoader,
     message_cache: MessageCache,
     running_background_task_cache: RunningBackgroundTaskCache,
     question_preview_cache: question_preview::QuestionPreviewCache,
@@ -125,6 +130,7 @@ impl RouteLoaders {
             permission_request_data: Arc::new(|_, _| Ok(None)),
             permission_denials: Arc::new(|_| Ok(Vec::new())),
             agent_files: Arc::new(|_| Ok(Vec::new())),
+            agent_file_storage_root: Arc::new(|| None),
             message_cache: MessageCache::default(),
             running_background_task_cache: RunningBackgroundTaskCache::default(),
             question_preview_cache: question_preview::QuestionPreviewCache::default(),
@@ -166,6 +172,14 @@ impl RouteLoaders {
         load_agent_files: impl Fn(&str) -> Result<Vec<AgentFile>> + Send + Sync + 'static,
     ) -> Self {
         self.agent_files = Arc::new(load_agent_files);
+        self
+    }
+
+    pub(super) fn with_agent_file_storage_root_loader(
+        mut self,
+        load_storage_root: impl Fn() -> Option<PathBuf> + Send + Sync + 'static,
+    ) -> Self {
+        self.agent_file_storage_root = Arc::new(load_storage_root);
         self
     }
 
@@ -302,6 +316,31 @@ fn load_conversation_with_queued_prompts(
     load_conversation_with_tail_window(session_id, load_session, load_user_marker, loaders, None)
 }
 
+pub(super) fn conversation_contains_markdown_source(
+    session_id: &str,
+    load_session: impl FnMut(&str) -> Result<Option<Session>>,
+    load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
+    loaders: &RouteLoaders,
+    expected_message: &str,
+) -> Result<bool> {
+    let Some(conversation) = load_conversation_with_tail_window_and_marker_updates(
+        session_id,
+        load_session,
+        load_user_marker,
+        loaders,
+        None,
+        false,
+    )?
+    else {
+        return Ok(false);
+    };
+
+    Ok(command_source::contains_markdown_source(
+        &conversation.messages,
+        expected_message,
+    ))
+}
+
 fn load_conversation_with_initial_tail_window(
     session_id: &str,
     load_session: impl FnMut(&str) -> Result<Option<Session>>,
@@ -320,14 +359,60 @@ fn load_conversation_with_initial_tail_window(
 
 fn load_conversation_with_tail_window(
     session_id: &str,
-    mut load_session: impl FnMut(&str) -> Result<Option<Session>>,
+    load_session: impl FnMut(&str) -> Result<Option<Session>>,
     load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
     loaders: &RouteLoaders,
     tail_window_limit: Option<usize>,
 ) -> Result<Option<ConversationResponse>> {
-    let Some(session) = load_session(session_id)? else {
+    load_conversation_with_tail_window_and_marker_updates(
+        session_id,
+        load_session,
+        load_user_marker,
+        loaders,
+        tail_window_limit,
+        true,
+    )
+}
+
+fn load_conversation_with_tail_window_and_marker_updates(
+    session_id: &str,
+    load_session: impl FnMut(&str) -> Result<Option<Session>>,
+    load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
+    loaders: &RouteLoaders,
+    tail_window_limit: Option<usize>,
+    mark_resolved_queued_prompts: bool,
+) -> Result<Option<ConversationResponse>> {
+    let codex_home = crate::shared::dirs::codex_home_dir();
+    load_conversation_with_tail_window_from(
+        session_id,
+        load_session,
+        load_user_marker,
+        loaders,
+        tail_window_limit,
+        codex_home.as_deref(),
+        mark_resolved_queued_prompts,
+    )
+}
+
+fn load_conversation_with_tail_window_from(
+    session_id: &str,
+    mut load_session: impl FnMut(&str) -> Result<Option<Session>>,
+    load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
+    loaders: &RouteLoaders,
+    tail_window_limit: Option<usize>,
+    codex_home: Option<&Path>,
+    mark_resolved_queued_prompts: bool,
+) -> Result<Option<ConversationResponse>> {
+    let Some(mut session) = load_session(session_id)? else {
         return Ok(None);
     };
+    if let Some(path) = archived_codex_transcript_path(
+        session.engine,
+        session.transcript_path.as_deref(),
+        codex_home,
+    )? {
+        session.transcript_path = Some(path);
+    }
     let user_marker = if session.engine == Engine::Claude {
         load_user_marker(session_id)?
     } else {
@@ -400,11 +485,13 @@ fn load_conversation_with_tail_window(
         );
         resolve_peer_session_titles(&mut cached.conversation.messages, &mut load_session)?;
         cached.conversation.update_metadata();
-        cache::mark_resolved_queued_prompts(
-            loaders,
-            session_id,
-            &cached.resolved_queued_prompt_ids,
-        );
+        if mark_resolved_queued_prompts {
+            cache::mark_resolved_queued_prompts(
+                loaders,
+                session_id,
+                &cached.resolved_queued_prompt_ids,
+            );
+        }
         return Ok(Some(cached.conversation));
     }
 
@@ -452,7 +539,20 @@ fn load_conversation_with_tail_window(
     let tail_window_start = conversation.tail_window_start;
     let recent_agent_files =
         filter_after_tail_window(&agent_files, tail_window_start, |file| file.created_at);
-    merge_stored_files(session_id, &recent_agent_files, &mut conversation.messages);
+    let storage_root = if recent_agent_files
+        .iter()
+        .any(|file| file.mime_type.is_none())
+    {
+        (loaders.agent_file_storage_root)()
+    } else {
+        None
+    };
+    merge_stored_files(
+        session_id,
+        &recent_agent_files,
+        storage_root.as_deref(),
+        &mut conversation.messages,
+    );
 
     attach_question_request_if_present(
         &mut conversation.messages,
@@ -479,7 +579,9 @@ fn load_conversation_with_tail_window(
     }
     conversation.initial_epoch = tail_window_limit.is_some() && session.engine == Engine::Claude;
 
-    cache::mark_resolved_queued_prompts(loaders, session_id, &resolved_queued_prompt_ids);
+    if mark_resolved_queued_prompts {
+        cache::mark_resolved_queued_prompts(loaders, session_id, &resolved_queued_prompt_ids);
+    }
     if !used_tail_window {
         loaders.message_cache.insert(
             session_id,
@@ -535,12 +637,14 @@ fn open_transcript(path: &Path, allow_compressed: bool) -> Result<Option<Box<dyn
     }
 
     if !allow_compressed {
-        return Ok(None);
+        return open_archived_codex_transcript(path);
     }
     let compressed_path = compressed_path(path);
     let file = match File::open(&compressed_path) {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return open_archived_codex_transcript(path);
+        }
         Err(error) => {
             return Err(error)
                 .with_context(|| format!("open transcript {}", compressed_path.display()));
@@ -549,6 +653,21 @@ fn open_transcript(path: &Path, allow_compressed: bool) -> Result<Option<Box<dyn
     let decoder = zstd::stream::read::Decoder::new(file)
         .with_context(|| format!("decompress transcript {}", compressed_path.display()))?;
     Ok(Some(Box::new(BufReader::new(decoder))))
+}
+
+fn open_archived_codex_transcript(path: &Path) -> Result<Option<Box<dyn BufRead + Send>>> {
+    let codex_home = crate::shared::dirs::codex_home_dir();
+    let Some(archived_path) =
+        archived_codex_transcript_path(Engine::Codex, Some(path), codex_home.as_deref())?
+    else {
+        return Ok(None);
+    };
+    match File::open(&archived_path) {
+        Ok(file) => reader_for(file, &archived_path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error)
+            .with_context(|| format!("open archived transcript {}", archived_path.display())),
+    }
 }
 
 fn reader_for(file: File, path: &Path) -> Result<Option<Box<dyn BufRead + Send>>> {
@@ -831,8 +950,8 @@ mod tests {
     use super::cache::TranscriptChange;
     use super::{
         ChatItem, MAX_PERMISSION_COMMAND_BYTES, QuestionChoice, QuestionPrompt, RouteLoaders,
-        load_conversation_with_queued_prompts, load_messages_with,
-        routes_with_decisions_and_queued_prompts_and_peer_out_messages,
+        load_conversation_with_queued_prompts, load_conversation_with_tail_window_from,
+        load_messages_with, routes_with_decisions_and_queued_prompts_and_peer_out_messages,
         routes_with_proposals_and_peer_out_messages,
     };
     use crate::commands::agent::store::{
@@ -852,6 +971,72 @@ mod tests {
             "last_message": null,
         }))
         .unwrap()
+    }
+
+    #[rstest]
+    #[case::already_archived(false)]
+    #[case::archived_during_loading(true)]
+    fn codex_messages_are_loaded_from_archive_after_transcript_moves(
+        #[case] archive_during_loading: bool,
+    ) {
+        let codex_home = tempfile::tempdir().unwrap();
+        let file_name = "rollout-fixture-thread.jsonl";
+        let recorded_path = codex_home
+            .path()
+            .join("sessions/2026/01/01")
+            .join(file_name);
+        let archived_path = codex_home.path().join("archived_sessions").join(file_name);
+        std::fs::create_dir_all(archived_path.parent().unwrap()).unwrap();
+        let transcript_path = if archive_during_loading {
+            std::fs::create_dir_all(recorded_path.parent().unwrap()).unwrap();
+            &recorded_path
+        } else {
+            &archived_path
+        };
+        std::fs::write(
+            transcript_path,
+            r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Recovered conversation."}]}}"#,
+        )
+        .unwrap();
+
+        let mut session = stored_session();
+        session.engine = Engine::Codex;
+        session.transcript_path = Some(recorded_path.clone());
+        let recorded_path_for_loader = recorded_path.clone();
+        let archived_path_for_loader = archived_path.clone();
+        let loaders = RouteLoaders::new(
+            move |_| {
+                if archive_during_loading {
+                    std::fs::rename(&recorded_path_for_loader, &archived_path_for_loader)?;
+                }
+                Ok(Vec::new())
+            },
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        );
+        let codex_home_path = codex_home.path().to_str().unwrap();
+        let conversation = temp_env::with_vars([("CODEX_HOME", Some(codex_home_path))], || {
+            load_conversation_with_tail_window_from(
+                "fixture-session",
+                move |id| Ok((id == "fixture-session").then(|| session.clone())),
+                |_| Ok(None),
+                &loaders,
+                None,
+                Some(codex_home.path()),
+                true,
+            )
+        })
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            conversation.messages,
+            vec![ChatItem::Assistant {
+                text: "Recovered conversation.".to_string(),
+            }],
+        );
     }
 
     fn background_task_output_router(transcript_path: &Path, output_path: &Path) -> Router {
@@ -1082,12 +1267,16 @@ mod tests {
                     "files": [{
                         "name": "fixture.png",
                         "source": "/api/sessions/fixture-session/files/file-fixture-id",
+                        "size": 3,
                         "isImage": true,
+                        "previewType": "image",
                         "available": true,
                     }, {
                         "name": "fixture-report.pdf",
                         "source": "/api/sessions/fixture-session/files/file-fixture-report-id",
+                        "size": 7,
                         "isImage": false,
+                        "previewType": "download",
                         "available": true,
                     }],
                     "caption": "Compare these files.",
@@ -1110,12 +1299,16 @@ mod tests {
                     "files": [{
                         "name": "fixture.png",
                         "source": "/api/sessions/fixture-session/files/file-fixture-id",
+                        "size": 3,
                         "isImage": true,
+                        "previewType": "image",
                         "available": true,
                     }, {
                         "name": "fixture-report.pdf",
                         "source": "/api/sessions/fixture-session/files/file-fixture-report-id",
+                        "size": 7,
                         "isImage": false,
+                        "previewType": "download",
                         "available": true,
                     }],
                     "caption": "Compare these files.",

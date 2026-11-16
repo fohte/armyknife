@@ -97,6 +97,33 @@ export const DecisionsShowUnreviewedCount: Story = {
   },
 }
 
+export const ManyTabsKeepCloseActionVisible: Story = {
+  name: 'The panel scrolls many tabs while keeping the close action visible',
+  parameters: {
+    overflowCheck: {
+      ignoreSelectors: ['.session-status-panel-tablist'],
+    },
+  },
+  args: {
+    tabs: [
+      'Running',
+      'Browser preview',
+      'Metrics dashboard',
+      'Review queue',
+      'Workspace integration with a long descriptive label',
+      'Build output',
+      'Deployment status',
+      'Additional service view',
+    ].map((label, index) => ({
+      id: `view-${String(index + 1)}`,
+      label,
+      count: 1,
+      content: <div className="session-status-preview">{label}</div>,
+    })),
+    activeTabId: 'view-8',
+  },
+}
+
 export const NoTabsAreAvailable: Story = {
   name: 'The panel shows an empty state when no tabs have items',
   args: {

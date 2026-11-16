@@ -12,6 +12,7 @@ import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 import { BangCommandActions } from '#components/bang-command'
+import { useMarkdownCommandContext } from '#components/markdown-command-context'
 import { useMarkdownSessionLinks } from '#components/markdown-session-links'
 import { SessionLink } from '#components/session-link'
 import {
@@ -452,6 +453,10 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   onCommandExecuted,
 }: MarkdownMessageProps) {
   const sessionLinks = useMarkdownSessionLinks()
+  const inheritedCommandContext = useMarkdownCommandContext()
+  const commandSessionId = sessionId ?? inheritedCommandContext?.sessionId
+  const commandExecutedCallback =
+    onCommandExecuted ?? inheritedCommandContext?.onCommandExecuted
   const rootClassName =
     className === undefined
       ? 'markdown-message'
@@ -466,13 +471,15 @@ export const MarkdownMessage = memo(function MarkdownMessage({
     ...(sessionLinks.onSelectSession === undefined
       ? {}
       : { onSelectSession: sessionLinks.onSelectSession }),
-    ...(sessionId === undefined
+    ...(commandSessionId === undefined
       ? {}
       : {
           commandContext: {
             messageText: children,
-            sessionId,
-            ...(onCommandExecuted === undefined ? {} : { onCommandExecuted }),
+            sessionId: commandSessionId,
+            ...(commandExecutedCallback === undefined
+              ? {}
+              : { onCommandExecuted: commandExecutedCallback }),
           },
         }),
   }

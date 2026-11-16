@@ -474,9 +474,11 @@ pub(super) mod test_support {
     #[fixture]
     pub(super) fn session() -> Session {
         Session {
+            launch_id: None,
             session_id: "state-session".to_string(),
             archived_at: None,
             pr_context: None,
+            created_pr_urls: Vec::new(),
             crit_urls: Vec::new(),
             web_uis: Vec::new(),
             pending_human_review_ids: Default::default(),

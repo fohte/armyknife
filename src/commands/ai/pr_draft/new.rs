@@ -61,7 +61,8 @@ async fn run_impl(args: &NewArgs, gh_client: &impl RepoClient) -> anyhow::Result
         }
     };
 
-    let allows_japanese = is_private || repo_allows_japanese(&repo_info.owner, &repo_info.repo);
+    let allows_japanese =
+        repo_allows_japanese(&repo_info.owner, &repo_info.repo, is_private).await?;
 
     let title = args.title.as_deref().unwrap_or("");
     let frontmatter = generate_frontmatter(title, allows_japanese);

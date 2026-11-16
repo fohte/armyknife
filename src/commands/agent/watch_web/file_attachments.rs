@@ -7,10 +7,11 @@ use anyhow::Result;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{Path as AxumPath, State};
-use axum::http::StatusCode;
 use axum::http::header::{
-    CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS,
+    ACCEPT_RANGES, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE,
+    RANGE, X_CONTENT_TYPE_OPTIONS,
 };
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use base64::Engine as _;
@@ -18,7 +19,8 @@ use serde::Serialize;
 
 use super::super::file::{self, storage_root};
 use super::super::file_attachment_support::{
-    MAX_AGENT_FILE_BYTES, image_format_from_bytes, is_image_mime_type, sanitize_basename,
+    FilePreviewType, MAX_AGENT_FILE_BYTES, file_preview_type, image_format_from_bytes,
+    preview_type_from_mime, sanitize_basename,
 };
 use super::super::store::{self, AgentFile};
 use super::super::types::{Engine, Session};
@@ -40,7 +42,9 @@ struct RoutesState {
 pub(super) struct ChatFile {
     pub(super) name: String,
     pub(super) source: String,
+    pub(super) size: usize,
     pub(super) is_image: bool,
+    pub(super) preview_type: FilePreviewType,
     pub(super) available: bool,
 }
 
@@ -78,14 +82,39 @@ fn routes_with(
         .with_state(state)
 }
 
-pub(super) fn stored_chat_files(session_id: &str, records: &[AgentFile]) -> Vec<ChatFile> {
+pub(super) fn stored_chat_files(
+    session_id: &str,
+    records: &[AgentFile],
+    storage_root: Option<&Path>,
+) -> Vec<ChatFile> {
     records
         .iter()
-        .map(|record| ChatFile {
-            name: record.name.clone(),
-            source: format!("/api/sessions/{session_id}/files/{}", record.id),
-            is_image: record.mime_type.as_deref().is_some_and(is_image_mime_type),
-            available: true,
+        .map(|record| {
+            let mut size = usize::try_from(record.size).unwrap_or_default();
+            let preview_type = match record.mime_type.as_deref() {
+                Some(mime_type) => preview_type_from_mime(&record.name, Some(mime_type)),
+                None => storage_root
+                    .and_then(|root| match file::read_stored_file_prefix(root, session_id, record) {
+                        Ok(Some((bytes, stored_size))) => {
+                            size = stored_size;
+                            Some(file_preview_type(&record.name, &bytes))
+                        }
+                        Ok(None) => None,
+                        Err(error) => {
+                            tracing::warn!(%error, file_id = %record.id, "failed to classify stored agent file");
+                            None
+                        }
+                    })
+                    .unwrap_or(FilePreviewType::Download),
+            };
+            ChatFile {
+                name: record.name.clone(),
+                source: format!("/api/sessions/{session_id}/files/{}", record.id),
+                size,
+                is_image: preview_type == FilePreviewType::Image,
+                preview_type,
+                available: true,
+            }
         })
         .collect()
 }
@@ -103,12 +132,12 @@ pub(super) fn transcript_chat_file(
         .map(sanitize_basename)
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| "download".to_owned());
-    let (available, is_image) = match inspect_transcript_file(path) {
-        Ok(Some(is_image)) => (true, is_image),
-        Ok(None) => (false, false),
+    let (available, size, preview_type) = match inspect_transcript_file(path) {
+        Ok(Some((size, preview_type))) => (true, size, preview_type),
+        Ok(None) => (false, 0, FilePreviewType::Download),
         Err(error) => {
             tracing::warn!(path = %path.display(), %error, "failed to check transcript attachment availability");
-            (false, false)
+            (false, 0, FilePreviewType::Download)
         }
     };
     ChatFile {
@@ -117,12 +146,14 @@ pub(super) fn transcript_chat_file(
             "/api/sessions/{session_id}/transcript-files/{}/{index}",
             encode_tool_use_id(tool_use_id)
         ),
-        is_image,
+        size,
+        is_image: preview_type == FilePreviewType::Image,
+        preview_type,
         available,
     }
 }
 
-fn inspect_transcript_file(path: &Path) -> Result<Option<bool>> {
+fn inspect_transcript_file(path: &Path) -> Result<Option<(usize, FilePreviewType)>> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_file() && metadata.len() <= MAX_FILE_BYTES => {}
         Ok(_) => return Ok(None),
@@ -145,12 +176,19 @@ fn inspect_transcript_file(path: &Path) -> Result<Option<bool>> {
     if !metadata.is_file() || metadata.len() > MAX_FILE_BYTES {
         return Ok(None);
     }
-    let mut prefix = Vec::with_capacity(12);
-    file.by_ref().take(12).read_to_end(&mut prefix)?;
-    Ok(Some(image_format_from_bytes(&prefix).is_some()))
+    let size = metadata.len();
+    let Some(bytes) = file::read_file_type_prefix(&mut file, size)? else {
+        return Ok(None);
+    };
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    Ok(Some((size as usize, file_preview_type(name, &bytes))))
 }
 
 async fn get_stored_file(
+    headers: HeaderMap,
     State(state): State<RoutesState>,
     AxumPath((session_id, file_id)): AxumPath<(String, String)>,
 ) -> Response {
@@ -165,7 +203,7 @@ async fn get_stored_file(
     })
     .await;
     match result {
-        Ok(Ok(Some((name, bytes)))) => file_response(&name, &bytes),
+        Ok(Ok(Some((name, bytes)))) => file_response(&name, &bytes, headers.get(RANGE)),
         Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
         Ok(Err(error)) => {
             tracing::warn!(%error, "failed to read stored agent file");
@@ -179,6 +217,7 @@ async fn get_stored_file(
 }
 
 async fn get_transcript_file(
+    headers: HeaderMap,
     State(state): State<RoutesState>,
     AxumPath((session_id, encoded_tool_use_id, index)): AxumPath<(String, String, usize)>,
 ) -> Response {
@@ -225,7 +264,7 @@ async fn get_transcript_file(
                 .map(sanitize_basename)
                 .filter(|name| !name.is_empty())
                 .unwrap_or_else(|| "download".to_owned());
-            file_response(&name, &bytes)
+            file_response(&name, &bytes, headers.get(RANGE))
         }
         None => StatusCode::NOT_FOUND.into_response(),
     }
@@ -349,26 +388,114 @@ fn read_file_for_delivery(path: &Path) -> Result<Option<Vec<u8>>> {
     Ok(Some(bytes))
 }
 
-fn file_response(name: &str, bytes: &[u8]) -> Response {
-    let mime_type = image_format_from_bytes(bytes).map(|(mime_type, _)| mime_type);
-    let (mime_type, disposition) = match mime_type {
-        Some(mime_type) => (mime_type, format!("inline; filename=\"{name}\"")),
-        None => (
-            "application/octet-stream",
-            format!("attachment; filename=\"{name}\""),
-        ),
+fn file_response(name: &str, bytes: &[u8], range: Option<&HeaderValue>) -> Response {
+    let preview_type = file_preview_type(name, bytes);
+    let mime_type = match preview_type {
+        FilePreviewType::Image => image_format_from_bytes(bytes)
+            .map(|(mime_type, _)| mime_type)
+            .unwrap_or("application/octet-stream"),
+        FilePreviewType::Markdown => "text/markdown; charset=utf-8",
+        FilePreviewType::Text => "text/plain; charset=utf-8",
+        FilePreviewType::Video if name.to_ascii_lowercase().ends_with(".mov") => "video/quicktime",
+        FilePreviewType::Video => "video/mp4",
+        FilePreviewType::Audio if name.to_ascii_lowercase().ends_with(".m4a") => "audio/mp4",
+        FilePreviewType::Audio => "audio/mpeg",
+        FilePreviewType::Pdf => "application/pdf",
+        FilePreviewType::Html | FilePreviewType::Download => "application/octet-stream",
     };
-    (
-        StatusCode::OK,
-        [
-            (CONTENT_TYPE, mime_type.to_owned()),
-            (CONTENT_DISPOSITION, disposition),
-            (CACHE_CONTROL, "private, no-store".to_owned()),
-            (X_CONTENT_TYPE_OPTIONS, "nosniff".to_owned()),
-        ],
-        Body::from(bytes.to_vec()),
-    )
-        .into_response()
+    let inline = !matches!(
+        preview_type,
+        FilePreviewType::Html | FilePreviewType::Download
+    );
+    let safe_name = sanitize_basename(name);
+    let disposition = format!(
+        "{}; filename=\"{safe_name}\"",
+        if inline { "inline" } else { "attachment" }
+    );
+    let is_seekable = matches!(
+        preview_type,
+        FilePreviewType::Video | FilePreviewType::Audio
+    );
+    let selected_range = if is_seekable {
+        range
+            .and_then(|range| range.to_str().ok())
+            .map(|range| parse_byte_range(range, bytes.len()))
+    } else {
+        None
+    };
+
+    let (status, body_bytes, content_range) = match selected_range {
+        Some(Ok((start, end))) => (
+            StatusCode::PARTIAL_CONTENT,
+            bytes[start..=end].to_vec(),
+            Some(format!("bytes {start}-{end}/{}", bytes.len())),
+        ),
+        Some(Err(ByteRangeError::Invalid)) => (
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            Vec::new(),
+            Some(format!("bytes */{}", bytes.len())),
+        ),
+        None => (StatusCode::OK, bytes.to_vec(), None),
+    };
+
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static(mime_type));
+    if let Ok(value) = HeaderValue::from_str(&disposition) {
+        headers.insert(CONTENT_DISPOSITION, value);
+    }
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+    headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    if is_seekable {
+        headers.insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    }
+    if let Some(value) = content_range.and_then(|value| HeaderValue::from_str(&value).ok()) {
+        headers.insert(CONTENT_RANGE, value);
+    }
+    if let Ok(value) = HeaderValue::from_str(&body_bytes.len().to_string()) {
+        headers.insert(CONTENT_LENGTH, value);
+    }
+    (status, headers, Body::from(body_bytes)).into_response()
+}
+
+#[derive(Debug)]
+enum ByteRangeError {
+    Invalid,
+}
+
+fn parse_byte_range(value: &str, length: usize) -> Result<(usize, usize), ByteRangeError> {
+    let Some(range) = value.strip_prefix("bytes=") else {
+        return Err(ByteRangeError::Invalid);
+    };
+    if range.contains(',') || length == 0 {
+        return Err(ByteRangeError::Invalid);
+    }
+    let Some((start, end)) = range.split_once('-') else {
+        return Err(ByteRangeError::Invalid);
+    };
+    if start.is_empty() {
+        let suffix = end.parse::<usize>().map_err(|_| ByteRangeError::Invalid)?;
+        if suffix == 0 {
+            return Err(ByteRangeError::Invalid);
+        }
+        return Ok((length.saturating_sub(suffix), length - 1));
+    }
+    let start = start
+        .parse::<usize>()
+        .map_err(|_| ByteRangeError::Invalid)?;
+    if start >= length {
+        return Err(ByteRangeError::Invalid);
+    }
+    let end = if end.is_empty() {
+        length - 1
+    } else {
+        end.parse::<usize>()
+            .map_err(|_| ByteRangeError::Invalid)?
+            .min(length - 1)
+    };
+    if end < start {
+        return Err(ByteRangeError::Invalid);
+    }
+    Ok((start, end))
 }
 
 #[cfg(test)]
@@ -382,8 +509,11 @@ mod tests {
     use tower::ServiceExt;
 
     use super::{
-        ChatFile, MAX_FILE_BYTES, encode_tool_use_id, routes_with, transcript_chat_file,
-        transcript_file_path,
+        ChatFile, MAX_FILE_BYTES, encode_tool_use_id, file_response, routes_with,
+        stored_chat_files, transcript_chat_file, transcript_file_path,
+    };
+    use crate::commands::agent::file_attachment_support::{
+        FILE_TYPE_PREFIX_BYTES, FilePreviewType,
     };
     use crate::commands::agent::store::{self, AgentFile};
     use crate::commands::agent::types::Session;
@@ -414,7 +544,9 @@ mod tests {
                     "/api/sessions/fixture-session/transcript-files/{}/0",
                     encode_tool_use_id("fixture-tool-use")
                 ),
+                size: bytes.len(),
                 is_image: true,
+                preview_type: FilePreviewType::Image,
                 available: true,
             }
         );
@@ -441,7 +573,9 @@ mod tests {
                     "/api/sessions/fixture-session/transcript-files/{}/0",
                     encode_tool_use_id("fixture-tool-use")
                 ),
+                size: b"not image content".len(),
                 is_image: false,
+                preview_type: FilePreviewType::Download,
                 available: true,
             }
         );
@@ -471,9 +605,170 @@ mod tests {
                     "/api/sessions/fixture-session/transcript-files/{}/0",
                     encode_tool_use_id("fixture-tool-use")
                 ),
+                size: 0,
                 is_image: false,
+                preview_type: FilePreviewType::Download,
                 available: false,
             }
+        );
+    }
+
+    #[test]
+    fn transcript_card_uses_metadata_size_when_the_type_prefix_ends_mid_character() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("large-notes.md");
+        let mut bytes = vec![b'a'; FILE_TYPE_PREFIX_BYTES - 1];
+        bytes.push(0xe3);
+        bytes.extend_from_slice(b"tail");
+        std::fs::write(&path, &bytes).unwrap();
+
+        let actual = transcript_chat_file(
+            "fixture-session",
+            "fixture-tool-use",
+            0,
+            path.to_str().unwrap(),
+        );
+
+        assert_eq!(
+            actual,
+            ChatFile {
+                name: "large-notes.md".to_owned(),
+                source: format!(
+                    "/api/sessions/fixture-session/transcript-files/{}/0",
+                    encode_tool_use_id("fixture-tool-use")
+                ),
+                size: bytes.len(),
+                is_image: false,
+                preview_type: FilePreviewType::Markdown,
+                available: true,
+            }
+        );
+    }
+
+    #[test]
+    fn stored_cards_use_mime_metadata_and_classify_legacy_file_bytes() {
+        let storage = TempDir::new().unwrap();
+        let session_id = "fixture-session";
+        let storage_root = storage.path().join("attachments");
+        let session_storage = storage_root.join(crate::shared::hex::encode(&Sha256::digest(
+            session_id.as_bytes(),
+        )));
+        std::fs::create_dir_all(&session_storage).unwrap();
+        let legacy_id = uuid::Uuid::new_v4().to_string();
+        let legacy_bytes = b"# Legacy file";
+        std::fs::write(session_storage.join(&legacy_id), legacy_bytes).unwrap();
+        let created_at = Utc::now();
+        let records = vec![
+            AgentFile {
+                id: "fixture-mime-id".to_owned(),
+                position: 0,
+                name: "sample-notes.md".to_owned(),
+                caption: None,
+                mime_type: Some("text/markdown".to_owned()),
+                size: 11,
+                created_at,
+            },
+            AgentFile {
+                id: legacy_id.clone(),
+                position: 1,
+                name: "legacy-notes.md".to_owned(),
+                caption: None,
+                mime_type: None,
+                size: legacy_bytes.len() as i64,
+                created_at,
+            },
+        ];
+
+        let actual = stored_chat_files(session_id, &records, Some(&storage_root));
+
+        assert_eq!(
+            actual,
+            vec![
+                ChatFile {
+                    name: "sample-notes.md".to_owned(),
+                    source: format!("/api/sessions/{session_id}/files/fixture-mime-id"),
+                    size: 11,
+                    is_image: false,
+                    preview_type: FilePreviewType::Markdown,
+                    available: true,
+                },
+                ChatFile {
+                    name: "legacy-notes.md".to_owned(),
+                    source: format!("/api/sessions/{session_id}/files/{legacy_id}"),
+                    size: legacy_bytes.len(),
+                    is_image: false,
+                    preview_type: FilePreviewType::Markdown,
+                    available: true,
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn serves_video_byte_ranges_for_seeking() {
+        let range = axum::http::HeaderValue::from_static("bytes=4-7");
+        let response = file_response("clip.mp4", b"0000ftypabcd", Some(&range));
+        let headers = response.headers();
+        let actual = (
+            response.status(),
+            headers.get(axum::http::header::CONTENT_TYPE).cloned(),
+            headers
+                .get(axum::http::header::CONTENT_DISPOSITION)
+                .cloned(),
+            headers.get(axum::http::header::ACCEPT_RANGES).cloned(),
+            headers.get(axum::http::header::CONTENT_RANGE).cloned(),
+            headers.get(axum::http::header::CONTENT_LENGTH).cloned(),
+            headers
+                .get(axum::http::header::X_CONTENT_TYPE_OPTIONS)
+                .cloned(),
+            to_bytes(response.into_body(), MAX_FILE_BYTES as usize)
+                .await
+                .unwrap()
+                .to_vec(),
+        );
+
+        assert_eq!(
+            actual,
+            (
+                StatusCode::PARTIAL_CONTENT,
+                Some("video/mp4".parse().unwrap()),
+                Some("inline; filename=\"clip.mp4\"".parse().unwrap()),
+                Some("bytes".parse().unwrap()),
+                Some("bytes 4-7/12".parse().unwrap()),
+                Some("4".parse().unwrap()),
+                Some("nosniff".parse().unwrap()),
+                b"ftyp".to_vec(),
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn serves_html_as_a_download_with_a_non_html_content_type() {
+        let response = file_response(
+            "document.html",
+            b"<!doctype html><script>window.example = true</script>",
+            None,
+        );
+        let headers = response.headers();
+        let actual = (
+            response.status(),
+            headers.get(axum::http::header::CONTENT_TYPE).cloned(),
+            headers
+                .get(axum::http::header::CONTENT_DISPOSITION)
+                .cloned(),
+            headers
+                .get(axum::http::header::X_CONTENT_TYPE_OPTIONS)
+                .cloned(),
+        );
+
+        assert_eq!(
+            actual,
+            (
+                StatusCode::OK,
+                Some("application/octet-stream".parse().unwrap()),
+                Some("attachment; filename=\"document.html\"".parse().unwrap()),
+                Some("nosniff".parse().unwrap()),
+            )
         );
     }
 

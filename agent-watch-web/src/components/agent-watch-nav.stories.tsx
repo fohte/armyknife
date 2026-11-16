@@ -147,8 +147,8 @@ export const RecentSessionsAppearNewestFirst: Story = {
   },
 }
 
-export const RecentSessionsAreHiddenOnMobile: Story = {
-  name: 'Mobile navigation does not show the Recent section',
+export const RecentSessionsAppearOnMobile: Story = {
+  name: 'Mobile navigation shows the Recent section',
   args: {
     isMobile: true,
     sessions: [

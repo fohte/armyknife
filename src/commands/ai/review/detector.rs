@@ -18,6 +18,11 @@ pub enum StartDetection {
     /// A legacy Commit Status (GitHub Status API) with the given context has appeared
     /// on the PR's head commit (e.g., CodeRabbit posts a `CodeRabbit` status).
     CommitStatus { context: &'static str },
+    /// Either a legacy Commit Status or a check run has appeared on the PR's head commit.
+    CommitStatusOrCheckRun {
+        context: &'static str,
+        check_name: &'static str,
+    },
 }
 
 /// How to detect that a reviewer has completed its review.
@@ -30,6 +35,12 @@ pub enum CompletionDetection {
     /// A PR review has been submitted, OR a Commit Status with the given context
     /// has reached the `success` state. Whichever signal arrives first counts.
     ReviewOrCommitStatus { context: &'static str },
+    /// A review on the current head, a successful Commit Status, or a completed check run
+    /// counts as completion.
+    ReviewOnHeadOrCommitStatusOrCheckRun {
+        context: &'static str,
+        check_name: &'static str,
+    },
 }
 
 /// Context passed to detection methods, carrying the GitHub API client
@@ -48,6 +59,15 @@ pub struct DetectionContext<'a, C: DetectionClient> {
 pub trait DetectionClient: Send + Sync {
     /// Find the latest review timestamp from a bot identified by `bot_login`.
     fn find_latest_review(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+        bot_login: &str,
+    ) -> impl Future<Output = Result<Option<DateTime<Utc>>>> + Send;
+
+    /// Find the latest review from a bot that targets the PR's current head commit.
+    fn find_latest_review_on_head(
         &self,
         owner: &str,
         repo: &str,
@@ -175,6 +195,21 @@ pub trait ReviewDetector: Send + Sync {
                     .has_commit_status(ctx.owner, ctx.repo, ctx.pr, context)
                     .await
             }
+            StartDetection::CommitStatusOrCheckRun {
+                context,
+                check_name,
+            } => {
+                if ctx
+                    .github
+                    .has_commit_status(ctx.owner, ctx.repo, ctx.pr, context)
+                    .await?
+                {
+                    return Ok(true);
+                }
+                ctx.github
+                    .has_check_run(ctx.owner, ctx.repo, ctx.pr, check_name)
+                    .await
+            }
         }
     }
 
@@ -214,6 +249,28 @@ pub trait ReviewDetector: Send + Sync {
                 }
                 ctx.github
                     .commit_status_completed_at(ctx.owner, ctx.repo, ctx.pr, context)
+                    .await
+            }
+            CompletionDetection::ReviewOnHeadOrCommitStatusOrCheckRun {
+                context,
+                check_name,
+            } => {
+                if let Some(t) = ctx
+                    .github
+                    .find_latest_review_on_head(ctx.owner, ctx.repo, ctx.pr, self.bot_login())
+                    .await?
+                {
+                    return Ok(Some(t));
+                }
+                if let Some(t) = ctx
+                    .github
+                    .commit_status_completed_at(ctx.owner, ctx.repo, ctx.pr, context)
+                    .await?
+                {
+                    return Ok(Some(t));
+                }
+                ctx.github
+                    .check_run_completed_at(ctx.owner, ctx.repo, ctx.pr, check_name)
                     .await
             }
         }

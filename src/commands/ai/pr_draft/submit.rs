@@ -4,21 +4,24 @@ use std::path::{Path, PathBuf};
 use super::common::{DraftFile, PrDraftError, RepoInfo, contains_japanese, repo_allows_japanese};
 use super::hooks::{HookContext, HookRunner, PRE_PR_SUBMIT_HOOK, default_runner, run_pr_hook};
 use super::stack::stack_created_pull_request;
-use crate::commands::agent::{ensure_repo_vibe_access, is_vibe_enabled};
-use crate::commands::ai::pr_series::{
-    PrSeriesPlan, has_managed_section, load_plan_if_present, preserve_managed_section,
-};
-use crate::commands::ai::pr_series_aftercare::{
-    SubmitSyncFailure, SubmitSyncOutcome, SubmitSyncStage, link_and_sync_after_submit,
-};
-use crate::infra::git::cmd::{run_git, run_git_optional};
+use crate::commands::agent::{ensure_no_review_access, is_vibe_enabled};
+use crate::commands::ai::pr_series::has_managed_section;
+use crate::infra::git::cmd::run_git;
 use crate::infra::github::{
     CreatePrParams, GitHubClient, PrBodyClient, PrClient, PrStackClient, PrState, RepoClient,
     UpdatePrParams,
 };
-use crate::infra::tq::TqClient;
-use crate::shared::config::{Config, load_config};
+use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::LockGuard;
+
+mod post_submit;
+
+use post_submit::{
+    PostSubmitProcessor, PrSeriesPostSubmitProcessor, SubmitEffects, body_for_existing_pr_update,
+    format_post_submit_failure, record_created_pr_url,
+};
+#[cfg(test)]
+use post_submit::{SavedPrSeriesPlan, TqBranchMetadata, record_created_pr_url_in};
 
 const SERIES_MARKERS_REQUIRED_ERROR: &str = indoc::indoc! {"
     A PR series plan with at least two pull requests requires both markers in the PR body. Add them on their own lines after the bullet list in the changes section:
@@ -52,154 +55,32 @@ struct PrTarget {
     is_private: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TqBranchMetadata {
-    task_id: String,
-    checklist_item_id: String,
-}
-
-#[derive(Clone)]
-struct SavedPrSeriesPlan {
-    task_id: String,
-    plan: PrSeriesPlan,
-}
-
-trait PostSubmitProcessor {
-    fn metadata_for_branch(&self, branch: &str) -> Option<TqBranchMetadata>;
-
-    async fn saved_plan(&self, metadata: &TqBranchMetadata) -> Option<SavedPrSeriesPlan>;
-
-    async fn link_and_sync(
-        &self,
-        metadata: &TqBranchMetadata,
-        target: &PrTarget,
-        pr_url: &str,
-        saved_plan: Option<SavedPrSeriesPlan>,
-    ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure>;
-}
-
-struct PrSeriesPostSubmitProcessor<'a> {
-    github: &'a GitHubClient,
-}
-
-impl PostSubmitProcessor for PrSeriesPostSubmitProcessor<'_> {
-    fn metadata_for_branch(&self, branch: &str) -> Option<TqBranchMetadata> {
-        read_current_branch_tq_metadata(branch)
-    }
-
-    async fn saved_plan(&self, metadata: &TqBranchMetadata) -> Option<SavedPrSeriesPlan> {
-        match load_plan_if_present(&metadata.task_id) {
-            Ok(Some(plan)) => Some(SavedPrSeriesPlan {
-                task_id: metadata.task_id.clone(),
-                plan,
-            }),
-            Ok(None) if metadata.task_id.parse::<u32>().is_ok() => {
-                let Some(tq_client) = TqClient::detect() else {
-                    tracing::warn!(
-                        event = "pr_draft.submit.plan_task_resolution_failed",
-                        task_id = %metadata.task_id,
-                        "tq CLI is unavailable for resolving the canonical task ID"
-                    );
-                    return None;
-                };
-                let task = match tq_client.task_details(&metadata.task_id).await {
-                    Ok(task) => task,
-                    Err(error) => {
-                        tracing::warn!(
-                            event = "pr_draft.submit.plan_task_resolution_failed",
-                            task_id = %metadata.task_id,
-                            error = %error,
-                            "failed to resolve the canonical tq task ID"
-                        );
-                        return None;
-                    }
-                };
-                match load_plan_if_present(&task.id) {
-                    Ok(Some(plan)) => Some(SavedPrSeriesPlan {
-                        task_id: task.id,
-                        plan,
-                    }),
-                    Ok(None) => None,
-                    Err(error) => {
-                        warn_plan_lookup_failure(metadata, &error);
-                        None
-                    }
-                }
-            }
-            Ok(None) => None,
-            Err(error) => {
-                warn_plan_lookup_failure(metadata, &error);
-                None
-            }
-        }
-    }
-
-    async fn link_and_sync(
-        &self,
-        metadata: &TqBranchMetadata,
-        target: &PrTarget,
-        pr_url: &str,
-        saved_plan: Option<SavedPrSeriesPlan>,
-    ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure> {
-        let Some(saved_plan) = saved_plan else {
-            return Ok(SubmitSyncOutcome::NoPlan);
-        };
-        link_and_sync_after_submit(
-            self.github,
-            &saved_plan.task_id,
-            &metadata.checklist_item_id,
-            &target.owner,
-            &target.repo,
-            pr_url,
-            saved_plan.plan,
-        )
-        .await
-    }
-}
-
-fn warn_plan_lookup_failure(metadata: &TqBranchMetadata, error: &anyhow::Error) {
-    tracing::warn!(
-        event = "pr_draft.submit.plan_check_failed",
-        task_id = %metadata.task_id,
-        error = %error,
-        "failed to check for a PR series plan"
-    );
-}
-
 pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
     let client = GitHubClient::get()?;
     let post_submit_processor = PrSeriesPostSubmitProcessor { github: client };
-    run_impl(
+    let submit_effects = SubmitEffects {
+        post_submit_processor: &post_submit_processor,
+        record_created_pr_url,
+    };
+    run_impl_with_recording(
         args,
         client,
         default_runner(),
         write_pr_url_config,
         read_current_repo_identity,
-        &post_submit_processor,
+        &submit_effects,
         |owner, repo| ensure_no_review_access(is_vibe_enabled, load_config, owner, repo),
     )
     .await
 }
 
-fn ensure_no_review_access(
-    vibe_enabled: impl FnOnce() -> anyhow::Result<bool>,
-    load_config: impl FnOnce() -> anyhow::Result<Config>,
-    owner: &str,
-    repo: &str,
-) -> anyhow::Result<()> {
-    if !vibe_enabled()? {
-        anyhow::bail!("The --no-review option is only available when vibe mode is enabled.");
-    }
-    ensure_repo_vibe_access(&load_config()?, owner, repo)
-}
-
-async fn run_impl(
+async fn run_impl_with_recording<P: PostSubmitProcessor, R: Fn(&str)>(
     args: &SubmitArgs,
     gh_client: &(impl PrBodyClient + PrClient + PrStackClient + RepoClient),
     run_hook: HookRunner<'_>,
     write_config: impl Fn(&str, &str) -> anyhow::Result<()>,
     current_repo_identity: impl FnOnce() -> Option<(String, String)>,
-    post_submit_processor: &impl PostSubmitProcessor,
+    submit_effects: &SubmitEffects<'_, P, R>,
     vibe_access_check: impl FnOnce(&str, &str) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
     // Get draft path and target repo info
@@ -256,8 +137,8 @@ async fn run_impl(
         return Err(PrDraftError::EmptyTitle.into());
     }
 
-    // For public repos without Japanese language config, check for Japanese characters
-    let allows_japanese = is_private || repo_allows_japanese(&target.owner, &target.repo);
+    // Reject Japanese content when the effective repository language is not Japanese.
+    let allows_japanese = repo_allows_japanese(&target.owner, &target.repo, is_private).await?;
     if !allows_japanese {
         if contains_japanese(&draft.frontmatter.title) {
             return Err(PrDraftError::JapaneseInTitle.into());
@@ -274,12 +155,17 @@ async fn run_impl(
         true
     };
     let tq_metadata = if target_is_current_repo {
-        post_submit_processor.metadata_for_branch(&target.branch)
+        submit_effects
+            .post_submit_processor
+            .metadata_for_branch(&target.branch)
     } else {
         None
     };
     let saved_plan = if let Some(metadata) = &tq_metadata {
-        post_submit_processor.saved_plan(metadata).await
+        submit_effects
+            .post_submit_processor
+            .saved_plan(metadata)
+            .await
     } else {
         None
     };
@@ -375,6 +261,8 @@ async fn run_impl(
         }
     };
 
+    (submit_effects.record_created_pr_url)(&pr_url);
+
     if target_is_current_repo {
         let config_key = format!("branch.{}.pr-url", target.branch);
         if let Err(error) = write_config(&config_key, &pr_url) {
@@ -389,7 +277,8 @@ async fn run_impl(
     println!("{pr_url}");
 
     if let Some(metadata) = tq_metadata
-        && let Err(failure) = post_submit_processor
+        && let Err(failure) = submit_effects
+            .post_submit_processor
             .link_and_sync(&metadata, &target, &pr_url, saved_plan)
             .await
     {
@@ -403,122 +292,6 @@ async fn run_impl(
     draft.cleanup()?;
 
     Ok(())
-}
-
-async fn body_for_existing_pr_update(
-    gh_client: &impl PrBodyClient,
-    owner: &str,
-    repo: &str,
-    number: u64,
-    submitted_body: &str,
-    has_saved_plan: bool,
-    metadata: Option<&TqBranchMetadata>,
-) -> String {
-    if !has_saved_plan {
-        return submitted_body.to_string();
-    }
-    let Some(metadata) = metadata else {
-        return submitted_body.to_string();
-    };
-
-    let existing_body = match gh_client.get_pull_request_body(owner, repo, number).await {
-        Ok(body) => body,
-        Err(error) => {
-            warn_pr_series_body_fallback(
-                "pr_draft.submit.read_body_failed",
-                owner,
-                repo,
-                number,
-                metadata,
-                &error,
-            );
-            return submitted_body.to_string();
-        }
-    };
-
-    match preserve_managed_section(&existing_body, submitted_body) {
-        Ok(body) => body,
-        Err(error) => {
-            warn_pr_series_body_fallback(
-                "pr_draft.submit.preserve_section_failed",
-                owner,
-                repo,
-                number,
-                metadata,
-                &error,
-            );
-            submitted_body.to_string()
-        }
-    }
-}
-
-fn warn_pr_series_body_fallback(
-    event: &'static str,
-    owner: &str,
-    repo: &str,
-    number: u64,
-    metadata: &TqBranchMetadata,
-    error: &anyhow::Error,
-) {
-    tracing::warn!(
-        event = event,
-        task_id = %metadata.task_id,
-        owner,
-        repo,
-        number,
-        error = %error,
-        "failed to preserve the PR series section while updating the PR body"
-    );
-    eprintln!(
-        "Warning: could not preserve the PR series section for {owner}/{repo} pull request {number}: {error}. Continuing with the draft body. If synchronization does not restore the section, run `a ai pr-series sync {}`.",
-        metadata.task_id,
-    );
-}
-
-fn read_current_branch_tq_metadata(branch: &str) -> Option<TqBranchMetadata> {
-    tq_branch_metadata(
-        read_branch_config_value(branch, "x-tq-task-id"),
-        read_branch_config_value(branch, "x-tq-checklist-item-id"),
-    )
-}
-
-fn tq_branch_metadata(
-    task_id: Option<String>,
-    checklist_item_id: Option<String>,
-) -> Option<TqBranchMetadata> {
-    let task_id = task_id.filter(|value| !value.trim().is_empty())?;
-    let checklist_item_id = checklist_item_id.filter(|value| !value.trim().is_empty())?;
-    Some(TqBranchMetadata {
-        task_id,
-        checklist_item_id,
-    })
-}
-
-fn read_branch_config_value(branch: &str, name: &str) -> Option<String> {
-    let key = format!("branch.{branch}.{name}");
-    run_git_optional(Path::new("."), ["config", "--local", "--get", &key])
-        .filter(|value| !value.trim().is_empty())
-}
-
-fn format_post_submit_failure(
-    failure: &SubmitSyncFailure,
-    metadata: &TqBranchMetadata,
-    pr_url: &str,
-) -> String {
-    match failure.stage {
-        SubmitSyncStage::Prepare => format!(
-            "PR submit completed, but PR series setup failed: {}\nAfter resolving the error, run `tq checklist item update {} --github {}` and then `a ai pr-series sync {}`.",
-            failure.error, metadata.checklist_item_id, pr_url, metadata.task_id
-        ),
-        SubmitSyncStage::Link => format!(
-            "PR submit completed, but its tq checklist link failed: {}\nAfter resolving the error, run `tq checklist item update {} --github {}` and then `a ai pr-series sync {}`.",
-            failure.error, metadata.checklist_item_id, pr_url, metadata.task_id
-        ),
-        SubmitSyncStage::Sync => format!(
-            "PR submit completed and linked, but PR series synchronization failed: {}\nAfter resolving the listed errors, run `a ai pr-series sync {}`.",
-            failure.error, metadata.task_id
-        ),
-    }
 }
 
 fn write_pr_url_config(key: &str, url: &str) -> anyhow::Result<()> {
@@ -544,7 +317,15 @@ mod tests {
     use anyhow::Result;
 
     use super::*;
-    use crate::infra::github::GitHubMockServer;
+    use crate::commands::agent::types::SessionPrContext;
+    use crate::commands::ai::pr_series::PrSeriesPlan;
+    use crate::commands::ai::pr_series_aftercare::{
+        SubmitSyncFailure, SubmitSyncOutcome, SubmitSyncStage,
+    };
+    use crate::infra::github::error::Result as GitHubResult;
+    use crate::infra::github::{
+        CreatedPullRequest, GitHubMockServer, PullRequestStack, UpdatePrBodyParams,
+    };
     use crate::shared::config::Config;
     use crate::shared::env_var::EnvVars;
     use clap::Parser;
@@ -608,6 +389,58 @@ mod tests {
 
     fn no_vibe_access(_owner: &str, _repo: &str) -> anyhow::Result<()> {
         anyhow::bail!("The --no-review option is only available when vibe mode is enabled.")
+    }
+
+    fn noop_record_created_pr_url(_pr_url: &str) {}
+
+    #[fixture]
+    fn sessions_dir_with_cwd_pr_context() -> tempfile::TempDir {
+        let sessions_dir = tempfile::tempdir().expect("temporary session directory should exist");
+        let session: crate::commands::agent::types::Session =
+            serde_json::from_value(serde_json::json!({
+                "session_id": "sample-session",
+                "pr_context": {
+                    "owner": "sample-owner",
+                    "repo": "sample-repository",
+                    "branch": "cwd-branch",
+                },
+                "cwd": "/workspace/sample",
+                "transcript_path": null,
+                "tmux_info": null,
+                "status": "stopped",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "last_message": null,
+            }))
+            .expect("fixture session should deserialize");
+        crate::commands::agent::store::save_session_to(sessions_dir.path(), &session)
+            .expect("fixture session should save");
+        sessions_dir
+    }
+
+    async fn run_impl(
+        args: &SubmitArgs,
+        gh_client: &(impl PrBodyClient + PrClient + PrStackClient + RepoClient),
+        run_hook: HookRunner<'_>,
+        write_config: impl Fn(&str, &str) -> anyhow::Result<()>,
+        current_repo_identity: impl FnOnce() -> Option<(String, String)>,
+        post_submit_processor: &impl PostSubmitProcessor,
+        vibe_access_check: impl FnOnce(&str, &str) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        let submit_effects = SubmitEffects {
+            post_submit_processor,
+            record_created_pr_url: noop_record_created_pr_url,
+        };
+        super::run_impl_with_recording(
+            args,
+            gh_client,
+            run_hook,
+            write_config,
+            current_repo_identity,
+            &submit_effects,
+            vibe_access_check,
+        )
+        .await
     }
 
     /// Captures every hook invocation so tests can assert on hook name, env,
@@ -871,6 +704,157 @@ mod tests {
     impl Drop for TestEnv {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.draft_dir);
+        }
+    }
+
+    struct TestDraftDirectory {
+        path: PathBuf,
+    }
+
+    impl TestDraftDirectory {
+        fn new(owner: &str, repo: &str) -> Self {
+            crate::shared::testing::init_approval_dir();
+            let path = DraftFile::draft_dir().join(owner).join(repo);
+            if path.exists() {
+                let _ = fs::remove_dir_all(&path);
+            }
+            Self { path }
+        }
+    }
+
+    impl Drop for TestDraftDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    type CreatePrCall = (String, String, String, String, Option<String>, bool);
+
+    #[derive(Default)]
+    struct SubmitClientStub {
+        create_calls: Mutex<Vec<CreatePrCall>>,
+        update_calls: Mutex<Vec<u64>>,
+        existing_pr_number: Option<u64>,
+    }
+
+    impl RepoClient for SubmitClientStub {
+        async fn repo_exists(&self, _owner: &str, _repo: &str) -> GitHubResult<bool> {
+            Ok(true)
+        }
+
+        async fn is_repo_private(&self, _owner: &str, _repo: &str) -> GitHubResult<bool> {
+            Ok(true)
+        }
+
+        async fn get_default_branch(&self, _owner: &str, _repo: &str) -> GitHubResult<String> {
+            Ok("main".to_string())
+        }
+    }
+
+    impl PrClient for SubmitClientStub {
+        async fn create_pull_request(
+            &self,
+            params: CreatePrParams,
+        ) -> GitHubResult<CreatedPullRequest> {
+            self.create_calls
+                .lock()
+                .expect("submit client mutex")
+                .push((
+                    params.owner,
+                    params.repo,
+                    params.title,
+                    params.head,
+                    params.base,
+                    params.draft,
+                ));
+            Ok(CreatedPullRequest {
+                number: 1,
+                url: "https://github.com/sample-owner/sample-repository/pull/1".to_string(),
+            })
+        }
+
+        async fn update_pull_request(&self, params: UpdatePrParams) -> GitHubResult<String> {
+            self.update_calls
+                .lock()
+                .expect("submit client mutex")
+                .push(params.number);
+            Ok(format!(
+                "https://github.com/sample-owner/sample-repository/pull/{}",
+                params.number
+            ))
+        }
+
+        async fn get_pr_for_branch(
+            &self,
+            owner: &str,
+            repo: &str,
+            _branch: &str,
+        ) -> GitHubResult<Option<crate::infra::github::PrInfo>> {
+            Ok(self
+                .existing_pr_number
+                .map(|number| crate::infra::github::PrInfo {
+                    number,
+                    title: "Existing pull request".to_string(),
+                    state: PrState::Open,
+                    url: format!("https://github.com/{owner}/{repo}/pull/{number}"),
+                }))
+        }
+
+        async fn get_open_pr_for_branch(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _branch: &str,
+        ) -> GitHubResult<Option<crate::infra::github::PrInfo>> {
+            Ok(None)
+        }
+    }
+
+    impl PrBodyClient for SubmitClientStub {
+        async fn get_pull_request_body(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _number: u64,
+        ) -> GitHubResult<String> {
+            Ok(String::new())
+        }
+
+        async fn update_pull_request_body(
+            &self,
+            _params: UpdatePrBodyParams,
+        ) -> GitHubResult<String> {
+            Ok("https://github.com/sample-owner/sample-repository/pull/1".to_string())
+        }
+    }
+
+    impl PrStackClient for SubmitClientStub {
+        async fn get_stack_for_pull_request(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _pull_request: u64,
+        ) -> GitHubResult<Option<PullRequestStack>> {
+            Ok(None)
+        }
+
+        async fn create_stack(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _pull_requests: &[u64],
+        ) -> GitHubResult<()> {
+            Ok(())
+        }
+
+        async fn add_pull_request_to_stack(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _stack_number: u64,
+            _pull_request: u64,
+        ) -> GitHubResult<()> {
+            Ok(())
         }
     }
 
@@ -1297,70 +1281,6 @@ mod tests {
             ),
             (Ok(()), Vec::new()),
         );
-    }
-
-    #[rstest]
-    #[case::prepare(
-        SubmitSyncStage::Prepare,
-        indoc! {"
-            PR submit completed, but PR series setup failed: sample synchronization failure
-            After resolving the error, run `tq checklist item update sample-leaf-id --github https://github.com/acme/notify-api/pull/17` and then `a ai pr-series sync sample-task-id`.
-        "}.trim_end()
-    )]
-    #[case::link(
-        SubmitSyncStage::Link,
-        indoc! {"
-            PR submit completed, but its tq checklist link failed: sample synchronization failure
-            After resolving the error, run `tq checklist item update sample-leaf-id --github https://github.com/acme/notify-api/pull/17` and then `a ai pr-series sync sample-task-id`.
-        "}.trim_end()
-    )]
-    #[case::sync(
-        SubmitSyncStage::Sync,
-        indoc! {"
-            PR submit completed and linked, but PR series synchronization failed: sample synchronization failure
-            After resolving the listed errors, run `a ai pr-series sync sample-task-id`.
-        "}.trim_end()
-    )]
-    fn formats_post_submit_recovery_instructions(
-        #[case] stage: SubmitSyncStage,
-        #[case] expected: &str,
-    ) {
-        let failure = SubmitSyncFailure {
-            stage,
-            error: anyhow::anyhow!("sample synchronization failure"),
-        };
-        let metadata = TqBranchMetadata {
-            task_id: "sample-task-id".to_string(),
-            checklist_item_id: "sample-leaf-id".to_string(),
-        };
-
-        assert_eq!(
-            format_post_submit_failure(
-                &failure,
-                &metadata,
-                "https://github.com/acme/notify-api/pull/17",
-            ),
-            expected,
-        );
-    }
-
-    #[rstest]
-    #[case::both_ids(
-        Some("sample-task-id".to_string()),
-        Some("sample-leaf-id".to_string()),
-        Some(TqBranchMetadata {
-            task_id: "sample-task-id".to_string(),
-            checklist_item_id: "sample-leaf-id".to_string(),
-        })
-    )]
-    #[case::missing_task_id(None, Some("sample-leaf-id".to_string()), None)]
-    #[case::missing_leaf_id(Some("sample-task-id".to_string()), None, None)]
-    fn requires_both_branch_tq_ids(
-        #[case] task_id: Option<String>,
-        #[case] checklist_item_id: Option<String>,
-        #[case] expected: Option<TqBranchMetadata>,
-    ) {
-        assert_eq!(tq_branch_metadata(task_id, checklist_item_id), expected);
     }
 
     #[tokio::test]
@@ -2021,6 +1941,103 @@ mod tests {
                 format!("branch.{branch}.pr-url"),
                 format!("https://github.com/{}/{}/pull/1", env.owner, env.repo),
             ))),
+        );
+    }
+
+    #[rstest]
+    #[case::created_pr(None, 1, vec![(
+        "sample-owner".to_string(),
+        "sample-repository".to_string(),
+        "Submit a change".to_string(),
+        "feature/submitted-change".to_string(),
+        None,
+        false,
+    )], Vec::new())]
+    #[case::updated_pr(Some(23), 23, Vec::new(), vec![23])]
+    #[tokio::test]
+    async fn submit_records_the_url_for_created_and_updated_prs(
+        sessions_dir_with_cwd_pr_context: tempfile::TempDir,
+        #[case] existing_pr_number: Option<u64>,
+        #[case] pull_request_number: u64,
+        #[case] expected_create_calls: Vec<CreatePrCall>,
+        #[case] expected_update_calls: Vec<u64>,
+    ) {
+        let _draft_directory = TestDraftDirectory::new("sample-owner", "sample-repository");
+        let branch = "feature/submitted-change";
+        let draft_path = create_approved_draft(
+            "sample-owner",
+            "sample-repository",
+            branch,
+            "Submit a change",
+            "Body content",
+        );
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+        let client = SubmitClientStub {
+            existing_pr_number,
+            ..SubmitClientStub::default()
+        };
+        let sessions_dir = sessions_dir_with_cwd_pr_context.path();
+        let record_pr_url = |pr_url: &str| {
+            record_created_pr_url_in(sessions_dir, "sample-session", pr_url)
+                .expect("successful submit should record its pull request URL");
+        };
+        let submit_effects = SubmitEffects {
+            post_submit_processor: &NoopPostSubmitProcessor,
+            record_created_pr_url: record_pr_url,
+        };
+        let result = super::run_impl_with_recording(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            no_current_repo,
+            &submit_effects,
+            no_vibe_access,
+        )
+        .await;
+        let session =
+            crate::commands::agent::store::load_session_from(sessions_dir, "sample-session")
+                .expect("session store should be readable")
+                .expect("session should remain stored");
+        let created_prs = client
+            .create_calls
+            .lock()
+            .expect("submit client mutex")
+            .clone();
+        let updated_prs = client
+            .update_calls
+            .lock()
+            .expect("submit client mutex")
+            .clone();
+        let pr_url =
+            format!("https://github.com/sample-owner/sample-repository/pull/{pull_request_number}");
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                created_prs,
+                updated_prs,
+                (session.pr_context, session.created_pr_urls),
+            ),
+            (
+                Ok(()),
+                expected_create_calls,
+                expected_update_calls,
+                (
+                    Some(SessionPrContext {
+                        owner: "sample-owner".to_string(),
+                        repo: "sample-repository".to_string(),
+                        branch: "cwd-branch".to_string(),
+                        checklist_item_id: None,
+                    }),
+                    vec![pr_url],
+                ),
+            ),
         );
     }
 

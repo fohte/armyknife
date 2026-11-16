@@ -67,8 +67,10 @@ mod tests {
 
     fn create_test_session(tmux_info: Option<TmuxInfo>) -> Session {
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
+            created_pr_urls: Vec::new(),
             session_id: "test-123".to_string(),
             work_type: None,
             work_type_pinned: false,

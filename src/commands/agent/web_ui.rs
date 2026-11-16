@@ -11,6 +11,10 @@ use crate::commands::agent::crit::url::add_url;
 pub enum WebUiCommands {
     /// Associate a named local web interface with the calling agent session.
     Add(AddArgs),
+    /// Remove a named web interface from the calling agent session.
+    Remove(RemoveArgs),
+    /// List web interfaces registered by the calling agent session.
+    List,
 }
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -21,6 +25,16 @@ pub struct AddArgs {
     /// Name shown in the watch-web status panel.
     #[arg(long)]
     pub name: String,
+}
+
+#[derive(Args, Clone, PartialEq, Eq)]
+pub struct RemoveArgs {
+    /// Name of the web interface to remove.
+    pub name: String,
+}
+
+pub(crate) fn session_start_instruction() -> &'static str {
+    "When you start a local web UI (an HTTP server with a port), register it with `a agent web-ui add <URL> --name <NAME>`."
 }
 
 pub fn run(command: &WebUiCommands) -> Result<()> {
@@ -34,7 +48,75 @@ pub fn run(command: &WebUiCommands) -> Result<()> {
             println!("Recorded web UI '{}'", args.name.trim());
             Ok(())
         }
+        WebUiCommands::Remove(args) => {
+            validate_name(&args.name)?;
+            let session_id = crate::shared::env_var::EnvVars::load()
+                .own_session_id()
+                .context("A tracked agent session is required to remove a web UI")?;
+            remove_web_ui(&session_id, &args.name)?;
+            println!("Removed web UI '{}'", args.name.trim());
+            Ok(())
+        }
+        WebUiCommands::List => {
+            let session_id = crate::shared::env_var::EnvVars::load()
+                .own_session_id()
+                .context("A tracked agent session is required to list web UIs")?;
+            let web_uis = list_web_uis(&session_id)?;
+            println!("{}", format_web_ui_list(&web_uis));
+            Ok(())
+        }
     }
+}
+
+fn remove_web_ui(session_id: &str, name: &str) -> Result<Session> {
+    remove_web_ui_in(&store::sessions_dir()?, session_id, name)
+}
+
+fn remove_web_ui_in(sessions_dir: &Path, session_id: &str, name: &str) -> Result<Session> {
+    validate_name(name)?;
+    let name = name.trim();
+    let lock = store::lock_session_for_update(sessions_dir, session_id)?;
+    let Some(mut session) = lock.load()? else {
+        anyhow::bail!("Agent session not found: {session_id}");
+    };
+    let original_len = session.web_uis.len();
+    session.web_uis.retain(|web_ui| web_ui.name.trim() != name);
+    anyhow::ensure!(
+        session.web_uis.len() != original_len,
+        "Web UI '{}' is not registered",
+        name
+    );
+    lock.save(&session)?;
+    Ok(session)
+}
+
+fn list_web_uis(session_id: &str) -> Result<Vec<WebUiRegistration>> {
+    list_web_uis_in(&store::sessions_dir()?, session_id)
+}
+
+fn list_web_uis_in(sessions_dir: &Path, session_id: &str) -> Result<Vec<WebUiRegistration>> {
+    let Some(session) = store::load_session_from(sessions_dir, session_id)? else {
+        anyhow::bail!("Agent session not found: {session_id}");
+    };
+    Ok(session.web_uis)
+}
+
+fn format_web_ui_list(web_uis: &[WebUiRegistration]) -> String {
+    if web_uis.is_empty() {
+        return "No web UIs registered.".to_owned();
+    }
+
+    web_uis
+        .iter()
+        .map(|web_ui| {
+            format!(
+                "{}: {}",
+                web_ui.name.escape_debug(),
+                web_ui.url.escape_debug()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub(super) fn record_url(
@@ -129,7 +211,10 @@ mod tests {
     use rstest::{fixture, rstest};
     use serde_json::json;
 
-    use super::{local_web_ui_port, record_url_in, register, validate_name};
+    use super::{
+        format_web_ui_list, list_web_uis_in, local_web_ui_port, record_url_in, register,
+        remove_web_ui_in, validate_name,
+    };
     use crate::cli::{Cli, Commands};
     use crate::commands::agent::store;
     use crate::commands::agent::types::Session;
@@ -145,6 +230,25 @@ mod tests {
             "status": "running",
             "created_at": "2026-01-01T00:00:00Z",
             "updated_at": "2026-01-01T00:00:00Z"
+        }))
+        .expect("fixture session should deserialize");
+        store::save_session_to(dir.path(), &session).expect("fixture session should be saved");
+        dir
+    }
+
+    #[fixture]
+    fn sessions_dir_with_web_uis() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("session directory should be created");
+        let session: Session = serde_json::from_value(json!({
+            "session_id": "fixture-session",
+            "cwd": "/fixture-worktree",
+            "status": "running",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "web_uis": [
+                {"name": "Sample editor", "url": "http://localhost:49152/sample/", "exposedUrl": null},
+                {"name": "Secondary preview", "url": "http://localhost:49153/preview/", "exposedUrl": "https://preview.example.invalid/preview/"}
+            ]
         }))
         .expect("fixture session should deserialize");
         store::save_session_to(dir.path(), &session).expect("fixture session should be saved");
@@ -313,5 +417,101 @@ mod tests {
             (args.url.as_str(), args.name.as_str()),
             ("http://127.0.0.1:4721/design/sample/", "Design editor"),
         );
+    }
+
+    #[rstest]
+    fn removes_a_named_web_ui_and_preserves_other_registrations(
+        sessions_dir_with_web_uis: tempfile::TempDir,
+    ) {
+        let removed = remove_web_ui_in(
+            sessions_dir_with_web_uis.path(),
+            "fixture-session",
+            " Sample editor ",
+        )
+        .expect("named web UI should be removed");
+        let stored = store::load_session_from(sessions_dir_with_web_uis.path(), "fixture-session")
+            .expect("session should load")
+            .expect("session should exist");
+        let expected = vec![WebUiRegistration {
+            name: "Secondary preview".to_owned(),
+            url: "http://localhost:49153/preview/".to_owned(),
+            exposed_url: Some("https://preview.example.invalid/preview/".to_owned()),
+        }];
+
+        assert_eq!(
+            (removed.web_uis, stored.web_uis),
+            (expected.clone(), expected)
+        );
+    }
+
+    #[rstest]
+    fn removing_an_unregistered_web_ui_returns_an_error(
+        sessions_dir_with_web_uis: tempfile::TempDir,
+    ) {
+        let result = remove_web_ui_in(
+            sessions_dir_with_web_uis.path(),
+            "fixture-session",
+            "Missing",
+        );
+
+        assert_eq!(
+            result
+                .expect_err("unregistered web UI should fail")
+                .to_string(),
+            "Web UI 'Missing' is not registered",
+        );
+    }
+
+    #[rstest]
+    fn lists_the_calling_sessions_web_uis_with_names_and_urls(
+        sessions_dir_with_web_uis: tempfile::TempDir,
+    ) {
+        let web_uis = list_web_uis_in(sessions_dir_with_web_uis.path(), "fixture-session")
+            .expect("registered web UIs should be listed");
+
+        assert_eq!(
+            format_web_ui_list(&web_uis),
+            "Sample editor: http://localhost:49152/sample/\nSecondary preview: http://localhost:49153/preview/",
+        );
+    }
+
+    #[test]
+    fn formats_an_empty_web_ui_list() {
+        assert_eq!(format_web_ui_list(&[]), "No web UIs registered.");
+    }
+
+    #[test]
+    fn escapes_terminal_control_characters_in_web_ui_names() {
+        let web_uis = vec![WebUiRegistration {
+            name: "Sample\u{1b}[2J interface\n".to_owned(),
+            url: "http://localhost:49152/example/".to_owned(),
+            exposed_url: None,
+        }];
+
+        assert_eq!(
+            format_web_ui_list(&web_uis),
+            "Sample\\u{1b}[2J interface\\n: http://localhost:49152/example/",
+        );
+    }
+
+    #[test]
+    fn parses_web_ui_remove_command() {
+        let remove = Cli::try_parse_from(["a", "agent", "web-ui", "remove", "Sample editor"])
+            .expect("web UI remove command should parse");
+        let Commands::Agent(AgentCommands::WebUi(WebUiCommands::Remove(args))) = remove.command
+        else {
+            panic!("expected web UI remove command");
+        };
+        assert_eq!(args.name, "Sample editor");
+    }
+
+    #[test]
+    fn parses_web_ui_list_command() {
+        let list = Cli::try_parse_from(["a", "agent", "web-ui", "list"])
+            .expect("web UI list command should parse");
+        assert!(matches!(
+            list.command,
+            Commands::Agent(AgentCommands::WebUi(WebUiCommands::List))
+        ));
     }
 }

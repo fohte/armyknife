@@ -11,7 +11,6 @@ const meta = {
   ),
   args: {
     title: 'Investigate a failing build',
-    isPaused: true,
     sessionId: 'sample-session-7f3a',
   },
 } satisfies Meta<typeof SessionHeading>
@@ -19,11 +18,16 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
-export const PausedSession: Story = {
-  name: 'A paused session keeps its title beside the copy button',
+export const SessionTitleAndCopyControl: Story = {
+  name: 'The session title stays beside its copy button',
 }
 
-export const ActiveSession: Story = {
-  args: { isPaused: false },
-  name: 'An active session keeps its title beside the copy button',
+export const SessionWithoutCopyControl: Story = {
+  args: { title: 'Investigate a failing build' },
+  render: ({ title }) => (
+    <div className="conversation-header-copy">
+      <SessionHeading title={title} />
+    </div>
+  ),
+  name: 'The session title appears without a copy button',
 }

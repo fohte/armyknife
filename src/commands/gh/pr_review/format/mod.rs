@@ -255,6 +255,7 @@ mod tests {
                 body: body.to_string(),
                 state,
                 created_at: "2024-01-15T10:00:00Z".to_string(),
+                commit: None,
             }
         }
 
@@ -390,6 +391,7 @@ mod tests {
             body: String::new(),
             state: ReviewState::Approved,
             created_at: String::new(),
+            commit: None,
         };
         assert_eq!(author_login(&review), expected);
     }

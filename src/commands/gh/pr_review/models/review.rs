@@ -9,6 +9,12 @@ pub struct Review {
     pub body: String,
     pub state: ReviewState,
     pub created_at: String,
+    pub commit: Option<ReviewCommit>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReviewCommit {
+    pub oid: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -114,12 +120,27 @@ mod tests {
             "author": {"login": "reviewer"},
             "body": "LGTM",
             "state": "APPROVED",
-            "createdAt": "2024-01-01T00:00:00Z"
+            "createdAt": "2024-01-01T00:00:00Z",
+            "commit": {"oid": "sample-commit-oid"}
         }"#;
         let review: Review = serde_json::from_str(json).unwrap();
-        assert_eq!(review.database_id, 123);
-        assert_eq!(review.author.unwrap().login, "reviewer");
-        assert_eq!(review.body, "LGTM");
-        assert_eq!(review.state, ReviewState::Approved);
+        assert_eq!(
+            (
+                review.database_id,
+                review.author.as_ref().map(|author| author.login.as_str()),
+                review.body.as_str(),
+                review.state,
+                review.created_at.as_str(),
+                review.commit.as_ref().map(|commit| commit.oid.as_str()),
+            ),
+            (
+                123,
+                Some("reviewer"),
+                "LGTM",
+                ReviewState::Approved,
+                "2024-01-01T00:00:00Z",
+                Some("sample-commit-oid"),
+            ),
+        );
     }
 }

@@ -10,6 +10,7 @@ use super::super::CommandResult;
 use super::{
     ActionContext, action_context, normalized_queued_prompts, post, response_snapshot, session,
 };
+use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, Session, SessionStatus};
 
 fn save_command_session(context: &ActionContext, message: &str) -> Session {
@@ -63,6 +64,122 @@ async fn command_preview_shows_cwd_only_for_a_transcript_command(action_context:
             "body": {"cwd": session.cwd.display().to_string()},
             "calls": [],
         }),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn todo_markdown_command_can_be_previewed_and_executed(action_context: ActionContext) {
+    let detail = "Check `! printf safe`.";
+    let sessions_dir = action_context.temp_dir.path().join("sessions");
+    let transcript_path = action_context.temp_dir.path().join("transcript.jsonl");
+    std::fs::write(
+        &transcript_path,
+        r#"{"type":"assistant","timestamp":"2026-06-01T12:00:00Z","message":{"content":[{"type":"text","text":"The task is recorded."}]}}"#,
+    )
+    .unwrap();
+    let mut session = session("sample-session");
+    session.engine = Engine::Claude;
+    session.cwd = action_context.temp_dir.path().to_path_buf();
+    session.transcript_path = Some(transcript_path);
+    action_context.save_session(&session);
+    store::add_agent_todo_in(
+        &sessions_dir,
+        "sample-session",
+        "Review the output",
+        Some(detail),
+    )
+    .unwrap();
+
+    let loader_sessions_dir = sessions_dir.clone();
+    let loaders = super::empty_message_loaders().with_todo_loader(move |session_id| {
+        store::agent_todos_from(&loader_sessions_dir, session_id)
+    });
+    let router = action_context
+        .router_with_loaders_and_proposal_answer_locks(loaders)
+        .0;
+    let request_body = json!({
+        "messageText": detail,
+        "commands": ["printf safe"],
+    });
+    let preview = response_snapshot(
+        router
+            .clone()
+            .oneshot(post(
+                "/sessions/sample-session/commands/preview",
+                request_body.clone(),
+            ))
+            .await
+            .unwrap(),
+        &action_context,
+    )
+    .await;
+    let execution = response_snapshot(
+        router
+            .oneshot(post(
+                "/sessions/sample-session/commands/execute",
+                request_body,
+            ))
+            .await
+            .unwrap(),
+        &action_context,
+    )
+    .await;
+    let cwd = action_context.temp_dir.path().display().to_string();
+    let expected_message = indoc! {r#"
+        Command exited with code 0 in {cwd}.
+
+        Command:
+        ```
+        $ printf safe
+        ```
+
+        stdout:
+        ```
+        fixture output
+        ```
+
+        stderr:
+        ```
+        (empty)
+        ```
+    "#}
+    .replace("{cwd}", &cwd);
+    let expected_script = indoc! {r#"
+        set +e
+        __armyknife_bang_exit_code=0
+        printf safe
+        __armyknife_bang_command_exit_code=$?
+        if [ "$__armyknife_bang_command_exit_code" -ne 0 ] && [ "$__armyknife_bang_exit_code" -eq 0 ]; then __armyknife_bang_exit_code=$__armyknife_bang_command_exit_code; fi
+        exit "$__armyknife_bang_exit_code"
+    "#}
+    .trim();
+
+    assert_eq!(
+        (preview, execution),
+        (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "cwd": cwd },
+                "calls": [],
+            }),
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "exitCode": 0, "succeeded": true, "timedOut": false },
+                "calls": [
+                    {
+                        "kind": "execute-command",
+                        "cwd": action_context.temp_dir.path(),
+                        "command": expected_script,
+                    },
+                    {
+                        "kind": "message",
+                        "sessionId": "sample-session",
+                        "content": expected_message.trim_end(),
+                    },
+                ],
+            }),
+        ),
     );
 }
 
@@ -129,7 +246,7 @@ async fn command_execution_rejects_commands_absent_from_the_transcript(
         body,
         json!({
             "status": StatusCode::CONFLICT.as_u16(),
-            "body": {"error": "the selected command is not present in the agent transcript"},
+            "body": {"error": "the selected command is not present in the session conversation"},
             "calls": [],
         }),
     );

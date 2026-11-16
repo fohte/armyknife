@@ -276,6 +276,7 @@ mod tests {
             body: body.to_string(),
             state,
             created_at: created_at.to_string(),
+            commit: None,
         }
     }
 

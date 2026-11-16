@@ -1,1 +1,1 @@
-export { requestJson, requestText } from '#api-requests'
+export { requestJson, requestText, requestUtf8Text } from '#api-requests'

@@ -3,7 +3,7 @@ import '#components/session-task-links.css'
 import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
-import { CompletedItemsToggle } from '#components/completed-items-toggle'
+import { getSessionTasks } from '#session-task-utils'
 import type { Session, SessionTask } from '#types'
 
 type MenuPosition = {
@@ -54,25 +54,27 @@ export function SessionTaskLinks({
   sessions = [],
   onMakePrimary,
   taskListOpen,
-  completedTasksExpanded,
+  showTaskMenu = true,
 }: {
   task: SessionTask | null
-  tasks: SessionTask[]
+  tasks: readonly SessionTask[]
   sessions?: readonly SessionTaskLinkSession[]
   onMakePrimary?: (taskId: string) => Promise<boolean>
   taskListOpen?: boolean
-  completedTasksExpanded?: boolean
+  showTaskMenu?: boolean
 }) {
   const taskMenuId = useId()
   const summaryRef = useRef<HTMLElement>(null)
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false)
-  const [expandedCompletedTasksFor, setExpandedCompletedTasksFor] = useState<
-    string | null
-  >(null)
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null)
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null)
   const menuOpen =
-    task !== null && tasks.length > 1 && (taskListOpen ?? uncontrolledOpen)
+    showTaskMenu &&
+    task !== null &&
+    tasks.some(
+      (linkedTask) => linkedTask.id !== task.id && linkedTask.isClosed !== true,
+    ) &&
+    (taskListOpen ?? uncontrolledOpen)
 
   useLayoutEffect(() => {
     if (!menuOpen) return
@@ -111,30 +113,13 @@ export function SessionTaskLinks({
 
   if (task === null) return null
 
-  const primaryAndOpenTasks = tasks.filter(
+  const selectableTasks = tasks.filter(
     (linkedTask) => linkedTask.id === task.id || linkedTask.isClosed !== true,
   )
-  const completedSecondaryTasks = tasks.filter(
-    (linkedTask) => linkedTask.id !== task.id && linkedTask.isClosed === true,
-  )
-  const completedTasksKey = `${task.id}:${completedSecondaryTasks
-    .map((completedTask) => completedTask.id)
-    .join(',')}`
-  const showCompletedTasks =
-    completedTasksExpanded ?? expandedCompletedTasksFor === completedTasksKey
-  const visibleTasks = showCompletedTasks
-    ? [...primaryAndOpenTasks, ...completedSecondaryTasks]
-    : primaryAndOpenTasks
-  const taskListDisclosure =
-    primaryAndOpenTasks.length > 1
-      ? {
-          label: `${String(primaryAndOpenTasks.length - 1)} more linked tq tasks`,
-          summary: `+${String(primaryAndOpenTasks.length - 1)} tasks ▾`,
-        }
-      : {
-          label: `${String(completedSecondaryTasks.length)} completed linked tq tasks`,
-          summary: `${String(completedSecondaryTasks.length)} completed ▾`,
-        }
+  const taskListDisclosure = {
+    label: `${String(selectableTasks.length - 1)} more linked tq tasks`,
+    summary: `+${String(selectableTasks.length - 1)} tasks ▾`,
+  }
 
   const makePrimary = async (taskId: string) => {
     if (onMakePrimary === undefined) return
@@ -146,7 +131,7 @@ export function SessionTaskLinks({
   const summaryByTaskId = new Map(
     tasks.map((linkedTask) => {
       const linkedSessions = sessions.filter((session) =>
-        (session.tasks ?? (session.task === null ? [] : [session.task])).some(
+        getSessionTasks(session).some(
           (sessionTask) => sessionTask.id === linkedTask.id,
         ),
       )
@@ -187,7 +172,7 @@ export function SessionTaskLinks({
           <SessionTaskId priority={task.priority} number={task.number} />{' '}
           {task.title}
         </a>
-        {tasks.length > 1 ? (
+        {showTaskMenu && selectableTasks.length > 1 ? (
           <details
             className="session-task-links"
             aria-owns={taskMenuId}
@@ -208,7 +193,7 @@ export function SessionTaskLinks({
           </details>
         ) : null}
       </div>
-      {tasks.length > 1
+      {showTaskMenu && selectableTasks.length > 1
         ? createPortal(
             <div
               id={taskMenuId}
@@ -230,7 +215,7 @@ export function SessionTaskLinks({
                 Linked tq tasks · Inbox and Board use the primary one
               </div>
               <ul>
-                {visibleTasks.map((linkedTask) => {
+                {selectableTasks.map((linkedTask) => {
                   const isPrimary = linkedTask.id === task.id
 
                   return (
@@ -287,19 +272,6 @@ export function SessionTaskLinks({
                   )
                 })}
               </ul>
-              {completedSecondaryTasks.length > 0 ? (
-                <CompletedItemsToggle
-                  count={completedSecondaryTasks.length}
-                  expanded={showCompletedTasks}
-                  onToggle={() => {
-                    if (completedTasksExpanded === undefined) {
-                      setExpandedCompletedTasksFor(
-                        showCompletedTasks ? null : completedTasksKey,
-                      )
-                    }
-                  }}
-                />
-              ) : null}
             </div>,
             document.body,
           )

@@ -3,12 +3,12 @@ use std::collections::{HashMap, HashSet};
 use crate::commands::agent::tq_session_tasks::order_tasks_by_priority;
 use crate::infra::github::PrHeadInfo;
 
-use super::{BranchPrKey, SessionTaskMetadata};
+use super::{PullRequestKey, SessionTaskMetadata};
 
 pub(super) fn merge_pull_request_results(
-    cached: &mut HashMap<BranchPrKey, Option<PrHeadInfo>>,
-    refreshed: HashMap<BranchPrKey, Option<PrHeadInfo>>,
-    requested_keys: &HashSet<BranchPrKey>,
+    cached: &mut HashMap<PullRequestKey, Option<PrHeadInfo>>,
+    refreshed: HashMap<PullRequestKey, Option<PrHeadInfo>>,
+    requested_keys: &HashSet<PullRequestKey>,
 ) {
     for key in requested_keys {
         if let Some(pull_request) = refreshed.get(key) {
@@ -18,8 +18,8 @@ pub(super) fn merge_pull_request_results(
 }
 
 pub(super) fn prune_pull_request_results(
-    cached: &mut HashMap<BranchPrKey, Option<PrHeadInfo>>,
-    stale_keys: &HashSet<BranchPrKey>,
+    cached: &mut HashMap<PullRequestKey, Option<PrHeadInfo>>,
+    stale_keys: &HashSet<PullRequestKey>,
 ) {
     cached.retain(|key, _| !stale_keys.contains(key));
 }
@@ -89,9 +89,7 @@ fn merge_refreshed_task_metadata(
     let mut order_by_priority = cached
         .priorities
         .iter()
-        .filter_map(|(task_id, priority)| {
-            Some(((*priority)?, *cached.priority_order.get(task_id)?))
-        })
+        .filter_map(|(task_id, priority)| Some((*priority, *cached.priority_order.get(task_id)?)))
         .collect::<HashMap<_, _>>();
     let mut next_priority_order = cached
         .priority_order
@@ -123,7 +121,7 @@ fn merge_refreshed_task_metadata(
         .collect::<Vec<_>>();
     refreshed_order.sort_by_key(|(task_id, order)| (**order, (*task_id).clone()));
     for (task_id, _) in refreshed_order {
-        let Some(Some(priority)) = refreshed.priorities.get(task_id) else {
+        let Some(priority) = refreshed.priorities.get(task_id) else {
             continue;
         };
         let order = *order_by_priority.entry(*priority).or_insert_with(|| {
@@ -154,6 +152,7 @@ pub(super) fn prune_session_task_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent::types::Session;
     use crate::infra::github::{PrHeadInfo, PrInfo, PrState};
     use rstest::{fixture, rstest};
     use std::sync::Arc;
@@ -165,7 +164,8 @@ mod tests {
         wait_for_refresh,
     };
     use super::super::{
-        FETCH_TIMEOUT, PullRequestFetcher, SessionTaskMetadata, TaskMetadataFetcher,
+        FETCH_TIMEOUT, PullRequestFetcher, SessionPullRequestInfo, SessionTaskMetadata,
+        TaskMetadataFetcher,
     };
 
     fn head_info(number: u64, title: impl Into<String>, url: impl Into<String>) -> PrHeadInfo {
@@ -177,6 +177,19 @@ mod tests {
                 url: url.into(),
             },
             head_sha: Some("sample-head".to_string()),
+        }
+    }
+
+    fn session_pull_request(session: &Session, progress: PrHeadInfo) -> SessionPullRequestInfo {
+        let context = session
+            .pr_context
+            .as_ref()
+            .expect("session has a pull request context");
+        SessionPullRequestInfo {
+            owner: context.owner.clone(),
+            repo: context.repo.clone(),
+            progress,
+            from_cwd_branch: true,
         }
     }
 
@@ -245,6 +258,71 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn refreshed_cache_keeps_unset_priority_between_regular_and_deferred(
+        updates_and_receiver: (EnrichmentUpdates, watch::Receiver<()>),
+    ) {
+        let (updates, mut receiver) = updates_and_receiver;
+        let task_fetcher: TaskMetadataFetcher = Arc::new(|_, _| {
+            Box::pin(async {
+                Ok(SessionTaskMetadata {
+                    links: HashMap::from([(
+                        "session-a".to_string(),
+                        vec![
+                            linked_task("deferred"),
+                            linked_task("unset"),
+                            linked_task("regular"),
+                        ],
+                    )]),
+                    priorities: HashMap::from([
+                        ("regular".to_string(), Some(0)),
+                        ("unset".to_string(), None),
+                        ("deferred".to_string(), Some(-1)),
+                    ]),
+                    priority_order: HashMap::from([
+                        ("regular".to_string(), 0),
+                        ("unset".to_string(), 1),
+                        ("deferred".to_string(), 2),
+                    ]),
+                    task_projects: HashMap::new(),
+                })
+            })
+        });
+        let pull_request_fetcher: PullRequestFetcher =
+            Arc::new(|_| Box::pin(async { Ok(HashMap::new()) }));
+        let cache = cache_with_fetchers(updates, FETCH_TIMEOUT, task_fetcher, pull_request_fetcher);
+        let session = session("session-a", None);
+
+        let _ = cache.task_metadata(std::slice::from_ref(&session)).await;
+        wait_for_refresh(&mut receiver).await;
+
+        assert_eq!(
+            cache.task_metadata(std::slice::from_ref(&session)).await,
+            SessionTaskMetadata {
+                links: HashMap::from([(
+                    "session-a".to_string(),
+                    vec![
+                        linked_task("regular"),
+                        linked_task("unset"),
+                        linked_task("deferred"),
+                    ],
+                )]),
+                priorities: HashMap::from([
+                    ("regular".to_string(), Some(0)),
+                    ("unset".to_string(), None),
+                    ("deferred".to_string(), Some(-1)),
+                ]),
+                priority_order: HashMap::from([
+                    ("regular".to_string(), 0),
+                    ("unset".to_string(), 1),
+                    ("deferred".to_string(), 2),
+                ]),
+                task_projects: HashMap::new(),
+            },
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn alternating_branch_sets_keep_each_cached_pull_request(
         updates_and_receiver: (EnrichmentUpdates, watch::Receiver<()>),
     ) {
@@ -256,11 +334,11 @@ mod tests {
                     .filter_map(|session| {
                         let context = session.pr_context.as_ref()?;
                         Some((
-                            (
+                            PullRequestKey::Branch((
                                 context.owner.clone(),
                                 context.repo.clone(),
                                 context.branch.clone(),
-                            ),
+                            )),
                             Some(head_info(
                                 if context.branch == "branch-a" { 17 } else { 23 },
                                 format!("Change for {}", context.branch),
@@ -294,31 +372,28 @@ mod tests {
                 cached_b_after_refresh,
             ),
             (
-                HashMap::from([("session-a".to_string(), None)]),
+                HashMap::from([("session-a".to_string(), Vec::new())]),
                 HashMap::from([(
                     "session-a".to_string(),
-                    Some(head_info(
-                        17,
-                        "Change for branch-a",
-                        "https://example.test/branch-a"
-                    )),
+                    vec![session_pull_request(
+                        &session_a,
+                        head_info(17, "Change for branch-a", "https://example.test/branch-a"),
+                    )],
                 )]),
-                HashMap::from([("session-b".to_string(), None)]),
+                HashMap::from([("session-b".to_string(), Vec::new())]),
                 HashMap::from([(
                     "session-a".to_string(),
-                    Some(head_info(
-                        17,
-                        "Change for branch-a",
-                        "https://example.test/branch-a"
-                    )),
+                    vec![session_pull_request(
+                        &session_a,
+                        head_info(17, "Change for branch-a", "https://example.test/branch-a"),
+                    )],
                 )]),
                 HashMap::from([(
                     "session-b".to_string(),
-                    Some(head_info(
-                        23,
-                        "Change for branch-b",
-                        "https://example.test/branch-b"
-                    )),
+                    vec![session_pull_request(
+                        &session_b,
+                        head_info(23, "Change for branch-b", "https://example.test/branch-b"),
+                    )],
                 )]),
             )
         );

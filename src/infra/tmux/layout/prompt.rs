@@ -64,7 +64,11 @@ pub(super) fn scope_session_launch_env(
         .iter()
         .find(|(key, _)| *key == EnvVars::session_vibe_launch_name())
         .map(|(_, value)| *value);
-    if work_type.is_none() && vibe_launch.is_none() {
+    let launch_id = env_vars
+        .iter()
+        .find(|(key, _)| *key == EnvVars::session_launch_id_name())
+        .map(|(_, value)| *value);
+    if work_type.is_none() && vibe_launch.is_none() && launch_id.is_none() {
         return command.to_string();
     }
 
@@ -90,6 +94,12 @@ pub(super) fn scope_session_launch_env(
             vibe_launch,
         ));
     }
+    if is_agent_command && let Some(launch_id) = launch_id {
+        assignments.push(shell_assignment(
+            EnvVars::session_launch_id_name(),
+            launch_id,
+        ));
+    }
     let scoped_command = if assignments.is_empty() {
         command.to_string()
     } else {
@@ -102,6 +112,7 @@ pub(super) fn scope_session_launch_env(
     let unset_commands = [
         work_type.map(|_| EnvVars::session_work_type_name()),
         vibe_launch.map(|_| EnvVars::session_vibe_launch_name()),
+        launch_id.map(|_| EnvVars::session_launch_id_name()),
     ]
     .into_iter()
     .flatten()
@@ -283,6 +294,16 @@ mod tests {
         assert_eq!(
             scope_session_launch_env("claude", Engine::Claude, &env_vars),
             "unset ARMYKNIFE_SESSION_WORK_TYPE; unset ARMYKNIFE_SESSION_VIBE_LAUNCH; ARMYKNIFE_SESSION_WORK_TYPE=sample-skill ARMYKNIFE_SESSION_VIBE_LAUNCH=1 claude"
+        );
+    }
+
+    #[test]
+    fn scopes_watch_web_launch_id_to_the_agent_process() {
+        let env_vars = [(EnvVars::session_launch_id_name(), "launch-fixture")];
+
+        assert_eq!(
+            scope_session_launch_env("claude", Engine::Claude, &env_vars),
+            "unset ARMYKNIFE_SESSION_LAUNCH_ID; ARMYKNIFE_SESSION_LAUNCH_ID=launch-fixture claude"
         );
     }
 

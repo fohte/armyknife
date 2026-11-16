@@ -871,8 +871,10 @@ mod tests {
 
     fn make_session(id: &str, status: SessionStatus, updated_at: DateTime<Utc>) -> Session {
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
+            created_pr_urls: Vec::new(),
             session_id: id.to_string(),
             work_type: None,
             work_type_pinned: false,

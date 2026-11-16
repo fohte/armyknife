@@ -1,15 +1,15 @@
 use anyhow::{Context, Result, bail};
-use std::io::{self, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use crate::infra::git::{GitRepo, MergeStatus, get_merge_status_for_repo, get_repo_root};
-use crate::infra::tmux;
 use crate::shared::cleanup;
 use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
 use crate::shared::merge_notify::notify_delegator_of_merge;
 use crate::shared::worktree::{
-    branch_to_worktree_name, find_worktree_name, get_main_repo, get_worktree_branch,
+    branch_to_worktree_name, ensure_clean_for_deletion, find_worktree_name, get_main_repo,
+    get_worktree_branch,
 };
 use crate::shared::worktree_error::WmError;
 
@@ -19,6 +19,7 @@ pub(crate) struct WorktreeDeletePlan {
     branch_name: Option<String>,
     worktree_path: PathBuf,
     merge_status: Option<MergeStatus>,
+    force: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -58,6 +59,8 @@ pub(crate) async fn prepare(
     let worktree_name = find_worktree_name(&main_repo, &worktree_path_str)?;
     let branch_name = get_worktree_branch(&main_repo, &worktree_name);
 
+    ensure_clean_for_deletion(&worktree_path, force)?;
+
     let merge_status =
         check_merge_status(&main_repo, branch_name.as_deref(), force, unmerged_policy).await?;
 
@@ -67,6 +70,7 @@ pub(crate) async fn prepare(
         branch_name,
         worktree_path,
         merge_status,
+        force,
     })
 }
 
@@ -77,8 +81,11 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
         branch_name,
         worktree_path,
         merge_status,
+        force,
     } = plan;
     let worktree_path_str = worktree_path.to_string_lossy();
+
+    ensure_clean_for_deletion(&worktree_path, force)?;
 
     // Must complete before cleanup_worktree_by_name below: it deletes this
     // worktree's session records and, when the command runs from the
@@ -97,12 +104,12 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
         skip_hooks,
     );
 
-    // Capture the current tmux window ID before cleanup deletes it,
-    // so we can close the window we're sitting in
-    let current_window_id = tmux::get_window_id_if_in_path(&worktree_path_str);
-
-    let result =
-        cleanup::cleanup_worktree_by_name(&main_repo, &worktree_name, &worktree_path, || {
+    let result = cleanup::cleanup_worktree_by_name(
+        &main_repo,
+        &worktree_name,
+        &worktree_path,
+        force,
+        || {
             if !skip_hooks {
                 hooks::spawn_post_worktree_delete_hook(
                     main_repo.workdir(),
@@ -111,7 +118,21 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
                     merged,
                 );
             }
-        })?;
+        },
+    );
+
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            if hook_ran {
+                eprintln!(
+                    "note: the pre-worktree-delete hook already ran before this failure; \
+                     any process it stopped will not be restarted automatically"
+                );
+            }
+            return Err(error);
+        }
+    };
 
     if !result.worktree_deleted {
         if hook_ran {
@@ -135,14 +156,6 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
             "Process groups signaled: {}",
             result.process_groups_signaled
         );
-    }
-
-    // Close the current tmux window if we're inside the deleted worktree.
-    // cleanup_worktree_by_name uses get_window_ids_in_path which queries all
-    // panes globally, but the current window may have already been captured
-    // above via get_window_id_if_in_path. Ensure it's closed.
-    if let Some(window_id) = current_window_id {
-        let _ = tmux::kill_window(&window_id);
     }
 
     Ok(())
@@ -219,6 +232,16 @@ async fn check_merge_status(
             let branch = branch.to_string();
             async move { get_merge_status_for_repo(&repo_for_status, &branch).await }
         },
+        || {
+            let stdin = io::stdin();
+            let stdout = io::stdout();
+            confirm_with_terminal(
+                "Delete anyway? [y/N] ",
+                &mut stdin.lock(),
+                &mut stdout.lock(),
+                || stdin.is_terminal(),
+            )
+        },
     )
     .await
 }
@@ -229,6 +252,7 @@ async fn check_merge_status_with<F, G, Fut>(
     unmerged_policy: UnmergedWorktreePolicy,
     branch_exists: F,
     get_status: G,
+    confirm: impl FnOnce() -> Option<bool>,
 ) -> Result<Option<MergeStatus>>
 where
     F: FnOnce(&str) -> bool,
@@ -249,18 +273,40 @@ where
             branch,
             merge_status.reason()
         );
-        print!("Delete anyway? [y/N] ");
-        io::stdout().flush().ok();
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).ok();
-        if !input.trim().eq_ignore_ascii_case("y") {
-            println!("Cancelled.");
-            return Err(WmError::Cancelled.into());
+        match confirm() {
+            Some(true) => {}
+            Some(false) => return Err(WmError::Cancelled.into()),
+            None => {
+                return Err(anyhow::anyhow!(
+                    "Cancelled: stdin is not a terminal; input was not accepted as confirmation."
+                ));
+            }
         }
     }
 
     Ok(Some(merge_status))
+}
+
+pub(crate) fn confirm_with_terminal<R: BufRead, W: Write>(
+    prompt: &str,
+    input: &mut R,
+    output: &mut W,
+    stdin_is_terminal: impl FnOnce() -> bool,
+) -> Option<bool> {
+    if !stdin_is_terminal() {
+        return None;
+    }
+
+    if write!(output, "{prompt}")
+        .and_then(|()| output.flush())
+        .is_err()
+    {
+        return Some(false);
+    }
+
+    let mut line = String::new();
+    input.read_line(&mut line).ok();
+    Some(line.trim().eq_ignore_ascii_case("y"))
 }
 
 /// Resolve the worktree path from the argument or current directory.
@@ -325,6 +371,7 @@ mod tests {
                     reason: "PR #42 merged".to_string(),
                 })
             },
+            || Some(true),
         )
         .await
         .expect("merge status");
@@ -352,6 +399,7 @@ mod tests {
                     reason: "pull request is still open".to_string(),
                 })
             },
+            || Some(true),
         )
         .await;
 
@@ -362,6 +410,157 @@ mod tests {
                     .to_string(),
             ),
         );
+    }
+
+    #[rstest]
+    #[case::terminal_y_continues(
+        true,
+        "y\n",
+        Ok(Some(MergeStatus::NotMerged {
+            reason: "pull request is still open".to_string(),
+        })),
+        "Delete anyway? [y/N] ",
+        "",
+    )]
+    #[case::terminal_n_cancels(
+        true,
+        "n\n",
+        Err("Cancelled.".to_string()),
+        "Delete anyway? [y/N] ",
+        "",
+    )]
+    #[case::non_terminal_y_cancels(
+        false,
+        "y\n",
+        Err("Cancelled: stdin is not a terminal; input was not accepted as confirmation.".to_string()),
+        "",
+        "y\n",
+    )]
+    #[tokio::test]
+    async fn confirms_unmerged_worktrees_only_with_terminal_y(
+        #[case] stdin_is_terminal: bool,
+        #[case] input: &str,
+        #[case] expected_result: std::result::Result<Option<MergeStatus>, String>,
+        #[case] expected_output: &str,
+        #[case] expected_unread: &str,
+    ) {
+        let mut reader = io::Cursor::new(input.as_bytes());
+        let mut output = Vec::new();
+        let result = check_merge_status_with(
+            Some("feature"),
+            false,
+            UnmergedWorktreePolicy::Confirm,
+            |_| true,
+            |_| {
+                std::future::ready(MergeStatus::NotMerged {
+                    reason: "pull request is still open".to_string(),
+                })
+            },
+            || {
+                confirm_with_terminal("Delete anyway? [y/N] ", &mut reader, &mut output, || {
+                    stdin_is_terminal
+                })
+            },
+        )
+        .await
+        .map_err(|error| error.to_string());
+
+        let mut unread = String::new();
+        io::Read::read_to_string(&mut reader, &mut unread).expect("read remaining input");
+        assert_eq!(
+            (
+                result,
+                String::from_utf8(output).expect("utf8 output"),
+                unread,
+            ),
+            (
+                expected_result,
+                expected_output.to_string(),
+                expected_unread.to_string(),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn force_skips_confirmation_for_unmerged_worktrees() {
+        let result = check_merge_status_with(
+            Some("feature"),
+            true,
+            UnmergedWorktreePolicy::Confirm,
+            |_| true,
+            |_| {
+                std::future::ready(MergeStatus::NotMerged {
+                    reason: "pull request is still open".to_string(),
+                })
+            },
+            || panic!("force must skip the confirmation"),
+        )
+        .await
+        .expect("force bypasses confirmation");
+
+        assert_eq!(
+            result,
+            Some(MergeStatus::NotMerged {
+                reason: "pull request is still open".to_string(),
+            }),
+        );
+    }
+
+    #[rstest]
+    #[case::non_terminal_rejects_piped_y(false, "y\n", (None, "", "y\n"))]
+    #[case::terminal_accepts_y(true, "y\n", (Some(true), "Delete anyway? [y/N] ", ""))]
+    #[case::terminal_rejects_n(true, "n\n", (Some(false), "Delete anyway? [y/N] ", ""))]
+    fn unmerged_confirmation_requires_terminal_input(
+        #[case] stdin_is_terminal: bool,
+        #[case] input: &str,
+        #[case] expected: (Option<bool>, &str, &str),
+    ) {
+        let mut reader = io::Cursor::new(input.as_bytes());
+        let mut output = Vec::new();
+
+        let confirmed =
+            confirm_with_terminal("Delete anyway? [y/N] ", &mut reader, &mut output, || {
+                stdin_is_terminal
+            });
+        let mut unread = String::new();
+        io::Read::read_to_string(&mut reader, &mut unread).expect("read remaining input");
+
+        assert_eq!(
+            (
+                confirmed,
+                String::from_utf8(output).expect("utf8 output").as_str(),
+                unread.as_str(),
+            ),
+            expected,
+        );
+    }
+
+    struct ClosedWriter;
+
+    impl Write for ClosedWriter {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn unmerged_confirmation_rejects_when_prompt_cannot_be_written() {
+        let mut reader = io::Cursor::new("y\n".as_bytes());
+
+        let result = confirm_with_terminal(
+            "Delete anyway? [y/N] ",
+            &mut reader,
+            &mut ClosedWriter,
+            || true,
+        );
+        let mut unread = String::new();
+        io::Read::read_to_string(&mut reader, &mut unread).expect("read remaining input");
+
+        assert_eq!((result, unread), (Some(false), "y\n".to_string()));
     }
 
     #[rstest]

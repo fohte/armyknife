@@ -256,8 +256,10 @@ mod tests {
     fn make_session(id: &str, status: SessionStatus) -> Session {
         let timestamp: DateTime<Utc> = Utc::now();
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
+            created_pr_urls: Vec::new(),
             session_id: id.to_string(),
             crit_urls: Vec::new(),
             web_uis: Vec::new(),

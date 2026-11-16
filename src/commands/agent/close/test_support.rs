@@ -13,8 +13,10 @@ use super::CloseRuntime;
 #[fixture]
 pub(super) fn session() -> Session {
     Session {
+        launch_id: None,
         archived_at: None,
         pr_context: None,
+        created_pr_urls: Vec::new(),
         session_id: "session-1".to_string(),
         work_type: None,
         work_type_pinned: false,

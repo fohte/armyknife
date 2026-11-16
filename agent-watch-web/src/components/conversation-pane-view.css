@@ -79,17 +79,21 @@
 }
 
 .conversation-pane[data-mobile='true'] .mobile-conversation-context {
-  display: flex;
-  min-width: 0;
-  align-items: baseline;
-  gap: 5px;
-  overflow: visible;
+  color: var(--aw-text-muted);
 }
 
 .conversation-pane[data-mobile='true']
   .mobile-conversation-context
   .session-task-line {
+  min-width: 0;
   flex: 0 1 auto;
+}
+
+.conversation-pane[data-mobile='true']
+  .mobile-conversation-context
+  .session-task-line
+  .conversation-task-link {
+  color: var(--aw-text-muted);
 }
 
 .conversation-pane[data-mobile='true']
@@ -101,9 +105,7 @@
 .conversation-pane[data-mobile='true']
   .mobile-conversation-context
   > span:last-child {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex: 0 0 auto;
 }
 
 .conversation-repo,

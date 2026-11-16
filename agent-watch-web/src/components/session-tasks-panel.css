@@ -1,0 +1,133 @@
+.session-tasks-panel {
+  width: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 0 12px;
+  color: var(--aw-text-primary);
+}
+
+.session-tasks-panel-heading {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0 18px;
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.session-tasks-panel-heading--completed {
+  margin-top: 8px;
+}
+
+.session-tasks-panel-heading > span {
+  color: var(--aw-text-secondary);
+  font-family: var(--font-mono);
+  font-weight: 400;
+}
+
+.session-tasks-panel-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-tasks-panel-list > li {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.session-tasks-panel-item {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 7px 18px;
+  color: var(--aw-text-primary);
+  text-decoration: none;
+}
+
+.session-tasks-panel-primary,
+.session-tasks-panel-primary-action {
+  flex: 0 0 auto;
+  margin: 0 18px 0 8px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.session-tasks-panel-primary-action {
+  padding: 3px 6px;
+  border: 1px solid var(--aw-border-control);
+  background: transparent;
+  color: var(--aw-text-secondary);
+  cursor: pointer;
+}
+
+.session-tasks-panel-primary-action:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.session-tasks-panel-item--open:hover,
+.session-tasks-panel-item--completed:hover {
+  background: var(--aw-bg-pressed);
+}
+
+.session-tasks-panel-item--completed {
+  padding-block: 6px;
+  color: var(--aw-text-secondary);
+}
+
+.session-tasks-panel-icon {
+  color: var(--aw-color-working);
+}
+
+.session-tasks-panel-item--completed .session-tasks-panel-icon {
+  color: var(--aw-text-muted);
+}
+
+.session-tasks-panel-copy {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.session-tasks-panel-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-tasks-panel-meta {
+  overflow: hidden;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-tasks-panel-item--completed .session-tasks-panel-title {
+  grid-column: 2;
+}
+
+.session-tasks-panel-show-more {
+  margin: 4px 0 0 42px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--aw-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}

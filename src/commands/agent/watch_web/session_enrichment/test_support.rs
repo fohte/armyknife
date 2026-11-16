@@ -9,7 +9,7 @@ use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionSt
 
 use super::super::EnrichmentUpdates;
 use super::{
-    BranchPrKey, PullRequestFetcher, SessionEnrichmentCache, SessionTaskMetadata,
+    PullRequestFetcher, PullRequestKey, SessionEnrichmentCache, SessionTaskMetadata,
     TaskMetadataFetcher,
 };
 
@@ -56,9 +56,11 @@ pub(super) fn linked_task(task_id: &str) -> SessionTask {
 pub(super) fn session(session_id: &str, pr_context: Option<SessionPrContext>) -> Session {
     let timestamp = Utc.timestamp_opt(1_234_567, 0).single().unwrap();
     Session {
+        launch_id: None,
         session_id: session_id.to_string(),
         archived_at: None,
         pr_context,
+        created_pr_urls: Vec::new(),
         crit_urls: Vec::new(),
         web_uis: Vec::new(),
         pending_human_review_ids: Default::default(),
@@ -118,10 +120,10 @@ pub(super) async fn wait_for_refresh(receiver: &mut tokio::sync::watch::Receiver
         .unwrap();
 }
 
-pub(super) fn branch_key(branch: &str) -> BranchPrKey {
-    (
+pub(super) fn branch_key(branch: &str) -> PullRequestKey {
+    PullRequestKey::Branch((
         "example-owner".to_string(),
         "example-repository".to_string(),
         branch.to_string(),
-    )
+    ))
 }

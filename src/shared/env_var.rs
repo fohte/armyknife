@@ -30,8 +30,10 @@ const PR_NUMBER: &str = "ARMYKNIFE_PR_NUMBER";
 const PR_IS_UPDATE: &str = "ARMYKNIFE_PR_IS_UPDATE";
 const PR_URL: &str = "ARMYKNIFE_PR_URL";
 const PR_HEAD_SHA: &str = "ARMYKNIFE_PR_HEAD_SHA";
+const SESSION_LAUNCH_ID: &str = "ARMYKNIFE_SESSION_LAUNCH_ID";
 
 /// Snapshot of all ARMYKNIFE_* environment variables at load time.
+#[derive(Default)]
 pub struct EnvVars {
     /// When set, hooks are skipped entirely.
     /// Used by `claude -p` invocations to prevent infinite recursion.
@@ -61,6 +63,7 @@ pub struct EnvVars {
 
     /// Comma-separated ancestor session IDs from root to immediate parent.
     pub ancestor_session_ids: Option<String>,
+    pub session_launch_id: Option<String>,
 
     /// Hook log level: "debug", "error", or unset (default: error).
     pub cc_hook_log: Option<String>,
@@ -95,6 +98,7 @@ impl EnvVars {
             session_child_launch: non_empty_var(SESSION_CHILD_LAUNCH),
             session_vibe_launch: non_empty_var(SESSION_VIBE_LAUNCH).is_some(),
             ancestor_session_ids: non_empty_var(ANCESTOR_SESSION_IDS),
+            session_launch_id: non_empty_var(SESSION_LAUNCH_ID),
             cc_hook_log: non_empty_var(CC_HOOK_LOG),
             cc_notify: non_empty_var(CC_NOTIFY),
         }
@@ -138,6 +142,10 @@ impl EnvVars {
     /// Returns the env var name for ANCESTOR_SESSION_IDS (used as key in env var pairs).
     pub fn ancestor_session_ids_name() -> &'static str {
         ANCESTOR_SESSION_IDS
+    }
+
+    pub fn session_launch_id_name() -> &'static str {
+        SESSION_LAUNCH_ID
     }
 
     /// Returns the env var name that marks a Codex process launched by the

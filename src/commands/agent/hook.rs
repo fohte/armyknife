@@ -20,7 +20,7 @@ use super::session_status;
 use super::store;
 use super::types::{
     ChildLaunchPermission, Engine, HookEvent, HookInput, MAIN_THREAD_AGENT_KEY, Session,
-    SessionPrContext, SessionStatus, TMUX_SESSION_OPTION, TmuxInfo,
+    SessionPrContext, SessionStatus, TmuxInfo,
 };
 use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::tmux;
@@ -36,6 +36,7 @@ mod permission_request;
 mod prompt_skill;
 mod session_lifecycle;
 mod session_metadata;
+mod session_start;
 mod side_effects;
 mod stop;
 mod vibe;
@@ -125,14 +126,16 @@ pub fn run(args: &HookArgs) -> Result<()> {
         ProcessResult::StopBlocked(reason) => Some(reason),
         ProcessResult::SessionSaved | ProcessResult::SessionEnded | ProcessResult::Skipped => None,
     };
-    if event == HookEvent::SessionStart && args.engine == Engine::Claude {
-        let marker = store::watch_web_user_marker(&session_id)?;
-        return write_claude_session_start_response(marker.as_deref(), &mut io::stdout().lock());
-    }
-    write_stop_response(
-        args.engine,
+    let marker = if event == HookEvent::SessionStart && args.engine == Engine::Claude {
+        store::watch_web_user_marker(&session_id)?
+    } else {
+        None
+    };
+    session_start::write_hook_response(
         event,
+        args.engine,
         block_reason.as_deref(),
+        marker.as_deref(),
         &mut io::stdout().lock(),
     )
 }
@@ -144,27 +147,9 @@ fn write_stop_response(
     output: impl Write,
 ) -> Result<()> {
     if event == HookEvent::SessionStart && engine == Engine::Claude {
-        return write_claude_session_start_response_without_agent_instruction(output);
+        return session_start::write_without_instruction(output);
     }
     stop::write_response(engine, event, block_reason, output)
-}
-
-fn session_start_context(marker: Option<&str>) -> String {
-    let mut context = super::decision::session_start_instruction().to_string();
-    if let Some(marker) = marker {
-        context.push('\n');
-        context.push('\n');
-        context.push_str(&super::watch_web_user_marker::session_start_context(marker));
-    }
-    context
-}
-
-fn write_claude_session_start_response(marker: Option<&str>, output: impl Write) -> Result<()> {
-    stop::write_session_start_response(&session_start_context(marker), output)
-}
-
-fn write_claude_session_start_response_without_agent_instruction(output: impl Write) -> Result<()> {
-    stop::write_session_start_response("", output)
 }
 
 /// Result of processing a hook event.
@@ -283,8 +268,10 @@ fn new_session_record(
         .unwrap_or_default();
 
     Session {
+        launch_id: env.session_launch_id.clone(),
         archived_at: None,
         pr_context,
+        created_pr_urls: Vec::new(),
         session_id: input.session_id.clone(),
         work_type: env.session_work_type.clone(),
         // A new ID in a pane that already tracked a session is a restart or
@@ -322,6 +309,33 @@ fn new_session_record(
         model: None,
         effort: None,
     }
+}
+
+fn tmux_info_from_pane(
+    pane_info: Option<&tmux::PaneInfo>,
+    side_effects: &SideEffects,
+) -> Result<Option<TmuxInfo>> {
+    pane_info
+        .map(|info| {
+            Ok(TmuxInfo {
+                session_name: info.session_name.clone(),
+                window_name: info.window_name.clone(),
+                window_index: info.window_index,
+                pane_id: info.pane_id.clone(),
+                socket_path: side_effects.current_tmux_socket_path()?,
+            })
+        })
+        .transpose()
+}
+
+fn bind_session_to_pane(
+    sessions_dir: &Path,
+    pane_info: &tmux::PaneInfo,
+    session_id: &str,
+    side_effects: &SideEffects,
+) {
+    side_effects.set_pane_session_id(&pane_info.pane_id, session_id);
+    end_sessions_on_pane_takeover(sessions_dir, &pane_info.pane_id, session_id, side_effects);
 }
 
 fn ensure_watch_web_user_marker(
@@ -382,8 +396,24 @@ fn process_hook_event_impl_with_instruction(
     side_effects: &SideEffects,
     stop_hook_instruction: Option<&str>,
 ) -> Result<ProcessResult> {
-    let env = EnvVars::load();
+    process_hook_event_impl_with_env(
+        event,
+        input,
+        sessions_dir,
+        side_effects,
+        stop_hook_instruction,
+        EnvVars::load(),
+    )
+}
 
+fn process_hook_event_impl_with_env(
+    event: HookEvent,
+    input: HookInput,
+    sessions_dir: &Path,
+    side_effects: &SideEffects,
+    stop_hook_instruction: Option<&str>,
+    env: EnvVars,
+) -> Result<ProcessResult> {
     // Claude's SessionEnd confirms termination; Codex's hook does not because
     // the app-server also fires it during daemon shutdown.
     //
@@ -448,14 +478,10 @@ fn process_hook_event_impl_with_instruction(
     // Resolved once and shared by the pane option, the pane takeover check and
     // `Session::tmux_info` below: all three want the same pane, and the lookup
     // shells out to tmux.
-    let pane_info = if side_effects.tmux {
-        pane_binding::resolve(&input)
-    } else {
-        None
-    };
+    let pane_info = side_effects.resolve_pane(&input);
 
-    // A `claude -c` resume can emit startup for a temporary ID before resume
-    // supplies the restored ID. Keep startup metadata without binding its ID to the pane.
+    // A `claude -c` resume can emit startup for a temporary ID; watch-web's
+    // launch ID identifies a new session that can be bound before its first prompt.
     if event == HookEvent::SessionStart {
         // Export session ID to CLAUDE_ENV_FILE so that subsequent Bash commands
         // (e.g., `a agent new`) can automatically discover the parent session ID.
@@ -465,6 +491,7 @@ fn process_hook_event_impl_with_instruction(
 
         // Startup can carry the only model value before a session row exists.
         if input.source.as_deref() == Some("startup") {
+            let is_watch_web_launch = env.session_launch_id.is_some();
             let initialized = session_init::load_or_capture(
                 sessions_dir,
                 &input.session_id,
@@ -478,7 +505,7 @@ fn process_hook_event_impl_with_instruction(
                         None,
                         input.transcript_path.as_deref(),
                     );
-                    if !metadata_update.apply(&mut model, &mut effort) {
+                    if !metadata_update.apply(&mut model, &mut effort) && !is_watch_web_launch {
                         return None;
                     }
 
@@ -528,6 +555,14 @@ fn process_hook_event_impl_with_instruction(
                 drop(session_lock);
                 return Ok(ProcessResult::Skipped);
             };
+            let tmux_info = if is_watch_web_launch {
+                if let Some(pane_info) = pane_info.as_ref() {
+                    bind_session_to_pane(sessions_dir, pane_info, &input.session_id, side_effects);
+                }
+                tmux_info_from_pane(pane_info.as_ref(), side_effects)?
+            } else {
+                None
+            };
             let now = Utc::now();
             let mut session = new_session_record(
                 &input,
@@ -535,8 +570,12 @@ fn process_hook_event_impl_with_instruction(
                 now,
                 pr_context,
                 work_type_pinned,
-                None,
-                SessionStatus::Ended,
+                tmux_info,
+                if is_watch_web_launch {
+                    SessionStatus::Running
+                } else {
+                    SessionStatus::Ended
+                },
             );
             session.model = model;
             session.effort = effort;
@@ -547,15 +586,7 @@ fn process_hook_event_impl_with_instruction(
         }
 
         if let Some(pane_info) = pane_info.as_ref() {
-            // Ignore errors; pane option is nice-to-have, not critical
-            let _ =
-                tmux::set_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION, &input.session_id);
-            end_sessions_on_pane_takeover(
-                sessions_dir,
-                &pane_info.pane_id,
-                &input.session_id,
-                side_effects,
-            );
+            bind_session_to_pane(sessions_dir, pane_info, &input.session_id, side_effects);
         }
     }
 
@@ -570,26 +601,10 @@ fn process_hook_event_impl_with_instruction(
         && session_needs_pane_binding(sessions_dir, &input.session_id)?
         && let Some(pane_info) = pane_info.as_ref()
     {
-        let _ = tmux::set_pane_option(&pane_info.pane_id, TMUX_SESSION_OPTION, &input.session_id);
-        end_sessions_on_pane_takeover(
-            sessions_dir,
-            &pane_info.pane_id,
-            &input.session_id,
-            side_effects,
-        );
+        bind_session_to_pane(sessions_dir, pane_info, &input.session_id, side_effects);
     }
 
-    let tmux_info = if let Some(info) = pane_info {
-        Some(TmuxInfo {
-            session_name: info.session_name,
-            window_name: info.window_name,
-            window_index: info.window_index,
-            pane_id: info.pane_id,
-            socket_path: tmux::current_socket_path()?,
-        })
-    } else {
-        None
-    };
+    let tmux_info = tmux_info_from_pane(pane_info.as_ref(), side_effects)?;
 
     let mut status = determine_status(event, &input);
     let may_contain_work_type = work_type::may_contain_work_type(event, &input);
@@ -1583,9 +1598,10 @@ fn build_subtitle(session: &Session) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::side_effects::PaneBindingOperations;
     use super::*;
     use crate::commands::agent::session_pr_context::fixed_context_capture;
-    use crate::commands::agent::types::{AgentStatus, WebUiRegistration};
+    use crate::commands::agent::types::{AgentStatus, TMUX_SESSION_OPTION, WebUiRegistration};
     use rstest::{fixture, rstest};
 
     fn process_hook_event_without_instruction(
@@ -1595,29 +1611,6 @@ mod tests {
         side_effects: &SideEffects,
     ) -> Result<ProcessResult> {
         process_hook_event_impl_with_instruction(event, input, sessions_dir, side_effects, None)
-    }
-
-    #[rstest]
-    #[case::without_watch_web_marker(None)]
-    #[case::with_watch_web_marker(Some("⟦armyknife-user:fixture-marker-cobalt⟧"))]
-    fn claude_session_start_response_includes_the_decision_instruction(
-        #[case] marker: Option<&str>,
-    ) {
-        let mut output = Vec::new();
-
-        write_claude_session_start_response(marker, &mut output)
-            .expect("SessionStart response should serialize");
-
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&output)
-                .expect("response should be valid JSON"),
-            serde_json::json!({
-                "hookSpecificOutput": {
-                    "hookEventName": "SessionStart",
-                    "additionalContext": session_start_context(marker),
-                }
-            }),
-        );
     }
 
     #[test]
@@ -1643,6 +1636,32 @@ mod tests {
         temp_dir: tempfile::TempDir,
         archived_calls: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
         side_effects: SideEffects,
+    }
+
+    struct RecordingPaneBinding {
+        pane_info: tmux::PaneInfo,
+        option_writes: std::sync::Arc<std::sync::Mutex<Vec<(String, String, String)>>>,
+    }
+
+    impl PaneBindingOperations for RecordingPaneBinding {
+        fn resolve(&self, _input: &HookInput) -> Option<tmux::PaneInfo> {
+            Some(self.pane_info.clone())
+        }
+
+        fn set_session_id(&self, pane_id: &str, session_id: &str) {
+            self.option_writes
+                .lock()
+                .expect("pane option writes lock should not be poisoned")
+                .push((
+                    pane_id.to_string(),
+                    TMUX_SESSION_OPTION.to_string(),
+                    session_id.to_string(),
+                ));
+        }
+
+        fn current_socket_path(&self) -> anyhow::Result<Option<String>> {
+            Ok(Some("test-socket".to_string()))
+        }
     }
 
     #[fixture]
@@ -1887,6 +1906,110 @@ mod tests {
                     .expect("resumed marker should load"),
             ),
             (true, marker),
+        );
+    }
+
+    #[test]
+    fn session_start_persists_launch_id_from_environment() {
+        let temp_dir = tempfile::TempDir::new().expect("temporary directory should be created");
+        let env = EnvVars {
+            session_launch_id: Some("launch-fixture".to_string()),
+            ..EnvVars::default()
+        };
+        process_hook_event_impl_with_env(
+            HookEvent::SessionStart,
+            create_test_input(None),
+            temp_dir.path(),
+            &SideEffects::none(),
+            None,
+            env,
+        )
+        .expect("session-start should save the session");
+        let session = store::load_session_from(temp_dir.path(), "test-123")
+            .expect("session should load")
+            .expect("session should exist");
+        let mut actual = serde_json::to_value(session).expect("session should serialize");
+        actual["created_at"] = serde_json::json!("<timestamp>");
+        actual["updated_at"] = serde_json::json!("<timestamp>");
+
+        let mut expected = create_test_session(None);
+        expected.launch_id = Some("launch-fixture".to_string());
+        let mut expected =
+            serde_json::to_value(expected).expect("expected session should serialize");
+        expected["created_at"] = serde_json::json!("<timestamp>");
+        expected["updated_at"] = serde_json::json!("<timestamp>");
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn promptless_watch_web_session_is_saved_on_startup() {
+        let temp_dir = tempfile::TempDir::new().expect("temporary directory should be created");
+        let env = EnvVars {
+            session_launch_id: Some("launch-fixture".to_string()),
+            ..EnvVars::default()
+        };
+        let option_writes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let pane_info = tmux::PaneInfo {
+            session_name: "main".to_string(),
+            window_name: "claude".to_string(),
+            window_index: 0,
+            pane_id: "%42".to_string(),
+        };
+        let side_effects = SideEffects {
+            pane_binding: Some(std::sync::Arc::new(RecordingPaneBinding {
+                pane_info,
+                option_writes: option_writes.clone(),
+            })),
+            ..SideEffects::none()
+        };
+        let result = process_hook_event_impl_with_env(
+            HookEvent::SessionStart,
+            create_test_input_with_source(None, Some("startup")),
+            temp_dir.path(),
+            &side_effects,
+            None,
+            env,
+        )
+        .expect("startup should save the session");
+        let session = store::load_session_from(temp_dir.path(), "test-123")
+            .expect("session should load")
+            .expect("session should exist");
+        let mut actual = serde_json::to_value(session).expect("session should serialize");
+        actual["created_at"] = serde_json::json!("<timestamp>");
+        actual["updated_at"] = serde_json::json!("<timestamp>");
+
+        let mut expected = create_test_session(None);
+        expected.launch_id = Some("launch-fixture".to_string());
+        expected.tmux_info = Some(TmuxInfo {
+            session_name: "main".to_string(),
+            window_name: "claude".to_string(),
+            window_index: 0,
+            pane_id: "%42".to_string(),
+            socket_path: Some("test-socket".to_string()),
+        });
+        let mut expected = serde_json::to_value(expected).expect("session should serialize");
+        expected["created_at"] = serde_json::json!("<timestamp>");
+        expected["updated_at"] = serde_json::json!("<timestamp>");
+
+        assert_eq!(
+            (
+                result,
+                actual,
+                option_writes
+                    .lock()
+                    .expect("pane option writes lock should not be poisoned")
+                    .clone(),
+            ),
+            (
+                ProcessResult::SessionSaved,
+                expected,
+                vec![(
+                    "%42".to_string(),
+                    TMUX_SESSION_OPTION.to_string(),
+                    "test-123".to_string(),
+                )],
+            ),
         );
     }
 
@@ -2743,8 +2866,10 @@ mod tests {
         let sessions_dir = temp_dir.path();
 
         let session = Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
+            created_pr_urls: Vec::new(),
             session_id: "paused-sess".to_string(),
             work_type: None,
             work_type_pinned: false,
@@ -3236,8 +3361,10 @@ mod tests {
         let sessions_dir = temp_dir.path();
 
         let session = Session {
+            launch_id: None,
             archived_at: Some(Utc::now()),
             pr_context: None,
+            created_pr_urls: Vec::new(),
             session_id: "end-sess".to_string(),
             work_type: None,
             work_type_pinned: false,
@@ -3408,6 +3535,7 @@ mod tests {
             tq_archive: false,
             track_bg_run_tasks: false,
             redeliver_bg_notifications: false,
+            pane_binding: None,
             removed_notification_groups: None,
             tmux_sync_calls: Some(calls.clone()),
             tq_archive_calls: None,
@@ -3871,6 +3999,7 @@ mod tests {
             tq_archive: false,
             track_bg_run_tasks: false,
             redeliver_bg_notifications: false,
+            pane_binding: None,
             removed_notification_groups: Some(removed.clone()),
             tmux_sync_calls: None,
             tq_archive_calls: None,
@@ -3956,8 +4085,10 @@ mod tests {
 
     fn create_test_session(tmux_info: Option<TmuxInfo>) -> Session {
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
+            created_pr_urls: Vec::new(),
             session_id: "test-123".to_string(),
             work_type: None,
             work_type_pinned: false,
@@ -4551,6 +4682,7 @@ mod tests {
             tq_archive: false,
             track_bg_run_tasks: false,
             redeliver_bg_notifications: false,
+            pane_binding: None,
             removed_notification_groups: Some(removed_notification_groups.clone()),
             tmux_sync_calls: Some(tmux_sync_calls.clone()),
             tq_archive_calls: None,
@@ -6131,8 +6263,10 @@ mod tests {
         fn make_session(session_id: &str, pane_id: &str) -> Session {
             let now = Utc::now();
             Session {
+                launch_id: None,
                 archived_at: None,
                 pr_context: None,
+                created_pr_urls: Vec::new(),
                 session_id: session_id.to_string(),
                 work_type: None,
                 work_type_pinned: false,

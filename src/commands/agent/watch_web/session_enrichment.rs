@@ -11,7 +11,8 @@ use crate::commands::agent::tq_session_tasks::{
     order_tasks_by_priority, task_priority_metadata,
 };
 use crate::commands::agent::types::Session;
-use crate::infra::github::{BranchPrQuery, GitHubClient, PrHeadInfo};
+use crate::commands::agent::types::SessionPrContext;
+use crate::infra::github::{BranchPrQuery, GitHubClient, PrHeadInfo, PrNumberQuery};
 use crate::infra::tq::{TqClient, TqProjectSummary, TqTaskSummary};
 
 mod cache;
@@ -27,18 +28,33 @@ const CACHE_TTL: Duration = Duration::from_secs(30);
 const CACHE_KEY_RETENTION: Duration = Duration::from_secs(10 * 60);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(35);
 type BranchPrKey = (String, String, String);
+type NumberPrKey = (String, String, u64);
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum PullRequestKey {
+    Branch(BranchPrKey),
+    Number(NumberPrKey),
+}
 type FetchFuture<T> = Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'static>>;
 type TaskMetadataFetcher = Arc<
     dyn Fn(HashSet<String>, SessionTaskMetadata) -> FetchFuture<SessionTaskMetadata> + Send + Sync,
 >;
 type PullRequestFetcher = Arc<
-    dyn Fn(Vec<Session>) -> FetchFuture<HashMap<BranchPrKey, Option<PrHeadInfo>>> + Send + Sync,
+    dyn Fn(Vec<Session>) -> FetchFuture<HashMap<PullRequestKey, Option<PrHeadInfo>>> + Send + Sync,
 >;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SessionPullRequestInfo {
+    pub(super) owner: String,
+    pub(super) repo: String,
+    pub(super) progress: PrHeadInfo,
+    pub(super) from_cwd_branch: bool,
+}
 
 #[derive(Clone)]
 pub(super) struct SessionEnrichmentCache {
     tq: Arc<RefreshingCache<SessionTaskMetadata, String>>,
-    pull_requests: Arc<RefreshingCache<HashMap<BranchPrKey, Option<PrHeadInfo>>, BranchPrKey>>,
+    pull_requests:
+        Arc<RefreshingCache<HashMap<PullRequestKey, Option<PrHeadInfo>>, PullRequestKey>>,
     task_fetcher: TaskMetadataFetcher,
     pull_request_fetcher: PullRequestFetcher,
 }
@@ -51,7 +67,7 @@ impl SessionEnrichmentCache {
             },
         );
         let pull_request_fetcher: PullRequestFetcher = Arc::new(
-            |sessions| -> FetchFuture<HashMap<BranchPrKey, Option<PrHeadInfo>>> {
+            |sessions| -> FetchFuture<HashMap<PullRequestKey, Option<PrHeadInfo>>> {
                 Box::pin(async move { fetch_pull_requests(&sessions).await })
             },
         );
@@ -100,7 +116,7 @@ impl SessionEnrichmentCache {
     pub(super) async fn pull_requests(
         &self,
         sessions: &[Session],
-    ) -> HashMap<String, Option<PrHeadInfo>> {
+    ) -> HashMap<String, Vec<SessionPullRequestInfo>> {
         let query_keys = pull_request_keys(sessions);
         if query_keys.is_empty() {
             return HashMap::new();
@@ -123,18 +139,47 @@ impl SessionEnrichmentCache {
 
         sessions
             .iter()
-            .filter_map(|session| {
-                let context = session.pr_context.as_ref()?;
-                let key = BranchPrQuery {
-                    owner: context.owner.clone(),
-                    repo: context.repo.clone(),
-                    branch: context.branch.clone(),
+            .filter(|session| session.pr_context.is_some() || !session.created_pr_urls.is_empty())
+            .map(|session| {
+                let mut seen_pull_requests = HashSet::new();
+                let mut pull_requests = Vec::new();
+                if let Some(context) = &session.pr_context {
+                    let key = PullRequestKey::Branch(branch_query(context).key());
+                    if let Some(pull_request) = cached.get(&key).cloned().flatten() {
+                        let pull_request_key = (
+                            context.owner.clone(),
+                            context.repo.clone(),
+                            pull_request.pull_request.number,
+                        );
+                        if seen_pull_requests.insert(pull_request_key) {
+                            pull_requests.push(SessionPullRequestInfo {
+                                owner: context.owner.clone(),
+                                repo: context.repo.clone(),
+                                progress: pull_request,
+                                from_cwd_branch: true,
+                            });
+                        }
+                    }
                 }
-                .key();
-                Some((
-                    session.session_id.clone(),
-                    cached.get(&key).cloned().unwrap_or(None),
-                ))
+                for query in submitted_pr_queries(&session.created_pr_urls) {
+                    let Some(pull_request) = cached
+                        .get(&PullRequestKey::Number(query.key()))
+                        .cloned()
+                        .flatten()
+                    else {
+                        continue;
+                    };
+                    let pull_request_key = (query.owner.clone(), query.repo.clone(), query.number);
+                    if seen_pull_requests.insert(pull_request_key) {
+                        pull_requests.push(SessionPullRequestInfo {
+                            owner: query.owner,
+                            repo: query.repo,
+                            progress: pull_request,
+                            from_cwd_branch: false,
+                        });
+                    }
+                }
+                (session.session_id.clone(), pull_requests)
             })
             .collect()
     }
@@ -352,18 +397,59 @@ fn task_project_names(
         .collect()
 }
 
-fn pull_request_keys(sessions: &[Session]) -> HashSet<BranchPrKey> {
-    sessions
-        .iter()
-        .filter_map(|session| session.pr_context.as_ref())
-        .map(|context| {
-            BranchPrQuery {
-                owner: context.owner.clone(),
-                repo: context.repo.clone(),
-                branch: context.branch.clone(),
+fn pull_request_keys(sessions: &[Session]) -> HashSet<PullRequestKey> {
+    let mut keys = branch_pr_queries(sessions)
+        .into_iter()
+        .map(|query| PullRequestKey::Branch(query.key()))
+        .collect::<HashSet<_>>();
+    keys.extend(
+        submitted_pr_queries_for_sessions(sessions)
+            .into_iter()
+            .map(|query| PullRequestKey::Number(query.key())),
+    );
+    keys
+}
+
+fn branch_pr_queries(sessions: &[Session]) -> Vec<BranchPrQuery> {
+    let mut queries = Vec::new();
+    let mut seen = HashSet::new();
+    for session in sessions {
+        if let Some(context) = &session.pr_context {
+            let query = branch_query(context);
+            if seen.insert(query.key()) {
+                queries.push(query);
             }
-            .key()
-        })
+        }
+    }
+    queries
+}
+
+fn branch_query(context: &SessionPrContext) -> BranchPrQuery {
+    BranchPrQuery {
+        owner: context.owner.clone(),
+        repo: context.repo.clone(),
+        branch: context.branch.clone(),
+    }
+}
+
+fn submitted_pr_queries_for_sessions(sessions: &[Session]) -> Vec<PrNumberQuery> {
+    let mut queries = Vec::new();
+    let mut seen = HashSet::new();
+    for session in sessions {
+        for query in submitted_pr_queries(&session.created_pr_urls) {
+            if seen.insert(query.key()) {
+                queries.push(query);
+            }
+        }
+    }
+    queries
+}
+
+fn submitted_pr_queries(urls: &[String]) -> Vec<PrNumberQuery> {
+    let mut seen = HashSet::new();
+    urls.iter()
+        .filter_map(|url| PrNumberQuery::from_github_url(url))
+        .filter(|query| seen.insert(query.key()))
         .collect()
 }
 
@@ -375,23 +461,10 @@ async fn detected_tq_client() -> Result<Option<TqClient>, String> {
 
 async fn fetch_pull_requests(
     sessions: &[Session],
-) -> Result<HashMap<BranchPrKey, Option<PrHeadInfo>>, String> {
-    let mut queries = Vec::new();
-    let mut seen = HashSet::new();
-    for session in sessions {
-        let Some(context) = session.pr_context.as_ref() else {
-            continue;
-        };
-        let query = BranchPrQuery {
-            owner: context.owner.clone(),
-            repo: context.repo.clone(),
-            branch: context.branch.clone(),
-        };
-        if seen.insert(query.key()) {
-            queries.push(query.clone());
-        }
-    }
-    if queries.is_empty() {
+) -> Result<HashMap<PullRequestKey, Option<PrHeadInfo>>, String> {
+    let branch_queries = branch_pr_queries(sessions);
+    let number_queries = submitted_pr_queries_for_sessions(sessions);
+    if branch_queries.is_empty() && number_queries.is_empty() {
         return Ok(HashMap::new());
     }
 
@@ -399,10 +472,25 @@ async fn fetch_pull_requests(
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())?;
-    let prs = client
-        .get_prs_with_head_sha_for_branches_batch(&queries)
-        .await
-        .map_err(|error| error.to_string())?;
+    let (branch_prs, number_prs) = tokio::try_join!(
+        client.get_prs_with_head_sha_for_branches_batch(&branch_queries),
+        client.get_pr_progress_for_numbers_batch(&number_queries),
+    )
+    .map_err(|error| error.to_string())?;
+
+    let mut prs = branch_prs
+        .into_iter()
+        .map(|(key, value)| (PullRequestKey::Branch(key), value))
+        .collect::<HashMap<_, _>>();
+    prs.extend(number_prs.into_iter().map(|(key, value)| {
+        (
+            PullRequestKey::Number(key),
+            value.map(|progress| PrHeadInfo {
+                pull_request: progress.pull_request,
+                head_sha: progress.head_sha,
+            }),
+        )
+    }));
 
     Ok(prs)
 }
@@ -410,7 +498,8 @@ async fn fetch_pull_requests(
 #[cfg(test)]
 mod tests {
     use super::test_support::{
-        cache_with_fetchers, metadata, session, session_with_branch, wait_for_refresh,
+        branch_key, cache_with_fetchers, metadata, session, session_with_branch,
+        session_with_branch_name, wait_for_refresh,
     };
     use super::*;
     use crate::commands::agent::tq_session_tasks::task_priority_metadata;
@@ -452,11 +541,19 @@ mod tests {
     }
 
     #[rstest]
-    #[case::unset_priority_is_left_unranked(
-        vec![task("task-a", None), task("task-b", Some(-1))],
+    #[case::unset_priority_keeps_its_tq_position(
+        vec![task("task-a", Some(0)), task("task-b", None), task("task-c", Some(-1))],
         (
-            HashMap::from([("task-a".to_string(), None), ("task-b".to_string(), Some(-1))]),
-            HashMap::from([("task-b".to_string(), 0)]),
+            HashMap::from([
+                ("task-a".to_string(), Some(0)),
+                ("task-b".to_string(), None),
+                ("task-c".to_string(), Some(-1)),
+            ]),
+            HashMap::from([
+                ("task-a".to_string(), 0),
+                ("task-b".to_string(), 1),
+                ("task-c".to_string(), 2),
+            ]),
         ),
     )]
     #[case::same_priority_shares_order(
@@ -802,11 +899,11 @@ mod tests {
             Box::pin(async move {
                 calls.fetch_add(1, Ordering::SeqCst);
                 Ok(HashMap::from([(
-                    (
+                    PullRequestKey::Branch((
                         "example-owner".to_string(),
                         "example-repository".to_string(),
                         "feature/example".to_string(),
-                    ),
+                    )),
                     Some(head_info(17)),
                 )]))
             })
@@ -821,15 +918,101 @@ mod tests {
         wait_for_refresh(&mut receiver).await;
         let shared_branch = cache.pull_requests(&[first.clone(), second.clone()]).await;
 
+        let first_pr = SessionPullRequestInfo {
+            owner: "example-owner".to_string(),
+            repo: "example-repository".to_string(),
+            progress: head_info(17),
+            from_cwd_branch: true,
+        };
+        let second_pr = SessionPullRequestInfo {
+            owner: "example-owner".to_string(),
+            repo: "example-repository".to_string(),
+            progress: head_info(17),
+            from_cwd_branch: true,
+        };
         assert_eq!(
             (initial, shared_branch, calls.load(Ordering::SeqCst)),
             (
-                HashMap::from([("session-one".to_string(), None)]),
+                HashMap::from([("session-one".to_string(), Vec::new())]),
                 HashMap::from([
-                    ("session-one".to_string(), Some(head_info(17)),),
-                    ("session-two".to_string(), Some(head_info(17)),),
+                    ("session-one".to_string(), vec![first_pr]),
+                    ("session-two".to_string(), vec![second_pr]),
                 ]),
                 1,
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn submitted_pr_urls_follow_the_cwd_pr_and_duplicate_prs_are_removed() {
+        let updates = EnrichmentUpdates::new();
+        let mut receiver = updates.subscribe();
+        let pull_request_fetcher: PullRequestFetcher = Arc::new(|_| {
+            Box::pin(async move {
+                Ok(HashMap::from([
+                    (branch_key("cwd-branch"), Some(head_info(17))),
+                    (
+                        PullRequestKey::Number((
+                            "example-owner".to_string(),
+                            "example-repository".to_string(),
+                            23,
+                        )),
+                        Some(head_info(23)),
+                    ),
+                ]))
+            })
+        });
+        let task_fetcher: TaskMetadataFetcher =
+            Arc::new(|_, previous| Box::pin(async move { Ok(previous) }));
+        let cache = cache_with_fetchers(updates, FETCH_TIMEOUT, task_fetcher, pull_request_fetcher);
+        let mut current_session = session_with_branch_name("session-multiple", "cwd-branch");
+        let cwd_context = current_session
+            .pr_context
+            .clone()
+            .expect("cwd context exists");
+        current_session.created_pr_urls = vec![
+            "https://github.com/example-owner/example-repository/pull/23".to_string(),
+            "https://github.com/example-owner/example-repository/pull/23".to_string(),
+        ];
+
+        let initial = cache
+            .pull_requests(std::slice::from_ref(&current_session))
+            .await;
+        wait_for_refresh(&mut receiver).await;
+        let pull_requests = cache
+            .pull_requests(std::slice::from_ref(&current_session))
+            .await;
+
+        assert_eq!(
+            (
+                initial,
+                pull_requests,
+                branch_pr_queries(&[current_session])
+            ),
+            (
+                HashMap::from([("session-multiple".to_string(), Vec::new())]),
+                HashMap::from([(
+                    "session-multiple".to_string(),
+                    vec![
+                        SessionPullRequestInfo {
+                            owner: cwd_context.owner,
+                            repo: cwd_context.repo,
+                            progress: head_info(17),
+                            from_cwd_branch: true,
+                        },
+                        SessionPullRequestInfo {
+                            owner: "example-owner".to_string(),
+                            repo: "example-repository".to_string(),
+                            progress: head_info(23),
+                            from_cwd_branch: false,
+                        },
+                    ],
+                )]),
+                vec![BranchPrQuery {
+                    owner: "example-owner".to_string(),
+                    repo: "example-repository".to_string(),
+                    branch: "cwd-branch".to_string(),
+                },],
             ),
         );
     }

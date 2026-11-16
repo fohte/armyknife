@@ -6,9 +6,11 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Pencil,
+  Star,
 } from 'lucide-react'
 import { type SubmitEvent, useState } from 'react'
 
+import { MobileConversationActionsMenu } from '#components/mobile-conversation-actions-menu'
 import { OpenInTerminalAction } from '#components/open-in-terminal-action'
 import { PullRequestMergeAction } from '#components/pull-request-merge-action'
 import { PullRequestMergeConfirmation } from '#components/pull-request-merge-confirmation'
@@ -16,6 +18,7 @@ import { SessionHeading } from '#components/session-heading'
 import { SessionTaskLinks } from '#components/session-task-links'
 import { StarredSessionToggle } from '#components/starred-session-toggle'
 import { useSessionOperations } from '#session-operation-context'
+import { getSessionTasks } from '#session-task-utils'
 import type {
   BackgroundTask,
   OpenInTerminalStatus,
@@ -52,6 +55,7 @@ type ConversationPaneHeaderProps = {
   openInTerminalStatus: OpenInTerminalStatus
   isToday: boolean
   titleEditing?: boolean
+  mobileActionsMenuOpen?: boolean
   onAction: (
     action: string,
     payload?: Record<string, unknown>,
@@ -75,6 +79,7 @@ export function ConversationPaneHeader({
   openInTerminalStatus,
   isToday,
   titleEditing = false,
+  mobileActionsMenuOpen,
   onAction,
   onOpenInTerminal,
   onSelectSession,
@@ -95,7 +100,13 @@ export function ConversationPaneHeader({
   } | null>(null)
   const { pendingOperations, run } = useSessionOperations()
   const parent = session.parent
-  const pullRequest = session.pullRequest
+  const pullRequests =
+    session.pullRequests !== undefined && session.pullRequests.length > 0
+      ? session.pullRequests
+      : session.pullRequest === null
+        ? []
+        : [session.pullRequest]
+  const pullRequest = pullRequests[0] ?? null
   const mergeOperation =
     pullRequest?.state === 'Open' &&
     pullRequest.owner !== undefined &&
@@ -119,8 +130,7 @@ export function ConversationPaneHeader({
         operation.sessionId === session.id &&
         operation.number === mergeOperation.number,
     )
-  const linkedTasks =
-    session.tasks ?? (session.task === null ? [] : [session.task])
+  const linkedTasks = getSessionTasks(session)
 
   const confirmMerge = async () => {
     if (mergeOperation === null || merging) return
@@ -212,19 +222,20 @@ export function ConversationPaneHeader({
     <div className="session-title-heading">
       <SessionHeading
         title={session.title}
-        isPaused={session.isPaused}
-        sessionId={session.id}
+        {...(isMobile ? {} : { sessionId: session.id })}
       />
-      <Button
-        className="session-title-edit cursor-pointer"
-        type="button"
-        variant="plain"
-        aria-label="Edit session title"
-        title="Edit session title"
-        onClick={editTitle}
-      >
-        <Pencil aria-hidden="true" size={15} />
-      </Button>
+      {isMobile ? null : (
+        <Button
+          className="session-title-edit cursor-pointer"
+          type="button"
+          variant="plain"
+          aria-label="Edit session title"
+          title="Edit session title"
+          onClick={editTitle}
+        >
+          <Pencil aria-hidden="true" size={15} />
+        </Button>
+      )}
     </div>
   )
 
@@ -241,74 +252,75 @@ export function ConversationPaneHeader({
           >
             <ChevronLeft aria-hidden="true" size={30} strokeWidth={2.5} />
           </Button>
-          <div className="mobile-conversation-heading">
-            {titleHeading}
-            <div className="mobile-conversation-context">
-              <SessionTaskLinks
-                task={session.task}
-                tasks={linkedTasks}
-                sessions={sessions}
-                onMakePrimary={(taskId) => onAction('primary-task', { taskId })}
+          <div className="mobile-conversation-title">
+            {isToday ? (
+              <Star
+                aria-label="Starred"
+                className="mobile-conversation-starred"
+                role="img"
+                size={13}
               />
-              {session.task ? <span aria-hidden="true">·</span> : null}
-              <span>{session.repo.split('/').at(-1)}</span>
-            </div>
-          </div>
-          <Button
-            className="mobile-conversation-status-toggle"
-            type="button"
-            variant="plain"
-            aria-label={
-              statusPanelOpen
-                ? 'Close session status panel'
-                : 'Open session status panel'
-            }
-            aria-expanded={statusPanelOpen}
-            aria-controls="session-status-panel"
-            title={
-              statusPanelOpen
-                ? 'Close session status panel'
-                : 'Open session status panel'
-            }
-            onClick={() => {
-              onToggleStatusPanel()
-            }}
-          >
-            {statusPanelOpen ? (
-              <PanelRightClose aria-hidden="true" size={18} />
-            ) : (
-              <PanelRightOpen aria-hidden="true" size={18} />
-            )}
-            {backgroundTasks.length > 0 ? (
-              <span className="conversation-status-panel-count">
-                {backgroundTasks.length}
-              </span>
             ) : null}
-          </Button>
-          <Button
-            className="mobile-conversation-later cursor-pointer"
-            type="button"
-            variant="plain"
-            onClick={onLater}
-          >
-            Later
-          </Button>
-          {session.category === 'done' && onClose !== undefined ? (
+            {titleHeading}
+          </div>
+          <div className="mobile-conversation-header-actions">
             <Button
-              className="mobile-conversation-close cursor-pointer"
+              className="mobile-conversation-status-toggle"
               type="button"
               variant="plain"
-              onClick={onClose}
+              aria-label={
+                statusPanelOpen
+                  ? 'Close session status panel'
+                  : 'Open session status panel'
+              }
+              aria-expanded={statusPanelOpen}
+              aria-controls="session-status-panel"
+              title={
+                statusPanelOpen
+                  ? 'Close session status panel'
+                  : 'Open session status panel'
+              }
+              onClick={() => {
+                onToggleStatusPanel()
+              }}
             >
-              Close
+              {statusPanelOpen ? (
+                <PanelRightClose aria-hidden="true" size={18} />
+              ) : (
+                <PanelRightOpen aria-hidden="true" size={18} />
+              )}
+              {backgroundTasks.length > 0 ? (
+                <span className="conversation-status-panel-count">
+                  {backgroundTasks.length}
+                </span>
+              ) : null}
             </Button>
-          ) : null}
-          <StarredSessionToggle
-            className="mobile-conversation-today cursor-pointer"
-            size="mobile"
-            isStarred={isToday}
-            onToggleToday={onToggleToday}
-          />
+            <MobileConversationActionsMenu
+              sessionId={session.id}
+              isDone={session.category === 'done'}
+              isStarred={isToday}
+              {...(mobileActionsMenuOpen === undefined
+                ? {}
+                : { open: mobileActionsMenuOpen })}
+              {...(onLater === undefined ? {} : { onLater })}
+              {...(onClose === undefined ? {} : { onClose })}
+              {...(onToggleToday === undefined
+                ? {}
+                : { onToggleStarred: onToggleToday })}
+              onEditTitle={editTitle}
+            />
+          </div>
+          <div className="mobile-conversation-context">
+            <SessionTaskLinks
+              task={session.task}
+              tasks={linkedTasks}
+              sessions={sessions}
+              showTaskMenu={false}
+              onMakePrimary={(taskId) => onAction('primary-task', { taskId })}
+            />
+            {session.task ? <span aria-hidden="true">·</span> : null}
+            <span className="mobile-conversation-repo">{session.repo}</span>
+          </div>
         </>
       ) : (
         <>
@@ -378,19 +390,24 @@ export function ConversationPaneHeader({
                   isStarred={isToday}
                   onToggleToday={onToggleToday}
                 />
-                {pullRequest ? (
+                {pullRequests.map((pr) => (
                   <a
+                    key={`${pr.owner ?? session.repo}/${pr.repo ?? ''}/${String(pr.number)}`}
                     className="conversation-pr-link"
                     href={
-                      pullRequest.url ??
-                      `https://github.com/${session.repo}/pull/${String(pullRequest.number)}`
+                      pr.url ??
+                      `https://github.com/${
+                        pr.owner !== undefined && pr.repo !== undefined
+                          ? `${pr.owner}/${pr.repo}`
+                          : session.repo
+                      }/pull/${String(pr.number)}`
                     }
                     target="_blank"
                     rel="noreferrer"
                   >
-                    #{pullRequest.number} PR
+                    #{pr.number} PR
                   </a>
-                ) : null}
+                ))}
                 {mergeOperation === null ||
                 (mergeFeedback?.kind === 'success' &&
                   mergeFeedback.number === mergeOperation.number) ? null : (

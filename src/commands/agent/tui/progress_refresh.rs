@@ -101,12 +101,10 @@ pub(super) fn start_progress_refresh(
     session_id: String,
 ) -> ProgressRefreshStart {
     app.begin_progress_refresh(&session_id);
-    let Some(fetch_scope) = app
-        .progress_scope_for_session(&session_id)
-        .and_then(|scope| scope.fetch_scope())
-    else {
+    let Some(scope) = app.progress_scope_for_session(&session_id) else {
         return ProgressRefreshStart::MissingScope;
     };
+    let fetch_scope = scope.fetch_scope();
     let now = Utc::now();
     if let Some(wait) = app.progress_refresh_wait(&session_id, now, PROGRESS_REFRESH_INTERVAL)
         && !wait.is_zero()

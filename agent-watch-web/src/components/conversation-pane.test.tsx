@@ -705,19 +705,39 @@ it('refetches the initial tree when a member changes while it loads', async () =
   })
 })
 
-function starredToggleSnapshot(onToggleToday: ReturnType<typeof vi.fn>) {
-  const toggle = container.querySelector<HTMLButtonElement>(
-    '.mobile-conversation-today',
+async function openMobileActionsMenu() {
+  const trigger = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      'button[aria-label="More actions"]',
+    ),
   )
-  return {
-    label: toggle?.getAttribute('aria-label'),
-    pressed: toggle?.getAttribute('aria-pressed'),
-    title: toggle?.getAttribute('title'),
-    calls: onToggleToday.mock.calls,
-  }
+  await act(async () => {
+    trigger.click()
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+  })
 }
 
-it('toggles Starred from the iPhone conversation header', () => {
+function mobileActionMenuItem(label: string) {
+  return requireElement(
+    Array.from(
+      document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+    ).find((item) => item.textContent === label) ?? null,
+  )
+}
+
+function mobileCopyStatus() {
+  const status = container.querySelector<HTMLElement>(
+    '.mobile-conversation-copy-status[role="status"]',
+  )
+  return status === null
+    ? null
+    : {
+        text: status.textContent,
+        hidden: status.classList.contains('sr-only'),
+      }
+}
+
+it('toggles Starred from the mobile actions menu', async () => {
   const onToggleToday = vi.fn()
   renderView(
     () => Promise.resolve(true),
@@ -734,22 +754,29 @@ it('toggles Starred from the iPhone conversation header', () => {
     { isToday: false, onToggleToday },
   )
 
-  const toggle = container.querySelector<HTMLButtonElement>(
-    '.mobile-conversation-today',
-  )
-  act(() => {
-    toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  await openMobileActionsMenu()
+  const toggle = mobileActionMenuItem('Add to Starred')
+  await act(async () => {
+    toggle.click()
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
   })
 
-  expect(starredToggleSnapshot(onToggleToday)).toEqual({
-    label: 'Add to Starred',
-    pressed: 'false',
-    title: 'Add to Starred',
+  const snapshot = () => ({
+    menuItem: toggle.textContent,
+    calls: onToggleToday.mock.calls,
+    menuClosed:
+      container
+        .querySelector('button[aria-label="More actions"]')
+        ?.getAttribute('aria-expanded') === 'false',
+  })
+  expect(snapshot()).toEqual({
+    menuItem: 'Add to Starred',
     calls: [[true]],
+    menuClosed: true,
   })
 })
 
-it('labels a Starred iPhone session for removal', () => {
+it('labels a Starred mobile session for removal', async () => {
   const onToggleToday = vi.fn()
   renderView(
     () => Promise.resolve(true),
@@ -766,15 +793,22 @@ it('labels a Starred iPhone session for removal', () => {
     { isToday: true, onToggleToday },
   )
 
-  expect(starredToggleSnapshot(onToggleToday)).toEqual({
-    label: 'Remove from Starred',
-    pressed: 'true',
-    title: 'Remove from Starred',
+  await openMobileActionsMenu()
+
+  const snapshot = () => ({
+    menuItem: mobileActionMenuItem('Remove from Starred').textContent,
+    calls: onToggleToday.mock.calls,
+    starBeforeTitle:
+      container.querySelector('.mobile-conversation-starred') !== null,
+  })
+  expect(snapshot()).toEqual({
+    menuItem: 'Remove from Starred',
     calls: [],
+    starBeforeTitle: true,
   })
 })
 
-it('sets the primary linked task from desktop and mobile headers', async () => {
+it('sets the primary linked task from the desktop header', async () => {
   const primaryTask = {
     id: 'sample-primary-task',
     number: 2048,
@@ -794,65 +828,52 @@ it('sets the primary linked task from desktop and mobile headers', async () => {
   }
   const onAction = vi.fn(() => Promise.resolve(true))
 
-  for (const isMobile of [false, true]) {
-    renderView(
-      onAction,
-      sessionWithLinkedTasks,
-      undefined,
-      [],
-      actions,
-      isMobile,
-      [],
-      [sessionWithLinkedTasks],
-    )
-    await act(async () => {
-      container.querySelector('summary')?.click()
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
-    })
-    await act(async () => {
-      document.body
-        .querySelector<HTMLButtonElement>('.session-task-links-make-primary')
-        ?.click()
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
-    })
-  }
+  renderView(
+    onAction,
+    sessionWithLinkedTasks,
+    undefined,
+    [],
+    actions,
+    false,
+    [],
+    [sessionWithLinkedTasks],
+  )
+  await act(async () => {
+    container.querySelector('summary')?.click()
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+  })
+  await act(async () => {
+    document.body
+      .querySelector<HTMLButtonElement>('.session-task-links-make-primary')
+      ?.click()
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+  })
 
   expect(onAction.mock.calls).toEqual([
-    ['primary-task', { taskId: 'sample-secondary-task' }],
     ['primary-task', { taskId: 'sample-secondary-task' }],
   ])
 })
 
-it('places the session ID copy control beside the iPhone title', () => {
+it('places the session ID copy action in the mobile menu', async () => {
   renderView(() => Promise.resolve(true), session, undefined, [], actions, true)
 
   const titleRow = container.querySelector(
-    '.mobile-conversation-heading .session-heading-title-row',
+    '.mobile-conversation-title .session-heading-title-row',
   )
-  const copyButton = titleRow?.querySelector<HTMLButtonElement>(
-    '.conversation-copy-session-id',
-  )
+  await openMobileActionsMenu()
+  const copyMenuItem = mobileActionMenuItem('Copy session ID')
 
   const snapshot = () => ({
     title: titleRow?.querySelector('h1')?.textContent,
-    copyButton: {
-      ariaLabel: copyButton?.getAttribute('aria-label'),
-      title: copyButton?.getAttribute('title'),
-      compact: copyButton?.getAttribute('data-compact') ?? null,
-    },
-    compactCopyControl: container.querySelector(
-      '.conversation-copy-session-id[data-compact="true"]',
-    ),
+    copyAction: copyMenuItem.textContent,
+    copyControlBesideTitle:
+      titleRow?.querySelector('.conversation-copy-session-id') !== null,
   })
 
   expect(snapshot()).toEqual({
     title: 'Choose a retry policy',
-    copyButton: {
-      ariaLabel: 'Copy session ID',
-      title: 'Copy session ID',
-      compact: null,
-    },
-    compactCopyControl: null,
+    copyAction: 'Copy session ID',
+    copyControlBesideTitle: false,
   })
 })
 
@@ -980,6 +1001,111 @@ it('provides session links to cards through the conversation pane context', asyn
   expect(getActual()).toEqual({
     href: `?session=${linkedSession.id}`,
     selectedSessions: [linkedSession.id],
+  })
+})
+
+it('executes a bang command from a todo card in the conversation', async () => {
+  const markdown = 'Check `! printf safe`.'
+  const todo: ChatItem = {
+    type: 'todo',
+    seq: 1,
+    title: 'Review the command result',
+    detail: markdown,
+    completed: false,
+    resolution: null,
+    comment: null,
+  }
+  const commandRequests: Array<{ url: string; body: unknown }> = []
+  let messageFetchCount = 0
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (url.includes('/messages?')) {
+      messageFetchCount += 1
+      return Promise.resolve(jsonResponse(messagesResponse([todo])))
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(actions))
+    }
+    if (url.endsWith('/commands/preview')) {
+      const body = typeof init?.body === 'string' ? init.body : '{}'
+      commandRequests.push({
+        url,
+        body: JSON.parse(body),
+      })
+      return Promise.resolve(jsonResponse({ cwd: '/workspace/example' }))
+    }
+    if (url.endsWith('/commands/execute')) {
+      const body = typeof init?.body === 'string' ? init.body : '{}'
+      commandRequests.push({
+        url,
+        body: JSON.parse(body),
+      })
+      return Promise.resolve(
+        jsonResponse({ exitCode: 0, succeeded: true, timedOut: false }),
+      )
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+
+  const runButton = requireElement(
+    (await waitForState(() =>
+      Boolean(container.querySelector('.chat-todo-detail button')),
+    ))
+      ? container.querySelector<HTMLButtonElement>('.chat-todo-detail button')
+      : null,
+  )
+  const messageFetchCountBeforeCommand = messageFetchCount
+  await act(async () => userEvent.click(runButton))
+  const dialog = requireElement(
+    (await waitForState(() =>
+      Boolean(document.body.querySelector('[role="dialog"]')),
+    ))
+      ? document.body.querySelector<HTMLElement>('[role="dialog"]')
+      : null,
+  )
+  const confirmButton = Array.from(dialog.querySelectorAll('button')).find(
+    (button) => button.textContent === 'Run command',
+  )
+  if (!(confirmButton instanceof HTMLButtonElement)) {
+    throw new Error('Expected the confirmation button')
+  }
+  await act(async () => userEvent.click(confirmButton))
+  const completed = await waitForState(
+    () =>
+      runButton.textContent === 'Succeeded' &&
+      messageFetchCount > messageFetchCountBeforeCommand,
+  )
+
+  const getActual = () => ({
+    commandCompleted: completed,
+    conversationRefreshed: messageFetchCount > messageFetchCountBeforeCommand,
+    commandRequests,
+  })
+  expect(getActual()).toEqual({
+    commandCompleted: true,
+    conversationRefreshed: true,
+    commandRequests: [
+      {
+        url: '/api/sessions/sample-session/commands/preview',
+        body: { messageText: markdown, commands: ['printf safe'] },
+      },
+      {
+        url: '/api/sessions/sample-session/commands/execute',
+        body: { messageText: markdown, commands: ['printf safe'] },
+      },
+    ],
   })
 })
 
@@ -1742,13 +1868,10 @@ it('copies the session ID from desktop and mobile headers', async () => {
   const desktopButtonText = desktopButton.textContent
 
   renderView(onAction, session, undefined, [], actions, true)
-  const mobileButton = requireElement(
-    container.querySelector<HTMLButtonElement>(
-      ".conversation-pane[data-mobile='true'] .conversation-copy-session-id",
-    ),
-  )
+  await openMobileActionsMenu()
+  const mobileCopyItem = mobileActionMenuItem('Copy session ID')
   await act(async () => {
-    mobileButton.click()
+    mobileCopyItem.click()
     await new Promise((resolve) => window.setTimeout(resolve, 0))
   })
 
@@ -1756,15 +1879,13 @@ it('copies the session ID from desktop and mobile headers', async () => {
     copiedText,
     writeCalls: writeText.mock.calls,
     desktopButtonText,
-    mobileButtonText: mobileButton.textContent,
-    mobileAccessibleName: mobileButton.getAttribute('aria-label'),
+    mobileLiveStatus: mobileCopyStatus(),
   })
   expect(snapshot()).toEqual({
     copiedText: session.id,
     writeCalls: [[session.id], [session.id]],
     desktopButtonText: 'Copied',
-    mobileButtonText: 'Copied',
-    mobileAccessibleName: 'Session ID copied',
+    mobileLiveStatus: { text: 'Session ID copied', hidden: false },
   })
 })
 
@@ -1792,14 +1913,11 @@ it('copies the session ID through the HTTP-compatible clipboard fallback', async
     true,
   )
 
-  const copyButton = requireElement(
-    container.querySelector<HTMLButtonElement>(
-      ".conversation-pane[data-mobile='true'] .conversation-copy-session-id",
-    ),
-  )
+  await openMobileActionsMenu()
+  const copyMenuItem = mobileActionMenuItem('Copy session ID')
   let copyCallsAtClickReturn = 0
   act(() => {
-    copyButton.click()
+    copyMenuItem.click()
     copyCallsAtClickReturn = copyCommand.mock.calls.length
   })
   await act(async () => {
@@ -1811,14 +1929,14 @@ it('copies the session ID through the HTTP-compatible clipboard fallback', async
     copyCalls: copyCommand.mock.calls,
     copyCallsAtClickReturn,
     temporaryTextareaCount: document.body.querySelectorAll('textarea').length,
-    buttonText: copyButton.textContent,
+    liveStatus: mobileCopyStatus(),
   })
   expect(snapshot()).toEqual({
     copiedText: session.id,
     copyCalls: [['copy']],
     copyCallsAtClickReturn: 1,
     temporaryTextareaCount: 1,
-    buttonText: 'Copied',
+    liveStatus: { text: 'Session ID copied', hidden: false },
   })
 })
 
@@ -1847,13 +1965,10 @@ it('falls back when the Clipboard API rejects the copy request', async () => {
     true,
   )
 
-  const copyButton = requireElement(
-    container.querySelector<HTMLButtonElement>(
-      ".conversation-pane[data-mobile='true'] .conversation-copy-session-id",
-    ),
-  )
+  await openMobileActionsMenu()
+  const copyMenuItem = mobileActionMenuItem('Copy session ID')
   await act(async () => {
-    copyButton.click()
+    copyMenuItem.click()
     await new Promise((resolve) => window.setTimeout(resolve, 0))
   })
 
@@ -1861,13 +1976,13 @@ it('falls back when the Clipboard API rejects the copy request', async () => {
     clipboardCalls: writeText.mock.calls,
     fallbackCalls: copyCommand.mock.calls,
     copiedText,
-    buttonText: copyButton.textContent,
+    liveStatus: mobileCopyStatus(),
   })
   expect(snapshot()).toEqual({
     clipboardCalls: [[session.id]],
     fallbackCalls: [['copy']],
     copiedText: session.id,
-    buttonText: 'Copied',
+    liveStatus: { text: 'Session ID copied', hidden: false },
   })
 })
 
@@ -1889,25 +2004,23 @@ it('announces when neither clipboard method can copy the session ID', async () =
     true,
   )
 
-  const copyButton = requireElement(
-    container.querySelector<HTMLButtonElement>(
-      ".conversation-pane[data-mobile='true'] .conversation-copy-session-id",
-    ),
-  )
+  await openMobileActionsMenu()
+  const copyMenuItem = mobileActionMenuItem('Copy session ID')
   await act(async () => {
-    copyButton.click()
+    copyMenuItem.click()
     await new Promise((resolve) => window.setTimeout(resolve, 0))
   })
 
   const snapshot = () => ({
-    buttonText: copyButton.textContent,
-    accessibleName: copyButton.getAttribute('aria-label'),
-    liveStatus: container.querySelector('.sr-only[role="status"]')?.textContent,
+    menuClosed:
+      container
+        .querySelector('button[aria-label="More actions"]')
+        ?.getAttribute('aria-expanded') === 'false',
+    liveStatus: mobileCopyStatus(),
   })
   expect(snapshot()).toEqual({
-    buttonText: 'Copy failed',
-    accessibleName: 'Could not copy session ID',
-    liveStatus: 'Could not copy session ID',
+    menuClosed: true,
+    liveStatus: { text: 'Could not copy session ID', hidden: false },
   })
 })
 
@@ -1932,27 +2045,22 @@ it('announces copy failure and removes the textarea when execCommand throws', as
     true,
   )
 
-  const copyButton = requireElement(
-    container.querySelector<HTMLButtonElement>(
-      ".conversation-pane[data-mobile='true'] .conversation-copy-session-id",
-    ),
-  )
+  await openMobileActionsMenu()
+  const copyMenuItem = mobileActionMenuItem('Copy session ID')
   await act(async () => {
-    copyButton.click()
+    copyMenuItem.click()
     await new Promise((resolve) => window.setTimeout(resolve, 0))
   })
 
   const snapshot = () => ({
     copyCalls: copyCommand.mock.calls,
     temporaryTextareaCount: document.body.querySelectorAll('textarea').length,
-    buttonText: copyButton.textContent,
-    liveStatus: container.querySelector('.sr-only[role="status"]')?.textContent,
+    liveStatus: mobileCopyStatus(),
   })
   expect(snapshot()).toEqual({
     copyCalls: [['copy']],
     temporaryTextareaCount: 1,
-    buttonText: 'Copy failed',
-    liveStatus: 'Could not copy session ID',
+    liveStatus: { text: 'Could not copy session ID', hidden: false },
   })
 })
 
@@ -4345,7 +4453,7 @@ it('opens a registered web UI when other status tabs are available', () => {
     ],
     selectedTab: 'Design editor',
     webUiPane: true,
-    iframe: 'http://127.0.0.1:5000/design/sample/',
+    iframe: 'http://localhost:5000/design/sample/',
   })
 })
 
@@ -4731,7 +4839,7 @@ it('opens and closes the existing status panel over the mobile conversation', as
   })
 })
 
-it('shows the paused state in the conversation header', () => {
+it('omits the paused badge from the conversation header', () => {
   renderView(
     vi.fn().mockResolvedValue(true),
     { ...session, category: 'done', kind: null, isPaused: true },
@@ -4742,16 +4850,17 @@ it('shows the paused state in the conversation header', () => {
 
   const snapshot = () => ({
     title: container.querySelector('.conversation-header h1')?.textContent,
-    paused: container.querySelector('.conversation-header [data-slot="chip"]')
-      ?.textContent,
+    pausedBadge:
+      container.querySelector('.conversation-header [data-slot="chip"]') !==
+      null,
   })
   expect(snapshot()).toEqual({
     title: 'Choose a retry policy',
-    paused: 'Paused',
+    pausedBadge: false,
   })
 })
 
-it('shows the paused state in the mobile conversation header', () => {
+it('omits the paused badge from the mobile conversation header', () => {
   renderView(
     vi.fn().mockResolvedValue(true),
     { ...session, category: 'done', kind: null, isPaused: true },
@@ -4765,16 +4874,69 @@ it('shows the paused state in the mobile conversation header', () => {
     mobile: container
       .querySelector('.conversation-pane')
       ?.getAttribute('data-mobile'),
-    title: container.querySelector('.mobile-conversation-heading h1')
+    title: container.querySelector('.mobile-conversation-title h1')
       ?.textContent,
-    paused: container.querySelector(
-      '.mobile-conversation-heading [data-slot="chip"]',
-    )?.textContent,
+    pausedBadge:
+      container.querySelector(
+        '.mobile-conversation-title [data-slot="chip"]',
+      ) !== null,
   })
   expect(snapshot()).toEqual({
     mobile: 'true',
     title: 'Choose a retry policy',
-    paused: 'Paused',
+    pausedBadge: false,
+  })
+})
+
+it('shows only the task and full repository in the mobile context row', () => {
+  const task = {
+    id: 'example-open-task',
+    number: 2048,
+    title: 'Improve request reliability across several delivery paths',
+    priority: 1,
+  }
+  renderView(
+    vi.fn().mockResolvedValue(true),
+    {
+      ...session,
+      task,
+      tasks: [task, { ...task, id: 'example-secondary-task', number: 2049 }],
+      repo: 'example/long-running-service-name',
+    },
+    undefined,
+    [],
+    null,
+    true,
+  )
+
+  const taskLink = container.querySelector<HTMLElement>(
+    '.mobile-conversation-context a',
+  )
+  const repo = container.querySelector<HTMLElement>('.mobile-conversation-repo')
+  const snapshot = () => ({
+    task: taskLink?.textContent,
+    repo: repo?.textContent,
+    disclosure: container.querySelector('.mobile-conversation-context summary')
+      ?.textContent,
+    taskTextOverflow:
+      taskLink === null ? null : window.getComputedStyle(taskLink).textOverflow,
+    repoFlexShrink:
+      repo === null ? null : window.getComputedStyle(repo).flexShrink,
+    separators: Array.from(
+      container.querySelectorAll(
+        '.mobile-conversation-context > span[aria-hidden="true"]',
+      ),
+      (separator) => separator.textContent,
+    ),
+  })
+
+  expect(snapshot()).toEqual({
+    task: 'P1 #2048 Improve request reliability across several delivery paths',
+    repo: 'example/long-running-service-name',
+    disclosure: undefined,
+    taskTextOverflow: 'ellipsis',
+    repoFlexShrink: '0',
+    separators: ['·'],
   })
 })
 

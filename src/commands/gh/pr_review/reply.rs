@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::future::Future;
 
 use clap::Args;
 
@@ -9,8 +10,10 @@ use super::markdown::serializer::{PreservedThreadActions, SerializeOptions, Thre
 use super::markdown::{MarkdownParser, MarkdownSerializer};
 use super::models::PrData;
 use super::storage::ThreadStorage;
+use crate::commands::agent::{ensure_no_review_access, is_vibe_enabled};
 use crate::infra::git;
 use crate::infra::github::GitHubClient;
+use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::Document;
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -51,6 +54,10 @@ pub struct ReplyPushArgs {
     /// Force push even with conflicts
     #[arg(long = "force")]
     pub force: bool,
+
+    /// Skip editor approval when vibe mode and the target repository are allowed
+    #[arg(long)]
+    pub no_review: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,6 +83,43 @@ fn verify_push_approval(path: &std::path::Path, content: &str) -> anyhow::Result
         .approval_manager()
         .verify_content_matches_file(content.as_bytes())?;
     Ok(())
+}
+
+fn verify_push_approval_if_required(
+    path: &std::path::Path,
+    content: &str,
+    no_review: bool,
+) -> anyhow::Result<()> {
+    if no_review {
+        return verify_push_content_matches_file(path, content);
+    }
+
+    verify_push_approval(path, content)
+}
+
+fn verify_push_content_matches_file(path: &std::path::Path, content: &str) -> anyhow::Result<()> {
+    if std::fs::read(path)? != content.as_bytes() {
+        anyhow::bail!("threads.md changed while preparing the push; no changes were applied");
+    }
+
+    Ok(())
+}
+
+async fn run_push_with_access<Fut>(
+    no_review: bool,
+    owner: &str,
+    repo: &str,
+    access_check: impl FnOnce(&str, &str) -> anyhow::Result<()>,
+    push: impl FnOnce() -> Fut,
+) -> anyhow::Result<()>
+where
+    Fut: Future<Output = anyhow::Result<()>>,
+{
+    if no_review {
+        access_check(owner, repo)?;
+    }
+
+    push().await
 }
 
 pub async fn run_pull(args: &ReplyPullArgs) -> anyhow::Result<()> {
@@ -234,7 +278,22 @@ fn prepare_existing_thread_actions(
 pub async fn run_push(args: &ReplyPushArgs) -> anyhow::Result<()> {
     let (owner, repo) = git::get_repo_owner_and_name(args.repo.as_deref())?;
 
-    let storage = ThreadStorage::new(&owner, &repo, args.pr_number);
+    run_push_with_access(
+        args.no_review,
+        &owner,
+        &repo,
+        |owner, repo| ensure_no_review_access(is_vibe_enabled, load_config, owner, repo),
+        || run_push_after_access(args, &owner, &repo),
+    )
+    .await
+}
+
+async fn run_push_after_access(
+    args: &ReplyPushArgs,
+    owner: &str,
+    repo: &str,
+) -> anyhow::Result<()> {
+    let storage = ThreadStorage::new(owner, repo, args.pr_number);
 
     // Read and parse local data
     if !storage.exists() {
@@ -245,7 +304,7 @@ pub async fn run_push(args: &ReplyPushArgs) -> anyhow::Result<()> {
     let local = MarkdownParser::parse(&content)?;
 
     // Fetch latest remote state
-    let remote = fetch_pr_data(&owner, &repo, args.pr_number, true).await?;
+    let remote = fetch_pr_data(owner, repo, args.pr_number, true).await?;
 
     // Detect changes
     let changeset = ReplyChangeSet::detect(&local, &remote, &local.frontmatter.pulled_at);
@@ -272,16 +331,14 @@ pub async fn run_push(args: &ReplyPushArgs) -> anyhow::Result<()> {
         PushPlan::Apply => {
             changeset.display();
             let client = GitHubClient::get()?;
-            verify_push_approval(&storage.threads_path(), &content)?;
-            changeset
-                .apply(client, &owner, &repo, args.pr_number)
-                .await?;
+            verify_push_approval_if_required(&storage.threads_path(), &content, args.no_review)?;
+            changeset.apply(client, owner, repo, args.pr_number).await?;
         }
     }
 
     // Re-fetch and update local file after push
     let include_resolved = local.threads.iter().any(|t| t.resolve);
-    let updated_remote = fetch_pr_data(&owner, &repo, args.pr_number, include_resolved).await?;
+    let updated_remote = fetch_pr_data(owner, repo, args.pr_number, include_resolved).await?;
 
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let frontmatter = ThreadsFrontmatter {
@@ -474,8 +531,12 @@ mod pull_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::gh::GhCommands;
     use crate::commands::gh::pr_review::changeset::ReplyAction;
+    use crate::commands::gh::pr_review::{PrReviewCommands, ReplyCommands};
+    use crate::shared::config::Config;
     use crate::shared::human_in_the_loop::HumanInTheLoopError;
+    use clap::Parser;
     use indoc::indoc;
     use rstest::rstest;
     use tempfile::TempDir;
@@ -503,6 +564,146 @@ mod tests {
         };
 
         assert_eq!(push_plan(&changeset, dry_run), expected_plan);
+    }
+
+    #[test]
+    fn push_parses_no_review_flag() {
+        let parsed = crate::cli::Cli::try_parse_from([
+            "a",
+            "gh",
+            "pr-review",
+            "reply",
+            "push",
+            "42",
+            "--no-review",
+        ])
+        .expect("--no-review should be a valid push option");
+
+        assert!(
+            parsed.command
+                == crate::cli::Commands::Gh(GhCommands::PrReview {
+                    command: PrReviewCommands::Reply {
+                        command: ReplyCommands::Push(ReplyPushArgs {
+                            pr_number: 42,
+                            repo: None,
+                            dry_run: false,
+                            force: false,
+                            no_review: true,
+                        }),
+                    },
+                }),
+        );
+    }
+
+    #[rstest]
+    #[case::vibe_and_repo_allowed(
+        true,
+        indoc! {"
+            orgs:
+              example-org:
+                vibe: true
+        "},
+        Ok(())
+    )]
+    #[case::vibe_disabled(
+        false,
+        indoc! {"
+            orgs:
+              example-org:
+                vibe: true
+        "},
+        Err("The --no-review option is only available when vibe mode is enabled.".to_string())
+    )]
+    #[case::repo_access_denied(
+        true,
+        "{}",
+        Err("Vibe mode is disabled by configuration for repository example-org/example-repo.".to_string())
+    )]
+    fn no_review_requires_vibe_and_repo_access(
+        #[case] vibe_enabled: bool,
+        #[case] config_yaml: &str,
+        #[case] expected: Result<(), String>,
+    ) {
+        let config: Config = serde_yaml::from_str(config_yaml).unwrap();
+
+        let result = ensure_no_review_access(
+            || Ok(vibe_enabled),
+            || Ok(config),
+            "example-org",
+            "example-repo",
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(result, expected);
+    }
+
+    #[tokio::test]
+    async fn no_review_access_denial_stops_push_before_work() {
+        let push_started = std::cell::Cell::new(false);
+
+        let result = run_push_with_access(
+            true,
+            "example-org",
+            "example-repo",
+            |_, _| anyhow::bail!("vibe access denied"),
+            || async {
+                push_started.set(true);
+                Ok(())
+            },
+        )
+        .await
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, push_started.get()),
+            (Err("vibe access denied".to_string()), false)
+        );
+    }
+
+    #[rstest]
+    #[case::approval_still_required(false, false)]
+    #[case::approval_skipped_for_no_review(true, true)]
+    fn push_approval_is_skipped_only_for_no_review(
+        #[case] no_review: bool,
+        #[case] expected_success: bool,
+    ) {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("threads.md");
+        let content = indoc! {"
+            ---
+            pr: 1
+            repo: example/repo
+            pulled_at: '2024-01-15T10:00:00Z'
+            submit: false
+            ---
+            Draft reply"};
+        std::fs::write(&path, content).unwrap();
+
+        assert_eq!(
+            verify_push_approval_if_required(&path, content, no_review).is_ok(),
+            expected_success,
+        );
+    }
+
+    #[test]
+    fn no_review_still_rejects_a_threads_file_changed_after_read() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("threads.md");
+        let content = indoc! {"
+            ---
+            pr: 1
+            repo: example/repo
+            pulled_at: '2024-01-15T10:00:00Z'
+            submit: false
+            ---
+            Original reply"};
+        std::fs::write(&path, content.replace("Original reply", "New reply")).unwrap();
+
+        assert_eq!(
+            verify_push_approval_if_required(&path, content, true)
+                .map_err(|error| error.to_string()),
+            Err("threads.md changed while preparing the push; no changes were applied".to_string()),
+        );
     }
 
     #[rstest]

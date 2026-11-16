@@ -577,6 +577,30 @@ function clickButton(selector: string) {
   })
 }
 
+async function clickMobileSessionAction(label: string) {
+  const trigger = container.querySelector<HTMLButtonElement>(
+    'button[aria-label="More actions"]',
+  )
+  if (trigger === null) {
+    throw new Error('Mobile actions trigger not found')
+  }
+  act(() => {
+    trigger.click()
+  })
+  const item = Array.from(
+    document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+  ).find((candidate) => candidate.textContent === label)
+  if (item === undefined) {
+    throw new Error(
+      `Menu item not found: ${label}; screen after opening=${String(container.querySelector('.agent-watch-shell')?.getAttribute('data-mobile-screen'))}`,
+    )
+  }
+  await act(async () => {
+    item.click()
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+  })
+}
+
 function renderMobileApp(view: 'Inbox' | 'Board' = 'Inbox') {
   renderApp()
   act(() => {
@@ -1805,22 +1829,30 @@ it('opens Later for the session shown in a mobile conversation', async () => {
   act(() => {
     container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
   })
-  act(() => {
-    container
-      .querySelector<HTMLButtonElement>('.mobile-conversation-later')
-      ?.click()
+  const conversationState = () => ({
+    screen: container
+      .querySelector('.agent-watch-shell')
+      ?.getAttribute('data-mobile-screen'),
+    url: window.location.search,
   })
+  const initialConversationState = conversationState()
+  await clickMobileSessionAction('Later')
   await act(async () => {
     await flushAsyncState()
   })
 
   const snapshot = () => ({
+    initialConversationState,
     menuTitle: container.querySelector('.later-menu-title')?.textContent,
     menuLabel: container
       .querySelector('.later-menu')
       ?.getAttribute('aria-label'),
   })
   expect(snapshot()).toEqual({
+    initialConversationState: {
+      screen: 'conversation',
+      url: '?session=session-mobile&screen=conversation',
+    },
     menuTitle: 'Later: Reply to the question',
     menuLabel: 'Later: Reply to the question',
   })
@@ -1842,11 +1874,7 @@ it('closes the mobile Later menu with Escape', async () => {
   act(() => {
     container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
   })
-  act(() => {
-    container
-      .querySelector<HTMLButtonElement>('.mobile-conversation-later')
-      ?.click()
-  })
+  await clickMobileSessionAction('Later')
   await act(async () => {
     await flushAsyncState()
   })
@@ -1881,11 +1909,7 @@ it('returns to the Inbox after submitting Later for a mobile conversation', asyn
   act(() => {
     container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
   })
-  act(() => {
-    container
-      .querySelector<HTMLButtonElement>('.mobile-conversation-later')
-      ?.click()
-  })
+  await clickMobileSessionAction('Later')
   await act(async () => {
     await flushAsyncState()
   })
@@ -2715,68 +2739,101 @@ it('closes all Done sessions from the Inbox heading and reports failures', async
   })
 })
 
-it('offers to keep an unmerged worktree and retries Close with that choice', async () => {
-  const closeBodies: string[] = []
-  const fetchMock = vi.fn<typeof fetch>().mockImplementation((input, init) => {
-    if (!requestUrl(input).endsWith('/close')) {
-      return mockSessionActionFetch(input)
-    }
-    closeBodies.push(typeof init?.body === 'string' ? init.body : '')
-    return Promise.resolve(
-      closeBodies.length === 1
-        ? new Response(
-            JSON.stringify({
-              error:
-                'Branch `sample-branch` is not merged (pull request is open); close the session while keeping its worktree to continue',
-              code: 'unmerged_worktree',
-            }),
-            { status: 409 },
-          )
-        : new Response(null, { status: 204 }),
-    )
-  })
-  vi.stubGlobal('fetch', fetchMock)
-  renderApp()
-  publishSessions({
-    revision: 1,
-    sessions: [session('session-unmerged', 'Unmerged session', 'done')],
-  })
-  act(() => {
-    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
-  })
-  await act(async () => {
-    await flushAsyncState()
-  })
-  await act(async () => {
-    container.querySelector<HTMLButtonElement>('.conversation-close')?.click()
-    await flushAsyncState()
-  })
-  function closeFailureSnapshot() {
-    return {
+it.each([
+  {
+    caseName: 'unmerged worktree',
+    code: 'unmerged_worktree',
+    message:
+      'Branch `sample-branch` is not merged (pull request is open); close the session while keeping its worktree to continue',
+    sessionId: 'session-unmerged',
+  },
+  {
+    caseName: 'dirty worktree',
+    code: 'dirty_worktree',
+    message:
+      'Worktree contains uncommitted changes or untracked files: /worktrees/sample; commit or move them before closing',
+    sessionId: 'session-dirty',
+  },
+  {
+    caseName: 'worktree with running processes',
+    code: 'worktree_process_guard',
+    message:
+      "Worktree '/worktrees/sample' contains running processes: 42 (editor). Stop them and retry, or close the session while keeping the worktree.",
+    sessionId: 'session-busy-processes',
+  },
+  {
+    caseName: 'worktree whose processes cannot be checked',
+    code: 'worktree_process_guard',
+    message:
+      "Could not inspect processes in worktree '/worktrees/sample'. Ensure lsof and ps are available and working, or close the session while keeping the worktree.",
+    sessionId: 'session-uncheckable-processes',
+  },
+])(
+  'offers to keep a $caseName and retries Close with that choice',
+  async ({ code, message, sessionId }) => {
+    const closeBodies: string[] = []
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockImplementation((input, init) => {
+        if (!requestUrl(input).endsWith('/close')) {
+          return mockSessionActionFetch(input)
+        }
+        closeBodies.push(typeof init?.body === 'string' ? init.body : '')
+        return Promise.resolve(
+          closeBodies.length === 1
+            ? new Response(
+                JSON.stringify({
+                  error: message,
+                  code,
+                }),
+                { status: 409 },
+              )
+            : new Response(null, { status: 204 }),
+        )
+      })
+    vi.stubGlobal('fetch', fetchMock)
+    renderApp()
+    publishSessions({
+      revision: 1,
+      sessions: [session(sessionId, 'Session with retained worktree', 'done')],
+    })
+    act(() => {
+      container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+    })
+    await act(async () => {
+      await flushAsyncState()
+    })
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('.conversation-close')?.click()
+      await flushAsyncState()
+    })
+    const initialFailure = {
       error: container.querySelector('.load-message.is-error p')?.textContent,
       choice: container.querySelector('.load-message.is-error button')
         ?.textContent,
-      closeBodies: closeBodies.map((body) => JSON.parse(body) as unknown),
     }
-  }
-  expect(closeFailureSnapshot()).toEqual({
-    error:
-      'Branch `sample-branch` is not merged (pull request is open); close the session while keeping its worktree to continue',
-    choice: 'Close and keep worktree',
-    closeBodies: [{ keepWorktree: false }],
-  })
-  await act(async () => {
-    container
-      .querySelector<HTMLButtonElement>('.load-message.is-error button')
-      ?.click()
-    await flushAsyncState()
-  })
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('.load-message.is-error button')
+        ?.click()
+      await flushAsyncState()
+    })
 
-  expect(closeBodies.map((body) => JSON.parse(body) as unknown)).toEqual([
-    { keepWorktree: false },
-    { keepWorktree: true },
-  ])
-})
+    function closeRetrySnapshot() {
+      return {
+        initialFailure,
+        closeBodies: closeBodies.map((body) => JSON.parse(body) as unknown),
+      }
+    }
+    expect(closeRetrySnapshot()).toEqual({
+      initialFailure: {
+        error: message,
+        choice: 'Close and keep worktree',
+      },
+      closeBodies: [{ keepWorktree: false }, { keepWorktree: true }],
+    })
+  },
+)
 
 it('closes the selected Done session with E and leaves other categories alone', async () => {
   const fetchMock = vi

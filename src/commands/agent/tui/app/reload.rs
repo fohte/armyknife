@@ -403,8 +403,10 @@ mod tests {
         let offset = TEST_SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
         let now = Utc::now();
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
+            created_pr_urls: Vec::new(),
             session_id: id.to_string(),
             work_type: None,
             work_type_pinned: false,

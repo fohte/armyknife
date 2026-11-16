@@ -261,8 +261,10 @@ mod tests {
 
     fn session(session_id: &str, cwd: &str, ancestor_session_ids: Vec<String>) -> Session {
         Session {
+            launch_id: None,
             archived_at: None,
             pr_context: None,
+            created_pr_urls: Vec::new(),
             session_id: session_id.to_string(),
             work_type: None,
             work_type_pinned: false,

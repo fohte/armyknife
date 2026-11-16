@@ -66,9 +66,11 @@ mod tests {
 
     fn session(ancestor_session_ids: Vec<String>) -> Session {
         Session {
+            launch_id: None,
             archived_at: None,
             session_id: "target-session".to_string(),
             pr_context: None,
+            created_pr_urls: Vec::new(),
             crit_urls: Vec::new(),
             web_uis: Vec::new(),
             pending_human_review_ids: BTreeSet::new(),

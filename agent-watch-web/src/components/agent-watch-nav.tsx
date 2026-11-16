@@ -60,16 +60,14 @@ export function AgentWatchNav({
   inboxCollapsed = false,
   onToggleInbox = () => undefined,
 }: AgentWatchNavProps) {
-  const recentSessions = isMobile
-    ? []
-    : sessions
-        .filter((session) => session.lastPromptedAt != null)
-        .toSorted(
-          (left, right) =>
-            Date.parse(right.lastPromptedAt ?? '') -
-            Date.parse(left.lastPromptedAt ?? ''),
-        )
-        .slice(0, 10)
+  const recentSessions = sessions
+    .filter((session) => session.lastPromptedAt != null)
+    .toSorted(
+      (left, right) =>
+        Date.parse(right.lastPromptedAt ?? '') -
+        Date.parse(left.lastPromptedAt ?? ''),
+    )
+    .slice(0, 10)
 
   return (
     <nav className="agent-watch-nav" aria-label="Main navigation">

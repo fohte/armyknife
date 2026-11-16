@@ -20,6 +20,7 @@ struct TreeSessionView {
     repo: String,
     decision_count: i64,
     pull_request: Option<PullRequestView>,
+    pull_requests: Vec<PullRequestView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -274,11 +275,20 @@ pub(super) async fn session_tree<S: SessionSource>(
                     .map_or(0, |counts| counts.total),
                 pull_request: pull_requests
                     .get(&session.session_id)
-                    .and_then(Option::as_ref)
-                    .map(|progress| PullRequestView {
-                        number: progress.pull_request.number,
-                        state: progress.pull_request.state.clone(),
+                    .and_then(|pull_requests| current_branch_pull_request(pull_requests))
+                    .map(|pull_request| PullRequestView {
+                        number: pull_request.progress.pull_request.number,
+                        state: pull_request.progress.pull_request.state.clone(),
                     }),
+                pull_requests: pull_requests
+                    .get(&session.session_id)
+                    .into_iter()
+                    .flatten()
+                    .map(|pull_request| PullRequestView {
+                        number: pull_request.progress.pull_request.number,
+                        state: pull_request.progress.pull_request.state.clone(),
+                    })
+                    .collect(),
             }
         })
         .collect();
