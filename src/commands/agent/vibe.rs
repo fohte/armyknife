@@ -21,6 +21,12 @@ pub(crate) enum VibeState {
     RepoDisabled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct VibeSettingChange {
+    previous_enabled: bool,
+    revision: i64,
+}
+
 pub(crate) fn state_for(
     session: &Session,
     repo_identity: Option<(&str, &str)>,
@@ -255,14 +261,35 @@ pub(crate) fn set_in(
     sessions_dir: &std::path::Path,
     session_id: &str,
     enabled: bool,
-) -> Result<()> {
+) -> Result<VibeSettingChange> {
     let lock = store::lock_session_for_update(sessions_dir, session_id)?;
     let mut session = lock
         .load()?
         .ok_or_else(|| CcError::SessionNotFound(session_id.to_string()))?;
+    let previous_enabled = session.vibe_enabled;
     session.vibe_enabled = enabled;
+    let revision = lock.save_with_revision(&session)?;
+    Ok(VibeSettingChange {
+        previous_enabled,
+        revision,
+    })
+}
+
+pub(crate) fn restore_in_if_unchanged(
+    sessions_dir: &std::path::Path,
+    session_id: &str,
+    change: VibeSettingChange,
+) -> Result<bool> {
+    let lock = store::lock_session_for_update(sessions_dir, session_id)?;
+    if lock.revision()? != Some(change.revision) {
+        return Ok(false);
+    }
+    let Some(mut session) = lock.load()? else {
+        return Ok(false);
+    };
+    session.vibe_enabled = change.previous_enabled;
     lock.save(&session)?;
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]

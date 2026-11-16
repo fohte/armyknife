@@ -226,15 +226,30 @@ impl SessionLock {
     }
 
     pub(crate) fn save(&self, session: &Session) -> Result<()> {
+        self.save_with_revision(session).map(|_| ())
+    }
+
+    pub(crate) fn save_with_revision(&self, session: &Session) -> Result<i64> {
         ensure!(
             session.session_id == self.session_id,
             "session ID cannot change while its store lock is held"
         );
         self.ensure_transaction()?;
-        write_session(&self.connection, session)?;
+        let revision = write_session(&self.connection, session)?;
         self.connection.execute_batch("COMMIT")?;
         self.transaction_active.set(false);
-        Ok(())
+        Ok(revision)
+    }
+
+    pub(crate) fn revision(&self) -> Result<Option<i64>> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT rev FROM sessions WHERE session_id = ?1",
+                [&self.session_id],
+                |row| row.get(0),
+            )
+            .optional()?)
     }
 
     pub(crate) fn delete(&self) -> Result<bool> {

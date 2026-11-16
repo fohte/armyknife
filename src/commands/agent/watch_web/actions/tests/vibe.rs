@@ -9,8 +9,8 @@ use tower::ServiceExt;
 use super::{
     ActionContext, action_context, normalized_queued_prompts, post, response_snapshot, session,
 };
-use crate::commands::agent::store;
 use crate::commands::agent::types::SessionStatus;
+use crate::commands::agent::{store, vibe};
 use crate::shared::config::Config;
 
 fn allowed_config() -> Config {
@@ -59,6 +59,110 @@ async fn enabling_vibe_updates_session_and_sends_a_queued_prompt(action_context:
                 "content": "watch-web からユーザーが vibe mode を on にしました。",
                 "sentAt": "<sent-at>",
             }]),
+        ),
+    );
+}
+
+#[rstest]
+#[case::enabling(
+    false,
+    true,
+    false,
+    "watch-web からユーザーが vibe mode を on にしました。"
+)]
+#[case::disabling(
+    true,
+    false,
+    true,
+    "watch-web からユーザーが vibe mode を off にしました。"
+)]
+#[tokio::test]
+async fn failed_prompt_delivery_restores_the_previous_vibe_setting(
+    action_context: ActionContext,
+    #[case] previous_enabled: bool,
+    #[case] requested_enabled: bool,
+    #[case] expected_enabled: bool,
+    #[case] expected_content: &str,
+) {
+    let mut target_session = session("fixture-session");
+    target_session.vibe_enabled = previous_enabled;
+    action_context.save_session(&target_session);
+    action_context.set_message_error("message transport failed");
+
+    let response = action_context
+        .router_with_vibe_config(allowed_config)
+        .oneshot(post(
+            "/sessions/fixture-session/vibe",
+            json!({ "enabled": requested_enabled }),
+        ))
+        .await
+        .unwrap();
+    let actual = (
+        response_snapshot(response, &action_context).await,
+        action_context.load_session("fixture-session").vibe_enabled,
+        store::watch_web_queued_prompts_from(
+            &action_context.temp_dir.path().join("sessions"),
+            "fixture-session",
+        )
+        .unwrap(),
+    );
+
+    assert_eq!(
+        actual,
+        (
+            json!({
+                "status": StatusCode::BAD_GATEWAY.as_u16(),
+                "body": { "error": "message transport failed" },
+                "calls": [{
+                    "kind": "message",
+                    "sessionId": "fixture-session",
+                    "content": expected_content,
+                }],
+            }),
+            expected_enabled,
+            Vec::<store::WatchWebQueuedPrompt>::new(),
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn failed_delivery_does_not_restore_over_a_concurrent_vibe_setting(
+    action_context: ActionContext,
+) {
+    action_context.save_session(&session("fixture-session"));
+    action_context.set_message_error("message transport failed");
+    let sessions_dir = action_context.temp_dir.path().join("sessions");
+    action_context.set_after_message(move || {
+        vibe::set_in(&sessions_dir, "fixture-session", true).unwrap();
+    });
+
+    let response = action_context
+        .router_with_vibe_config(allowed_config)
+        .oneshot(post(
+            "/sessions/fixture-session/vibe",
+            json!({ "enabled": true }),
+        ))
+        .await
+        .unwrap();
+    let actual = (
+        response_snapshot(response, &action_context).await,
+        action_context.load_session("fixture-session").vibe_enabled,
+    );
+
+    assert_eq!(
+        actual,
+        (
+            json!({
+                "status": StatusCode::BAD_GATEWAY.as_u16(),
+                "body": { "error": "message transport failed" },
+                "calls": [{
+                    "kind": "message",
+                    "sessionId": "fixture-session",
+                    "content": "watch-web からユーザーが vibe mode を on にしました。",
+                }],
+            }),
+            true,
         ),
     );
 }

@@ -68,21 +68,7 @@ pub(super) async fn set_vibe(
     } else {
         None
     };
-    let session_id = session.session_id.clone();
-    let enabled = request.enabled;
-    run_blocking({
-        let sessions_dir = sessions_dir.clone();
-        move || vibe::set_in(&sessions_dir, &session_id, enabled)
-    })
-    .await?;
-
-    let message = match (request.enabled, inherited_from) {
-        (true, _) => "watch-web からユーザーが vibe mode を on にしました。".to_string(),
-        (false, Some(ancestor_session_id)) => format!(
-            "watch-web からユーザーが vibe mode を off にしました。祖先セッション {ancestor_session_id} から引き継いでいるため、vibe mode は引き続き有効です。"
-        ),
-        (false, None) => "watch-web からユーザーが vibe mode を off にしました。".to_string(),
-    };
+    // Creating the marker advances the session revision used by rollback on delivery failure.
     let marker = if session.engine == Engine::Claude {
         let sessions_dir = sessions_dir.clone();
         let session_id = session.session_id.clone();
@@ -95,9 +81,25 @@ pub(super) async fn set_vibe(
     } else {
         None
     };
-    let queued_prompt_id = send_queued_prompt(QueuedPromptDelivery {
+    let restore_session_id = session.session_id.clone();
+    let session_id = session.session_id.clone();
+    let enabled = request.enabled;
+    let change = run_blocking({
+        let sessions_dir = sessions_dir.clone();
+        move || vibe::set_in(&sessions_dir, &session_id, enabled)
+    })
+    .await?;
+
+    let message = match (request.enabled, inherited_from) {
+        (true, _) => "watch-web からユーザーが vibe mode を on にしました。".to_string(),
+        (false, Some(ancestor_session_id)) => format!(
+            "watch-web からユーザーが vibe mode を off にしました。祖先セッション {ancestor_session_id} から引き継いでいるため、vibe mode は引き続き有効です。"
+        ),
+        (false, None) => "watch-web からユーザーが vibe mode を off にしました。".to_string(),
+    };
+    let delivery = send_queued_prompt(QueuedPromptDelivery {
         runtime: state.runtime,
-        sessions_dir,
+        sessions_dir: sessions_dir.clone(),
         session,
         marker,
         queued_content: message.clone(),
@@ -105,7 +107,27 @@ pub(super) async fn set_vibe(
         queued_attachments: Vec::<store::WatchWebQueuedAttachment>::new(),
         attachment_paths: Vec::new(),
     })
-    .await?;
+    .await;
+    let queued_prompt_id = match delivery {
+        Ok(queued_prompt_id) => queued_prompt_id,
+        Err(error) => {
+            let session_id_for_log = restore_session_id.clone();
+            let restore_result = run_blocking({
+                let sessions_dir = sessions_dir.clone();
+                let session_id = restore_session_id;
+                move || vibe::restore_in_if_unchanged(&sessions_dir, &session_id, change)
+            })
+            .await;
+            if let Err(restore_error) = restore_result {
+                tracing::warn!(
+                    session_id = %session_id_for_log,
+                    error = %restore_error.message,
+                    "failed to restore vibe setting after prompt delivery failed"
+                );
+            }
+            return Err(error);
+        }
+    };
 
     Ok(Json(json!({
         "ok": true,
