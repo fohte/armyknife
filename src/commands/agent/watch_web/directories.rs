@@ -41,12 +41,17 @@ impl DirectorySource for LiveDirectorySource {
     }
 
     fn ghq_root(&self) -> Option<PathBuf> {
-        crate::shared::repos_root::resolve_repos_root(None).ok()
+        let config = crate::shared::config::load_config_or_default();
+        ghq_root_from_config(&config)
     }
 
     fn home_dir(&self) -> Option<PathBuf> {
         crate::shared::dirs::home_dir()
     }
+}
+
+fn ghq_root_from_config(config: &crate::shared::config::Config) -> Option<PathBuf> {
+    crate::shared::repos_root::resolve_repos_root(config.agent.worktree.repos_root.as_deref()).ok()
 }
 
 #[derive(Debug, Deserialize)]
@@ -208,6 +213,18 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use serde_json::Value;
     use tower::ServiceExt;
+
+    #[test]
+    fn configured_repository_root_is_used_for_search() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = crate::shared::config::Config::default();
+        config.agent.worktree.repos_root = Some(root.path().to_string_lossy().into_owned());
+
+        assert_eq!(
+            ghq_root_from_config(&config),
+            Some(root.path().to_path_buf())
+        );
+    }
 
     #[derive(Clone)]
     struct FakeDirectorySource {
