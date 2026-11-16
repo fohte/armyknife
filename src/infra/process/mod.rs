@@ -470,6 +470,7 @@ impl ProcessSnapshot {
                     .and_then(|executable| Path::new(executable).file_name())
                     .is_some_and(|name| name == "codex")
                     && args.next() == Some("app-server")
+                    && args.any(|argument| argument == "--managed-daemon")
             })
     }
 

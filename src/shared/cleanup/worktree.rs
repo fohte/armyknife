@@ -406,18 +406,21 @@ mod tests {
         false,
         Some(WorktreeProcessInspection {
             non_shell_processes: vec![ProcessInPath { pid: 42, comm: "editor".to_string() }],
-            daemon_descendant_pgids: vec![],
+            daemon_descendant_pgids: vec![88],
         }),
+        true,
         (false, Some("active"), true, 0, vec!["panes", "detect"]),
     )]
     #[case::inspection_unavailable_without_force(
         false,
         None,
+        true,
         (false, Some("unavailable"), true, 0, vec!["panes", "detect"]),
     )]
     #[case::shell_only_without_force(
         false,
         Some(WorktreeProcessInspection::default()),
+        true,
         (true, None, false, 0, vec!["panes", "detect", "delete:false", "after_delete", "sessions:false", "pane_closed"]),
     )]
     #[case::daemon_groups_are_signaled_after_delete(
@@ -426,17 +429,29 @@ mod tests {
             non_shell_processes: vec![],
             daemon_descendant_pgids: vec![88],
         }),
+        true,
         (true, None, false, 1, vec!["panes", "detect", "delete:false", "after_delete", "sessions:false", "groups:[88]", "pane_closed"]),
+    )]
+    #[case::daemon_groups_are_not_signaled_when_deletion_returns_false(
+        false,
+        Some(WorktreeProcessInspection {
+            non_shell_processes: vec![],
+            daemon_descendant_pgids: vec![88],
+        }),
+        false,
+        (false, None, true, 0, vec!["panes", "detect", "delete:false"]),
     )]
     #[case::force_skips_the_guard_and_signals_process_groups(
         true,
         None,
+        true,
         (true, None, false, 1, vec!["panes", "groups_detect", "delete:true", "after_delete", "sessions:true", "groups:[77]", "pane_closed"]),
     )]
     fn cleanup_checks_processes_before_deleting_and_signals_after_success(
         cleanup_test_context: CleanupTestContext,
         #[case] force: bool,
         #[case] detected_processes: Option<WorktreeProcessInspection>,
+        #[case] delete_succeeds: bool,
         #[case] expected: (bool, Option<&'static str>, bool, usize, Vec<&'static str>),
     ) {
         let CleanupTestContext {
@@ -488,9 +503,12 @@ mod tests {
                     events
                         .borrow_mut()
                         .push(if force { "delete:true" } else { "delete:false" });
-                    std::fs::remove_dir_all(path).expect("worktree directory should be deleted");
+                    if delete_succeeds {
+                        std::fs::remove_dir_all(path)
+                            .expect("worktree directory should be deleted");
+                    }
                     Ok(WorktreeCleanupResult {
-                        worktree_deleted: true,
+                        worktree_deleted: delete_succeeds,
                         ..WorktreeCleanupResult::default()
                     })
                 },

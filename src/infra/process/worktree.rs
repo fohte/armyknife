@@ -122,6 +122,8 @@ mod tests {
             70 1 70 /opt/homebrew/bin/codex
             71 70 71 node
             80 1 80 /usr/bin/bash
+            90 1 90 /usr/local/bin/codex
+            91 90 91 worker
         "},
             indoc! {"
             60 /opt/homebrew/bin/codex app-server --listen unix:// --managed-daemon
@@ -131,6 +133,8 @@ mod tests {
             64 node node_repl
             70 /opt/homebrew/bin/codex exec
             71 node node_repl
+            90 /usr/local/bin/codex app-server --listen socket
+            91 worker worker
         "},
         )
     }
@@ -139,11 +143,13 @@ mod tests {
     #[case::only_shells(&[(20, WORKTREE), (50, WORKTREE)], &[], &[])]
     #[case::non_shell_processes(&[(30, WORKTREE), (40, WORKTREE)], &[(30, "claude"), (40, "node")], &[])]
     #[case::caller_and_ancestor_are_excluded(&[(10, WORKTREE), (20, WORKTREE), (30, WORKTREE)], &[(30, "claude")], &[])]
-    #[case::missing_ps_pid_is_ignored(&[(90, WORKTREE)], &[], &[])]
+    #[case::missing_ps_pid_is_ignored(&[(92, WORKTREE)], &[], &[])]
     #[case::login_shell_is_recognized(&[(20, WORKTREE)], &[], &[])]
     #[case::command_path_uses_its_basename(&[(80, WORKTREE)], &[], &[])]
     #[case::daemon_process_groups_are_collected(&[(61, WORKTREE), (30, WORKTREE)], &[(30, "claude")], &[61])]
     #[case::other_codex_ancestors_are_not_ignored(&[(71, WORKTREE)], &[(71, "node")], &[])]
+    #[case::app_server_without_managed_daemon_does_not_exempt_descendants(&[(91, WORKTREE)], &[(91, "worker")], &[])]
+    #[case::app_server_itself_is_not_exempt(&[(60, WORKTREE)], &[(60, "codex")], &[])]
     #[case::app_server_process_group_is_excluded(&[(62, WORKTREE)], &[], &[])]
     #[case::caller_process_group_is_excluded(&[(63, WORKTREE)], &[], &[])]
     #[case::invalid_process_group_is_excluded(&[(64, WORKTREE)], &[], &[])]
