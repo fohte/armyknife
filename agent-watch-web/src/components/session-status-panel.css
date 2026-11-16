@@ -14,13 +14,25 @@
   min-height: 48px;
   flex: 0 0 48px;
   align-items: stretch;
-  gap: 16px;
-  padding: 0 10px 0 18px;
+  padding: 0 8px 0 0;
   border-bottom: 1px solid var(--aw-border);
+}
+
+.session-status-panel-tablist {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: stretch;
+  gap: 16px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-left: 18px;
 }
 
 .session-status-panel-tab {
   display: inline-flex;
+  max-width: 180px;
+  flex: 0 0 auto;
   align-items: center;
   gap: 5px;
   border: 0;
@@ -31,6 +43,14 @@
   cursor: pointer;
   font: inherit;
   font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.session-status-panel-tab > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-status-panel-tab[aria-selected='true'] {
@@ -45,7 +65,7 @@
   min-width: 28px;
   height: 28px;
   min-height: 28px;
-  margin-left: auto;
+  flex: 0 0 auto;
   align-self: center;
   padding: 0;
   color: var(--aw-text-muted);
