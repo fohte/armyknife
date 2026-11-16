@@ -340,7 +340,7 @@ pub fn get_parent_pid(pid: u32) -> Option<u32> {
         .ok()
 }
 
-/// Process topology and command lines captured from the process table.
+/// Process topology and command names captured from the process table.
 ///
 /// Stores a parent → children mapping so callers can search for descendants
 /// without forking `ps` for every lookup.
@@ -352,17 +352,16 @@ pub struct ProcessSnapshot {
 }
 
 impl ProcessSnapshot {
-    /// Captures process topology and command lines from separate `ps -A` queries.
-    /// Returns `None` if either query fails.
+    /// Captures process topology via `ps -A`.
+    /// Returns `None` if `ps` fails.
     pub fn capture() -> Option<Self> {
-        let output = command::new("ps")
-            .args(["-A", "-o", "pid=,ppid=,comm="])
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        let text = String::from_utf8_lossy(&output.stdout);
+        let text = capture_process_table()?;
+        Some(Self::from_ps_output(&text))
+    }
+
+    /// Captures command arguments for checks that distinguish subcommands sharing one executable.
+    fn capture_with_command_lines() -> Option<Self> {
+        let processes = capture_process_table()?;
         let args_output = command::new("ps")
             .args(["-A", "-o", "pid=,args="])
             .output()
@@ -371,7 +370,7 @@ impl ProcessSnapshot {
             return None;
         }
         let args_text = String::from_utf8_lossy(&args_output.stdout);
-        Some(Self::from_ps_outputs(&text, &args_text))
+        Some(Self::from_ps_outputs(&processes, &args_text))
     }
 
     fn from_ps_output(text: &str) -> Self {
@@ -499,6 +498,17 @@ impl ProcessSnapshot {
         }
         None
     }
+}
+
+fn capture_process_table() -> Option<String> {
+    let output = command::new("ps")
+        .args(["-A", "-o", "pid=,ppid=,comm="])
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 fn parse_ps_args_output(text: &str) -> HashMap<u32, String> {

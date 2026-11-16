@@ -17,7 +17,7 @@ pub struct ProcessInPath {
 /// can refuse destructive work when they cannot verify the worktree is idle.
 pub fn find_non_shell_processes_in_path(path: &Path) -> Option<Vec<ProcessInPath>> {
     let cwds = list_process_cwds()?;
-    let snapshot = ProcessSnapshot::capture()?;
+    let snapshot = ProcessSnapshot::capture_with_command_lines()?;
     let resolved_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     Some(non_shell_processes_in_path(
         &snapshot,
