@@ -1,34 +1,24 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader, Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use axum::Router;
-use axum::body::Body;
-use axum::extract::Path as AxumPath;
-use axum::extract::Query;
-use axum::extract::State;
-use axum::http::StatusCode;
-use axum::http::header::CONTENT_TYPE;
-use axum::response::{IntoResponse, Response};
-use axum::routing::get;
-use serde::Serialize;
 use serde_json::Value;
 
-use crate::commands::agent::proposal::{ProposalAnswer, ProposalOption};
-use crate::commands::agent::store::{
-    AgentDecision, AgentFile, AgentProposal, AgentTodo, PermissionDeniedOperation,
-    PermissionRequestData, ProposalResolution, TodoResolution, WatchWebPeerOutMessage,
-    WatchWebQueuedPrompt,
-};
-use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
-use crate::commands::agent::user_turn::is_ask_user_question;
+#[cfg(test)]
+use crate::commands::agent::store::{AgentDecision, WatchWebPeerOutMessage, WatchWebQueuedPrompt};
+use crate::commands::agent::types::Engine;
+#[cfg(test)]
+use crate::commands::agent::types::Session;
+#[cfg(test)]
+use axum::Router;
 
 mod background_task_outputs;
 mod background_tasks;
 mod command_source;
+mod conversation;
 mod incremental;
+mod items;
 mod parser;
 mod pending_permissions;
 mod proposals;
@@ -36,30 +26,33 @@ mod question_preview;
 mod questions;
 pub(in crate::commands::agent::watch_web) mod queued_prompt;
 mod range;
+mod routes;
 mod subagent_reports;
 mod transcript_path;
 
-use self::incremental::{filter_after_tail_window, parse_initial_or_full};
+pub(super) use self::conversation::conversation_contains_markdown_source;
+#[cfg(test)]
+use self::conversation::load_conversation_with_queued_prompts;
+pub(super) use self::items::{BackgroundTask, BackgroundTaskKind, SkillSuggestion};
+use self::items::{
+    ChatItem, ConversationResponse, EventKind, ParentSession, PeerDirection, ToolGroupItem,
+    ToolOperation, UserContentPart,
+};
+#[cfg(test)]
 #[cfg(test)]
 pub(super) use self::pending_permissions::MAX_PERMISSION_COMMAND_BYTES;
-use self::pending_permissions::{collect_pending_permission_cards, permission_denied_cards};
 pub(super) use self::pending_permissions::{
     permission_request_command, permission_request_command_summary, permission_request_description,
 };
-use self::proposals::proposal_chat_item;
 #[cfg(test)]
 use self::questions::QuestionChoice;
-use self::questions::{
-    QuestionPrompt, attach_question_request_if_present, question_item_from_input,
-};
-use self::range::MessageRange;
+use self::questions::{QuestionPrompt, question_item_from_input};
+use self::routes::MessagesRouteState;
+pub(super) use self::routes::{RouteLoaders, routes_with_proposals_and_peer_out_messages};
 
 mod cache;
-use self::cache::{MessageCache, MessageCacheKey, MessageCacheRecords};
 mod file_attachments;
-use self::file_attachments::merge_stored_files;
 mod session_titles;
-use self::session_titles::{parent_session, resolve_peer_session_titles};
 use self::transcript_path::archived_codex_transcript_path;
 
 pub(super) fn registered_background_tasks(session_id: &str) -> Result<Vec<BackgroundTask>> {
@@ -76,127 +69,6 @@ pub(super) fn claude_content_text(content: Option<&Value>) -> String {
             .collect::<Vec<_>>()
             .join("\n"),
         _ => String::new(),
-    }
-}
-
-type SessionLoader = Arc<dyn Fn(&str) -> Result<Option<Session>> + Send + Sync>;
-type UserMarkerLoader = Arc<dyn Fn(&str) -> Result<Option<String>> + Send + Sync>;
-type MessagesRouteState = (SessionLoader, UserMarkerLoader, RouteLoaders);
-type DecisionLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentDecision>> + Send + Sync>;
-type QueuedPromptLoader = Arc<dyn Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync>;
-type PeerOutMessageLoader = Arc<dyn Fn(&str) -> Result<Vec<WatchWebPeerOutMessage>> + Send + Sync>;
-type QueuedPromptUpdater = Arc<dyn Fn(&str, &[i64]) -> Result<()> + Send + Sync>;
-type ProposalLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentProposal>> + Send + Sync>;
-type TodoLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentTodo>> + Send + Sync>;
-type PermissionRequestDataLoader =
-    Arc<dyn Fn(&str, &str) -> Result<Option<PermissionRequestData>> + Send + Sync>;
-type PermissionDeniedLoader =
-    Arc<dyn Fn(&str) -> Result<Vec<PermissionDeniedOperation>> + Send + Sync>;
-type AgentFileLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentFile>> + Send + Sync>;
-type AgentFileStorageRootLoader = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
-type BackgroundTaskLoader = Arc<dyn Fn(&str) -> Result<Vec<BackgroundTask>> + Send + Sync>;
-
-#[derive(Clone)]
-pub(super) struct RouteLoaders {
-    decisions: DecisionLoader,
-    queued_prompts: QueuedPromptLoader,
-    peer_out_messages: PeerOutMessageLoader,
-    mark_queued_prompts_resolved: QueuedPromptUpdater,
-    proposals: ProposalLoader,
-    todos: TodoLoader,
-    permission_request_data: PermissionRequestDataLoader,
-    permission_denials: PermissionDeniedLoader,
-    agent_files: AgentFileLoader,
-    agent_file_storage_root: AgentFileStorageRootLoader,
-    background_tasks: BackgroundTaskLoader,
-    message_cache: MessageCache,
-    question_preview_cache: question_preview::QuestionPreviewCache,
-}
-
-impl RouteLoaders {
-    pub(super) fn new(
-        load_decisions: impl Fn(&str) -> Result<Vec<AgentDecision>> + Send + Sync + 'static,
-        load_queued_prompts: impl Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync + 'static,
-        load_peer_out_messages: impl Fn(&str) -> Result<Vec<WatchWebPeerOutMessage>>
-        + Send
-        + Sync
-        + 'static,
-        mark_queued_prompts_resolved: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
-        load_proposals: impl Fn(&str) -> Result<Vec<AgentProposal>> + Send + Sync + 'static,
-    ) -> Self {
-        Self {
-            decisions: Arc::new(load_decisions),
-            queued_prompts: Arc::new(load_queued_prompts),
-            peer_out_messages: Arc::new(load_peer_out_messages),
-            mark_queued_prompts_resolved: Arc::new(mark_queued_prompts_resolved),
-            proposals: Arc::new(load_proposals),
-            todos: Arc::new(|_| Ok(Vec::new())),
-            permission_request_data: Arc::new(|_, _| Ok(None)),
-            permission_denials: Arc::new(|_| Ok(Vec::new())),
-            agent_files: Arc::new(|_| Ok(Vec::new())),
-            agent_file_storage_root: Arc::new(|| None),
-            background_tasks: Arc::new(|_| Ok(Vec::new())),
-            message_cache: MessageCache::default(),
-            question_preview_cache: question_preview::QuestionPreviewCache::default(),
-        }
-    }
-
-    pub(super) fn with_todo_loader(
-        mut self,
-        load_todos: impl Fn(&str) -> Result<Vec<AgentTodo>> + Send + Sync + 'static,
-    ) -> Self {
-        self.todos = Arc::new(load_todos);
-        self
-    }
-
-    pub(super) fn with_permission_request_data_loader(
-        mut self,
-        load_permission_request_data: impl Fn(&str, &str) -> Result<Option<PermissionRequestData>>
-        + Send
-        + Sync
-        + 'static,
-    ) -> Self {
-        self.permission_request_data = Arc::new(load_permission_request_data);
-        self
-    }
-
-    pub(super) fn with_permission_denied_loader(
-        mut self,
-        load_permission_denials: impl Fn(&str) -> Result<Vec<PermissionDeniedOperation>>
-        + Send
-        + Sync
-        + 'static,
-    ) -> Self {
-        self.permission_denials = Arc::new(load_permission_denials);
-        self
-    }
-
-    pub(super) fn with_agent_file_loader(
-        mut self,
-        load_agent_files: impl Fn(&str) -> Result<Vec<AgentFile>> + Send + Sync + 'static,
-    ) -> Self {
-        self.agent_files = Arc::new(load_agent_files);
-        self
-    }
-
-    pub(super) fn with_agent_file_storage_root_loader(
-        mut self,
-        load_storage_root: impl Fn() -> Option<PathBuf> + Send + Sync + 'static,
-    ) -> Self {
-        self.agent_file_storage_root = Arc::new(load_storage_root);
-        self
-    }
-
-    pub(super) fn with_background_task_loader(
-        mut self,
-        load_background_tasks: impl Fn(&str) -> Result<Vec<BackgroundTask>> + Send + Sync + 'static,
-    ) -> Self {
-        self.background_tasks = Arc::new(load_background_tasks);
-        self
-    }
-
-    fn background_tasks(&self, session_id: &str) -> Result<Vec<BackgroundTask>> {
-        (self.background_tasks)(session_id)
     }
 }
 
@@ -222,79 +94,6 @@ fn routes_with_decisions_and_queued_prompts_and_peer_out_messages(
     )
 }
 
-pub(super) fn routes_with_proposals_and_peer_out_messages(
-    load_session: impl Fn(&str) -> Result<Option<Session>> + Send + Sync + 'static,
-    load_user_marker: impl Fn(&str) -> Result<Option<String>> + Send + Sync + 'static,
-    loaders: RouteLoaders,
-) -> Router {
-    let load_session = Arc::new(load_session) as SessionLoader;
-    Router::new()
-        .route(
-            "/sessions/{id}/background-tasks/{task_id}/output",
-            get(background_task_outputs::get_background_task_output),
-        )
-        .route("/sessions/{id}/messages", get(get_messages))
-        .with_state((
-            load_session,
-            Arc::new(load_user_marker) as UserMarkerLoader,
-            loaders,
-        ))
-}
-
-async fn get_messages(
-    State((load_session, load_user_marker, loaders)): State<MessagesRouteState>,
-    AxumPath(session_id): AxumPath<String>,
-    Query(range): Query<MessageRange>,
-) -> Response {
-    if !range.is_valid() {
-        return StatusCode::BAD_REQUEST.into_response();
-    }
-    let tail_window_limit = range.initial_tail_window_limit();
-
-    match tokio::task::spawn_blocking(move || match tail_window_limit {
-        Some(limit) => load_conversation_with_initial_tail_window(
-            &session_id,
-            |id| load_session(id),
-            |id| load_user_marker(id),
-            &loaders,
-            limit,
-        ),
-        None => load_conversation_with_queued_prompts(
-            &session_id,
-            |id| load_session(id),
-            |id| load_user_marker(id),
-            &loaders,
-        ),
-    })
-    .await
-    {
-        Ok(Ok(Some(mut conversation))) => {
-            conversation.apply_range(range);
-            match serde_json::to_vec(&conversation) {
-                Ok(body) => (
-                    StatusCode::OK,
-                    [(CONTENT_TYPE, "application/json")],
-                    Body::from(body),
-                )
-                    .into_response(),
-                Err(error) => {
-                    tracing::warn!(%error, "failed to serialize agent session messages");
-                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
-                }
-            }
-        }
-        Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
-        Ok(Err(error)) => {
-            tracing::warn!(%error, "failed to read agent session messages");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-        Err(error) => {
-            tracing::error!(%error, "agent session message worker failed");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
-}
-
 #[cfg(test)]
 fn load_messages_with(
     session_id: &str,
@@ -311,316 +110,6 @@ fn load_messages_with(
         load_conversation_with_queued_prompts(session_id, load_session, |_| Ok(None), &loaders)?
             .map(|conversation| conversation.messages),
     )
-}
-
-fn load_conversation_with_queued_prompts(
-    session_id: &str,
-    load_session: impl FnMut(&str) -> Result<Option<Session>>,
-    load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
-    loaders: &RouteLoaders,
-) -> Result<Option<ConversationResponse>> {
-    load_conversation_with_tail_window(session_id, load_session, load_user_marker, loaders, None)
-}
-
-pub(super) fn conversation_contains_markdown_source(
-    session_id: &str,
-    load_session: impl FnMut(&str) -> Result<Option<Session>>,
-    load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
-    loaders: &RouteLoaders,
-    expected_message: &str,
-) -> Result<bool> {
-    let Some(conversation) = load_conversation_with_tail_window_and_marker_updates(
-        session_id,
-        load_session,
-        load_user_marker,
-        loaders,
-        None,
-        false,
-    )?
-    else {
-        return Ok(false);
-    };
-
-    Ok(command_source::contains_markdown_source(
-        &conversation.messages,
-        expected_message,
-    ))
-}
-
-fn load_conversation_with_initial_tail_window(
-    session_id: &str,
-    load_session: impl FnMut(&str) -> Result<Option<Session>>,
-    load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
-    loaders: &RouteLoaders,
-    message_limit: usize,
-) -> Result<Option<ConversationResponse>> {
-    load_conversation_with_tail_window(
-        session_id,
-        load_session,
-        load_user_marker,
-        loaders,
-        Some(message_limit),
-    )
-}
-
-fn load_conversation_with_tail_window(
-    session_id: &str,
-    load_session: impl FnMut(&str) -> Result<Option<Session>>,
-    load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
-    loaders: &RouteLoaders,
-    tail_window_limit: Option<usize>,
-) -> Result<Option<ConversationResponse>> {
-    load_conversation_with_tail_window_and_marker_updates(
-        session_id,
-        load_session,
-        load_user_marker,
-        loaders,
-        tail_window_limit,
-        true,
-    )
-}
-
-fn load_conversation_with_tail_window_and_marker_updates(
-    session_id: &str,
-    load_session: impl FnMut(&str) -> Result<Option<Session>>,
-    load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
-    loaders: &RouteLoaders,
-    tail_window_limit: Option<usize>,
-    mark_resolved_queued_prompts: bool,
-) -> Result<Option<ConversationResponse>> {
-    let codex_home = crate::shared::dirs::codex_home_dir();
-    load_conversation_with_tail_window_from(
-        session_id,
-        load_session,
-        load_user_marker,
-        loaders,
-        tail_window_limit,
-        codex_home.as_deref(),
-        mark_resolved_queued_prompts,
-    )
-}
-
-fn load_conversation_with_tail_window_from(
-    session_id: &str,
-    mut load_session: impl FnMut(&str) -> Result<Option<Session>>,
-    load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
-    loaders: &RouteLoaders,
-    tail_window_limit: Option<usize>,
-    codex_home: Option<&Path>,
-    mark_resolved_queued_prompts: bool,
-) -> Result<Option<ConversationResponse>> {
-    let Some(mut session) = load_session(session_id)? else {
-        return Ok(None);
-    };
-    if let Some(path) = archived_codex_transcript_path(
-        session.engine,
-        session.transcript_path.as_deref(),
-        codex_home,
-    )? {
-        session.transcript_path = Some(path);
-    }
-    let user_marker = if session.engine == Engine::Claude {
-        load_user_marker(session_id)?
-    } else {
-        None
-    };
-    let decisions = (loaders.decisions)(session_id)?;
-    let queued_prompts = (loaders.queued_prompts)(session_id)?;
-    let peer_out_messages = (loaders.peer_out_messages)(session_id)?;
-    let proposals = (loaders.proposals)(session_id)?;
-    let proposal_items = proposals
-        .iter()
-        .map(proposal_chat_item)
-        .collect::<Result<Vec<_>>>()?;
-    let todos = (loaders.todos)(session_id)?;
-    let agent_files = (loaders.agent_files)(session_id)?;
-    let permission_denials = (loaders.permission_denials)(session_id)?;
-    let mut additional_cards = permission_denied_cards(&permission_denials);
-    let parent = parent_session(&session, &mut load_session)?;
-    let main_permission_pending = session
-        .pending_permission_agent_ids
-        .contains(MAIN_THREAD_AGENT_KEY);
-    let main_permission_request_id = session
-        .pending_permission_request_ids
-        .get(MAIN_THREAD_AGENT_KEY)
-        .cloned();
-    let main_permission_data = main_permission_request_id
-        .as_deref()
-        .map(|request_id| (loaders.permission_request_data)(session_id, request_id))
-        .transpose()?
-        .flatten();
-    let main_permission_is_question = main_permission_data
-        .as_ref()
-        .and_then(|data| data.tool_name.as_deref())
-        == Some("AskUserQuestion")
-        || (main_permission_data.is_none() && is_ask_user_question(&session));
-    let pending_tool = if main_permission_pending && !main_permission_is_question {
-        main_permission_data.as_ref()
-    } else {
-        None
-    };
-    let cache_key = MessageCacheKey::new(
-        &session,
-        parent.clone(),
-        user_marker.clone(),
-        decisions.clone(),
-        queued_prompts.clone(),
-        peer_out_messages.clone(),
-        MessageCacheRecords {
-            proposals: proposals.clone(),
-            todos: todos.clone(),
-            agent_files: agent_files.clone(),
-            permission_denials: permission_denials.clone(),
-        },
-    )?;
-    if let Some(mut cached) = loaders.message_cache.get(session_id, &cache_key)? {
-        cached.conversation.initial_epoch =
-            tail_window_limit.is_some() && session.engine == Engine::Claude;
-        let elapsed = cached.cached_at.elapsed().as_secs();
-        for task in &mut cached.conversation.background_tasks {
-            task.elapsed_seconds = task.elapsed_seconds.saturating_add(elapsed);
-        }
-        cache::refresh_image_availability(&mut cached.conversation);
-        if let Some(path) = session.transcript_path.as_deref() {
-            subagent_reports::add_descriptions(path, &mut cached.conversation.messages);
-        }
-        attach_question_request_if_present(
-            &mut cached.conversation.messages,
-            main_permission_request_id.as_deref(),
-            main_permission_data.as_ref(),
-        );
-        resolve_peer_session_titles(&mut cached.conversation.messages, &mut load_session)?;
-        cached.conversation.update_metadata();
-        cached
-            .conversation
-            .background_tasks
-            .extend(loaders.background_tasks(session_id)?);
-        if mark_resolved_queued_prompts {
-            cache::mark_resolved_queued_prompts(
-                loaders,
-                session_id,
-                &cached.resolved_queued_prompt_ids,
-            );
-        }
-        return Ok(Some(cached.conversation));
-    }
-
-    let pending_permissions = collect_pending_permission_cards(
-        session_id,
-        &session,
-        main_permission_is_question,
-        main_permission_request_id.as_deref(),
-        main_permission_data.as_ref(),
-        loaders,
-    )?;
-    additional_cards.extend(pending_permissions.cards);
-
-    let transcript_input = TranscriptInput {
-        path: session.transcript_path.as_deref(),
-        engine: session.engine,
-        additions: parser::claude::ParserAdditions {
-            session_id,
-            parent: parent.as_ref(),
-            pending_tool,
-            user_marker: user_marker.as_deref(),
-            decisions: &decisions,
-            queued_prompts: &queued_prompts,
-            peer_out_messages: &peer_out_messages,
-            proposals: &proposal_items,
-            todos: &todos,
-            additional_cards: &additional_cards,
-        },
-    };
-    let pending_task_ids = session
-        .pending_bg_task_ids
-        .union(&session.pending_agent_task_ids)
-        .cloned()
-        .collect::<Vec<_>>();
-    let (mut conversation, resolved_queued_prompt_ids, used_tail_window) = parse_initial_or_full(
-        session_id,
-        transcript_input,
-        tail_window_limit,
-        &pending_task_ids,
-        cache_key.transcript_fingerprint.clone(),
-        &loaders.message_cache,
-    )?;
-    cache::refresh_image_availability(&mut conversation);
-    resolve_peer_session_titles(&mut conversation.messages, &mut load_session)?;
-    let tail_window_start = conversation.tail_window_start;
-    let recent_agent_files =
-        filter_after_tail_window(&agent_files, tail_window_start, |file| file.created_at);
-    let storage_root = if recent_agent_files
-        .iter()
-        .any(|file| file.mime_type.is_none())
-    {
-        (loaders.agent_file_storage_root)()
-    } else {
-        None
-    };
-    merge_stored_files(
-        session_id,
-        &recent_agent_files,
-        storage_root.as_deref(),
-        &mut conversation.messages,
-    );
-
-    attach_question_request_if_present(
-        &mut conversation.messages,
-        main_permission_request_id.as_deref(),
-        main_permission_data.as_ref(),
-    );
-
-    attach_permission_request_id(
-        &mut conversation.messages,
-        main_permission_request_id.as_deref(),
-    );
-
-    conversation.messages.extend(pending_permissions.questions);
-
-    conversation.update_metadata();
-    if used_tail_window {
-        conversation.decisions = decisions.iter().cloned().map(ChatItem::from).collect();
-        conversation.has_unanswered_proposal = proposals
-            .iter()
-            .any(|proposal| proposal.answer.is_none() && proposal.resolved_at.is_none());
-    }
-    conversation.initial_epoch = tail_window_limit.is_some() && session.engine == Engine::Claude;
-
-    if mark_resolved_queued_prompts {
-        cache::mark_resolved_queued_prompts(loaders, session_id, &resolved_queued_prompt_ids);
-    }
-    if !used_tail_window {
-        loaders.message_cache.insert(
-            session_id,
-            cache_key,
-            conversation.clone(),
-            resolved_queued_prompt_ids,
-        );
-    }
-    conversation
-        .background_tasks
-        .extend(loaders.background_tasks(session_id)?);
-    Ok(Some(conversation))
-}
-
-fn attach_permission_request_id(messages: &mut [ChatItem], request_id: Option<&str>) {
-    let Some(request_id) = request_id else {
-        return;
-    };
-    for message in messages {
-        if let ChatItem::Permission {
-            request_id: current,
-            ..
-        }
-        | ChatItem::PermissionWithThinking {
-            request_id: current,
-            ..
-        } = message
-            && current.is_none()
-        {
-            *current = Some(request_id.to_owned());
-        }
-    }
 }
 
 pub(in crate::commands::agent::watch_web::messages) struct TranscriptInput<'a> {
@@ -709,302 +198,6 @@ fn compressed_path(path: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum ChatItem {
-    User {
-        text: String,
-        #[serde(rename = "rewindId", skip_serializing_if = "Option::is_none")]
-        rewind_id: Option<String>,
-        #[serde(rename = "queuedPromptId", skip_serializing_if = "Option::is_none")]
-        queued_prompt_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        timestamp: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        from: Option<String>,
-    },
-    QueuedUser {
-        content: Vec<UserContentPart>,
-        #[serde(rename = "queuedPromptId", skip_serializing_if = "Option::is_none")]
-        queued_prompt_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        timestamp: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        from: Option<String>,
-    },
-    UserWithContent {
-        content: Vec<UserContentPart>,
-        #[serde(rename = "rewindId", skip_serializing_if = "Option::is_none")]
-        rewind_id: Option<String>,
-        #[serde(rename = "queuedPromptId", skip_serializing_if = "Option::is_none")]
-        queued_prompt_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        timestamp: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        from: Option<String>,
-    },
-    Peer {
-        direction: PeerDirection,
-        session_id: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        session_title: Option<String>,
-        content: Vec<UserContentPart>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        timestamp: Option<String>,
-        #[serde(skip_serializing_if = "is_false")]
-        failed: bool,
-    },
-    SubagentReport {
-        agent_id: String,
-        agent_name: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        description: Option<String>,
-        text: String,
-    },
-    Event {
-        kind: EventKind,
-        text: String,
-        failed: bool,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        timestamp: Option<String>,
-    },
-    FileAttachment {
-        files: Vec<super::file_attachments::ChatFile>,
-        caption: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        timestamp: Option<String>,
-    },
-    Assistant {
-        text: String,
-    },
-    Narration {
-        text: String,
-        #[serde(rename = "thinkingDurationMs", skip_serializing_if = "Option::is_none")]
-        thinking_duration_ms: Option<u64>,
-    },
-    Thinking {
-        text: String,
-        #[serde(rename = "thinkingDurationMs", skip_serializing_if = "Option::is_none")]
-        thinking_duration_ms: Option<u64>,
-    },
-    ToolSummary {
-        summary: String,
-        operations: Vec<ToolOperation>,
-    },
-    #[serde(rename = "tool_summary")]
-    ToolSummaryWithThinking {
-        summary: String,
-        operations: Vec<ToolOperation>,
-        items: Vec<ToolGroupItem>,
-    },
-    ToolInProgress {
-        tool: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        target: Option<String>,
-    },
-    #[serde(rename = "tool_in_progress")]
-    ToolInProgressWithThinking {
-        tool: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        target: Option<String>,
-        items: Vec<ToolGroupItem>,
-    },
-    Question {
-        #[serde(rename = "requestId", skip_serializing_if = "Option::is_none")]
-        request_id: Option<String>,
-        questions: Vec<QuestionPrompt>,
-    },
-    Proposal {
-        seq: i64,
-        title: String,
-        summary: Option<String>,
-        options: Vec<ProposalOption>,
-        answer: Option<ProposalAnswer>,
-        resolved: bool,
-        resolution: Option<ProposalResolution>,
-        comment: Option<String>,
-    },
-    Todo {
-        seq: i64,
-        title: String,
-        detail: Option<String>,
-        completed: bool,
-        resolution: Option<TodoResolution>,
-        comment: Option<String>,
-    },
-    Permission {
-        #[serde(rename = "requestId", skip_serializing_if = "Option::is_none")]
-        request_id: Option<String>,
-        tool: String,
-        description: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        command: Option<String>,
-    },
-    #[serde(rename = "permission")]
-    PermissionWithThinking {
-        #[serde(rename = "requestId", skip_serializing_if = "Option::is_none")]
-        request_id: Option<String>,
-        tool: String,
-        description: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        command: Option<String>,
-        items: Vec<ToolGroupItem>,
-    },
-    PermissionDenied {
-        seq: i64,
-        #[serde(rename = "toolUseId", skip_serializing_if = "Option::is_none")]
-        tool_use_id: Option<String>,
-        tool: String,
-        #[serde(rename = "inputSummary")]
-        input_summary: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        command: Option<String>,
-        reason: Option<String>,
-        retryable: bool,
-        resolved: bool,
-    },
-    Decision {
-        seq: i64,
-        title: String,
-        why: String,
-        considered: Vec<String>,
-        #[serde(rename = "easyToChange")]
-        easy_to_change: String,
-        review: Option<String>,
-        #[serde(rename = "createdAt")]
-        created_at: String,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum ToolGroupItem {
-    Thinking {
-        text: String,
-        #[serde(rename = "thinkingDurationMs", skip_serializing_if = "Option::is_none")]
-        thinking_duration_ms: Option<u64>,
-    },
-    #[serde(rename = "tool_use")]
-    ToolUse {
-        tool: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        target: Option<String>,
-        failed: bool,
-    },
-}
-
-fn is_false(value: &bool) -> bool {
-    !value
-}
-
-impl From<AgentDecision> for ChatItem {
-    fn from(decision: AgentDecision) -> Self {
-        Self::Decision {
-            seq: decision.seq,
-            title: decision.title,
-            why: decision.why,
-            considered: decision.considered,
-            easy_to_change: decision.easy_to_change,
-            review: decision.review,
-            created_at: decision.created_at,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum PeerDirection {
-    From,
-    To,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum EventKind {
-    Armyknife,
-    CompactBoundary,
-    System,
-    Hook,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ConversationResponse {
-    messages: Vec<ChatItem>,
-    background_tasks: Vec<BackgroundTask>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    skills: Vec<SkillSuggestion>,
-    start: usize,
-    total: usize,
-    decisions: Vec<ChatItem>,
-    has_unanswered_proposal: bool,
-    active_question_index: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stable_start: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stable_end: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stable_digest: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    epoch: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    older_cursor: Option<String>,
-    #[serde(skip_serializing_if = "is_false")]
-    epoch_reset: bool,
-    #[serde(skip)]
-    tail_window_start: Option<chrono::DateTime<chrono::Utc>>,
-    #[serde(skip)]
-    initial_epoch: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct SkillSuggestion {
-    pub(super) name: String,
-    pub(super) description: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct BackgroundTask {
-    pub(super) id: String,
-    pub(super) description: String,
-    pub(super) elapsed_seconds: u64,
-    pub(super) kind: BackgroundTaskKind,
-    #[serde(skip)]
-    pub(super) output_path: Option<PathBuf>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) agent_type: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum BackgroundTaskKind {
-    Subagent,
-    BackgroundTask,
-}
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum UserContentPart {
-    Text { text: String },
-    Image { source: String, available: bool },
-    File { name: String },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct ToolOperation {
-    tool: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    target: Option<String>,
-    failed: bool,
-}
-
-#[derive(Clone, PartialEq, Eq)]
-struct ParentSession {
-    session_id: String,
-    title: String,
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
@@ -1024,8 +217,8 @@ mod tests {
     use super::cache::TranscriptChange;
     use super::{
         ChatItem, MAX_PERMISSION_COMMAND_BYTES, QuestionChoice, QuestionPrompt, RouteLoaders,
-        load_conversation_with_queued_prompts, load_conversation_with_tail_window_from,
-        load_messages_with, routes_with_decisions_and_queued_prompts_and_peer_out_messages,
+        load_conversation_with_queued_prompts, load_messages_with,
+        routes_with_decisions_and_queued_prompts_and_peer_out_messages,
         routes_with_proposals_and_peer_out_messages,
     };
     use crate::commands::agent::store::{
@@ -1092,14 +285,11 @@ mod tests {
         );
         let codex_home_path = codex_home.path().to_str().unwrap();
         let conversation = temp_env::with_vars([("CODEX_HOME", Some(codex_home_path))], || {
-            load_conversation_with_tail_window_from(
+            load_conversation_with_queued_prompts(
                 "fixture-session",
                 move |id| Ok((id == "fixture-session").then(|| session.clone())),
                 |_| Ok(None),
                 &loaders,
-                None,
-                Some(codex_home.path()),
-                true,
             )
         })
         .unwrap()
@@ -3181,53 +2371,6 @@ mod tests {
                 "description": "Waiting for permission",
                 "command": "cargo test -p sample",
             }),
-        );
-    }
-
-    #[test]
-    fn attaches_request_id_to_permission_cards_with_grouped_thinking() {
-        let mut messages = vec![ChatItem::PermissionWithThinking {
-            request_id: None,
-            tool: "Bash".to_string(),
-            description: String::new(),
-            command: Some("cargo test -p sample".to_string()),
-            items: vec![
-                super::ToolGroupItem::Thinking {
-                    text: "Review the fictional request.".to_string(),
-                    thinking_duration_ms: Some(63),
-                },
-                super::ToolGroupItem::ToolUse {
-                    tool: "Bash".to_string(),
-                    target: Some("cargo test -p sample".to_string()),
-                    failed: false,
-                },
-            ],
-        }];
-
-        super::attach_permission_request_id(&mut messages, Some("permission-request-main"));
-
-        assert_eq!(
-            serde_json::to_value(messages).unwrap(),
-            json!([{
-                "type": "permission",
-                "requestId": "permission-request-main",
-                "tool": "Bash",
-                "description": "",
-                "command": "cargo test -p sample",
-                "items": [
-                    {
-                        "type": "thinking",
-                        "text": "Review the fictional request.",
-                        "thinkingDurationMs": 63,
-                    },
-                    {
-                        "type": "tool_use",
-                        "tool": "Bash",
-                        "target": "cargo test -p sample",
-                        "failed": false,
-                    },
-                ],
-            }]),
         );
     }
 

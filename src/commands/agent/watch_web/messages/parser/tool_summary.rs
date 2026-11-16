@@ -53,10 +53,12 @@ impl ToolSummary {
     }
 
     pub(super) fn take_pending_thinking(&mut self) -> Vec<ToolGroupItem> {
-        if self.actions > 0 {
-            return Vec::new();
-        }
-        std::mem::take(&mut self.group_items)
+        let start = self
+            .group_items
+            .iter()
+            .rposition(|item| matches!(item, ToolGroupItem::ToolUse { .. }))
+            .map_or(0, |index| index + 1);
+        self.group_items.split_off(start)
     }
 
     pub(super) fn record_codex_edited_files(&mut self, paths: Vec<String>) {

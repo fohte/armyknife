@@ -332,12 +332,13 @@ mod tests {
             }]
         );
     }
+    use crate::commands::agent::proposal::ProposalOption;
     use crate::commands::agent::store::{
         AgentDecision, AgentTodo, PermissionRequestData, TodoResolution,
     };
     use crate::commands::agent::watch_web::messages::{
-        ChatItem, ParentSession, PeerDirection, ProposalOption, QuestionChoice, SkillSuggestion,
-        ToolOperation, UserContentPart,
+        ChatItem, ParentSession, PeerDirection, QuestionChoice, SkillSuggestion, ToolOperation,
+        UserContentPart,
     };
 
     fn signature_with_block_kind(block_kind: &str) -> String {
@@ -561,6 +562,100 @@ mod tests {
                     },
                 ],
             }]),
+        );
+    }
+
+    #[test]
+    fn keeps_thinking_after_a_completed_tool_with_the_next_pending_tool() {
+        let transcript = [
+            json!({
+                "type": "assistant",
+                "message": {
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "fixture-completed-tool-id",
+                        "name": "Read",
+                        "input": {"file_path": "fixture/source.rs"},
+                    }],
+                },
+            }),
+            json!({
+                "type": "user",
+                "message": {
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": "fixture-completed-tool-id",
+                        "content": "Synthetic source output.",
+                    }],
+                },
+            }),
+            json!({
+                "type": "assistant",
+                "thinkingDurationMs": 53,
+                "message": {
+                    "content": [{
+                        "type": "thinking",
+                        "thinking": "Review the fictional result.",
+                        "signature": signature_with_block_kind("thinking"),
+                    }],
+                },
+            }),
+            json!({
+                "type": "assistant",
+                "message": {
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "fixture-pending-tool-id",
+                        "name": "Bash",
+                        "input": {"command": "echo awaiting approval"},
+                    }],
+                },
+            }),
+        ]
+        .into_iter()
+        .map(|record| record.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+        let pending_tool = PermissionRequestData {
+            tool_name: Some("Bash".to_string()),
+            tool_input: json!({"command": "echo awaiting approval"}),
+            pending: true,
+        };
+
+        assert_eq!(
+            serde_json::to_value(
+                parse(Cursor::new(transcript), None, Some(&pending_tool), None).unwrap()
+            )
+            .unwrap(),
+            json!([
+                {
+                    "type": "tool_summary",
+                    "summary": "Read ×1",
+                    "operations": [{
+                        "tool": "Read",
+                        "target": "fixture/source.rs",
+                        "failed": false,
+                    }],
+                },
+                {
+                    "type": "permission",
+                    "tool": "Bash",
+                    "description": "",
+                    "command": "echo awaiting approval",
+                    "items": [
+                        {
+                            "type": "thinking",
+                            "text": "Review the fictional result.",
+                            "thinkingDurationMs": 53,
+                        },
+                        {
+                            "type": "tool_use",
+                            "tool": "Bash",
+                            "failed": false,
+                        },
+                    ],
+                },
+            ]),
         );
     }
 
