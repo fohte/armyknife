@@ -16,6 +16,7 @@ const validFile = {
   name: 'sample-layout.png',
   source: '/api/sessions/sample-session/files/sample-file',
   isImage: true,
+  previewType: 'image',
   available: true,
 }
 
@@ -197,6 +198,12 @@ it.each([
   {
     name: 'a file with a non-boolean availability flag',
     message: fileAttachment({ files: [{ ...validFile, available: 1 }] }),
+  },
+  {
+    name: 'a file with an unknown preview type',
+    message: fileAttachment({
+      files: [{ ...validFile, previewType: 'script' }],
+    }),
   },
   {
     name: 'a missing caption',

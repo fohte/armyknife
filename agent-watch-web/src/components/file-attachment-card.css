@@ -31,6 +31,13 @@
   list-style: none;
 }
 
+.chat-file-attachment-item {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  min-width: 0;
+}
+
 .chat-file-image-button {
   display: block;
   padding: 0;
@@ -45,6 +52,46 @@
   max-height: 480px;
   border-radius: calc(var(--aw-radius) - 4px);
   object-fit: contain;
+}
+
+.chat-file-media-preview {
+  display: block;
+  width: min(100%, 480px);
+  max-height: 360px;
+}
+
+.chat-file-open-pdf {
+  color: var(--aw-text-body);
+}
+
+.chat-file-preview-loading {
+  color: var(--aw-text-muted);
+  font-size: 12px;
+}
+
+.chat-file-text-preview {
+  max-width: min(100%, 480px);
+  max-height: 360px;
+  overflow: auto;
+}
+
+.chat-file-markdown-preview {
+  max-width: min(100%, 480px);
+  max-height: 480px;
+  overflow: auto;
+}
+
+.chat-file-collapsed-preview {
+  max-width: min(100%, 480px);
+}
+
+.chat-file-collapsed-preview summary {
+  color: var(--aw-text-secondary);
+  cursor: pointer;
+}
+
+.chat-file-collapsed-preview[open] > :not(summary) {
+  margin-top: 8px;
 }
 
 .chat-file-download {

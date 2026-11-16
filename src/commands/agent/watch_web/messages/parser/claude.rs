@@ -254,6 +254,8 @@ mod tests {
     use rstest::rstest;
     use serde_json::json;
 
+    use crate::commands::agent::file_attachment_support::FilePreviewType;
+
     use super::{
         ParserAdditions, ProposalItem, parse, parse_with_decisions_and_queued_prompts,
         parse_with_image_directory,
@@ -318,6 +320,7 @@ mod tests {
                         "/api/sessions/fixture-session/transcript-files/Zml4dHVyZS10b29sLXVzZQ/0"
                             .to_owned(),
                     is_image: true,
+                    preview_type: FilePreviewType::Image,
                     available: true,
                 }],
                 caption: Some("Inspect the sample image.".to_owned()),

@@ -124,6 +124,14 @@ function isChatItem(value: unknown): value is ChatItem {
             typeof file['name'] === 'string' &&
             typeof file['source'] === 'string' &&
             typeof file['isImage'] === 'boolean' &&
+            (file['previewType'] === 'image' ||
+              file['previewType'] === 'markdown' ||
+              file['previewType'] === 'text' ||
+              file['previewType'] === 'video' ||
+              file['previewType'] === 'audio' ||
+              file['previewType'] === 'pdf' ||
+              file['previewType'] === 'html' ||
+              file['previewType'] === 'download') &&
             typeof file['available'] === 'boolean',
         ) &&
         (value['caption'] === null || typeof value['caption'] === 'string') &&

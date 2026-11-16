@@ -1,11 +1,72 @@
 import '#components/file-attachment-card.css'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
+import { requestUtf8Text } from '#components/conversation-requests'
+import {
+  type AttachmentPreviewFile,
+  FileContentPreview,
+} from '#components/file-content-preview'
 import { formatMessageTime } from '#components/message-time'
 import type { ChatItem } from '#types'
 
 type FileAttachmentMessage = Extract<ChatItem, { type: 'file_attachment' }>
+
+function useTextPreview(file: AttachmentPreviewFile) {
+  const [preview, setPreview] = useState<
+    | { status: 'loading' }
+    | { status: 'unavailable' }
+    | { status: 'loaded'; content: string }
+  >({ status: 'loading' })
+
+  useEffect(() => {
+    let active = true
+
+    void requestUtf8Text(file.source).match(
+      (content) => {
+        if (active) setPreview({ status: 'loaded', content })
+      },
+      () => {
+        if (active) setPreview({ status: 'unavailable' })
+      },
+    )
+
+    return () => {
+      active = false
+    }
+  }, [file.source])
+
+  return preview
+}
+
+function TextFilePreview({ file }: { file: AttachmentPreviewFile }) {
+  const preview = useTextPreview(file)
+  return (
+    <FileContentPreview
+      file={file}
+      loading={preview.status === 'loading'}
+      {...(preview.status === 'loaded' ? { textContent: preview.content } : {})}
+    />
+  )
+}
+
+function AttachmentPreview({
+  file,
+  onEnlargeImage,
+}: {
+  file: AttachmentPreviewFile
+  onEnlargeImage: (source: string) => void
+}) {
+  if (!file.available) {
+    return <FileContentPreview file={file} />
+  }
+
+  if (file.previewType === 'text' || file.previewType === 'markdown') {
+    return <TextFilePreview file={file} />
+  }
+
+  return <FileContentPreview file={file} onEnlargeImage={onEnlargeImage} />
+}
 
 export function FileAttachmentCard({
   message,
@@ -16,13 +77,11 @@ export function FileAttachmentCard({
   now?: Date
   previewOpen?: boolean
 }) {
-  const [unavailableImages, setUnavailableImages] = useState<Set<string>>(
-    () => new Set(),
-  )
   const [expandedImage, setExpandedImage] = useState<string | null>(() =>
     previewOpen
-      ? (message.files.find((file) => file.isImage && file.available)?.source ??
-        null)
+      ? (message.files.find(
+          (file) => file.previewType === 'image' && file.available,
+        )?.source ?? null)
       : null,
   )
   const time = formatMessageTime(message.timestamp, now)
@@ -37,48 +96,11 @@ export function FileAttachmentCard({
         <p className="chat-file-attachment-caption">{message.caption}</p>
       )}
       <ul className="chat-file-attachment-list">
-        {message.files.map((file) => {
-          const available =
-            file.available && !unavailableImages.has(file.source)
-          return (
-            <li key={file.source}>
-              {file.isImage && available ? (
-                <button
-                  className="chat-file-image-button"
-                  type="button"
-                  aria-label={`Enlarge ${file.name}`}
-                  onClick={() => {
-                    setExpandedImage(file.source)
-                  }}
-                >
-                  <img
-                    src={file.source}
-                    alt={file.name}
-                    loading="lazy"
-                    onError={() => {
-                      setUnavailableImages((current) =>
-                        new Set(current).add(file.source),
-                      )
-                    }}
-                  />
-                </button>
-              ) : available ? (
-                <a
-                  className="chat-file-download"
-                  href={file.source}
-                  download={file.name}
-                >
-                  <span aria-hidden="true">↓</span>
-                  {file.name}
-                </a>
-              ) : (
-                <span className="chat-file-unavailable">
-                  {file.name} · unavailable
-                </span>
-              )}
-            </li>
-          )
-        })}
+        {message.files.map((file) => (
+          <li className="chat-file-attachment-item" key={file.source}>
+            <AttachmentPreview file={file} onEnlargeImage={setExpandedImage} />
+          </li>
+        ))}
       </ul>
       {expandedImage !== null && (
         <dialog

@@ -157,6 +157,15 @@ export type ChatItem =
         name: string
         source: string
         isImage: boolean
+        previewType:
+          | 'image'
+          | 'markdown'
+          | 'text'
+          | 'video'
+          | 'audio'
+          | 'pdf'
+          | 'html'
+          | 'download'
         available: boolean
       }[]
       caption: string | null

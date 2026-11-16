@@ -12,7 +12,8 @@ use uuid::Uuid;
 
 use super::error::CcError;
 use super::file_attachment_support::{
-    MAX_AGENT_FILE_BYTES as MAX_FILE_BYTES, image_format_from_bytes, sanitize_basename,
+    FilePreviewType, MAX_AGENT_FILE_BYTES as MAX_FILE_BYTES, file_preview_type,
+    image_format_from_bytes, sanitize_basename,
 };
 use super::store::{self, AgentFile};
 use crate::shared::env_var::EnvVars;
@@ -83,7 +84,24 @@ fn record_files(
             .and_then(|name| name.to_str())
             .map(sanitize_basename)
             .context("file name is not valid UTF-8")?;
-        let mime_type = image_format_from_bytes(&bytes).map(|(mime_type, _)| mime_type.to_owned());
+        let mime_type = match file_preview_type(&name, &bytes) {
+            FilePreviewType::Image => {
+                image_format_from_bytes(&bytes).map(|(mime_type, _)| mime_type.to_owned())
+            }
+            FilePreviewType::Markdown => Some("text/markdown".to_owned()),
+            FilePreviewType::Text => Some("text/plain".to_owned()),
+            FilePreviewType::Video if name.to_ascii_lowercase().ends_with(".mov") => {
+                Some("video/quicktime".to_owned())
+            }
+            FilePreviewType::Video => Some("video/mp4".to_owned()),
+            FilePreviewType::Audio if name.to_ascii_lowercase().ends_with(".m4a") => {
+                Some("audio/mp4".to_owned())
+            }
+            FilePreviewType::Audio => Some("audio/mpeg".to_owned()),
+            FilePreviewType::Pdf => Some("application/pdf".to_owned()),
+            FilePreviewType::Html => Some("text/html".to_owned()),
+            FilePreviewType::Download => None,
+        };
         pending_files.push((name, mime_type, bytes));
     }
 
@@ -364,6 +382,7 @@ mod tests {
             (
                 records[0].name.as_str(),
                 records[0].caption.as_deref(),
+                records[0].mime_type.as_deref(),
                 store::agent_file_from(sessions.path(), "fixture-session", &records[0].id).unwrap(),
                 read_stored_file(
                     &state.path().join("attachments"),
@@ -375,6 +394,7 @@ mod tests {
             (
                 "report.txt",
                 Some("Fixture caption"),
+                Some("text/plain"),
                 Some(records[0].clone()),
                 Some(b"fixture report".to_vec())
             )
