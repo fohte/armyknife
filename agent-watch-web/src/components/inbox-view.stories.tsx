@@ -230,11 +230,6 @@ const meta = {
       </div>
     ),
   ],
-  parameters: {
-    overflowCheck: {
-      ignoreSelectors: ['.done-section .session-status-dot'],
-    },
-  },
 } satisfies Meta<typeof InboxView>
 
 export default meta

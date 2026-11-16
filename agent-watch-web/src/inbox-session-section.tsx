@@ -1,6 +1,6 @@
 import { Button } from '@fohte/ui/button'
 
-import { SessionRow } from '#components/session-row'
+import { InboxSessionListItem } from '#inbox-session-list-item'
 import type { Session } from '#types'
 
 export function renderInboxSessionSection({
@@ -11,7 +11,6 @@ export function renderInboxSessionSection({
   onSelect,
   onLater,
   onToggleToday,
-  compactRepo,
   isMobile,
   className = '',
   onCloseAll,
@@ -24,7 +23,6 @@ export function renderInboxSessionSection({
   onSelect: (id: string) => void
   onLater: (id: string) => void
   onToggleToday: (id: string, isToday: boolean) => void
-  compactRepo: boolean
   isMobile: boolean
   className?: string
   onCloseAll?: () => void
@@ -50,14 +48,13 @@ export function renderInboxSessionSection({
       {sessions.length > 0 ? (
         <ul className="session-list">
           {sessions.map((session) => (
-            <SessionRow
+            <InboxSessionListItem
               key={session.id}
               session={session}
-              selected={session.id === selectedId}
+              selectedId={selectedId}
               onSelect={onSelect}
               onLater={onLater}
               onToggleToday={onToggleToday}
-              compactRepo={compactRepo}
               isMobile={isMobile}
             />
           ))}

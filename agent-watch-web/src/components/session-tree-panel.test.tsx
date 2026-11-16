@@ -9,6 +9,8 @@ const sessions: SessionTreeNode[] = [
   {
     id: 'root',
     parentId: null,
+    engine: 'claude',
+    workType: null,
     category: 'done',
     isActive: true,
     kind: null,
@@ -23,6 +25,8 @@ const sessions: SessionTreeNode[] = [
   {
     id: 'active-child',
     parentId: 'root',
+    engine: 'codex',
+    workType: 'development',
     category: 'needs_action',
     isActive: true,
     kind: 'Question',
@@ -42,6 +46,8 @@ const sessions: SessionTreeNode[] = [
   {
     id: 'ended-child',
     parentId: 'active-child',
+    engine: 'claude',
+    workType: 'PM',
     category: 'done',
     isActive: false,
     kind: null,
@@ -86,37 +92,45 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it('shows the current path, task and repository differences, and ended sessions', () => {
+it('shows every tree session with the shared row and keeps ended sessions visible', () => {
   renderTree()
 
   expect(
     Array.from(container.querySelectorAll('[role="treeitem"]'), (row) => ({
-      title: row.querySelector('.session-tree-title')?.textContent,
+      title: row.querySelector('.session-title')?.textContent,
+      role: row.querySelector('.session-role-icon')?.getAttribute('aria-label'),
+      engine: row.querySelector('.session-engine')?.textContent ?? null,
       selected: row.getAttribute('aria-selected'),
-      task: row.querySelector('.session-tree-task')?.textContent ?? null,
-      repo: row.querySelector('.session-tree-repo')?.textContent ?? null,
+      task: row.querySelector('.session-task')?.textContent ?? null,
+      repo: row.querySelector('.session-repo')?.textContent ?? null,
       ended: row.classList.contains('is-ended'),
     })),
   ).toEqual([
     {
       title: 'Root session',
+      role: 'No role',
+      engine: 'claude',
       selected: 'true',
-      task: null,
+      task: '— No task',
       repo: 'sample/repo',
       ended: false,
     },
     {
       title: 'Active child',
+      role: 'development',
+      engine: 'codex',
       selected: 'false',
-      task: '17 · Sample task',
+      task: '— #17 Sample task',
       repo: 'sample/other-repo',
       ended: false,
     },
     {
       title: 'Ended child',
+      role: 'PM',
+      engine: 'claude',
       selected: 'false',
-      task: null,
-      repo: null,
+      task: '— No task',
+      repo: 'sample/other-repo',
       ended: true,
     },
   ])

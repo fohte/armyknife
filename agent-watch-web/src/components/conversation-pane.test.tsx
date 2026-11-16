@@ -1181,7 +1181,7 @@ it('loads and shows the session tree from the tree endpoint', async () => {
     countTone: container.querySelector('.session-status-panel-count')
       ?.className,
     rows: Array.from(
-      container.querySelectorAll('.session-tree-title'),
+      container.querySelectorAll('.session-tree-row .session-title'),
       (row) => row.textContent,
     ),
   })
@@ -1613,7 +1613,7 @@ it('removes sessions dropped by a refreshed tree from the cache', async () => {
   await waitForState(
     () =>
       container.querySelector(
-        '#session-tree-row-sibling-session .session-tree-title',
+        '#session-tree-row-sibling-session .session-title',
       )?.textContent === 'Updated sibling session',
   )
   renderInboxPanes(sessions, grandchildSession, sessionRefreshRevisions)
@@ -1622,7 +1622,7 @@ it('removes sessions dropped by a refreshed tree from the cache', async () => {
   const snapshot = () => ({
     currentRow: container.querySelector('.session-tree-row.is-current')?.id,
     siblingTitle: container.querySelector(
-      '#session-tree-row-sibling-session .session-tree-title',
+      '#session-tree-row-sibling-session .session-title',
     )?.textContent,
     alert: container.querySelector('[role="alert"]')?.textContent,
     treeRequests: fetcher.mock.calls

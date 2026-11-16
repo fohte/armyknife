@@ -135,13 +135,15 @@ const openSessionCases = [
   },
   {
     target: 'configured work type row',
-    selector: '[aria-label="Open sample project Guides session in Inbox"]',
+    selector:
+      '[aria-label="Open Prepare a launch checklist Guides session in Inbox"]',
     expectedTitle: 'Prepare a launch checklist',
     activation: 'click',
   },
   {
     target: 'configured work type row',
-    selector: '[aria-label="Open sample project Guides session in Inbox"]',
+    selector:
+      '[aria-label="Open Prepare a launch checklist Guides session in Inbox"]',
     expectedTitle: 'Prepare a launch checklist',
     activation: 'keyboard',
   },
@@ -180,7 +182,7 @@ it('keeps the Board updated from the session feed while it is active', () => {
       (element) => element.getAttribute('aria-label'),
     ),
     updatedCardTitles: Array.from(
-      container.querySelectorAll<HTMLElement>('.board-card-title'),
+      container.querySelectorAll<HTMLElement>('.board-card .session-title'),
       (element) => element.textContent,
     ),
     activeView: readActiveView(),
@@ -433,7 +435,7 @@ it('shows configured work-type sessions in the empty command palette', () => {
   const snapshot = () => ({
     headings: groups.map((group) => group.querySelector('h2')?.textContent),
     sessionTitle: workTypeGroup?.querySelector(
-      '.command-palette-item-heading strong',
+      '.command-palette-item .session-title',
     )?.textContent,
   })
 
@@ -465,7 +467,7 @@ it('opens a configured Later session from Nav while Later is collapsed', () => {
   act(() => {
     container
       .querySelector<HTMLButtonElement>(
-        '[aria-label="Open sample project Guides session in Inbox"]',
+        '[aria-label="Open Defer a report Guides session in Inbox"]',
       )
       ?.click()
   })
@@ -2488,7 +2490,7 @@ it('closes the mobile navigation after opening a session from a work type', () =
   act(() => {
     container
       .querySelector<HTMLButtonElement>(
-        '[aria-label="Open sample project Guides session in Inbox"]',
+        '[aria-label="Open Prepare a launch checklist Guides session in Inbox"]',
       )
       ?.click()
   })
@@ -4261,10 +4263,10 @@ it('advances elapsed time for all rows with one shared timer', async () => {
   })
 
   expect(snapshot()).toEqual({
-    before: ['8s', 'Working · 30s'],
-    afterFirstTick: ['9s', 'Working · 31s'],
-    afterUpdate: ['9s', 'Working · 31s'],
-    afterSecondTick: ['10s', 'Working · 32s'],
+    before: ['8s', '30s'],
+    afterFirstTick: ['9s', '31s'],
+    afterUpdate: ['9s', '31s'],
+    afterSecondTick: ['10s', '32s'],
     intervalCount: 1,
   })
 })

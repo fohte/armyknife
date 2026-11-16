@@ -7,8 +7,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { InboxFilterBar } from '#components/inbox-filter-bar'
 import { InboxFilterDialog } from '#components/inbox-filter-dialog'
 import { MobileNavigationActions } from '#components/mobile-navigation-actions'
-import { SessionRow } from '#components/session-row'
 import { filterInboxSessions, parseInboxFilterQuery } from '#inbox-filter'
+import { InboxSessionListItem } from '#inbox-session-list-item'
 import { renderInboxSessionSection } from '#inbox-session-section'
 import { nextReturnLabel } from '#inbox-view-utils'
 import type { SavedInboxView } from '#saved-inbox-views'
@@ -328,7 +328,6 @@ export function InboxView({
           onSelect,
           onLater,
           onToggleToday,
-          compactRepo: isMobile,
           isMobile,
         })}
         <Button
@@ -359,14 +358,13 @@ export function InboxView({
         {laterExpanded && later.length > 0 ? (
           <ul className="session-list later-session-list">
             {later.map((session) => (
-              <SessionRow
+              <InboxSessionListItem
                 key={session.id}
                 session={session}
-                selected={session.id === selectedId}
+                selectedId={selectedId}
                 onSelect={onSelect}
                 onLater={onLater}
                 onToggleToday={onToggleToday}
-                compactRepo={isMobile}
                 isMobile={isMobile}
               />
             ))}
@@ -394,7 +392,6 @@ export function InboxView({
           onSelect,
           onLater,
           onToggleToday,
-          compactRepo: isMobile,
           isMobile,
         })}
         {hiddenInProgressCount > 0 && !isMobile ? (
@@ -451,7 +448,6 @@ export function InboxView({
           onSelect,
           onLater,
           onToggleToday,
-          compactRepo: isMobile,
           isMobile,
           onCloseAll: () => {
             onCloseDone(allDone)

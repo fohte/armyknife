@@ -156,6 +156,12 @@
   text-align: left;
 }
 
+.command-palette-item.session-row {
+  display: block;
+  min-height: 69px;
+  padding: 0;
+}
+
 .command-palette-item[data-palette-active='true'] {
   background: var(--aw-bg-selected);
 }

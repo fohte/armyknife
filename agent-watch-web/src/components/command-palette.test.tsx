@@ -29,7 +29,7 @@ const session: Session = {
     priority: 1,
   },
   repo: 'example/web-app',
-  branch: 'feature/notification-preferences',
+  branch: 'feature/sample-change',
   canOpenInTerminal: true,
   project: 'notification refresh',
   parent: null,
@@ -154,46 +154,114 @@ it('shows the primary task and the count of other linked tasks for a session', (
     ],
   })
 
-  expect(
-    container.querySelector('.command-palette-item-subtitle')?.textContent,
-  ).toBe(
-    'P1 #42 Improve notifications +1 · example/web-app · feature/notification-preferences',
-  )
+  const snapshot = () => ({
+    task: container.querySelector('.session-task')?.textContent,
+    repo: container.querySelector('.session-repo')?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    task: 'P1 #42 Improve notifications +1',
+    repo: 'example/web-app',
+  })
 })
 
 it.each([
-  ['needs action', 'needs_action', 'Question', 300, '◆', 'Question', '5m'],
+  [
+    'needs action',
+    'needs_action',
+    'Question',
+    300,
+    'Question',
+    '5m',
+    true,
+    false,
+  ],
   [
     'needs action without a kind',
     'needs_action',
     null,
     300,
-    '◆',
-    'Needs action',
+    'Stopped',
     '5m',
+    true,
+    false,
   ],
-  ['error', 'needs_action', 'Error', 720, '×', 'Error', '12m'],
-  ['in progress', 'in_progress', null, 30, '●', 'Working', '30s'],
-  ['later', 'later', null, 90, '◷', 'Later', ''],
-  ['done', 'done', null, 360, '✓', 'Done', ''],
-  ['short session', 'needs_action', 'Question', 8, '◆', 'Question', '8s'],
-  ['59 seconds', 'needs_action', 'Question', 59, '◆', 'Question', '59s'],
-  ['60 seconds', 'needs_action', 'Question', 60, '◆', 'Question', '1m'],
-  ['59 minutes', 'needs_action', 'Question', 3_540, '◆', 'Question', '59m'],
-  ['60 minutes', 'needs_action', 'Question', 3_600, '◆', 'Question', '1h'],
-  ['90 minutes', 'needs_action', 'Question', 5_400, '◆', 'Question', '1h'],
-  ['24 hours', 'needs_action', 'Question', 86_400, '◆', 'Question', '1d'],
-  ['unknown category', 'blocked', null, 60, '•', 'blocked', '1m'],
+  ['error', 'needs_action', 'Error', 720, 'Error', '12m', true, false],
+  ['in progress', 'in_progress', null, 30, 'Working', '30s', false, true],
+  ['later', 'later', null, 90, 'Stopped', '1m', true, false],
+  ['done', 'done', null, 360, 'Done', '6m', false, false],
+  [
+    'short session',
+    'needs_action',
+    'Question',
+    8,
+    'Question',
+    '8s',
+    true,
+    false,
+  ],
+  [
+    '59 seconds',
+    'needs_action',
+    'Question',
+    59,
+    'Question',
+    '59s',
+    true,
+    false,
+  ],
+  ['60 seconds', 'needs_action', 'Question', 60, 'Question', '1m', true, false],
+  [
+    '59 minutes',
+    'needs_action',
+    'Question',
+    3_540,
+    'Question',
+    '59m',
+    true,
+    false,
+  ],
+  [
+    '60 minutes',
+    'needs_action',
+    'Question',
+    3_600,
+    'Question',
+    '1h',
+    true,
+    false,
+  ],
+  [
+    '90 minutes',
+    'needs_action',
+    'Question',
+    5_400,
+    'Question',
+    '1h',
+    true,
+    false,
+  ],
+  [
+    '24 hours',
+    'needs_action',
+    'Question',
+    86_400,
+    'Question',
+    '1d',
+    true,
+    false,
+  ],
+  ['unknown category', 'blocked', null, 60, 'Stopped', '1m', true, false],
 ] as const)(
-  'renders the %s session icon, kind, and elapsed time',
+  'renders the %s status icon and elapsed time',
   (
     _name,
     category,
     kind,
     elapsedSeconds,
-    icon,
-    expectedKind,
-    expectedDetail,
+    expectedStatus,
+    expectedAge,
+    hasKindIcon,
+    hasWorkingDot,
   ) => {
     renderPalette({
       sessions: [{ ...session, category, kind, elapsedSeconds }],
@@ -202,16 +270,19 @@ it.each([
 
     const item = container.querySelector('.command-palette-item')
     const snapshot = () => ({
-      detail: item?.querySelector('.command-palette-item-detail')?.textContent,
-      icon: item?.querySelector('.command-palette-status')?.textContent,
-      kind: item?.querySelector('.command-palette-item-kind')?.textContent,
-      title: item?.querySelector('.command-palette-item-heading strong')
-        ?.textContent,
+      status: item
+        ?.querySelector('.session-row-status')
+        ?.getAttribute('aria-label'),
+      hasKindIcon: item?.querySelector('.session-row-kind-icon') !== null,
+      hasWorkingDot: item?.querySelector('.session-row-working-dot') !== null,
+      age: item?.querySelector('.session-age')?.textContent,
+      title: item?.querySelector('.session-title')?.textContent,
     })
     expect(snapshot()).toEqual({
-      detail: expectedDetail,
-      icon,
-      kind: expectedKind,
+      status: expectedStatus,
+      hasKindIcon,
+      hasWorkingDot,
+      age: expectedAge,
       title: 'Review notification settings',
     })
   },
@@ -327,17 +398,13 @@ it.each([
   },
 )
 
-it('renders every result detail with monospace styling', () => {
-  renderPalette({ initialQuery: 'notification' })
+it('keeps non-session result details monospace', () => {
+  renderPalette({ initialQuery: '#notification' })
 
   const actual = Array.from(
     container.querySelectorAll('.command-palette-item-detail'),
   ).map((item) => item.className)
-  expect(actual).toEqual([
-    'command-palette-item-detail is-monospace',
-    'command-palette-item-detail is-monospace',
-    'command-palette-item-detail is-monospace',
-  ])
+  expect(actual).toEqual(['command-palette-item-detail is-monospace'])
 })
 
 it.each([
@@ -438,31 +505,50 @@ it('runs New session from the command palette', async () => {
   ])
 })
 
-it('matches a session by branch name and shows its task, branch, and repository', () => {
-  renderPalette({ initialQuery: 'feature/notification-preferences' })
+it('matches a session by branch name and renders the shared session row', () => {
+  renderPalette({ initialQuery: 'feature/sample-change' })
 
-  expect(container.querySelector('.command-palette-item')?.textContent).toEqual(
-    '◆Review notification settingsQuestionP1 #42 Improve notifications · example/web-app · feature/notification-preferences5m',
-  )
+  const snapshot = () => ({
+    title: container.querySelector('.session-title')?.textContent,
+    task: container.querySelector('.session-task')?.textContent,
+    repo: container.querySelector('.session-repo')?.textContent,
+    branch: container.querySelector('.session-branch')?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    title: 'Review notification settings',
+    task: 'P1 #42 Improve notifications',
+    repo: 'example/web-app',
+    branch: 'feature/sample-change',
+  })
 })
 
 it.each([
   ['omitted', undefined],
   ['null', null],
   ['blank', '   '],
-] as const)('omits the branch label for %s', (_, branch) => {
-  const sessionWithoutBranch: Session = { ...session }
-  if (branch === undefined) {
-    delete sessionWithoutBranch.branch
-  } else {
-    sessionWithoutBranch.branch = branch
-  }
-  renderPalette({ sessions: [sessionWithoutBranch] })
+] as const)(
+  'keeps branch metadata out of the common row when it is %s',
+  (_, branch) => {
+    const sessionWithoutBranch: Session = { ...session }
+    if (branch === undefined) {
+      delete sessionWithoutBranch.branch
+    } else {
+      sessionWithoutBranch.branch = branch
+    }
+    renderPalette({ sessions: [sessionWithoutBranch] })
 
-  expect(
-    container.querySelector('.command-palette-item-subtitle')?.textContent,
-  ).toEqual('P1 #42 Improve notifications · example/web-app')
-})
+    const snapshot = () => ({
+      task: container.querySelector('.session-task')?.textContent,
+      repo: container.querySelector('.session-repo')?.textContent,
+      branch: container.querySelector('.session-branch')?.textContent ?? null,
+    })
+    expect(snapshot()).toEqual({
+      task: 'P1 #42 Improve notifications',
+      repo: 'example/web-app',
+      branch: null,
+    })
+  },
+)
 
 it('keeps the branch after the task when the repository is blank', () => {
   renderPalette({
@@ -470,14 +556,21 @@ it('keeps the branch after the task when the repository is blank', () => {
       {
         ...session,
         repo: '   ',
-        branch: 'feature/notification-preferences',
+        branch: 'feature/sample-change',
       },
     ],
   })
 
-  expect(
-    container.querySelector('.command-palette-item-subtitle')?.textContent,
-  ).toEqual('P1 #42 Improve notifications · feature/notification-preferences')
+  const snapshot = () => ({
+    task: container.querySelector('.session-task')?.textContent,
+    repo: container.querySelector('.session-repo')?.textContent,
+    branch: container.querySelector('.session-branch')?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    task: 'P1 #42 Improve notifications',
+    repo: '—',
+    branch: 'feature/sample-change',
+  })
 })
 
 it.each([

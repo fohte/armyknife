@@ -19,8 +19,8 @@ import {
   itemSubtitle,
   itemTitle,
 } from '#components/command-palette-item'
+import { SessionRow } from '#components/session-row'
 import { useCopySessionId } from '#components/use-copy-session-id'
-import { sessionKindLabel } from '#session-kind-label'
 import type { Session } from '#types'
 
 type CommandPaletteProps = {
@@ -410,7 +410,7 @@ export function CommandPalette({
                     <button
                       key={item.id}
                       aria-selected={active}
-                      className="command-palette-item"
+                      className={`command-palette-item${item.type === 'session' ? ' session-row' : ''}`}
                       data-palette-active={active ? 'true' : 'false'}
                       data-tone={itemColor(item)}
                       onClick={() => {
@@ -422,28 +422,33 @@ export function CommandPalette({
                       role="option"
                       type="button"
                     >
-                      <span
-                        className="command-palette-status"
-                        aria-hidden="true"
-                      >
-                        {itemIcon(item)}
-                      </span>
-                      <span className="command-palette-item-main">
-                        <span className="command-palette-item-heading">
-                          <strong>{itemResultTitle(item)}</strong>
-                          {item.type === 'session' ? (
-                            <span className="command-palette-item-kind">
-                              {sessionKindLabel(item.session)}
+                      {item.type === 'session' ? (
+                        <SessionRow
+                          session={item.session}
+                          density="compact"
+                          branch={item.session.branch ?? null}
+                        />
+                      ) : (
+                        <>
+                          <span
+                            className="command-palette-status"
+                            aria-hidden="true"
+                          >
+                            {itemIcon(item)}
+                          </span>
+                          <span className="command-palette-item-main">
+                            <span className="command-palette-item-heading">
+                              <strong>{itemResultTitle(item)}</strong>
                             </span>
-                          ) : null}
-                        </span>
-                        <span className="command-palette-item-subtitle">
-                          {itemSubtitle(item)}
-                        </span>
-                      </span>
-                      <span className="command-palette-item-detail is-monospace">
-                        {itemDetail(item)}
-                      </span>
+                            <span className="command-palette-item-subtitle">
+                              {itemSubtitle(item)}
+                            </span>
+                          </span>
+                          <span className="command-palette-item-detail is-monospace">
+                            {itemDetail(item)}
+                          </span>
+                        </>
+                      )}
                     </button>
                   )
                 })}

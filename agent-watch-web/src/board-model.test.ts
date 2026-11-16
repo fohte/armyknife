@@ -122,7 +122,7 @@ it('hides only quiet projects when the quiet filter is enabled', () => {
   expect(buildBoardProjects(sessions)).toEqual(expected)
 })
 
-it('groups configured work types by label and chooses a needs-action session per project', () => {
+it('groups configured work types by label and includes every matching session', () => {
   const sessions = [
     {
       ...session('guide-active', 'sample project', 'in_progress'),
@@ -151,14 +151,7 @@ it('groups configured work types by label and chooses a needs-action session per
   ).toEqual([
     {
       label: 'Guides',
-      projects: [
-        {
-          name: 'sample project',
-          status: 'Review',
-          needsActionCount: 2,
-          sessionId: 'guide-waiting',
-        },
-      ],
+      sessions: [sessions[1], sessions[2], sessions[0]],
     },
   ])
 })

@@ -245,9 +245,8 @@ export function buildCommandPaletteGroups(
     const workTypeGroups = buildWorkTypeNavGroups(sessions, workTypeNavLabels)
       .map((group) => ({
         heading: group.label,
-        items: group.projects.flatMap(({ sessionId }) => {
-          const session = sessionsById.get(sessionId)
-          return session === undefined || displayedSessionIds.has(sessionId)
+        items: group.sessions.flatMap((session) => {
+          return displayedSessionIds.has(session.id)
             ? []
             : [sessionItem(session)]
         }),

@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { BoardProject } from '#board-model'
 import { MobileNavigationActions } from '#components/mobile-navigation-actions'
 import { SessionPausedBadge } from '#components/session-paused-badge'
-import { formatLinkedTaskCount } from '#session-task-count'
+import { SessionRow } from '#components/session-row'
 
 type BoardViewProps = {
   projects: readonly BoardProject[]
@@ -32,50 +32,6 @@ const GROUPS = [
   { category: 'done', title: 'Done', className: 'done' },
 ] as const
 
-function formatElapsedTime(totalSeconds: number) {
-  if (totalSeconds < 60) {
-    return `${String(totalSeconds)}s`
-  }
-
-  const minutes = Math.floor(totalSeconds / 60)
-  if (minutes < 60) {
-    return `${String(minutes)}m`
-  }
-
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) {
-    return `${String(hours)}h`
-  }
-
-  return `${String(Math.floor(hours / 24))}d`
-}
-
-function cardKind(session: BoardProject['sessions'][number]) {
-  if (session.category === 'in_progress') {
-    return 'Working'
-  }
-  if (session.category === 'done') {
-    return session.pullRequest?.state === 'Merged'
-      ? `Merged #${String(session.pullRequest.number)}`
-      : 'Done'
-  }
-  return session.kind ?? 'Stopped'
-}
-
-function taskDetails(session: BoardProject['sessions'][number]) {
-  if (session.task === null) {
-    return { identifier: '—', title: 'No task' }
-  }
-
-  const priority =
-    session.task.priority === null ? '—' : `P${String(session.task.priority)}`
-  const linkedTaskCount = formatLinkedTaskCount(session.tasks)
-  return {
-    identifier: `${priority} #${String(session.task.number)}`,
-    title: `${session.task.title}${linkedTaskCount}`,
-  }
-}
-
 function ProjectCard({
   session,
   onSelectSession,
@@ -83,29 +39,18 @@ function ProjectCard({
   session: BoardProject['sessions'][number]
   onSelectSession: (id: string) => void
 }) {
-  const task = taskDetails(session)
-
   return (
     <Button
       type="button"
       variant="plain"
-      className={`board-card block w-full cursor-pointer category-${session.category} hover:text-foreground`}
+      className={`session-row board-card block w-full cursor-pointer category-${session.category} hover:text-foreground`}
       data-kind={session.kind?.toLowerCase() ?? ''}
       aria-label={`Open in Inbox: ${session.title}`}
       onClick={() => {
         onSelectSession(session.id)
       }}
     >
-      <div className="board-card-heading">
-        <SessionPausedBadge isPaused={session.isPaused} />
-        <span>{cardKind(session)}</span>
-        <time>{formatElapsedTime(session.elapsedSeconds)}</time>
-      </div>
-      <div className="board-card-title">{session.title}</div>
-      <div className="board-card-task">
-        <span className="board-card-task-id">{task.identifier}</span>{' '}
-        <span>{task.title}</span>
-      </div>
+      <SessionRow session={session} density="compact" />
     </Button>
   )
 }
