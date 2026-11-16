@@ -1843,6 +1843,7 @@ it('opens Later for the session shown in a mobile conversation', async () => {
 
   const snapshot = () => ({
     initialConversationState,
+    finalConversationState: conversationState(),
     menuTitle: container.querySelector('.later-menu-title')?.textContent,
     menuLabel: container
       .querySelector('.later-menu')
@@ -1850,6 +1851,10 @@ it('opens Later for the session shown in a mobile conversation', async () => {
   })
   expect(snapshot()).toEqual({
     initialConversationState: {
+      screen: 'conversation',
+      url: '?session=session-mobile&screen=conversation',
+    },
+    finalConversationState: {
       screen: 'conversation',
       url: '?session=session-mobile&screen=conversation',
     },
