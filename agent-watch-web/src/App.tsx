@@ -552,9 +552,10 @@ function AppContent() {
     [closeMobileNav, navigate, newSession.reset, setCommandPaletteOpen],
   )
   const closeNewSession = useCallback(() => {
+    newSession.reset()
     setPendingLaunchId(null)
     setNewSessionMode(null)
-  }, [])
+  }, [newSession.reset])
   const openSessionFromNavigation = useCallback(
     (id: string) => {
       closeMobileNav()

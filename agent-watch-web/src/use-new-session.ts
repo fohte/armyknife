@@ -19,6 +19,7 @@ export function useNewSession(active: boolean) {
   const [isStarting, setIsStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const requestSequence = useRef(0)
+  const launchSequence = useRef(0)
 
   useEffect(() => {
     if (!active) return
@@ -49,6 +50,7 @@ export function useNewSession(active: boolean) {
 
   const reset = useCallback(() => {
     requestSequence.current += 1
+    launchSequence.current += 1
     setDirectoryQuery('')
     setDirectories([])
     setSelectedDirectory(null)
@@ -72,6 +74,8 @@ export function useNewSession(active: boolean) {
       engineOverride?: SessionEngine,
     ) => {
       if (selectedDirectory === null || isStarting) return
+      const sequence = launchSequence.current + 1
+      launchSequence.current = sequence
       setError(null)
       setIsStarting(true)
       const result = await launchSession({
@@ -80,6 +84,7 @@ export function useNewSession(active: boolean) {
         worktree,
         initialMessage,
       })
+      if (launchSequence.current !== sequence) return
       result.match(
         ({ launchId }) => {
           onLaunched(launchId)

@@ -16,7 +16,13 @@ function requireButton(selector: string) {
   return button
 }
 
-function PickerHarness({ start }: { start: NewSessionState['start'] }) {
+function PickerHarness({
+  start,
+  onClose = () => undefined,
+}: {
+  start: NewSessionState['start']
+  onClose?: () => void
+}) {
   const [selectedDirectory, setSelectedDirectory] =
     useState<NewSessionState['selectedDirectory']>(null)
   const [engine, setEngine] = useState<NewSessionState['engine']>('claude')
@@ -42,7 +48,7 @@ function PickerHarness({ start }: { start: NewSessionState['start'] }) {
   return (
     <NewSessionPicker
       state={state}
-      onClose={() => undefined}
+      onClose={onClose}
       onLaunched={() => undefined}
     />
   )
@@ -109,4 +115,33 @@ it('toggles the worktree option with Option+W', async () => {
       .querySelector<HTMLButtonElement>('.new-session-picker-worktree')
       ?.getAttribute('aria-pressed'),
   ).toBe('true')
+})
+
+it('closes the picker when Enter activates the close button', async () => {
+  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  const onClose = vi.fn()
+  root = createRoot(container)
+  act(() => {
+    root?.render(<PickerHarness onClose={onClose} start={start} />)
+  })
+  await act(async () => {
+    await userEvent.click(
+      requireButton(
+        '[aria-label="Select directory /Users/example/work/service"]',
+      ),
+    )
+  })
+  const closeButton = requireButton('.new-session-picker-close')
+  act(() => {
+    closeButton.focus()
+  })
+  await act(async () => {
+    await userEvent.keyboard('{Enter}')
+  })
+
+  const snapshot = () => ({
+    closeCalls: onClose.mock.calls,
+    startCalls: start.mock.calls.map(([, engine]) => engine),
+  })
+  expect(snapshot()).toEqual({ closeCalls: [[]], startCalls: [] })
 })

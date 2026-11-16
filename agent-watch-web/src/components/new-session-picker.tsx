@@ -36,6 +36,12 @@ export function NewSessionPicker({
         aria-modal="true"
         className={`new-session-picker${isMobile ? ' is-mobile' : ''}`}
         onKeyDown={(event) => {
+          if (
+            event.key === 'Enter' &&
+            event.target instanceof HTMLButtonElement
+          ) {
+            return
+          }
           if (event.key === 'Escape') {
             event.preventDefault()
             onClose()
@@ -133,7 +139,9 @@ export function NewSessionPicker({
           <button
             aria-label="Close new session"
             className="new-session-picker-close"
-            onClick={onClose}
+            onClick={() => {
+              onClose()
+            }}
             type="button"
           >
             <X aria-hidden="true" size={16} />
