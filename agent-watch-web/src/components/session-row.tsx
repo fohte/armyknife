@@ -1,206 +1,198 @@
-import '#components/later-today.css'
+import '#components/session-row.css'
 
-import { Button } from '@fohte/ui/button'
+import {
+  Bug,
+  Code2,
+  Ellipsis,
+  Palette,
+  Search,
+  UsersRound,
+  Workflow,
+} from 'lucide-react'
 
-import { cn } from '#lib/utils'
-import { formatSessionDecisionCount } from '#session-decision-count'
 import { sessionKindIcon } from '#session-kind-label'
 import { formatLinkedTaskCount } from '#session-task-count'
-import type { Session } from '#types'
+import type { Session, SessionTask } from '#types'
+
+type SessionRowData = Pick<
+  Session,
+  'title' | 'category' | 'kind' | 'elapsedSeconds' | 'preview' | 'task' | 'repo'
+> &
+  Partial<
+    Pick<
+      Session,
+      | 'engine'
+      | 'workType'
+      | 'unread'
+      | 'tasks'
+      | 'decisionCount'
+      | 'unreviewedDecisionCount'
+      | 'pullRequest'
+    >
+  >
 
 type SessionRowProps = {
-  session: Session
-  selected: boolean
-  onSelect: (id: string) => void
-  onLater?: (id: string) => void
-  onToggleToday?: (id: string, isToday: boolean) => void
-  compactRepo?: boolean
-  actionsVisible?: boolean
+  session: SessionRowData
+  density?: 'full' | 'compact'
   isMobile?: boolean
 }
 
 function formatElapsedTime(totalSeconds: number) {
-  if (totalSeconds < 60) {
-    return `${String(totalSeconds)}s`
-  }
-
+  if (totalSeconds < 60) return `${String(totalSeconds)}s`
   const minutes = Math.floor(totalSeconds / 60)
-  if (minutes < 60) {
-    return `${String(minutes)}m`
-  }
-
+  if (minutes < 60) return `${String(minutes)}m`
   const hours = Math.floor(minutes / 60)
-  if (hours < 24) {
-    return `${String(hours)}h`
-  }
-
+  if (hours < 24) return `${String(hours)}h`
   return `${String(Math.floor(hours / 24))}d`
 }
 
-function sessionStatus(session: Session) {
+function rolePresentation(workType: string | null | undefined) {
+  const role = workType?.trim() ?? ''
+  const normalized = role.toLowerCase().replaceAll('_', '-')
+  switch (normalized) {
+    case 'development':
+      return { label: role, Icon: Code2 }
+    case 'design':
+      return { label: role, Icon: Workflow }
+    case 'designer':
+      return { label: role, Icon: Palette }
+    case 'research':
+      return { label: role, Icon: Search }
+    case 'debug-flow':
+      return { label: role, Icon: Bug }
+    case 'pm':
+      return { label: role, Icon: UsersRound }
+    default:
+      return role.length === 0
+        ? { label: 'No role', Icon: Ellipsis }
+        : { label: role, Icon: Ellipsis }
+  }
+}
+
+function taskReference(task: SessionTask) {
+  return `${task.priority === null ? '—' : `P${String(task.priority)}`} #${String(task.number)}`
+}
+
+function statusIcon(session: SessionRowData) {
   if (session.category === 'in_progress') {
-    return `Working · ${formatElapsedTime(session.elapsedSeconds)}`
+    return <span className="session-row-working-dot" />
   }
+  if (session.category === 'done') return <span aria-hidden="true">✓</span>
 
-  if (session.category === 'done') {
-    const detail =
-      session.pullRequest?.state === 'Merged'
-        ? `Merged #${String(session.pullRequest.number)}`
-        : 'Finished'
-    return `${detail} · ${formatElapsedTime(session.elapsedSeconds)}`
-  }
-
-  return formatElapsedTime(session.elapsedSeconds)
-}
-
-function sessionTaskLabel(session: Session) {
-  if (session.task === null) {
-    return null
-  }
-
-  const priority =
-    session.task.priority === null ? '—' : `P${String(session.task.priority)}`
-  return {
-    reference: `${priority} #${String(session.task.number)}`,
-    title: session.task.title,
-    linkedTaskCount: formatLinkedTaskCount(session.tasks),
-  }
-}
-
-function sessionKind(session: Session) {
-  return session.kind ?? 'Stopped'
+  const kind = session.kind ?? 'Stopped'
+  const Icon = sessionKindIcon(kind)
+  return (
+    <Icon
+      aria-hidden="true"
+      className={`session-row-kind-icon session-row-kind-icon--${kind.toLowerCase()}`}
+      size={14}
+    />
+  )
 }
 
 export function SessionRow({
   session,
-  selected,
-  onSelect,
-  onLater,
-  onToggleToday,
-  compactRepo = false,
-  actionsVisible = false,
+  density = 'full',
   isMobile = false,
 }: SessionRowProps) {
-  const kind = sessionKind(session)
-  const KindIcon = sessionKindIcon(kind)
-  const taskLabel = sessionTaskLabel(session)
-  const decisionLabel = formatSessionDecisionCount(session)
+  const role = rolePresentation(session.workType)
+  const RoleIcon = role.Icon
+  const task = session.task
+  const repo = session.repo.trim() || '—'
+  const linkedTaskCount = formatLinkedTaskCount(session.tasks)
+  const decisionLabel =
+    session.unreviewedDecisionCount !== undefined &&
+    session.unreviewedDecisionCount > 0
+      ? `${String(session.unreviewedDecisionCount)} to review`
+      : session.decisionCount !== undefined && session.decisionCount > 0
+        ? `${String(session.decisionCount)} decisions`
+        : null
 
   return (
-    <li className="session-list-item">
-      <div
-        className={`session-row-layout${actionsVisible ? ' actions-visible' : ''}${
-          session.isToday === true ? ' is-starred' : ''
-        }`}
+    <div
+      className={`session-row-content density-${density}${isMobile ? ' is-mobile' : ''}`}
+      data-session-row-content=""
+    >
+      <span
+        className={`session-row-status category-${session.category}`}
+        role="img"
+        aria-label={
+          session.category === 'in_progress'
+            ? 'Working'
+            : session.category === 'done'
+              ? 'Done'
+              : (session.kind ?? 'Stopped')
+        }
+        title={session.category === 'in_progress' ? 'Working' : undefined}
       >
-        <Button
-          type="button"
-          variant="plain"
-          className={cn(
-            'session-row cursor-pointer',
-            `category-${session.category}`,
-            selected && 'is-selected',
-          )}
-          data-session-row=""
-          aria-current={selected ? 'true' : undefined}
-          onClick={() => {
-            onSelect(session.id)
-          }}
-        >
-          <span className="session-status-dot" aria-hidden="true" />
-          <span className="session-content">
-            <span className="session-title-line">
-              <span
-                className={`session-title${session.unread ? ' is-unread' : ''}`}
-              >
-                {session.title}
-              </span>
-              <span className="session-age">{sessionStatus(session)}</span>
-            </span>
-            {session.category === 'needs_action' ? (
-              <span className="session-preview">
-                <span
-                  aria-label={kind}
-                  data-session-kind={kind.toLowerCase()}
-                  className="session-kind-icon"
-                  role="img"
-                  title={kind}
-                >
-                  <KindIcon aria-hidden="true" size={14} />
-                </span>
-                {session.preview !== null && session.preview.length > 0 ? (
-                  <span> {session.preview}</span>
-                ) : null}
-              </span>
-            ) : null}
-            <span className="session-meta-line">
-              <span className="session-task">
-                {taskLabel === null ? (
-                  '— No task'
-                ) : (
-                  <>
-                    <span className="session-task-reference">
-                      {taskLabel.reference}
-                    </span>
-                    {`${isMobile ? ' ' : ' · '}${taskLabel.title}${taskLabel.linkedTaskCount}`}
-                  </>
-                )}
-              </span>
-              {isMobile ? (
-                <span
-                  className="mobile-session-meta-separator"
-                  aria-hidden="true"
-                >
-                  ·
-                </span>
-              ) : null}
-              <span className="session-repo">
-                {compactRepo
-                  ? session.repo.split('/').at(-1)
-                  : session.repo || '—'}
-              </span>
-              {decisionLabel !== null ? (
-                <span className="session-decision-count">{decisionLabel}</span>
-              ) : null}
-            </span>
+        {statusIcon(session)}
+      </span>
+      <span className="session-content">
+        <span className="session-title-line">
+          <span
+            className={`session-title${session.unread === true ? ' is-unread' : ''}`}
+          >
+            {session.title}
           </span>
-        </Button>
-        {!isMobile ? (
-          <div className="session-row-actions">
-            {onToggleToday ? (
-              <Button
-                type="button"
-                variant="plain"
-                aria-label={
-                  session.isToday === true
-                    ? 'Remove from Starred'
-                    : 'Add to Starred'
-                }
-                aria-pressed={session.isToday ?? false}
-                className="session-action-button cursor-pointer"
-                onClick={() => {
-                  onToggleToday(session.id, session.isToday !== true)
-                }}
-              >
-                {session.isToday === true ? '★' : '☆'}
-              </Button>
-            ) : null}
-            {onLater ? (
-              <Button
-                type="button"
-                variant="plain"
-                aria-label={`Later: ${session.title}`}
-                className="session-action-button cursor-pointer"
-                onClick={() => {
-                  onLater(session.id)
-                }}
-              >
-                ◷
-              </Button>
-            ) : null}
-          </div>
+          <span className="session-age">
+            {formatElapsedTime(session.elapsedSeconds)}
+          </span>
+        </span>
+        {density === 'full' &&
+        session.preview !== null &&
+        session.preview.length > 0 ? (
+          <span className="session-preview">{session.preview}</span>
         ) : null}
-      </div>
-    </li>
+        <span className="session-meta-line">
+          <span
+            className="session-role-icon"
+            role="img"
+            aria-label={role.label}
+            title={role.label}
+          >
+            <RoleIcon aria-hidden="true" size={13} />
+          </span>
+          {session.engine ? (
+            <>
+              <span className="session-engine">{session.engine}</span>
+              <span className="session-meta-separator" aria-hidden="true">
+                ·
+              </span>
+            </>
+          ) : null}
+          <span className="session-task">
+            {task === null ? (
+              '— No task'
+            ) : (
+              <>
+                <span className="session-task-reference">
+                  {taskReference(task)}
+                </span>{' '}
+                <span className="session-task-title">
+                  {task.title}
+                  {linkedTaskCount}
+                </span>
+              </>
+            )}
+          </span>
+          {density === 'full' ? (
+            <>
+              <span className="session-repo-separator" aria-hidden="true">
+                ·
+              </span>
+              <span className="session-repo">{repo}</span>
+            </>
+          ) : null}
+          {decisionLabel !== null ? (
+            <span className="session-decision-count">{decisionLabel}</span>
+          ) : null}
+        </span>
+        {density === 'compact' ? (
+          <span className="session-repo-line">
+            <span className="session-repo">{repo}</span>
+          </span>
+        ) : null}
+      </span>
+    </div>
   )
 }

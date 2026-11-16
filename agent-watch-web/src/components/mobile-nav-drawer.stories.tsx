@@ -2,8 +2,31 @@ import type { Meta, StoryObj } from '@storybook/react-vite'
 
 import { AgentWatchNav } from '#components/agent-watch-nav'
 import { MobileNavDrawer } from '#components/mobile-nav-drawer'
+import type { Session } from '#types'
 
-function createNavigation(projectCount: number) {
+function createNavigation(sessionCount: number) {
+  const sessions: Session[] = Array.from(
+    { length: sessionCount },
+    (_, index) => ({
+      id: `sample-session-${String(index + 1)}`,
+      engine: 'codex',
+      workType: 'PM',
+      category: 'needs_action',
+      isPaused: false,
+      kind: 'Question',
+      title: `Review sample change ${String(index + 1)}`,
+      preview: null,
+      elapsedSeconds: 30,
+      unread: false,
+      task: null,
+      repo: 'example/project',
+      project: 'sample project',
+      parent: null,
+      ancestorSessionIds: [],
+      pullRequest: null,
+    }),
+  )
+
   return (
     <AgentWatchNav
       activeView="inbox"
@@ -26,13 +49,8 @@ function createNavigation(projectCount: number) {
       selectedSavedViewId={null}
       workTypeNavGroups={[
         {
-          label: 'Guides',
-          projects: Array.from({ length: projectCount }, (_, index) => ({
-            name: `Sample project ${String(index + 1)}`,
-            status: 'Review' as const,
-            needsActionCount: 2,
-            sessionId: `sample-session-${String(index + 1)}`,
-          })),
+          label: 'PM',
+          sessions,
         },
       ]}
       onViewChange={() => undefined}

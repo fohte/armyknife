@@ -5,6 +5,8 @@ import type { Session } from '#types'
 
 const todaySession: Session = {
   id: 'today-session',
+  engine: 'claude',
+  workType: 'PM',
   category: 'needs_action',
   isPaused: false,
   kind: 'Question',
@@ -12,7 +14,12 @@ const todaySession: Session = {
   preview: 'Choose a limit.',
   elapsedSeconds: 10,
   unread: true,
-  task: null,
+  task: {
+    id: 'sample-task',
+    number: 17,
+    title: 'Improve request reliability',
+    priority: 2,
+  },
   repo: 'example/service',
   project: 'sample project',
   parent: null,
@@ -57,31 +64,19 @@ const meta = {
     selectedSavedViewId: null,
     workTypeNavGroups: [
       {
-        label: 'Guides',
-        projects: [
+        label: 'PM',
+        sessions: [
+          todaySession,
           {
-            name: 'sample project',
-            status: 'Review',
-            needsActionCount: 3,
-            sessionId: 'sample-guide-session',
-          },
-          {
-            name: 'telemetry playground',
-            status: 'Working',
-            needsActionCount: 0,
-            sessionId: 'sample-guide-session-2',
-          },
-          {
-            name: 'handbook preview',
-            status: 'Idle',
-            needsActionCount: 0,
-            sessionId: 'sample-guide-session-3',
+            ...todaySessionInProgress,
+            id: 'pm-working-session',
+            workType: 'PM',
           },
         ],
       },
       {
         label: 'Reviews',
-        projects: [],
+        sessions: [],
       },
     ],
     onViewChange: () => undefined,

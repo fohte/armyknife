@@ -15,11 +15,9 @@
 
 .session-tree-row {
   position: relative;
-  display: flex;
+  display: block;
   min-width: 0;
-  flex-direction: column;
-  gap: 3px;
-  padding: 7px 12px 8px 0;
+  padding: 0 12px 0 0;
   color: var(--aw-text-body);
   cursor: pointer;
 }
@@ -45,17 +43,11 @@
   cursor: default;
 }
 
-.session-tree-main-line,
-.session-tree-detail-line,
-.session-tree-meta-line {
+.session-tree-main-line {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 6px;
-}
-
-.session-tree-main-line {
-  min-height: 17px;
+  gap: 4px;
 }
 
 .session-tree-caret,
@@ -77,107 +69,30 @@
   cursor: pointer;
 }
 
-.session-tree-status {
-  width: 7px;
-  min-width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--aw-text-muted);
-}
-
-.session-tree-status--needs_action {
-  background: var(--aw-color-warning);
-}
-
-.session-tree-status--in_progress {
-  background: var(--aw-color-working);
-}
-
-.session-tree-status--later {
-  border: 1px solid var(--aw-text-muted);
-  background: transparent;
-}
-
-.session-tree-status--done {
-  width: 8px;
-  height: 8px;
-  border: 1px solid var(--aw-text-muted);
-  background: transparent;
-}
-
-.session-tree-title {
-  overflow: hidden;
+.session-tree-main-line > .session-row-content {
   min-width: 0;
   flex: 1 1 auto;
+}
+
+.session-tree-row .session-row-content.density-compact {
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 6px;
+  padding: 5px 0;
+}
+
+.session-tree-row .session-row-content .session-title {
   color: var(--aw-text-primary);
   font-size: 12.5px;
   font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.session-tree-age {
-  flex: 0 0 auto;
-  color: var(--aw-text-secondary);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  white-space: nowrap;
-}
-
-.session-tree-descendant-count {
-  flex: 0 0 auto;
-  color: var(--aw-color-warning);
-  font-family: var(--font-mono);
+.session-tree-row .session-row-content .session-meta-line,
+.session-tree-row .session-row-content .session-repo-line {
   font-size: 10.5px;
 }
 
-.session-tree-detail-line,
-.session-tree-meta-line {
-  overflow: hidden;
-  padding-left: 27px;
-  font-size: 10.5px;
-  line-height: 1.4;
-  white-space: nowrap;
-}
-
-.session-tree-kind {
-  flex: 0 0 auto;
-  color: var(--aw-text-secondary);
-  font-weight: 700;
-}
-
-.session-tree-kind--question,
-.session-tree-kind--approve,
-.session-tree-kind--proposal {
-  color: var(--aw-color-warning);
-}
-
-.session-tree-kind--review {
-  color: var(--aw-color-working);
-}
-
-.session-tree-preview {
-  overflow: hidden;
-  color: var(--aw-text-secondary);
-  text-overflow: ellipsis;
-}
-
-.session-tree-meta-line {
-  justify-content: space-between;
-  gap: 10px;
-  color: var(--aw-text-secondary);
-}
-
-.session-tree-task {
-  overflow: hidden;
-  min-width: 0;
-  text-overflow: ellipsis;
-}
-
-.session-tree-task-id,
-.session-tree-repo {
-  font-family: var(--font-mono);
-  font-size: 10px;
+.session-tree-row .session-row-content .session-repo-line {
+  padding-left: 0;
 }
 
 .session-tree-repo {

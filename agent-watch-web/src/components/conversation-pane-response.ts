@@ -383,6 +383,12 @@ export function isSessionTreeResponse(
         typeof session['id'] === 'string' &&
         (session['parentId'] === null ||
           typeof session['parentId'] === 'string') &&
+        (session['engine'] === undefined ||
+          session['engine'] === 'claude' ||
+          session['engine'] === 'codex') &&
+        (session['workType'] === undefined ||
+          session['workType'] === null ||
+          typeof session['workType'] === 'string') &&
         typeof session['category'] === 'string' &&
         typeof session['isActive'] === 'boolean' &&
         (session['kind'] === null || typeof session['kind'] === 'string') &&

@@ -1199,6 +1199,8 @@ mod tests {
                     {
                         "id": "child-session",
                         "parentId": null,
+                        "engine": "claude",
+                        "workType": null,
                         "category": "later",
                         "isActive": true,
                         "kind": "Stopped",
@@ -1247,6 +1249,8 @@ mod tests {
                     "sessions": [{
                         "id": "child-session",
                         "parentId": null,
+                        "engine": "claude",
+                        "workType": null,
                         "category": "in_progress",
                         "isActive": true,
                         "kind": null,
@@ -1276,6 +1280,8 @@ mod tests {
     #[tokio::test]
     async fn session_tree_route_reparents_active_descendants_across_ended_sessions() {
         let mut source = source();
+        source.all_sessions[0].engine = Engine::Codex;
+        source.all_sessions[0].work_type = Some("development".to_string());
         let mut grandchild = session(SessionStatus::Stopped);
         grandchild.session_id = "grandchild-session".to_string();
         grandchild.ancestor_session_ids =
@@ -1317,6 +1323,8 @@ mod tests {
                     {
                         "id": "child-session",
                         "parentId": null,
+                        "engine": "codex",
+                        "workType": "development",
                         "category": "later",
                         "isActive": true,
                         "kind": "Stopped",
@@ -1341,6 +1349,8 @@ mod tests {
                     {
                         "id": "grandchild-session",
                         "parentId": "child-session",
+                        "engine": "claude",
+                        "workType": null,
                         "category": "needs_action",
                         "isActive": true,
                         "kind": "Stopped",

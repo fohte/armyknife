@@ -3,10 +3,9 @@ import '#components/session-tree-panel.css'
 import type { KeyboardEvent } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { formatElapsedTime } from '#components/format-elapsed-time'
+import { SessionRow } from '#components/session-row'
 import {
   defaultExpandedSessionIds,
-  directSessionChildCounts,
   type SessionTreeViewState,
   visibleSessionTreeRows,
 } from '#session-tree-model'
@@ -55,11 +54,6 @@ export function SessionTreePanel({
     () => new Map(sessions.map((session) => [session.id, session])),
     [sessions],
   )
-  const directChildCountByParent = useMemo(
-    () => directSessionChildCounts(sessions),
-    [sessions],
-  )
-
   useEffect(() => {
     setTreeReceivedAt(Date.now())
   }, [sessions])
@@ -182,24 +176,9 @@ export function SessionTreePanel({
       >
         {rows.map((row) => {
           const { session } = row
-          const parent =
-            session.parentId === null
-              ? undefined
-              : sessionById.get(session.parentId)
-          const taskDiffers =
-            session.task !== null && session.task.id !== parent?.task?.id
-          const repoDiffers =
-            session.repo !== '' && session.repo !== parent?.repo
-          const kind = session.kind ?? 'Session'
-          const directChildCount = directChildCountByParent.get(session.id) ?? 0
           const elapsedSeconds =
             session.elapsedSeconds +
             Math.max(0, Math.floor((nowMs - treeReceivedAt) / 1_000))
-          const preview =
-            session.category === 'done' &&
-            session.pullRequest?.state === 'Merged'
-              ? `Merged #${String(session.pullRequest.number)} · ◇ ${String(session.decisionCount)} decisions · ${String(directChildCount)} ${directChildCount === 1 ? 'child' : 'children'}`
-              : session.preview
           return (
             <div
               key={session.id}
@@ -236,56 +215,16 @@ export function SessionTreePanel({
                     aria-hidden="true"
                   />
                 )}
-                <span
-                  className={`session-tree-status session-tree-status--${session.category}`}
-                  aria-label={session.category.replace('_', ' ')}
+                <SessionRow
+                  session={{ ...session, elapsedSeconds }}
+                  density="compact"
                 />
-                <span className="session-tree-title">{session.title}</span>
-                {row.needsActionDescendantCount > 0 &&
-                row.hasChildren &&
-                !row.isExpanded ? (
-                  <span className="session-tree-descendant-count">
-                    {row.needsActionDescendantCount}
-                  </span>
-                ) : null}
-                <span className="session-tree-age">
-                  {elapsedSeconds === 0
-                    ? 'now'
-                    : formatElapsedTime(elapsedSeconds)}
-                </span>
               </div>
-              <div className="session-tree-detail-line">
-                <span
-                  className={`session-tree-kind session-tree-kind--${kind.toLowerCase()}`}
-                >
-                  {kind}
-                </span>
-                {preview === null || preview === '' ? null : (
-                  <span className="session-tree-preview"> · {preview}</span>
-                )}
-              </div>
-              {taskDiffers || repoDiffers ? (
-                <div className="session-tree-meta-line">
-                  {taskDiffers ? (
-                    <span className="session-tree-task">
-                      <span className="session-tree-task-id">
-                        {String(session.task?.number)}
-                      </span>
-                      <span> · {session.task?.title}</span>
-                    </span>
-                  ) : null}
-                  {repoDiffers ? (
-                    <span className="session-tree-repo">{session.repo}</span>
-                  ) : null}
-                </div>
-              ) : null}
             </div>
           )
         })}
       </div>
-      <footer className="session-tree-footer">
-        tq and repo are shown only when they differ from the parent. ← / → fold.
-      </footer>
+      <footer className="session-tree-footer">Use ← / → to fold.</footer>
     </div>
   )
 }

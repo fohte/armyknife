@@ -10,6 +10,8 @@ use super::*;
 struct TreeSessionView {
     id: String,
     parent_id: Option<String>,
+    engine: Engine,
+    work_type: Option<String>,
     category: SessionCategory,
     is_active: bool,
     kind: Option<SessionKind>,
@@ -240,6 +242,8 @@ pub(super) async fn session_tree<S: SessionSource>(
             TreeSessionView {
                 id: session.session_id.clone(),
                 parent_id: parent_ids.get(&session.session_id).cloned().flatten(),
+                engine: session.engine,
+                work_type: session.work_type.clone(),
                 category,
                 is_active: session.status != SessionStatus::Ended,
                 kind: kind_for_with_todo(

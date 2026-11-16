@@ -1,7 +1,6 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { userEvent } from 'vitest/browser'
 
 import { SessionRow } from '#components/session-row'
 import type { Session } from '#types'
@@ -10,17 +9,37 @@ let container: HTMLDivElement
 let root: Root | null = null
 
 const session: Session = {
-  id: 'paused-session',
-  category: 'done',
-  isPaused: true,
-  kind: null,
-  title: 'Prepare the next deployment window',
-  preview: null,
-  elapsedSeconds: 120,
-  unread: false,
-  task: null,
-  tasks: [],
-  repo: 'example/service',
+  id: 'sample-session',
+  engine: 'codex',
+  workType: 'development',
+  category: 'needs_action',
+  isPaused: false,
+  kind: 'Question',
+  title: 'Review the retry policy',
+  preview: 'Should retries stop after three attempts?',
+  elapsedSeconds: 125,
+  unread: true,
+  task: {
+    id: 'sample-task',
+    number: 17,
+    title: 'Improve request reliability',
+    priority: 2,
+  },
+  tasks: [
+    {
+      id: 'sample-task',
+      number: 17,
+      title: 'Improve request reliability',
+      priority: 2,
+    },
+    {
+      id: 'sample-child-task',
+      number: 18,
+      title: 'Document the retry policy',
+      priority: null,
+    },
+  ],
+  repo: 'sample/service',
   project: 'sample project',
   parent: null,
   ancestorSessionIds: [],
@@ -28,92 +47,42 @@ const session: Session = {
 }
 
 function renderRow(
-  viewSession: Session,
+  density: 'full' | 'compact',
+  viewSession: Session = session,
   isMobile = false,
-  withActions = false,
 ) {
   if (root !== null) act(() => root?.unmount())
   root = createRoot(container)
   act(() => {
     root?.render(
-      <ul>
-        <SessionRow
-          session={viewSession}
-          selected={false}
-          onSelect={() => undefined}
-          {...(withActions
-            ? {
-                onLater: () => undefined,
-                onToggleToday: () => undefined,
-              }
-            : {})}
-          compactRepo={isMobile}
-          isMobile={isMobile}
-        />
-      </ul>,
+      <SessionRow
+        session={viewSession}
+        density={density}
+        isMobile={isMobile}
+      />,
     )
   })
 }
 
 function snapshot() {
+  const row = container.querySelector<HTMLElement>('[data-session-row-content]')
+  const role = container.querySelector<HTMLElement>('.session-role-icon')
+  const task = container.querySelector<HTMLElement>('.session-task')
+
   return {
-    chips: Array.from(container.querySelectorAll('[data-slot="chip"]')).map(
-      (chip) => chip.textContent,
-    ),
+    density:
+      row?.classList.contains('density-full') === true ? 'full' : 'compact',
+    mobile: row?.classList.contains('is-mobile') ?? false,
+    title: container.querySelector('.session-title')?.textContent,
     age: container.querySelector('.session-age')?.textContent,
-    task: container.querySelector('.session-task')?.textContent,
-  }
-}
-
-function sessionKindPresentationSnapshot(iconClass: string) {
-  const kindIcon = container.querySelector<HTMLElement>('.session-kind-icon')
-  const icon = kindIcon?.querySelector('svg')
-  const sessionContent = container.querySelector('.session-content')
-  const sessionPreview = container.querySelector('.session-preview')
-
-  return {
-    contentLines: Array.from(sessionContent?.children ?? [], (line) =>
-      line.getAttribute('class'),
+    preview: container.querySelector('.session-preview')?.textContent ?? null,
+    role: role?.getAttribute('aria-label'),
+    engine: container.querySelector('.session-engine')?.textContent ?? null,
+    task: task?.textContent,
+    repositoryLines: Array.from(
+      container.querySelectorAll('.session-repo'),
+      (repo) => repo.textContent,
     ),
-    kindIcon: {
-      ariaLabel: kindIcon?.getAttribute('aria-label'),
-      classMatches: icon?.classList.contains(iconClass) ?? false,
-      title: kindIcon?.getAttribute('title'),
-    },
-    preview: sessionPreview?.textContent,
-  }
-}
-
-function mobileMetaSnapshot() {
-  return {
-    task: container.querySelector('.session-task')?.textContent,
-    separator: container.querySelector('.mobile-session-meta-separator')
-      ?.textContent,
-    repo: container.querySelector('.session-repo')?.textContent,
-  }
-}
-
-function actionVisibilitySnapshot() {
-  const actions = container.querySelector('.session-row-actions')
-  const [starButton, laterButton] = container.querySelectorAll(
-    '.session-row-actions button',
-  )
-
-  return {
-    actionsOpacity: actions === null ? null : getComputedStyle(actions).opacity,
-    star: {
-      icon: starButton?.textContent,
-      pressed: starButton?.getAttribute('aria-pressed'),
-      opacity:
-        starButton === undefined ? null : getComputedStyle(starButton).opacity,
-    },
-    later:
-      laterButton === undefined
-        ? null
-        : {
-            opacity: getComputedStyle(laterButton).opacity,
-            pointerEvents: getComputedStyle(laterButton).pointerEvents,
-          },
   }
 }
 
@@ -130,182 +99,50 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it.each([
-  { name: 'paused', viewSession: session },
-  { name: 'not paused', viewSession: { ...session, isPaused: false } },
-])('shows the same completed row status when $name', ({ viewSession }) => {
-  renderRow(viewSession)
+it('shows the full Inbox row with role, engine, task and repository', () => {
+  renderRow('full')
 
-  const expected = {
-    chips: [],
-    age: 'Finished · 2m',
-    task: '— No task',
-  }
-  expect(snapshot()).toEqual(expected)
-})
-
-it('keeps the merged pull request label on a paused row', () => {
-  renderRow({
-    ...session,
-    pullRequest: { number: 2049, state: 'Merged' },
-  })
-
-  const expected = {
-    chips: [],
-    age: 'Merged #2049 · 2m',
-    task: '— No task',
-  }
-  expect(snapshot()).toEqual(expected)
-})
-
-it.each([
-  { kind: 'Plan', iconClass: 'lucide-list' },
-  { kind: 'Question', iconClass: 'lucide-message-circle-question-mark' },
-  { kind: 'Approve', iconClass: 'lucide-shield-question-mark' },
-  { kind: 'Proposal', iconClass: 'lucide-signpost' },
-  { kind: 'Todo', iconClass: 'lucide-square' },
-  { kind: 'Error', iconClass: 'lucide-triangle-alert' },
-  { kind: 'Stopped', iconClass: 'lucide-circle-pause' },
-  { kind: 'Review', iconClass: 'lucide-eye' },
-  { kind: 'UnmappedKind', iconClass: 'lucide-circle-question-mark' },
-])(
-  'renders $kind as a named icon and keeps the preview text',
-  ({ kind, iconClass }) => {
-    renderRow({
-      ...session,
-      category: 'needs_action',
-      kind,
-      preview: 'Review the mockup',
-    })
-
-    expect(sessionKindPresentationSnapshot(iconClass)).toEqual({
-      contentLines: [
-        'session-title-line',
-        'session-preview',
-        'session-meta-line',
-      ],
-      kindIcon: {
-        ariaLabel: kind,
-        classMatches: true,
-        title: kind,
-      },
-      preview: ' Review the mockup',
-    })
-  },
-)
-
-it('shows the primary tq task and the number of other linked tasks', () => {
-  renderRow({
-    ...session,
-    task: {
-      id: 'open-task',
-      number: 2048,
-      title: 'Improve request reliability',
-      priority: 1,
-      isClosed: false,
-    },
-    tasks: [
-      {
-        id: 'open-task',
-        number: 2048,
-        title: 'Improve request reliability',
-        priority: 1,
-        isClosed: false,
-      },
-      {
-        id: 'completed-task',
-        number: 2047,
-        title: 'Document retry behavior',
-        priority: null,
-        isClosed: true,
-      },
-    ],
-  })
-
-  expect(container.querySelector('.session-task')?.textContent).toBe(
-    'P1 #2048 · Improve request reliability +1',
-  )
-})
-
-it('keeps the task, separator, and repository together on an iPhone row', () => {
-  renderRow(
-    {
-      ...session,
-      task: {
-        id: 'open-task',
-        number: 2048,
-        title: 'Improve request reliability',
-        priority: 1,
-      },
-    },
-    true,
-  )
-
-  expect(mobileMetaSnapshot()).toEqual({
-    task: 'P1 #2048 Improve request reliability',
-    separator: '·',
-    repo: 'service',
+  expect(snapshot()).toEqual({
+    density: 'full',
+    mobile: false,
+    title: 'Review the retry policy',
+    age: '2m',
+    preview: 'Should retries stop after three attempts?',
+    role: 'development',
+    engine: 'codex',
+    task: 'P2 #17 Improve request reliability +1',
+    repositoryLines: ['sample/service'],
   })
 })
 
-it('shows only the star on a starred desktop row at rest', async () => {
-  renderRow({ ...session, isToday: true }, false, true)
-  const pointerTarget = document.createElement('div')
-  pointerTarget.style.position = 'fixed'
-  pointerTarget.style.inset = '0'
-  pointerTarget.style.opacity = '0'
-  document.body.append(pointerTarget)
-  await userEvent.hover(pointerTarget)
+it('shows compact rows without a preview and reserves the missing role slot', () => {
+  renderRow('compact', { ...session, workType: null })
 
-  const actual = actionVisibilitySnapshot()
-  pointerTarget.remove()
-
-  expect(actual).toEqual({
-    actionsOpacity: '1',
-    star: { icon: '★', pressed: 'true', opacity: '1' },
-    later: { opacity: '0', pointerEvents: 'none' },
+  expect(snapshot()).toEqual({
+    density: 'compact',
+    mobile: false,
+    title: 'Review the retry policy',
+    age: '2m',
+    preview: null,
+    role: 'No role',
+    engine: 'codex',
+    task: 'P2 #17 Improve request reliability +1',
+    repositoryLines: ['sample/service'],
   })
 })
 
-it.each([
-  {
-    name: 'a working session shows its total decision count',
-    viewSession: {
-      ...session,
-      category: 'in_progress',
-      decisionCount: 2,
-      unreviewedDecisionCount: 1,
-    },
-    expected: '◇ 2 decisions',
-  },
-  {
-    name: 'a Done session shows its pending review count',
-    viewSession: {
-      ...session,
-      decisionCount: 3,
-      unreviewedDecisionCount: 2,
-    },
-    expected: '◇ 2 decisions to review',
-  },
-  {
-    name: 'a Done session uses the singular pending review label',
-    viewSession: {
-      ...session,
-      decisionCount: 1,
-      unreviewedDecisionCount: 1,
-    },
-    expected: '◇ 1 decision to review',
-  },
-])('$name', ({ viewSession, expected }) => {
-  renderRow(viewSession)
+it('keeps the full layout for mobile Inbox rows', () => {
+  renderRow('full', session, true)
 
-  expect(container.querySelector('.session-decision-count')?.textContent).toBe(
-    expected,
-  )
-})
-
-it('keeps the decision count hidden when an older response has no counts', () => {
-  renderRow(session)
-
-  expect(container.querySelector('.session-decision-count')).toBeNull()
+  expect(snapshot()).toEqual({
+    density: 'full',
+    mobile: true,
+    title: 'Review the retry policy',
+    age: '2m',
+    preview: 'Should retries stop after three attempts?',
+    role: 'development',
+    engine: 'codex',
+    task: 'P2 #17 Improve request reliability +1',
+    repositoryLines: ['sample/service'],
+  })
 })

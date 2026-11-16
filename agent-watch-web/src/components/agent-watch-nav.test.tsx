@@ -13,6 +13,8 @@ let root: Root | null = null
 
 const baseTodaySession: Session = {
   id: 'today-session',
+  engine: 'claude',
+  workType: 'development',
   category: 'needs_action',
   isPaused: false,
   kind: 'Question',
@@ -84,12 +86,11 @@ it('renders the configured label and opens the selected session', () => {
     [
       {
         label: 'Guides',
-        projects: [
+        sessions: [
           {
-            name: 'sample project',
-            status: 'Review',
-            needsActionCount: 1,
-            sessionId: 'sample-session',
+            ...baseTodaySession,
+            id: 'sample-session',
+            title: 'Sample session',
           },
         ],
       },
@@ -98,7 +99,7 @@ it('renders the configured label and opens the selected session', () => {
   )
 
   const button = container.querySelector<HTMLButtonElement>(
-    '[aria-label="Open sample project Guides session in Inbox"]',
+    '[aria-label="Open Sample session Guides session in Inbox"]',
   )
   act(() => button?.click())
 
@@ -108,7 +109,7 @@ it('renders the configured label and opens the selected session', () => {
       (heading) => heading.textContent,
     ),
     buttons: Array.from(
-      container.querySelectorAll<HTMLButtonElement>('.work-type-project'),
+      container.querySelectorAll<HTMLButtonElement>('.work-type-nav button'),
       (element) => element.getAttribute('aria-label'),
     ),
     selectedSessions: onSelectSession.mock.calls,
@@ -116,7 +117,7 @@ it('renders the configured label and opens the selected session', () => {
 
   expect(snapshot()).toEqual({
     headings: ['Guides'],
-    buttons: ['Open sample project Guides session in Inbox'],
+    buttons: ['Open Sample session Guides session in Inbox'],
     selectedSessions: [['sample-session']],
   })
 })
@@ -132,86 +133,42 @@ it('renders no work type sections without configured groups', () => {
   ).toEqual([])
 })
 
-it('shows Starred kind icons with accessible names and category colors', () => {
+it('uses the shared compact row without a starred marker', () => {
   renderNav([], {
-    todaySessions: [
-      baseTodaySession,
-      {
-        ...baseTodaySession,
-        id: 'working-session',
-        category: 'in_progress',
-        kind: null,
-      },
-      { ...baseTodaySession, id: 'error-session', kind: 'Error' },
-      {
-        ...baseTodaySession,
-        id: 'stopped-session',
-        category: 'in_progress',
-        isPaused: true,
-        kind: 'Stopped',
-      },
-    ],
+    todaySessions: [baseTodaySession],
   })
 
   const snapshot = () => ({
     heading: container.querySelector('#today-nav-title')?.textContent,
-    statuses: Array.from(
-      container.querySelectorAll<HTMLElement>('.today-session-status'),
-      (status) => ({
-        text: status.textContent,
-        ariaLabel: status.getAttribute('aria-label'),
-        className: status.className,
-        color: getComputedStyle(status).color,
-        iconClass: status.querySelector('svg')?.getAttribute('class') ?? null,
-        role: status.getAttribute('role'),
-        title: status.getAttribute('title'),
+    rows: Array.from(
+      container.querySelectorAll<HTMLElement>(
+        '.today-nav .session-row-content',
+      ),
+      (row) => ({
+        title: row.querySelector('.session-title')?.textContent,
+        role: row
+          .querySelector('.session-role-icon')
+          ?.getAttribute('aria-label'),
+        engine: row.querySelector('.session-engine')?.textContent,
+        task: row.querySelector('.session-task')?.textContent,
+        repo: row.querySelector('.session-repo')?.textContent,
       }),
     ),
-    oldIndicators: container.querySelectorAll('.today-start, .today-indicator')
-      .length,
+    starMarkers: container.querySelectorAll('.today-star').length,
   })
 
   expect(snapshot()).toEqual({
     heading: 'Starred',
-    statuses: [
+    rows: [
       {
-        text: '',
-        ariaLabel: 'Question',
-        className: 'today-session-status is-needs-action',
-        color: 'rgb(251, 191, 36)',
-        iconClass: 'lucide lucide-message-circle-question-mark',
-        role: 'img',
-        title: 'Question',
-      },
-      {
-        text: 'Working',
-        ariaLabel: null,
-        className: 'today-session-status is-working',
-        color: 'rgb(96, 165, 250)',
-        iconClass: null,
-        role: null,
-        title: 'Working',
-      },
-      {
-        text: '',
-        ariaLabel: 'Error',
-        className: 'today-session-status is-error',
-        color: 'rgb(248, 113, 113)',
-        iconClass: 'lucide lucide-triangle-alert',
-        role: 'img',
-        title: 'Error',
-      },
-      {
-        text: '',
-        ariaLabel: 'Stopped',
-        className: 'today-session-status is-working',
-        color: 'rgb(96, 165, 250)',
-        iconClass: 'lucide lucide-circle-pause',
-        role: 'img',
-        title: 'Stopped',
+        title: 'Review the retry policy',
+        role: 'development',
+        engine: 'claude',
+        task: '— No task',
+        repo: 'sample/repository',
       },
     ],
-    oldIndicators: 0,
+    starMarkers: 0,
   })
 })
 
@@ -231,7 +188,7 @@ it('shows only the ten most recently prompted sessions in newest-first order', (
 
   expect(
     Array.from(
-      container.querySelectorAll<HTMLElement>('.recent-session-title'),
+      container.querySelectorAll<HTMLElement>('.recent-nav .session-title'),
       (title) => title.textContent,
     ),
   ).toEqual([
@@ -283,7 +240,7 @@ it('shows the Recent section in the mobile navigation', () => {
   const snapshot = () => ({
     title: container.querySelector('#recent-nav-title')?.textContent,
     sessions: Array.from(
-      container.querySelectorAll('.recent-session-title'),
+      container.querySelectorAll('.recent-nav .session-title'),
       (title) => title.textContent,
     ),
   })

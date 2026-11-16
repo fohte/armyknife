@@ -325,7 +325,6 @@ export function InboxView({
           onSelect,
           onLater,
           onToggleToday,
-          compactRepo: isMobile,
           isMobile,
         })}
         <Button
@@ -356,16 +355,61 @@ export function InboxView({
         {laterExpanded && later.length > 0 ? (
           <ul className="session-list later-session-list">
             {later.map((session) => (
-              <SessionRow
-                key={session.id}
-                session={session}
-                selected={session.id === selectedId}
-                onSelect={onSelect}
-                onLater={onLater}
-                onToggleToday={onToggleToday}
-                compactRepo={isMobile}
-                isMobile={isMobile}
-              />
+              <li className="session-list-item" key={session.id}>
+                <div
+                  className={`session-row-layout${session.isToday === true ? ' is-starred' : ''}`}
+                >
+                  <Button
+                    type="button"
+                    variant="plain"
+                    className={`session-row cursor-pointer category-${session.category}${session.id === selectedId ? ' is-selected' : ''}`}
+                    data-session-row=""
+                    aria-current={
+                      session.id === selectedId ? 'true' : undefined
+                    }
+                    onClick={() => {
+                      onSelect(session.id)
+                    }}
+                  >
+                    <SessionRow
+                      session={session}
+                      density="full"
+                      isMobile={isMobile}
+                    />
+                  </Button>
+                  {!isMobile ? (
+                    <div className="session-row-actions">
+                      <Button
+                        type="button"
+                        variant="plain"
+                        aria-label={
+                          session.isToday === true
+                            ? 'Remove from Starred'
+                            : 'Add to Starred'
+                        }
+                        aria-pressed={session.isToday ?? false}
+                        className="session-action-button cursor-pointer"
+                        onClick={() => {
+                          onToggleToday(session.id, session.isToday !== true)
+                        }}
+                      >
+                        {session.isToday === true ? '★' : '☆'}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="plain"
+                        aria-label={`Later: ${session.title}`}
+                        className="session-action-button cursor-pointer"
+                        onClick={() => {
+                          onLater(session.id)
+                        }}
+                      >
+                        ◷
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+              </li>
             ))}
           </ul>
         ) : null}
@@ -391,7 +435,6 @@ export function InboxView({
           onSelect,
           onLater,
           onToggleToday,
-          compactRepo: isMobile,
           isMobile,
         })}
         {hiddenInProgressCount > 0 && !isMobile ? (
@@ -448,7 +491,6 @@ export function InboxView({
           onSelect,
           onLater,
           onToggleToday,
-          compactRepo: isMobile,
           isMobile,
           onCloseAll: () => {
             onCloseDone(allDone)

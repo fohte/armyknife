@@ -6,6 +6,8 @@ import type { Session } from '#types'
 const session: Session = {
   id: 'example-session',
   category: 'needs_action',
+  engine: 'claude',
+  workType: 'development',
   isPaused: false,
   kind: 'Question',
   title: 'Update retry handling',
@@ -46,14 +48,12 @@ const meta = {
   component: SessionRow,
   args: {
     session,
-    selected: false,
-    onSelect: () => undefined,
   },
   decorators: [
     (Story) => (
-      <ul className="story-session-list">
+      <div className="story-session-list">
         <Story />
-      </ul>
+      </div>
     ),
   ],
 } satisfies Meta<typeof SessionRow>
@@ -65,19 +65,23 @@ export const NeedsActionIsUnread: Story = {
   name: 'An unread question waits for a response',
 }
 
-export const PausedNeedsActionKeepsItsRequestStatus: Story = {
-  name: 'A paused question keeps its request status',
+export const FullInboxRow: Story = {
+  name: 'A full row shows the request preview with session details',
   args: {
-    session: { ...session, isPaused: true },
+    density: 'full',
   },
 }
 
-export const SessionIsStarredForToday: Story = {
-  name: 'A starred session stays in the Starred list',
+export const CompactSessionRow: Story = {
+  name: 'A compact row places the repository below the task details',
+  args: { density: 'compact' },
+}
+
+export const CompactSessionWithoutRole: Story = {
+  name: 'A compact row keeps its role icon slot when no role is assigned',
   args: {
-    session: { ...session, isToday: true },
-    onLater: () => undefined,
-    onToggleToday: () => undefined,
+    density: 'compact',
+    session: { ...session, workType: null },
   },
 }
 
@@ -246,25 +250,10 @@ export const WorkShowsDecisionCount: Story = {
   },
 }
 
-export const SessionIsPaused: Story = {
-  name: 'A paused session keeps the completed row status',
+export const MobileInboxRow: Story = {
+  name: 'A mobile Inbox row uses the full layout at phone size',
   args: {
-    session: {
-      ...session,
-      category: 'done',
-      kind: null,
-      isPaused: true,
-      unread: false,
-    },
-  },
-}
-
-export const RepositoryNameIsCompactOnIPhone: Story = {
-  name: 'The repository name fits on an iPhone row',
-  args: {
-    compactRepo: true,
-    onLater: () => undefined,
-    onToggleToday: () => undefined,
+    density: 'full',
     isMobile: true,
   },
   decorators: [

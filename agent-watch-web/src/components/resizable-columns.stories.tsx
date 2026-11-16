@@ -6,6 +6,8 @@ import type { Session } from '#types'
 
 const todaySession: Session = {
   id: 'storybook-session',
+  engine: 'claude',
+  workType: 'PM',
   category: 'needs_action',
   isPaused: false,
   kind: 'Review',
@@ -53,14 +55,7 @@ function navigation(activeView: 'inbox' | 'board') {
       workTypeNavGroups={[
         {
           label: 'PM',
-          projects: [
-            {
-              name: 'sample project',
-              status: 'Review',
-              needsActionCount: 1,
-              sessionId: todaySession.id,
-            },
-          ],
+          sessions: [todaySession],
         },
       ]}
       onViewChange={() => undefined}

@@ -78,6 +78,8 @@ export type Session = {
 export type SessionTreeNode = {
   id: string
   parentId: string | null
+  engine?: 'claude' | 'codex'
+  workType?: string | null
   category: SessionCategory
   isActive: boolean
   kind: SessionKind | null
