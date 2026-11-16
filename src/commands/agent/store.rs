@@ -18,6 +18,7 @@ mod archive;
 mod database;
 mod peer_out_messages;
 mod queued_prompts;
+mod usage;
 
 pub(crate) use archive::{ArchiveLogContext, archive_codex_thread_before_delete_with};
 pub(crate) use database::AgentFile;
@@ -41,6 +42,7 @@ pub(crate) use queued_prompts::{
     insert_watch_web_queued_prompt_from, mark_watch_web_queued_prompts_resolved,
     mark_watch_web_queued_prompts_resolved_from, watch_web_queued_prompts_from,
 };
+pub(crate) use usage::{engine_quotas_from, record_usage_from, usage_snapshots_from};
 
 /// Threshold in seconds for sort stability.
 /// Sessions updated within this window are sorted by created_at instead,

@@ -100,25 +100,39 @@ pub(super) enum StoredSession {
 }
 
 pub(crate) fn open_connection(sessions_dir: &Path) -> Result<Connection> {
+    open_connection_with_options(sessions_dir, BUSY_TIMEOUT, true)
+}
+
+pub(crate) fn open_usage_connection(sessions_dir: &Path) -> Result<Connection> {
+    open_connection_with_options(sessions_dir, Duration::from_millis(100), false)
+}
+
+fn open_connection_with_options(
+    sessions_dir: &Path,
+    busy_timeout: Duration,
+    import_legacy_data: bool,
+) -> Result<Connection> {
     fs::create_dir_all(sessions_dir)
         .with_context(|| format!("creating sessions dir {}", sessions_dir.display()))?;
 
     let database_path = sessions_dir.join("sessions.db");
     let mut connection = Connection::open(&database_path)
         .with_context(|| format!("opening session database {}", database_path.display()))?;
-    connection.busy_timeout(BUSY_TIMEOUT)?;
+    connection.busy_timeout(busy_timeout)?;
     connection.pragma_update(None, "journal_mode", "WAL")?;
     migrations::migrate_if_needed(&mut connection)?;
 
-    if let Err(error) = migration::import_legacy_json(&mut connection, sessions_dir) {
-        tracing::warn!(
-            target: "armyknife::commands::agent::store",
-            event = "agent.store.legacy_import_failed",
-            error = %error,
-        );
+    if import_legacy_data {
+        if let Err(error) = migration::import_legacy_json(&mut connection, sessions_dir) {
+            tracing::warn!(
+                target: "armyknife::commands::agent::store",
+                event = "agent.store.legacy_import_failed",
+                error = %error,
+            );
+        }
+        migration::remove_legacy_lock_files(sessions_dir);
+        migration::cleanup_expired_legacy_json(&connection, sessions_dir)?;
     }
-    migration::remove_legacy_lock_files(sessions_dir);
-    migration::cleanup_expired_legacy_json(&connection, sessions_dir)?;
 
     Ok(connection)
 }
