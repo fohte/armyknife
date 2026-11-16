@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.750](https://github.com/fohte/armyknife/compare/v0.1.749...v0.1.750) (2026-11-16)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show task and repo clearly ([#1884](https://github.com/fohte/armyknife/issues/1884)) ([6ad697e](https://github.com/fohte/armyknife/commit/6ad697ed5a177327341a504001536a0234dc4abd))
+
 ## [0.1.749](https://github.com/fohte/armyknife/compare/v0.1.748...v0.1.749) (2026-11-16)
 
 
