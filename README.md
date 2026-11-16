@@ -632,7 +632,7 @@ Withdrew todo 1
 
 ### `a agent file send`
 
-Run `a agent file send <path>... [--caption <text>]` from a tracked Claude Code or Codex session to show files in that session's watch-web conversation. The command copies each file at send time, so the conversation keeps the sent contents if the source later changes or disappears. PNG, JPEG, GIF, and WebP images appear inline; other files have download links. A send accepts up to 16 files, each at most 10 MiB, with a combined limit of 50 MiB.
+Run `a agent file send <path>... [--caption <text>]` from a tracked Claude Code or Codex session to show files in that session's watch-web conversation. The command copies each file at send time, so the conversation keeps the sent contents if the source later changes or disappears. PNG, JPEG, GIF, and WebP images appear inline. Markdown files render in the conversation; other recognized UTF-8 text files appear in a code block, with long previews collapsed. MP4/MOV videos and M4A/MP3 audio files have inline players, and PDFs open in the browser's PDF viewer. HTML files remain download-only so scripts cannot run on the watch-web origin; unsupported files also have download links. A send accepts up to 16 files, each at most 10 MiB, with a combined limit of 50 MiB.
 
 ```console
 $ a agent file send ./sample-layout.png ./sample-report.pdf --caption "Review these samples"

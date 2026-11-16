@@ -12,7 +12,8 @@ use uuid::Uuid;
 
 use super::error::CcError;
 use super::file_attachment_support::{
-    MAX_AGENT_FILE_BYTES as MAX_FILE_BYTES, image_format_from_bytes, sanitize_basename,
+    FILE_TYPE_PREFIX_BYTES, FilePreviewType, MAX_AGENT_FILE_BYTES as MAX_FILE_BYTES,
+    file_preview_type, image_format_from_bytes, sanitize_basename,
 };
 use super::store::{self, AgentFile};
 use crate::shared::env_var::EnvVars;
@@ -83,7 +84,24 @@ fn record_files(
             .and_then(|name| name.to_str())
             .map(sanitize_basename)
             .context("file name is not valid UTF-8")?;
-        let mime_type = image_format_from_bytes(&bytes).map(|(mime_type, _)| mime_type.to_owned());
+        let mime_type = match file_preview_type(&name, &bytes) {
+            FilePreviewType::Image => {
+                image_format_from_bytes(&bytes).map(|(mime_type, _)| mime_type.to_owned())
+            }
+            FilePreviewType::Markdown => Some("text/markdown".to_owned()),
+            FilePreviewType::Text => Some("text/plain".to_owned()),
+            FilePreviewType::Video if name.to_ascii_lowercase().ends_with(".mov") => {
+                Some("video/quicktime".to_owned())
+            }
+            FilePreviewType::Video => Some("video/mp4".to_owned()),
+            FilePreviewType::Audio if name.to_ascii_lowercase().ends_with(".m4a") => {
+                Some("audio/mp4".to_owned())
+            }
+            FilePreviewType::Audio => Some("audio/mpeg".to_owned()),
+            FilePreviewType::Pdf => Some("application/pdf".to_owned()),
+            FilePreviewType::Html => Some("text/html".to_owned()),
+            FilePreviewType::Download => None,
+        };
         pending_files.push((name, mime_type, bytes));
     }
 
@@ -152,6 +170,49 @@ pub(crate) fn read_stored_file(
     session_id: &str,
     file: &AgentFile,
 ) -> Result<Option<Vec<u8>>> {
+    let Some((stored_file, size)) = open_stored_file(storage_root, session_id, file)? else {
+        return Ok(None);
+    };
+    let mut bytes = Vec::with_capacity(size as usize);
+    stored_file
+        .take(MAX_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 != size {
+        return Ok(None);
+    }
+    Ok(Some(bytes))
+}
+
+pub(crate) fn read_stored_file_prefix(
+    storage_root: &Path,
+    session_id: &str,
+    file: &AgentFile,
+) -> Result<Option<(Vec<u8>, usize)>> {
+    let Some((mut stored_file, size)) = open_stored_file(storage_root, session_id, file)? else {
+        return Ok(None);
+    };
+    let Some(bytes) = read_file_type_prefix(&mut stored_file, size)? else {
+        return Ok(None);
+    };
+    Ok(Some((bytes, size as usize)))
+}
+
+pub(crate) fn read_file_type_prefix(file: &mut File, file_size: u64) -> Result<Option<Vec<u8>>> {
+    let expected_size = file_size.min(FILE_TYPE_PREFIX_BYTES as u64) as usize;
+    let mut bytes = Vec::with_capacity(expected_size);
+    file.take(FILE_TYPE_PREFIX_BYTES as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() != expected_size {
+        return Ok(None);
+    }
+    Ok(Some(bytes))
+}
+
+fn open_stored_file(
+    storage_root: &Path,
+    session_id: &str,
+    file: &AgentFile,
+) -> Result<Option<(File, u64)>> {
     if Uuid::parse_str(&file.id).is_err() {
         return Ok(None);
     }
@@ -159,28 +220,29 @@ pub(crate) fn read_stored_file(
         return Ok(None);
     };
     let path = directory.join(&file.id);
-    let metadata = match fs::symlink_metadata(&path) {
+    let path_metadata = match fs::symlink_metadata(&path) {
         Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => metadata,
         Ok(_) => return Ok(None),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    if file.size < 0 || metadata.len() != file.size as u64 || metadata.len() > MAX_FILE_BYTES {
+    if file.size < 0
+        || path_metadata.len() != file.size as u64
+        || path_metadata.len() > MAX_FILE_BYTES
+    {
         return Ok(None);
     }
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
     options.custom_flags(libc::O_NOFOLLOW);
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    options
-        .open(path)?
-        .take(MAX_FILE_BYTES + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() as u64 != file.size as u64 {
+    let stored_file = options.open(path)?;
+    let metadata = stored_file.metadata()?;
+    if !metadata.is_file() || metadata.len() != file.size as u64 || metadata.len() > MAX_FILE_BYTES
+    {
         return Ok(None);
     }
-    Ok(Some(bytes))
+    Ok(Some((stored_file, metadata.len())))
 }
 
 pub(crate) fn storage_root() -> Result<PathBuf> {
@@ -291,7 +353,10 @@ mod tests {
     use sha2::Digest;
     use tempfile::TempDir;
 
-    use super::{MAX_FILE_BYTES, read_stored_file, record_files, validate_send_limits};
+    use super::{
+        FILE_TYPE_PREFIX_BYTES, MAX_FILE_BYTES, read_stored_file, read_stored_file_prefix,
+        record_files, validate_send_limits,
+    };
     use crate::cli::{Cli, Commands};
     use crate::commands::agent::store::{self, AgentFile};
     use crate::commands::agent::{AgentCommands, FileCommands};
@@ -364,6 +429,7 @@ mod tests {
             (
                 records[0].name.as_str(),
                 records[0].caption.as_deref(),
+                records[0].mime_type.as_deref(),
                 store::agent_file_from(sessions.path(), "fixture-session", &records[0].id).unwrap(),
                 read_stored_file(
                     &state.path().join("attachments"),
@@ -375,9 +441,39 @@ mod tests {
             (
                 "report.txt",
                 Some("Fixture caption"),
+                Some("text/plain"),
                 Some(records[0].clone()),
                 Some(b"fixture report".to_vec())
             )
+        );
+    }
+
+    #[rstest]
+    fn reads_only_the_file_type_prefix_for_stored_attachments(storage: (TempDir, TempDir)) {
+        let (sessions, state) = storage;
+        create_session(sessions.path());
+        let source = state.path().join("large-output.log");
+        let content = vec![b'x'; FILE_TYPE_PREFIX_BYTES + 32];
+        fs::write(&source, &content).unwrap();
+        let records = record_files(
+            "fixture-session",
+            std::slice::from_ref(&source),
+            None,
+            sessions.path(),
+            &state.path().join("attachments"),
+        )
+        .unwrap();
+
+        let actual = read_stored_file_prefix(
+            &state.path().join("attachments"),
+            "fixture-session",
+            &records[0],
+        )
+        .unwrap();
+
+        assert_eq!(
+            actual,
+            Some((vec![b'x'; FILE_TYPE_PREFIX_BYTES], content.len()))
         );
     }
 

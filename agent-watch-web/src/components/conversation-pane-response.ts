@@ -123,7 +123,18 @@ function isChatItem(value: unknown): value is ChatItem {
             isRecord(file) &&
             typeof file['name'] === 'string' &&
             typeof file['source'] === 'string' &&
+            typeof file['size'] === 'number' &&
+            Number.isSafeInteger(file['size']) &&
+            file['size'] >= 0 &&
             typeof file['isImage'] === 'boolean' &&
+            (file['previewType'] === 'image' ||
+              file['previewType'] === 'markdown' ||
+              file['previewType'] === 'text' ||
+              file['previewType'] === 'video' ||
+              file['previewType'] === 'audio' ||
+              file['previewType'] === 'pdf' ||
+              file['previewType'] === 'html' ||
+              file['previewType'] === 'download') &&
             typeof file['available'] === 'boolean',
         ) &&
         (value['caption'] === null || typeof value['caption'] === 'string') &&
