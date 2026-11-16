@@ -38,6 +38,9 @@ fn non_shell_processes_in_path(
         .iter()
         .filter(|(pid, cwd)| !excluded_pids.contains(pid) && cwd.starts_with(path))
         .filter_map(|(&pid, _)| {
+            if snapshot.has_codex_app_server_ancestor(pid) {
+                return None;
+            }
             let comm = snapshot.comm_basename(pid)?;
             let comm = comm.strip_prefix('-').unwrap_or(comm);
             (!SHELL_COMMANDS.contains(&comm)).then(|| ProcessInPath {
@@ -60,16 +63,27 @@ mod tests {
     const WORKTREE: &str = "/repo/.worktrees/feature";
 
     fn snapshot() -> ProcessSnapshot {
-        ProcessSnapshot::from_ps_output(indoc! {"
+        ProcessSnapshot::from_ps_outputs(
+            indoc! {"
             1 0 launchd
             10 1 zsh
             20 10 -zsh
             30 20 claude
             40 30 node
             50 1 bash
-            60 1 codex
-            70 1 /usr/bin/bash
-        "})
+            60 1 /opt/homebrew/bin/codex
+            61 60 node
+            70 1 /opt/homebrew/bin/codex
+            71 70 node
+            80 1 /usr/bin/bash
+        "},
+            indoc! {"
+            60 /opt/homebrew/bin/codex app-server --listen unix:// --managed-daemon
+            61 node node_repl
+            70 /opt/homebrew/bin/codex exec
+            71 node node_repl
+        "},
+        )
     }
 
     #[rstest]
@@ -78,7 +92,9 @@ mod tests {
     #[case::caller_and_ancestor_are_excluded(&[(10, WORKTREE), (20, WORKTREE), (30, WORKTREE)], &[(30, "claude")])]
     #[case::missing_ps_pid_is_ignored(&[(80, WORKTREE)], &[])]
     #[case::login_shell_is_recognized(&[(20, WORKTREE)], &[])]
-    #[case::command_path_uses_its_basename(&[(70, WORKTREE)], &[])]
+    #[case::command_path_uses_its_basename(&[(80, WORKTREE)], &[])]
+    #[case::codex_daemon_descendants_are_ignored(&[(61, WORKTREE), (30, WORKTREE)], &[(30, "claude")])]
+    #[case::other_codex_ancestors_are_not_ignored(&[(71, WORKTREE)], &[(71, "node")])]
     fn selects_non_shell_processes_in_the_worktree(
         #[case] cwd_entries: &[(u32, &str)],
         #[case] expected_processes: &[(u32, &str)],

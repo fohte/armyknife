@@ -348,6 +348,7 @@ pub struct ProcessSnapshot {
     children: HashMap<u32, Vec<(u32, String)>>,
     parents: HashMap<u32, u32>,
     comms: HashMap<u32, String>,
+    command_lines: HashMap<u32, String>,
 }
 
 impl ProcessSnapshot {
@@ -362,13 +363,22 @@ impl ProcessSnapshot {
             return None;
         }
         let text = String::from_utf8_lossy(&output.stdout);
-        Some(Self::from_ps_output(&text))
+        let args_output = command::new("ps")
+            .args(["-A", "-o", "pid=,args="])
+            .output()
+            .ok()?;
+        if !args_output.status.success() {
+            return None;
+        }
+        let args_text = String::from_utf8_lossy(&args_output.stdout);
+        Some(Self::from_ps_outputs(&text, &args_text))
     }
 
     fn from_ps_output(text: &str) -> Self {
         let mut children: HashMap<u32, Vec<(u32, String)>> = HashMap::new();
         let mut parents: HashMap<u32, u32> = HashMap::new();
         let mut comms: HashMap<u32, String> = HashMap::new();
+        let mut command_lines: HashMap<u32, String> = HashMap::new();
         for line in text.lines() {
             let mut it = line.split_whitespace();
             let Some(pid) = it.next().and_then(|s| s.parse::<u32>().ok()) else {
@@ -383,13 +393,21 @@ impl ProcessSnapshot {
             }
             children.entry(ppid).or_default().push((pid, comm.clone()));
             parents.insert(pid, ppid);
-            comms.insert(pid, comm);
+            comms.insert(pid, comm.clone());
+            command_lines.insert(pid, comm);
         }
         Self {
             children,
             parents,
             comms,
+            command_lines,
         }
+    }
+
+    fn from_ps_outputs(processes: &str, args: &str) -> Self {
+        let mut snapshot = Self::from_ps_output(processes);
+        snapshot.command_lines = parse_ps_args_output(args);
+        snapshot
     }
 
     /// Returns `pid` and every ancestor up to (but not including) the point
@@ -416,6 +434,22 @@ impl ProcessSnapshot {
         self.comms
             .get(&pid)
             .map(|c| c.rsplit('/').next().unwrap_or(c.as_str()))
+    }
+
+    fn has_codex_app_server_ancestor(&self, pid: u32) -> bool {
+        self.ancestors(pid)
+            .into_iter()
+            .filter(|&ancestor| ancestor != pid)
+            .any(|ancestor| {
+                let Some(command_line) = self.command_lines.get(&ancestor) else {
+                    return false;
+                };
+                let mut args = command_line.split_whitespace();
+                args.next()
+                    .and_then(|executable| Path::new(executable).file_name())
+                    .is_some_and(|name| name == "codex")
+                    && args.next() == Some("app-server")
+            })
     }
 
     /// Resolves the pid of the first process in the subtree rooted at
@@ -465,6 +499,17 @@ impl ProcessSnapshot {
         }
         None
     }
+}
+
+fn parse_ps_args_output(text: &str) -> HashMap<u32, String> {
+    text.lines()
+        .filter_map(|line| {
+            let mut columns = line.split_whitespace();
+            let pid = columns.next()?.parse::<u32>().ok()?;
+            let args = columns.collect::<Vec<_>>().join(" ");
+            (!args.is_empty()).then_some((pid, args))
+        })
+        .collect()
 }
 
 /// Captures the current working directory of every process visible to the
