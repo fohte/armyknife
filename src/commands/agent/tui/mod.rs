@@ -441,7 +441,7 @@ mod tests {
             .map(|i| Session {
                 archived_at: None,
                 pr_context: None,
-                submitted_pr_contexts: Vec::new(),
+                created_pr_urls: Vec::new(),
                 session_id: format!("session-{}", i),
                 work_type: None,
                 work_type_pinned: false,
@@ -954,7 +954,7 @@ mod tests {
             Session {
                 archived_at: None,
                 pr_context: None,
-                submitted_pr_contexts: Vec::new(),
+                created_pr_urls: Vec::new(),
                 session_id: "session-running".to_string(),
                 work_type: None,
                 work_type_pinned: false,
@@ -993,7 +993,7 @@ mod tests {
             Session {
                 archived_at: None,
                 pr_context: None,
-                submitted_pr_contexts: Vec::new(),
+                created_pr_urls: Vec::new(),
                 session_id: "session-waiting".to_string(),
                 work_type: None,
                 work_type_pinned: false,
@@ -1032,7 +1032,7 @@ mod tests {
             Session {
                 archived_at: None,
                 pr_context: None,
-                submitted_pr_contexts: Vec::new(),
+                created_pr_urls: Vec::new(),
                 session_id: "session-stopped".to_string(),
                 work_type: None,
                 work_type_pinned: false,
@@ -1071,7 +1071,7 @@ mod tests {
             Session {
                 archived_at: None,
                 pr_context: None,
-                submitted_pr_contexts: Vec::new(),
+                created_pr_urls: Vec::new(),
                 session_id: "session-paused".to_string(),
                 work_type: None,
                 work_type_pinned: false,
@@ -1236,7 +1236,7 @@ mod tests {
         Session {
             archived_at: None,
             pr_context: None,
-            submitted_pr_contexts: Vec::new(),
+            created_pr_urls: Vec::new(),
             session_id: id.to_string(),
             work_type: None,
             work_type_pinned: false,

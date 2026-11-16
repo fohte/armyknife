@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.749](https://github.com/fohte/armyknife/compare/v0.1.748...v0.1.749) (2026-11-16)
+
+
+### Bug Fixes
+
+* **agent/tui:** show PRs created by the session ([#1882](https://github.com/fohte/armyknife/issues/1882)) ([8afccf3](https://github.com/fohte/armyknife/commit/8afccf3ff2d84fb1dcb3979d05c9b1505abab6b8))
+
+## [0.1.748](https://github.com/fohte/armyknife/compare/v0.1.747...v0.1.748) (2026-11-16)
+
+
+### Features
+
+* **agent/web-ui:** allow removing and listing ([#1879](https://github.com/fohte/armyknife/issues/1879)) ([1c8eab3](https://github.com/fohte/armyknife/commit/1c8eab3aa933591247180ba6f8dc429f12d0c244))
+
 ## [0.1.747](https://github.com/fohte/armyknife/compare/v0.1.746...v0.1.747) (2026-11-16)
 
 

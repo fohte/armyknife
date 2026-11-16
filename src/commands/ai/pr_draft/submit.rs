@@ -18,10 +18,10 @@ mod post_submit;
 
 use post_submit::{
     PostSubmitProcessor, PrSeriesPostSubmitProcessor, SubmitEffects, body_for_existing_pr_update,
-    format_post_submit_failure, record_submitted_pr_context,
+    format_post_submit_failure, record_created_pr_url,
 };
 #[cfg(test)]
-use post_submit::{SavedPrSeriesPlan, TqBranchMetadata, record_submitted_pr_context_in};
+use post_submit::{SavedPrSeriesPlan, TqBranchMetadata, record_created_pr_url_in};
 
 const SERIES_MARKERS_REQUIRED_ERROR: &str = indoc::indoc! {"
     A PR series plan with at least two pull requests requires both markers in the PR body. Add them on their own lines after the bullet list in the changes section:
@@ -60,7 +60,7 @@ pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
     let post_submit_processor = PrSeriesPostSubmitProcessor { github: client };
     let submit_effects = SubmitEffects {
         post_submit_processor: &post_submit_processor,
-        record_pr_context: record_submitted_pr_context,
+        record_created_pr_url,
     };
     run_impl_with_recording(
         args,
@@ -74,7 +74,7 @@ pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
     .await
 }
 
-async fn run_impl_with_recording<P: PostSubmitProcessor, R: Fn(&PrTarget)>(
+async fn run_impl_with_recording<P: PostSubmitProcessor, R: Fn(&str)>(
     args: &SubmitArgs,
     gh_client: &(impl PrBodyClient + PrClient + PrStackClient + RepoClient),
     run_hook: HookRunner<'_>,
@@ -261,7 +261,7 @@ async fn run_impl_with_recording<P: PostSubmitProcessor, R: Fn(&PrTarget)>(
         }
     };
 
-    (submit_effects.record_pr_context)(&target);
+    (submit_effects.record_created_pr_url)(&pr_url);
 
     if target_is_current_repo {
         let config_key = format!("branch.{}.pr-url", target.branch);
@@ -391,7 +391,7 @@ mod tests {
         anyhow::bail!("The --no-review option is only available when vibe mode is enabled.")
     }
 
-    fn noop_record_submitted_pr_context(_target: &PrTarget) {}
+    fn noop_record_created_pr_url(_pr_url: &str) {}
 
     #[fixture]
     fn sessions_dir_with_cwd_pr_context() -> tempfile::TempDir {
@@ -429,7 +429,7 @@ mod tests {
     ) -> anyhow::Result<()> {
         let submit_effects = SubmitEffects {
             post_submit_processor,
-            record_pr_context: noop_record_submitted_pr_context,
+            record_created_pr_url: noop_record_created_pr_url,
         };
         super::run_impl_with_recording(
             args,
@@ -733,6 +733,8 @@ mod tests {
     #[derive(Default)]
     struct SubmitClientStub {
         create_calls: Mutex<Vec<CreatePrCall>>,
+        update_calls: Mutex<Vec<u64>>,
+        existing_pr_number: Option<u64>,
     }
 
     impl RepoClient for SubmitClientStub {
@@ -771,17 +773,31 @@ mod tests {
             })
         }
 
-        async fn update_pull_request(&self, _params: UpdatePrParams) -> GitHubResult<String> {
-            Ok("https://github.com/sample-owner/sample-repository/pull/1".to_string())
+        async fn update_pull_request(&self, params: UpdatePrParams) -> GitHubResult<String> {
+            self.update_calls
+                .lock()
+                .expect("submit client mutex")
+                .push(params.number);
+            Ok(format!(
+                "https://github.com/sample-owner/sample-repository/pull/{}",
+                params.number
+            ))
         }
 
         async fn get_pr_for_branch(
             &self,
-            _owner: &str,
-            _repo: &str,
+            owner: &str,
+            repo: &str,
             _branch: &str,
         ) -> GitHubResult<Option<crate::infra::github::PrInfo>> {
-            Ok(None)
+            Ok(self
+                .existing_pr_number
+                .map(|number| crate::infra::github::PrInfo {
+                    number,
+                    title: "Existing pull request".to_string(),
+                    state: PrState::Open,
+                    url: format!("https://github.com/{owner}/{repo}/pull/{number}"),
+                }))
         }
 
         async fn get_open_pr_for_branch(
@@ -1929,9 +1945,22 @@ mod tests {
     }
 
     #[rstest]
+    #[case::created_pr(None, 1, vec![(
+        "sample-owner".to_string(),
+        "sample-repository".to_string(),
+        "Submit a change".to_string(),
+        "feature/submitted-change".to_string(),
+        None,
+        false,
+    )], Vec::new())]
+    #[case::updated_pr(Some(23), 23, Vec::new(), vec![23])]
     #[tokio::test]
-    async fn submit_records_submitted_pr_context_on_the_calling_session(
+    async fn submit_records_the_url_for_created_and_updated_prs(
         sessions_dir_with_cwd_pr_context: tempfile::TempDir,
+        #[case] existing_pr_number: Option<u64>,
+        #[case] pull_request_number: u64,
+        #[case] expected_create_calls: Vec<CreatePrCall>,
+        #[case] expected_update_calls: Vec<u64>,
     ) {
         let _draft_directory = TestDraftDirectory::new("sample-owner", "sample-repository");
         let branch = "feature/submitted-change";
@@ -1948,24 +1977,18 @@ mod tests {
             draft: false,
             no_review: false,
         };
-        let client = SubmitClientStub::default();
+        let client = SubmitClientStub {
+            existing_pr_number,
+            ..SubmitClientStub::default()
+        };
         let sessions_dir = sessions_dir_with_cwd_pr_context.path();
-        let record_pr_context = |target: &PrTarget| {
-            record_submitted_pr_context_in(
-                sessions_dir,
-                "sample-session",
-                SessionPrContext {
-                    owner: target.owner.clone(),
-                    repo: target.repo.clone(),
-                    branch: target.branch.clone(),
-                    checklist_item_id: None,
-                },
-            )
-            .expect("successful submit should record its session context");
+        let record_pr_url = |pr_url: &str| {
+            record_created_pr_url_in(sessions_dir, "sample-session", pr_url)
+                .expect("successful submit should record its pull request URL");
         };
         let submit_effects = SubmitEffects {
             post_submit_processor: &NoopPostSubmitProcessor,
-            record_pr_context,
+            record_created_pr_url: record_pr_url,
         };
         let result = super::run_impl_with_recording(
             &args,
@@ -1986,23 +2009,25 @@ mod tests {
             .lock()
             .expect("submit client mutex")
             .clone();
+        let updated_prs = client
+            .update_calls
+            .lock()
+            .expect("submit client mutex")
+            .clone();
+        let pr_url =
+            format!("https://github.com/sample-owner/sample-repository/pull/{pull_request_number}");
 
         assert_eq!(
             (
                 result.map_err(|error| error.to_string()),
                 created_prs,
-                (session.pr_context, session.submitted_pr_contexts),
+                updated_prs,
+                (session.pr_context, session.created_pr_urls),
             ),
             (
                 Ok(()),
-                vec![(
-                    "sample-owner".to_string(),
-                    "sample-repository".to_string(),
-                    "Submit a change".to_string(),
-                    branch.to_string(),
-                    None,
-                    false,
-                )],
+                expected_create_calls,
+                expected_update_calls,
                 (
                     Some(SessionPrContext {
                         owner: "sample-owner".to_string(),
@@ -2010,12 +2035,7 @@ mod tests {
                         branch: "cwd-branch".to_string(),
                         checklist_item_id: None,
                     }),
-                    vec![SessionPrContext {
-                        owner: "sample-owner".to_string(),
-                        repo: "sample-repository".to_string(),
-                        branch: branch.to_string(),
-                        checklist_item_id: None,
-                    }],
+                    vec![pr_url],
                 ),
             ),
         );

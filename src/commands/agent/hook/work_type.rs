@@ -187,7 +187,7 @@ mod tests {
         Session {
             archived_at: None,
             pr_context: None,
-            submitted_pr_contexts: Vec::new(),
+            created_pr_urls: Vec::new(),
             session_id: "session-test".to_owned(),
             crit_urls: Vec::new(),
             web_uis: Vec::new(),

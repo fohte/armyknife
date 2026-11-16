@@ -7,6 +7,7 @@ use super::super::progress::ProgressRow;
 use super::super::progress_batches::ImplementationPlan;
 use super::App;
 use super::progress::CachedProgress;
+use super::progress_scope::ProgressScopeKind;
 
 mod disk_cache;
 
@@ -107,9 +108,11 @@ impl App {
     }
 
     pub(super) fn progress_cache_key(&self, session_id: &str) -> String {
-        self.task_by_session
-            .get(session_id)
-            .map(|task| task_cache_key(&task.task_id))
+        self.progress_scope_for_session(session_id)
+            .and_then(|scope| match scope {
+                ProgressScopeKind::Task { task_id, .. } => Some(task_cache_key(&task_id)),
+                ProgressScopeKind::OwnOnly | ProgressScopeKind::Direct => None,
+            })
             .unwrap_or_else(|| format!("session:{session_id}"))
     }
 

@@ -251,7 +251,7 @@ mod tests {
         Session {
             archived_at: None,
             pr_context: None,
-            submitted_pr_contexts: Vec::new(),
+            created_pr_urls: Vec::new(),
             session_id: "test-123".to_string(),
             work_type: None,
             work_type_pinned: false,
@@ -427,7 +427,7 @@ mod tests {
             Session {
                 archived_at: None,
                 pr_context: None,
-                submitted_pr_contexts: Vec::new(),
+                created_pr_urls: Vec::new(),
                 session_id: "s1".to_string(),
                 work_type: None,
                 work_type_pinned: false,
@@ -466,7 +466,7 @@ mod tests {
             Session {
                 archived_at: None,
                 pr_context: None,
-                submitted_pr_contexts: Vec::new(),
+                created_pr_urls: Vec::new(),
                 session_id: "s2".to_string(),
                 work_type: None,
                 work_type_pinned: false,
@@ -505,7 +505,7 @@ mod tests {
             Session {
                 archived_at: None,
                 pr_context: None,
-                submitted_pr_contexts: Vec::new(),
+                created_pr_urls: Vec::new(),
                 session_id: "s3".to_string(),
                 work_type: None,
                 work_type_pinned: false,
@@ -544,7 +544,7 @@ mod tests {
             Session {
                 archived_at: None,
                 pr_context: None,
-                submitted_pr_contexts: Vec::new(),
+                created_pr_urls: Vec::new(),
                 session_id: "s4".to_string(),
                 work_type: None,
                 work_type_pinned: false,
@@ -863,7 +863,7 @@ mod tests {
             Session {
                 archived_at: None,
                 pr_context: None,
-                submitted_pr_contexts: Vec::new(),
+                created_pr_urls: Vec::new(),
                 session_id: "s1".to_string(),
                 work_type: None,
                 work_type_pinned: false,
@@ -908,7 +908,7 @@ mod tests {
             Session {
                 archived_at: None,
                 pr_context: None,
-                submitted_pr_contexts: Vec::new(),
+                created_pr_urls: Vec::new(),
                 session_id: "s2".to_string(),
                 work_type: None,
                 work_type_pinned: false,
@@ -953,7 +953,7 @@ mod tests {
             Session {
                 archived_at: None,
                 pr_context: None,
-                submitted_pr_contexts: Vec::new(),
+                created_pr_urls: Vec::new(),
                 session_id: "s3".to_string(),
                 work_type: None,
                 work_type_pinned: false,

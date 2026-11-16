@@ -604,7 +604,7 @@ mod tests {
     fn suggestion_session(session_id: &str, status: SessionStatus, engine: Engine) -> Session {
         Session {
             pr_context: None,
-            submitted_pr_contexts: Vec::new(),
+            created_pr_urls: Vec::new(),
             session_id: session_id.to_string(),
             work_type: None,
             work_type_pinned: false,
@@ -670,7 +670,7 @@ mod tests {
         Session {
             archived_at: None,
             pr_context: None,
-            submitted_pr_contexts: Vec::new(),
+            created_pr_urls: Vec::new(),
             session_id: session_id.to_string(),
             work_type: None,
             work_type_pinned: false,

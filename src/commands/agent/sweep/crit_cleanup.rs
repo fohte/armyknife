@@ -248,7 +248,7 @@ mod tests {
         Session {
             archived_at: None,
             pr_context: None,
-            submitted_pr_contexts: Vec::new(),
+            created_pr_urls: Vec::new(),
             session_id: "fixture-session".to_string(),
             crit_urls: crit_urls.iter().map(|url| (*url).to_string()).collect(),
             web_uis: Vec::new(),

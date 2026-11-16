@@ -7,7 +7,8 @@ use crate::commands::agent::tui::progress::{
     ProgressSelectionKey, StageMarks, WorkProgressRow, build_progress_rows,
 };
 use crate::commands::agent::tui::progress_batches::{
-    ImplementationPlan, build_implementation_plan,
+    ImplementationPlan, append_created_pull_requests, build_implementation_plan,
+    session_progress_plan,
 };
 use crate::commands::agent::tui::session_rows::SessionTask;
 use crate::commands::agent::tui::tq_snapshot::TqSnapshot;
@@ -105,6 +106,81 @@ fn linked_checklist_plan() -> ImplementationPlan {
         state: Some("open".to_string()),
     };
     build_implementation_plan(&checklist, &[github_link], &[], &HashMap::new(), true)
+}
+
+fn created_pr_plan() -> ImplementationPlan {
+    created_pr_plan_for_session("project-manager", 23)
+}
+
+fn created_pr_plan_for_session(session_id: &str, number: u64) -> ImplementationPlan {
+    let url = format!("https://github.com/sample-org/sample-project/pull/{number}");
+    let progress = PrProgressInfo {
+        pull_request: PrInfo {
+            number,
+            title: "Add a sample design".to_string(),
+            state: PrState::Open,
+            url: url.clone(),
+        },
+        ci_state: PrCiState::Unknown,
+        head_sha: None,
+    };
+    let mut plan = session_progress_plan(&[]);
+    append_created_pull_requests(
+        &mut plan,
+        session_id,
+        &[url],
+        &HashMap::from([(
+            (
+                "sample-org".to_string(),
+                "sample-project".to_string(),
+                number,
+            ),
+            Some(progress),
+        )]),
+        false,
+    );
+    plan
+}
+
+fn expected_task_created_pr_rows(session_id: &str, number: u64) -> Vec<ProgressRow> {
+    let url = format!("https://github.com/sample-org/sample-project/pull/{number}");
+    vec![
+        expected_work_row("owner-session", "session"),
+        expected_work_row("peer-session", "session"),
+        ProgressRow::ImplementationHeader {
+            merged_pr_count: 0,
+            total_pr_count: 1,
+            collapsed: false,
+        },
+        ProgressRow::BatchHeader {
+            batch_id: format!("created-prs:{session_id}"),
+            title: "Created by this session".to_string(),
+            merged_pr_count: 0,
+            collapsed: false,
+        },
+        ProgressRow::ChecklistPullRequest {
+            batch_id: format!("created-prs:{session_id}"),
+            row: PrProgressRow {
+                session_id: format!(
+                    "checklist-item:created-pr:{session_id}:sample-org:sample-project:{number}"
+                ),
+                repo: Some("sample-project".to_string()),
+                title: "Add a sample design".to_string(),
+                number: Some(number),
+                url: Some(url),
+                pane_id: None,
+                is_ended: true,
+                lookup_unavailable: false,
+                stages: StageMarks {
+                    implementation: ProgressMark::Done,
+                    diff_review: ProgressMark::NotStarted,
+                    pr_body: ProgressMark::NotStarted,
+                    ci: ProgressMark::NotStarted,
+                    merge: ProgressMark::NotStarted,
+                },
+            },
+        },
+    ]
 }
 
 fn expected_unavailable_checklist_rows(session_id: &str) -> Vec<ProgressRow> {
@@ -631,6 +707,191 @@ fn project_manager_progress_shows_only_its_work_row_regardless_of_task_link(
             ),
         ),
         (Some(ProgressScopeKind::OwnOnly), expected.clone(), expected,),
+    );
+}
+
+#[test]
+fn project_manager_progress_keeps_its_created_pr_plan() {
+    let timestamp = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
+    let mut project_manager = create_test_session_at("project-manager", timestamp);
+    project_manager.work_type = Some("project-manager".to_string());
+    let mut app = create_test_app(vec![project_manager]);
+    app.update_row_order(&[None, Some("project-manager")]);
+    app.list_state.select(Some(1));
+
+    app.apply_progress_result(
+        "project-manager",
+        Ok(FetchedProgress {
+            selected_session_id: "project-manager".to_string(),
+            request_scope: Some(ProgressFetchScope {
+                task_id: None,
+                session_ids: Some(Vec::new()),
+                other_task_session_ids: Vec::new(),
+            }),
+            delegated: Vec::new(),
+            implementation: Some(created_pr_plan()),
+            github_error: None,
+        }),
+    );
+
+    assert_eq!(
+        app.progress_rows,
+        vec![
+            expected_work_row("project-manager", "project-manager"),
+            ProgressRow::ImplementationHeader {
+                merged_pr_count: 0,
+                total_pr_count: 1,
+                collapsed: false,
+            },
+            ProgressRow::BatchHeader {
+                batch_id: "created-prs:project-manager".to_string(),
+                title: "Created by this session".to_string(),
+                merged_pr_count: 0,
+                collapsed: false,
+            },
+            ProgressRow::ChecklistPullRequest {
+                batch_id: "created-prs:project-manager".to_string(),
+                row: PrProgressRow {
+                    session_id:
+                        "checklist-item:created-pr:project-manager:sample-org:sample-project:23"
+                            .to_string(),
+                    repo: Some("sample-project".to_string()),
+                    title: "Add a sample design".to_string(),
+                    number: Some(23),
+                    url: Some("https://github.com/sample-org/sample-project/pull/23".to_string()),
+                    pane_id: None,
+                    is_ended: true,
+                    lookup_unavailable: false,
+                    stages: StageMarks {
+                        implementation: ProgressMark::Done,
+                        diff_review: ProgressMark::NotStarted,
+                        pr_body: ProgressMark::NotStarted,
+                        ci: ProgressMark::NotStarted,
+                        merge: ProgressMark::NotStarted,
+                    },
+                },
+            },
+        ],
+    );
+}
+
+#[test]
+fn project_manager_progress_uses_a_session_cache_when_task_linked() {
+    let timestamp = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
+    let mut project_manager = create_test_session_at("project-manager", timestamp);
+    project_manager.work_type = Some("project-manager".to_string());
+    let child_task = create_test_session_at("child-task", timestamp);
+    let mut app = create_test_app(vec![project_manager, child_task]);
+    app.set_tq_snapshot(TqSnapshot::new(HashMap::from([
+        (
+            "project-manager".to_string(),
+            vec![task_link("parent-task")],
+        ),
+        ("child-task".to_string(), vec![task_link("parent-task")]),
+    ])));
+
+    assert_eq!(
+        (
+            app.progress_cache_key("project-manager"),
+            app.progress_cache_key("child-task"),
+        ),
+        (
+            "session:project-manager".to_string(),
+            "task:parent-task".to_string(),
+        ),
+    );
+}
+
+#[rstest]
+fn task_progress_keeps_created_prs_private_to_their_session(timestamp: DateTime<Utc>) {
+    let owner = create_test_session_at("owner-session", timestamp);
+    let peer = create_test_session_at("peer-session", timestamp);
+    let mut app = create_test_app(vec![owner, peer]);
+    app.update_row_order(&[None, Some("owner-session"), Some("peer-session")]);
+    app.list_state.select(Some(1));
+    app.set_tq_snapshot(TqSnapshot::new(HashMap::from([
+        ("owner-session".to_string(), vec![task_link("task-a")]),
+        ("peer-session".to_string(), vec![task_link("task-a")]),
+    ])));
+
+    let owner_scope = app
+        .progress_scope_for_session("owner-session")
+        .unwrap()
+        .fetch_scope();
+    app.apply_progress_result(
+        "owner-session",
+        Ok(FetchedProgress {
+            selected_session_id: "owner-session".to_string(),
+            request_scope: Some(owner_scope),
+            delegated: Vec::new(),
+            implementation: Some(created_pr_plan_for_session("owner-session", 23)),
+            github_error: None,
+        }),
+    );
+
+    app.list_state.select(Some(2));
+    app.begin_progress_refresh("peer-session");
+    let peer_during_cached_refresh = app.progress_rows.clone();
+    let peer_scope = app
+        .progress_scope_for_session("peer-session")
+        .unwrap()
+        .fetch_scope();
+    app.apply_progress_result(
+        "peer-session",
+        Ok(FetchedProgress {
+            selected_session_id: "peer-session".to_string(),
+            request_scope: Some(peer_scope.clone()),
+            delegated: Vec::new(),
+            implementation: None,
+            github_error: None,
+        }),
+    );
+    let peer_without_created_pr = app.progress_rows.clone();
+
+    app.apply_progress_result(
+        "peer-session",
+        Ok(FetchedProgress {
+            selected_session_id: "peer-session".to_string(),
+            request_scope: Some(peer_scope),
+            delegated: Vec::new(),
+            implementation: Some(created_pr_plan_for_session("peer-session", 24)),
+            github_error: None,
+        }),
+    );
+    let peer_with_created_pr = app.progress_rows.clone();
+
+    app.list_state.select(Some(1));
+    app.refresh_progress_from_sessions("owner-session");
+
+    assert_eq!(
+        (
+            peer_during_cached_refresh,
+            peer_without_created_pr,
+            peer_with_created_pr,
+            app.progress_rows,
+        ),
+        (
+            vec![
+                expected_work_row("owner-session", "session"),
+                expected_work_row("peer-session", "session"),
+                ProgressRow::ImplementationHeader {
+                    merged_pr_count: 0,
+                    total_pr_count: 0,
+                    collapsed: false,
+                },
+            ],
+            vec![
+                expected_work_row("owner-session", "session"),
+                expected_work_row("peer-session", "session"),
+                ProgressRow::ImplementationHeader {
+                    merged_pr_count: 0,
+                    total_pr_count: 0,
+                    collapsed: false,
+                },
+            ],
+            expected_task_created_pr_rows("peer-session", 24),
+            expected_task_created_pr_rows("owner-session", 23),
+        ),
     );
 }
 

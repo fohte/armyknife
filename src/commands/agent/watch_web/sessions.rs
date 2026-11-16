@@ -89,8 +89,8 @@ struct SessionPullRequestView {
 fn session_pull_request_view(pull_request: &SessionPullRequestInfo) -> SessionPullRequestView {
     SessionPullRequestView {
         number: pull_request.progress.pull_request.number,
-        owner: pull_request.context.owner.clone(),
-        repo: pull_request.context.repo.clone(),
+        owner: pull_request.owner.clone(),
+        repo: pull_request.repo.clone(),
         title: pull_request.progress.pull_request.title.clone(),
         url: pull_request.progress.pull_request.url.clone(),
         head_sha: pull_request.progress.head_sha.clone(),
@@ -707,7 +707,7 @@ mod tests {
             session_id: "session".to_string(),
             archived_at: None,
             pr_context: None,
-            submitted_pr_contexts: Vec::new(),
+            created_pr_urls: Vec::new(),
             crit_urls: Vec::new(),
             web_uis: Vec::new(),
             pending_human_review_ids: Default::default(),
@@ -947,13 +947,8 @@ mod tests {
             branch: "feature-example".to_string(),
             checklist_item_id: None,
         });
-        child_session.submitted_pr_contexts =
-            vec![crate::commands::agent::types::SessionPrContext {
-                owner: "example-org".to_string(),
-                repo: "example-repo".to_string(),
-                branch: "designer-pr-branch".to_string(),
-                checklist_item_id: None,
-            }];
+        child_session.created_pr_urls =
+            vec!["https://github.com/example-org/example-repo/pull/43".to_string()];
         let pull_request_context = child_session
             .pr_context
             .clone()
@@ -1025,7 +1020,8 @@ mod tests {
                 "child-session".to_string(),
                 vec![
                     SessionPullRequestInfo {
-                        context: pull_request_context,
+                        owner: pull_request_context.owner,
+                        repo: pull_request_context.repo,
                         progress: crate::infra::github::PrHeadInfo {
                             pull_request: crate::infra::github::PrInfo {
                                 number: 42,
@@ -1037,12 +1033,8 @@ mod tests {
                         },
                     },
                     SessionPullRequestInfo {
-                        context: crate::commands::agent::types::SessionPrContext {
-                            owner: "example-org".to_string(),
-                            repo: "example-repo".to_string(),
-                            branch: "designer-pr-branch".to_string(),
-                            checklist_item_id: None,
-                        },
+                        owner: "example-org".to_string(),
+                        repo: "example-repo".to_string(),
                         progress: crate::infra::github::PrHeadInfo {
                             pull_request: crate::infra::github::PrInfo {
                                 number: 43,

@@ -12,7 +12,7 @@ use crate::commands::agent::tq_session_tasks::{
 };
 use crate::commands::agent::types::Session;
 use crate::commands::agent::types::SessionPrContext;
-use crate::infra::github::{BranchPrQuery, GitHubClient, PrHeadInfo};
+use crate::infra::github::{BranchPrQuery, GitHubClient, PrHeadInfo, PrNumberQuery};
 use crate::infra::tq::{TqClient, TqProjectSummary, TqTaskSummary};
 
 mod cache;
@@ -28,24 +28,32 @@ const CACHE_TTL: Duration = Duration::from_secs(30);
 const CACHE_KEY_RETENTION: Duration = Duration::from_secs(10 * 60);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(35);
 type BranchPrKey = (String, String, String);
+type NumberPrKey = (String, String, u64);
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum PullRequestKey {
+    Branch(BranchPrKey),
+    Number(NumberPrKey),
+}
 type FetchFuture<T> = Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'static>>;
 type TaskMetadataFetcher = Arc<
     dyn Fn(HashSet<String>, SessionTaskMetadata) -> FetchFuture<SessionTaskMetadata> + Send + Sync,
 >;
 type PullRequestFetcher = Arc<
-    dyn Fn(Vec<Session>) -> FetchFuture<HashMap<BranchPrKey, Option<PrHeadInfo>>> + Send + Sync,
+    dyn Fn(Vec<Session>) -> FetchFuture<HashMap<PullRequestKey, Option<PrHeadInfo>>> + Send + Sync,
 >;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SessionPullRequestInfo {
-    pub(super) context: SessionPrContext,
+    pub(super) owner: String,
+    pub(super) repo: String,
     pub(super) progress: PrHeadInfo,
 }
 
 #[derive(Clone)]
 pub(super) struct SessionEnrichmentCache {
     tq: Arc<RefreshingCache<SessionTaskMetadata, String>>,
-    pull_requests: Arc<RefreshingCache<HashMap<BranchPrKey, Option<PrHeadInfo>>, BranchPrKey>>,
+    pull_requests:
+        Arc<RefreshingCache<HashMap<PullRequestKey, Option<PrHeadInfo>>, PullRequestKey>>,
     task_fetcher: TaskMetadataFetcher,
     pull_request_fetcher: PullRequestFetcher,
 }
@@ -58,7 +66,7 @@ impl SessionEnrichmentCache {
             },
         );
         let pull_request_fetcher: PullRequestFetcher = Arc::new(
-            |sessions| -> FetchFuture<HashMap<BranchPrKey, Option<PrHeadInfo>>> {
+            |sessions| -> FetchFuture<HashMap<PullRequestKey, Option<PrHeadInfo>>> {
                 Box::pin(async move { fetch_pull_requests(&sessions).await })
             },
         );
@@ -130,31 +138,44 @@ impl SessionEnrichmentCache {
 
         sessions
             .iter()
-            .filter(|session| session_pr_contexts(session).next().is_some())
+            .filter(|session| session.pr_context.is_some() || !session.created_pr_urls.is_empty())
             .map(|session| {
                 let mut seen_pull_requests = HashSet::new();
-                let pull_requests = session_pr_contexts(session)
-                    .filter_map(|context| {
-                        let key = BranchPrQuery {
-                            owner: context.owner.clone(),
-                            repo: context.repo.clone(),
-                            branch: context.branch.clone(),
-                        }
-                        .key();
-                        let pull_request = cached.get(&key).cloned().flatten()?;
+                let mut pull_requests = Vec::new();
+                if let Some(context) = &session.pr_context {
+                    let key = PullRequestKey::Branch(branch_query(context).key());
+                    if let Some(pull_request) = cached.get(&key).cloned().flatten() {
                         let pull_request_key = (
                             context.owner.clone(),
                             context.repo.clone(),
                             pull_request.pull_request.number,
                         );
-                        seen_pull_requests.insert(pull_request_key).then_some(
-                            SessionPullRequestInfo {
-                                context: context.clone(),
+                        if seen_pull_requests.insert(pull_request_key) {
+                            pull_requests.push(SessionPullRequestInfo {
+                                owner: context.owner.clone(),
+                                repo: context.repo.clone(),
                                 progress: pull_request,
-                            },
-                        )
-                    })
-                    .collect();
+                            });
+                        }
+                    }
+                }
+                for query in created_pr_queries(&session.created_pr_urls) {
+                    let Some(pull_request) = cached
+                        .get(&PullRequestKey::Number(query.key()))
+                        .cloned()
+                        .flatten()
+                    else {
+                        continue;
+                    };
+                    let pull_request_key = (query.owner.clone(), query.repo.clone(), query.number);
+                    if seen_pull_requests.insert(pull_request_key) {
+                        pull_requests.push(SessionPullRequestInfo {
+                            owner: query.owner,
+                            repo: query.repo,
+                            progress: pull_request,
+                        });
+                    }
+                }
                 (session.session_id.clone(), pull_requests)
             })
             .collect()
@@ -373,23 +394,25 @@ fn task_project_names(
         .collect()
 }
 
-fn pull_request_keys(sessions: &[Session]) -> HashSet<BranchPrKey> {
-    branch_pr_queries(sessions)
+fn pull_request_keys(sessions: &[Session]) -> HashSet<PullRequestKey> {
+    let mut keys = branch_pr_queries(sessions)
         .into_iter()
-        .map(|query| query.key())
-        .collect()
+        .map(|query| PullRequestKey::Branch(query.key()))
+        .collect::<HashSet<_>>();
+    keys.extend(
+        created_pr_queries_for_sessions(sessions)
+            .into_iter()
+            .map(|query| PullRequestKey::Number(query.key())),
+    );
+    keys
 }
 
 fn branch_pr_queries(sessions: &[Session]) -> Vec<BranchPrQuery> {
     let mut queries = Vec::new();
     let mut seen = HashSet::new();
     for session in sessions {
-        for context in session_pr_contexts(session) {
-            let query = BranchPrQuery {
-                owner: context.owner.clone(),
-                repo: context.repo.clone(),
-                branch: context.branch.clone(),
-            };
+        if let Some(context) = &session.pr_context {
+            let query = branch_query(context);
             if seen.insert(query.key()) {
                 queries.push(query);
             }
@@ -398,11 +421,55 @@ fn branch_pr_queries(sessions: &[Session]) -> Vec<BranchPrQuery> {
     queries
 }
 
-fn session_pr_contexts(session: &Session) -> impl Iterator<Item = &SessionPrContext> {
-    session
-        .pr_context
-        .iter()
-        .chain(session.submitted_pr_contexts.iter())
+fn branch_query(context: &SessionPrContext) -> BranchPrQuery {
+    BranchPrQuery {
+        owner: context.owner.clone(),
+        repo: context.repo.clone(),
+        branch: context.branch.clone(),
+    }
+}
+
+fn created_pr_queries_for_sessions(sessions: &[Session]) -> Vec<PrNumberQuery> {
+    let mut queries = Vec::new();
+    let mut seen = HashSet::new();
+    for session in sessions {
+        for query in created_pr_queries(&session.created_pr_urls) {
+            if seen.insert(query.key()) {
+                queries.push(query);
+            }
+        }
+    }
+    queries
+}
+
+fn created_pr_queries(urls: &[String]) -> Vec<PrNumberQuery> {
+    let mut seen = HashSet::new();
+    urls.iter()
+        .filter_map(|url| pr_number_query_from_url(url))
+        .filter(|query| seen.insert(query.key()))
+        .collect()
+}
+
+fn pr_number_query_from_url(value: &str) -> Option<PrNumberQuery> {
+    let url = reqwest::Url::parse(value).ok()?;
+    if url.scheme() != "https" || url.host_str() != Some("github.com") {
+        return None;
+    }
+    let mut segments = url.path_segments()?;
+    let owner = segments.next()?;
+    let repo = segments.next()?;
+    if segments.next()? != "pull" {
+        return None;
+    }
+    let number = segments.next()?.parse::<u64>().ok()?;
+    if owner.is_empty() || repo.is_empty() || number == 0 || segments.next().is_some() {
+        return None;
+    }
+    Some(PrNumberQuery {
+        owner: owner.to_owned(),
+        repo: repo.to_owned(),
+        number,
+    })
 }
 
 async fn detected_tq_client() -> Result<Option<TqClient>, String> {
@@ -413,9 +480,10 @@ async fn detected_tq_client() -> Result<Option<TqClient>, String> {
 
 async fn fetch_pull_requests(
     sessions: &[Session],
-) -> Result<HashMap<BranchPrKey, Option<PrHeadInfo>>, String> {
-    let queries = branch_pr_queries(sessions);
-    if queries.is_empty() {
+) -> Result<HashMap<PullRequestKey, Option<PrHeadInfo>>, String> {
+    let branch_queries = branch_pr_queries(sessions);
+    let number_queries = created_pr_queries_for_sessions(sessions);
+    if branch_queries.is_empty() && number_queries.is_empty() {
         return Ok(HashMap::new());
     }
 
@@ -423,10 +491,25 @@ async fn fetch_pull_requests(
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())?;
-    let prs = client
-        .get_prs_with_head_sha_for_branches_batch(&queries)
-        .await
-        .map_err(|error| error.to_string())?;
+    let (branch_prs, number_prs) = tokio::try_join!(
+        client.get_prs_with_head_sha_for_branches_batch(&branch_queries),
+        client.get_pr_progress_for_numbers_batch(&number_queries),
+    )
+    .map_err(|error| error.to_string())?;
+
+    let mut prs = branch_prs
+        .into_iter()
+        .map(|(key, value)| (PullRequestKey::Branch(key), value))
+        .collect::<HashMap<_, _>>();
+    prs.extend(number_prs.into_iter().map(|(key, value)| {
+        (
+            PullRequestKey::Number(key),
+            value.map(|progress| PrHeadInfo {
+                pull_request: progress.pull_request,
+                head_sha: progress.head_sha,
+            }),
+        )
+    }));
 
     Ok(prs)
 }
@@ -835,11 +918,11 @@ mod tests {
             Box::pin(async move {
                 calls.fetch_add(1, Ordering::SeqCst);
                 Ok(HashMap::from([(
-                    (
+                    PullRequestKey::Branch((
                         "example-owner".to_string(),
                         "example-repository".to_string(),
                         "feature/example".to_string(),
-                    ),
+                    )),
                     Some(head_info(17)),
                 )]))
             })
@@ -855,11 +938,13 @@ mod tests {
         let shared_branch = cache.pull_requests(&[first.clone(), second.clone()]).await;
 
         let first_pr = SessionPullRequestInfo {
-            context: first.pr_context.clone().expect("first context exists"),
+            owner: "example-owner".to_string(),
+            repo: "example-repository".to_string(),
             progress: head_info(17),
         };
         let second_pr = SessionPullRequestInfo {
-            context: second.pr_context.clone().expect("second context exists"),
+            owner: "example-owner".to_string(),
+            repo: "example-repository".to_string(),
             progress: head_info(17),
         };
         assert_eq!(
@@ -876,14 +961,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn submitted_branch_prs_follow_the_cwd_pr_and_duplicate_prs_are_removed() {
+    async fn created_pr_urls_follow_the_cwd_pr_and_duplicate_prs_are_removed() {
         let updates = EnrichmentUpdates::new();
         let mut receiver = updates.subscribe();
         let pull_request_fetcher: PullRequestFetcher = Arc::new(|_| {
             Box::pin(async move {
                 Ok(HashMap::from([
                     (branch_key("cwd-branch"), Some(head_info(17))),
-                    (branch_key("submitted-branch"), Some(head_info(23))),
+                    (
+                        PullRequestKey::Number((
+                            "example-owner".to_string(),
+                            "example-repository".to_string(),
+                            23,
+                        )),
+                        Some(head_info(23)),
+                    ),
                 ]))
             })
         });
@@ -895,14 +987,10 @@ mod tests {
             .pr_context
             .clone()
             .expect("cwd context exists");
-        let submitted_context = SessionPrContext {
-            owner: "example-owner".to_string(),
-            repo: "example-repository".to_string(),
-            branch: "submitted-branch".to_string(),
-            checklist_item_id: None,
-        };
-        current_session.submitted_pr_contexts =
-            vec![submitted_context.clone(), submitted_context.clone()];
+        current_session.created_pr_urls = vec![
+            "https://github.com/example-owner/example-repository/pull/23".to_string(),
+            "https://github.com/example-owner/example-repository/pull/23".to_string(),
+        ];
 
         let initial = cache
             .pull_requests(std::slice::from_ref(&current_session))
@@ -924,27 +1012,22 @@ mod tests {
                     "session-multiple".to_string(),
                     vec![
                         SessionPullRequestInfo {
-                            context: cwd_context,
+                            owner: cwd_context.owner,
+                            repo: cwd_context.repo,
                             progress: head_info(17),
                         },
                         SessionPullRequestInfo {
-                            context: submitted_context,
+                            owner: "example-owner".to_string(),
+                            repo: "example-repository".to_string(),
                             progress: head_info(23),
                         },
                     ],
                 )]),
-                vec![
-                    BranchPrQuery {
-                        owner: "example-owner".to_string(),
-                        repo: "example-repository".to_string(),
-                        branch: "cwd-branch".to_string(),
-                    },
-                    BranchPrQuery {
-                        owner: "example-owner".to_string(),
-                        repo: "example-repository".to_string(),
-                        branch: "submitted-branch".to_string(),
-                    },
-                ],
+                vec![BranchPrQuery {
+                    owner: "example-owner".to_string(),
+                    repo: "example-repository".to_string(),
+                    branch: "cwd-branch".to_string(),
+                },],
             ),
         );
     }

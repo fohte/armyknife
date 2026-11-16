@@ -1,8 +1,7 @@
 use std::path::Path;
 
 use super::PrTarget;
-use crate::commands::agent::store;
-use crate::commands::agent::types::SessionPrContext;
+use crate::commands::agent;
 use crate::commands::ai::pr_series::{
     PrSeriesPlan, load_plan_if_present, preserve_managed_section,
 };
@@ -42,7 +41,7 @@ pub(super) trait PostSubmitProcessor {
 
 pub(super) struct SubmitEffects<'a, P, R> {
     pub(super) post_submit_processor: &'a P,
-    pub(super) record_pr_context: R,
+    pub(super) record_created_pr_url: R,
 }
 
 pub(super) struct PrSeriesPostSubmitProcessor<'a> {
@@ -133,57 +132,39 @@ fn warn_plan_lookup_failure(metadata: &TqBranchMetadata, error: &anyhow::Error) 
     );
 }
 
-pub(super) fn record_submitted_pr_context(target: &PrTarget) {
+pub(super) fn record_created_pr_url(pr_url: &str) {
     let Some(session_id) = EnvVars::load().own_session_id() else {
+        tracing::warn!(
+            event = "pr_draft.submit.session_pr_record_failed",
+            "calling agent session is unavailable"
+        );
         return;
     };
-    let sessions_dir = match store::sessions_dir() {
-        Ok(sessions_dir) => sessions_dir,
-        Err(error) => {
-            tracing::warn!(
-                event = "pr_draft.submit.session_store_unavailable",
-                session = %session_id,
-                error = %error,
-                "failed to locate session store for submitted PR context"
-            );
-            return;
-        }
-    };
-    if let Err(error) = record_submitted_pr_context_in(
-        &sessions_dir,
-        &session_id,
-        SessionPrContext {
-            owner: target.owner.clone(),
-            repo: target.repo.clone(),
-            branch: target.branch.clone(),
-            checklist_item_id: None,
-        },
-    ) {
+    let result = agent::store::sessions_dir()
+        .and_then(|sessions_dir| record_created_pr_url_in(&sessions_dir, &session_id, pr_url));
+    if let Err(error) = result {
         tracing::warn!(
-            event = "pr_draft.submit.session_record_failed",
+            event = "pr_draft.submit.session_pr_record_failed",
             session = %session_id,
             error = %error,
-            "failed to record submitted PR context"
+            "failed to record pull request on the calling session"
         );
     }
 }
 
-pub(super) fn record_submitted_pr_context_in(
+pub(super) fn record_created_pr_url_in(
     sessions_dir: &Path,
     session_id: &str,
-    context: SessionPrContext,
+    pr_url: &str,
 ) -> anyhow::Result<()> {
-    store::update_session_in(sessions_dir, session_id, |session| {
-        if session.submitted_pr_contexts.iter().any(|existing| {
-            existing.owner == context.owner
-                && existing.repo == context.repo
-                && existing.branch == context.branch
-        }) {
-            return false;
-        }
-        session.submitted_pr_contexts.push(context);
-        true
-    })?;
+    let lock = agent::store::lock_session_for_update(sessions_dir, session_id)?;
+    let Some(mut session) = lock.load()? else {
+        anyhow::bail!("agent session not found: {session_id}");
+    };
+    if !session.created_pr_urls.iter().any(|url| url == pr_url) {
+        session.created_pr_urls.push(pr_url.to_owned());
+        lock.save(&session)?;
+    }
     Ok(())
 }
 
@@ -337,36 +318,23 @@ mod tests {
     }
 
     #[rstest]
-    fn submitted_pr_context_is_saved_once_without_replacing_the_cwd_context(
+    fn created_pr_url_is_saved_once_without_replacing_the_cwd_context(
         sessions_dir_with_cwd_pr_context: tempfile::TempDir,
     ) {
         let sessions_dir = sessions_dir_with_cwd_pr_context;
-        let submitted_context = SessionPrContext {
-            owner: "sample-owner".to_string(),
-            repo: "sample-repository".to_string(),
-            branch: "submitted-branch".to_string(),
-            checklist_item_id: None,
-        };
+        let pr_url = "https://github.com/sample-owner/sample-repository/pull/17";
 
-        record_submitted_pr_context_in(
-            sessions_dir.path(),
-            "sample-session",
-            submitted_context.clone(),
-        )
-        .expect("submitted context should be recorded");
-        record_submitted_pr_context_in(
-            sessions_dir.path(),
-            "sample-session",
-            submitted_context.clone(),
-        )
-        .expect("repeated submission should be idempotent");
+        record_created_pr_url_in(sessions_dir.path(), "sample-session", pr_url)
+            .expect("pull request should be recorded");
+        record_created_pr_url_in(sessions_dir.path(), "sample-session", pr_url)
+            .expect("repeated recording should be idempotent");
 
         let session =
             crate::commands::agent::store::load_session_from(sessions_dir.path(), "sample-session")
                 .expect("session store should be readable")
                 .expect("session should remain stored");
         assert_eq!(
-            (session.pr_context, session.submitted_pr_contexts),
+            (session.pr_context, session.created_pr_urls),
             (
                 Some(SessionPrContext {
                     owner: "sample-owner".to_string(),
@@ -374,7 +342,7 @@ mod tests {
                     branch: "cwd-branch".to_string(),
                     checklist_item_id: None,
                 }),
-                vec![submitted_context],
+                vec![pr_url.to_string()],
             ),
         );
     }

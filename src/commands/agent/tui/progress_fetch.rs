@@ -2,11 +2,14 @@ use std::collections::{HashMap, HashSet};
 
 use super::super::session_pr_context::{self, Resolution};
 use super::progress::{FetchedDelegate, FetchedProgress, ProgressFetchScope};
-use super::progress_batches::{build_implementation_plan, pull_request_queries};
+use super::progress_batches::{
+    append_created_pull_requests, build_implementation_plan, created_pr_queries,
+    pr_number_query_from_url, pull_request_queries, session_progress_plan,
+};
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Session, SessionPrContext};
 use crate::infra::git::GitRepo;
-use crate::infra::github::{BranchPrQuery, GitHubClient};
+use crate::infra::github::{BranchPrQuery, GitHubClient, PrNumberQuery};
 use crate::infra::tq::{TqChecklist, TqClient, TqGithubLink};
 
 pub(super) async fn fetch_progress(
@@ -25,6 +28,11 @@ async fn fetch_progress_for_sessions(
     request_scope: ProgressFetchScope,
     sessions: Vec<Session>,
 ) -> Result<FetchedProgress, String> {
+    let created_pr_urls = sessions
+        .iter()
+        .find(|session| session.session_id == selected_session_id)
+        .map(|session| session.created_pr_urls.clone())
+        .unwrap_or_default();
     let delegated = match request_scope.session_ids.as_ref() {
         Some(session_ids) => {
             let session_ids = session_ids.iter().cloned().collect::<HashSet<_>>();
@@ -51,6 +59,16 @@ async fn fetch_progress_for_sessions(
         .as_ref()
         .map(|(checklist, github_links)| pull_request_queries(checklist, github_links))
         .unwrap_or_default();
+    let mut number_queries = linked_pr_queries.clone();
+    let mut seen_number_queries = number_queries
+        .iter()
+        .map(PrNumberQuery::key)
+        .collect::<HashSet<_>>();
+    for query in created_pr_queries(&created_pr_urls) {
+        if seen_number_queries.insert(query.key()) {
+            number_queries.push(query);
+        }
+    }
 
     let (prs, mut github_error) = if query_data.queries.is_empty() {
         (HashMap::new(), None)
@@ -72,12 +90,12 @@ async fn fetch_progress_for_sessions(
             ),
         }
     };
-    let (linked_prs, linked_pr_lookup_failed, linked_pr_error) = if linked_pr_queries.is_empty() {
+    let (linked_prs, linked_pr_lookup_failed, linked_pr_error) = if number_queries.is_empty() {
         (HashMap::new(), false, None)
     } else {
         match GitHubClient::get() {
             Ok(client) => match client
-                .get_pr_progress_for_numbers_batch(&linked_pr_queries)
+                .get_pr_progress_for_numbers_batch(&number_queries)
                 .await
             {
                 Ok(progress) => (progress, false, None),
@@ -120,15 +138,29 @@ async fn fetch_progress_for_sessions(
             }
         })
         .collect();
-    let implementation = implementation_checklist.map(|(checklist, github_links)| {
-        build_implementation_plan(
-            &checklist,
-            &github_links,
-            &delegated,
+    let has_created_pr_urls = created_pr_urls
+        .iter()
+        .any(|url| pr_number_query_from_url(url).is_some());
+    let mut implementation = implementation_checklist
+        .map(|(checklist, github_links)| {
+            build_implementation_plan(
+                &checklist,
+                &github_links,
+                &delegated,
+                &linked_prs,
+                linked_pr_lookup_failed,
+            )
+        })
+        .or_else(|| has_created_pr_urls.then(|| session_progress_plan(&delegated)));
+    if has_created_pr_urls && let Some(plan) = implementation.as_mut() {
+        append_created_pull_requests(
+            plan,
+            &selected_session_id,
+            &created_pr_urls,
             &linked_prs,
             linked_pr_lookup_failed,
-        )
-    });
+        );
+    }
 
     Ok(FetchedProgress {
         selected_session_id,
@@ -459,7 +491,7 @@ mod tests {
         Session {
             archived_at: None,
             pr_context: None,
-            submitted_pr_contexts: Vec::new(),
+            created_pr_urls: Vec::new(),
             session_id: session_id.to_string(),
             crit_urls: Vec::new(),
             web_uis: Vec::new(),

@@ -485,7 +485,7 @@ mod tests {
             session_id: "fixture-session".to_string(),
             archived_at: None,
             pr_context: None,
-            submitted_pr_contexts: Vec::new(),
+            created_pr_urls: Vec::new(),
             crit_urls: Vec::new(),
             web_uis: Vec::new(),
             pending_human_review_ids: BTreeSet::from([review_marker(

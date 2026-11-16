@@ -610,7 +610,7 @@ mod tests {
             Session {
                 archived_at: None,
                 pr_context: None,
-                submitted_pr_contexts: Vec::new(),
+                created_pr_urls: Vec::new(),
                 session_id: "resume-target".to_string(),
                 work_type: None,
                 work_type_pinned: false,
@@ -897,7 +897,7 @@ mod tests {
             Session {
                 archived_at: None,
                 pr_context: None,
-                submitted_pr_contexts: Vec::new(),
+                created_pr_urls: Vec::new(),
                 session_id: "guard-test".to_string(),
                 work_type: None,
                 work_type_pinned: false,

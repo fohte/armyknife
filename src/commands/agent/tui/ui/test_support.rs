@@ -14,7 +14,7 @@ pub(in crate::commands::agent::tui) fn create_test_session(id: &str) -> Session 
     Session {
         archived_at: None,
         pr_context: None,
-        submitted_pr_contexts: Vec::new(),
+        created_pr_urls: Vec::new(),
         session_id: id.to_string(),
         work_type: None,
         work_type_pinned: false,
