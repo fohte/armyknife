@@ -22,6 +22,7 @@ mod worktree;
 pub(crate) use output_tail::{
     DrainDeadlineCheck, OutputTail, OutputTailOptions, read_output_tail, set_nonblocking,
 };
+pub(crate) use worktree::{WorktreeProcessInspection, inspect_worktree_processes};
 
 pub use caller::find_caller_pids_in_path;
 pub use worktree::{ProcessInPath, SHELL_COMMANDS, find_non_shell_processes_in_path};
@@ -349,6 +350,7 @@ pub struct ProcessSnapshot {
     parents: HashMap<u32, u32>,
     comms: HashMap<u32, String>,
     command_lines: HashMap<u32, String>,
+    pgids: HashMap<u32, libc::pid_t>,
 }
 
 impl ProcessSnapshot {
@@ -360,8 +362,8 @@ impl ProcessSnapshot {
     }
 
     /// Captures command arguments for checks that distinguish subcommands sharing one executable.
-    fn capture_with_command_lines() -> Option<Self> {
-        let processes = capture_process_table()?;
+    fn capture_with_command_lines_and_groups() -> Option<Self> {
+        let processes = capture_process_groups_table()?;
         let args_output = command::new("ps")
             .args(["-A", "-o", "pid=,args="])
             .output()
@@ -370,7 +372,7 @@ impl ProcessSnapshot {
             return None;
         }
         let args_text = String::from_utf8_lossy(&args_output.stdout);
-        Some(Self::from_ps_outputs(&processes, &args_text))
+        Some(Self::from_ps_outputs_with_groups(&processes, &args_text))
     }
 
     fn from_ps_output(text: &str) -> Self {
@@ -400,11 +402,45 @@ impl ProcessSnapshot {
             parents,
             comms,
             command_lines,
+            pgids: HashMap::new(),
         }
     }
 
-    fn from_ps_outputs(processes: &str, args: &str) -> Self {
-        let mut snapshot = Self::from_ps_output(processes);
+    fn from_ps_outputs_with_groups(processes: &str, args: &str) -> Self {
+        let mut children: HashMap<u32, Vec<(u32, String)>> = HashMap::new();
+        let mut parents: HashMap<u32, u32> = HashMap::new();
+        let mut comms: HashMap<u32, String> = HashMap::new();
+        let mut pgids: HashMap<u32, libc::pid_t> = HashMap::new();
+        for line in processes.lines() {
+            let mut columns = line.split_whitespace();
+            let Some(pid) = columns.next().and_then(|value| value.parse::<u32>().ok()) else {
+                continue;
+            };
+            let Some(ppid) = columns.next().and_then(|value| value.parse::<u32>().ok()) else {
+                continue;
+            };
+            let Some(pgid) = columns
+                .next()
+                .and_then(|value| value.parse::<libc::pid_t>().ok())
+            else {
+                continue;
+            };
+            let comm = columns.collect::<Vec<_>>().join(" ");
+            if comm.is_empty() {
+                continue;
+            }
+            children.entry(ppid).or_default().push((pid, comm.clone()));
+            parents.insert(pid, ppid);
+            comms.insert(pid, comm);
+            pgids.insert(pid, pgid);
+        }
+        let mut snapshot = Self {
+            children,
+            parents,
+            comms,
+            command_lines: HashMap::new(),
+            pgids,
+        };
         snapshot.command_lines = parse_ps_args_output(args);
         snapshot
     }
@@ -435,12 +471,12 @@ impl ProcessSnapshot {
             .map(|c| c.rsplit('/').next().unwrap_or(c.as_str()))
     }
 
-    fn has_codex_app_server_ancestor(&self, pid: u32) -> bool {
+    fn codex_app_server_ancestors(&self, pid: u32) -> impl Iterator<Item = u32> + '_ {
         self.ancestors(pid)
             .into_iter()
-            .filter(|&ancestor| ancestor != pid)
-            .any(|ancestor| {
-                let Some(command_line) = self.command_lines.get(&ancestor) else {
+            .filter(move |&ancestor| ancestor != pid)
+            .filter(|ancestor| {
+                let Some(command_line) = self.command_lines.get(ancestor) else {
                     return false;
                 };
                 let mut args = command_line.split_whitespace();
@@ -449,6 +485,10 @@ impl ProcessSnapshot {
                     .is_some_and(|name| name == "codex")
                     && args.next() == Some("app-server")
             })
+    }
+
+    fn pgid(&self, pid: u32) -> Option<libc::pid_t> {
+        self.pgids.get(&pid).copied()
     }
 
     /// Resolves the pid of the first process in the subtree rooted at
@@ -503,6 +543,17 @@ impl ProcessSnapshot {
 fn capture_process_table() -> Option<String> {
     let output = command::new("ps")
         .args(["-A", "-o", "pid=,ppid=,comm="])
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn capture_process_groups_table() -> Option<String> {
+    let output = command::new("ps")
+        .args(["-A", "-o", "pid=,ppid=,pgid=,comm="])
         .output()
         .ok()?;
     output
@@ -630,8 +681,7 @@ pub fn kill_process_groups(pgids: &[libc::pid_t]) -> usize {
     pgids
         .iter()
         .filter(|&&pgid| {
-            // SAFETY: libc::kill with SIGTERM on a pgid validated by
-            // find_pgids_in_path (pgid > 1) is safe.
+            // SAFETY: callers provide process groups validated as greater than 1.
             unsafe { libc::kill(-pgid, libc::SIGTERM) == 0 }
         })
         .count()
