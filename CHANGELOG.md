@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.754](https://github.com/fohte/armyknife/compare/v0.1.753...v0.1.754) (2026-11-16)
+
+
+### Features
+
+* **agent-watch-web:** start sessions anywhere ([#1890](https://github.com/fohte/armyknife/issues/1890)) ([8740a91](https://github.com/fohte/armyknife/commit/8740a91db8c6470c26b74593eb751896980542b6))
+
 ## [0.1.753](https://github.com/fohte/armyknife/compare/v0.1.752...v0.1.753) (2026-11-16)
 
 
