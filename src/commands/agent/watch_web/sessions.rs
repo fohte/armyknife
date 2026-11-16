@@ -27,7 +27,7 @@ use crate::commands::agent::types::{
     DisplayStatus, Engine, Session, SessionStatus, WebUiRegistration,
 };
 use crate::commands::agent::user_turn::user_turns;
-use crate::commands::agent::vibe::{self, VibeState};
+use crate::commands::agent::vibe::VibeState;
 use crate::infra::github::PrState;
 use crate::shared::config::Config;
 use crate::shared::config::{self, AgentConfig};
@@ -44,6 +44,8 @@ mod project;
 use self::project::{
     resolve_parent_project, resolve_project, resolve_repo, resolve_repos_for_sessions,
 };
+mod vibe;
+use self::vibe::{VibeAncestorLoader, states_for_sessions};
 mod feed;
 mod task_selection;
 mod tree;
@@ -171,8 +173,6 @@ struct SessionsResponse {
     work_type_nav_labels: HashMap<String, String>,
     sessions: Vec<SessionView>,
 }
-
-type VibeAncestorLoader = Arc<dyn Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync>;
 
 struct SessionSnapshot {
     revision: i64,
@@ -388,7 +388,7 @@ async fn list_sessions<S: SessionSource>(
     let vibe_config = snapshot.vibe_config;
     let vibe_ancestor_loader = snapshot.vibe_ancestor_loader;
     let vibe_modes = tokio::task::spawn_blocking(move || {
-        vibe_states_for_sessions(
+        states_for_sessions(
             &sessions_for_vibe,
             &all_sessions_for_vibe,
             &repo_by_id_for_vibe,
@@ -720,41 +720,6 @@ fn session_tree_related_ids(sessions: &[Session]) -> HashSet<String> {
         }
     }
     related_ids
-}
-
-fn vibe_states_for_sessions(
-    sessions: &[Session],
-    all_sessions: &[Session],
-    repo_by_id: &HashMap<String, String>,
-    config: &Config,
-    mut load_missing_ancestor: impl FnMut(&str) -> anyhow::Result<Option<Session>>,
-) -> anyhow::Result<Vec<VibeState>> {
-    let all_sessions_by_id = all_sessions
-        .iter()
-        .map(|session| (session.session_id.as_str(), session))
-        .collect::<HashMap<_, _>>();
-    let mut missing_ancestors_by_id: HashMap<String, Option<Session>> = HashMap::new();
-
-    sessions
-        .iter()
-        .map(|session| {
-            let repo_identity = repo_by_id
-                .get(&session.session_id)
-                .and_then(|repo| repo.split_once('/'));
-            vibe::state_for_with_ancestor_loader(session, repo_identity, config, |ancestor_id| {
-                if let Some(ancestor) = all_sessions_by_id.get(ancestor_id) {
-                    return Ok(Some((*ancestor).clone()));
-                }
-                if let Some(ancestor) = missing_ancestors_by_id.get(ancestor_id) {
-                    return Ok(ancestor.clone());
-                }
-
-                let ancestor = load_missing_ancestor(ancestor_id)?;
-                missing_ancestors_by_id.insert(ancestor_id.to_owned(), ancestor.clone());
-                Ok(ancestor)
-            })
-        })
-        .collect()
 }
 
 #[cfg(test)]
