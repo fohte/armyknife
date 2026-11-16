@@ -47,7 +47,7 @@ export function SessionStatusPanel({
     } else if (activeTabBounds.right > visibleRight) {
       tabList.scrollBy({ left: activeTabBounds.right - visibleRight })
     }
-  }, [activeTab])
+  }, [activeTabId])
 
   return (
     <aside

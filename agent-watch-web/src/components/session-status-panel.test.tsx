@@ -41,6 +41,43 @@ function renderPanel(
   return onTabChange
 }
 
+function getTabLayoutSnapshot(activeTabId: string) {
+  const tabList = container.querySelector<HTMLElement>('[role="tablist"]')
+  const activeTab = container.querySelector<HTMLButtonElement>(
+    `#session-status-tab-${activeTabId}`,
+  )
+  const closeButton = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Close session status panel"]',
+  )
+  const header = container.querySelector<HTMLElement>(
+    '.session-status-panel-tabs',
+  )
+  const activeTabBounds = activeTab?.getBoundingClientRect()
+  const tabListBounds = tabList?.getBoundingClientRect()
+  const closeButtonBounds = closeButton?.getBoundingClientRect()
+  const headerBounds = header?.getBoundingClientRect()
+  const scrollLeft = tabList?.scrollLeft ?? 0
+  const startPadding = Number.parseFloat(
+    tabList === null ? '0' : getComputedStyle(tabList).paddingLeft,
+  )
+
+  return {
+    hasScrolledRight: scrollLeft > startPadding,
+    isAtStart: scrollLeft <= startPadding,
+    activeTabVisible:
+      activeTabBounds !== undefined &&
+      tabListBounds !== undefined &&
+      activeTabBounds.left >= tabListBounds.left &&
+      activeTabBounds.right <= tabListBounds.right + 1,
+    closeButtonVisible:
+      closeButtonBounds !== undefined &&
+      tabListBounds !== undefined &&
+      headerBounds !== undefined &&
+      closeButtonBounds.left >= tabListBounds.right &&
+      closeButtonBounds.right <= headerBounds.right,
+  }
+}
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
@@ -93,14 +130,21 @@ it('keeps overflowing tabs selectable and scrolls the active tab beside the clos
   renderPanel('view-1', onTabChange, undefined, 0, tabs)
 
   const tabList = container.querySelector<HTMLElement>('[role="tablist"]')
+  act(() => {
+    if (tabList !== null) tabList.scrollLeft = 300
+    root?.render(
+      <SessionStatusPanel
+        tabs={tabs.map((tab) => ({ ...tab }))}
+        activeTabId="view-1"
+        onTabChange={onTabChange}
+        onClose={vi.fn()}
+      />,
+    )
+  })
+  const userScrollPreserved = tabList?.scrollLeft === 300
+
   const lastTab = container.querySelector<HTMLButtonElement>(
     '#session-status-tab-view-8',
-  )
-  const closeButton = container.querySelector<HTMLButtonElement>(
-    '[aria-label="Close session status panel"]',
-  )
-  const header = container.querySelector<HTMLElement>(
-    '.session-status-panel-tabs',
   )
 
   act(() => lastTab?.click())
@@ -115,32 +159,47 @@ it('keeps overflowing tabs selectable and scrolls the active tab beside the clos
     )
   })
 
-  const activeTabBounds = lastTab?.getBoundingClientRect()
-  const tabListBounds = tabList?.getBoundingClientRect()
-  const closeButtonBounds = closeButton?.getBoundingClientRect()
-  const headerBounds = header?.getBoundingClientRect()
+  const rightwardScroll = getTabLayoutSnapshot('view-8')
+  act(() => {
+    root?.render(
+      <SessionStatusPanel
+        tabs={tabs}
+        activeTabId="view-1"
+        onTabChange={onTabChange}
+        onClose={vi.fn()}
+      />,
+    )
+  })
+  const leftwardScroll = getTabLayoutSnapshot('view-1')
   const snapshot = () => ({
     tabCount: container.querySelectorAll('[role="tab"]').length,
     lastTabSelectable: onTabChange.mock.calls,
-    tabListOverflows: (tabList?.scrollWidth ?? 0) > (tabList?.clientWidth ?? 0),
-    activeTabVisible:
-      activeTabBounds !== undefined &&
-      tabListBounds !== undefined &&
-      activeTabBounds.left >= tabListBounds.left &&
-      activeTabBounds.right <= tabListBounds.right + 1,
-    closeButtonVisible:
-      closeButtonBounds !== undefined &&
-      tabListBounds !== undefined &&
-      headerBounds !== undefined &&
-      closeButtonBounds.left >= tabListBounds.right &&
-      closeButtonBounds.right <= headerBounds.right,
+    userScrollPreserved,
+    tabListOverflows:
+      (container.querySelector<HTMLElement>('[role="tablist"]')?.scrollWidth ??
+        0) >
+      (container.querySelector<HTMLElement>('[role="tablist"]')?.clientWidth ??
+        0),
+    rightwardScroll,
+    leftwardScroll,
   })
   expect(snapshot()).toEqual({
     tabCount: 8,
     lastTabSelectable: [['view-8']],
+    userScrollPreserved: true,
     tabListOverflows: true,
-    activeTabVisible: true,
-    closeButtonVisible: true,
+    rightwardScroll: {
+      hasScrolledRight: true,
+      isAtStart: false,
+      activeTabVisible: true,
+      closeButtonVisible: true,
+    },
+    leftwardScroll: {
+      hasScrolledRight: false,
+      isAtStart: true,
+      activeTabVisible: true,
+      closeButtonVisible: true,
+    },
   })
 })
 
