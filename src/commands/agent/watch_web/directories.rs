@@ -441,6 +441,32 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn search_omits_repository_symlinks_that_resolve_outside_the_root() {
+        let repos_root = tempfile::tempdir().unwrap();
+        let external_repo = tempfile::tempdir().unwrap();
+        let repository_parent = repos_root.path().join("github.com/example.invalid");
+        std::fs::create_dir_all(&repository_parent).unwrap();
+        std::fs::create_dir_all(external_repo.path().join(".git")).unwrap();
+        std::os::unix::fs::symlink(
+            external_repo.path(),
+            repository_parent.join("external-repo"),
+        )
+        .unwrap();
+        let source = FakeDirectorySource {
+            sessions: Vec::new(),
+            ghq_root: Some(repos_root.path().to_path_buf()),
+            home_dir: None,
+        };
+        let router = router_with_source(Arc::new(source));
+
+        assert_eq!(
+            get(&router, "/directories?q=external-repo").await,
+            (StatusCode::OK, serde_json::json!({"directories": []}),),
+        );
+    }
+
     #[tokio::test]
     async fn search_matches_recent_repository_by_relative_path() {
         let repos_root = tempfile::tempdir().unwrap();
