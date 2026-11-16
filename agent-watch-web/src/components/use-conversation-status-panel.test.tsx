@@ -156,6 +156,12 @@ it('shows linked open and completed tasks in the Tasks tab', () => {
       container.querySelectorAll('.session-tasks-panel-item'),
       (task) => task.textContent,
     ),
+    primaryControls: Array.from(
+      container.querySelectorAll(
+        '.session-tasks-panel-primary, .session-tasks-panel-primary-action',
+      ),
+      (control) => control.textContent,
+    ),
   })
 
   expect(snapshot()).toEqual({
@@ -164,6 +170,7 @@ it('shows linked open and completed tasks in the Tasks tab', () => {
       '●#18 Improve request reliabilityP1 · fixture/toolkit',
       '✓#17 Document request behavior',
     ],
+    primaryControls: ['Primary', 'Make primary'],
   })
 })
 

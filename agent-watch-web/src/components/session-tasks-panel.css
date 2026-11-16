@@ -38,14 +38,44 @@
   list-style: none;
 }
 
+.session-tasks-panel-list > li {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
 .session-tasks-panel-item {
   display: grid;
   grid-template-columns: 14px minmax(0, 1fr);
   align-items: center;
   gap: 10px;
+  min-width: 0;
+  flex: 1 1 auto;
   padding: 7px 18px;
   color: var(--aw-text-primary);
   text-decoration: none;
+}
+
+.session-tasks-panel-primary,
+.session-tasks-panel-primary-action {
+  flex: 0 0 auto;
+  margin: 0 18px 0 8px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.session-tasks-panel-primary-action {
+  padding: 3px 6px;
+  border: 1px solid var(--aw-border-control);
+  background: transparent;
+  color: var(--aw-text-secondary);
+  cursor: pointer;
+}
+
+.session-tasks-panel-primary-action:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 .session-tasks-panel-item--open:hover,

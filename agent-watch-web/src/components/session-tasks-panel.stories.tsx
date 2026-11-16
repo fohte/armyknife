@@ -6,6 +6,7 @@ const meta = {
   component: SessionTasksPanel,
   args: {
     repo: 'example/service',
+    primaryTaskId: 'example-open-task',
     tasks: [
       {
         id: 'example-open-task',
@@ -50,6 +51,7 @@ export const InProgressAndCompletedTasks: Story = {
 
 export const OnlyCompletedTasks: Story = {
   args: {
+    primaryTaskId: 'example-completed-task-a',
     tasks: [
       {
         id: 'example-completed-task-a',

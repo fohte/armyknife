@@ -40,7 +40,13 @@ afterEach(() => {
 
 it('groups open and completed linked tasks and reveals the remaining completed tasks', () => {
   act(() => {
-    root?.render(<SessionTasksPanel tasks={tasks} repo="example/service" />)
+    root?.render(
+      <SessionTasksPanel
+        tasks={tasks}
+        repo="example/service"
+        primaryTaskId="example-open-task"
+      />,
+    )
   })
 
   const before = () => ({
@@ -50,11 +56,11 @@ it('groups open and completed linked tasks and reveals the remaining completed t
     ),
     openTasks: Array.from(
       container.querySelectorAll('.session-tasks-panel-item--open'),
-      (task) => task.textContent,
+      (task) => ({ href: task.getAttribute('href'), text: task.textContent }),
     ),
     completedTasks: Array.from(
       container.querySelectorAll('.session-tasks-panel-item--completed'),
-      (task) => task.textContent,
+      (task) => ({ href: task.getAttribute('href'), text: task.textContent }),
     ),
     showMore: container.querySelector('.session-tasks-panel-show-more')
       ?.textContent,
@@ -71,26 +77,86 @@ it('groups open and completed linked tasks and reveals the remaining completed t
   expect(snapshot()).toEqual({
     beforeClick: {
       headings: ['IN PROGRESS', 'COMPLETED 5'],
-      openTasks: ['●#2048 Improve request reliabilityP1 · example/service'],
+      openTasks: [
+        {
+          href: 'https://tq.fohte.net/tasks/example-open-task',
+          text: '●#2048 Improve request reliabilityP1 · example/service',
+        },
+      ],
       completedTasks: [
-        '✓#2047 Document request behavior 1',
-        '✓#2046 Document request behavior 2',
-        '✓#2045 Document request behavior 3',
-        '✓#2044 Document request behavior 4',
+        {
+          href: 'https://tq.fohte.net/tasks/example-completed-task-1',
+          text: '✓#2047 Document request behavior 1',
+        },
+        {
+          href: 'https://tq.fohte.net/tasks/example-completed-task-2',
+          text: '✓#2046 Document request behavior 2',
+        },
+        {
+          href: 'https://tq.fohte.net/tasks/example-completed-task-3',
+          text: '✓#2045 Document request behavior 3',
+        },
+        {
+          href: 'https://tq.fohte.net/tasks/example-completed-task-4',
+          text: '✓#2044 Document request behavior 4',
+        },
       ],
       showMore: 'Show 1 more',
     },
     afterClick: {
       headings: ['IN PROGRESS', 'COMPLETED 5'],
-      openTasks: ['●#2048 Improve request reliabilityP1 · example/service'],
+      openTasks: [
+        {
+          href: 'https://tq.fohte.net/tasks/example-open-task',
+          text: '●#2048 Improve request reliabilityP1 · example/service',
+        },
+      ],
       completedTasks: [
-        '✓#2047 Document request behavior 1',
-        '✓#2046 Document request behavior 2',
-        '✓#2045 Document request behavior 3',
-        '✓#2044 Document request behavior 4',
-        '✓#2043 Document request behavior 5',
+        {
+          href: 'https://tq.fohte.net/tasks/example-completed-task-1',
+          text: '✓#2047 Document request behavior 1',
+        },
+        {
+          href: 'https://tq.fohte.net/tasks/example-completed-task-2',
+          text: '✓#2046 Document request behavior 2',
+        },
+        {
+          href: 'https://tq.fohte.net/tasks/example-completed-task-3',
+          text: '✓#2045 Document request behavior 3',
+        },
+        {
+          href: 'https://tq.fohte.net/tasks/example-completed-task-4',
+          text: '✓#2044 Document request behavior 4',
+        },
+        {
+          href: 'https://tq.fohte.net/tasks/example-completed-task-5',
+          text: '✓#2043 Document request behavior 5',
+        },
       ],
       showMore: undefined,
     },
   })
+})
+
+it('makes a completed secondary task primary from the Tasks tab', async () => {
+  const onMakePrimary = vi.fn(() => Promise.resolve(true))
+  act(() => {
+    root?.render(
+      <SessionTasksPanel
+        tasks={tasks}
+        repo="example/service"
+        primaryTaskId="example-open-task"
+        onMakePrimary={onMakePrimary}
+      />,
+    )
+  })
+
+  await act(async () => {
+    container
+      .querySelector<HTMLButtonElement>('.session-tasks-panel-primary-action')
+      ?.click()
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+  })
+
+  expect(onMakePrimary.mock.calls).toEqual([['example-completed-task-1']])
 })

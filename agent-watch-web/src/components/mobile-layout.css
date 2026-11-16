@@ -621,10 +621,6 @@ html[data-mobile-layout='true'] {
   color: var(--aw-color-error);
 }
 
-.mobile-conversation-heading {
-  display: contents;
-}
-
 .conversation-pane[data-mobile='true']
   .mobile-conversation-title
   .session-heading-title-row {

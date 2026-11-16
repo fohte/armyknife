@@ -15,6 +15,7 @@ import { SessionTreePanel } from '#components/session-tree-panel'
 import { WebUiPane } from '#components/web-ui-pane'
 import { useSessionOperations } from '#session-operation-context'
 import { createSessionOperation } from '#session-operations'
+import { getSessionTasks } from '#session-task-utils'
 import {
   needsActionDescendantCount,
   type SessionTreeViewState,
@@ -164,8 +165,7 @@ export function useConversationStatusPanel({
     (sessionTreeError !== null ||
       sessionTree === null ||
       sessionTree.length > 1)
-  const sessionTasks =
-    session.tasks ?? (session.task === null ? [] : [session.task])
+  const sessionTasks = getSessionTasks(session)
   const availableTabIds = [
     ...(backgroundTasks.length === 0 ? [] : ['running']),
     ...(sessionTasks.length === 0 ? [] : ['tasks']),
@@ -264,7 +264,12 @@ export function useConversationStatusPanel({
             count: sessionTasks.length,
             showCount: true,
             content: (
-              <SessionTasksPanel tasks={sessionTasks} repo={session.repo} />
+              <SessionTasksPanel
+                tasks={sessionTasks}
+                repo={session.repo}
+                primaryTaskId={session.task?.id ?? null}
+                onMakePrimary={(taskId) => onAction('primary-task', { taskId })}
+              />
             ),
           },
         ]

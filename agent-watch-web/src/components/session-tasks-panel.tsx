@@ -9,11 +9,16 @@ const INITIAL_COMPLETED_TASKS = 4
 export function SessionTasksPanel({
   tasks,
   repo,
+  primaryTaskId,
+  onMakePrimary,
 }: {
   tasks: readonly SessionTask[]
   repo: string
+  primaryTaskId: string | null
+  onMakePrimary?: (taskId: string) => Promise<boolean>
 }) {
   const [showAllCompleted, setShowAllCompleted] = useState(false)
+  const [pendingTaskId, setPendingTaskId] = useState<string | null>(null)
   const inProgressTasks = tasks.filter((task) => task.isClosed !== true)
   const completedTasks = tasks.filter((task) => task.isClosed === true)
   const visibleCompletedTasks = showAllCompleted
@@ -21,6 +26,29 @@ export function SessionTasksPanel({
     : completedTasks.slice(0, INITIAL_COMPLETED_TASKS)
   const remainingCompletedCount =
     completedTasks.length - visibleCompletedTasks.length
+
+  const makePrimary = async (taskId: string) => {
+    if (onMakePrimary === undefined) return
+    setPendingTaskId(taskId)
+    await onMakePrimary(taskId)
+    setPendingTaskId(null)
+  }
+
+  const primaryControl = (task: SessionTask) => {
+    if (onMakePrimary === undefined) return null
+    return task.id === primaryTaskId ? (
+      <span className="session-tasks-panel-primary">Primary</span>
+    ) : (
+      <button
+        className="session-tasks-panel-primary-action"
+        type="button"
+        disabled={pendingTaskId !== null}
+        onClick={() => void makePrimary(task.id)}
+      >
+        Make primary
+      </button>
+    )
+  }
 
   return (
     <div className="session-tasks-panel">
@@ -58,6 +86,7 @@ export function SessionTasksPanel({
                     </span>
                   </span>
                 </a>
+                {primaryControl(task)}
               </li>
             ))}
           </ul>
@@ -90,6 +119,7 @@ export function SessionTasksPanel({
                     {task.title}
                   </span>
                 </a>
+                {primaryControl(task)}
               </li>
             ))}
           </ul>

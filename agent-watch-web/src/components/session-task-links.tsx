@@ -3,6 +3,7 @@ import '#components/session-task-links.css'
 import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
+import { getSessionTasks } from '#session-task-utils'
 import type { Session, SessionTask } from '#types'
 
 type MenuPosition = {
@@ -56,7 +57,7 @@ export function SessionTaskLinks({
   showTaskMenu = true,
 }: {
   task: SessionTask | null
-  tasks: SessionTask[]
+  tasks: readonly SessionTask[]
   sessions?: readonly SessionTaskLinkSession[]
   onMakePrimary?: (taskId: string) => Promise<boolean>
   taskListOpen?: boolean
@@ -130,7 +131,7 @@ export function SessionTaskLinks({
   const summaryByTaskId = new Map(
     tasks.map((linkedTask) => {
       const linkedSessions = sessions.filter((session) =>
-        (session.tasks ?? (session.task === null ? [] : [session.task])).some(
+        getSessionTasks(session).some(
           (sessionTask) => sessionTask.id === linkedTask.id,
         ),
       )

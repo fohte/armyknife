@@ -18,6 +18,7 @@ import { SessionHeading } from '#components/session-heading'
 import { SessionTaskLinks } from '#components/session-task-links'
 import { StarredSessionToggle } from '#components/starred-session-toggle'
 import { useSessionOperations } from '#session-operation-context'
+import { getSessionTasks } from '#session-task-utils'
 import type {
   BackgroundTask,
   OpenInTerminalStatus,
@@ -123,8 +124,7 @@ export function ConversationPaneHeader({
         operation.sessionId === session.id &&
         operation.number === mergeOperation.number,
     )
-  const linkedTasks =
-    session.tasks ?? (session.task === null ? [] : [session.task])
+  const linkedTasks = getSessionTasks(session)
 
   const confirmMerge = async () => {
     if (mergeOperation === null || merging) return
