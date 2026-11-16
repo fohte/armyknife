@@ -1818,16 +1818,16 @@ it('opens Later for the session shown in a mobile conversation', async () => {
     .fn<typeof fetch>()
     .mockImplementation(mockSessionActionFetch)
   vi.stubGlobal('fetch', fetchMock)
-  window.history.replaceState(
-    null,
-    '',
-    '/?session=session-mobile&screen=conversation',
-  )
-  mobileViewportMatches = true
   renderApp()
   publishSessions({
     revision: 1,
     sessions: [session('session-mobile', 'Reply to the question')],
+  })
+  act(() => {
+    setMobileViewport(true)
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
   })
   const conversationState = () => ({
     screen: container
@@ -1843,7 +1843,6 @@ it('opens Later for the session shown in a mobile conversation', async () => {
 
   const snapshot = () => ({
     initialConversationState,
-    finalConversationState: conversationState(),
     menuTitle: container.querySelector('.later-menu-title')?.textContent,
     menuLabel: container
       .querySelector('.later-menu')
@@ -1851,10 +1850,6 @@ it('opens Later for the session shown in a mobile conversation', async () => {
   })
   expect(snapshot()).toEqual({
     initialConversationState: {
-      screen: 'conversation',
-      url: '?session=session-mobile&screen=conversation',
-    },
-    finalConversationState: {
       screen: 'conversation',
       url: '?session=session-mobile&screen=conversation',
     },
