@@ -1835,22 +1835,21 @@ it('opens Later for the session shown in a mobile conversation', async () => {
       ?.getAttribute('data-mobile-screen'),
     url: window.location.search,
   })
-  expect(conversationState()).toEqual({
-    screen: 'conversation',
-    url: '?session=session-mobile&screen=conversation',
-  })
   await clickMobileSessionAction('Later')
   await act(async () => {
     await flushAsyncState()
   })
 
   const snapshot = () => ({
+    ...conversationState(),
     menuTitle: container.querySelector('.later-menu-title')?.textContent,
     menuLabel: container
       .querySelector('.later-menu')
       ?.getAttribute('aria-label'),
   })
   expect(snapshot()).toEqual({
+    screen: 'conversation',
+    url: '?session=session-mobile&screen=conversation',
     menuTitle: 'Later: Reply to the question',
     menuLabel: 'Later: Reply to the question',
   })
