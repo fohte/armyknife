@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.753](https://github.com/fohte/armyknife/compare/v0.1.752...v0.1.753) (2026-11-16)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show Codex background runs ([#1891](https://github.com/fohte/armyknife/issues/1891)) ([1d1911d](https://github.com/fohte/armyknife/commit/1d1911dc4fb592e8516e04b5bd54723d11ba74b9))
+
 ## [0.1.752](https://github.com/fohte/armyknife/compare/v0.1.751...v0.1.752) (2026-11-16)
 
 
