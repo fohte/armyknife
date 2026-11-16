@@ -108,7 +108,13 @@ fn format_web_ui_list(web_uis: &[WebUiRegistration]) -> String {
 
     web_uis
         .iter()
-        .map(|web_ui| format!("{}: {}", web_ui.name, web_ui.url))
+        .map(|web_ui| {
+            format!(
+                "{}: {}",
+                web_ui.name.escape_debug(),
+                web_ui.url.escape_debug()
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -240,8 +246,8 @@ mod tests {
             "created_at": "2026-01-01T00:00:00Z",
             "updated_at": "2026-01-01T00:00:00Z",
             "web_uis": [
-                {"name": "Sample editor", "url": "http://localhost:49152/sample/", "exposed_url": null},
-                {"name": "Secondary preview", "url": "http://localhost:49153/preview/", "exposed_url": "https://preview.example.invalid/preview/"}
+                {"name": "Sample editor", "url": "http://localhost:49152/sample/", "exposedUrl": null},
+                {"name": "Secondary preview", "url": "http://localhost:49153/preview/", "exposedUrl": "https://preview.example.invalid/preview/"}
             ]
         }))
         .expect("fixture session should deserialize");
@@ -429,7 +435,7 @@ mod tests {
         let expected = vec![WebUiRegistration {
             name: "Secondary preview".to_owned(),
             url: "http://localhost:49153/preview/".to_owned(),
-            exposed_url: None,
+            exposed_url: Some("https://preview.example.invalid/preview/".to_owned()),
         }];
 
         assert_eq!(
@@ -475,7 +481,21 @@ mod tests {
     }
 
     #[test]
-    fn parses_web_ui_remove_and_list_commands() {
+    fn escapes_terminal_control_characters_in_web_ui_names() {
+        let web_uis = vec![WebUiRegistration {
+            name: "Sample\u{1b}[2J interface\n".to_owned(),
+            url: "http://localhost:49152/example/".to_owned(),
+            exposed_url: None,
+        }];
+
+        assert_eq!(
+            format_web_ui_list(&web_uis),
+            "Sample\\u{1b}[2J interface\\n: http://localhost:49152/example/",
+        );
+    }
+
+    #[test]
+    fn parses_web_ui_remove_command() {
         let remove = Cli::try_parse_from(["a", "agent", "web-ui", "remove", "Sample editor"])
             .expect("web UI remove command should parse");
         let Commands::Agent(AgentCommands::WebUi(WebUiCommands::Remove(args))) = remove.command
@@ -483,7 +503,10 @@ mod tests {
             panic!("expected web UI remove command");
         };
         assert_eq!(args.name, "Sample editor");
+    }
 
+    #[test]
+    fn parses_web_ui_list_command() {
         let list = Cli::try_parse_from(["a", "agent", "web-ui", "list"])
             .expect("web UI list command should parse");
         assert!(matches!(

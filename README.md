@@ -698,17 +698,17 @@ Within a session, registering an interface with an existing trimmed name replace
 When watch-web starts or observes a registration change, it calls the executable `web-ui-expose` hook from `~/.config/armyknife/hooks/`, or `$XDG_CONFIG_HOME/armyknife/hooks/` when `XDG_CONFIG_HOME` is set. The hook receives the relay URL in `ARMYKNIFE_WEB_UI_URL` (including the registered path and query) and the relay port in `ARMYKNIFE_WEB_UI_PORT`, then prints the external URL to stdout. A missing hook, failure, or empty output leaves the interface without an external URL. When a registration disappears or watch-web shuts down, it calls `web-ui-unexpose` with the relay URL and port and `ARMYKNIFE_WEB_UI_EXPOSED_URL`; unexpose failures do not interrupt cleanup. See [Hooks](docs/hooks.md#web-ui-expose-and-web-ui-unexpose) for details.
 
 ```console
-$ a agent web-ui add http://127.0.0.1:48761/design/sample/ --name "Design editor"
-Recorded web UI 'Design editor'
-```
-
-Remove a registration by name or list the registrations owned by the calling session:
-
-```console
+$ a agent web-ui add http://127.0.0.1:49321/editor/ --name "Sample editor"
+Recorded web UI 'Sample editor'
+$ a agent web-ui add http://127.0.0.1:49322/preview/ --name "Sample interface"
+Recorded web UI 'Sample interface'
+$ a agent web-ui list
+Sample editor: http://127.0.0.1:49321/editor/
+Sample interface: http://127.0.0.1:49322/preview/
 $ a agent web-ui remove "Sample interface"
 Removed web UI 'Sample interface'
 $ a agent web-ui list
-Sample interface: http://127.0.0.1:49152/example/
+Sample editor: http://127.0.0.1:49321/editor/
 ```
 
 Names are matched after trimming whitespace. The reserved name `crit` cannot be removed with this command. Removing a registration lets watch-web stop its relay and run the `web-ui-unexpose` hook.
