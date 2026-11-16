@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.756](https://github.com/fohte/armyknife/compare/v0.1.755...v0.1.756) (2026-11-16)
+
+
+### Features
+
+* **agent-watch-web:** unify session rows ([#1895](https://github.com/fohte/armyknife/issues/1895)) ([c588937](https://github.com/fohte/armyknife/commit/c5889370a4ebee85b15983ecd05ddd42a3a7dfa2))
+
 ## [0.1.755](https://github.com/fohte/armyknife/compare/v0.1.754...v0.1.755) (2026-11-16)
 
 
