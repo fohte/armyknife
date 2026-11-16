@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.755](https://github.com/fohte/armyknife/compare/v0.1.754...v0.1.755) (2026-11-16)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show repository roots ([#1896](https://github.com/fohte/armyknife/issues/1896)) ([ecacd61](https://github.com/fohte/armyknife/commit/ecacd61d30977d07f423e8e7796bcd18536199e8))
+
 ## [0.1.754](https://github.com/fohte/armyknife/compare/v0.1.753...v0.1.754) (2026-11-16)
 
 
