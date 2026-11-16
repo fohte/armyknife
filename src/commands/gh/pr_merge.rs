@@ -125,7 +125,7 @@ trait PrMergeClient {
         repo: &str,
         branch: &str,
         merge_sha: Option<&str>,
-        base_checks_reported: bool,
+        discover_merge_checks: bool,
     ) -> anyhow::Result<()>;
     async fn merge_async(
         &self,
@@ -171,7 +171,7 @@ enum MergeOutcome {
 #[derive(Debug, PartialEq, Eq)]
 struct MergedPr {
     snapshot: PrSnapshot,
-    base_checks_reported: bool,
+    discover_merge_checks: bool,
 }
 
 fn unmerged_lower_pr(
@@ -414,9 +414,9 @@ impl PrMergeClient for GhCli {
         repo: &str,
         branch: &str,
         merge_sha: Option<&str>,
-        base_checks_reported: bool,
+        discover_merge_checks: bool,
     ) -> anyhow::Result<()> {
-        checks::wait_for_merge_commit_checks(owner, repo, branch, merge_sha, base_checks_reported)
+        checks::wait_for_merge_commit_checks(owner, repo, branch, merge_sha, discover_merge_checks)
     }
 
     async fn merge_async(
@@ -521,8 +521,8 @@ mod tests {
         checks_error: bool,
         base_checks_error: bool,
         base_checks_fail_on_second: bool,
-        base_checks_reported: bool,
-        base_checks_reported_on_second: Option<bool>,
+        discover_merge_checks: bool,
+        discover_merge_checks_on_second: Option<bool>,
         merge_commit_checks_error: bool,
         merge_error: bool,
         fallback_error: Option<AsyncMergeFallback>,
@@ -605,10 +605,10 @@ mod tests {
                 anyhow::bail!("fake base branch checks failed");
             }
             Ok(if is_second_check {
-                self.base_checks_reported_on_second
-                    .unwrap_or(self.base_checks_reported)
+                self.discover_merge_checks_on_second
+                    .unwrap_or(self.discover_merge_checks)
             } else {
-                self.base_checks_reported
+                self.discover_merge_checks
             })
         }
 
@@ -618,12 +618,12 @@ mod tests {
             _repo: &str,
             branch: &str,
             merge_sha: Option<&str>,
-            base_checks_reported: bool,
+            discover_merge_checks: bool,
         ) -> anyhow::Result<()> {
             self.merge_commit_check_calls.borrow_mut().push((
                 branch.to_string(),
                 merge_sha.map(str::to_string),
-                base_checks_reported,
+                discover_merge_checks,
             ));
             if self.merge_commit_checks_error {
                 anyhow::bail!("fake merge commit checks failed");
@@ -692,10 +692,10 @@ mod tests {
         }
     }
 
-    fn merged_outcome(snapshot: PrSnapshot, base_checks_reported: bool) -> MergeOutcome {
+    fn merged_outcome(snapshot: PrSnapshot, discover_merge_checks: bool) -> MergeOutcome {
         MergeOutcome::Merged(MergedPr {
             snapshot,
-            base_checks_reported,
+            discover_merge_checks,
         })
     }
 
@@ -713,8 +713,8 @@ mod tests {
             checks_error,
             base_checks_error: false,
             base_checks_fail_on_second: false,
-            base_checks_reported: true,
-            base_checks_reported_on_second: None,
+            discover_merge_checks: true,
+            discover_merge_checks_on_second: None,
             merge_commit_checks_error: false,
             merge_error,
             fallback_error: None,
@@ -954,7 +954,7 @@ mod tests {
             false,
             false,
         );
-        client.base_checks_reported_on_second = Some(false);
+        client.discover_merge_checks_on_second = Some(false);
         client.merge_result = AsyncMergeResult::Merged {
             sha: Some("merge-response".to_string()),
         };
@@ -1082,7 +1082,8 @@ mod tests {
         #[case] expected_outcome: MergeOutcome,
         #[case] expected_events: Vec<String>,
     ) {
-        let client = fake_client(&snapshots, Rc::clone(&events), false, false);
+        let mut client = fake_client(&snapshots, Rc::clone(&events), false, false);
+        client.discover_merge_checks = false;
         let mut hook = |_: &[(&str, &str)]| {
             events.borrow_mut().push("hook".to_string());
             Ok(())

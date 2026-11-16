@@ -21,9 +21,9 @@ pub(super) fn wait_for_merge_commit_checks(
     repo: &str,
     branch: &str,
     merge_sha: Option<&str>,
-    base_checks_reported: bool,
+    discover_merge_checks: bool,
 ) -> anyhow::Result<()> {
-    commit::wait_for_merge_commit_checks(owner, repo, branch, merge_sha, base_checks_reported)
+    commit::wait_for_merge_commit_checks(owner, repo, branch, merge_sha, discover_merge_checks)
 }
 
 const GH_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);

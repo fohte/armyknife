@@ -67,7 +67,7 @@ pub(super) fn wait_for_merge_commit_checks(
     repo: &str,
     branch: &str,
     merge_sha: Option<&str>,
-    base_checks_reported: bool,
+    discover_merge_checks: bool,
 ) -> anyhow::Result<()> {
     let required_contexts = fetch_required_status_check_contexts(owner, repo, branch)?;
     if required_contexts.is_empty() {
@@ -75,16 +75,41 @@ pub(super) fn wait_for_merge_commit_checks(
     }
 
     let merge_sha = merge_sha.context("GitHub did not report the confirmed merge commit SHA")?;
-    println!("Waiting for required checks on merge commit {merge_sha}...");
-    wait_for_commit_checks(
-        owner,
-        repo,
-        branch,
+    wait_for_merge_commit_checks_with(
         merge_sha,
+        discover_merge_checks,
         &required_contexts,
+        || fetch_commit_checks(owner, repo, merge_sha),
+        |details| {
+            println!(
+                "Required checks on `{branch}` are pending: {details}; retrying in 10 seconds..."
+            );
+            thread::sleep(CHECK_POLL_INTERVAL);
+        },
+        Instant::now,
+        |warning| eprintln!("{warning}"),
+    )
+}
+
+fn wait_for_merge_commit_checks_with(
+    merge_sha: &str,
+    discover_merge_checks: bool,
+    required_contexts: &[RequiredStatusCheckContext],
+    fetch_checks: impl FnMut() -> anyhow::Result<Vec<GhCheck>>,
+    wait: impl FnMut(&str),
+    now: impl FnMut() -> Instant,
+    warn: impl FnMut(&str),
+) -> anyhow::Result<()> {
+    println!("Waiting for required checks on merge commit {merge_sha}...");
+    let outcome = wait_for_commit_checks_with(
+        required_contexts,
         false,
-        base_checks_reported.then_some(COMMIT_CHECK_DISCOVERY_TIMEOUT),
+        fetch_checks,
+        wait,
+        now,
+        discover_merge_checks.then_some(COMMIT_CHECK_DISCOVERY_TIMEOUT),
     )?;
+    finish_commit_check_wait(merge_sha, outcome, warn);
     Ok(())
 }
 
@@ -556,7 +581,7 @@ mod tests {
     }
 
     #[test]
-    fn waits_for_a_required_check_that_appears_after_an_empty_response() {
+    fn merge_commit_wait_catches_a_failure_that_appears_after_an_empty_response() {
         let mut client = FakeCommitCheckClient {
             responses: VecDeque::from([
                 vec![],
@@ -573,16 +598,17 @@ mod tests {
         let elapsed = Cell::new(Duration::ZERO);
         let mut waits = 0;
 
-        let result = wait_for_commit_checks_with(
+        let result = wait_for_merge_commit_checks_with(
+            "merge-tip",
+            true,
             &[required("unit", None)],
-            false,
             || client.fetch(),
             |_| {
                 waits += 1;
                 elapsed.set(elapsed.get() + CHECK_POLL_INTERVAL);
             },
             || started_at + elapsed.get(),
-            Some(COMMIT_CHECK_DISCOVERY_TIMEOUT),
+            |_| {},
         )
         .map_err(|error| error.to_string());
 
@@ -677,48 +703,71 @@ mod tests {
     }
 
     #[test]
-    fn warns_when_merge_commit_checks_are_unreported_after_the_deadline() {
+    fn merge_commit_wait_skips_discovery_when_the_base_had_no_reported_checks() {
+        let mut client = FakeCommitCheckClient {
+            responses: VecDeque::from([vec![]]),
+            request_count: 0,
+        };
+        let started_at = Instant::now();
+        let elapsed = Cell::new(Duration::ZERO);
+        let mut waits = 0;
+        let mut warnings = Vec::new();
+
+        let result = wait_for_merge_commit_checks_with(
+            "merge-tip",
+            false,
+            &[required("unit", None)],
+            || client.fetch(),
+            |_| {
+                waits += 1;
+                elapsed.set(elapsed.get() + CHECK_POLL_INTERVAL);
+            },
+            || started_at + elapsed.get(),
+            |warning| warnings.push(warning.to_string()),
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, client.request_count, waits, warnings),
+            (Ok(()), 1, 0, vec![]),
+        );
+    }
+
+    #[test]
+    fn merge_commit_wait_warns_when_checks_are_unreported_after_the_deadline() {
         let mut client = FakeCommitCheckClient {
             responses: VecDeque::from([vec![], vec![]]),
             request_count: 0,
         };
         let started_at = Instant::now();
         let elapsed = Cell::new(Duration::ZERO);
-        let discovery_timeout = Duration::from_secs(30);
         let mut waits = 0;
+        let mut warnings = Vec::new();
 
-        let result = wait_for_commit_checks_with(
+        let result = wait_for_merge_commit_checks_with(
+            "merge-tip",
+            true,
             &[required("pr-title-check", None)],
-            false,
             || client.fetch(),
             |_| {
                 waits += 1;
-                elapsed.set(elapsed.get() + discovery_timeout);
+                elapsed.set(elapsed.get() + COMMIT_CHECK_DISCOVERY_TIMEOUT);
             },
             || started_at + elapsed.get(),
-            Some(discovery_timeout),
+            |warning| warnings.push(warning.to_string()),
         )
-        .map(|outcome| {
-            let mut warnings = Vec::new();
-            let reported = finish_commit_check_wait("merge-tip", outcome, |warning| {
-                warnings.push(warning.to_string());
-            });
-            (reported, warnings)
-        })
         .map_err(|error| error.to_string());
 
         assert_eq!(
-            (result, client.request_count, waits),
+            (result, client.request_count, waits, warnings),
             (
-                Ok((
-                    false,
-                    vec![
-                        "Required checks were not reported on merge-tip; CI was not verified"
-                            .to_string(),
-                    ],
-                )),
+                Ok(()),
                 2,
                 1,
+                vec![
+                    "Required checks were not reported on merge-tip; CI was not verified"
+                        .to_string(),
+                ],
             ),
         );
     }

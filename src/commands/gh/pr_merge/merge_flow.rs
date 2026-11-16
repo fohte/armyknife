@@ -22,7 +22,7 @@ struct PostMergeCheckContext<'a> {
     owner: &'a str,
     repo: &'a str,
     pr_number: u64,
-    base_checks_reported: bool,
+    discover_merge_checks: bool,
 }
 
 fn check_base_branch_before_merge(
@@ -109,7 +109,7 @@ pub(super) async fn run_merge_with_options(
         bail!("PR #{pr_number} head changed since confirmation.");
     }
 
-    let mut base_checks_reported = if options.run_branch_commit_checks {
+    let mut discover_merge_checks = if options.run_branch_commit_checks {
         check_base_branch_before_merge(
             client,
             owner,
@@ -155,13 +155,13 @@ pub(super) async fn run_merge_with_options(
     if current.state == PrState::Merged {
         return Ok(MergeOutcome::Merged(MergedPr {
             snapshot: current,
-            base_checks_reported,
+            discover_merge_checks: options.run_branch_commit_checks,
         }));
     }
     ensure_pr_is_open_and_safe(&current, pr_number, Some(&initial.head_sha))?;
 
     if options.run_branch_commit_checks {
-        base_checks_reported = check_base_branch_before_merge(
+        discover_merge_checks = check_base_branch_before_merge(
             client,
             owner,
             repo,
@@ -175,7 +175,7 @@ pub(super) async fn run_merge_with_options(
         owner,
         repo,
         pr_number,
-        base_checks_reported,
+        discover_merge_checks,
     };
 
     let merge_result = match client
@@ -222,7 +222,7 @@ async fn recover_async_merge_error(
         {
             return Ok(MergeOutcome::Merged(MergedPr {
                 snapshot: merged,
-                base_checks_reported: context.base_checks_reported,
+                discover_merge_checks: context.discover_merge_checks,
             }));
         }
         return Err(merge_error);
@@ -232,7 +232,7 @@ async fn recover_async_merge_error(
         {
             return Ok(MergeOutcome::Merged(MergedPr {
                 snapshot: merged,
-                base_checks_reported: context.base_checks_reported,
+                discover_merge_checks: context.discover_merge_checks,
             }));
         }
         return Err(merge_error).context(format!(
@@ -263,7 +263,7 @@ async fn fallback_to_sync_merge(
     if before_sync.state == PrState::Merged {
         return Ok(MergeOutcome::Merged(MergedPr {
             snapshot: before_sync,
-            base_checks_reported: context.base_checks_reported,
+            discover_merge_checks: context.discover_merge_checks,
         }));
     }
     ensure_pr_is_open_and_safe(&before_sync, context.pr_number, Some(confirmed_head_sha))
@@ -304,7 +304,7 @@ async fn fallback_to_sync_merge(
             {
                 return Ok(MergeOutcome::Merged(MergedPr {
                     snapshot: merged,
-                    base_checks_reported: context.base_checks_reported,
+                    discover_merge_checks: context.discover_merge_checks,
                 }));
             }
             return Err(sync_error).with_context(|| {
@@ -358,7 +358,7 @@ fn merged_outcome_after_refresh(
             merged.merge_commit_sha = merge_sha.or(merged.merge_commit_sha);
             MergeOutcome::Merged(MergedPr {
                 snapshot: merged,
-                base_checks_reported: context.base_checks_reported,
+                discover_merge_checks: context.discover_merge_checks,
             })
         }
         Ok(refreshed) => {
@@ -370,7 +370,7 @@ fn merged_outcome_after_refresh(
             refreshed.merge_commit_sha = merge_sha.or(refreshed.merge_commit_sha);
             MergeOutcome::Merged(MergedPr {
                 snapshot: refreshed,
-                base_checks_reported: context.base_checks_reported,
+                discover_merge_checks: context.discover_merge_checks,
             })
         }
         Err(error) => {
@@ -382,7 +382,7 @@ fn merged_outcome_after_refresh(
             fallback_snapshot.merge_commit_sha = merge_sha.or(fallback_snapshot.merge_commit_sha);
             MergeOutcome::Merged(MergedPr {
                 snapshot: fallback_snapshot,
-                base_checks_reported: context.base_checks_reported,
+                discover_merge_checks: context.discover_merge_checks,
             })
         }
     }

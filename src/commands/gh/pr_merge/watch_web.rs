@@ -113,7 +113,7 @@ where
                         repo,
                         &merged.snapshot.base_ref_name,
                         merged.snapshot.merge_commit_sha.as_deref(),
-                        merged.base_checks_reported,
+                        merged.discover_merge_checks,
                     )
                     .with_context(|| {
                         format!(
