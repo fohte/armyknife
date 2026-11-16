@@ -102,27 +102,51 @@ fn build_directory_list(
     let sessions = source.sessions()?;
     let query = query.filter(|query| !query.trim().is_empty());
     let needle = query.as_deref().map(str::to_lowercase);
+    let repos_root = source.ghq_root().and_then(|root| root.canonicalize().ok());
+    let repositories = repos_root
+        .as_deref()
+        .map(discover_repositories)
+        .unwrap_or_default();
     let mut sessions = sessions;
     sessions.sort_by_key(|session| std::cmp::Reverse(session.updated_at));
 
     let mut directories = Vec::new();
     let mut seen = HashSet::new();
     for session in sessions {
-        let path = session.cwd;
-        if matches_query(&path, needle.as_deref()) {
+        let Ok(path) = session.cwd.canonicalize() else {
+            continue;
+        };
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(repo) = repository_for_session(&path, &repositories) else {
+            continue;
+        };
+        if matches_query(
+            repository_relative_path(repo, repos_root.as_deref()),
+            needle.as_deref(),
+        ) {
             push_directory(
                 &mut directories,
                 &mut seen,
-                path,
+                repo.clone(),
                 DirectorySourceKind::Recent,
             );
         }
     }
 
-    if let (Some(needle), Some(root)) = (needle.as_deref(), source.ghq_root()) {
-        for repo in discover_repositories(&root) {
-            if matches_query(&repo, Some(needle)) {
-                push_directory(&mut directories, &mut seen, repo, DirectorySourceKind::Repo);
+    if let Some(needle) = needle.as_deref() {
+        for repo in &repositories {
+            if matches_query(
+                repository_relative_path(repo, repos_root.as_deref()),
+                Some(needle),
+            ) {
+                push_directory(
+                    &mut directories,
+                    &mut seen,
+                    repo.clone(),
+                    DirectorySourceKind::Repo,
+                );
             }
         }
     }
@@ -134,6 +158,19 @@ fn build_directory_list(
     }
 
     Ok(DirectoriesResponse { directories })
+}
+
+fn repository_for_session<'a>(path: &Path, repositories: &'a [PathBuf]) -> Option<&'a PathBuf> {
+    repositories
+        .iter()
+        .filter(|repo| path.starts_with(repo))
+        .max_by_key(|repo| repo.components().count())
+}
+
+fn repository_relative_path<'a>(repo: &'a Path, repos_root: Option<&Path>) -> &'a Path {
+    repos_root
+        .and_then(|root| repo.strip_prefix(root).ok())
+        .unwrap_or(repo)
 }
 
 fn matches_query(path: &Path, query: Option<&str>) -> bool {
@@ -170,6 +207,11 @@ fn search_path(query: &str, home: Option<PathBuf>) -> Option<PathBuf> {
 fn discover_repositories(root: &Path) -> Vec<PathBuf> {
     let mut repositories = Vec::new();
     collect_repositories(root, 0, &mut repositories);
+    repositories = repositories
+        .into_iter()
+        .filter_map(|repo| repo.canonicalize().ok())
+        .filter(|repo| repo.starts_with(root))
+        .collect();
     repositories.sort();
     repositories
 }
@@ -211,6 +253,7 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::Request;
     use chrono::{TimeZone, Utc};
+    use rstest::rstest;
     use serde_json::Value;
     use tower::ServiceExt;
 
@@ -303,16 +346,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn returns_recent_session_directories_newest_first_without_duplicates() {
-        let older = tempfile::tempdir().unwrap();
-        let newer = tempfile::tempdir().unwrap();
+    async fn returns_recent_repositories_newest_first_without_worktrees_or_outside_paths() {
+        let repos_root = tempfile::tempdir().unwrap();
+        let older_repo = repos_root
+            .path()
+            .join("github.com/example.invalid/older-repo");
+        let newer_repo = repos_root
+            .path()
+            .join("github.com/example.invalid/newer-repo");
+        let older_worktree = older_repo.join(".worktrees/topic");
+        let newer_worktree = newer_repo.join(".worktrees/topic");
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(older_repo.join(".git")).unwrap();
+        std::fs::create_dir_all(newer_repo.join(".git")).unwrap();
+        std::fs::create_dir_all(older_worktree.join("src")).unwrap();
+        std::fs::create_dir_all(&newer_worktree).unwrap();
         let source = FakeDirectorySource {
             sessions: vec![
-                session(older.path().to_path_buf(), 10),
-                session(newer.path().to_path_buf(), 30),
-                session(older.path().to_path_buf(), 20),
+                session(older_repo.clone(), 10),
+                session(newer_worktree, 30),
+                session(older_worktree.join("src"), 40),
+                session(outside.path().to_path_buf(), 50),
             ],
-            ghq_root: None,
+            ghq_root: Some(repos_root.path().to_path_buf()),
             home_dir: None,
         };
         let router = router_with_source(Arc::new(source));
@@ -323,8 +379,8 @@ mod tests {
                 StatusCode::OK,
                 serde_json::json!({
                     "directories": [
-                        {"path": newer.path().canonicalize().unwrap().to_string_lossy(), "source": "recent"},
-                        {"path": older.path().canonicalize().unwrap().to_string_lossy(), "source": "recent"},
+                        {"path": older_repo.canonicalize().unwrap().to_string_lossy(), "source": "recent"},
+                        {"path": newer_repo.canonicalize().unwrap().to_string_lossy(), "source": "recent"},
                     ],
                 }),
             ),
@@ -333,14 +389,15 @@ mod tests {
 
     #[tokio::test]
     async fn omits_session_directories_that_are_no_longer_available() {
-        let existing = tempfile::tempdir().unwrap();
-        let stale = existing.path().join("removed-directory");
+        let repos_root = tempfile::tempdir().unwrap();
+        let repo = repos_root
+            .path()
+            .join("github.com/example.invalid/active-repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        let stale = repo.join(".worktrees/removed-directory");
         let source = FakeDirectorySource {
-            sessions: vec![
-                session(existing.path().to_path_buf(), 20),
-                session(stale, 30),
-            ],
-            ghq_root: None,
+            sessions: vec![session(repo.clone(), 20), session(stale, 30)],
+            ghq_root: Some(repos_root.path().to_path_buf()),
             home_dir: None,
         };
         let router = router_with_source(Arc::new(source));
@@ -351,7 +408,7 @@ mod tests {
                 StatusCode::OK,
                 serde_json::json!({
                     "directories": [
-                        {"path": existing.path().canonicalize().unwrap().to_string_lossy(), "source": "recent"},
+                        {"path": repo.canonicalize().unwrap().to_string_lossy(), "source": "recent"},
                     ],
                 }),
             ),
@@ -362,12 +419,10 @@ mod tests {
     async fn search_includes_matching_ghq_repositories() {
         let home = tempfile::tempdir().unwrap();
         let ghq = tempfile::tempdir().unwrap();
-        let recent = home.path().join("recent-project");
-        let repo = ghq.path().join("github.com/example/sample-app");
-        std::fs::create_dir_all(&recent).unwrap();
+        let repo = ghq.path().join("github.com/example.invalid/sample-app");
         std::fs::create_dir_all(repo.join(".git")).unwrap();
         let source = FakeDirectorySource {
-            sessions: vec![session(recent, 10)],
+            sessions: Vec::new(),
             ghq_root: Some(ghq.path().to_path_buf()),
             home_dir: Some(home.path().to_path_buf()),
         };
@@ -387,7 +442,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_includes_an_existing_tilde_path() {
+    async fn search_matches_recent_repository_by_relative_path() {
+        let repos_root = tempfile::tempdir().unwrap();
+        let repo = repos_root
+            .path()
+            .join("github.com/example.invalid/sample-app");
+        let worktree = repo.join(".worktrees/topic");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::create_dir_all(&worktree).unwrap();
+        let source = FakeDirectorySource {
+            sessions: vec![session(worktree, 10)],
+            ghq_root: Some(repos_root.path().to_path_buf()),
+            home_dir: None,
+        };
+        let router = router_with_source(Arc::new(source));
+
+        assert_eq!(
+            get(
+                &router,
+                "/directories?q=github.com/example.invalid/sample-app"
+            )
+            .await,
+            (
+                StatusCode::OK,
+                serde_json::json!({
+                    "directories": [{
+                        "path": repo.canonicalize().unwrap().to_string_lossy(),
+                        "source": "recent",
+                    }],
+                }),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::tilde("~/sample-directory")]
+    #[case::absolute_path("")]
+    #[tokio::test]
+    async fn search_includes_an_existing_direct_path(#[case] query: &str) {
         let home = tempfile::tempdir().unwrap();
         let path_candidate = home.path().join("sample-directory");
         std::fs::create_dir_all(&path_candidate).unwrap();
@@ -397,9 +489,14 @@ mod tests {
             home_dir: Some(home.path().to_path_buf()),
         };
         let router = router_with_source(Arc::new(source));
+        let query = if query.is_empty() {
+            path_candidate.to_string_lossy().into_owned()
+        } else {
+            query.to_owned()
+        };
 
         assert_eq!(
-            get(&router, "/directories?q=~/sample-directory").await,
+            get(&router, &format!("/directories?q={query}")).await,
             (
                 StatusCode::OK,
                 serde_json::json!({
