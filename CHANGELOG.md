@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.745](https://github.com/fohte/armyknife/compare/v0.1.744...v0.1.745) (2026-11-16)
+
+
+### Features
+
+* **agent:** preview sent files inline ([#1874](https://github.com/fohte/armyknife/issues/1874)) ([1a39649](https://github.com/fohte/armyknife/commit/1a39649c9a6e6167af205e14dc4f98e4616cefbc))
+
 ## [0.1.744](https://github.com/fohte/armyknife/compare/v0.1.743...v0.1.744) (2026-11-16)
 
 
