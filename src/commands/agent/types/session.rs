@@ -73,7 +73,7 @@ pub struct Session {
     /// GitHub lookup data retained after a worktree is removed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_context: Option<SessionPrContext>,
-    /// Branches whose pull requests were submitted by this session.
+    /// Lets watch-web find PRs submitted from a worktree other than this session's cwd branch.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_pr_contexts: Vec<SessionPrContext>,
     /// Crit review URLs opened by this session, ordered by most recently requested.
