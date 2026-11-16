@@ -234,9 +234,8 @@ mod tests {
         serde_json::to_value(session).expect("session should serialize")
     }
 
-    #[test]
-    fn records_watch_web_launch_id_from_the_launch_environment() {
-        let sessions_dir = tempfile::tempdir().unwrap();
+    #[rstest]
+    fn records_watch_web_launch_id_from_the_launch_environment(sessions_dir: TempDir) {
         let env_vars = [(EnvVars::session_launch_id_name(), "launch-fixture")];
 
         record_from_env_in(
@@ -248,9 +247,33 @@ mod tests {
         )
         .unwrap();
 
+        let mut actual = session_json(sessions_dir.path());
+        actual["created_at"] = json!("<timestamp>");
+        actual["updated_at"] = json!("<timestamp>");
         assert_eq!(
-            session_json(sessions_dir.path())["launch_id"],
-            "launch-fixture"
+            actual,
+            json!({
+                "session_id": "thread-a",
+                "launch_id": "launch-fixture",
+                "cwd": "/workspace/project",
+                "transcript_path": null,
+                "tty": null,
+                "tmux_info": null,
+                "status": "running",
+                "created_at": "<timestamp>",
+                "updated_at": "<timestamp>",
+                "last_message": null,
+                "current_tool": null,
+                "label": null,
+                "work_type": null,
+                "ancestor_session_ids": [],
+                "pending_bg_task_ids": [],
+                "pending_agent_task_ids": [],
+                "pending_permission_agent_ids": [],
+                "read_at": null,
+                "sweep_signaled": false,
+                "engine": "codex"
+            }),
         );
     }
 

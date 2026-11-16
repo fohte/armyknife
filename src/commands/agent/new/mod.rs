@@ -304,7 +304,9 @@ fn tmux_launch_inputs_with_vibe_check(
             }
         };
     // Agent tools can invoke this command without a tmux context, so preserve the user's focus.
-    let background = std::env::var("CLAUDECODE").is_ok() || own_session_id.is_some();
+    let background = std::env::var("CLAUDECODE").is_ok()
+        || own_session_id.is_some()
+        || common.watch_web_launch_id.is_some();
     let env_vars = build_env_vars(common, vibe, own_session_id)?;
     Ok((env_vars, background))
 }
@@ -1497,6 +1499,41 @@ mod tests {
         .unwrap();
 
         assert_eq!(actual, (expected_env_vars, expected_background));
+    }
+
+    #[test]
+    fn watch_web_launches_run_in_the_background() {
+        let mut common = TestCli::try_parse_from(["a"]).unwrap().args.common;
+        common.watch_web_launch_id = Some("launch-fixture".to_string());
+        let actual = temp_env::with_vars(
+            [
+                ("CLAUDECODE", None::<&str>),
+                ("ARMYKNIFE_SESSION_ID", None::<&str>),
+                ("CODEX_SESSION_ID", None::<&str>),
+                ("TMUX", None::<&str>),
+                ("TMUX_PANE", None::<&str>),
+                ("TQ_SESSION_ID", None::<&str>),
+            ],
+            || tmux_launch_inputs_with_vibe_check(&common, false, || Ok(false)),
+        )
+        .unwrap();
+
+        assert_eq!(
+            actual,
+            (
+                vec![
+                    (
+                        EnvVars::session_child_launch_name().to_string(),
+                        "allow".to_string(),
+                    ),
+                    (
+                        EnvVars::session_launch_id_name().to_string(),
+                        "launch-fixture".to_string(),
+                    ),
+                ],
+                true,
+            ),
+        );
     }
 
     #[rstest]

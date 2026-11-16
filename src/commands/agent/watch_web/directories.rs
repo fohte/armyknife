@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::commands::agent::store;
 use crate::commands::agent::types::Session;
+use crate::commands::agent::watch_web::paths::normalize_directory;
 
 pub(super) fn router() -> Router {
     router_with_source(Arc::new(LiveDirectorySource))
@@ -140,7 +141,12 @@ fn push_directory(
     path: PathBuf,
     source: DirectorySourceKind,
 ) {
-    let normalized = path.canonicalize().unwrap_or(path);
+    let Ok(normalized) = path.canonicalize() else {
+        return;
+    };
+    if !normalized.is_dir() {
+        return;
+    }
     if seen.insert(normalized.clone()) {
         output.push(DirectoryView {
             path: normalized.to_string_lossy().into_owned(),
@@ -150,20 +156,10 @@ fn push_directory(
 }
 
 fn search_path(query: &str, home: Option<PathBuf>) -> Option<PathBuf> {
-    let candidate = if query == "~" || query.starts_with("~/") {
-        let home = home?;
-        if query == "~" {
-            home
-        } else {
-            home.join(query.strip_prefix("~/")?)
-        }
-    } else if Path::new(query).is_absolute() {
-        PathBuf::from(query)
-    } else {
+    if !(query == "~" || query.starts_with("~/") || Path::new(query).is_absolute()) {
         return None;
-    };
-    let canonical = candidate.canonicalize().ok()?;
-    canonical.is_dir().then_some(canonical)
+    }
+    normalize_directory(query, home.as_deref()).ok()
 }
 
 fn discover_repositories(root: &Path) -> Vec<PathBuf> {
@@ -311,6 +307,33 @@ mod tests {
                     "directories": [
                         {"path": newer.path().canonicalize().unwrap().to_string_lossy(), "source": "recent"},
                         {"path": older.path().canonicalize().unwrap().to_string_lossy(), "source": "recent"},
+                    ],
+                }),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn omits_session_directories_that_are_no_longer_available() {
+        let existing = tempfile::tempdir().unwrap();
+        let stale = existing.path().join("removed-directory");
+        let source = FakeDirectorySource {
+            sessions: vec![
+                session(existing.path().to_path_buf(), 20),
+                session(stale, 30),
+            ],
+            ghq_root: None,
+            home_dir: None,
+        };
+        let router = router_with_source(Arc::new(source));
+
+        assert_eq!(
+            get(&router, "/directories").await,
+            (
+                StatusCode::OK,
+                serde_json::json!({
+                    "directories": [
+                        {"path": existing.path().canonicalize().unwrap().to_string_lossy(), "source": "recent"},
                     ],
                 }),
             ),

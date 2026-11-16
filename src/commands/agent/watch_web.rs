@@ -8,6 +8,7 @@ mod image_attachments;
 mod interrupted;
 mod limits;
 mod messages;
+mod paths;
 mod restart;
 mod review_document;
 mod rewind;

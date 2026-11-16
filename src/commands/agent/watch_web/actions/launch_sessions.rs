@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -10,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::commands::agent::new::{CommonNewArgs, NewArgs};
 use crate::commands::agent::types::Engine;
+use crate::commands::agent::watch_web::paths::normalize_directory;
 
 use super::ApiError;
 
@@ -59,7 +59,9 @@ async fn launch_session(
     State(state): State<LaunchState>,
     Json(request): Json<LaunchRequest>,
 ) -> Result<Json<LaunchResponse>, ApiError> {
-    let directory = normalize_directory(&request.directory).map_err(ApiError::bad_request)?;
+    let home = crate::shared::dirs::home_dir();
+    let directory = normalize_directory(&request.directory, home.as_deref())
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let engine = match request.engine.as_str() {
         "claude" => Engine::Claude,
         "codex" => Engine::Codex,
@@ -72,7 +74,7 @@ async fn launch_session(
     let worktree = request.worktree.then(|| {
         initial_message
             .is_none()
-            .then(|| branch_name_for_time(Utc::now()))
+            .then(|| branch_name_for_time(Utc::now(), &launch_id))
     });
     let args = NewArgs {
         worktree,
@@ -106,29 +108,8 @@ async fn launch_session(
     Ok(Json(LaunchResponse { launch_id }))
 }
 
-fn normalize_directory(path: &str) -> Result<PathBuf, String> {
-    let path = if path == "~" || path.starts_with("~/") {
-        let home = crate::shared::dirs::home_dir()
-            .ok_or_else(|| "could not determine the home directory".to_string())?;
-        if path == "~" {
-            home
-        } else {
-            home.join(path.strip_prefix("~/").unwrap_or_default())
-        }
-    } else {
-        PathBuf::from(path)
-    };
-    let canonical = path
-        .canonicalize()
-        .map_err(|error| format!("directory is unavailable: {error}"))?;
-    if !canonical.is_dir() {
-        return Err("directory must be an existing directory".to_string());
-    }
-    Ok(canonical)
-}
-
-fn branch_name_for_time(now: chrono::DateTime<Utc>) -> String {
-    format!("watch-web-{}", now.format("%Y%m%d-%H%M%S"))
+fn branch_name_for_time(now: chrono::DateTime<Utc>, launch_id: &str) -> String {
+    format!("watch-web-{}-{launch_id}", now.format("%Y%m%d-%H%M%S"))
 }
 
 #[cfg(test)]
@@ -138,6 +119,7 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use chrono::TimeZone;
     use serde_json::{Value, json};
+    use std::path::PathBuf;
     use std::sync::Mutex;
     use tower::ServiceExt;
 
@@ -214,7 +196,7 @@ mod tests {
             (status, response, args),
             (
                 StatusCode::OK,
-                json!({"launchId": launch_id}),
+                json!({"launchId": launch_id.clone()}),
                 LaunchCapture {
                     launch_id: Some(launch_id),
                     directory: None,
@@ -223,6 +205,50 @@ mod tests {
                     prompt: Some("Inspect the fixture.".to_string()),
                     worktree: None,
                 },
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn launches_a_promptless_worktree_with_a_unique_timestamp_branch() {
+        let directory = tempfile::tempdir().unwrap();
+        let host = Arc::new(FakeLaunchHost::default());
+        let router = router_with_host(host.clone());
+        let (status, response) = request(
+            &router,
+            json!({
+                "directory": directory.path(),
+                "engine": "claude",
+                "worktree": true,
+            }),
+        )
+        .await;
+        let args = LaunchCapture::from(host.calls.lock().unwrap().pop().unwrap());
+        let launch_id = response["launchId"].as_str().unwrap().to_string();
+        let worktree = args.worktree.as_ref().map(|branch| {
+            branch
+                .as_ref()
+                .map(|branch| normalize_branch_timestamp(branch, &launch_id))
+        });
+
+        assert_eq!(
+            (
+                status,
+                response,
+                args.directory,
+                args.exact_directory,
+                args.engine,
+                args.prompt,
+                worktree,
+            ),
+            (
+                StatusCode::OK,
+                json!({"launchId": launch_id.clone()}),
+                Some(directory.path().canonicalize().unwrap()),
+                None,
+                Some(Engine::Claude),
+                None,
+                Some(Some(format!("watch-web-<timestamp>-{launch_id}"))),
             ),
         );
     }
@@ -250,6 +276,30 @@ mod tests {
     fn worktree_without_message_uses_a_timestamp_branch() {
         let now = Utc.with_ymd_and_hms(2026, 11, 16, 3, 4, 5).unwrap();
 
-        assert_eq!(branch_name_for_time(now), "watch-web-20261116-030405");
+        assert_eq!(
+            branch_name_for_time(now, "launch-fixture"),
+            "watch-web-20261116-030405-launch-fixture"
+        );
+    }
+
+    fn normalize_branch_timestamp(branch: &str, launch_id: &str) -> String {
+        let suffix = format!("-{launch_id}");
+        let timestamp = branch
+            .strip_prefix("watch-web-")
+            .and_then(|branch| branch.strip_suffix(&suffix));
+        if timestamp.is_some_and(|timestamp| {
+            timestamp.len() == 15
+                && timestamp.bytes().enumerate().all(|(index, byte)| {
+                    if index == 8 {
+                        byte == b'-'
+                    } else {
+                        byte.is_ascii_digit()
+                    }
+                })
+        }) {
+            format!("watch-web-<timestamp>-{launch_id}")
+        } else {
+            branch.to_string()
+        }
     }
 }

@@ -1853,6 +1853,48 @@ mod tests {
         );
     }
 
+    #[test]
+    fn session_start_persists_launch_id_from_environment() {
+        let temp_dir = tempfile::TempDir::new().expect("temporary directory should be created");
+
+        let actual = temp_env::with_vars(
+            [
+                (EnvVars::session_launch_id_name(), Some("launch-fixture")),
+                (EnvVars::session_label_name(), None::<&str>),
+                (EnvVars::session_work_type_name(), None::<&str>),
+                (EnvVars::session_child_launch_name(), None::<&str>),
+                (EnvVars::session_vibe_launch_name(), None::<&str>),
+                (EnvVars::ancestor_session_ids_name(), None::<&str>),
+            ],
+            || {
+                process_hook_event_impl(
+                    HookEvent::SessionStart,
+                    create_test_input(None),
+                    temp_dir.path(),
+                    &SideEffects::none(),
+                )
+                .expect("session-start should save the session");
+
+                let session = store::load_session_from(temp_dir.path(), "test-123")
+                    .expect("session should load")
+                    .expect("session should exist");
+                let mut actual = serde_json::to_value(session).expect("session should serialize");
+                actual["created_at"] = serde_json::json!("<timestamp>");
+                actual["updated_at"] = serde_json::json!("<timestamp>");
+                actual
+            },
+        );
+
+        let mut expected = create_test_session(None);
+        expected.launch_id = Some("launch-fixture".to_string());
+        let mut expected =
+            serde_json::to_value(expected).expect("expected session should serialize");
+        expected["created_at"] = serde_json::json!("<timestamp>");
+        expected["updated_at"] = serde_json::json!("<timestamp>");
+
+        assert_eq!(actual, expected);
+    }
+
     #[rstest]
     #[case::session_start(HookEvent::SessionStart, None, None, Some(SessionStatus::Running))]
     #[case::session_start_startup(
