@@ -86,7 +86,7 @@ function ProjectColumn({
         }
 
         if (category === 'done') {
-          const firstDoneSession =
+          const doneSessionToSummarize =
             sessions.find((session) => session.isPaused) ?? sessions[0]
 
           return (
@@ -98,10 +98,12 @@ function ProjectColumn({
               <p className="board-done-summary">
                 <span className="board-done-label">✓ Done</span>
                 <span aria-hidden="true"> · </span>
-                {firstDoneSession !== undefined ? (
+                {doneSessionToSummarize !== undefined ? (
                   <>
-                    <SessionPausedBadge isPaused={firstDoneSession.isPaused} />
-                    {firstDoneSession.title}
+                    <SessionPausedBadge
+                      isPaused={doneSessionToSummarize.isPaused}
+                    />
+                    {doneSessionToSummarize.title}
                     {sessions.length > 1
                       ? ` and ${String(sessions.length - 1)} more`
                       : ''}
