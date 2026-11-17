@@ -261,7 +261,7 @@ export function ConversationPaneView({
     const cardSelector =
       statusBandState?.kind === 'permission'
         ? '.chat-permission-card'
-        : '.chat-question-card'
+        : '.chat-question-card[data-has-unanswered-question="true"]'
     const cards =
       conversationScrollRef.current?.querySelectorAll<HTMLElement>(cardSelector)
     cards?.[cards.length - 1]?.scrollIntoView({

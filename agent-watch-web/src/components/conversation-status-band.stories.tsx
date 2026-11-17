@@ -50,6 +50,21 @@ export const TheSessionShowsItsActiveTool: Story = {
   },
 }
 
+export const TheMobileStatusRowUsesTheCompactHeight: Story = {
+  name: 'The mobile status row fits within forty-four pixels',
+  args: {
+    state: state('waiting', 'Waiting for the sample check'),
+    isMobile: true,
+  },
+  decorators: [
+    (Story) => (
+      <div style={{ width: '390px' }}>
+        <Story />
+      </div>
+    ),
+  ],
+}
+
 export const TheActiveToolDetailsAreExpanded: Story = {
   name: 'The active tool details are expanded',
   args: {

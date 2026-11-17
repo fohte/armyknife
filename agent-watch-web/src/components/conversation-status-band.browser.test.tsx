@@ -78,6 +78,38 @@ it('expands to every background task when the compact row is pressed', async () 
   })
 })
 
+it('shows the full active-tool command after the compact row is pressed', async () => {
+  const activeToolDetail =
+    'Bash  cargo test --package fictional -- --show-output'
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationStatusBand
+        state={{ kind: 'working', detail: null }}
+        elapsedSeconds={92}
+        activeTool={{
+          tool: 'exec',
+          target: 'cargo test --package fictional -- --show-output',
+        }}
+        backgroundTasks={[]}
+      />,
+    )
+  })
+
+  const toggle = container.querySelector<HTMLButtonElement>(
+    '.conversation-status-band-toggle',
+  )
+  if (toggle === null) throw new Error('The status row was not rendered')
+  await act(async () => userEvent.click(toggle))
+
+  const snapshot = () => ({
+    expanded: toggle.getAttribute('aria-expanded'),
+    detail: container.querySelector('.conversation-status-band-expanded p')
+      ?.textContent,
+  })
+  expect(snapshot()).toEqual({ expanded: 'true', detail: activeToolDetail })
+})
+
 it.each([
   {
     kind: 'question' as const,

@@ -263,6 +263,11 @@ export function QuestionCard({
   return (
     <article
       className="chat-question-card"
+      data-has-unanswered-question={
+        questions.some((question) => question.answer === null)
+          ? 'true'
+          : undefined
+      }
       data-answerable-single-choice={showNumberShortcuts ? 'true' : undefined}
       onKeyDownCapture={handleKeyDownCapture}
       ref={cardRef}

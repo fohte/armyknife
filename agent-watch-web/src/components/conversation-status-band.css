@@ -18,6 +18,7 @@
 
 .conversation-status-band--compact {
   display: block;
+  flex-shrink: 0;
   padding: 0;
 }
 
@@ -258,6 +259,10 @@
   padding: 0 12px;
 }
 
+.conversation-status-band--compact.is-mobile {
+  min-height: 44px;
+}
+
 .conversation-status-band--compact.is-mobile .conversation-status-band-label,
 .conversation-pane[data-mobile='true']
   .conversation-status-band--compact
@@ -314,6 +319,10 @@
   .conversation-status-band--compact .conversation-status-band-toggle {
     min-height: 43px;
     padding: 0 12px;
+  }
+
+  .conversation-status-band--compact {
+    min-height: 44px;
   }
 
   .conversation-status-band--compact .conversation-status-band-label {

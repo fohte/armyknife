@@ -68,7 +68,7 @@ export function ConversationStatusBand({
       : state.kind === 'compacting'
         ? '古い会話を要約しています'
         : state.kind === 'background-tasks' && backgroundTask !== undefined
-          ? `${backgroundTask.description} · ${formatElapsedTime(backgroundTask.elapsedSeconds)}`
+          ? formatBackgroundTaskDetail(backgroundTask)
           : state.detail
   const inlineDetail =
     state.kind === 'waiting' && detail == null && backgroundTasks.length > 0
@@ -118,9 +118,7 @@ export function ConversationStatusBand({
     )
   }
 
-  const backgroundTaskDetails = backgroundTasks.map(
-    (task) => `${task.description} · ${formatElapsedTime(task.elapsedSeconds)}`,
-  )
+  const backgroundTaskDetails = backgroundTasks.map(formatBackgroundTaskDetail)
   const expandedDetails =
     state.kind === 'background-tasks' && backgroundTaskDetails.length > 0
       ? backgroundTaskDetails
@@ -183,6 +181,10 @@ export function ConversationStatusBand({
       ) : null}
     </section>
   )
+}
+
+function formatBackgroundTaskDetail(task: BackgroundTask) {
+  return `${task.description} · ${formatElapsedTime(task.elapsedSeconds)}`
 }
 
 function BackgroundTaskList({ tasks }: { tasks: readonly BackgroundTask[] }) {

@@ -3715,17 +3715,24 @@ it('shows the agent status reason while the stopped session is waiting', () => {
 it.each([
   {
     kind: 'question',
-    message: question,
-    selector: '.chat-question-card',
+    messages: [
+      question,
+      {
+        ...question,
+        requestId: 'ask-request-answered',
+        questions: [{ ...questionPrompt, answer: 'Window A' }],
+      },
+    ],
+    selector: '.chat-question-card[data-has-unanswered-question="true"]',
   },
   {
     kind: 'permission',
-    message: permission,
+    messages: [permission],
     selector: '.chat-permission-card',
   },
 ])(
   'scrolls to the pending $kind card from its status row',
-  async ({ kind, message, selector }) => {
+  async ({ kind, messages, selector }) => {
     renderView(
       vi.fn().mockResolvedValue(true),
       {
@@ -3734,7 +3741,7 @@ it.each([
         kind: kind === 'question' ? 'Question' : 'Approve',
       },
       undefined,
-      [message],
+      messages,
     )
     const card = requireElement(container.querySelector<HTMLElement>(selector))
     const scrollIntoView = vi
@@ -3838,6 +3845,14 @@ it('shows background task descriptions and elapsed times on mobile', () => {
       '.conversation-status-band-toggle',
     ),
   )
+  const band = requireElement(
+    container.querySelector<HTMLElement>('.conversation-status-band'),
+  )
+  const compactSnapshot = () => ({
+    height: Math.round(band.getBoundingClientRect().height),
+    padding: getComputedStyle(band).padding,
+  })
+  expect(compactSnapshot()).toEqual({ height: 44, padding: '0px' })
   act(() => {
     toggle.click()
   })
