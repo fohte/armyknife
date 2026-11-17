@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, it } from 'vitest'
 
-import { ToolSummary } from '#components/tool-summary'
+import { summarizeToolGroupItems, ToolSummary } from '#components/tool-summary'
 
 it('renders a collapsed summary without changing its text content', () => {
   expect(
@@ -58,6 +58,118 @@ it('renders expanded operations as tool, target, and status rows', () => {
     ),
   ).toBe(
     '<details class="chat-tool-summary" data-has-operations="true" open=""><summary><span>2 tool calls</span><span class="chat-tool-summary-collapse">‹ Collapse</span></summary><ul class="chat-tool-operations"><li data-has-target="true" data-failed="false"><span class="chat-tool-name">Read</span><code class="chat-tool-target">src/feature.rs</code><span class="chat-tool-operation-status" role="img" aria-label="Succeeded">✓</span></li><li data-has-target="true" data-failed="false"><span class="chat-tool-name">exec</span><code class="chat-tool-target">printf hello</code><span class="chat-tool-operation-status" role="img" aria-label="Succeeded">✓</span></li></ul></details>',
+  )
+})
+
+it('renders thoughts and tools in the supplied group order', () => {
+  expect(
+    renderToStaticMarkup(
+      <ToolSummary
+        summary="Thought ×1 · Read ×1"
+        operations={[
+          { tool: 'Read', target: 'fixture/source.rs', failed: false },
+        ]}
+        items={[
+          { type: 'thinking', text: 'Review the fictional request.' },
+          {
+            type: 'tool_use',
+            tool: 'Read',
+            target: 'fixture/source.rs',
+            failed: false,
+          },
+        ]}
+        open
+      />,
+    ),
+  ).toBe(
+    '<details class="chat-tool-summary" data-has-operations="true" open=""><summary><span>1 tool call</span><span class="chat-tool-summary-collapse">‹ Collapse</span></summary><ul class="chat-tool-operations"><li class="chat-tool-thought"><details><summary><span class="chat-tool-name">Thought</span><span class="chat-tool-thought-preview">Review the fictional request.</span></summary><p class="chat-tool-thought-full">Review the fictional request.</p></details></li><li data-has-target="true" data-failed="false"><span class="chat-tool-name">Read</span><code class="chat-tool-target">fixture/source.rs</code><span class="chat-tool-operation-status" role="img" aria-label="Succeeded">✓</span></li></ul></details>',
+  )
+})
+
+it('summarizes one edit by file name and counts the other tools', () => {
+  expect(
+    summarizeToolGroupItems([
+      { type: 'thinking', text: 'Review the first fictional requirement.' },
+      { type: 'thinking', text: 'Check the second fictional requirement.' },
+      {
+        type: 'tool_use',
+        tool: 'Edit',
+        target: 'fixture/client.ts',
+        failed: false,
+      },
+      {
+        type: 'tool_use',
+        tool: 'Read',
+        target: 'fixture/client.ts',
+        failed: false,
+      },
+      {
+        type: 'tool_use',
+        tool: 'Read',
+        target: 'fixture/settings.ts',
+        failed: false,
+      },
+      {
+        type: 'tool_use',
+        tool: 'Shell',
+        target: 'printf fixture',
+        failed: false,
+      },
+    ]),
+  ).toBe('Thought ×2 · Edit client.ts · Read ×2 · Shell ×1')
+})
+
+it.each([
+  { tool: 'Write', target: 'fixture/client.ts' },
+  { tool: 'MultiEdit', target: 'fixture/client.ts' },
+  { tool: 'NotebookEdit', target: 'fixture/client.ts' },
+  { tool: 'apply_patch', target: 'fixture/client.ts' },
+  { tool: 'write_file', target: 'fixture/client.ts' },
+  { tool: 'edit_file', target: 'fixture/client.ts' },
+  { tool: 'FileChange', target: 'fixture/client.ts' },
+  { tool: 'fileChange', target: 'fixture/client.ts' },
+])('summarizes one $tool call by its file name', ({ tool, target }) => {
+  expect(
+    summarizeToolGroupItems([
+      { type: 'tool_use', tool, target, failed: false },
+    ]),
+  ).toBe('Edit client.ts')
+})
+
+it('counts multiple edits instead of showing only one file name', () => {
+  expect(
+    summarizeToolGroupItems([
+      {
+        type: 'tool_use',
+        tool: 'Edit',
+        target: 'fixture/client.ts',
+        failed: false,
+      },
+      {
+        type: 'tool_use',
+        tool: 'Edit',
+        target: 'fixture/settings.ts',
+        failed: false,
+      },
+    ]),
+  ).toBe('Edit ×2')
+})
+
+it('renders thinking without tools as a collapsible group', () => {
+  expect(
+    renderToStaticMarkup(
+      <ToolSummary
+        summary="Thought ×2"
+        operations={[]}
+        items={[
+          { type: 'thinking', text: 'Review the first fictional detail.' },
+          { type: 'thinking', text: 'Review the second fictional detail.' },
+        ]}
+        open
+      />,
+    ),
+  ).toBe(
+    '<details class="chat-tool-summary" data-has-operations="true" open=""><summary><span class="chat-tool-summary-text">Thought ×2</span><span class="chat-tool-summary-collapse">‹ Collapse</span></summary><ul class="chat-tool-operations"><li class="chat-tool-thought"><details><summary><span class="chat-tool-name">Thought</span><span class="chat-tool-thought-preview">Review the first fictional detail.</span></summary><p class="chat-tool-thought-full">Review the first fictional detail.</p></details></li><li class="chat-tool-thought"><details><summary><span class="chat-tool-name">Thought</span><span class="chat-tool-thought-preview">Review the second fictional detail.</span></summary><p class="chat-tool-thought-full">Review the second fictional detail.</p></details></li></ul></details>',
   )
 })
 

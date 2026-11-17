@@ -17,7 +17,7 @@ import { ProposalCard } from '#components/proposal-card'
 import { QuestionCard } from '#components/question-card'
 import { SubagentReport } from '#components/subagent-report'
 import { TodoCard } from '#components/todo-card'
-import { ToolSummary } from '#components/tool-summary'
+import { summarizeToolGroupItems, ToolSummary } from '#components/tool-summary'
 import { UserWithContent } from '#components/user-with-content'
 import type {
   ChatItem,
@@ -144,19 +144,43 @@ export function renderConversationMessage({
       </article>
     )
   }
-  if (message.type === 'narration' || message.type === 'thinking') {
-    return null
+  if (message.type === 'narration') {
+    return (
+      <article className="chat-narration-message">
+        <MarkdownMessage>{message.text}</MarkdownMessage>
+      </article>
+    )
+  }
+  if (message.type === 'thinking') {
+    const items = [{ type: 'thinking' as const, text: message.text }]
+    return (
+      <ToolSummary
+        summary={summarizeToolGroupItems(items)}
+        operations={[]}
+        items={items}
+      />
+    )
   }
   if (message.type === 'tool_summary') {
     return (
       <ToolSummary
         summary={message.summary}
         operations={message.operations ?? []}
+        {...(message.items === undefined ? {} : { items: message.items })}
       />
     )
   }
   if (message.type === 'tool_in_progress') {
-    return <ToolSummary summary="1 action" operations={[message]} />
+    const items = message.items
+    return (
+      <ToolSummary
+        summary={
+          items === undefined ? '1 action' : summarizeToolGroupItems(items)
+        }
+        operations={[message]}
+        {...(items === undefined ? {} : { items })}
+      />
+    )
   }
   if (message.type === 'question') {
     const unanswered = message.questions.every(

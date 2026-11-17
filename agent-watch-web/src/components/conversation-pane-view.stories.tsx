@@ -523,7 +523,7 @@ export const IPhoneConversationShowsItsWorkingStatus: Story = {
       },
       {
         type: 'tool_summary',
-        summary: 'Read ×2 · Edit ×1 · Shell ×1',
+        summary: 'Read ×2 · Edit client.ts · Shell ×1',
       },
       {
         type: 'assistant',

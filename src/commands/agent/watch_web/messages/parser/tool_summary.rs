@@ -71,24 +71,31 @@ impl ToolSummary {
 
     pub(super) fn flush_into(&mut self, items: &mut Vec<ChatItem>) {
         if self.actions == 0 {
-            items.extend(
-                std::mem::take(&mut self.group_items)
-                    .into_iter()
-                    .filter_map(|item| match item {
-                        ToolGroupItem::Thinking {
-                            text,
-                            thinking_duration_ms,
-                        } => Some(ChatItem::Thinking {
-                            text,
-                            thinking_duration_ms,
-                        }),
-                        ToolGroupItem::ToolUse { .. } => None,
-                    }),
-            );
+            let group_items = std::mem::take(&mut self.group_items);
+            let thought_count = group_items
+                .iter()
+                .filter(|item| matches!(item, ToolGroupItem::Thinking { .. }))
+                .count();
+            if thought_count > 0 {
+                items.push(ChatItem::ToolSummaryWithThinking {
+                    summary: format!("Thought ×{thought_count}"),
+                    operations: Vec::new(),
+                    items: group_items,
+                });
+            }
             *self = Self::default();
             return;
         }
-        let mut summary_parts = Vec::new();
+        let thought_count = self
+            .group_items
+            .iter()
+            .filter(|item| matches!(item, ToolGroupItem::Thinking { .. }))
+            .count();
+        let mut summary_parts = if thought_count > 0 {
+            vec![format!("Thought ×{thought_count}")]
+        } else {
+            Vec::new()
+        };
         if !self.edited_files.is_empty() {
             let files = self
                 .edited_files
@@ -126,10 +133,11 @@ impl ToolSummary {
             .iter()
             .filter(|operation| operation.failed)
             .count();
+        let separator = if thought_count > 0 { " · " } else { "  " };
         let summary = if failed_count == 0 {
-            summary_parts.join("  ")
+            summary_parts.join(separator)
         } else {
-            format!("{} · {failed_count} failed", summary_parts.join("  "))
+            format!("{} · {failed_count} failed", summary_parts.join(separator))
         };
         let operations = std::mem::take(&mut self.operations);
         let group_items = std::mem::take(&mut self.group_items);
@@ -306,7 +314,7 @@ mod tests {
     use serde_json::json;
 
     use super::{ToolSummary, operation_target};
-    use crate::commands::agent::watch_web::messages::{ChatItem, ToolOperation};
+    use crate::commands::agent::watch_web::messages::{ChatItem, ToolGroupItem, ToolOperation};
 
     #[rstest]
     #[case::singular(1, "Read ×1")]
@@ -391,6 +399,67 @@ mod tests {
                     },
                 ],
             }]
+        );
+    }
+
+    #[test]
+    fn groups_standalone_thoughts_as_a_collapsible_tool_summary() {
+        let mut summary = ToolSummary::default();
+        summary.record_thinking("Review the first fixture.".to_string(), None);
+        summary.record_thinking("Review the second fixture.".to_string(), None);
+        let mut items = Vec::new();
+
+        summary.flush_into(&mut items);
+
+        assert_eq!(
+            items,
+            vec![ChatItem::ToolSummaryWithThinking {
+                summary: "Thought ×2".to_string(),
+                operations: Vec::new(),
+                items: vec![
+                    ToolGroupItem::Thinking {
+                        text: "Review the first fixture.".to_string(),
+                        thinking_duration_ms: None,
+                    },
+                    ToolGroupItem::Thinking {
+                        text: "Review the second fixture.".to_string(),
+                        thinking_duration_ms: None,
+                    },
+                ],
+            }],
+        );
+    }
+
+    #[test]
+    fn puts_thought_count_before_grouped_tool_activity() {
+        let mut summary = ToolSummary::default();
+        summary.record_thinking("Review the fictional request.".to_string(), None);
+        summary.record("Read", None, false);
+        let mut items = Vec::new();
+
+        summary.flush_into(&mut items);
+
+        assert_eq!(
+            items,
+            vec![ChatItem::ToolSummaryWithThinking {
+                summary: "Thought ×1 · Read ×1".to_string(),
+                operations: vec![ToolOperation {
+                    tool: "Read".to_string(),
+                    target: None,
+                    failed: false,
+                }],
+                items: vec![
+                    ToolGroupItem::Thinking {
+                        text: "Review the fictional request.".to_string(),
+                        thinking_duration_ms: None,
+                    },
+                    ToolGroupItem::ToolUse {
+                        tool: "Read".to_string(),
+                        target: None,
+                        failed: false,
+                    },
+                ],
+            }],
         );
     }
 

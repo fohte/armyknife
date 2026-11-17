@@ -40,6 +40,14 @@
   padding: 0 16px 12px;
 }
 
+.permission-tool-activity {
+  padding: 0 16px 12px;
+}
+
+.permission-tool-activity .chat-tool-summary {
+  margin-block-start: 0;
+}
+
 .conversation-terminal-fallback {
   display: flex;
   min-width: 0;

@@ -67,6 +67,9 @@ enum CodexEffect {
         text: CodexText,
         timestamp: Option<DateTime<Utc>>,
     },
+    Thinking {
+        text: CodexText,
+    },
     TurnFailed {
         reason: Option<CodexText>,
         timestamp: Option<DateTime<Utc>>,
@@ -226,6 +229,13 @@ impl CodexParserState {
                                     timestamp,
                                 });
                             }
+                        }
+                    }
+                    Some("reasoning") => {
+                        if let Some(text) = reasoning_summary_text(payload) {
+                            effects.push(CodexEffect::Thinking {
+                                text: CodexText::new(text)?,
+                            });
                         }
                     }
                     Some("custom_tool_call") | Some("function_call") => {
@@ -420,6 +430,9 @@ impl CodexParserState {
                             timestamp: timestamp.map(|timestamp| timestamp.to_rfc3339()),
                         });
                     }
+                    CodexEffect::Thinking { text } => {
+                        tools.record_thinking(text.decode()?, None);
+                    }
                     CodexEffect::TurnFailed { reason, timestamp } => {
                         tools.flush_into(&mut items);
                         let text = match reason {
@@ -538,6 +551,19 @@ fn codex_tool_failed(result: &Value) -> bool {
     })
 }
 
+fn reasoning_summary_text(item: &Value) -> Option<String> {
+    let summary = item.get("summary")?.as_array()?;
+    let text = summary
+        .iter()
+        .filter(|entry| entry.get("type").and_then(Value::as_str) == Some("summary_text"))
+        .filter_map(|entry| entry.get("text").and_then(Value::as_str))
+        .filter(|text| !text.trim().is_empty())
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.is_empty()).then_some(text)
+}
+
 fn content_text(content: Option<&Value>) -> String {
     match content {
         Some(Value::Array(blocks)) => blocks
@@ -593,8 +619,55 @@ mod tests {
     use super::{CodexParserState, parse, parse_with_skills};
     use crate::commands::agent::store::{AgentTodo, PermissionRequestData, TodoResolution};
     use crate::commands::agent::watch_web::messages::{
-        ChatItem, EventKind, ParentSession, PeerDirection, SkillSuggestion, UserContentPart,
+        ChatItem, EventKind, ParentSession, PeerDirection, SkillSuggestion, ToolGroupItem,
+        ToolOperation, UserContentPart,
     };
+
+    #[test]
+    fn groups_codex_reasoning_summary_with_the_following_tool_call() {
+        let transcript = indoc! {r#"
+            {"type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"Review the fictional request."}]}}
+            {"type":"response_item","payload":{"type":"custom_tool_call","name":"Read","input":{"file_path":"src/fixture.rs"}}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None).unwrap(),
+            vec![ChatItem::ToolSummaryWithThinking {
+                summary: "Thought ×1 · Read ×1".to_string(),
+                operations: vec![ToolOperation {
+                    tool: "Read".to_string(),
+                    target: Some("src/fixture.rs".to_string()),
+                    failed: false,
+                }],
+                items: vec![
+                    ToolGroupItem::Thinking {
+                        text: "Review the fictional request.".to_string(),
+                        thinking_duration_ms: None,
+                    },
+                    ToolGroupItem::ToolUse {
+                        tool: "Read".to_string(),
+                        target: Some("src/fixture.rs".to_string()),
+                        failed: false,
+                    },
+                ],
+            }],
+        );
+    }
+
+    #[test]
+    fn omits_empty_codex_reasoning_summaries() {
+        let transcript = indoc! {r#"
+            {"type":"response_item","payload":{"type":"reasoning","summary":[]}}
+            {"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Fixture response."}]}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None).unwrap(),
+            vec![ChatItem::Assistant {
+                text: "Fixture response.".to_string(),
+            }],
+        );
+    }
 
     #[test]
     fn permission_request_matches_codex_call_name_and_json_input() {

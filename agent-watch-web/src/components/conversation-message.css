@@ -3,3 +3,9 @@
   color: var(--aw-text-body);
   white-space: pre-wrap;
 }
+
+.chat-narration-message {
+  max-width: 100%;
+  color: #a1a1aa;
+  white-space: pre-wrap;
+}
