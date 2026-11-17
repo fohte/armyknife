@@ -1,4 +1,8 @@
+use std::io::{self, BufRead};
+
 use serde_json::Value;
+
+use crate::commands::agent::types::Engine;
 
 use super::super::SkillSuggestion;
 
@@ -9,23 +13,82 @@ pub(super) fn parse_claude_listing(content: Option<&Value>) -> Vec<SkillSuggesti
         .collect()
 }
 
-pub(super) fn capture_codex_listing(record: &Value, skills: &mut Vec<SkillSuggestion>) {
-    if record.get("type").and_then(Value::as_str) != Some("response_item") {
+pub(super) fn update_claude_listing(
+    skills: &mut Vec<SkillSuggestion>,
+    listing: Vec<SkillSuggestion>,
+    is_initial: bool,
+) {
+    if is_initial {
+        *skills = listing;
         return;
     }
 
-    let Some(payload) = record.get("payload") else {
-        return;
-    };
+    for skill in listing {
+        if let Some(existing) = skills
+            .iter_mut()
+            .find(|existing| existing.name == skill.name)
+        {
+            existing.description = skill.description;
+        } else {
+            skills.push(skill);
+        }
+    }
+}
+
+pub(super) fn capture_codex_listing(record: &Value, skills: &mut Vec<SkillSuggestion>) {
+    if let Some(listing) = parse_codex_listing(record) {
+        *skills = listing;
+    }
+}
+
+pub(in crate::commands::agent::watch_web::messages) fn read_transcript_listing(
+    reader: impl BufRead,
+    engine: Engine,
+) -> io::Result<Option<Vec<SkillSuggestion>>> {
+    let mut skills: Option<Vec<SkillSuggestion>> = None;
+    for line in reader.lines() {
+        let line = line?;
+        let Ok(record) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        match engine {
+            Engine::Claude => {
+                let Some(attachment) = record.get("attachment") else {
+                    continue;
+                };
+                if attachment.get("type").and_then(Value::as_str) != Some("skill_listing") {
+                    continue;
+                }
+                let listing = parse_claude_listing(attachment.get("content"));
+                let is_initial =
+                    attachment.get("isInitial").and_then(Value::as_bool) != Some(false);
+                let current = skills.get_or_insert_with(Vec::new);
+                update_claude_listing(current, listing, is_initial);
+            }
+            Engine::Codex => {
+                if let Some(listing) = parse_codex_listing(&record) {
+                    skills = Some(listing);
+                }
+            }
+        }
+    }
+    Ok(skills)
+}
+
+fn parse_codex_listing(record: &Value) -> Option<Vec<SkillSuggestion>> {
+    if record.get("type").and_then(Value::as_str) != Some("response_item") {
+        return None;
+    }
+
+    let payload = record.get("payload")?;
     if payload.get("type").and_then(Value::as_str) != Some("message")
         || payload.get("role").and_then(Value::as_str) != Some("developer")
     {
-        return;
+        return None;
     }
 
-    let Some(content) = payload.get("content").and_then(Value::as_array) else {
-        return;
-    };
+    let content = payload.get("content").and_then(Value::as_array)?;
+    let mut listing: Option<Vec<SkillSuggestion>> = None;
     for block in content {
         if block.get("type").and_then(Value::as_str) != Some("input_text") {
             continue;
@@ -33,10 +96,11 @@ pub(super) fn capture_codex_listing(record: &Value, skills: &mut Vec<SkillSugges
         let Some(text) = block.get("text").and_then(Value::as_str) else {
             continue;
         };
-        if let Some(listing) = parse_codex_available_skills(text) {
-            *skills = listing;
+        if let Some(parsed) = parse_codex_available_skills(text) {
+            listing = Some(parsed);
         }
     }
+    listing
 }
 
 fn parse_codex_available_skills(text: &str) -> Option<Vec<SkillSuggestion>> {

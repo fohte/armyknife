@@ -232,6 +232,10 @@ pub(super) struct ConversationResponse {
     pub(super) background_tasks: Vec<BackgroundTask>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) skills: Vec<SkillSuggestion>,
+    #[serde(skip)]
+    pub(super) skill_suggestions_from_transcript: bool,
+    #[serde(skip)]
+    pub(super) skill_suggestions_are_fallback: bool,
     pub(super) start: usize,
     pub(super) total: usize,
     pub(super) decisions: Vec<ChatItem>,

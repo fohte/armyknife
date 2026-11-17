@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use axum::Router;
@@ -27,6 +28,7 @@ use super::range::MessageRange;
 use super::{BackgroundTask, background_task_outputs, question_preview};
 
 pub(super) type SessionLoader = Arc<dyn Fn(&str) -> Result<Option<Session>> + Send + Sync>;
+pub(super) type SessionListLoader = Arc<dyn Fn() -> Result<Vec<Session>> + Send + Sync>;
 pub(super) type UserMarkerLoader = Arc<dyn Fn(&str) -> Result<Option<String>> + Send + Sync>;
 pub(super) type MessagesRouteState = (SessionLoader, UserMarkerLoader, RouteLoaders);
 pub(super) type DecisionLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentDecision>> + Send + Sync>;
@@ -47,6 +49,12 @@ pub(super) type BackgroundTaskLoader =
     Arc<dyn Fn(&str) -> Result<Vec<BackgroundTask>> + Send + Sync>;
 type RepoIdentityLoader = Arc<dyn Fn(&Path) -> Option<(String, String)> + Send + Sync>;
 type VibeConfigLoader = Arc<dyn Fn() -> crate::shared::config::Config + Send + Sync>;
+type SkillListingCache = Arc<Mutex<HashMap<String, CachedSkillListing>>>;
+
+struct CachedSkillListing {
+    fingerprint: String,
+    listing: Option<Vec<super::SkillSuggestion>>,
+}
 
 #[derive(Clone)]
 pub(in crate::commands::agent::watch_web) struct RouteLoaders {
@@ -61,6 +69,8 @@ pub(in crate::commands::agent::watch_web) struct RouteLoaders {
     pub(super) agent_files: AgentFileLoader,
     pub(super) agent_file_storage_root: AgentFileStorageRootLoader,
     pub(super) background_tasks: BackgroundTaskLoader,
+    session_list: SessionListLoader,
+    skill_listing_cache: SkillListingCache,
     vibe_config: Option<VibeConfigLoader>,
     repo_identity: Option<RepoIdentityLoader>,
     pub(super) message_cache: MessageCache,
@@ -90,6 +100,8 @@ impl RouteLoaders {
             agent_files: Arc::new(|_| Ok(Vec::new())),
             agent_file_storage_root: Arc::new(|| None),
             background_tasks: Arc::new(|_| Ok(Vec::new())),
+            session_list: Arc::new(|| Ok(Vec::new())),
+            skill_listing_cache: Arc::new(Mutex::new(HashMap::new())),
             vibe_config: None,
             repo_identity: None,
             message_cache: MessageCache::default(),
@@ -151,6 +163,14 @@ impl RouteLoaders {
         self
     }
 
+    pub(in crate::commands::agent::watch_web) fn with_session_list_loader(
+        mut self,
+        load_sessions: impl Fn() -> Result<Vec<Session>> + Send + Sync + 'static,
+    ) -> Self {
+        self.session_list = Arc::new(load_sessions);
+        self
+    }
+
     pub(in crate::commands::agent::watch_web) fn with_vibe_context(
         mut self,
         config: impl Fn() -> crate::shared::config::Config + Send + Sync + 'static,
@@ -163,6 +183,50 @@ impl RouteLoaders {
 
     pub(super) fn background_tasks(&self, session_id: &str) -> Result<Vec<BackgroundTask>> {
         (self.background_tasks)(session_id)
+    }
+
+    pub(super) fn sessions(&self) -> Result<Vec<Session>> {
+        (self.session_list)()
+    }
+
+    pub(super) fn cached_skill_listing(
+        &self,
+        session: &Session,
+        transcript_fingerprint: &str,
+        load_listing: impl FnOnce() -> Result<Option<Vec<super::SkillSuggestion>>>,
+    ) -> Result<Option<Vec<super::SkillSuggestion>>> {
+        let fingerprint = serde_json::to_string(&(
+            session.engine,
+            &session.cwd,
+            &session.transcript_path,
+            session.created_at,
+            session.updated_at,
+            transcript_fingerprint,
+        ))?;
+        let mut cache = self
+            .skill_listing_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(cached) = cache.get(&session.session_id)
+            && cached.fingerprint == fingerprint
+        {
+            return Ok(cached.listing.clone());
+        }
+        drop(cache);
+
+        let listing = load_listing()?;
+        cache = self
+            .skill_listing_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.insert(
+            session.session_id.clone(),
+            CachedSkillListing {
+                fingerprint,
+                listing: listing.clone(),
+            },
+        );
+        Ok(listing)
     }
 }
 
