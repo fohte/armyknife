@@ -144,9 +144,13 @@ it('places the new-session action before the palette shortcut with the designed 
   const newSessionButton = container.querySelector<HTMLButtonElement>(
     '.brand-row [aria-label="New session"]',
   )
+  const paletteButton = container.querySelector<HTMLButtonElement>(
+    '.brand-row .agent-watch-command-key',
+  )
   const plusIcon = newSessionButton?.querySelector('svg')
   if (
     newSessionButton === null ||
+    paletteButton === null ||
     plusIcon === null ||
     plusIcon === undefined
   ) {
@@ -160,12 +164,22 @@ it('places the new-session action before the palette shortcut with the designed 
     ),
     plusColor: getComputedStyle(newSessionButton).color,
     plusSize: getComputedStyle(plusIcon).width,
+    newSessionMarginLeft:
+      Number.parseFloat(getComputedStyle(newSessionButton).marginLeft) > 0
+        ? 'auto'
+        : '0px',
+    paletteMarginLeft:
+      Number.parseFloat(getComputedStyle(paletteButton).marginLeft) > 0
+        ? 'auto'
+        : '0px',
   })
 
   expect(snapshot()).toEqual({
     actions: ['New session', 'Jump to with Control K', 'Hide Inbox'],
     plusColor: 'rgb(212, 212, 216)',
     plusSize: '15px',
+    newSessionMarginLeft: 'auto',
+    paletteMarginLeft: '0px',
   })
 })
 
