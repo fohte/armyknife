@@ -119,6 +119,42 @@ it('summarizes one edit by file name and counts the other tools', () => {
   ).toBe('Thought ×2 · Edit client.ts · Read ×2 · Shell ×1')
 })
 
+it.each([
+  { tool: 'Write', target: 'fixture/client.ts' },
+  { tool: 'MultiEdit', target: 'fixture/client.ts' },
+  { tool: 'NotebookEdit', target: 'fixture/client.ts' },
+  { tool: 'apply_patch', target: 'fixture/client.ts' },
+  { tool: 'write_file', target: 'fixture/client.ts' },
+  { tool: 'edit_file', target: 'fixture/client.ts' },
+  { tool: 'FileChange', target: 'fixture/client.ts' },
+  { tool: 'fileChange', target: 'fixture/client.ts' },
+])('summarizes one $tool call by its file name', ({ tool, target }) => {
+  expect(
+    summarizeToolGroupItems([
+      { type: 'tool_use', tool, target, failed: false },
+    ]),
+  ).toBe('Edit client.ts')
+})
+
+it('counts multiple edits instead of showing only one file name', () => {
+  expect(
+    summarizeToolGroupItems([
+      {
+        type: 'tool_use',
+        tool: 'Edit',
+        target: 'fixture/client.ts',
+        failed: false,
+      },
+      {
+        type: 'tool_use',
+        tool: 'Edit',
+        target: 'fixture/settings.ts',
+        failed: false,
+      },
+    ]),
+  ).toBe('Edit ×2')
+})
+
 it('renders thinking without tools as a collapsible group', () => {
   expect(
     renderToStaticMarkup(
