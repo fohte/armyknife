@@ -375,9 +375,11 @@ export function ConversationPaneView({
             {loadingOlder ? 'Loading older messages…' : 'Load older messages'}
           </Button>
         ) : null}
-        <div className="conversation-timeline">
-          <span>Conversation</span>
-        </div>
+        {isMobile ? null : (
+          <div className="conversation-timeline">
+            <span>Conversation</span>
+          </div>
+        )}
         {loading && messages.length === 0 ? (
           <p className="conversation-status">Loading conversation…</p>
         ) : null}
