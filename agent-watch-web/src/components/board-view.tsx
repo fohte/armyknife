@@ -86,7 +86,8 @@ function ProjectColumn({
         }
 
         if (category === 'done') {
-          const firstDoneSession = sessions[0]
+          const firstDoneSession =
+            sessions.find((session) => session.isPaused) ?? sessions[0]
 
           return (
             <section

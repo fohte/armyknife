@@ -70,12 +70,19 @@ function moreButtonSnapshot(more: HTMLButtonElement | null) {
     type: more?.type,
     text: more?.textContent,
     buttonCount: container.querySelectorAll('.board-more').length,
+    cardCount: container.querySelectorAll('.board-card').length,
     groupLabel: container
       .querySelector('.board-group.in-progress')
       ?.getAttribute('aria-label'),
     groupHeading: container.querySelector('.board-group.in-progress h3')
       ?.textContent,
   }
+}
+
+function clickOverflowSnapshot(more: HTMLButtonElement | null) {
+  const before = moreButtonSnapshot(more)
+  act(() => more?.click())
+  return { before, after: moreButtonSnapshot(more) }
 }
 
 function quietToggleSnapshot(
@@ -128,13 +135,24 @@ it('identifies paused sessions in the Done group', () => {
 })
 
 it('shows paused sessions beside the count of other Done sessions', () => {
-  renderBoard([pausedSession, completedSession])
+  renderBoard([completedSession, pausedSession])
 
   expect(snapshot()).toEqual({
     group: 'Done (2)',
     heading: undefined,
     badge: 'Paused',
     summary: '✓ Done · PausedPrepare the next deployment window and 1 more',
+  })
+})
+
+it('shows the first completed session when no Done session is paused', () => {
+  renderBoard([completedSession])
+
+  expect(snapshot()).toEqual({
+    group: 'Done (1)',
+    heading: undefined,
+    badge: undefined,
+    summary: '✓ Done · Document the deployment procedure',
   })
 })
 
@@ -148,14 +166,24 @@ it('renders the overflow summary as a button without expanding sessions', () => 
   )
 
   const more = container.querySelector<HTMLButtonElement>('.board-more')
-  act(() => more?.click())
 
-  expect(moreButtonSnapshot(more)).toEqual({
-    type: 'button',
-    text: '1 more',
-    buttonCount: 1,
-    groupLabel: 'In progress (4)',
-    groupHeading: 'In progress',
+  expect(clickOverflowSnapshot(more)).toEqual({
+    before: {
+      type: 'button',
+      text: '1 more',
+      buttonCount: 1,
+      cardCount: 3,
+      groupLabel: 'In progress (4)',
+      groupHeading: 'In progress',
+    },
+    after: {
+      type: 'button',
+      text: '1 more',
+      buttonCount: 1,
+      cardCount: 3,
+      groupLabel: 'In progress (4)',
+      groupHeading: 'In progress',
+    },
   })
 })
 
