@@ -1,5 +1,6 @@
 import { type Dispatch, type SetStateAction, useEffect, useState } from 'react'
 
+import { getConversationCritUrl } from '#components/conversation-crit-url'
 import {
   isReviewDocumentResponse,
   type ReviewDocumentResponse,
@@ -124,6 +125,7 @@ export function useConversationStatusPanel({
 }: UseConversationStatusPanelOptions) {
   const { run } = useSessionOperations()
   const [activePanelTabId, setActivePanelTabId] = useState<string | null>(null)
+  const [critFullscreenRequest, setCritFullscreenRequest] = useState(0)
   const [selectedDecisionSeq, setSelectedDecisionSeq] = useState<number | null>(
     null,
   )
@@ -143,16 +145,21 @@ export function useConversationStatusPanel({
     decisions.find((decision) => decision.seq === selectedDecisionSeq) ??
     decisions.find((decision) => decision.review === null) ??
     decisions[0]
+  const critUrl = getConversationCritUrl(session)
   const legacyCritUrl =
     session.kind === 'Review' &&
     session.category === 'needs_action' &&
-    session.critUrl != null &&
-    session.critUrl !== ''
-      ? session.critUrl
+    critUrl !== null
+      ? critUrl
       : null
+  const registeredWebUis = (session.webUis ?? []).filter(
+    (webUi) => webUi.name !== 'crit' || webUi.url.trim() !== '',
+  )
   const webUis =
-    session.webUis ??
-    (legacyCritUrl === null ? [] : [{ name: 'crit', url: legacyCritUrl }])
+    legacyCritUrl !== null &&
+    !registeredWebUis.some((webUi) => webUi.name === 'crit')
+      ? [...registeredWebUis, { name: 'crit', url: legacyCritUrl }]
+      : registeredWebUis
   const webUiTabIds = webUis.map((webUi) =>
     webUi.name === 'crit' ? 'crit' : `web-ui-${encodeURIComponent(webUi.url)}`,
   )
@@ -433,6 +440,7 @@ export function useConversationStatusPanel({
           name={webUi.name}
           url={webUi.url}
           exposedUrl={webUi.exposedUrl ?? null}
+          fullscreenRequest={webUi.name === 'crit' ? critFullscreenRequest : 0}
           onClose={onCloseStatusPanel}
         />
       ),
@@ -443,6 +451,10 @@ export function useConversationStatusPanel({
   }, [activePanelTabId, activeTabId])
   return {
     activeTabId,
+    onOpenCritInFullscreen: () => {
+      setActivePanelTabId('crit')
+      setCritFullscreenRequest((request) => request + 1)
+    },
     onSelectDecision: setSelectedDecisionSeq,
     onTabChange: setActivePanelTabId,
     selectedDecisionSeq: selectedDecision?.seq ?? null,

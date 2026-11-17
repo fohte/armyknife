@@ -325,6 +325,7 @@ export function ConversationPane({
   }))
   const {
     activeTabId,
+    onOpenCritInFullscreen,
     onSelectDecision,
     onTabChange,
     selectedDecisionSeq,
@@ -384,6 +385,10 @@ export function ConversationPane({
       onRewind={onRewind}
       onOpenInTerminal={onOpenInTerminal}
       onSelectSession={selectLinkedSession}
+      onReviewInCrit={() => {
+        onOpenCritInFullscreen()
+        if (!statusPanelOpen) onToggleStatusPanel()
+      }}
       isMobile={isMobile}
       statusPanelOpen={statusPanelOpen}
       selectedDecisionSeq={selectedDecisionSeq}

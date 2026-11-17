@@ -1,7 +1,7 @@
 import '#components/web-ui-pane.css'
 
 import { Button } from '@fohte/ui/button'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { webUiTargetUrl } from '#components/web-ui-target-url'
 
@@ -12,6 +12,7 @@ type WebUiPaneProps = {
   hostname?: string
   onClose: () => void
   defaultFullscreen?: boolean
+  fullscreenRequest?: number
 }
 
 export function WebUiPane({
@@ -21,12 +22,22 @@ export function WebUiPane({
   hostname,
   onClose,
   defaultFullscreen = false,
+  fullscreenRequest = 0,
 }: WebUiPaneProps) {
-  const [isFullscreen, setIsFullscreen] = useState(defaultFullscreen)
+  const [isFullscreen, setIsFullscreen] = useState(
+    defaultFullscreen || fullscreenRequest > 0,
+  )
+  const previousFullscreenRequest = useRef(fullscreenRequest)
   const targetUrl = webUiTargetUrl(
     { url, exposedUrl: exposedUrl ?? null },
     hostname ?? location.hostname,
   )
+
+  useEffect(() => {
+    if (previousFullscreenRequest.current === fullscreenRequest) return
+    previousFullscreenRequest.current = fullscreenRequest
+    if (fullscreenRequest > 0) setIsFullscreen(true)
+  }, [fullscreenRequest])
 
   return (
     <aside
