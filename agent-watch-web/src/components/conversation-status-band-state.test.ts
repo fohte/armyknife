@@ -66,11 +66,34 @@ it.each([
     expected: { kind: 'compacting', detail: null },
   },
   {
+    name: 'idle compacting',
+    input: {
+      session: {
+        ...session,
+        isCompacting: true,
+        activityStatus: 'stopped' as const,
+      },
+    },
+    expected: { kind: 'compacting', detail: null },
+  },
+  {
     name: 'background tasks',
     input: {
       session: {
         ...session,
         activityStatus: 'stopped' as const,
+        waitingForBackgroundTasks: true,
+      },
+      backgroundTasks,
+    },
+    expected: { kind: 'background-tasks', detail: 'Check the sample build' },
+  },
+  {
+    name: 'background tasks while working',
+    input: {
+      session: {
+        ...session,
+        activityStatus: 'working' as const,
         waitingForBackgroundTasks: true,
       },
       backgroundTasks,

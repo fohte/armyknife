@@ -45,10 +45,10 @@ export function getConversationStatusBandState({
     session.category === 'in_progress' && session.activityStatus === 'waiting'
   const isWorking =
     session.category === 'in_progress' &&
-    (session.activityStatus === 'working' ||
-      (session.activityStatus == null && !isWaitingForBackgroundTasks))
+    !isWaitingForBackgroundTasks &&
+    (session.activityStatus === 'working' || session.activityStatus == null)
 
-  if (isCompacting && session.activityStatus !== 'stopped') {
+  if (isCompacting) {
     return { kind: 'compacting', detail: null }
   }
   if (isWorking) return { kind: 'working', detail: null }
