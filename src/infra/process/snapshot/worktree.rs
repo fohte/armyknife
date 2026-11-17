@@ -17,7 +17,9 @@ pub(crate) struct WorktreeProcessInspection {
     pub(crate) daemon_descendant_pgids: Vec<libc::pid_t>,
 }
 
-/// Finds non-shell processes whose current working directory is inside `path`.
+/// Finds non-shell processes whose current working directory is inside `path`,
+/// excluding shell-launched `sqlite3` processes whose arguments start with
+/// `-batch -noheader`, the invocation form used by zsh-histdb.
 ///
 /// Returns `None` when either process source cannot be inspected, so callers
 /// can refuse destructive work when they cannot verify the worktree is idle.
@@ -152,6 +154,8 @@ mod tests {
             91 90 91 worker
             100 20 20 sqlite3
             101 20 20 sqlite3
+            102 20 20 sqlite3
+            103 20 20 sqlite3
             110 1 110 sqlite3
         "},
             indoc! {"
@@ -166,6 +170,8 @@ mod tests {
             91 worker worker
             100 sqlite3 -batch -noheader /Users/example/.histdb/history.db
             101 sqlite3 /Users/example/.histdb/history.db
+            102 sqlite3 -batch /Users/example/.histdb/history.db
+            103 sqlite3 -noheader /Users/example/.histdb/history.db
             110 sqlite3 -batch -noheader /Users/example/.histdb/history.db
         "},
         )
@@ -177,6 +183,8 @@ mod tests {
     #[case::shell_histdb_sqlite3_is_ignored(&[(100, WORKTREE)], &[], &[])]
     #[case::shell_agent_is_still_detected(&[(30, WORKTREE)], &[(30, "claude")], &[])]
     #[case::other_shell_sqlite3_is_still_detected(&[(20, WORKTREE), (101, WORKTREE)], &[(101, "sqlite3")], &[])]
+    #[case::sqlite3_without_noheader_is_still_detected(&[(102, WORKTREE)], &[(102, "sqlite3")], &[])]
+    #[case::sqlite3_without_batch_is_still_detected(&[(103, WORKTREE)], &[(103, "sqlite3")], &[])]
     #[case::unrelated_histdb_sqlite3_is_still_detected(&[(110, WORKTREE)], &[(110, "sqlite3")], &[])]
     #[case::caller_and_ancestor_are_excluded(&[(10, WORKTREE), (20, WORKTREE), (30, WORKTREE)], &[(30, "claude")], &[])]
     #[case::missing_ps_pid_is_ignored(&[(92, WORKTREE)], &[], &[])]
