@@ -51,8 +51,14 @@ const meta = {
     (Story, context) => (
       <div
         className="conversation-pane"
+        data-mobile={context.args.isMobile}
         style={{
-          height: context.args.isMobile ? 88 : 96,
+          height: context.args.isMobile
+            ? (context.args.session.pullRequests?.length ?? 0) > 0 ||
+              context.args.session.pullRequest !== null
+              ? 130
+              : 88
+            : 96,
         }}
       >
         <Story />
@@ -145,7 +151,7 @@ export const SessionPullRequestCanBeMerged: Story = {
 }
 
 export const SessionHasMultiplePullRequests: Story = {
-  name: 'The header shows every pull request submitted by the session',
+  name: 'The header counts the other pull requests from the session',
   args: {
     session: {
       ...session,
@@ -173,6 +179,53 @@ export const SessionHasMultiplePullRequests: Story = {
           repo: 'example-repo',
           url: 'https://github.com/example-org/example-repo/pull/43',
           headSha: 'other-head-sha',
+        },
+      ],
+    },
+  },
+}
+
+export const MobileHeaderShowsPullRequestSheet: Story = {
+  name: 'The mobile header shows the open pull request sheet below the title',
+  args: {
+    isMobile: true,
+    pullRequestsOpen: true,
+    session: {
+      ...session,
+      title: 'Show delivery status in the session header',
+      pullRequest: {
+        number: 42,
+        state: 'Open',
+        owner: 'example-org',
+        repo: 'example-repo',
+        title: 'Show delivery status in the session header',
+        url: 'https://github.com/example-org/example-repo/pull/42',
+        ciState: 'InProgress',
+        isCurrentBranch: true,
+        headSha: 'fixture-head-sha',
+      },
+      pullRequests: [
+        {
+          number: 42,
+          state: 'Open',
+          owner: 'example-org',
+          repo: 'example-repo',
+          title: 'Show delivery status in the session header',
+          url: 'https://github.com/example-org/example-repo/pull/42',
+          ciState: 'InProgress',
+          isCurrentBranch: true,
+          headSha: 'fixture-head-sha',
+        },
+        {
+          number: 43,
+          state: 'Open',
+          owner: 'example-org',
+          repo: 'example-infra',
+          title: 'Add delivery retry settings',
+          url: 'https://github.com/example-org/example-infra/pull/43',
+          ciState: 'Successful',
+          isCurrentBranch: false,
+          headSha: 'fixture-other-sha',
         },
       ],
     },

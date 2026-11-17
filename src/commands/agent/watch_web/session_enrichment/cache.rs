@@ -1,13 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::commands::agent::tq_session_tasks::order_tasks_by_priority;
-use crate::infra::github::PrHeadInfo;
+use crate::infra::github::PrProgressInfo;
 
 use super::{PullRequestKey, SessionTaskMetadata};
 
 pub(super) fn merge_pull_request_results(
-    cached: &mut HashMap<PullRequestKey, Option<PrHeadInfo>>,
-    refreshed: HashMap<PullRequestKey, Option<PrHeadInfo>>,
+    cached: &mut HashMap<PullRequestKey, Option<PrProgressInfo>>,
+    refreshed: HashMap<PullRequestKey, Option<PrProgressInfo>>,
     requested_keys: &HashSet<PullRequestKey>,
 ) {
     for key in requested_keys {
@@ -18,7 +18,7 @@ pub(super) fn merge_pull_request_results(
 }
 
 pub(super) fn prune_pull_request_results(
-    cached: &mut HashMap<PullRequestKey, Option<PrHeadInfo>>,
+    cached: &mut HashMap<PullRequestKey, Option<PrProgressInfo>>,
     stale_keys: &HashSet<PullRequestKey>,
 ) {
     cached.retain(|key, _| !stale_keys.contains(key));
@@ -159,7 +159,7 @@ pub(super) fn prune_session_task_metadata(
 mod tests {
     use super::*;
     use crate::commands::agent::types::Session;
-    use crate::infra::github::{PrHeadInfo, PrInfo, PrState};
+    use crate::infra::github::{PrCiState, PrInfo, PrProgressInfo, PrState};
     use rstest::{fixture, rstest};
     use std::sync::Arc;
     use tokio::sync::watch;
@@ -174,19 +174,20 @@ mod tests {
         TaskMetadataFetcher,
     };
 
-    fn head_info(number: u64, title: impl Into<String>, url: impl Into<String>) -> PrHeadInfo {
-        PrHeadInfo {
+    fn head_info(number: u64, title: impl Into<String>, url: impl Into<String>) -> PrProgressInfo {
+        PrProgressInfo {
             pull_request: PrInfo {
                 number,
                 title: title.into(),
                 state: PrState::Open,
                 url: url.into(),
             },
+            ci_state: PrCiState::Successful,
             head_sha: Some("sample-head".to_string()),
         }
     }
 
-    fn session_pull_request(session: &Session, progress: PrHeadInfo) -> SessionPullRequestInfo {
+    fn session_pull_request(session: &Session, progress: PrProgressInfo) -> SessionPullRequestInfo {
         let context = session
             .pr_context
             .as_ref()

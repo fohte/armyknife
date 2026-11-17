@@ -434,6 +434,12 @@ html[data-mobile-layout='true'] {
   border-bottom-color: var(--aw-border);
 }
 
+.conversation-pane[data-mobile='true'] .conversation-header.has-session-prs {
+  min-height: calc(130px + max(8px, env(safe-area-inset-top)));
+  flex-basis: calc(130px + max(8px, env(safe-area-inset-top)));
+  grid-template-rows: 44px 24px 56px;
+}
+
 .mobile-conversation-back {
   min-width: 44px;
   min-height: 44px;

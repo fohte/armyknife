@@ -887,6 +887,13 @@ mod tests {
         ci: ProgressMark::NotStarted,
         merge: ProgressMark::NotStarted,
     })]
+    #[case::failed_ci_keeps_the_existing_neutral_mark(false, false, PrState::Open, PrCiState::Failed, StageMarks {
+        implementation: ProgressMark::Done,
+        diff_review: ProgressMark::Done,
+        pr_body: ProgressMark::Done,
+        ci: ProgressMark::NotStarted,
+        merge: ProgressMark::NotStarted,
+    })]
     #[case::open_and_ready_to_merge(false, false, PrState::Open, PrCiState::Successful, StageMarks {
         implementation: ProgressMark::Done,
         diff_review: ProgressMark::Done,

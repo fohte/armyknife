@@ -12,7 +12,7 @@ use crate::commands::agent::tq_session_tasks::{
 };
 use crate::commands::agent::types::Session;
 use crate::commands::agent::types::SessionPrContext;
-use crate::infra::github::{BranchPrQuery, GitHubClient, PrHeadInfo, PrNumberQuery};
+use crate::infra::github::{BranchPrQuery, GitHubClient, PrNumberQuery, PrProgressInfo};
 use crate::infra::tq::{TqClient, TqProjectSummary, TqTaskSummary};
 
 mod cache;
@@ -39,14 +39,16 @@ type TaskMetadataFetcher = Arc<
     dyn Fn(HashSet<String>, SessionTaskMetadata) -> FetchFuture<SessionTaskMetadata> + Send + Sync,
 >;
 type PullRequestFetcher = Arc<
-    dyn Fn(Vec<Session>) -> FetchFuture<HashMap<PullRequestKey, Option<PrHeadInfo>>> + Send + Sync,
+    dyn Fn(Vec<Session>) -> FetchFuture<HashMap<PullRequestKey, Option<PrProgressInfo>>>
+        + Send
+        + Sync,
 >;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SessionPullRequestInfo {
     pub(super) owner: String,
     pub(super) repo: String,
-    pub(super) progress: PrHeadInfo,
+    pub(super) progress: PrProgressInfo,
     pub(super) from_cwd_branch: bool,
 }
 
@@ -54,7 +56,7 @@ pub(super) struct SessionPullRequestInfo {
 pub(super) struct SessionEnrichmentCache {
     tq: Arc<RefreshingCache<SessionTaskMetadata, String>>,
     pull_requests:
-        Arc<RefreshingCache<HashMap<PullRequestKey, Option<PrHeadInfo>>, PullRequestKey>>,
+        Arc<RefreshingCache<HashMap<PullRequestKey, Option<PrProgressInfo>>, PullRequestKey>>,
     task_fetcher: TaskMetadataFetcher,
     pull_request_fetcher: PullRequestFetcher,
 }
@@ -67,7 +69,7 @@ impl SessionEnrichmentCache {
             },
         );
         let pull_request_fetcher: PullRequestFetcher = Arc::new(
-            |sessions| -> FetchFuture<HashMap<PullRequestKey, Option<PrHeadInfo>>> {
+            |sessions| -> FetchFuture<HashMap<PullRequestKey, Option<PrProgressInfo>>> {
                 Box::pin(async move { fetch_pull_requests(&sessions).await })
             },
         );
@@ -478,7 +480,7 @@ async fn detected_tq_client() -> Result<Option<TqClient>, String> {
 
 async fn fetch_pull_requests(
     sessions: &[Session],
-) -> Result<HashMap<PullRequestKey, Option<PrHeadInfo>>, String> {
+) -> Result<HashMap<PullRequestKey, Option<PrProgressInfo>>, String> {
     let branch_queries = branch_pr_queries(sessions);
     let number_queries = submitted_pr_queries_for_sessions(sessions);
     if branch_queries.is_empty() && number_queries.is_empty() {
@@ -490,7 +492,7 @@ async fn fetch_pull_requests(
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())?;
     let (branch_prs, number_prs) = tokio::try_join!(
-        client.get_prs_with_head_sha_for_branches_batch(&branch_queries),
+        client.get_pr_progress_for_branches_batch(&branch_queries),
         client.get_pr_progress_for_numbers_batch(&number_queries),
     )
     .map_err(|error| error.to_string())?;
@@ -499,15 +501,11 @@ async fn fetch_pull_requests(
         .into_iter()
         .map(|(key, value)| (PullRequestKey::Branch(key), value))
         .collect::<HashMap<_, _>>();
-    prs.extend(number_prs.into_iter().map(|(key, value)| {
-        (
-            PullRequestKey::Number(key),
-            value.map(|progress| PrHeadInfo {
-                pull_request: progress.pull_request,
-                head_sha: progress.head_sha,
-            }),
-        )
-    }));
+    prs.extend(
+        number_prs
+            .into_iter()
+            .map(|(key, value)| (PullRequestKey::Number(key), value)),
+    );
 
     Ok(prs)
 }
@@ -520,19 +518,20 @@ mod tests {
     };
     use super::*;
     use crate::commands::agent::tq_session_tasks::task_priority_metadata;
-    use crate::infra::github::{PrHeadInfo, PrInfo, PrState};
+    use crate::infra::github::{PrCiState, PrInfo, PrProgressInfo, PrState};
     use rstest::rstest;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Notify;
 
-    fn head_info(number: u64) -> PrHeadInfo {
-        PrHeadInfo {
+    fn head_info(number: u64) -> PrProgressInfo {
+        PrProgressInfo {
             pull_request: PrInfo {
                 number,
                 title: "Example change".to_string(),
                 state: PrState::Open,
                 url: format!("https://example.test/pull/{number}"),
             },
+            ci_state: PrCiState::Successful,
             head_sha: Some("sample-head".to_string()),
         }
     }

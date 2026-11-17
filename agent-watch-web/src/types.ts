@@ -32,6 +32,8 @@ export type PullRequest = {
   title?: string
   url?: string
   headSha?: string | null
+  ciState?: 'Waiting' | 'InProgress' | 'Successful' | 'Failed' | 'Unknown'
+  isCurrentBranch?: boolean
 }
 
 type ParentSession = {

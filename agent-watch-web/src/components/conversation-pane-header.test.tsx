@@ -504,7 +504,7 @@ it('opens the title editor from the mobile actions menu', async () => {
   expect(snapshot()).toEqual({ editorVisible: true, menuClosed: true })
 })
 
-it('shows every pull request linked to the session in order', () => {
+it('summarizes every pull request and opens the full list', () => {
   renderHeader(
     false,
     vi.fn(() => Promise.resolve(true)),
@@ -517,6 +517,8 @@ it('shows every pull request linked to the session in order', () => {
         repo: 'example-repo',
         url: 'https://github.com/example-org/example-repo/pull/42',
         headSha: 'sample-head-sha',
+        ciState: 'InProgress',
+        isCurrentBranch: true,
       },
       pullRequests: [
         {
@@ -526,6 +528,8 @@ it('shows every pull request linked to the session in order', () => {
           repo: 'example-repo',
           url: 'https://github.com/example-org/example-repo/pull/42',
           headSha: 'sample-head-sha',
+          ciState: 'InProgress',
+          isCurrentBranch: true,
         },
         {
           number: 43,
@@ -534,29 +538,45 @@ it('shows every pull request linked to the session in order', () => {
           repo: 'example-repo',
           url: 'https://github.com/example-org/example-repo/pull/43',
           headSha: 'other-head-sha',
+          ciState: 'Successful',
+          isCurrentBranch: false,
         },
       ],
     },
   )
 
-  expect(
-    Array.from(
-      container.querySelectorAll<HTMLAnchorElement>('.conversation-pr-link'),
+  const trigger = requireElement(
+    container.querySelector<HTMLButtonElement>('.session-pr-trigger'),
+  )
+  act(() => {
+    trigger.click()
+  })
+
+  const snapshot = () => ({
+    triggerLabel: trigger.getAttribute('aria-label'),
+    expanded: trigger.getAttribute('aria-expanded'),
+    pullRequests: Array.from(
+      container.querySelectorAll<HTMLAnchorElement>('.session-pr-row'),
       (link) => ({
-        text: link.textContent,
+        number: link.querySelector('.session-pr-number')?.textContent,
         href: link.getAttribute('href'),
       }),
     ),
-  ).toEqual([
-    {
-      text: '#42 PR',
-      href: 'https://github.com/example-org/example-repo/pull/42',
-    },
-    {
-      text: '#43 PR',
-      href: 'https://github.com/example-org/example-repo/pull/43',
-    },
-  ])
+  })
+  expect(snapshot()).toEqual({
+    triggerLabel: 'PR #42, open, CI running. 1 more PR from this session',
+    expanded: 'true',
+    pullRequests: [
+      {
+        number: '#42',
+        href: 'https://github.com/example-org/example-repo/pull/42',
+      },
+      {
+        number: '#43',
+        href: 'https://github.com/example-org/example-repo/pull/43',
+      },
+    ],
+  })
 })
 
 it('merges the session pull request after confirming its head SHA', async () => {
@@ -829,14 +849,15 @@ it('hides the merge action when the session pull request has no head SHA', () =>
   )
 
   const headerState = () => ({
-    pullRequestLink: container.querySelector('.conversation-pr-link')
-      ?.textContent,
+    pullRequestLabel: container
+      .querySelector('.session-pr-trigger')
+      ?.getAttribute('aria-label'),
     mergeButton: [
       ...container.querySelectorAll<HTMLButtonElement>('button'),
     ].some((button) => button.textContent === 'Merge'),
   })
   expect(headerState()).toEqual({
-    pullRequestLink: '#42 PR',
+    pullRequestLabel: 'PR #42, open, CI status unknown',
     mergeButton: false,
   })
 })
