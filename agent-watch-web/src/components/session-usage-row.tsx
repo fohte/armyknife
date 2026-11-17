@@ -2,6 +2,7 @@ import '#components/session-usage-row.css'
 
 import {
   formatTokenCount,
+  getUsageLandingDescription,
   getUsageSeverity,
   type SessionUsage,
 } from '#agent-usage'
@@ -25,13 +26,26 @@ function UsageRate({
   if (window === null) return null
   const usedPercentage = Math.round(window.usedPercentage)
   const severity = getUsageSeverity(window.usedPercentage)
+  const description =
+    getUsageLandingDescription(label, usedPercentage, window, nowSeconds) ??
+    `${label}: ${String(usedPercentage)}% used`
   return (
-    <span className="session-usage-rate">
-      {label}{' '}
-      <span className={severity === 'normal' ? undefined : `is-${severity}`}>
-        {String(usedPercentage)}%
-      </span>{' '}
-      <UsagePaceIndicator nowSeconds={nowSeconds} window={window} />
+    <span
+      aria-label={description}
+      className={`session-usage-rate${severity === 'normal' ? '' : ` is-${severity}`}`}
+      role="group"
+      title={description}
+    >
+      <span aria-hidden="true" className="session-usage-rate-current">
+        {label} {String(usedPercentage)}%
+      </span>
+      <UsagePaceIndicator
+        decorative
+        label={label}
+        nowSeconds={nowSeconds}
+        usedPercentage={usedPercentage}
+        window={window}
+      />
     </span>
   )
 }

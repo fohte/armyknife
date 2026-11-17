@@ -1,40 +1,44 @@
 import '#components/usage-pace-indicator.css'
 
-import { getUsageLandingEstimate, type RateLimitWindow } from '#agent-usage'
-
-const statusLabels = {
-  'on-pace': 'On pace',
-  warning: 'At or above quota pace',
-  danger: 'Well above quota pace',
-} as const
-
-const statusMarks = {
-  'on-pace': '✓',
-  warning: '⚠',
-  danger: '🔥',
-} as const
+import {
+  getUsageLandingDescription,
+  getUsageLandingEstimate,
+  type RateLimitWindow,
+} from '#agent-usage'
 
 type UsagePaceIndicatorProps = {
+  label: string
+  usedPercentage: number
   window: RateLimitWindow | null
   nowSeconds: number
+  decorative?: boolean
 }
 
 export function UsagePaceIndicator({
+  label,
+  usedPercentage,
   window,
   nowSeconds,
+  decorative = false,
 }: UsagePaceIndicatorProps) {
   if (window === null) return null
   const estimate = getUsageLandingEstimate(window, nowSeconds)
   if (estimate === null) return null
-  const label = statusLabels[estimate.status]
-  const description = `${label}: projected ${String(estimate.percentage)}% at window end`
+  const description = getUsageLandingDescription(
+    label,
+    usedPercentage,
+    window,
+    nowSeconds,
+  )
   return (
     <span
-      aria-label={description}
+      aria-hidden={decorative || undefined}
+      aria-label={decorative ? undefined : (description ?? undefined)}
       className={`usage-pace-indicator is-${estimate.status}`}
-      title={description}
+      title={description ?? undefined}
     >
-      {statusMarks[estimate.status]} {String(estimate.percentage)}%
+      {'→ '}
+      {String(estimate.percentage)}%
     </span>
   )
 }

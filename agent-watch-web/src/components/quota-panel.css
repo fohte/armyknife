@@ -31,7 +31,7 @@
 
 .quota-window {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) 30px auto;
+  grid-template-columns: 18px minmax(0, 1fr) 4ch 6ch 5ch;
   align-items: center;
   gap: 6px;
   color: #8b8b94;
@@ -62,6 +62,10 @@
 
 .quota-window-percentage {
   text-align: right;
+}
+
+.quota-window-forecast {
+  white-space: nowrap;
 }
 
 .quota-window-reset {

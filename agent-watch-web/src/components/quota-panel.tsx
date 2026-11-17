@@ -4,6 +4,7 @@ import {
   type EngineQuota,
   formatResetTime,
   getExpectedUsagePercentage,
+  getUsageLandingDescription,
   getUsageSeverity,
   type RateLimitWindow,
 } from '#agent-usage'
@@ -54,8 +55,17 @@ function QuotaWindow({
     currentWindow === null
       ? '--'
       : formatResetTime(currentWindow.resetsAt, nowSeconds)
+  const landingDescription =
+    currentWindow === null || usedPercentage === null
+      ? null
+      : getUsageLandingDescription(
+          label,
+          usedPercentage,
+          currentWindow,
+          nowSeconds,
+        )
   return (
-    <div className="quota-window">
+    <div className="quota-window" title={landingDescription ?? undefined}>
       <span>{label}</span>
       <span
         aria-label={`${engine} ${label} quota used`}
@@ -63,9 +73,10 @@ function QuotaWindow({
         aria-valuemin={0}
         aria-valuenow={usedPercentage ?? 0}
         aria-valuetext={
-          usedPercentage === null
+          landingDescription ??
+          (usedPercentage === null
             ? 'Unavailable'
-            : `${String(usedPercentage)}% used`
+            : `${String(usedPercentage)}% used`)
         }
         className="quota-meter"
         role="meter"
@@ -90,10 +101,16 @@ function QuotaWindow({
       <span className="quota-window-percentage" style={{ color }}>
         {usedPercentage === null ? '--' : `${String(usedPercentage)}%`}
       </span>
-      <span className="quota-window-reset">
-        <UsagePaceIndicator nowSeconds={nowSeconds} window={currentWindow} />{' '}
-        {reset}
+      <span className="quota-window-forecast">
+        <UsagePaceIndicator
+          decorative
+          label={label}
+          nowSeconds={nowSeconds}
+          usedPercentage={usedPercentage ?? 0}
+          window={currentWindow}
+        />
       </span>
+      <span className="quota-window-reset">{reset}</span>
     </div>
   )
 }

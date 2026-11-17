@@ -4,7 +4,7 @@
   box-sizing: border-box;
   flex-wrap: wrap;
   align-items: center;
-  gap: 2px 8px;
+  gap: 2px 10px;
   padding: 0 24px 12px;
   color: #8b8b94;
   font-family: var(--font-mono);
@@ -14,7 +14,7 @@
 }
 
 .session-usage-row[data-mobile='true'] {
-  gap: 2px 6px;
+  gap: 2px 10px;
   padding: 0 16px 10px;
   font-size: 11px;
 }
@@ -50,17 +50,20 @@
 }
 
 .session-usage-rate {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   color: #8b8b94;
 }
 
-.session-usage-rate > span:first-child {
+.session-usage-rate-current {
   color: #d4d4d8;
 }
 
-.session-usage-rate > .is-warning {
+.session-usage-rate.is-warning .session-usage-rate-current {
   color: #fbbf24;
 }
 
-.session-usage-rate > .is-danger {
+.session-usage-rate.is-danger .session-usage-rate-current {
   color: #f87171;
 }
