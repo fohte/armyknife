@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.777](https://github.com/fohte/armyknife/compare/v0.1.776...v0.1.777) (2026-11-17)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** match status band to screens ([#1933](https://github.com/fohte/armyknife/issues/1933)) ([6a1d9df](https://github.com/fohte/armyknife/commit/6a1d9df83e66ea2724110f66657a04b4e7f0457f))
+
 ## [0.1.776](https://github.com/fohte/armyknife/compare/v0.1.775...v0.1.776) (2026-11-17)
 
 
