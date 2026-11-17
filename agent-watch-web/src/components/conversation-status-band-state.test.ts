@@ -113,6 +113,19 @@ it.each([
     },
     expected: { kind: 'crit-review', detail: 'Refresh the sample service' },
   },
+  ...(['Todo', 'Proposal'] as const).map((kind) => ({
+    name: `crit review with ${kind} kind`,
+    input: {
+      session: {
+        ...session,
+        category: 'needs_action' as const,
+        activityStatus: 'waiting' as const,
+        kind,
+        critUrl: 'https://crit.example.test/review/fixture',
+      },
+    },
+    expected: { kind: 'crit-review', detail: 'Refresh the sample service' },
+  })),
   {
     name: 'registered Crit review',
     input: {
@@ -213,4 +226,45 @@ it('keeps Crit review primary while background tasks continue', () => {
       backgroundTasks,
     }),
   ).toEqual({ kind: 'crit-review', detail: 'Refresh the sample service' })
+})
+
+it('shows a pending question before the Crit review', () => {
+  expect(
+    getConversationStatusBandState({
+      session: {
+        ...session,
+        category: 'needs_action',
+        kind: 'Todo',
+        critUrl: 'https://crit.example.test/review/fixture',
+      },
+      messages: [question],
+      backgroundTasks: [],
+    }),
+  ).toEqual({
+    kind: 'question',
+    detail: 'Which retry interval should be used?',
+  })
+})
+
+it('shows a pending permission before the Crit review', () => {
+  expect(
+    getConversationStatusBandState({
+      session: {
+        ...session,
+        category: 'needs_action',
+        kind: 'Todo',
+        critUrl: 'https://crit.example.test/review/fixture',
+      },
+      messages: [
+        {
+          type: 'permission',
+          requestId: 'fixture-permission-request',
+          tool: 'exec',
+          description: 'Run the sample check',
+          command: 'cargo test --package sample',
+        } satisfies ChatItem,
+      ],
+      backgroundTasks: [],
+    }),
+  ).toEqual({ kind: 'permission', detail: 'cargo test --package sample' })
 })

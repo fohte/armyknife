@@ -13,3 +13,9 @@ export function getConversationCritUrl(
     ? legacyCritUrl
     : null
 }
+
+export function getPendingCritReviewUrl(session: Session) {
+  return session.category === 'needs_action'
+    ? getConversationCritUrl(session)
+    : null
+}
