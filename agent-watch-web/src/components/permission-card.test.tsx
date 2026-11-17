@@ -215,3 +215,26 @@ it('shows the description for a non-Bash permission', () => {
     commandBlock: null,
   })
 })
+
+it('renders grouped thought activity inside a permission card', () => {
+  const message: Extract<ChatItem, { type: 'permission' }> = {
+    type: 'permission',
+    requestId: 'permission-request-fictional',
+    tool: 'Read',
+    description: 'Read the fictional source file.',
+    items: [
+      { type: 'thinking', text: 'Review the fictional source request.' },
+      {
+        type: 'tool_use',
+        tool: 'Read',
+        target: 'src/fixture.rs',
+        failed: false,
+      },
+    ],
+  }
+  renderPermissionCard(message)
+
+  expect(container.innerHTML).toBe(
+    '<article class="chat-permission-card"><h2>Permission required</h2><p class="permission-tool">Read</p><p>Read the fictional source file.</p><div class="permission-tool-activity"><details class="chat-tool-summary" data-has-operations="true"><summary><span class="chat-tool-summary-text">Thought ×1 · Read ×1</span></summary><ul class="chat-tool-operations"><li class="chat-tool-thought"><details><summary><span class="chat-tool-name">Thought</span><span class="chat-tool-thought-preview">Review the fictional source request.</span></summary><p class="chat-tool-thought-full">Review the fictional source request.</p></details></li><li data-has-target="true" data-failed="false"><span class="chat-tool-name">Read</span><code class="chat-tool-target">src/fixture.rs</code><span class="chat-tool-operation-status" role="img" aria-label="Succeeded">✓</span></li></ul></details></div></article>',
+  )
+})

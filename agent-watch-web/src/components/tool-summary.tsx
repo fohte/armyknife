@@ -16,6 +16,43 @@ type ToolSummaryProps = {
   open?: boolean
 }
 
+type ToolOperationRowProps = {
+  operation: ToolSummaryOperation
+  failedSuffix: string | undefined
+}
+
+function ToolOperationRow({ operation, failedSuffix }: ToolOperationRowProps) {
+  return (
+    <li
+      data-has-target={
+        typeof operation.target === 'string' && operation.target.length > 0
+          ? 'true'
+          : 'false'
+      }
+      data-failed={operation.failed === true ? 'true' : 'false'}
+      data-has-status={
+        operation.failed === undefined && failedSuffix !== undefined
+          ? 'false'
+          : undefined
+      }
+    >
+      <span className="chat-tool-name">{operation.tool}</span>
+      {typeof operation.target === 'string' && operation.target.length > 0 ? (
+        <code className="chat-tool-target">{operation.target}</code>
+      ) : null}
+      {operation.failed !== undefined || failedSuffix === undefined ? (
+        <span
+          className="chat-tool-operation-status"
+          role="img"
+          aria-label={operation.failed === true ? 'Failed' : 'Succeeded'}
+        >
+          {operation.failed === true ? '✕' : '✓'}
+        </span>
+      ) : null}
+    </li>
+  )
+}
+
 export function summarizeToolGroupItems(
   items: readonly ToolGroupItem[],
 ): string {
@@ -104,65 +141,22 @@ export function ToolSummary({
                 </details>
               </li>
             ) : (
-              <li
+              <ToolOperationRow
                 key={`${String(index)}-${item.tool}-${item.target ?? ''}`}
-                data-has-target={
-                  item.target !== undefined && item.target.length > 0
-                    ? 'true'
-                    : 'false'
-                }
-                data-failed={item.failed ? 'true' : 'false'}
-              >
-                <span className="chat-tool-name">{item.tool}</span>
-                {item.target !== undefined && item.target.length > 0 ? (
-                  <code className="chat-tool-target">{item.target}</code>
-                ) : null}
-                <span
-                  className="chat-tool-operation-status"
-                  role="img"
-                  aria-label={item.failed ? 'Failed' : 'Succeeded'}
-                >
-                  {item.failed ? '✕' : '✓'}
-                </span>
-              </li>
+                operation={item}
+                failedSuffix={undefined}
+              />
             ),
           )}
         </ul>
       ) : operations.length > 0 ? (
         <ul className="chat-tool-operations">
           {operations.map((operation, index) => (
-            <li
+            <ToolOperationRow
               key={`${String(index)}-${operation.tool}-${operation.target ?? ''}`}
-              data-has-target={
-                typeof operation.target === 'string' &&
-                operation.target.length > 0
-                  ? 'true'
-                  : 'false'
-              }
-              data-failed={operation.failed === true ? 'true' : 'false'}
-              data-has-status={
-                operation.failed === undefined && failedSuffix !== undefined
-                  ? 'false'
-                  : undefined
-              }
-            >
-              <span className="chat-tool-name">{operation.tool}</span>
-              {typeof operation.target === 'string' &&
-              operation.target.length > 0 ? (
-                <code className="chat-tool-target">{operation.target}</code>
-              ) : null}
-              {operation.failed !== undefined || failedSuffix === undefined ? (
-                <span
-                  className="chat-tool-operation-status"
-                  role="img"
-                  aria-label={
-                    operation.failed === true ? 'Failed' : 'Succeeded'
-                  }
-                >
-                  {operation.failed === true ? '✕' : '✓'}
-                </span>
-              ) : null}
-            </li>
+              operation={operation}
+              failedSuffix={failedSuffix}
+            />
           ))}
         </ul>
       ) : null}
