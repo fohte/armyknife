@@ -445,6 +445,7 @@ mod tests {
 
     use chrono::{TimeZone, Utc};
     use indoc::indoc;
+    use rstest::{fixture, rstest};
     use tempfile::tempdir;
 
     use super::{read_latest_quota_from, read_transcript};
@@ -500,53 +501,56 @@ mod tests {
         );
     }
 
-    #[test]
-    fn assigns_a_primary_weekly_window_to_seven_day_quota() {
-        let directory = tempdir().expect("temporary directory should be created");
-        let transcript = directory.path().join("fixture-rollout.jsonl");
-        fs::write(
-            &transcript,
-            indoc! {r#"
-                {"type":"event_msg","timestamp":"2026-11-16T12:00:00Z","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":12,"window_minutes":10080,"resets_at":1795435200},"secondary":null}}}
-            "#},
-        )
-        .expect("fixture rollout should be written");
-
-        assert_eq!(
-            read_transcript(&transcript, "fixture-session"),
-            Some(SessionUsage {
-                session_id: "fixture-session".to_owned(),
-                engine: Engine::Codex,
-                model: None,
-                effort: None,
-                context: None,
-                rate_limits: RateLimits {
-                    five_hour: None,
-                    seven_day: Some(RateLimitWindow {
-                        used_percentage: 12.0,
-                        resets_at: Some(1795435200),
-                        window_seconds: 604800,
-                    }),
-                },
-                version: None,
-                observed_at: Utc.with_ymd_and_hms(2026, 11, 16, 12, 0, 0).unwrap(),
-            }),
-        );
+    #[fixture]
+    fn rollout_directory() -> tempfile::TempDir {
+        tempdir().expect("temporary directory should be created")
     }
 
-    #[test]
-    fn ignores_rate_limit_windows_with_unrecognized_durations() {
-        let directory = tempdir().expect("temporary directory should be created");
-        let transcript = directory.path().join("fixture-rollout.jsonl");
-        fs::write(
-            &transcript,
-            indoc! {r#"
-                {"type":"event_msg","timestamp":"2026-11-16T12:00:00Z","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":12,"window_minutes":150,"resets_at":1794837600},"secondary":null}}}
-            "#},
-        )
-        .expect("fixture rollout should be written");
+    #[rstest]
+    #[case::primary_weekly_window(
+        indoc! {r#"
+            {"type":"event_msg","timestamp":"2026-11-16T12:00:00Z","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":12,"window_minutes":10080,"resets_at":1795435200},"secondary":null}}}
+        "#},
+        Some(RateLimits {
+            five_hour: None,
+            seven_day: Some(RateLimitWindow {
+                used_percentage: 12.0,
+                resets_at: Some(1795435200),
+                window_seconds: 604800,
+            }),
+        }),
+    )]
+    #[case::unrecognized_duration(
+        indoc! {r#"
+            {"type":"event_msg","timestamp":"2026-11-16T12:00:00Z","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":12,"window_minutes":150,"resets_at":1794837600},"secondary":null}}}
+        "#},
+        None,
+    )]
+    #[case::missing_duration(
+        indoc! {r#"
+            {"type":"event_msg","timestamp":"2026-11-16T12:00:00Z","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":12,"resets_at":1794837600},"secondary":null}}}
+        "#},
+        None,
+    )]
+    fn classifies_codex_quota_by_window_duration(
+        rollout_directory: tempfile::TempDir,
+        #[case] rollout_event: &str,
+        #[case] expected_rate_limits: Option<RateLimits>,
+    ) {
+        let transcript = rollout_directory.path().join("fixture-rollout.jsonl");
+        fs::write(&transcript, rollout_event).expect("fixture rollout should be written");
+        let expected = expected_rate_limits.map(|rate_limits| SessionUsage {
+            session_id: "fixture-session".to_owned(),
+            engine: Engine::Codex,
+            model: None,
+            effort: None,
+            context: None,
+            rate_limits,
+            version: None,
+            observed_at: Utc.with_ymd_and_hms(2026, 11, 16, 12, 0, 0).unwrap(),
+        });
 
-        assert_eq!(read_transcript(&transcript, "fixture-session"), None);
+        assert_eq!(read_transcript(&transcript, "fixture-session"), expected,);
     }
 
     #[test]
