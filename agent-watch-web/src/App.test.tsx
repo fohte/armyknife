@@ -2697,6 +2697,21 @@ it('returns to the previous screen after closing a new-session form from Inbox',
   })
 })
 
+it('clears a directly loaded new-session form without leaving the page', () => {
+  window.history.replaceState(null, '', '/?newSession=form')
+  renderApp()
+  clickButton('[aria-label="Close new session"]')
+
+  const snapshot = () => ({
+    newSessionFormOpen: container.querySelector('.new-session-view') !== null,
+    url: window.location.search,
+  })
+  expect(snapshot()).toEqual({
+    newSessionFormOpen: false,
+    url: '',
+  })
+})
+
 it('restores the previous screen when a new-session palette is dismissed with Back', async () => {
   vi.stubGlobal(
     'fetch',

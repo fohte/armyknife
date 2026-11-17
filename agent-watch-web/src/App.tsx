@@ -118,6 +118,7 @@ function AppContent() {
     backFromNewSession,
     backToInbox,
     navigate,
+    replaceNewSessionWithSession,
   } = useSessionHistory()
   const [hideQuietProjects, setHideQuietProjects] = useState(true)
   const [focusedProjectName, setFocusedProjectName] = useState<string | null>(
@@ -560,22 +561,6 @@ function AppContent() {
     setPendingLaunchId(null)
     backFromNewSession()
   }, [backFromNewSession, newSession.reset])
-  const replaceNewSessionWithSession = useCallback(
-    (id: string, conversationOpen: boolean) => {
-      newSession.reset()
-      setPendingLaunchId(null)
-      navigate(
-        (current) => ({
-          ...current,
-          selectedId: id,
-          conversationOpen,
-          newSessionMode: null,
-        }),
-        'replace',
-      )
-    },
-    [navigate, newSession.reset],
-  )
   const openSessionFromNavigation = useCallback(
     (id: string) => {
       closeMobileNav()
@@ -630,6 +615,8 @@ function AppContent() {
     },
     onSelect: (id: string) => {
       if (newSessionMode === 'form') {
+        newSession.reset()
+        setPendingLaunchId(null)
         replaceNewSessionWithSession(id, true)
         return
       }
@@ -727,6 +714,8 @@ function AppContent() {
           onSelectSession={(id) => {
             if (!orderedSessions.some((session) => session.id === id)) return
             if (newSessionMode === 'form') {
+              newSession.reset()
+              setPendingLaunchId(null)
               replaceNewSessionWithSession(id, false)
               return
             }

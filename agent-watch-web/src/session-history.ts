@@ -162,5 +162,26 @@ export function useSessionHistory() {
     navigate((current) => ({ ...current, newSessionMode: null }), 'replace')
   }, [navigate])
 
-  return { ...state, backFromNewSession, backToInbox, navigate }
+  const replaceNewSessionWithSession = useCallback(
+    (sessionId: string, conversationOpen: boolean) => {
+      navigate(
+        (current) => ({
+          ...current,
+          selectedId: sessionId,
+          conversationOpen,
+          newSessionMode: null,
+        }),
+        'replace',
+      )
+    },
+    [navigate],
+  )
+
+  return {
+    ...state,
+    backFromNewSession,
+    backToInbox,
+    navigate,
+    replaceNewSessionWithSession,
+  }
 }
