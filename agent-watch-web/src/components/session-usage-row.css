@@ -64,11 +64,3 @@
 .session-usage-rate > .is-danger {
   color: #f87171;
 }
-
-.session-usage-mark {
-  color: #71717a;
-}
-
-.session-usage-mark.is-ahead {
-  color: #fbbf24;
-}

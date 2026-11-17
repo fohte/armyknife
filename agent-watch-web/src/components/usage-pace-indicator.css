@@ -1,0 +1,15 @@
+.usage-pace-indicator {
+  white-space: nowrap;
+}
+
+.usage-pace-indicator.is-on-pace {
+  color: #d4d4d8;
+}
+
+.usage-pace-indicator.is-warning {
+  color: #fbbf24;
+}
+
+.usage-pace-indicator.is-danger {
+  color: #f87171;
+}

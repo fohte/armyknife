@@ -68,14 +68,6 @@
   white-space: nowrap;
 }
 
-.quota-window-mark {
-  color: #71717a;
-}
-
-.quota-window-mark.is-ahead {
-  color: #fbbf24;
-}
-
 .quota-panel-error {
   color: #8b8b94;
   font-size: 11px;

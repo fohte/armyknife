@@ -2,38 +2,15 @@ import '#components/session-usage-row.css'
 
 import {
   formatTokenCount,
-  getExpectedUsagePercentage,
-  getUsagePaceStatus,
   getUsageSeverity,
   type SessionUsage,
 } from '#agent-usage'
+import { UsagePaceIndicator } from '#components/usage-pace-indicator'
 
 type SessionUsageRowProps = {
   usage: SessionUsage | null
   nowSeconds?: number
   isMobile?: boolean
-}
-
-function UsageMark({
-  usedPercentage,
-  expectedPercentage,
-}: {
-  usedPercentage: number
-  expectedPercentage: number | null
-}) {
-  const paceStatus = getUsagePaceStatus(usedPercentage, expectedPercentage)
-  if (paceStatus === null) return null
-  const mark = paceStatus === 'ahead' ? '▲' : '✓'
-  const paceLabel = paceStatus === 'ahead' ? 'Ahead of pace' : 'On pace'
-  return (
-    <span
-      aria-label={`${paceLabel}: ${String(Math.round(expectedPercentage ?? 0))}% expected by now`}
-      className={`session-usage-mark${paceStatus === 'ahead' ? ' is-ahead' : ''}`}
-      title={`${paceLabel}: ${String(Math.round(expectedPercentage ?? 0))}% expected by now`}
-    >
-      {mark}
-    </span>
-  )
 }
 
 function UsageRate({
@@ -48,17 +25,13 @@ function UsageRate({
   if (window === null) return null
   const usedPercentage = Math.round(window.usedPercentage)
   const severity = getUsageSeverity(window.usedPercentage)
-  const expectedPercentage = getExpectedUsagePercentage(window, nowSeconds)
   return (
     <span className="session-usage-rate">
       {label}{' '}
       <span className={severity === 'normal' ? undefined : `is-${severity}`}>
         {String(usedPercentage)}%
       </span>{' '}
-      <UsageMark
-        expectedPercentage={expectedPercentage}
-        usedPercentage={window.usedPercentage}
-      />
+      <UsagePaceIndicator nowSeconds={nowSeconds} window={window} />
     </span>
   )
 }

@@ -5,7 +5,7 @@ import {
   formatResetTime,
   formatTokenCount,
   getExpectedUsagePercentage,
-  getUsagePaceStatus,
+  getUsageLandingEstimate,
   getUsageSeverity,
   requestAgentUsage,
 } from '#agent-usage'
@@ -66,15 +66,62 @@ it('does not calculate pace until the window has elapsed enough', () => {
 })
 
 it.each([
-  ['ahead of pace', 61, 60, 'ahead'],
-  ['on pace', 60, 60, 'on-pace'],
-  ['before pace is available', 12, null, null],
+  [
+    'below pace',
+    { usedPercentage: 40, resetsAt: 1_794_841_000, windowSeconds: 18_000 },
+    { percentage: 80, status: 'on-pace' },
+  ],
+  [
+    'at pace',
+    { usedPercentage: 50, resetsAt: 1_794_841_000, windowSeconds: 18_000 },
+    { percentage: 100, status: 'warning' },
+  ],
+  [
+    'above pace',
+    { usedPercentage: 70, resetsAt: 1_794_841_000, windowSeconds: 18_000 },
+    { percentage: 140, status: 'warning' },
+  ],
+  [
+    'well above pace',
+    { usedPercentage: 75, resetsAt: 1_794_841_000, windowSeconds: 18_000 },
+    { percentage: 150, status: 'danger' },
+  ],
 ])(
-  'classifies quota pace when usage is %s',
-  (_description, used, expected, result) => {
-    expect(getUsagePaceStatus(used, expected)).toEqual(result)
+  'projects window-end usage when the current usage is %s',
+  (_description, window, expected) => {
+    expect(getUsageLandingEstimate(window, 1_794_832_000)).toEqual(expected)
   },
 )
+
+it.each([
+  [
+    'the window has barely elapsed',
+    { usedPercentage: 1, resetsAt: 1_794_849_280, windowSeconds: 18_000 },
+  ],
+  [
+    'the window has reset',
+    { usedPercentage: 88, resetsAt: 1_794_831_900, windowSeconds: 18_000 },
+  ],
+  [
+    'there is no reset time',
+    { usedPercentage: 88, resetsAt: null, windowSeconds: 18_000 },
+  ],
+])('omits a landing estimate when %s', (_description, window) => {
+  expect(getUsageLandingEstimate(window, 1_794_832_000)).toEqual(null)
+})
+
+it('calculates a landing estimate once the window reaches five percent', () => {
+  expect(
+    getUsageLandingEstimate(
+      {
+        usedPercentage: 1,
+        resetsAt: 1_794_849_100,
+        windowSeconds: 18_000,
+      },
+      1_794_832_000,
+    ),
+  ).toEqual({ percentage: 20, status: 'on-pace' })
+})
 
 it.each([
   ['normal', 52, 'normal'],
