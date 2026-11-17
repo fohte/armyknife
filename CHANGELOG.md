@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.766](https://github.com/fohte/armyknife/compare/v0.1.765...v0.1.766) (2026-11-17)
+
+
+### Features
+
+* **agent-watch-web:** show conversation status ([#1916](https://github.com/fohte/armyknife/issues/1916)) ([e57bfb9](https://github.com/fohte/armyknife/commit/e57bfb97bc4f54b956cbeb0bad2554a9d484c43b))
+
 ## [0.1.765](https://github.com/fohte/armyknife/compare/v0.1.764...v0.1.765) (2026-11-17)
 
 
