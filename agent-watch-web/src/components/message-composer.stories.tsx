@@ -1,6 +1,34 @@
 import type { Decorator, Meta, StoryObj } from '@storybook/react-vite'
 
+import type { SessionUsage } from '#agent-usage'
 import { MessageComposer } from '#components/message-composer'
+import { SessionUsageRow } from '#components/session-usage-row'
+
+const mobileUsage: SessionUsage = {
+  sessionId: 'sample-mobile-session',
+  engine: 'claude',
+  model: 'Sonnet 4',
+  effort: 'medium',
+  context: {
+    usedTokens: 42_000,
+    windowTokens: 200_000,
+    usedPercentage: 21,
+  },
+  rateLimits: {
+    fiveHour: {
+      usedPercentage: 38,
+      resetsAt: 1_800_010_000,
+      windowSeconds: 18_000,
+    },
+    sevenDay: {
+      usedPercentage: 44,
+      resetsAt: 1_800_432_000,
+      windowSeconds: 604_800,
+    },
+  },
+  version: '2.0.0',
+  observedAt: '2026-11-17T00:00:00Z',
+}
 
 const meta = {
   component: MessageComposer,
@@ -37,11 +65,13 @@ const mobileViewportDecorator: Decorator = (Story) => (
       width: 'min(390px, 100%)',
       height: '844px',
       display: 'flex',
-      alignItems: 'end',
+      flexDirection: 'column',
+      justifyContent: 'flex-end',
       background: '#0a0a0a',
     }}
   >
     <Story />
+    <SessionUsageRow isMobile nowSeconds={1_800_000_000} usage={mobileUsage} />
   </div>
 )
 
