@@ -290,6 +290,8 @@ fn load_conversation_with_tail_window_from(
     }
     conversation.initial_epoch = tail_window_limit.is_some() && session.engine == Engine::Claude;
 
+    supplement_skill_suggestions(&mut conversation, &session, loaders);
+
     if mark_resolved_queued_prompts {
         cache::mark_resolved_queued_prompts(loaders, session_id, &resolved_queued_prompt_ids);
     }
@@ -305,6 +307,82 @@ fn load_conversation_with_tail_window_from(
         .background_tasks
         .extend(loaders.background_tasks(session_id)?);
     Ok(Some(conversation))
+}
+
+fn supplement_skill_suggestions(
+    conversation: &mut ConversationResponse,
+    session: &Session,
+    loaders: &RouteLoaders,
+) {
+    if !conversation.skills.is_empty() {
+        return;
+    }
+
+    let codex_home = crate::shared::dirs::codex_home_dir();
+    match skill_listing_for_session(session, codex_home.as_deref()) {
+        Ok(Some(skills)) => {
+            conversation.skills = skills;
+            return;
+        }
+        Ok(None) => {}
+        Err(error) => tracing::warn!(%error, "failed to inspect current transcript skill listing"),
+    }
+
+    let mut candidates = match loaders.sessions() {
+        Ok(candidates) => candidates,
+        Err(error) => {
+            tracing::warn!(%error, "failed to load sessions for skill suggestions");
+            return;
+        }
+    };
+    candidates.retain(|candidate| {
+        candidate.session_id != session.session_id && candidate.engine == session.engine
+    });
+    candidates.sort_by(|left, right| {
+        (left.cwd != session.cwd)
+            .cmp(&(right.cwd != session.cwd))
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
+            .then_with(|| right.created_at.cmp(&left.created_at))
+    });
+
+    for candidate in candidates {
+        match skill_listing_for_session(&candidate, codex_home.as_deref()) {
+            Ok(Some(skills)) => {
+                conversation.skills = skills;
+                return;
+            }
+            Ok(None) => {}
+            Err(error) => tracing::warn!(
+                session_id = %candidate.session_id,
+                %error,
+                "failed to inspect candidate transcript skill listing"
+            ),
+        }
+    }
+}
+
+fn skill_listing_for_session(
+    session: &Session,
+    codex_home: Option<&Path>,
+) -> Result<Option<Vec<super::SkillSuggestion>>> {
+    let archived_path = archived_codex_transcript_path(
+        session.engine,
+        session.transcript_path.as_deref(),
+        codex_home,
+    )?;
+    let Some(path) = archived_path
+        .as_deref()
+        .or(session.transcript_path.as_deref())
+    else {
+        return Ok(None);
+    };
+    let Some(reader) = super::open_transcript(path, true)? else {
+        return Ok(None);
+    };
+    Ok(super::parser::skill_suggestions::read_transcript_listing(
+        reader,
+        session.engine,
+    )?)
 }
 
 fn attach_permission_request_id(messages: &mut [ChatItem], request_id: Option<&str>) {

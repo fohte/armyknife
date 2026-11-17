@@ -1176,21 +1176,62 @@ mod tests {
             })
         };
         std::fs::write(&transcript_path, record.to_string()).unwrap();
+        let competing_transcript_path = directory.path().join("fixture-competing.jsonl");
+        let competing_record = if use_codex_transcript {
+            json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{
+                        "type": "input_text",
+                        "text": indoc::indoc! {"
+                            <skills_instructions>
+                            ## Skills
+                            ### Available skills
+                            - competing-fixture-skill: A fixture description.
+                            </skills_instructions>
+                        "},
+                    }],
+                },
+            })
+        } else {
+            json!({
+                "attachment": {
+                    "type": "skill_listing",
+                    "content": "- competing-fixture-skill: A fixture description.",
+                },
+            })
+        };
+        std::fs::write(&competing_transcript_path, competing_record.to_string()).unwrap();
 
         let mut session = stored_session();
-        session.engine = if use_codex_transcript {
+        let engine = if use_codex_transcript {
             Engine::Codex
         } else {
             Engine::Claude
         };
+        session.engine = engine;
         session.transcript_path = Some(transcript_path);
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
-            move |id| Ok((id == "fixture-session").then(|| session.clone())),
-            |_| Ok(None),
+        let mut competing_session = stored_session();
+        competing_session.session_id = "fixture-competing-session".to_string();
+        competing_session.engine = engine;
+        competing_session.transcript_path = Some(competing_transcript_path);
+        competing_session.updated_at = chrono::DateTime::parse_from_rfc3339("2026-01-02T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let loaders = RouteLoaders::new(
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
+        .with_session_list_loader(move || Ok(vec![competing_session.clone()]));
+        let router = routes_with_proposals_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            loaders,
         );
 
         assert_eq!(
@@ -1205,6 +1246,220 @@ mod tests {
                         {"name": "design-flow", "description": "Help shape a design."},
                         {"name": "debug-flow", "description": "Investigate a failure."},
                     ],
+                    "start": 0,
+                    "total": 0,
+                    "decisions": [],
+                    "hasUnansweredProposal": false,
+                    "activeQuestionIndex": null,
+                }),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::claude(Engine::Claude)]
+    #[case::codex(Engine::Codex)]
+    #[tokio::test]
+    async fn messages_route_falls_back_to_the_latest_same_directory_skill_listing(
+        #[case] engine: Engine,
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        let mut session = stored_session();
+        session.engine = engine;
+        let local_transcript_path = directory.path().join("fixture-local.jsonl");
+        let older_local_transcript_path = directory.path().join("fixture-older-local.jsonl");
+        let newer_global_transcript_path = directory.path().join("fixture-global.jsonl");
+        let wrong_engine_transcript_path = directory.path().join("fixture-other-engine.jsonl");
+        let write_listing = |path: &Path, listing_engine: Engine, name: &str| {
+            let record = match listing_engine {
+                Engine::Claude => json!({
+                    "attachment": {
+                        "type": "skill_listing",
+                        "content": format!("- {name}: A fixture description."),
+                    },
+                }),
+                Engine::Codex => json!({
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "developer",
+                        "content": [{
+                            "type": "input_text",
+                            "text": indoc::formatdoc! {"
+                                <skills_instructions>
+                                ## Skills
+                                ### Available skills
+                                - {name}: A fixture description.
+                                </skills_instructions>
+                            "},
+                        }],
+                    },
+                }),
+            };
+            std::fs::write(path, record.to_string()).unwrap();
+        };
+        write_listing(&local_transcript_path, engine, "local-fixture-skill");
+        write_listing(
+            &older_local_transcript_path,
+            engine,
+            "older-local-fixture-skill",
+        );
+        write_listing(
+            &newer_global_transcript_path,
+            engine,
+            "global-fixture-skill",
+        );
+        write_listing(
+            &wrong_engine_transcript_path,
+            match engine {
+                Engine::Claude => Engine::Codex,
+                Engine::Codex => Engine::Claude,
+            },
+            "wrong-engine-fixture-skill",
+        );
+
+        let updated_at = |value: &str| {
+            chrono::DateTime::parse_from_rfc3339(value)
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
+        let mut local = stored_session();
+        local.session_id = "fixture-local-session".to_string();
+        local.engine = engine;
+        local.transcript_path = Some(local_transcript_path);
+        local.updated_at = updated_at("2026-01-02T00:00:00Z");
+
+        let mut older_local = stored_session();
+        older_local.session_id = "fixture-older-local-session".to_string();
+        older_local.engine = engine;
+        older_local.transcript_path = Some(older_local_transcript_path);
+        older_local.updated_at = updated_at("2026-01-01T00:00:00Z");
+
+        let mut global = stored_session();
+        global.session_id = "fixture-global-session".to_string();
+        global.cwd = PathBuf::from("/fixture/other-project");
+        global.engine = engine;
+        global.transcript_path = Some(newer_global_transcript_path);
+        global.updated_at = updated_at("2026-01-03T00:00:00Z");
+
+        let mut wrong_engine = stored_session();
+        wrong_engine.session_id = "fixture-wrong-engine-session".to_string();
+        wrong_engine.engine = match engine {
+            Engine::Claude => Engine::Codex,
+            Engine::Codex => Engine::Claude,
+        };
+        wrong_engine.transcript_path = Some(wrong_engine_transcript_path);
+        wrong_engine.updated_at = updated_at("2026-01-04T00:00:00Z");
+
+        let loaders = RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
+        .with_session_list_loader(move || {
+            Ok(vec![
+                older_local.clone(),
+                local.clone(),
+                global.clone(),
+                wrong_engine.clone(),
+            ])
+        });
+        let router = routes_with_proposals_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            loaders,
+        );
+
+        assert_eq!(
+            message_response(&router).await,
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                json!({
+                    "messages": [],
+                    "backgroundTasks": [],
+                    "skills": [{
+                        "name": "local-fixture-skill",
+                        "description": "A fixture description.",
+                    }],
+                    "start": 0,
+                    "total": 0,
+                    "decisions": [],
+                    "hasUnansweredProposal": false,
+                    "activeQuestionIndex": null,
+                }),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn messages_route_uses_latest_skill_listing_when_no_same_directory_source_exists() {
+        let directory = tempfile::tempdir().unwrap();
+        let session = stored_session();
+        let older_transcript_path = directory.path().join("fixture-older.jsonl");
+        let newer_transcript_path = directory.path().join("fixture-newer.jsonl");
+        for (path, name) in [
+            (&older_transcript_path, "older-fixture-skill"),
+            (&newer_transcript_path, "newer-fixture-skill"),
+        ] {
+            std::fs::write(
+                path,
+                json!({
+                    "attachment": {
+                        "type": "skill_listing",
+                        "content": format!("- {name}: A fixture description."),
+                    },
+                })
+                .to_string(),
+            )
+            .unwrap();
+        }
+
+        let updated_at = |value: &str| {
+            chrono::DateTime::parse_from_rfc3339(value)
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
+        let mut older = stored_session();
+        older.session_id = "fixture-older-session".to_string();
+        older.cwd = PathBuf::from("/fixture/older-project");
+        older.transcript_path = Some(older_transcript_path);
+        older.updated_at = updated_at("2026-01-02T00:00:00Z");
+
+        let mut newer = stored_session();
+        newer.session_id = "fixture-newer-session".to_string();
+        newer.cwd = PathBuf::from("/fixture/newer-project");
+        newer.transcript_path = Some(newer_transcript_path);
+        newer.updated_at = updated_at("2026-01-03T00:00:00Z");
+
+        let loaders = RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
+        .with_session_list_loader(move || Ok(vec![older.clone(), newer.clone()]));
+        let router = routes_with_proposals_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            loaders,
+        );
+
+        assert_eq!(
+            message_response(&router).await,
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                json!({
+                    "messages": [],
+                    "backgroundTasks": [],
+                    "skills": [{
+                        "name": "newer-fixture-skill",
+                        "description": "A fixture description.",
+                    }],
                     "start": 0,
                     "total": 0,
                     "decisions": [],
