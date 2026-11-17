@@ -14,7 +14,8 @@ import {
 import { useAgentUsageContext } from '#components/agent-usage-context'
 import { ConversationPaneHeader } from '#components/conversation-pane-header'
 import { ConversationSelectionReply } from '#components/conversation-selection-reply'
-import { ConversationWorkingStatus } from '#components/conversation-working-status'
+import { ConversationStatusBand } from '#components/conversation-status-band'
+import { getConversationStatusBandState } from '#components/conversation-status-band-state'
 import { MarkdownCommandContextProvider } from '#components/markdown-command-context'
 import { MessageComposer } from '#components/message-composer'
 import type {
@@ -79,6 +80,7 @@ type ConversationPaneViewProps = {
   ) => Promise<boolean>
   onOpenInTerminal?: () => void
   onSelectSession: (id: string) => void
+  onReviewInCrit?: () => void
   isMobile?: boolean
   statusPanelOpen?: boolean
   mobileStatusPanel?: ReactNode
@@ -122,6 +124,7 @@ export function ConversationPaneView({
   onRewind,
   onOpenInTerminal,
   onSelectSession,
+  onReviewInCrit,
   isMobile = false,
   statusPanelOpen = false,
   mobileStatusPanel = null,
@@ -248,6 +251,11 @@ export function ConversationPaneView({
     pendingActions: pendingPermissionActions,
     sessions: sessionLinkTargets,
     now,
+  })
+  const statusBandState = getConversationStatusBandState({
+    session,
+    messages,
+    backgroundTasks,
   })
   const handlePasteFiles = (files: File[]) => {
     onPasteFiles(files)
@@ -384,26 +392,14 @@ export function ConversationPaneView({
         </MarkdownCommandContextProvider>
       </div>
 
-      {session.isCompacting === true ||
-      session.category === 'in_progress' ||
-      (isMobile && backgroundTasks.length > 0) ? (
-        <ConversationWorkingStatus
-          showWorking={
-            session.activityStatus === 'working' ||
-            (session.activityStatus == null &&
-              session.category === 'in_progress' &&
-              session.waitingForBackgroundTasks !== true)
-          }
-          isWaiting={session.activityStatus === 'waiting'}
-          waitingReason={session.waitingReason}
-          waitingForBackgroundTasks={session.waitingForBackgroundTasks}
-          elapsedSeconds={session.elapsedSeconds}
-          activeTool={activeTool}
-          backgroundTasks={backgroundTasks}
-          showBackgroundTasks={isMobile}
-          isCompacting={session.isCompacting === true}
-        />
-      ) : null}
+      <ConversationStatusBand
+        state={statusBandState}
+        elapsedSeconds={session.elapsedSeconds}
+        activeTool={activeTool}
+        backgroundTasks={backgroundTasks}
+        isMobile={isMobile}
+        {...(onReviewInCrit === undefined ? {} : { onReviewInCrit })}
+      />
 
       {(error ?? attachmentError) != null &&
       (error ?? attachmentError) !== '' ? (

@@ -124,6 +124,7 @@ export function useConversationStatusPanel({
 }: UseConversationStatusPanelOptions) {
   const { run } = useSessionOperations()
   const [activePanelTabId, setActivePanelTabId] = useState<string | null>(null)
+  const [critFullscreenRequest, setCritFullscreenRequest] = useState(0)
   const [selectedDecisionSeq, setSelectedDecisionSeq] = useState<number | null>(
     null,
   )
@@ -150,9 +151,12 @@ export function useConversationStatusPanel({
     session.critUrl !== ''
       ? session.critUrl
       : null
+  const registeredWebUis = session.webUis ?? []
   const webUis =
-    session.webUis ??
-    (legacyCritUrl === null ? [] : [{ name: 'crit', url: legacyCritUrl }])
+    legacyCritUrl !== null &&
+    !registeredWebUis.some((webUi) => webUi.name === 'crit')
+      ? [...registeredWebUis, { name: 'crit', url: legacyCritUrl }]
+      : registeredWebUis
   const webUiTabIds = webUis.map((webUi) =>
     webUi.name === 'crit' ? 'crit' : `web-ui-${encodeURIComponent(webUi.url)}`,
   )
@@ -433,6 +437,7 @@ export function useConversationStatusPanel({
           name={webUi.name}
           url={webUi.url}
           exposedUrl={webUi.exposedUrl ?? null}
+          fullscreenRequest={webUi.name === 'crit' ? critFullscreenRequest : 0}
           onClose={onCloseStatusPanel}
         />
       ),
@@ -443,6 +448,10 @@ export function useConversationStatusPanel({
   }, [activePanelTabId, activeTabId])
   return {
     activeTabId,
+    onOpenCritInFullscreen: () => {
+      setActivePanelTabId('crit')
+      setCritFullscreenRequest((request) => request + 1)
+    },
     onSelectDecision: setSelectedDecisionSeq,
     onTabChange: setActivePanelTabId,
     selectedDecisionSeq: selectedDecision?.seq ?? null,

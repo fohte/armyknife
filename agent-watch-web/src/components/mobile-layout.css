@@ -694,8 +694,8 @@ html[data-mobile-layout='true'] {
   font-size: 12.5px;
 }
 
-.conversation-pane[data-mobile='true'] .conversation-working-status {
-  padding: 8px 16px;
+.conversation-pane[data-mobile='true'] .conversation-status-band {
+  padding: 12px 16px;
 }
 
 .conversation-pane[data-mobile='true'] .conversation-error {

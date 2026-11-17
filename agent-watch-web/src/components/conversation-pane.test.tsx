@@ -3675,7 +3675,7 @@ it('shows elapsed time while the session is working without an active tool', () 
   )
 
   const snapshot = () => ({
-    workingStatus: container.querySelector('.conversation-working-status')
+    workingStatus: container.querySelector('.conversation-status-band-title')
       ?.textContent,
     message: container.querySelector('.conversation-status')?.textContent,
   })
@@ -3695,15 +3695,20 @@ it('shows the agent status reason while the stopped session is waiting', () => {
   })
 
   const snapshot = () => ({
-    status: container.querySelector('.conversation-working-status')
+    status: container.querySelector('.conversation-status-band-title')
       ?.textContent,
-    workingDotVisible:
-      container.querySelector('.conversation-working-dot') !== null,
+    detail: container.querySelector('.conversation-status-band-detail')
+      ?.textContent,
+    waitingDotVisible:
+      container.querySelector(
+        '.conversation-status-band.is-waiting .conversation-status-band-dot',
+      ) !== null,
   })
 
   expect(snapshot()).toEqual({
-    status: 'Waiting · waiting for an external build',
-    workingDotVisible: false,
+    status: 'Waiting',
+    detail: 'waiting for an external build',
+    waitingDotVisible: true,
   })
 })
 
@@ -3716,15 +3721,20 @@ it('shows when the stopped session is waiting for background tasks', () => {
   })
 
   const snapshot = () => ({
-    status: container.querySelector('.conversation-working-status')
+    status: container.querySelector('.conversation-status-band-title')
       ?.textContent,
-    workingDotVisible:
-      container.querySelector('.conversation-working-dot') !== null,
+    detail: container.querySelector('.conversation-status-band-detail')
+      ?.textContent,
+    waitingDotVisible:
+      container.querySelector(
+        '.conversation-status-band.is-waiting .conversation-status-band-dot',
+      ) !== null,
   })
 
   expect(snapshot()).toEqual({
-    status: 'Waiting for background tasks',
-    workingDotVisible: false,
+    status: 'Background tasks',
+    detail: 'Choose a retry policy',
+    waitingDotVisible: true,
   })
 })
 
@@ -3755,16 +3765,16 @@ it('shows background task descriptions and elapsed times on mobile', () => {
   act(() => {
     requireElement(
       container.querySelector<HTMLElement>(
-        '.conversation-background-tasks summary',
+        '.conversation-status-band-tasks summary',
       ),
     ).click()
   })
 
   const snapshot = () => ({
-    summary: container.querySelector('.conversation-background-tasks summary')
+    summary: container.querySelector('.conversation-status-band-tasks summary')
       ?.textContent,
     tasks: Array.from(
-      container.querySelectorAll('.conversation-background-tasks li'),
+      container.querySelectorAll('.conversation-status-band-tasks li'),
       (item) => item.textContent,
     ),
   })
@@ -3789,13 +3799,14 @@ it('shows the compacting status while hiding elapsed time and stale tool details
   )
 
   const getSnapshot = () => ({
-    workingStatus: container.querySelector('.conversation-working-status')
+    workingStatus: container.querySelector('.conversation-status-band-title')
       ?.textContent,
-    toolItems: container.querySelectorAll('.conversation-working-tool').length,
+    toolItems: container.querySelectorAll('.conversation-status-band-detail')
+      .length,
     inProgressItems: container.querySelectorAll('.tool-in-progress').length,
   })
   expect(getSnapshot()).toEqual({
-    workingStatus: 'Compacting conversation…',
+    workingStatus: 'Summarizing conversation',
     toolItems: 0,
     inProgressItems: 0,
   })
@@ -3822,22 +3833,18 @@ it('shows an active tool and hides it from the completed conversation', () => {
   )
 
   const snapshot = () => ({
-    workingStatus: Array.from(
-      requireElement(container.querySelector('.conversation-working-status'))
-        .children,
-    )
-      .slice(1)
-      .map((child) => child.textContent),
+    workingStatus: container.querySelector('.conversation-status-band-title')
+      ?.textContent,
+    activeTool: container.querySelector('.conversation-status-band-detail')
+      ?.textContent,
     toolSummary:
       container.querySelector('.chat-tool-summary')?.textContent ?? null,
     inProgressItems: container.querySelectorAll('.tool-in-progress').length,
   })
 
   expect(snapshot()).toEqual({
-    workingStatus: [
-      'Working · 1m 32s',
-      'execcargo test --manifest-path fixture/Cargo.toml',
-    ],
+    workingStatus: 'Working · 1m 32s',
+    activeTool: 'exec · cargo test --manifest-path fixture/Cargo.toml',
     toolSummary: '1 action',
     inProgressItems: 0,
   })
@@ -3858,7 +3865,7 @@ it('hides working status when the session is done', () => {
   )
 
   const snapshot = () => ({
-    workingStatus: container.querySelector('.conversation-working-status'),
+    workingStatus: container.querySelector('.conversation-status-band'),
     toolSummary:
       container.querySelector('.chat-tool-summary summary')?.textContent ??
       null,
@@ -3893,18 +3900,20 @@ it('keeps background tasks visible while the session waits for input', () => {
   )
 
   const snapshot = () => ({
-    status: container.querySelector('.conversation-working-status')
+    status: container.querySelector('.conversation-status-band-title')
       ?.textContent,
-    workingDotVisible:
-      container.querySelector('.conversation-working-dot') !== null,
+    waitingDotVisible:
+      container.querySelector(
+        '.conversation-status-band.is-waiting .conversation-status-band-dot',
+      ) !== null,
     backgroundTasks: container.querySelector(
-      '.conversation-background-tasks summary',
+      '.conversation-status-band-tasks summary',
     )?.textContent,
   })
 
   expect(snapshot()).toEqual({
-    status: 'Background tasks (1)Watch the build pipeline2m 8s',
-    workingDotVisible: false,
+    status: 'Waiting',
+    waitingDotVisible: true,
     backgroundTasks: 'Background tasks (1)',
   })
 })
@@ -3989,9 +3998,9 @@ it('accepts classified messages and the active tool from messages endpoint', asy
   ).toBe(true)
 
   const snapshot = () => ({
-    workingStatus: container.querySelector('.conversation-working-status')
-      ?.children[1]?.textContent,
-    activeTool: container.querySelector('.conversation-working-tool')
+    workingStatus: container.querySelector('.conversation-status-band-title')
+      ?.textContent,
+    activeTool: container.querySelector('.conversation-status-band-detail')
       ?.textContent,
     peerMessage: container.querySelector('.chat-peer-message')?.textContent,
     peerImage: container
@@ -4006,7 +4015,7 @@ it('accepts classified messages and the active tool from messages endpoint', asy
       }),
     ),
     backgroundTasks: container.querySelector(
-      '.conversation-background-tasks summary',
+      '.conversation-status-band-tasks summary',
     )?.textContent,
     headerRunningCount: container.querySelector(
       '.conversation-status-panel-count',
@@ -4014,7 +4023,7 @@ it('accepts classified messages and the active tool from messages endpoint', asy
   })
   expect(snapshot()).toEqual({
     workingStatus: 'Working · 30s',
-    activeTool: 'execcargo test',
+    activeTool: 'exec · cargo test',
     peerMessage:
       'FROMFixture peer session (ended)A fictional peer update.fixture-peer-layout.html',
     peerImage: '/api/images/fixture-peer-image.png',
@@ -4099,10 +4108,10 @@ it('shows running tasks in the desktop status panel and counts them in the heade
     ),
     panelToggle: container.querySelector('.conversation-status-panel-toggle')
       ?.textContent,
-    workingStatus: container.querySelector('.conversation-working-status')
+    workingStatus: container.querySelector('.conversation-status-band-title')
       ?.textContent,
     legacyTaskList:
-      container.querySelector('.conversation-background-tasks') !== null,
+      container.querySelector('.conversation-status-band-tasks') !== null,
   })
   expect(snapshot()).toEqual({
     tabs: [{ label: 'Running2', selected: 'true' }],
@@ -4117,8 +4126,8 @@ it('shows running tasks in the desktop status panel and counts them in the heade
       '▶cargo test -p fictional-crateOutput2h 0m',
     ],
     panelToggle: '2',
-    workingStatus: undefined,
-    legacyTaskList: false,
+    workingStatus: 'Waiting',
+    legacyTaskList: true,
   })
 })
 
@@ -5032,6 +5041,83 @@ it('keeps the status panel toggle available without a waiting crit URL', () => {
   expect(snapshot()).toEqual({
     missingUrl: true,
     notWaiting: true,
+  })
+})
+
+it('opens the Crit review fullscreen from the status band in one click', async () => {
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  function StatusPanelHarness() {
+    const [statusPanelOpen, setStatusPanelOpen] = useState(false)
+    return (
+      <ConversationPane
+        session={{
+          ...session,
+          category: 'needs_action',
+          activityStatus: 'stopped',
+          kind: 'Review',
+          critUrl: 'https://crit.example.test/review/fixture',
+          webUis: [],
+        }}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+        statusPanelOpen={statusPanelOpen}
+        onToggleStatusPanel={() => {
+          setStatusPanelOpen((open) => !open)
+        }}
+      />
+    )
+  }
+  root = createRoot(container)
+  act(() => root?.render(<StatusPanelHarness />))
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const reviewButton = await waitForState(
+    () =>
+      container.querySelector<HTMLButtonElement>(
+        '.conversation-status-band-review',
+      ) !== null,
+  )
+  if (!reviewButton) throw new Error('Expected the Crit review action')
+  await act(async () => {
+    await userEvent.click(
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.conversation-status-band-review',
+        ),
+      ),
+    )
+  })
+  const fullscreen = await waitForState(
+    () => container.querySelector('.web-ui-pane.is-fullscreen') !== null,
+  )
+
+  const snapshot = () => ({
+    fullscreen,
+    selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
+      ?.textContent,
+    fullscreenControl: container
+      .querySelector('.web-ui-pane-header button[aria-label*="fullscreen"]')
+      ?.getAttribute('aria-label'),
+    reviewUrl: container
+      .querySelector<HTMLIFrameElement>('.web-ui-pane iframe')
+      ?.getAttribute('src'),
+  })
+  expect(snapshot()).toEqual({
+    fullscreen: true,
+    selectedTab: 'crit',
+    fullscreenControl: 'Exit crit fullscreen',
+    reviewUrl: 'https://crit.example.test/review/fixture',
   })
 })
 
@@ -6579,7 +6665,7 @@ it('reloads the selected conversation when the session feed changes', async () =
   const snapshot = () => ({
     transcript: container.querySelector('.chat-assistant-message')?.textContent,
     backgroundTasks: container.querySelector(
-      '.conversation-background-tasks summary',
+      '.conversation-status-band-tasks summary',
     )?.textContent,
     requestCount: fetcher.mock.calls.length,
   })
