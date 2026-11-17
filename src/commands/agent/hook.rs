@@ -572,7 +572,11 @@ fn process_hook_event_impl_with_env(
                 work_type_pinned,
                 tmux_info,
                 if is_watch_web_launch {
-                    SessionStatus::Running
+                    if env.session_has_initial_prompt == Some(false) {
+                        SessionStatus::Stopped
+                    } else {
+                        SessionStatus::Running
+                    }
                 } else {
                     SessionStatus::Ended
                 },
@@ -1946,11 +1950,17 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
-    #[test]
-    fn promptless_watch_web_session_is_saved_on_startup() {
+    #[rstest]
+    #[case::without_initial_prompt(false, SessionStatus::Stopped)]
+    #[case::with_initial_prompt(true, SessionStatus::Running)]
+    fn watch_web_startup_status_matches_initial_prompt_presence(
+        #[case] has_initial_prompt: bool,
+        #[case] expected_status: SessionStatus,
+    ) {
         let temp_dir = tempfile::TempDir::new().expect("temporary directory should be created");
         let env = EnvVars {
             session_launch_id: Some("launch-fixture".to_string()),
+            session_has_initial_prompt: Some(has_initial_prompt),
             ..EnvVars::default()
         };
         let option_writes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1992,6 +2002,7 @@ mod tests {
             pane_id: "%42".to_string(),
             socket_path: Some("test-socket".to_string()),
         });
+        expected.status = expected_status;
         let mut expected = serde_json::to_value(expected).expect("session should serialize");
         expected["created_at"] = serde_json::json!("<timestamp>");
         expected["updated_at"] = serde_json::json!("<timestamp>");

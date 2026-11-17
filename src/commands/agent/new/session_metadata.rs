@@ -53,6 +53,7 @@ fn record_from_env_in(
         && !metadata.launched_with_vibe
         && metadata.ancestor_session_ids.is_empty()
         && metadata.launch_id.is_none()
+        && metadata.has_initial_prompt.is_none()
     {
         return Ok(());
     }
@@ -69,6 +70,7 @@ struct SessionMetadata<'a> {
     launched_with_vibe: bool,
     ancestor_session_ids: Vec<String>,
     launch_id: Option<&'a str>,
+    has_initial_prompt: Option<bool>,
 }
 
 fn non_empty_env<'a>(env_vars: &[(&str, &'a str)], name: &str) -> Option<&'a str> {
@@ -92,6 +94,8 @@ fn metadata_from_env<'a>(env_vars: &[(&str, &'a str)]) -> SessionMetadata<'a> {
             .map(parse_ancestor_session_ids)
             .unwrap_or_default(),
         launch_id: non_empty_env(env_vars, EnvVars::session_launch_id_name()),
+        has_initial_prompt: non_empty_env(env_vars, EnvVars::session_has_initial_prompt_name())
+            .map(|value| value == "1"),
     }
 }
 
@@ -104,6 +108,12 @@ fn record_in(
 ) -> Result<()> {
     let session_lock = store::lock_session_for_update(sessions_dir, session_id)?;
     let now = Utc::now();
+    let initial_status =
+        if metadata.launch_id.is_some() && metadata.has_initial_prompt == Some(false) {
+            SessionStatus::Stopped
+        } else {
+            SessionStatus::Running
+        };
     let mut session = session_lock.load()?.unwrap_or_else(|| Session {
         launch_id: None,
         archived_at: None,
@@ -122,7 +132,7 @@ fn record_in(
         transcript_path: None,
         tty: None,
         tmux_info: None,
-        status: SessionStatus::Running,
+        status: initial_status,
         created_at: now,
         updated_at: now,
         last_prompted_at: None,
@@ -237,8 +247,20 @@ mod tests {
     }
 
     #[rstest]
-    fn records_watch_web_launch_id_from_the_launch_environment(sessions_dir: TempDir) {
-        let env_vars = [(EnvVars::session_launch_id_name(), "launch-fixture")];
+    #[case::without_initial_prompt("0", "stopped")]
+    #[case::with_initial_prompt("1", "running")]
+    fn records_watch_web_launch_status_from_the_launch_environment(
+        sessions_dir: TempDir,
+        #[case] has_initial_prompt: &str,
+        #[case] expected_status: &str,
+    ) {
+        let env_vars = [
+            (EnvVars::session_launch_id_name(), "launch-fixture"),
+            (
+                EnvVars::session_has_initial_prompt_name(),
+                has_initial_prompt,
+            ),
+        ];
 
         record_from_env_in(
             sessions_dir.path(),
@@ -261,7 +283,7 @@ mod tests {
                 "transcript_path": null,
                 "tty": null,
                 "tmux_info": null,
-                "status": "running",
+                "status": expected_status,
                 "created_at": "<timestamp>",
                 "updated_at": "<timestamp>",
                 "last_message": null,
@@ -301,6 +323,7 @@ mod tests {
             SessionMetadata {
                 label: Some("explicit label"),
                 launch_id: None,
+                has_initial_prompt: None,
                 work_type,
                 child_launch: None,
                 launched_with_vibe: false,
@@ -457,6 +480,7 @@ mod tests {
             SessionMetadata {
                 label,
                 launch_id: None,
+                has_initial_prompt: None,
                 work_type,
                 child_launch: None,
                 launched_with_vibe: false,
@@ -485,6 +509,7 @@ mod tests {
             SessionMetadata {
                 label: None,
                 launch_id: None,
+                has_initial_prompt: None,
                 work_type: None,
                 child_launch: None,
                 launched_with_vibe: true,
@@ -521,6 +546,7 @@ mod tests {
         let env_vars = [
             ("UNRELATED", "value"),
             (EnvVars::session_launch_id_name(), "launch-fixture"),
+            (EnvVars::session_has_initial_prompt_name(), "1"),
             (EnvVars::session_label_name(), "delegate label"),
             (EnvVars::session_work_type_name(), "sample-skill"),
             (EnvVars::session_child_launch_name(), "deny"),
@@ -533,6 +559,7 @@ mod tests {
             SessionMetadata {
                 label: Some("delegate label"),
                 launch_id: Some("launch-fixture"),
+                has_initial_prompt: Some(true),
                 work_type: Some("sample-skill"),
                 child_launch: Some(ChildLaunchPermission::Deny),
                 launched_with_vibe: true,

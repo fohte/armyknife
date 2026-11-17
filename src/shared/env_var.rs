@@ -31,6 +31,7 @@ const PR_IS_UPDATE: &str = "ARMYKNIFE_PR_IS_UPDATE";
 const PR_URL: &str = "ARMYKNIFE_PR_URL";
 const PR_HEAD_SHA: &str = "ARMYKNIFE_PR_HEAD_SHA";
 const SESSION_LAUNCH_ID: &str = "ARMYKNIFE_SESSION_LAUNCH_ID";
+const SESSION_HAS_INITIAL_PROMPT: &str = "ARMYKNIFE_SESSION_HAS_INITIAL_PROMPT";
 
 /// Snapshot of all ARMYKNIFE_* environment variables at load time.
 #[derive(Default)]
@@ -64,6 +65,7 @@ pub struct EnvVars {
     /// Comma-separated ancestor session IDs from root to immediate parent.
     pub ancestor_session_ids: Option<String>,
     pub session_launch_id: Option<String>,
+    pub session_has_initial_prompt: Option<bool>,
 
     /// Hook log level: "debug", "error", or unset (default: error).
     pub cc_hook_log: Option<String>,
@@ -99,6 +101,8 @@ impl EnvVars {
             session_vibe_launch: non_empty_var(SESSION_VIBE_LAUNCH).is_some(),
             ancestor_session_ids: non_empty_var(ANCESTOR_SESSION_IDS),
             session_launch_id: non_empty_var(SESSION_LAUNCH_ID),
+            session_has_initial_prompt: non_empty_var(SESSION_HAS_INITIAL_PROMPT)
+                .map(|value| value == "1"),
             cc_hook_log: non_empty_var(CC_HOOK_LOG),
             cc_notify: non_empty_var(CC_NOTIFY),
         }
@@ -146,6 +150,10 @@ impl EnvVars {
 
     pub fn session_launch_id_name() -> &'static str {
         SESSION_LAUNCH_ID
+    }
+
+    pub fn session_has_initial_prompt_name() -> &'static str {
+        SESSION_HAS_INITIAL_PROMPT
     }
 
     /// Returns the env var name that marks a Codex process launched by the

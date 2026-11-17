@@ -40,6 +40,10 @@ pub(super) fn build_env_vars(
             EnvVars::session_launch_id_name().to_string(),
             launch_id.clone(),
         ));
+        env_vars.push((
+            EnvVars::session_has_initial_prompt_name().to_string(),
+            if common.prompt.is_some() { "1" } else { "0" }.to_string(),
+        ));
     }
     if vibe {
         env_vars.push((
@@ -102,6 +106,50 @@ mod tests {
                 (
                     EnvVars::session_launch_id_name().to_string(),
                     "launch-fixture".to_string(),
+                ),
+                (
+                    EnvVars::session_has_initial_prompt_name().to_string(),
+                    "0".to_string(),
+                ),
+            ],
+        );
+    }
+
+    #[test]
+    fn marks_watch_web_launches_with_an_initial_prompt() {
+        let common = CommonNewArgs {
+            watch_web_launch_id: Some("launch-fixture".to_string()),
+            watch_web_directory: None,
+            prompt: Some("Inspect the fixture.".to_string()),
+            child_launch: None,
+            label: None,
+            kind: None,
+            type_name: None,
+            model: None,
+            parent_session_id: None,
+            repo: None,
+            engine: Some(Engine::Claude),
+            reasoning_effort: None,
+        };
+
+        let env_vars = temp_env::with_vars([("TQ_SESSION_ID", None::<&str>)], || {
+            build_env_vars(&common, false, None).unwrap()
+        });
+
+        assert_eq!(
+            env_vars,
+            vec![
+                (
+                    EnvVars::session_child_launch_name().to_string(),
+                    "allow".to_string(),
+                ),
+                (
+                    EnvVars::session_launch_id_name().to_string(),
+                    "launch-fixture".to_string(),
+                ),
+                (
+                    EnvVars::session_has_initial_prompt_name().to_string(),
+                    "1".to_string(),
                 ),
             ],
         );
