@@ -71,6 +71,28 @@ export const CodexShowsContextWithoutSessionQuota: Story = {
   args: { usage: codexUsage, nowSeconds: 1_794_832_000 },
 }
 
+export const QuotaPercentagesShowWarningAndDanger: Story = {
+  name: 'Quota percentages show status while window labels stay muted',
+  args: {
+    usage: {
+      ...claudeUsage,
+      rateLimits: {
+        fiveHour: {
+          usedPercentage: 82,
+          resetsAt: 1_794_841_200,
+          windowSeconds: 18_000,
+        },
+        sevenDay: {
+          usedPercentage: 97,
+          resetsAt: 1_795_435_200,
+          windowSeconds: 604_800,
+        },
+      },
+    },
+    nowSeconds: 1_794_832_000,
+  },
+}
+
 export const MissingUsageIsHidden: Story = {
   name: 'The row is hidden when the session has no recorded usage',
   args: { usage: null },
