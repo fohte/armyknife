@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.769](https://github.com/fohte/armyknife/compare/v0.1.768...v0.1.769) (2026-11-17)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** stop duplicate thought text ([#1923](https://github.com/fohte/armyknife/issues/1923)) ([0431945](https://github.com/fohte/armyknife/commit/0431945fb86113b2d7b994fba77f208f4a7164b6))
+
 ## [0.1.768](https://github.com/fohte/armyknife/compare/v0.1.767...v0.1.768) (2026-11-17)
 
 
