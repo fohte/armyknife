@@ -50,6 +50,11 @@ export const TheSessionShowsItsActiveTool: Story = {
   },
 }
 
+export const TheWorkingStatusHasNoInlineDetail: Story = {
+  name: 'The working row keeps its chevron at the right edge without an active tool',
+  args: { state: state('working', null) },
+}
+
 export const TheMobileStatusRowUsesTheCompactHeight: Story = {
   name: 'The mobile status row fits within forty-four pixels',
   args: {

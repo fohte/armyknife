@@ -76,6 +76,7 @@ export function ConversationStatusBand({
     state.kind === 'waiting' && detail == null && backgroundTasks.length > 0
       ? `Background tasks (${String(backgroundTasks.length)})`
       : detail
+  const hasInlineDetail = inlineDetail != null && inlineDetail !== ''
   const isCardReturn = state.kind === 'question' || state.kind === 'permission'
 
   if (isReview) {
@@ -142,21 +143,17 @@ export function ConversationStatusBand({
     >
       <span className="conversation-status-band-dot" aria-hidden="true" />
       <strong className="conversation-status-band-label">{title}</strong>
-      {inlineDetail == null || inlineDetail === '' ? null : (
-        <>
-          <span
-            className="conversation-status-band-separator"
-            aria-hidden="true"
-          >
-            ·
-          </span>
-          <span
-            className={`conversation-status-band-inline-detail${state.kind === 'working' || state.kind === 'permission' ? ' is-monospace' : ''}`}
-          >
-            {inlineDetail}
-          </span>
-        </>
-      )}
+      {hasInlineDetail ? (
+        <span className="conversation-status-band-separator" aria-hidden="true">
+          ·
+        </span>
+      ) : null}
+      <span
+        className={`conversation-status-band-inline-detail${state.kind === 'working' || state.kind === 'permission' ? ' is-monospace' : ''}`}
+        aria-hidden={hasInlineDetail ? undefined : true}
+      >
+        {hasInlineDetail ? inlineDetail : null}
+      </span>
       <span className="conversation-status-band-chevron" aria-hidden="true">
         {isCardReturn ? '↑' : isExpanded ? '▾' : '›'}
       </span>
