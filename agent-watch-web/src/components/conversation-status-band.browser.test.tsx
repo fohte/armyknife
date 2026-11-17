@@ -84,6 +84,91 @@ it('expands to every background task when the compact row is pressed', async () 
 
 it.each([
   {
+    name: 'collapsed',
+    state: { kind: 'working', detail: null } as const,
+    defaultExpanded: false,
+    chevron: '›',
+  },
+  {
+    name: 'expanded',
+    state: { kind: 'working', detail: null } as const,
+    defaultExpanded: true,
+    chevron: '▾',
+  },
+  {
+    name: 'card shortcut',
+    state: { kind: 'question', detail: null } as const,
+    defaultExpanded: false,
+    chevron: '↑',
+  },
+])(
+  'aligns the empty-detail $name status row at both edges',
+  ({ state, defaultExpanded, chevron }) => {
+    container.style.width = '760px'
+    root = createRoot(container)
+    act(() => {
+      root?.render(
+        <ConversationStatusBand
+          state={state}
+          elapsedSeconds={6}
+          activeTool={undefined}
+          backgroundTasks={[]}
+          defaultExpanded={defaultExpanded}
+        />,
+      )
+    })
+
+    const toggle = container.querySelector<HTMLButtonElement>(
+      '.conversation-status-band-toggle',
+    )
+    const dot = container.querySelector<HTMLElement>(
+      '.conversation-status-band-dot',
+    )
+    const label = container.querySelector<HTMLElement>(
+      '.conversation-status-band-label',
+    )
+    const arrow = container.querySelector<HTMLElement>(
+      '.conversation-status-band-chevron',
+    )
+    if (toggle === null || dot === null || label === null || arrow === null) {
+      throw new Error('The status row was not rendered')
+    }
+
+    const getAlignment = () => {
+      const toggleRect = toggle.getBoundingClientRect()
+      const dotRect = dot.getBoundingClientRect()
+      const labelRect = label.getBoundingClientRect()
+      const arrowRect = arrow.getBoundingClientRect()
+      const style = getComputedStyle(toggle)
+
+      return {
+        dotStartsAtContentEdge:
+          Math.abs(
+            dotRect.left -
+              toggleRect.left -
+              Number.parseFloat(style.paddingLeft),
+          ) < 1,
+        labelFollowsDot: labelRect.left >= dotRect.right,
+        chevronAtContentEnd:
+          Math.abs(
+            toggleRect.right -
+              Number.parseFloat(style.paddingRight) -
+              arrowRect.right,
+          ) < 1,
+        chevron: arrow.textContent,
+      }
+    }
+    expect(getAlignment()).toEqual({
+      dotStartsAtContentEdge: true,
+      labelFollowsDot: true,
+      chevronAtContentEnd: true,
+      chevron,
+    })
+  },
+)
+
+it.each([
+  {
     kind: 'working' as const,
     state: { kind: 'working', detail: null } as const,
     activeTool: {
