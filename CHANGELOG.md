@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.768](https://github.com/fohte/armyknife/compare/v0.1.767...v0.1.768) (2026-11-17)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show narration and thinking ([#1919](https://github.com/fohte/armyknife/issues/1919)) ([ae973ac](https://github.com/fohte/armyknife/commit/ae973ac76c3c411cfed13c2dc765cc793a32f2d0))
+
 ## [0.1.767](https://github.com/fohte/armyknife/compare/v0.1.766...v0.1.767) (2026-11-17)
 
 
