@@ -458,6 +458,30 @@ it('does not show Show in Board on task result rows', () => {
   expect(getActual()).toEqual({ subtitle: 'P1 · 1 session', detail: undefined })
 })
 
+it('keeps Show in Board on project result rows', () => {
+  renderPalette({ initialQuery: '@notification' })
+
+  const getActual = () =>
+    Array.from(container.querySelectorAll('.command-palette-item')).map(
+      (item) => ({
+        icon: item.querySelector('.command-palette-status')?.textContent,
+        title: item.querySelector('.command-palette-item-heading strong')
+          ?.textContent,
+        subtitle: item.querySelector('.command-palette-item-subtitle')
+          ?.textContent,
+        detail: item.querySelector('.command-palette-item-detail')?.textContent,
+      }),
+    )
+  expect(getActual()).toEqual([
+    {
+      icon: '▤',
+      title: 'notification refresh',
+      subtitle: '1 sessions · 1 need action · example/web-app',
+      detail: 'Show in Board',
+    },
+  ])
+})
+
 it.each([
   [
     'results',

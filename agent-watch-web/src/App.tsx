@@ -817,6 +817,7 @@ function AppContent() {
           }}
           recentSessionIds={recentSessionIds}
           sessions={sessionsWithElapsedTime}
+          workTypeNavLabels={workTypeNavLabels}
           pendingFocusSessionId={pendingFocusSessionId}
         />
       ) : null}

@@ -49,17 +49,12 @@ export function itemSubtitle(item: PaletteItem) {
   }
 }
 
-function aggregateSubtitle(
-  sessions: readonly Session[],
-  priority?: number | null,
-) {
+function aggregateSubtitle(sessions: readonly Session[]) {
   const needsActionCount = sessions.filter(
     (session) => session.category === 'needs_action',
   ).length
   const repos = Array.from(new Set(sessions.map((session) => session.repo)))
-  const priorityLabel =
-    priority === undefined ? '' : `P${String(priority ?? '—')} · `
-  return `${priorityLabel}${String(sessions.length)} sessions · ${String(needsActionCount)} need action · ${repos.join(', ')}`
+  return `${String(sessions.length)} sessions · ${String(needsActionCount)} need action · ${repos.join(', ')}`
 }
 
 export function itemDetail(item: PaletteItem) {

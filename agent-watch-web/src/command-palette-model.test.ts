@@ -115,6 +115,7 @@ it('shows needs-action and recent sessions without special starred or work-type 
   const actionA = session('action-a', 'Action A', 'needs_action', null, 'alpha')
   const actionB = session('action-b', 'Action B', 'needs_action', null, 'beta')
   const actionC = session('action-c', 'Action C', 'needs_action', null, 'gamma')
+  const actionD = session('action-d', 'Action D', 'needs_action', null, 'omega')
   const recent = session(
     'recent',
     'Recent session',
@@ -125,10 +126,10 @@ it('shows needs-action and recent sessions without special starred or work-type 
 
   expect(
     buildCommandPaletteGroups(
-      [starred, pm, actionA, actionB, actionC, recent],
+      [starred, pm, actionA, actionB, actionC, actionD, recent],
       '',
       'all',
-      ['pm-session', 'starred', 'recent', 'action-a'],
+      ['pm-session', 'starred', 'action-d', 'recent', 'action-a'],
     ),
   ).toEqual([
     {
@@ -141,7 +142,10 @@ it('shows needs-action and recent sessions without special starred or work-type 
     },
     {
       heading: 'RECENT',
-      items: [{ type: 'session', id: 'recent', session: recent }],
+      items: [
+        { type: 'session', id: 'action-d', session: actionD },
+        { type: 'session', id: 'recent', session: recent },
+      ],
     },
     {
       heading: 'COMMANDS',
@@ -176,16 +180,29 @@ it('finds starred and work-type sessions in search results', () => {
   }
   const workType = {
     ...session('work-type', 'Review delivery', 'in_progress', null, 'beta'),
-    workType: 'PM',
+    workType: 'project-management',
   }
 
   const results = ['Starred', 'PM'].map((query) =>
-    buildCommandPaletteGroups([starred, workType], query, 'all', []).map(
-      (group) => group.items.map((item) => item.id),
-    ),
+    buildCommandPaletteGroups([starred, workType], query, 'all', [], {
+      'project-management': 'PM',
+    }),
   )
 
-  expect(results).toEqual([[['starred']], [['work-type']]])
+  expect(results).toEqual([
+    [
+      {
+        heading: 'SESSIONS',
+        items: [{ type: 'session', id: 'starred', session: starred }],
+      },
+    ],
+    [
+      {
+        heading: 'SESSIONS',
+        items: [{ type: 'session', id: 'work-type', session: workType }],
+      },
+    ],
+  ])
 })
 
 it('matches text and scopes task results from a leading prefix', () => {

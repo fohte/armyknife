@@ -177,7 +177,11 @@ function baseCommands(): PaletteCommandItem[] {
   ]
 }
 
-function itemMatches(query: string, item: PaletteItem) {
+function itemMatches(
+  query: string,
+  item: PaletteItem,
+  workTypeNavLabels: Readonly<Record<string, string>> = {},
+) {
   switch (item.type) {
     case 'session':
       return matches(
@@ -185,6 +189,9 @@ function itemMatches(query: string, item: PaletteItem) {
         item.session.title,
         item.session.kind,
         item.session.workType,
+        typeof item.session.workType === 'string'
+          ? workTypeNavLabels[item.session.workType]
+          : undefined,
         item.session.task?.title,
         item.session.task === null
           ? null
@@ -217,6 +224,7 @@ export function buildCommandPaletteGroups(
   input: string,
   selectedScope: PaletteScope,
   recentSessionIds: readonly string[],
+  workTypeNavLabels: Readonly<Record<string, string>> = {},
 ): PaletteGroup[] {
   const { scope, query } = resolveScope(input, selectedScope)
   const tasks = taskItems(sessions)
@@ -236,9 +244,12 @@ export function buildCommandPaletteGroups(
       .filter((session) => session.category === 'needs_action')
       .slice(0, 3)
       .map(sessionItem)
+    const displayedSessionIds = new Set(
+      needsAction.map((session) => session.id),
+    )
     const recentSessions = recentSessionIds.flatMap((id) => {
       const session = sessionsById.get(id)
-      return session === undefined || session.category === 'needs_action'
+      return session === undefined || displayedSessionIds.has(id)
         ? []
         : [sessionItem(session)]
     })
@@ -255,7 +266,11 @@ export function buildCommandPaletteGroups(
 
   const sessionItems = sessions
     .filter((session) =>
-      itemMatches(query, { type: 'session', id: session.id, session }),
+      itemMatches(
+        query,
+        { type: 'session', id: session.id, session },
+        workTypeNavLabels,
+      ),
     )
     .map((session) => ({ type: 'session' as const, id: session.id, session }))
   const candidates: Array<[PaletteScope, string, PaletteItem[]]> = [
@@ -266,7 +281,9 @@ export function buildCommandPaletteGroups(
   ]
   return candidates.flatMap(([candidateScope, heading, items]) => {
     if (scope !== 'all' && scope !== candidateScope) return []
-    const filtered = items.filter((item) => itemMatches(query, item))
+    const filtered = items.filter((item) =>
+      itemMatches(query, item, workTypeNavLabels),
+    )
     return filtered.length === 0 ? [] : [{ heading, items: filtered }]
   })
 }
