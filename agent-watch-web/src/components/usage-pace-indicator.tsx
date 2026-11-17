@@ -4,8 +4,8 @@ import { getUsageLandingEstimate, type RateLimitWindow } from '#agent-usage'
 
 const statusLabels = {
   'on-pace': 'On pace',
-  warning: 'Approaching limit',
-  danger: 'Likely to exceed limit',
+  warning: 'At or above quota pace',
+  danger: 'Well above quota pace',
 } as const
 
 const statusMarks = {

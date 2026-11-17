@@ -36,11 +36,11 @@ export const OnPace: Story = {
   name: 'Usage is projected to stay below the quota',
 }
 
-export const ApproachingLimit: Story = {
-  name: 'Usage is projected to approach the quota',
+export const AboveQuotaPace: Story = {
+  name: 'Usage is projected slightly above the quota',
   args: {
     window: {
-      usedPercentage: 70,
+      usedPercentage: 55,
       resetsAt: nowSeconds + 9_000,
       windowSeconds: 18_000,
     },
