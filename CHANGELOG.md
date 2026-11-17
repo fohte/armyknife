@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.763](https://github.com/fohte/armyknife/compare/v0.1.762...v0.1.763) (2026-11-17)
+
+
+### Bug Fixes
+
+* **watch-web:** suggest skills in new sessions ([#1911](https://github.com/fohte/armyknife/issues/1911)) ([216c2d4](https://github.com/fohte/armyknife/commit/216c2d41b8d444ba14a68005235452aa1ad9c833))
+
 ## [0.1.762](https://github.com/fohte/armyknife/compare/v0.1.761...v0.1.762) (2026-11-17)
 
 
