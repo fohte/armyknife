@@ -65,24 +65,17 @@ function snapshot() {
   }
 }
 
-function moreButtonSnapshot(more: HTMLButtonElement | null) {
-  return {
-    type: more?.type,
-    text: more?.textContent,
-    buttonCount: container.querySelectorAll('.board-more').length,
-    cardCount: container.querySelectorAll('.board-card').length,
-    groupLabel: container
-      .querySelector('.board-group.in-progress')
-      ?.getAttribute('aria-label'),
-    groupHeading: container.querySelector('.board-group.in-progress h3')
-      ?.textContent,
-  }
-}
+function overflowSummarySnapshot() {
+  const more = container.querySelector<HTMLElement>('.board-more')
 
-function clickOverflowSnapshot(more: HTMLButtonElement | null) {
-  const before = moreButtonSnapshot(more)
-  act(() => more?.click())
-  return { before, after: moreButtonSnapshot(more) }
+  return {
+    tagName: more?.tagName,
+    text: more?.textContent,
+    role: more?.getAttribute('role'),
+    tabIndex: more?.tabIndex,
+    buttonCount: container.querySelectorAll('button.board-more').length,
+    cardCount: container.querySelectorAll('.board-card').length,
+  }
 }
 
 function quietToggleSnapshot(
@@ -156,7 +149,7 @@ it('shows the first completed session when no Done session is paused', () => {
   })
 })
 
-it('renders the overflow summary as a button without expanding sessions', () => {
+it('renders the overflow summary as non-interactive text', () => {
   renderBoard(
     Array.from({ length: 4 }, (_, index) => ({
       ...completedSession,
@@ -165,25 +158,13 @@ it('renders the overflow summary as a button without expanding sessions', () => 
     })),
   )
 
-  const more = container.querySelector<HTMLButtonElement>('.board-more')
-
-  expect(clickOverflowSnapshot(more)).toEqual({
-    before: {
-      type: 'button',
-      text: '1 more',
-      buttonCount: 1,
-      cardCount: 3,
-      groupLabel: 'In progress (4)',
-      groupHeading: 'In progress',
-    },
-    after: {
-      type: 'button',
-      text: '1 more',
-      buttonCount: 1,
-      cardCount: 3,
-      groupLabel: 'In progress (4)',
-      groupHeading: 'In progress',
-    },
+  expect(overflowSummarySnapshot()).toEqual({
+    tagName: 'SPAN',
+    text: '1 more',
+    role: null,
+    tabIndex: -1,
+    buttonCount: 0,
+    cardCount: 3,
   })
 })
 

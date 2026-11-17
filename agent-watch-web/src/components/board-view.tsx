@@ -132,9 +132,9 @@ function ProjectColumn({
                 />
               ))}
               {sessions.length > visibleSessions.length ? (
-                <button className="board-more" type="button">
+                <span className="board-more">
                   {sessions.length - visibleSessions.length} more
-                </button>
+                </span>
               ) : null}
             </div>
           </section>

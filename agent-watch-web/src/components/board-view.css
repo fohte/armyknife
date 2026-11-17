@@ -225,7 +225,6 @@
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
-  cursor: pointer;
 }
 
 .board-done-summary {
