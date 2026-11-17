@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.1.775](https://github.com/fohte/armyknife/compare/v0.1.774...v0.1.775) (2026-11-17)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** match conversation screens ([#1935](https://github.com/fohte/armyknife/issues/1935)) ([5ecc859](https://github.com/fohte/armyknife/commit/5ecc8595712f77b5fd9a0a0b6ab71bf32f4f9af1))
+
+## [0.1.774](https://github.com/fohte/armyknife/compare/v0.1.773...v0.1.774) (2026-11-17)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** match palette to screens ([#1932](https://github.com/fohte/armyknife/issues/1932)) ([2c0bdda](https://github.com/fohte/armyknife/commit/2c0bddaa99ba015d58809aeafdecc16dd649e68f))
+
+## [0.1.773](https://github.com/fohte/armyknife/compare/v0.1.772...v0.1.773) (2026-11-17)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align nav and quota layout ([#1930](https://github.com/fohte/armyknife/issues/1930)) ([668e801](https://github.com/fohte/armyknife/commit/668e801c66b53349b9d34ba9c2bf8d0444e6e9a8))
+
+## [0.1.772](https://github.com/fohte/armyknife/compare/v0.1.771...v0.1.772) (2026-11-17)
+
+
+### Bug Fixes
+
+* **process:** ignore histdb sqlite3 in worktrees ([#1928](https://github.com/fohte/armyknife/issues/1928)) ([d0d1cd6](https://github.com/fohte/armyknife/commit/d0d1cd6299006beb27469c3e284b61ef0c36b591))
+
 ## [0.1.771](https://github.com/fohte/armyknife/compare/v0.1.770...v0.1.771) (2026-11-17)
 
 

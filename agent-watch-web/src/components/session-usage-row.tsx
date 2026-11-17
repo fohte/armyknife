@@ -32,12 +32,20 @@ function UsageRate({
   return (
     <span
       aria-label={description}
-      className={`session-usage-rate${severity === 'normal' ? '' : ` is-${severity}`}`}
+      className={`session-usage-rate${
+        label === '5h' ? ' session-usage-rate-five-hour' : ''
+      }`}
       role="group"
       title={description}
     >
-      <span aria-hidden="true" className="session-usage-rate-current">
-        {label} {String(usedPercentage)}%
+      <span
+        aria-hidden="true"
+        className={`session-usage-rate-current is-${severity}`}
+      >
+        <span className="session-usage-rate-label">{label}</span>
+        <span className="session-usage-rate-percentage">
+          {String(usedPercentage)}%
+        </span>
       </span>
       <UsagePaceIndicator
         decorative

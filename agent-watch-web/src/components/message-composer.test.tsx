@@ -152,6 +152,28 @@ it('disables message sending while attachments are being prepared', () => {
   })
 })
 
+it('keeps an empty draft unsendable while enabling a nonempty draft', () => {
+  renderFreshComposer({})
+
+  const sendButton = requireElement(
+    container.querySelector<HTMLButtonElement>('[aria-label="Send message"]'),
+  )
+  const emptyDraftDisabled = sendButton.disabled
+  setTextareaValue(
+    requireElement(container.querySelector<HTMLTextAreaElement>('textarea')),
+    'A sample message',
+  )
+
+  const snapshot = () => ({
+    emptyDraftDisabled,
+    nonemptyDraftDisabled: sendButton.disabled,
+  })
+  expect(snapshot()).toEqual({
+    emptyDraftDisabled: true,
+    nonemptyDraftDisabled: false,
+  })
+})
+
 it('shows desktop and mobile interrupt progress while the request is pending', () => {
   const onInterrupt = vi.fn()
   renderFreshComposer({ canInterrupt: true, isInterrupting: true, onInterrupt })

@@ -40,12 +40,12 @@ type CommandPaletteProps = {
   onRunCommand: (command: Extract<PaletteItem, { type: 'command' }>) => void
 }
 
-const SCOPES: Array<{ key: PaletteScope; label: string; marker?: string }> = [
+const SCOPES: Array<{ key: PaletteScope; label: string }> = [
   { key: 'all', label: 'All' },
   { key: 'sessions', label: 'Sessions' },
-  { key: 'tasks', label: 'tq tasks', marker: '#' },
-  { key: 'projects', label: 'Projects', marker: '@' },
-  { key: 'commands', label: 'Commands', marker: '>' },
+  { key: 'tasks', label: 'tq tasks' },
+  { key: 'projects', label: 'Projects' },
+  { key: 'commands', label: 'Commands' },
 ]
 
 export function CommandPalette({
@@ -334,7 +334,6 @@ export function CommandPalette({
               type="button"
             >
               {item.label}
-              {item.marker !== undefined ? <kbd>{item.marker}</kbd> : null}
             </button>
           ))}
         </div>
@@ -440,13 +439,17 @@ export function CommandPalette({
                             <span className="command-palette-item-heading">
                               <strong>{itemResultTitle(item)}</strong>
                             </span>
-                            <span className="command-palette-item-subtitle">
-                              {itemSubtitle(item)}
+                            {itemSubtitle(item).length > 0 ? (
+                              <span className="command-palette-item-subtitle">
+                                {itemSubtitle(item)}
+                              </span>
+                            ) : null}
+                          </span>
+                          {itemDetail(item).length > 0 ? (
+                            <span className="command-palette-item-detail is-monospace">
+                              {itemDetail(item)}
                             </span>
-                          </span>
-                          <span className="command-palette-item-detail is-monospace">
-                            {itemDetail(item)}
-                          </span>
+                          ) : null}
                         </>
                       )}
                     </button>

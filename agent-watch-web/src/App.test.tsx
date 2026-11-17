@@ -403,7 +403,7 @@ it('omits the work type list when no display labels are configured', () => {
   expect(container.querySelectorAll('.work-type-nav')).toHaveLength(0)
 })
 
-it('shows configured work-type sessions in the empty command palette', () => {
+it('shows configured work-type sessions within the needs-action group', () => {
   setPlatform('MacIntel')
   renderApp()
   publishSessions({
@@ -429,18 +429,18 @@ it('shows configured work-type sessions in the empty command palette', () => {
   const groups = Array.from(
     container.querySelectorAll('.command-palette-group'),
   )
-  const workTypeGroup = groups.find(
-    (group) => group.querySelector('h2')?.textContent === 'PM',
+  const needsActionGroup = groups.find(
+    (group) => group.querySelector('h2')?.textContent === 'NEEDS ACTION',
   )
   const snapshot = () => ({
     headings: groups.map((group) => group.querySelector('h2')?.textContent),
-    sessionTitle: workTypeGroup?.querySelector(
+    sessionTitle: needsActionGroup?.querySelector(
       '.command-palette-item .session-title',
     )?.textContent,
   })
 
   expect(snapshot()).toEqual({
-    headings: ['PM', 'COMMANDS'],
+    headings: ['NEEDS ACTION', 'COMMANDS'],
     sessionTitle: 'Coordinate a project',
   })
 })

@@ -192,6 +192,36 @@ export const SavedViewsShowCountsAndStatusColors: Story = {
   },
 }
 
+export const NavigationMatchesTheScreenDesign: Story = {
+  name: 'The navigation places views, recent sessions, and PM below the brand row',
+  args: {
+    savedViews: [
+      {
+        id: 'reviews',
+        name: 'Example reviews',
+        query: 'kind:review',
+        count: 2,
+        countTone: 'needs-action',
+      },
+    ],
+    sessions: [
+      {
+        ...todaySessionInProgress,
+        id: 'recent-session',
+        title: 'Review a sample change',
+        lastPromptedAt: '2026-01-01T11:00:00.000Z',
+      },
+    ],
+  },
+  decorators: [
+    (StoryComponent) => (
+      <div style={{ width: '240px', height: '900px' }}>
+        <StoryComponent />
+      </div>
+    ),
+  ],
+}
+
 export const AViewIsSelected: Story = {
   name: 'The selected saved view is highlighted in the navigation',
   args: {

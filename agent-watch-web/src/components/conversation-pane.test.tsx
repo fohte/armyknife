@@ -4046,7 +4046,7 @@ it('accepts classified messages and the active tool from messages endpoint', asy
     peerFile: 'fixture-peer-layout.html',
     event: [{ text: 'A fictional event was blocked.', failed: 'true' }],
     backgroundTasks: 'Background tasks (1) ▾',
-    headerRunningCount: '1',
+    headerRunningCount: undefined,
   })
 })
 
@@ -4913,7 +4913,7 @@ it('omits the paused badge from the mobile conversation header', () => {
   })
 })
 
-it('shows only the task and full repository in the mobile context row', () => {
+it('shows only the task and short repository name in the mobile context row', () => {
   const task = {
     id: 'example-open-task',
     number: 2048,
@@ -4957,7 +4957,7 @@ it('shows only the task and full repository in the mobile context row', () => {
 
   expect(snapshot()).toEqual({
     task: 'P1 #2048 Improve request reliability across several delivery paths',
-    repo: 'example/long-running-service-name',
+    repo: 'long-running-service-name',
     disclosure: undefined,
     taskTextOverflow: 'ellipsis',
     repoFlexShrink: '0',
@@ -4965,7 +4965,29 @@ it('shows only the task and full repository in the mobile context row', () => {
   })
 })
 
-it('offers the status panel from the mobile header and shows running task count', () => {
+it.each([
+  { layout: 'desktop', isMobile: false, expected: true },
+  { layout: 'mobile', isMobile: true, expected: false },
+])(
+  'shows the conversation divider in the $layout pane as designed',
+  ({ isMobile, expected }) => {
+    renderView(
+      vi.fn().mockResolvedValue(true),
+      session,
+      undefined,
+      [],
+      actions,
+      isMobile,
+    )
+
+    const snapshot = () => ({
+      visible: container.querySelector('.conversation-timeline') !== null,
+    })
+    expect(snapshot()).toEqual({ visible: expected })
+  },
+)
+
+it('offers the status panel from the mobile header without a task count', () => {
   const onToggleStatusPanel = vi.fn<() => void>()
   renderView(
     vi.fn(() => Promise.resolve(true)),
@@ -5007,7 +5029,7 @@ it('offers the status panel from the mobile header and shows running task count'
   expect(snapshot()).toEqual({
     expanded: 'false',
     controls: 'session-status-panel',
-    count: '1',
+    count: undefined,
     calls: [[]],
   })
 })

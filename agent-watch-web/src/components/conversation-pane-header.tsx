@@ -131,6 +131,7 @@ export function ConversationPaneHeader({
         operation.number === mergeOperation.number,
     )
   const linkedTasks = getSessionTasks(session)
+  const mobileRepoName = session.repo.split('/').at(-1) ?? session.repo
 
   const confirmMerge = async () => {
     if (mergeOperation === null || merging) return
@@ -289,11 +290,6 @@ export function ConversationPaneHeader({
               ) : (
                 <PanelRightOpen aria-hidden="true" size={18} />
               )}
-              {backgroundTasks.length > 0 ? (
-                <span className="conversation-status-panel-count">
-                  {backgroundTasks.length}
-                </span>
-              ) : null}
             </Button>
             <MobileConversationActionsMenu
               sessionId={session.id}
@@ -319,7 +315,7 @@ export function ConversationPaneHeader({
               onMakePrimary={(taskId) => onAction('primary-task', { taskId })}
             />
             {session.task ? <span aria-hidden="true">·</span> : null}
-            <span className="mobile-conversation-repo">{session.repo}</span>
+            <span className="mobile-conversation-repo">{mobileRepoName}</span>
           </div>
         </>
       ) : (
