@@ -16,33 +16,48 @@
   border-top-color: var(--aw-color-warning);
 }
 
-.conversation-status-band-main {
+.conversation-status-band--compact {
+  display: block;
+  flex-shrink: 0;
+  padding: 0;
+}
+
+.conversation-status-band-compact-main {
   display: flex;
   min-width: 0;
-  flex: 1;
   align-items: center;
-  gap: 12px;
 }
 
-.conversation-status-band-copy {
-  display: grid;
-  min-width: 0;
-  flex: 1;
-  gap: 1px;
-}
-
-.conversation-status-band-title {
+.conversation-status-band-toggle[data-slot='button'] {
   display: flex;
+  width: 100%;
   min-width: 0;
+  min-height: 31px;
+  box-sizing: border-box;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  padding: 0 max(24px, calc((100% - 712px) / 2));
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--aw-text-primary);
+  font: inherit;
+  text-align: left;
   white-space: nowrap;
 }
 
-.conversation-status-band-title strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
+.conversation-status-band-compact-main
+  .conversation-status-band-toggle[data-slot='button'] {
+  width: auto;
+  flex: 1;
+}
+
+.conversation-status-band-compact-main .conversation-status-band-tasks {
+  margin-right: max(24px, calc((100% - 712px) / 2));
+}
+
+.conversation-status-band-toggle[data-slot='button']:hover {
+  background: color-mix(in srgb, var(--aw-text-primary) 5%, transparent);
 }
 
 .conversation-status-band-dot {
@@ -62,6 +77,81 @@
   background: var(--aw-color-neutral);
 }
 
+.conversation-status-band-label {
+  flex: 0 0 auto;
+  font-size: 13px;
+}
+
+.conversation-status-band-inline-detail {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
+
+.conversation-status-band-inline-detail.is-monospace {
+  font-family: var(--font-mono);
+}
+
+.conversation-status-band-separator,
+.conversation-status-band-chevron {
+  flex: 0 0 auto;
+  color: var(--aw-text-muted);
+}
+
+.conversation-status-band--question .conversation-status-band-toggle,
+.conversation-status-band--permission .conversation-status-band-toggle,
+.conversation-status-band--question .conversation-status-band-inline-detail,
+.conversation-status-band--permission .conversation-status-band-inline-detail,
+.conversation-status-band--question .conversation-status-band-chevron,
+.conversation-status-band--permission .conversation-status-band-chevron {
+  color: var(--aw-color-warning);
+}
+
+.conversation-status-band-expanded {
+  display: grid;
+  gap: 4px;
+  padding: 0 24px 10px max(39px, calc((100% - 712px) / 2 + 15px));
+  color: var(--aw-text-body);
+  font-size: 12px;
+}
+
+.conversation-status-band-expanded p {
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+
+.conversation-status-band--crit-review .conversation-status-band-main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 12px;
+}
+
+.conversation-status-band--crit-review .conversation-status-band-copy {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 1px;
+}
+
+.conversation-status-band--crit-review .conversation-status-band-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.conversation-status-band--crit-review .conversation-status-band-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .conversation-status-band-detail {
   overflow: hidden;
   margin: 0 0 0 15px;
@@ -69,10 +159,6 @@
   font-size: 11.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.conversation-status-band-detail.is-monospace {
-  font-family: var(--font-mono);
 }
 
 .conversation-status-band-review[data-slot='button'] {
@@ -146,7 +232,7 @@
   font-family: var(--font-mono);
 }
 
-.conversation-status-band.is-mobile {
+.conversation-status-band.is-mobile:not(.conversation-status-band--compact) {
   flex-direction: column;
   align-items: stretch;
   gap: 8px;
@@ -157,7 +243,8 @@
   gap: 8px;
 }
 
-.conversation-status-band.is-mobile .conversation-status-band-title {
+.conversation-status-band--crit-review.is-mobile
+  .conversation-status-band-title {
   font-size: 14px;
 }
 
@@ -180,19 +267,53 @@
   font-size: 14px;
 }
 
+.conversation-status-band--compact.is-mobile .conversation-status-band-toggle,
+.conversation-pane[data-mobile='true']
+  .conversation-status-band--compact
+  .conversation-status-band-toggle {
+  min-height: 43px;
+  padding: 0 12px;
+}
+
+.conversation-status-band--compact.is-mobile {
+  min-height: 44px;
+}
+
+.conversation-status-band--compact.is-mobile .conversation-status-band-label,
+.conversation-pane[data-mobile='true']
+  .conversation-status-band--compact
+  .conversation-status-band-label {
+  font-size: 14px;
+}
+
+.conversation-status-band--compact.is-mobile
+  .conversation-status-band-inline-detail,
+.conversation-pane[data-mobile='true']
+  .conversation-status-band--compact
+  .conversation-status-band-inline-detail {
+  font-size: 12.5px;
+}
+
+.conversation-status-band--compact.is-mobile .conversation-status-band-expanded,
+.conversation-pane[data-mobile='true']
+  .conversation-status-band--compact
+  .conversation-status-band-expanded {
+  padding: 0 12px 10px 27px;
+}
+
 @media (max-width: 640px) {
-  .conversation-status-band {
+  .conversation-status-band:not(.conversation-status-band--compact) {
     flex-direction: column;
     align-items: stretch;
     gap: 8px;
     padding: 10px 12px;
   }
 
-  .conversation-status-band-main {
+  .conversation-status-band--crit-review .conversation-status-band-main {
     gap: 8px;
   }
 
-  .conversation-status-band-title {
+  .conversation-status-band--crit-review .conversation-status-band-title {
     font-size: 14px;
   }
 
@@ -209,5 +330,30 @@
     width: 100%;
     min-height: 44px;
     font-size: 14px;
+  }
+
+  .conversation-status-band--compact .conversation-status-band-toggle {
+    min-height: 43px;
+    padding: 0 12px;
+  }
+
+  .conversation-status-band-compact-main .conversation-status-band-tasks {
+    margin-right: 12px;
+  }
+
+  .conversation-status-band--compact {
+    min-height: 44px;
+  }
+
+  .conversation-status-band--compact .conversation-status-band-label {
+    font-size: 14px;
+  }
+
+  .conversation-status-band--compact .conversation-status-band-inline-detail {
+    font-size: 12.5px;
+  }
+
+  .conversation-status-band--compact .conversation-status-band-expanded {
+    padding: 0 12px 10px 27px;
   }
 }

@@ -27,48 +27,94 @@ const state = (
   detail: string | null,
 ): ConversationStatusBandState => ({ kind, detail })
 
+const backgroundTasks = [
+  {
+    id: 'fixture-background-task-one',
+    description: 'Rebuild the sample index',
+    elapsedSeconds: 128,
+    kind: 'background_task' as const,
+  },
+  {
+    id: 'fixture-background-task-two',
+    description: 'Check the sample bundle',
+    elapsedSeconds: 62,
+    kind: 'background_task' as const,
+  },
+]
+
 export const TheSessionShowsItsActiveTool: Story = {
-  name: 'The session shows an active tool and elapsed time',
+  name: 'The session shows its active tool in one line',
   args: {
     state: state('working', null),
-    activeTool: { tool: 'exec', target: 'cargo test --package sample' },
+    activeTool: { tool: 'exec', target: 'cargo test --package fictional' },
+  },
+}
+
+export const TheMobileStatusRowUsesTheCompactHeight: Story = {
+  name: 'The mobile status row fits within forty-four pixels',
+  args: {
+    state: state('waiting', 'Waiting for the sample check'),
+    isMobile: true,
+  },
+  decorators: [
+    (Story) => (
+      <div style={{ width: '390px' }}>
+        <Story />
+      </div>
+    ),
+  ],
+}
+
+export const TheActiveToolDetailsAreExpanded: Story = {
+  name: 'The active tool details are expanded',
+  args: {
+    state: state('working', null),
+    activeTool: { tool: 'exec', target: 'cargo test --package fictional' },
+    defaultExpanded: true,
   },
 }
 
 export const TheConversationIsBeingSummarized: Story = {
-  name: 'The conversation is being summarized',
+  name: 'The conversation is being summarized in one line',
   args: { state: state('compacting', null) },
 }
 
+export const TheCompactingDetailsAreExpanded: Story = {
+  name: 'The summary details are expanded',
+  args: { state: state('compacting', null), defaultExpanded: true },
+}
+
 export const BackgroundTasksAreRunning: Story = {
-  name: 'The session is waiting for background tasks',
+  name: 'Background tasks are summarized in one line',
   args: {
-    state: state('background-tasks', 'Check the sample build'),
-    backgroundTasks: [
-      {
-        id: 'fixture-background-task-one',
-        description: 'Check the sample build',
-        elapsedSeconds: 128,
-        kind: 'background_task',
-      },
-    ],
+    state: state('background-tasks', 'Rebuild the sample index'),
+    backgroundTasks,
+  },
+}
+
+export const AllBackgroundTaskDetailsAreExpanded: Story = {
+  name: 'The expanded status shows every background task',
+  args: {
+    state: state('background-tasks', 'Rebuild the sample index'),
+    backgroundTasks,
+    defaultExpanded: true,
   },
 }
 
 export const CritReviewIsWaiting: Story = {
   name: 'The session is waiting for a Crit review',
-  args: { state: state('crit-review', 'crit · PR #742') },
+  args: { state: state('crit-review', 'crit · PR #318') },
 }
 
 export const CritReviewButtonFillsTheMobileWidth: Story = {
   name: 'The mobile review button fills the available width',
   args: {
-    state: state('crit-review', 'crit · PR #742'),
+    state: state('crit-review', 'crit · PR #318'),
     isMobile: true,
   },
   decorators: [
     (Story) => (
-      <div style={{ width: '375px' }}>
+      <div style={{ width: '390px' }}>
         <Story />
       </div>
     ),
@@ -76,31 +122,72 @@ export const CritReviewButtonFillsTheMobileWidth: Story = {
 }
 
 export const CritReviewAndBackgroundTasksAreWaiting: Story = {
-  name: 'The Crit review is available while background tasks continue',
+  name: 'The Crit review stays available while background tasks run',
   args: {
-    state: state('crit-review', 'crit · PR #742'),
-    backgroundTasks: [
-      {
-        id: 'fixture-background-task-two',
-        description: 'Check the sample build',
-        elapsedSeconds: 128,
-        kind: 'background_task',
-      },
-    ],
+    state: state('crit-review', 'crit · PR #318'),
+    backgroundTasks,
+  },
+}
+
+export const AllCritBackgroundTasksAreExpanded: Story = {
+  name: 'The Crit review shows every background task',
+  args: {
+    state: state('crit-review', 'crit · PR #318'),
+    backgroundTasks,
+    defaultBackgroundTasksExpanded: true,
   },
 }
 
 export const AQuestionNeedsAnAnswer: Story = {
-  name: 'The session is waiting for an answer to its question',
-  args: { state: state('question', 'Which sample should be selected?') },
+  name: 'The question row points back to its conversation card',
+  args: { state: state('question', 'Which retry interval should be used?') },
+}
+
+export const AQuestionShowsBackgroundTasks: Story = {
+  name: 'The question row shows its background tasks on mobile',
+  args: {
+    state: state('question', 'Which retry interval should be used?'),
+    backgroundTasks,
+    defaultBackgroundTasksExpanded: true,
+    isMobile: true,
+  },
+  decorators: [
+    (Story) => (
+      <div style={{ width: '390px' }}>
+        <Story />
+      </div>
+    ),
+  ],
 }
 
 export const APermissionNeedsApproval: Story = {
-  name: 'The session is waiting for permission approval',
-  args: { state: state('permission', 'Bash  pnpm run validate') },
+  name: 'The permission row points back to its conversation card',
+  args: { state: state('permission', 'Bash  cargo run --package fictional') },
+}
+
+export const APermissionShowsBackgroundTasks: Story = {
+  name: 'The permission row shows its background tasks',
+  args: {
+    state: state('permission', 'Bash  cargo run --package fictional'),
+    backgroundTasks,
+    defaultBackgroundTasksExpanded: true,
+  },
 }
 
 export const TheSessionIsWaitingForExternalWork: Story = {
-  name: 'The session explains which external work it is waiting for',
-  args: { state: state('waiting', 'Waiting for a sample check') },
+  name: 'The external work reason is summarized in one line',
+  args: { state: state('waiting', 'Waiting for the sample check') },
+}
+
+export const TheWaitingReasonIsExpanded: Story = {
+  name: 'The full external work reason is expanded',
+  args: {
+    state: state('waiting', 'Waiting for the sample check to finish'),
+    defaultExpanded: true,
+  },
+}
+
+export const IdleSessionsHaveNoBand: Story = {
+  name: 'The idle session has no status band',
+  args: { state: null },
 }

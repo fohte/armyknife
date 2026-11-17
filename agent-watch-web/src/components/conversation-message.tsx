@@ -198,6 +198,7 @@ export function renderConversationMessage({
           ? {}
           : { requestId: message.requestId })}
         questions={message.questions}
+        cancelled={message.cancelled === true}
         canAnswer={canAnswer}
         isMobile={isMobile}
         showTerminalFallback={unanswered && actionsReady && !canAnswer}

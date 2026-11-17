@@ -35,6 +35,7 @@ const appTestFiles = [
   'src/components/command-palette.test.tsx',
   'src/components/board-view.test.tsx',
   'src/components/conversation-pane.test.tsx',
+  'src/components/conversation-status-band.browser.test.tsx',
   'src/components/conversation-pane-header.test.tsx',
   'src/components/conversation-selection-reply.test.tsx',
   'src/components/user-with-content.browser.test.tsx',
