@@ -26,6 +26,7 @@ type ToolSummaryProps = {
   items?: readonly ToolGroupItem[]
   children?: ReactNode
   open?: boolean
+  openThoughts?: boolean
   showOperationStatus?: boolean
 }
 
@@ -109,12 +110,21 @@ function getFileName(target: string): string {
   return fileName === undefined || fileName === '' ? target : fileName
 }
 
+const thoughtCharacterSegmenter = new Intl.Segmenter(undefined, {
+  granularity: 'grapheme',
+})
+
+function countThoughtCharacters(text: string): number {
+  return [...thoughtCharacterSegmenter.segment(text)].length
+}
+
 export function ToolSummary({
   summary,
   operations,
   items,
   children,
   open = false,
+  openThoughts = false,
   showOperationStatus = true,
 }: ToolSummaryProps) {
   const [isOpen, setIsOpen] = useState(open)
@@ -179,14 +189,14 @@ export function ToolSummary({
                 className="chat-tool-thought"
                 key={`thought-${String(index)}`}
               >
-                <details>
+                <details open={openThoughts}>
                   <summary>
                     <span className="chat-tool-name">Thought</span>
                     <span className="chat-tool-thought-preview">
                       {item.text}
                     </span>
                     <span className="chat-tool-thought-length">
-                      {item.text.length} chars
+                      {countThoughtCharacters(item.text)} chars
                     </span>
                   </summary>
                   <p className="chat-tool-thought-full">{item.text}</p>

@@ -218,6 +218,29 @@ it('counts grouped thoughts and tool calls in the expanded heading', () => {
   )
 })
 
+it('omits a thought count when the expanded group only has tool calls', () => {
+  expect(
+    renderToStaticMarkup(
+      <ToolSummary
+        summary="Read ×1"
+        operations={[]}
+        items={[
+          {
+            type: 'tool_use',
+            tool: 'Read',
+            target: 'fixture/source.rs',
+            failed: false,
+          },
+        ]}
+        open
+        showOperationStatus={false}
+      />,
+    ),
+  ).toBe(
+    '<details class="chat-tool-summary" data-has-operations="true" open=""><summary><span class="chat-tool-summary-text">1 tool call</span><span class="chat-tool-summary-collapse">‹ Collapse</span></summary><ul class="chat-tool-operations"><li data-has-target="true" data-failed="false" data-has-status="false"><span class="chat-tool-name">Read</span><code class="chat-tool-target">fixture/source.rs</code></li></ul></details>',
+  )
+})
+
 it('omits empty targets from expanded operation rows', () => {
   const operations = [
     { tool: 'Read', target: null, failed: false },

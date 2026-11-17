@@ -140,8 +140,8 @@ export const ThoughtCountAppearsInTheCollapsedSummary: Story = {
   },
 }
 
-export const ExpandedSummaryShowsThoughtsInSequence: Story = {
-  name: 'The expanded summary keeps thoughts in sequence with tool calls',
+export const ExpandedThoughtRowsShowCharacterCounts: Story = {
+  name: 'The expanded thought rows show character counts with tool calls',
   args: {
     summary: 'Thought ×2 · Edit sample.rs · Read ×1',
     operations: [
@@ -165,6 +165,7 @@ export const ExpandedSummaryShowsThoughtsInSequence: Story = {
       },
     ],
     open: true,
+    openThoughts: true,
   },
 }
 

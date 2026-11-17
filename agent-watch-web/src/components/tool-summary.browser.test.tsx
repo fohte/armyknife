@@ -25,6 +25,8 @@ function getThoughtRowState(
     label: label?.textContent ?? null,
     labelFits: label !== null && label.scrollWidth <= label.clientWidth,
     characterCount: length?.textContent ?? null,
+    characterCountDisplay:
+      length === null ? null : getComputedStyle(length).display,
     previewDisplay: preview === null ? null : getComputedStyle(preview).display,
     fullText: fullText?.textContent ?? null,
     fullTextDisplay:
@@ -47,7 +49,7 @@ afterEach(() => {
 })
 
 it('shows an expanded thought once and keeps its label visible at mobile width', async () => {
-  const thoughtText = 'Review the request.'
+  const thoughtText = 'Review 👩‍💻.'
   root = createRoot(container)
   act(() => {
     root?.render(
@@ -84,7 +86,8 @@ it('shows an expanded thought once and keeps its label visible at mobile width',
     thoughtOpen: true,
     label: 'Thought',
     labelFits: true,
-    characterCount: '19 chars',
+    characterCount: '9 chars',
+    characterCountDisplay: 'block',
     previewDisplay: 'none',
     fullText: thoughtText,
     fullTextDisplay: 'block',
