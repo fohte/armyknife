@@ -57,13 +57,13 @@ export const BackgroundTasksAreRunning: Story = {
 
 export const CritReviewIsWaiting: Story = {
   name: 'The session is waiting for a Crit review',
-  args: { state: state('crit-review', 'Refresh the sample service') },
+  args: { state: state('crit-review', 'crit · PR #742') },
 }
 
 export const CritReviewButtonFillsTheMobileWidth: Story = {
   name: 'The mobile review button fills the available width',
   args: {
-    state: state('crit-review', 'Refresh the sample service'),
+    state: state('crit-review', 'crit · PR #742'),
     isMobile: true,
   },
   decorators: [
@@ -78,7 +78,7 @@ export const CritReviewButtonFillsTheMobileWidth: Story = {
 export const CritReviewAndBackgroundTasksAreWaiting: Story = {
   name: 'The Crit review is available while background tasks continue',
   args: {
-    state: state('crit-review', 'Refresh the sample service'),
+    state: state('crit-review', 'crit · PR #742'),
     backgroundTasks: [
       {
         id: 'fixture-background-task-two',
@@ -97,7 +97,7 @@ export const AQuestionNeedsAnAnswer: Story = {
 
 export const APermissionNeedsApproval: Story = {
   name: 'The session is waiting for permission approval',
-  args: { state: state('permission', 'Run the sample validation command') },
+  args: { state: state('permission', 'Bash  pnpm run validate') },
 }
 
 export const TheSessionIsWaitingForExternalWork: Story = {
