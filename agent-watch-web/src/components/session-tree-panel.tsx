@@ -224,7 +224,7 @@ export function SessionTreePanel({
           )
         })}
       </div>
-      <footer className="session-tree-footer">Use ← / → to fold.</footer>
+      <footer className="session-tree-footer">← / → fold.</footer>
     </div>
   )
 }

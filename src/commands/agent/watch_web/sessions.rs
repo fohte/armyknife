@@ -63,6 +63,8 @@ struct TqTaskView {
     title: String,
     priority: Option<i32>,
     is_closed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(skip)]
     priority_order: Option<usize>,
 }
@@ -425,6 +427,7 @@ async fn list_sessions<S: SessionSource>(
                         .copied()
                         .flatten(),
                     is_closed: task.is_closed,
+                    updated_at: task_metadata.updated_at.get(&task.task_id).cloned(),
                     priority_order: task_metadata.priority_order.get(&task.task_id).copied(),
                 })
                 .collect::<Vec<_>>();
@@ -793,6 +796,7 @@ mod tests {
         unanswered_proposal_titles: HashMap<String, String>,
         unanswered_todo_titles: HashMap<String, String>,
         task_links: HashMap<String, Vec<LinkedSessionTask>>,
+        task_updated_at: HashMap<String, DateTime<Utc>>,
         task_priorities: HashMap<String, Option<i32>>,
         task_priority_order: HashMap<String, usize>,
         task_projects: HashMap<String, String>,
@@ -861,6 +865,7 @@ mod tests {
         async fn fetch_task_metadata(&self, _sessions: &[Session]) -> SessionTaskMetadata {
             SessionTaskMetadata {
                 links: self.task_links.clone(),
+                updated_at: self.task_updated_at.clone(),
                 priorities: self.task_priorities.clone(),
                 priority_order: self.task_priority_order.clone(),
                 task_projects: self.task_projects.clone(),
@@ -1034,6 +1039,7 @@ mod tests {
                     }],
                 ),
             ]),
+            task_updated_at: HashMap::new(),
             task_priorities: HashMap::from([("task-id".to_string(), Some(1))]),
             task_priority_order: HashMap::from([("task-id".to_string(), 0)]),
             task_projects: HashMap::from([
@@ -2635,6 +2641,12 @@ mod tests {
             ("completed-task".to_string(), Some(2)),
             ("open-task".to_string(), Some(1)),
         ]);
+        source.task_updated_at = HashMap::from([(
+            "completed-task".to_string(),
+            DateTime::parse_from_rfc3339("2026-10-01T00:00:00Z")
+                .expect("valid timestamp")
+                .with_timezone(&Utc),
+        )]);
 
         let (_, response) = sessions_response(source).await;
         let session = &response["sessions"][0];
@@ -2663,6 +2675,7 @@ mod tests {
                         "title": "completed task",
                         "priority": 2,
                         "isClosed": true,
+                        "updatedAt": "2026-10-01T00:00:00Z",
                     },
                 ]),
             ),

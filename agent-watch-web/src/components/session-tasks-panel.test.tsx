@@ -18,6 +18,7 @@ const tasks: SessionTask[] = [
     title: `Document request behavior ${String(index + 1)}`,
     priority: null,
     isClosed: true,
+    updatedAt: new Date(Date.now() - (index + 1) * 3_600_000).toISOString(),
   })),
 ]
 
@@ -80,25 +81,25 @@ it('groups open and completed linked tasks and reveals the remaining completed t
       openTasks: [
         {
           href: 'https://tq.fohte.net/tasks/example-open-task',
-          text: '●#2048 Improve request reliabilityP1 · example/service',
+          text: '●#2048 Improve request reliabilityP1 · service',
         },
       ],
       completedTasks: [
         {
           href: 'https://tq.fohte.net/tasks/example-completed-task-1',
-          text: '✓#2047 Document request behavior 1',
+          text: '✓#2047 Document request behavior 1 1h',
         },
         {
           href: 'https://tq.fohte.net/tasks/example-completed-task-2',
-          text: '✓#2046 Document request behavior 2',
+          text: '✓#2046 Document request behavior 2 2h',
         },
         {
           href: 'https://tq.fohte.net/tasks/example-completed-task-3',
-          text: '✓#2045 Document request behavior 3',
+          text: '✓#2045 Document request behavior 3 3h',
         },
         {
           href: 'https://tq.fohte.net/tasks/example-completed-task-4',
-          text: '✓#2044 Document request behavior 4',
+          text: '✓#2044 Document request behavior 4 4h',
         },
       ],
       showMore: 'Show 1 more',
@@ -108,29 +109,29 @@ it('groups open and completed linked tasks and reveals the remaining completed t
       openTasks: [
         {
           href: 'https://tq.fohte.net/tasks/example-open-task',
-          text: '●#2048 Improve request reliabilityP1 · example/service',
+          text: '●#2048 Improve request reliabilityP1 · service',
         },
       ],
       completedTasks: [
         {
           href: 'https://tq.fohte.net/tasks/example-completed-task-1',
-          text: '✓#2047 Document request behavior 1',
+          text: '✓#2047 Document request behavior 1 1h',
         },
         {
           href: 'https://tq.fohte.net/tasks/example-completed-task-2',
-          text: '✓#2046 Document request behavior 2',
+          text: '✓#2046 Document request behavior 2 2h',
         },
         {
           href: 'https://tq.fohte.net/tasks/example-completed-task-3',
-          text: '✓#2045 Document request behavior 3',
+          text: '✓#2045 Document request behavior 3 3h',
         },
         {
           href: 'https://tq.fohte.net/tasks/example-completed-task-4',
-          text: '✓#2044 Document request behavior 4',
+          text: '✓#2044 Document request behavior 4 4h',
         },
         {
           href: 'https://tq.fohte.net/tasks/example-completed-task-5',
-          text: '✓#2043 Document request behavior 5',
+          text: '✓#2043 Document request behavior 5 5h',
         },
       ],
       showMore: undefined,

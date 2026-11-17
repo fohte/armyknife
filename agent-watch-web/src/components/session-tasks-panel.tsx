@@ -6,6 +6,19 @@ import type { SessionTask } from '#types'
 
 const INITIAL_COMPLETED_TASKS = 4
 
+function formatTaskAge(updatedAt: string) {
+  const updatedAtMs = Date.parse(updatedAt)
+  if (Number.isNaN(updatedAtMs)) return null
+  const elapsedMinutes = Math.max(
+    0,
+    Math.floor((Date.now() - updatedAtMs) / 60_000),
+  )
+  if (elapsedMinutes < 60) return `${String(elapsedMinutes)}m`
+  const elapsedHours = Math.floor(elapsedMinutes / 60)
+  if (elapsedHours < 24) return `${String(elapsedHours)}h`
+  return `${String(Math.floor(elapsedHours / 24))}d`
+}
+
 export function SessionTasksPanel({
   tasks,
   repo,
@@ -26,6 +39,7 @@ export function SessionTasksPanel({
     : completedTasks.slice(0, INITIAL_COMPLETED_TASKS)
   const remainingCompletedCount =
     completedTasks.length - visibleCompletedTasks.length
+  const shortRepo = repo.split('/').at(-1) ?? repo
 
   const makePrimary = async (taskId: string) => {
     if (onMakePrimary === undefined) return
@@ -81,8 +95,8 @@ export function SessionTasksPanel({
                     </span>
                     <span className="session-tasks-panel-meta">
                       {task.priority === null
-                        ? repo
-                        : `P${String(task.priority)} · ${repo}`}
+                        ? shortRepo
+                        : `P${String(task.priority)} · ${shortRepo}`}
                     </span>
                   </span>
                 </a>
@@ -101,27 +115,42 @@ export function SessionTasksPanel({
             COMPLETED <span>{completedTasks.length}</span>
           </h3>
           <ul className="session-tasks-panel-list">
-            {visibleCompletedTasks.map((task) => (
-              <li key={task.id}>
-                <a
-                  className="session-tasks-panel-item session-tasks-panel-item--completed"
-                  href={`https://tq.fohte.net/tasks/${encodeURIComponent(task.id)}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <span className="session-tasks-panel-icon" aria-hidden="true">
-                    ✓
-                  </span>
-                  <span className="session-tasks-panel-title">
-                    <span className="session-task-link-id">
-                      #{String(task.number)}
-                    </span>{' '}
-                    {task.title}
-                  </span>
-                </a>
-                {primaryControl(task)}
-              </li>
-            ))}
+            {visibleCompletedTasks.map((task) => {
+              const age =
+                task.updatedAt == null ? null : formatTaskAge(task.updatedAt)
+              return (
+                <li key={task.id}>
+                  <a
+                    className="session-tasks-panel-item session-tasks-panel-item--completed"
+                    href={`https://tq.fohte.net/tasks/${encodeURIComponent(task.id)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <span
+                      className="session-tasks-panel-icon"
+                      aria-hidden="true"
+                    >
+                      ✓
+                    </span>
+                    <span className="session-tasks-panel-title">
+                      <span className="session-task-link-id">
+                        #{String(task.number)}
+                      </span>{' '}
+                      {task.title}
+                    </span>
+                    {age === null ? null : (
+                      <time
+                        className="session-tasks-panel-age"
+                        dateTime={task.updatedAt ?? undefined}
+                      >
+                        {` ${age}`}
+                      </time>
+                    )}
+                  </a>
+                  {primaryControl(task)}
+                </li>
+              )
+            })}
           </ul>
           {remainingCompletedCount === 0 ? null : (
             <button

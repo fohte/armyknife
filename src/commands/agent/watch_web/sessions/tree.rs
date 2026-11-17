@@ -195,6 +195,7 @@ pub(super) async fn session_tree<S: SessionSource>(
                         .copied()
                         .flatten(),
                     is_closed: task.is_closed,
+                    updated_at: None,
                     priority_order: task_metadata.priority_order.get(&task.task_id).copied(),
                 });
             let turn = turns.get(session.session_id.as_str()).copied();

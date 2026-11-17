@@ -21,6 +21,7 @@ export type SessionTask = {
   title: string
   priority: number | null
   isClosed?: boolean
+  updatedAt?: string | null
 }
 
 export type PullRequest = {
