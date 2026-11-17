@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
+use axum::Json;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::Path as AxumPath;
@@ -12,20 +13,20 @@ use axum::http::StatusCode;
 use axum::http::header::CONTENT_TYPE;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::commands::agent::store::{
     AgentDecision, AgentFile, AgentProposal, AgentTodo, PermissionDeniedOperation,
     PermissionRequestData, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
 };
-use crate::commands::agent::types::Session;
+use crate::commands::agent::types::{Engine, Session};
 
 use super::cache::MessageCache;
 use super::conversation::{
     load_conversation_with_initial_tail_window, load_conversation_with_queued_prompts,
 };
 use super::range::MessageRange;
-use super::{BackgroundTask, background_task_outputs, question_preview};
+use super::{BackgroundTask, SkillSuggestion, background_task_outputs, question_preview};
 
 pub(super) type SessionLoader = Arc<dyn Fn(&str) -> Result<Option<Session>> + Send + Sync>;
 pub(super) type SessionListLoader = Arc<dyn Fn() -> Result<Vec<Session>> + Send + Sync>;
@@ -54,6 +55,17 @@ type SkillListingCache = Arc<Mutex<HashMap<String, CachedSkillListing>>>;
 struct CachedSkillListing {
     fingerprint: String,
     listing: Option<Vec<super::SkillSuggestion>>,
+}
+
+#[derive(Deserialize)]
+struct SkillSuggestionsQuery {
+    engine: Engine,
+    directory: Option<PathBuf>,
+}
+
+#[derive(Serialize)]
+struct SkillSuggestionsResponse {
+    skills: Vec<SkillSuggestion>,
 }
 
 #[derive(Clone)]
@@ -242,11 +254,38 @@ pub(in crate::commands::agent::watch_web) fn routes_with_proposals_and_peer_out_
             get(background_task_outputs::get_background_task_output),
         )
         .route("/sessions/{id}/messages", get(get_messages))
+        .route("/skill-suggestions", get(get_skill_suggestions))
         .with_state((
             load_session,
             Arc::new(load_user_marker) as UserMarkerLoader,
             loaders,
         ))
+}
+
+async fn get_skill_suggestions(
+    State((_, _, loaders)): State<MessagesRouteState>,
+    Query(query): Query<SkillSuggestionsQuery>,
+) -> Response {
+    let result = tokio::task::spawn_blocking(move || {
+        super::skill_suggestions::find_from_recent_sessions(
+            query.engine,
+            query.directory.as_deref(),
+            None,
+            &loaders,
+        )
+    })
+    .await;
+    match result {
+        Ok(Ok(skills)) => Json(SkillSuggestionsResponse { skills }).into_response(),
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "failed to find skill suggestions");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+        Err(error) => {
+            tracing::warn!(%error, "skill suggestions task failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 async fn get_messages(

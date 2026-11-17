@@ -2,10 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   getSessionDirectories,
+  getSessionSkillSuggestions,
   launchSession,
   type SessionDirectory,
   type SessionEngine,
 } from '#new-session-api'
+import type { SkillSuggestion } from '#types'
 
 export function useNewSession(active: boolean) {
   const [directoryQuery, setDirectoryQuery] = useState('')
@@ -15,10 +17,14 @@ export function useNewSession(active: boolean) {
   const [engine, setEngine] = useState<SessionEngine>('claude')
   const [worktree, setWorktree] = useState(false)
   const [initialMessage, setInitialMessage] = useState('')
+  const [skillSuggestions, setSkillSuggestions] = useState<SkillSuggestion[]>(
+    [],
+  )
   const [isLoadingDirectories, setIsLoadingDirectories] = useState(false)
   const [isStarting, setIsStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const requestSequence = useRef(0)
+  const skillSuggestionsSequence = useRef(0)
   const launchSequence = useRef(0)
 
   useEffect(() => {
@@ -48,8 +54,38 @@ export function useNewSession(active: boolean) {
     }
   }, [active, directoryQuery])
 
+  useEffect(() => {
+    if (!active) {
+      skillSuggestionsSequence.current += 1
+      setSkillSuggestions([])
+      return
+    }
+    const sequence = skillSuggestionsSequence.current + 1
+    skillSuggestionsSequence.current = sequence
+    setSkillSuggestions([])
+    void getSessionSkillSuggestions(
+      engine,
+      selectedDirectory?.path ?? null,
+    ).match(
+      (skills) => {
+        if (skillSuggestionsSequence.current === sequence) {
+          setSkillSuggestions(skills)
+        }
+      },
+      () => {
+        if (skillSuggestionsSequence.current === sequence) {
+          setSkillSuggestions([])
+        }
+      },
+    )
+    return () => {
+      skillSuggestionsSequence.current += 1
+    }
+  }, [active, engine, selectedDirectory?.path])
+
   const reset = useCallback(() => {
     requestSequence.current += 1
+    skillSuggestionsSequence.current += 1
     launchSequence.current += 1
     setDirectoryQuery('')
     setDirectories([])
@@ -57,6 +93,7 @@ export function useNewSession(active: boolean) {
     setEngine('claude')
     setWorktree(false)
     setInitialMessage('')
+    setSkillSuggestions([])
     setIsLoadingDirectories(false)
     setIsStarting(false)
     setError(null)
@@ -105,6 +142,7 @@ export function useNewSession(active: boolean) {
     engine,
     worktree,
     initialMessage,
+    skillSuggestions,
     isLoadingDirectories,
     isStarting,
     error,

@@ -27,6 +27,7 @@ mod questions;
 pub(in crate::commands::agent::watch_web) mod queued_prompt;
 mod range;
 mod routes;
+mod skill_suggestions;
 mod subagent_reports;
 mod transcript_path;
 
@@ -1427,6 +1428,118 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn skill_suggestions_route_selects_by_engine_and_optional_directory(
+        #[from(empty_route_loaders)] loaders: RouteLoaders,
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        let write_listing = |path: &Path, engine: Engine, name: &str| {
+            let record = match engine {
+                Engine::Claude => json!({
+                    "attachment": {
+                        "type": "skill_listing",
+                        "content": format!("- {name}: A fixture description."),
+                    },
+                }),
+                Engine::Codex => json!({
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "developer",
+                        "content": [{
+                            "type": "input_text",
+                            "text": indoc::formatdoc! {"
+                                <skills_instructions>
+                                ## Skills
+                                ### Available skills
+                                - {name}: A fixture description.
+                                </skills_instructions>
+                            "},
+                        }],
+                    },
+                }),
+            };
+            std::fs::write(path, record.to_string()).unwrap();
+        };
+        let local_path = directory.path().join("fixture-local.jsonl");
+        let global_path = directory.path().join("fixture-global.jsonl");
+        let codex_path = directory.path().join("fixture-codex.jsonl");
+        write_listing(&local_path, Engine::Claude, "local-fixture-skill");
+        write_listing(&global_path, Engine::Claude, "global-fixture-skill");
+        write_listing(&codex_path, Engine::Codex, "codex-fixture-skill");
+
+        let updated_at = |value: &str| {
+            chrono::DateTime::parse_from_rfc3339(value)
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
+        let mut local = stored_session();
+        local.session_id = "fixture-local-session".to_string();
+        local.transcript_path = Some(local_path);
+        local.updated_at = updated_at("2026-01-01T00:00:00Z");
+
+        let mut global = stored_session();
+        global.session_id = "fixture-global-session".to_string();
+        global.cwd = PathBuf::from("/fixture/other-project");
+        global.transcript_path = Some(global_path);
+        global.updated_at = updated_at("2026-01-03T00:00:00Z");
+
+        let mut codex = stored_session();
+        codex.session_id = "fixture-codex-session".to_string();
+        codex.engine = Engine::Codex;
+        codex.transcript_path = Some(codex_path);
+        codex.updated_at = updated_at("2026-01-04T00:00:00Z");
+
+        let loaders = loaders.with_session_list_loader(move || {
+            Ok(vec![local.clone(), global.clone(), codex.clone()])
+        });
+        let router =
+            routes_with_proposals_and_peer_out_messages(|_| Ok(None), |_| Ok(None), loaders);
+
+        let same_directory = skill_suggestions_response_with_query(
+            &router,
+            "engine=claude&directory=%2Ffixture%2Fproject",
+        )
+        .await;
+        let latest = skill_suggestions_response_with_query(&router, "engine=claude").await;
+        let other_engine = skill_suggestions_response_with_query(
+            &router,
+            "engine=codex&directory=%2Ffixture%2Fproject",
+        )
+        .await;
+
+        assert_eq!(
+            (same_directory, latest, other_engine),
+            (
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({"skills": [{
+                        "name": "local-fixture-skill",
+                        "description": "A fixture description.",
+                    }]}),
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({"skills": [{
+                        "name": "global-fixture-skill",
+                        "description": "A fixture description.",
+                    }]}),
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({"skills": [{
+                        "name": "codex-fixture-skill",
+                        "description": "A fixture description.",
+                    }]}),
+                ),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn messages_route_uses_latest_skill_listing_when_no_same_directory_source_exists(
         #[from(empty_route_loaders)] loaders: RouteLoaders,
     ) {
@@ -1995,6 +2108,23 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri(format!("/sessions/fixture-session/messages{query}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        response_json_snapshot(response).await
+    }
+
+    async fn skill_suggestions_response_with_query(
+        router: &axum::Router,
+        query: &str,
+    ) -> (StatusCode, Option<String>, serde_json::Value) {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/skill-suggestions?{query}"))
                     .body(Body::empty())
                     .unwrap(),
             )

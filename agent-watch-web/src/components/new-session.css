@@ -195,6 +195,7 @@
 }
 
 .new-session-composer-box {
+  position: relative;
   border: 1px solid var(--aw-border-control);
   background: var(--aw-bg-surface);
 }

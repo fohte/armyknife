@@ -4,6 +4,11 @@ import { ArrowLeft, ChevronDown, Folder, GitBranch, X } from 'lucide-react'
 import { useState } from 'react'
 
 import { SessionDirectoryOptions } from '#components/session-directory-options'
+import {
+  skillCompletionTextareaAttributes,
+  SkillSuggestionList,
+  useSkillCompletion,
+} from '#components/skill-completion'
 import type { NewSessionState } from '#use-new-session'
 
 type NewSessionFormProps = {
@@ -28,6 +33,12 @@ export function NewSessionForm({
   )
   const [engineMenuOpen, setEngineMenuOpen] = useState(false)
   const selectedDirectory = state.selectedDirectory
+  const skillCompletion = useSkillCompletion({
+    draft: state.initialMessage,
+    engine: state.engine,
+    skills: state.skillSuggestions,
+    onDraftChange: state.setInitialMessage,
+  })
 
   return (
     <section aria-label="New session" className="new-session-view">
@@ -95,13 +106,28 @@ export function NewSessionForm({
       <div className="new-session-composer">
         <div className="new-session-composer-box">
           <textarea
+            ref={skillCompletion.textareaRef}
             aria-label="First message"
-            onChange={(event) => {
-              state.setInitialMessage(event.currentTarget.value)
-            }}
+            onChange={skillCompletion.handleChange}
+            onSelect={skillCompletion.handleSelect}
+            onKeyDown={skillCompletion.handleKeyDown}
             placeholder="First message (optional)"
             value={state.initialMessage}
+            {...skillCompletionTextareaAttributes({
+              isOpen: skillCompletion.isOpen,
+              id: skillCompletion.suggestionsId,
+              selectedIndex: skillCompletion.selectedSkillIndex,
+            })}
           />
+          {skillCompletion.isOpen ? (
+            <SkillSuggestionList
+              id={skillCompletion.suggestionsId}
+              completion={skillCompletion.completion}
+              skills={skillCompletion.matchingSkills}
+              selectedIndex={skillCompletion.selectedSkillIndex}
+              onSelect={skillCompletion.selectSkill}
+            />
+          ) : null}
           <div className="new-session-composer-actions">
             <div className="new-session-engine-control">
               <button

@@ -1,4 +1,4 @@
-import { act } from 'react'
+import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
@@ -24,6 +24,7 @@ function makeState(overrides: Partial<NewSessionState> = {}): NewSessionState {
     engine: 'claude',
     worktree: false,
     initialMessage: '',
+    skillSuggestions: [],
     isLoadingDirectories: false,
     isStarting: false,
     error: null,
@@ -52,6 +53,25 @@ function renderForm(state: NewSessionState, onLaunched = vi.fn()) {
   return { onLaunched }
 }
 
+function StatefulSkillForm() {
+  const [initialMessage, setInitialMessage] = useState('/')
+  const state = makeState({
+    initialMessage,
+    skillSuggestions: [
+      { name: 'design-flow', description: 'Help shape a design.' },
+      { name: 'debug-flow', description: 'Investigate a failure.' },
+    ],
+    setInitialMessage,
+  })
+  return (
+    <NewSessionForm
+      state={state}
+      onClose={() => undefined}
+      onLaunched={() => undefined}
+    />
+  )
+}
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
@@ -72,6 +92,31 @@ it('requires a directory before the session can start', () => {
   expect(
     container.querySelector<HTMLButtonElement>('.new-session-start')?.disabled,
   ).toBe(true)
+})
+
+it('suggests and inserts skills in the first message field', async () => {
+  root = createRoot(container)
+  act(() => root?.render(<StatefulSkillForm />))
+
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '[aria-label="First message"]',
+  )
+  if (textarea === null) throw new Error('Expected first message field')
+  await act(async () => {
+    await userEvent.click(textarea)
+    await userEvent.keyboard('{ArrowDown}{Enter}')
+  })
+
+  const snapshot = () => ({
+    draft: textarea.value,
+    optionCount: container.querySelectorAll('[role="option"]').length,
+    expanded: textarea.getAttribute('aria-expanded'),
+  })
+  expect(snapshot()).toEqual({
+    draft: '/debug-flow ',
+    optionCount: 0,
+    expanded: 'false',
+  })
 })
 
 it('opens directory suggestions and selects the clicked directory', async () => {

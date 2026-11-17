@@ -1214,6 +1214,7 @@ Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` on
 - `POST /api/sessions/{id}/review-document/finish` accepts the same payload, saves the edits, then asks the review process to close its editor and run the completion handler.
 - `POST /api/sessions` with `{"directory":"/workspace/example","engine":"claude","worktree":false,"initialMessage":"Inspect this project."}` starts a Claude Code or Codex session in an existing directory and returns `{"launchId":"..."}`. `engine` accepts `claude` or `codex`; `initialMessage` is optional.
 - `GET /api/directories` returns recent repository roots for sessions under the configured ghq root, ordered by recent activity with one result per repository. Sessions outside discovered repositories are omitted. Add `?q=<search>` to match paths relative to the ghq root and include matching repositories; an existing absolute or `~/` directory matching the query is also included.
+- `GET /api/skill-suggestions?engine=claude&directory=/workspace/example` returns the skill listing from the most recent matching session, preferring the selected directory. Omit `directory` to use the most recent listing for that engine.
 
 - `GET /api/sessions/{id}/actions`
 - `GET /api/sessions/{id}/tree` returns the ancestor-rooted session tree, excluding ended sessions.
