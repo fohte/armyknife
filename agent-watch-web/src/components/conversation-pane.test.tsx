@@ -3712,13 +3712,28 @@ it('shows the agent status reason while the stopped session is waiting', () => {
   })
 })
 
-it('shows when the stopped session is waiting for background tasks', () => {
-  renderView(vi.fn().mockResolvedValue(true), {
-    ...session,
-    category: 'in_progress',
-    activityStatus: 'stopped',
-    waitingForBackgroundTasks: true,
-  })
+it('shows elapsed time for a waiting background task', () => {
+  renderView(
+    vi.fn().mockResolvedValue(true),
+    {
+      ...session,
+      category: 'in_progress',
+      activityStatus: 'stopped',
+      waitingForBackgroundTasks: true,
+    },
+    undefined,
+    [],
+    actions,
+    false,
+    [
+      {
+        id: 'fixture-background-task',
+        description: 'Check the sample build',
+        elapsedSeconds: 42,
+        kind: 'background_task',
+      },
+    ],
+  )
 
   const snapshot = () => ({
     status: container.querySelector('.conversation-status-band-title')
@@ -3733,7 +3748,7 @@ it('shows when the stopped session is waiting for background tasks', () => {
 
   expect(snapshot()).toEqual({
     status: 'Waiting for background tasks',
-    detail: 'Choose a retry policy',
+    detail: 'Check the sample build · 42s',
     waitingDotVisible: true,
   })
 })

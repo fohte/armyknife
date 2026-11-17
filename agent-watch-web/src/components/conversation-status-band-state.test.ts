@@ -127,6 +127,23 @@ const statusCases: StatusCase[] = [
     },
     expected: { kind: 'crit-review', detail: 'crit · PR #742' },
   },
+  {
+    name: 'crit review with pull requests',
+    input: {
+      session: {
+        ...session,
+        category: 'needs_action',
+        activityStatus: 'waiting' as const,
+        kind: 'Review',
+        pullRequests: [
+          { number: 864, state: 'Open' },
+          { number: 865, state: 'Open' },
+        ],
+        critUrl: 'https://crit.example.test/review/fixture',
+      },
+    },
+    expected: { kind: 'crit-review', detail: 'crit · PR #864' },
+  },
   ...(['Todo', 'Proposal'] as const).map((kind): StatusCase => ({
     name: `crit review with ${kind} kind`,
     input: {
