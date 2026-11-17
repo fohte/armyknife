@@ -33,7 +33,10 @@ const completedSession: Session = {
   title: 'Document the deployment procedure',
 }
 
-function renderBoard(sessions: Session[]) {
+function renderBoard(
+  sessions: Session[],
+  onHideQuietProjectsChange: (checked: boolean) => void = () => undefined,
+) {
   root = createRoot(container)
   act(() => {
     root?.render(
@@ -42,7 +45,7 @@ function renderBoard(sessions: Session[]) {
         loaded
         error={null}
         hideQuietProjects={false}
-        onHideQuietProjectsChange={() => undefined}
+        onHideQuietProjectsChange={onHideQuietProjectsChange}
         onNewSession={() => undefined}
         onSelectSession={() => undefined}
       />,
@@ -52,13 +55,38 @@ function renderBoard(sessions: Session[]) {
 
 function snapshot() {
   return {
-    group: container.querySelector('.board-group')?.getAttribute('aria-label'),
+    group: container
+      .querySelector('.board-group.done')
+      ?.getAttribute('aria-label'),
+    heading: container.querySelector('.board-group.done h3')?.textContent,
     badge: container.querySelector('.board-done-summary [data-slot="chip"]')
       ?.textContent,
-    pausedTitle: container.querySelector(
-      '.board-done-paused-session span:last-child',
-    )?.textContent,
     summary: container.querySelector('.board-done-summary')?.textContent,
+  }
+}
+
+function moreButtonSnapshot(more: HTMLButtonElement | null) {
+  return {
+    type: more?.type,
+    text: more?.textContent,
+    buttonCount: container.querySelectorAll('.board-more').length,
+    groupLabel: container
+      .querySelector('.board-group.in-progress')
+      ?.getAttribute('aria-label'),
+    groupHeading: container.querySelector('.board-group.in-progress h3')
+      ?.textContent,
+  }
+}
+
+function quietToggleSnapshot(
+  input: HTMLInputElement | null,
+  onChange: ReturnType<typeof vi.fn>,
+) {
+  return {
+    type: input?.type,
+    checked: input?.checked,
+    label: input?.parentElement?.textContent,
+    changeCalls: onChange.mock.calls,
   }
 }
 
@@ -93,9 +121,9 @@ it('identifies paused sessions in the Done group', () => {
 
   expect(snapshot()).toEqual({
     group: 'Done (1)',
+    heading: undefined,
     badge: 'Paused',
-    pausedTitle: 'Prepare the next deployment window',
-    summary: 'PausedPrepare the next deployment window',
+    summary: '✓ Done · PausedPrepare the next deployment window',
   })
 })
 
@@ -104,9 +132,47 @@ it('shows paused sessions beside the count of other Done sessions', () => {
 
   expect(snapshot()).toEqual({
     group: 'Done (2)',
+    heading: undefined,
     badge: 'Paused',
-    pausedTitle: 'Prepare the next deployment window',
-    summary: 'PausedPrepare the next deployment window · 1 other done',
+    summary: '✓ Done · PausedPrepare the next deployment window and 1 more',
+  })
+})
+
+it('renders the overflow summary as a button without expanding sessions', () => {
+  renderBoard(
+    Array.from({ length: 4 }, (_, index) => ({
+      ...completedSession,
+      id: `working-session-${String(index)}`,
+      category: 'in_progress' as const,
+    })),
+  )
+
+  const more = container.querySelector<HTMLButtonElement>('.board-more')
+  act(() => more?.click())
+
+  expect(moreButtonSnapshot(more)).toEqual({
+    type: 'button',
+    text: '1 more',
+    buttonCount: 1,
+    groupLabel: 'In progress (4)',
+    groupHeading: 'In progress',
+  })
+})
+
+it('keeps the quiet-project control as a labeled native checkbox', () => {
+  const onHideQuietProjectsChange = vi.fn()
+  renderBoard([completedSession], onHideQuietProjectsChange)
+
+  const input = container.querySelector<HTMLInputElement>(
+    '.board-quiet-toggle input',
+  )
+  act(() => input?.click())
+
+  expect(quietToggleSnapshot(input, onHideQuietProjectsChange)).toEqual({
+    type: 'checkbox',
+    checked: false,
+    label: 'Hide quiet projects (1)',
+    changeCalls: [[true]],
   })
 })
 

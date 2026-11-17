@@ -159,6 +159,14 @@ export const BoardShowsActiveProjectsFirst: Story = {
   name: 'The board puts projects that need attention first',
 }
 
+export const BoardMatchesScreen: Story = {
+  name: 'The board shows project summaries, completed sessions, and overflow',
+  args: { hideQuietProjects: false },
+  parameters: {
+    overflowCheck: { ignoreSelectors: ['.board-projects-scroll'] },
+  },
+}
+
 export const BoardShowsPausedSessions: Story = {
   name: 'The Done group identifies paused sessions',
   args: {
