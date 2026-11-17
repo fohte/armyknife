@@ -307,11 +307,22 @@ it('preserves fractional elapsed time across unchanged session deltas', async ()
   ])
 })
 
-it('delivers tree availability and work type metadata from a session response', async () => {
+it('delivers session metadata and enriched pull request status', async () => {
   const source = new FakeEventSource()
   const received = deferred<undefined>()
   const responses: unknown[] = []
   const errors: (string | null)[] = []
+  const currentPullRequest = {
+    number: 42,
+    owner: 'example-org',
+    repo: 'example-repo',
+    title: 'Show a session pull request summary',
+    url: 'https://github.com/example-org/example-repo/pull/42',
+    headSha: 'fixture-head-sha',
+    state: 'Open',
+    ciState: 'Failed',
+    isCurrentBranch: true,
+  }
   const fetcher = vi.fn().mockResolvedValue(
     jsonResponse({
       revision: 1,
@@ -336,7 +347,8 @@ it('delivers tree availability and work type metadata from a session response', 
           project: 'sample project',
           parent: null,
           ancestorSessionIds: [],
-          pullRequest: null,
+          pullRequest: currentPullRequest,
+          pullRequests: [currentPullRequest],
         },
       ],
     }),
@@ -380,7 +392,8 @@ it('delivers tree availability and work type metadata from a session response', 
             project: 'sample project',
             parent: null,
             ancestorSessionIds: [],
-            pullRequest: null,
+            pullRequest: currentPullRequest,
+            pullRequests: [currentPullRequest],
           },
         ],
       },

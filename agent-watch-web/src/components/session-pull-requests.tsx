@@ -91,6 +91,16 @@ function pullRequestRepo(pullRequest: PullRequest, fallbackRepo: string) {
   return fallbackRepo
 }
 
+export function getRepresentativePullRequest(
+  pullRequests: readonly PullRequest[],
+) {
+  return (
+    pullRequests.find((pullRequest) => pullRequest.isCurrentBranch === true) ??
+    pullRequests.find((pullRequest) => pullRequest.state !== 'Merged') ??
+    pullRequests[0]
+  )
+}
+
 export function SessionPullRequests({
   pullRequests,
   repo,
@@ -99,10 +109,7 @@ export function SessionPullRequests({
   mobileAction,
   onOpenChange,
 }: SessionPullRequestsProps) {
-  const currentPullRequest =
-    pullRequests.find((pullRequest) => pullRequest.isCurrentBranch === true) ??
-    pullRequests.find((pullRequest) => pullRequest.state !== 'Merged') ??
-    pullRequests[0]
+  const currentPullRequest = getRepresentativePullRequest(pullRequests)
   const allMerged = pullRequests.every(
     (pullRequest) => pullRequest.state === 'Merged',
   )

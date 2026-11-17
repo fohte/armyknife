@@ -745,40 +745,6 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tower::ServiceExt;
 
-    #[test]
-    fn pull_request_view_preserves_ci_state_and_branch_origin() {
-        let pull_request = SessionPullRequestInfo {
-            owner: "example-owner".to_string(),
-            repo: "example-repository".to_string(),
-            progress: crate::infra::github::PrProgressInfo {
-                pull_request: crate::infra::github::PrInfo {
-                    number: 42,
-                    title: "Example change".to_string(),
-                    state: PrState::Open,
-                    url: "https://example.test/pull/42".to_string(),
-                },
-                ci_state: PrCiState::Failed,
-                head_sha: Some("fixture-head".to_string()),
-            },
-            from_cwd_branch: true,
-        };
-
-        assert_eq!(
-            serde_json::to_value(session_pull_request_view(&pull_request)).unwrap(),
-            serde_json::json!({
-                "number": 42,
-                "owner": "example-owner",
-                "repo": "example-repository",
-                "title": "Example change",
-                "url": "https://example.test/pull/42",
-                "headSha": "fixture-head",
-                "state": "Open",
-                "ciState": "Failed",
-                "isCurrentBranch": true,
-            }),
-        );
-    }
-
     fn session(status: SessionStatus) -> Session {
         Session {
             launch_id: None,
@@ -1097,7 +1063,7 @@ mod tests {
                                 state: PrState::Open,
                                 url: "https://example.com/pull/42".to_string(),
                             },
-                            ci_state: PrCiState::InProgress,
+                            ci_state: PrCiState::Failed,
                             head_sha: Some("fixture-head".to_string()),
                         },
                         from_cwd_branch: true,
@@ -1644,7 +1610,7 @@ mod tests {
             "url": "https://example.com/pull/42",
             "headSha": "fixture-head",
             "state": "Open",
-            "ciState": "InProgress",
+            "ciState": "Failed",
             "isCurrentBranch": true,
         });
         let submitted_pull_request = serde_json::json!({

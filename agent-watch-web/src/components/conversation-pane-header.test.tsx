@@ -579,6 +579,155 @@ it('summarizes every pull request and opens the full list', () => {
   })
 })
 
+it('merges the same unmerged pull request shown in the summary', async () => {
+  const fetchMock = vi.fn<typeof fetch>(() =>
+    Promise.resolve(Response.json({ result: 'merged' })),
+  )
+  vi.stubGlobal('fetch', fetchMock)
+  renderHeader(
+    false,
+    vi.fn(() => Promise.resolve(true)),
+    {
+      ...session,
+      pullRequests: [
+        {
+          number: 41,
+          state: 'Merged',
+          owner: 'example-org',
+          repo: 'example-repo',
+          url: 'https://github.com/example-org/example-repo/pull/41',
+          ciState: 'Unknown',
+          isCurrentBranch: false,
+        },
+        {
+          number: 42,
+          state: 'Open',
+          owner: 'example-org',
+          repo: 'example-repo',
+          url: 'https://github.com/example-org/example-repo/pull/42',
+          headSha: 'fixture-head-sha',
+          ciState: 'Successful',
+          isCurrentBranch: false,
+        },
+      ],
+    },
+  )
+
+  const trigger = requireElement(
+    container.querySelector<HTMLButtonElement>('.session-pr-trigger'),
+  )
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.conversation-pr-merge-button',
+      ),
+    ).click()
+  })
+  const confirmation = requireElement(
+    container.querySelector<HTMLElement>('[role="alertdialog"]'),
+  )
+
+  await act(async () => {
+    requireElement(
+      [...confirmation.querySelectorAll<HTMLButtonElement>('button')].find(
+        (button) => button.textContent === 'Confirm merge',
+      ) ?? null,
+    ).click()
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (container.querySelector('[role="status"]') !== null) return
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    }
+  })
+
+  const mergeState = () => ({
+    summary: trigger.getAttribute('aria-label'),
+    request: fetchMock.mock.calls.map(([url]) => url),
+    feedback: container.querySelector('[role="status"]')?.textContent,
+  })
+  expect(mergeState()).toEqual({
+    summary: 'PR #42, open, CI passed. 1 more PR from this session',
+    request: ['/api/sessions/fixture-session/pull-requests/42/merge'],
+    feedback: 'PR #42 merged.',
+  })
+})
+
+it('shows mobile merge feedback after confirming from the pull request sheet', async () => {
+  const fetchMock = vi.fn<typeof fetch>(() =>
+    Promise.resolve(Response.json({ result: 'merged' })),
+  )
+  vi.stubGlobal('fetch', fetchMock)
+  renderHeader(
+    true,
+    vi.fn(() => Promise.resolve(true)),
+    {
+      ...session,
+      pullRequest: {
+        number: 42,
+        state: 'Open',
+        owner: 'example-org',
+        repo: 'example-repo',
+        url: 'https://github.com/example-org/example-repo/pull/42',
+        headSha: 'fixture-head-sha',
+        ciState: 'Successful',
+        isCurrentBranch: true,
+      },
+    },
+  )
+
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>('.session-pr-trigger--mobile'),
+    ).click()
+  })
+  const sheet = requireElement(
+    container.querySelector<HTMLElement>('.session-pr-list--mobile'),
+  )
+  act(() => {
+    requireElement(
+      [...sheet.querySelectorAll<HTMLButtonElement>('button')].find(
+        (button) => button.textContent === 'Merge',
+      ) ?? null,
+    ).click()
+  })
+  const confirmation = requireElement(
+    container.querySelector<HTMLElement>('[role="alertdialog"]'),
+  )
+
+  await act(async () => {
+    requireElement(
+      [...confirmation.querySelectorAll<HTMLButtonElement>('button')].find(
+        (button) => button.textContent === 'Confirm merge',
+      ) ?? null,
+    ).click()
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (container.querySelector('.conversation-pr-merge-feedback') !== null) {
+        return
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    }
+  })
+
+  const mergeState = () => ({
+    request: fetchMock.mock.calls.map(([url]) => url),
+    confirmationOpen: container.querySelector('[role="alertdialog"]') !== null,
+    feedback: container.querySelector('.conversation-pr-merge-feedback')
+      ?.textContent,
+    feedbackRole: container
+      .querySelector('.conversation-pr-merge-feedback')
+      ?.getAttribute('role'),
+    headerHasFeedback: container
+      .querySelector('.conversation-header')
+      ?.classList.contains('has-session-pr-feedback'),
+  })
+  expect(mergeState()).toEqual({
+    request: ['/api/sessions/fixture-session/pull-requests/42/merge'],
+    confirmationOpen: false,
+    feedback: 'PR #42 merged.',
+    feedbackRole: 'status',
+    headerHasFeedback: true,
+  })
+})
+
 it('merges the session pull request after confirming its head SHA', async () => {
   let resolveMerge: (response: Response) => void = () => undefined
   const mergeResponse = new Promise<Response>((resolve) => {

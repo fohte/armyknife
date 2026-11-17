@@ -15,7 +15,10 @@ import { OpenInTerminalAction } from '#components/open-in-terminal-action'
 import { PullRequestMergeAction } from '#components/pull-request-merge-action'
 import { PullRequestMergeConfirmation } from '#components/pull-request-merge-confirmation'
 import { SessionHeading } from '#components/session-heading'
-import { SessionPullRequests } from '#components/session-pull-requests'
+import {
+  getRepresentativePullRequest,
+  SessionPullRequests,
+} from '#components/session-pull-requests'
 import { SessionTaskLinks } from '#components/session-task-links'
 import { StarredSessionToggle } from '#components/starred-session-toggle'
 import { useSessionOperations } from '#session-operation-context'
@@ -115,10 +118,7 @@ export function ConversationPaneHeader({
       : session.pullRequest === null
         ? []
         : [session.pullRequest]
-  const pullRequest =
-    pullRequests.find((item) => item.isCurrentBranch === true) ??
-    pullRequests[0] ??
-    null
+  const pullRequest = getRepresentativePullRequest(pullRequests) ?? null
   const mergeOperation =
     pullRequest?.state === 'Open' &&
     pullRequest.owner !== undefined &&
@@ -155,6 +155,10 @@ export function ConversationPaneHeader({
         }}
       />
     )
+  const visibleMergeFeedback =
+    mergeFeedback !== null && mergeFeedback.number === pullRequest?.number
+      ? mergeFeedback
+      : null
   const linkedTasks = getSessionTasks(session)
   const mobileRepoName = session.repo.split('/').at(-1) ?? session.repo
 
@@ -267,7 +271,7 @@ export function ConversationPaneHeader({
 
   return (
     <header
-      className={`conversation-header${isMobile && pullRequests.length > 0 ? ' has-session-prs' : ''}`}
+      className={`conversation-header${isMobile && pullRequests.length > 0 ? ' has-session-prs' : ''}${isMobile && visibleMergeFeedback !== null ? ' has-session-pr-feedback' : ''}`}
     >
       {isMobile ? (
         <>
@@ -352,6 +356,14 @@ export function ConversationPaneHeader({
             {...(mergeAction === null ? {} : { mobileAction: mergeAction })}
             onOpenChange={setPullRequestListOpen}
           />
+          {visibleMergeFeedback !== null ? (
+            <span
+              className={`conversation-pr-merge-feedback conversation-pr-merge-feedback--${visibleMergeFeedback.kind} conversation-pr-merge-feedback--mobile`}
+              role={visibleMergeFeedback.kind === 'error' ? 'alert' : 'status'}
+            >
+              {visibleMergeFeedback.message}
+            </span>
+          ) : null}
         </>
       ) : (
         <>
@@ -429,13 +441,14 @@ export function ConversationPaneHeader({
                   onOpenChange={setPullRequestListOpen}
                 />
                 {mergeAction}
-                {mergeFeedback === null ||
-                mergeFeedback.number !== pullRequest?.number ? null : (
+                {visibleMergeFeedback === null ? null : (
                   <span
-                    className={`conversation-pr-merge-feedback conversation-pr-merge-feedback--${mergeFeedback.kind}`}
-                    role={mergeFeedback.kind === 'error' ? 'alert' : 'status'}
+                    className={`conversation-pr-merge-feedback conversation-pr-merge-feedback--${visibleMergeFeedback.kind}`}
+                    role={
+                      visibleMergeFeedback.kind === 'error' ? 'alert' : 'status'
+                    }
                   >
-                    {mergeFeedback.message}
+                    {visibleMergeFeedback.message}
                   </span>
                 )}
                 {session.category === 'done' && onClose !== undefined ? (
