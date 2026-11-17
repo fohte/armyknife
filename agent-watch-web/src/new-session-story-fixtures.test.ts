@@ -17,6 +17,7 @@ export function createNewSessionStoryState(
     engine: 'claude',
     worktree: false,
     initialMessage: '',
+    skillSuggestions: [],
     isLoadingDirectories: false,
     isStarting: false,
     error: null,

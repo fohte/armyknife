@@ -24,6 +24,7 @@ function makeState(overrides: Partial<NewSessionState> = {}): NewSessionState {
     engine: 'claude',
     worktree: false,
     initialMessage: '',
+    skillSuggestions: [],
     isLoadingDirectories: false,
     isStarting: false,
     error: null,
@@ -72,6 +73,43 @@ it('requires a directory before the session can start', () => {
   expect(
     container.querySelector<HTMLButtonElement>('.new-session-start')?.disabled,
   ).toBe(true)
+})
+
+it('suggests and inserts skills in the first message field', async () => {
+  const setInitialMessage = vi.fn()
+  renderForm(
+    makeState({
+      initialMessage: '/',
+      skillSuggestions: [
+        { name: 'design-flow', description: 'Help shape a design.' },
+        { name: 'debug-flow', description: 'Investigate a failure.' },
+      ],
+      setInitialMessage,
+    }),
+  )
+
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '[aria-label="First message"]',
+  )
+  if (textarea === null) throw new Error('Expected first message field')
+  await act(async () => {
+    await userEvent.click(textarea)
+    await userEvent.keyboard('{ArrowDown}{Enter}')
+  })
+
+  const snapshot = () => ({
+    options: [...container.querySelectorAll('[role="option"]')].map(
+      (option) => option.textContent,
+    ),
+    initialMessages: setInitialMessage.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    options: [
+      '/design-flowHelp shape a design.',
+      '/debug-flowInvestigate a failure.',
+    ],
+    initialMessages: [['/debug-flow ']],
+  })
 })
 
 it('opens directory suggestions and selects the clicked directory', async () => {

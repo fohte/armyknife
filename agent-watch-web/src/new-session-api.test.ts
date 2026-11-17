@@ -1,6 +1,10 @@
 import { afterEach, expect, it, vi } from 'vitest'
 
-import { getSessionDirectories, launchSession } from '#new-session-api'
+import {
+  getSessionDirectories,
+  getSessionSkillSuggestions,
+  launchSession,
+} from '#new-session-api'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -31,6 +35,43 @@ it('searches directory suggestions with the encoded query', async () => {
   expect(snapshot()).toEqual({
     result: [{ path: '/Users/example/work/service', source: 'recent' }],
     requests: [['/api/directories?q=service+docs']],
+  })
+})
+
+it('loads skill suggestions for the selected engine and optional directory', async () => {
+  const fetcher = vi.fn<typeof fetch>().mockImplementation(() =>
+    Promise.resolve(
+      new Response(JSON.stringify({ skills: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    ),
+  )
+  vi.stubGlobal('fetch', fetcher)
+
+  const claudeResult = await getSessionSkillSuggestions(
+    'claude',
+    '/Users/example/work/feature branch',
+  )
+  const codexResult = await getSessionSkillSuggestions('codex', null)
+
+  const snapshot = () => ({
+    results: [claudeResult, codexResult].map((result) =>
+      result.match(
+        (value) => value,
+        (error) => error.message,
+      ),
+    ),
+    requests: fetcher.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    results: [[], []],
+    requests: [
+      [
+        '/api/skill-suggestions?engine=claude&directory=%2FUsers%2Fexample%2Fwork%2Ffeature+branch',
+      ],
+      ['/api/skill-suggestions?engine=codex'],
+    ],
   })
 })
 

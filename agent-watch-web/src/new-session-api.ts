@@ -1,5 +1,6 @@
 import { requestJson } from '#api-requests'
 import { postNewSession } from '#new-session-http'
+import type { SkillSuggestion } from '#types'
 
 export type SessionDirectory = {
   path: string
@@ -41,6 +42,21 @@ function isDirectoriesResponse(
   )
 }
 
+function isSkillSuggestionsResponse(
+  value: unknown,
+): value is { skills: SkillSuggestion[] } {
+  return (
+    isRecord(value) &&
+    Array.isArray(value['skills']) &&
+    value['skills'].every(
+      (skill) =>
+        isRecord(skill) &&
+        typeof skill['name'] === 'string' &&
+        typeof skill['description'] === 'string',
+    )
+  )
+}
+
 function isLaunchSessionResponse(
   value: unknown,
 ): value is LaunchSessionResponse {
@@ -54,6 +70,18 @@ export function getSessionDirectories(query: string) {
   return requestJson(`/api/directories${suffix}`, isDirectoriesResponse).map(
     ({ directories }) => directories,
   )
+}
+
+export function getSessionSkillSuggestions(
+  engine: SessionEngine,
+  directory: string | null,
+) {
+  const search = new URLSearchParams({ engine })
+  if (directory !== null) search.set('directory', directory)
+  return requestJson(
+    `/api/skill-suggestions?${search.toString()}`,
+    isSkillSuggestionsResponse,
+  ).map(({ skills }) => skills)
 }
 
 export function launchSession(request: LaunchSessionRequest) {

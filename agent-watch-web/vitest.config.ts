@@ -28,6 +28,7 @@ const appTestFiles = [
   'src/App.test.tsx',
   'src/components/mobile-nav-drawer.test.tsx',
   'src/components/new-session-form.browser.test.tsx',
+  'src/use-new-session.browser.test.tsx',
   'src/components/new-session-picker.browser.test.tsx',
   'src/components/mobile-navigation-actions.browser.test.tsx',
   'src/components/agent-watch-nav.test.tsx',

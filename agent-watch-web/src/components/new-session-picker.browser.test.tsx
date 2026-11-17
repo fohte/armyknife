@@ -34,6 +34,7 @@ function PickerHarness({
     engine,
     worktree,
     initialMessage: '',
+    skillSuggestions: [],
     isLoadingDirectories: false,
     isStarting: false,
     error: null,
