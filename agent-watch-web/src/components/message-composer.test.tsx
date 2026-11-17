@@ -13,6 +13,22 @@ function requireElement<T extends Element>(element: T | null): T {
   return element
 }
 
+function setTextareaValue(
+  textarea: HTMLTextAreaElement,
+  value: string,
+  cursor = value.length,
+) {
+  act(() => {
+    const valueSetter = Reflect.getOwnPropertyDescriptor(
+      textarea.constructor.prototype,
+      'value',
+    )?.set
+    if (valueSetter !== undefined) Reflect.apply(valueSetter, textarea, [value])
+    textarea.setSelectionRange(cursor, cursor)
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
 function ComposerHarness({
   isMobile = false,
   canInterrupt = false,
@@ -69,24 +85,6 @@ function renderFreshComposer(props: Parameters<typeof ComposerHarness>[0]) {
   root = createRoot(container)
   act(() => {
     root?.render(<ComposerHarness {...props} />)
-  })
-}
-
-function setTextareaValue(
-  textarea: HTMLTextAreaElement,
-  value: string,
-  cursor = value.length,
-) {
-  act(() => {
-    const valueSetter = Reflect.getOwnPropertyDescriptor(
-      textarea.constructor.prototype,
-      'value',
-    )?.set
-    if (valueSetter !== undefined) {
-      Reflect.apply(valueSetter, textarea, [value])
-    }
-    textarea.setSelectionRange(cursor, cursor)
-    textarea.dispatchEvent(new Event('input', { bubbles: true }))
   })
 }
 

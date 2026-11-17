@@ -1,9 +1,9 @@
 import { Result } from 'neverthrow'
-import { useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 
 const fallbackDrafts = new Map<string, string>()
 
-function readComposerDraft(key: string) {
+function readDraft(key: string, initialDraft: string) {
   const fallbackDraft = fallbackDrafts.get(key)
   if (fallbackDraft !== undefined) {
     return { draft: fallbackDraft, storageAvailable: false }
@@ -13,12 +13,12 @@ function readComposerDraft(key: string) {
     () => window.localStorage.getItem(key),
     (error: unknown) => error,
   )().match(
-    (draft) => ({ draft: draft ?? '', storageAvailable: true }),
-    () => ({ draft: '', storageAvailable: false }),
+    (draft) => ({ draft: draft ?? initialDraft, storageAvailable: true }),
+    () => ({ draft: initialDraft, storageAvailable: false }),
   )
 }
 
-function writeComposerDraft(key: string, draft: string) {
+function writeDraft(key: string, draft: string) {
   const storageAvailable = Result.fromThrowable(
     () => {
       if (draft === '') {
@@ -42,28 +42,51 @@ function writeComposerDraft(key: string, draft: string) {
 
 export function writeComposerDraftForSession(sessionId: string, draft: string) {
   const key = `agent-watch-web:composer-draft:${sessionId}`
-  const storageAvailable = writeComposerDraft(key, draft)
+  const storageAvailable = writeDraft(key, draft)
   return storageAvailable || fallbackDrafts.get(key) === draft
 }
 
-export function useComposerDraft(sessionId: string) {
-  const storageKey = `agent-watch-web:composer-draft:${sessionId}`
-  const [initialDraft] = useState(() => readComposerDraft(storageKey))
+export function cardDraftStorageKey(
+  cardType: string,
+  sessionId: string,
+  cardId: string | number,
+  field: string,
+) {
+  return `agent-watch-web:card-draft:${JSON.stringify([
+    cardType,
+    sessionId,
+    cardId,
+    field,
+  ])}`
+}
+
+export function useDraft(storageKey: string, initialValue = '') {
+  const [initialDraft] = useState(() => readDraft(storageKey, initialValue))
   const [draft, setDraft] = useState(initialDraft.draft)
   const [storageAvailable, setStorageAvailable] = useState(
     initialDraft.storageAvailable,
   )
   const draftRef = useRef(draft)
 
-  const updateDraft = (value: string) => {
-    draftRef.current = value
-    setDraft(value)
-    setStorageAvailable(writeComposerDraft(storageKey, value))
-  }
+  const updateDraft = useCallback(
+    (value: string) => {
+      draftRef.current = value
+      setDraft(value)
+      setStorageAvailable(writeDraft(storageKey, value))
+    },
+    [storageKey],
+  )
 
-  const clearDraftIfUnchanged = (sentDraft: string) => {
-    if (draftRef.current === sentDraft) updateDraft('')
-  }
+  const clearDraftIfUnchanged = useCallback(
+    (sentDraft: string) => {
+      if (draftRef.current === sentDraft) updateDraft('')
+    },
+    [updateDraft],
+  )
 
   return { draft, updateDraft, clearDraftIfUnchanged, storageAvailable }
+}
+
+export function useComposerDraft(sessionId: string) {
+  return useDraft(`agent-watch-web:composer-draft:${sessionId}`)
 }

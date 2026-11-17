@@ -2,6 +2,7 @@ import type { ComponentProps } from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { userEvent } from 'vitest/browser'
 
 import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import { ProposalCard } from '#components/proposal-card'
@@ -501,6 +502,185 @@ it('submits freeform answers for every question', async () => {
       },
     ],
   ])
+})
+
+it('restores question answers after reload and clears them after sending', async () => {
+  const sessionId = crypto.randomUUID()
+  const requestId = 'fixture-question-request'
+  const storageKey = `agent-watch-web:card-draft:${JSON.stringify([
+    'question',
+    sessionId,
+    requestId,
+    'answers',
+  ])}`
+  const selectionStorageKey = `agent-watch-web:card-draft:${JSON.stringify([
+    'question',
+    sessionId,
+    requestId,
+    'selections',
+  ])}`
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  const cardProps = props({
+    sessionId,
+    requestId,
+    isMobile: true,
+    onAnswer,
+  })
+  renderQuestion(cardProps)
+  act(() => {
+    choiceButton('Cedar').click()
+  })
+  await act(async () => {
+    await userEvent.fill(
+      requireElement(
+        container.querySelectorAll<HTMLTextAreaElement>('textarea').item(1),
+      ),
+      'Choose the icon with a clear silhouette.',
+    )
+  })
+  const storedDraftBeforeReload = window.localStorage.getItem(storageKey)
+  const storedSelectionBeforeReload =
+    window.localStorage.getItem(selectionStorageKey)
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+  renderQuestion(cardProps)
+
+  const restoredAnswer = requireElement(
+    container.querySelectorAll<HTMLTextAreaElement>('textarea').item(1),
+  )
+  const persistedBeforeSend = restoredAnswer.value
+  const restoredChoice = choiceButton('Cedar').getAttribute('aria-pressed')
+  await act(async () => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.chat-question-actions button.aw-button--primary',
+      ),
+    ).click()
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    restoredAnswer: persistedBeforeSend,
+    restoredChoice,
+    answerCalls: onAnswer.mock.calls,
+    storedDraftBeforeReload,
+    storedSelectionBeforeReload,
+    storedDraft: window.localStorage.getItem(storageKey),
+    storedSelection: window.localStorage.getItem(selectionStorageKey),
+  })
+
+  expect(snapshot()).toEqual({
+    restoredAnswer: 'Choose the icon with a clear silhouette.',
+    restoredChoice: 'true',
+    answerCalls: [
+      [
+        {
+          'Which colors should be included?': 'Cedar',
+          'Which icon?': 'Choose the icon with a clear silhouette.',
+        },
+      ],
+    ],
+    storedDraftBeforeReload:
+      'Which+icon%3F=Choose+the+icon+with+a+clear+silhouette.',
+    storedSelectionBeforeReload: 'Which+colors+should+be+included%3F=Cedar',
+    storedDraft: null,
+    storedSelection: null,
+  })
+})
+
+it('keeps freeform question answers after an unsuccessful send and reload', async () => {
+  const sessionId = crypto.randomUUID()
+  const requestId = 'fixture-retry-question'
+  const storageKey = `agent-watch-web:card-draft:${JSON.stringify([
+    'question',
+    sessionId,
+    requestId,
+    'answers',
+  ])}`
+  const onAnswer = vi.fn(() => Promise.resolve(false))
+  const cardProps = props({
+    sessionId,
+    requestId,
+    questions: singleChoiceQuestions,
+    isMobile: true,
+    onAnswer,
+  })
+  renderQuestion(cardProps)
+  await act(async () => {
+    await userEvent.fill(
+      requireElement(container.querySelector<HTMLTextAreaElement>('textarea')),
+      'Use the lower impact option.',
+    )
+  })
+  await act(async () => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.chat-question-actions button.aw-button--primary',
+      ),
+    ).click()
+    await Promise.resolve()
+  })
+  const storedDraftAfterFailure = window.localStorage.getItem(storageKey)
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+  renderQuestion(cardProps)
+
+  const snapshot = () => ({
+    answerCalls: onAnswer.mock.calls,
+    restoredAnswer: requireElement(
+      container.querySelector<HTMLTextAreaElement>('textarea'),
+    ).value,
+    storedDraftAfterFailure,
+    storedDraftAfterReload: window.localStorage.getItem(storageKey),
+  })
+
+  expect(snapshot()).toEqual({
+    answerCalls: [
+      [{ 'Which direction should be used?': 'Use the lower impact option.' }],
+    ],
+    restoredAnswer: 'Use the lower impact option.',
+    storedDraftAfterFailure:
+      'Which+direction+should+be+used%3F=Use+the+lower+impact+option.',
+    storedDraftAfterReload:
+      'Which+direction+should+be+used%3F=Use+the+lower+impact+option.',
+  })
+})
+
+it('warns when browser storage cannot save a question draft', async () => {
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new DOMException('Storage is blocked.')
+  })
+  renderQuestion(
+    props({
+      sessionId: 'fixture-storage-session',
+      requestId: 'fixture-storage-question',
+      questions: singleChoiceQuestions,
+      isMobile: true,
+    }),
+  )
+  await act(async () => {
+    await userEvent.fill(
+      requireElement(container.querySelector<HTMLTextAreaElement>('textarea')),
+      'Use the stable option.',
+    )
+  })
+
+  const snapshot = () => ({
+    answer: requireElement(
+      container.querySelector<HTMLTextAreaElement>('textarea'),
+    ).value,
+    notice: container.querySelector('[role="status"]')?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    answer: 'Use the stable option.',
+    notice:
+      'Browser storage is unavailable. Drafts may not survive a page reload.',
+  })
 })
 
 it('keeps the answer after a failed submission and allows retry', async () => {

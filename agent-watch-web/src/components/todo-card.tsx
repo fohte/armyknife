@@ -2,7 +2,7 @@ import '#components/todo-card.css'
 
 import { Button } from '@fohte/ui/button'
 import type { ClipboardEvent } from 'react'
-import { useEffect, useId, useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 
 import {
   AttachmentPreviewList,
@@ -12,6 +12,7 @@ import { CollapsibleText } from '#components/collapsible-text'
 import { MarkdownMessage } from '#components/markdown-message'
 import type { EncodedAttachment } from '#components/use-attachments'
 import { useAttachments } from '#components/use-attachments'
+import { cardDraftStorageKey, useDraft } from '#components/use-composer-draft'
 
 type TodoCardProps = {
   seq?: number
@@ -29,32 +30,38 @@ type TodoCardProps = {
 
 export function TodoCard({
   seq = 0,
-  sessionId = 'todo',
+  sessionId,
   title,
   detail,
   resolution,
   defaultComment = '',
   onResolve,
 }: TodoCardProps) {
+  const [draftSessionId] = useState(() => sessionId ?? crypto.randomUUID())
   const commentId = useId()
-  const attachmentState = useAttachments(`${sessionId}:todo:${String(seq)}`)
+  const attachmentState = useAttachments(
+    `${sessionId ?? 'todo'}:todo:${String(seq)}`,
+  )
+  const commentDraft = useDraft(
+    cardDraftStorageKey('todo', draftSessionId, seq, 'comment'),
+    defaultComment,
+  )
+  const { draft: comment, updateDraft, clearDraftIfUnchanged } = commentDraft
   const detailContent = useMemo(
     () =>
       detail === null ? null : <MarkdownMessage>{detail}</MarkdownMessage>,
     [detail],
   )
-  const [comment, setComment] = useState(defaultComment)
   const [detailExpanded, setDetailExpanded] = useState(false)
   const [resolutionLocally, setResolutionLocally] = useState<
     'completed' | 'rejected' | null
   >(null)
+  const [resolutionComment, setResolutionComment] = useState<string | null>(
+    null,
+  )
   const [isSubmitting, setIsSubmitting] = useState(false)
   const currentResolution = resolution ?? resolutionLocally
   const isResolved = currentResolution !== null
-
-  useEffect(() => {
-    if (resolution !== null) setComment(defaultComment)
-  }, [resolution, defaultComment])
 
   const resolveTodo = async (nextResolution: 'completed' | 'rejected') => {
     if (
@@ -66,6 +73,7 @@ export function TodoCard({
       return
     }
     const normalizedComment = comment.trim()
+    const sentDraft = comment
     setIsSubmitting(true)
     try {
       await attachmentState.sendWithAttachments(async (attachments) => {
@@ -80,7 +88,11 @@ export function TodoCard({
                 normalizedComment === '' ? null : normalizedComment,
                 attachments,
               )
-        if (succeeded) setResolutionLocally(nextResolution)
+        if (succeeded) {
+          setResolutionLocally(nextResolution)
+          setResolutionComment(normalizedComment)
+          clearDraftIfUnchanged(sentDraft)
+        }
         return succeeded
       })
     } finally {
@@ -90,7 +102,9 @@ export function TodoCard({
 
   if (isResolved) {
     const completionComment =
-      resolution !== null ? defaultComment : comment.trim()
+      resolution !== null
+        ? defaultComment
+        : (resolutionComment ?? comment.trim())
     const labels = {
       completed: ['done', 'Completed user task'],
       rejected: ['rejected', 'Rejected user task'],
@@ -139,6 +153,11 @@ export function TodoCard({
       <label className="chat-todo-comment-label" htmlFor={commentId}>
         Comment (optional)
       </label>
+      {!commentDraft.storageAvailable ? (
+        <p className="conversation-error" role="status">
+          Browser storage is unavailable. Drafts may not survive a page reload.
+        </p>
+      ) : null}
       <textarea
         id={commentId}
         className="chat-todo-comment"
@@ -149,7 +168,7 @@ export function TodoCard({
           handleAttachmentPaste(event, attachmentState.onPasteFiles)
         }}
         onChange={(event) => {
-          setComment(event.currentTarget.value)
+          updateDraft(event.currentTarget.value)
         }}
       />
       <AttachmentPreviewList

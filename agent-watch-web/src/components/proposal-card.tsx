@@ -12,6 +12,7 @@ import { numberShortcutChoice } from '#components/conversation-keyboard'
 import { MarkdownMessage } from '#components/markdown-message'
 import type { EncodedAttachment } from '#components/use-attachments'
 import { useAttachments } from '#components/use-attachments'
+import { cardDraftStorageKey, useDraft } from '#components/use-composer-draft'
 import type { ProposalAnswer, ProposalOption } from '#types'
 
 type ProposalCardProps = {
@@ -38,7 +39,7 @@ function choiceLabel(choice: number) {
 }
 
 export function ProposalCard({
-  sessionId = 'proposal',
+  sessionId,
   seq,
   title,
   summary,
@@ -52,17 +53,41 @@ export function ProposalCard({
   defaultComment = '',
   onAnswer,
 }: ProposalCardProps) {
-  const attachmentState = useAttachments(`${sessionId}:proposal:${String(seq)}`)
-  const [selectedChoice, setSelectedChoice] = useState<number | null>(
-    answer?.choice ?? defaultChoice,
+  const [draftSessionId] = useState(() => sessionId ?? crypto.randomUUID())
+  const attachmentState = useAttachments(
+    `${sessionId ?? 'proposal'}:proposal:${String(seq)}`,
   )
-  const [comment, setComment] = useState(answer?.comment ?? defaultComment)
+  const commentDraft = useDraft(
+    cardDraftStorageKey('proposal', draftSessionId, seq, 'comment'),
+    answer?.comment ?? defaultComment,
+  )
+  const choiceDraft = useDraft(
+    cardDraftStorageKey('proposal', draftSessionId, seq, 'choice'),
+    defaultChoice === null ? '' : String(defaultChoice),
+  )
   const [submittedAnswer, setSubmittedAnswer] = useState<ProposalAnswer | null>(
     null,
   )
+  const latestAnswer = answer ?? submittedAnswer
+  const savedChoice = Number(choiceDraft.draft)
+  const selectedChoice =
+    latestAnswer !== null
+      ? latestAnswer.choice
+      : choiceDraft.draft !== '' &&
+          Number.isInteger(savedChoice) &&
+          savedChoice >= 0 &&
+          savedChoice < options.length
+        ? savedChoice
+        : null
+  const setSelectedChoice = useCallback(
+    (choice: number | null) => {
+      choiceDraft.updateDraft(choice === null ? '' : String(choice))
+    },
+    [choiceDraft.updateDraft],
+  )
+  const { draft: comment, updateDraft, clearDraftIfUnchanged } = commentDraft
   const [isSubmitting, setIsSubmitting] = useState(false)
   const cardRef = useRef<HTMLElement | null>(null)
-  const latestAnswer = answer ?? submittedAnswer
   const isWithdrawn = resolution === 'withdrawn'
   const isAnswered = latestAnswer !== null || resolved || isWithdrawn
   const isDisabled = isAnswered || isSubmitting
@@ -70,9 +95,8 @@ export function ProposalCard({
   useEffect(() => {
     if (answer !== null || resolved || isWithdrawn) {
       setSelectedChoice(answer?.choice ?? null)
-      if (answer !== null) setComment(answer.comment ?? '')
     }
-  }, [answer, resolved, isWithdrawn])
+  }, [answer, resolved, isWithdrawn, setSelectedChoice])
 
   const submitAnswer = useCallback(
     async (choice: number | null) => {
@@ -95,14 +119,26 @@ export function ProposalCard({
             attachments.length === 0
               ? await onAnswer(response)
               : await onAnswer(response, attachments)
-          if (succeeded) setSubmittedAnswer(response)
+          if (succeeded) {
+            setSubmittedAnswer(response)
+            clearDraftIfUnchanged(comment)
+            choiceDraft.clearDraftIfUnchanged(choiceDraft.draft)
+          }
           return succeeded
         })
       } finally {
         setIsSubmitting(false)
       }
     },
-    [attachmentState, comment, isDisabled, onAnswer, options],
+    [
+      attachmentState,
+      choiceDraft,
+      clearDraftIfUnchanged,
+      comment,
+      isDisabled,
+      onAnswer,
+      options,
+    ],
   )
 
   useEffect(() => {
@@ -153,7 +189,13 @@ export function ProposalCard({
     return () => {
       window.removeEventListener('keydown', onKeyDown)
     }
-  }, [isDisabled, options.length, selectedChoice, submitAnswer])
+  }, [
+    isDisabled,
+    options.length,
+    selectedChoice,
+    setSelectedChoice,
+    submitAnswer,
+  ])
 
   const status =
     latestAnswer !== null
@@ -277,11 +319,17 @@ export function ProposalCard({
               handleAttachmentPaste(event, attachmentState.onPasteFiles)
             }}
             onChange={(event) => {
-              setComment(event.currentTarget.value)
+              updateDraft(event.currentTarget.value)
             }}
           />
         </>
       )}
+      {!isAnswered &&
+      (!commentDraft.storageAvailable || !choiceDraft.storageAvailable) ? (
+        <p className="conversation-error" role="status">
+          Browser storage is unavailable. Drafts may not survive a page reload.
+        </p>
+      ) : null}
       {answer === null && !resolved ? (
         <AttachmentPreviewList
           attachments={attachmentState.attachments}

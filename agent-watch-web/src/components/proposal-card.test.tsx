@@ -492,6 +492,133 @@ it('selects a numbered option and sends it with the comment on Command-Enter', a
   })
 })
 
+it('restores a proposal comment after reload and clears it after sending', async () => {
+  const sessionId = crypto.randomUUID()
+  const storageKey = `agent-watch-web:card-draft:${JSON.stringify([
+    'proposal',
+    sessionId,
+    7,
+    'comment',
+  ])}`
+  const choiceStorageKey = `agent-watch-web:card-draft:${JSON.stringify([
+    'proposal',
+    sessionId,
+    7,
+    'choice',
+  ])}`
+  const onAnswer = vi.fn<Props['onAnswer']>(() => Promise.resolve(true))
+  const cardProps = props({ sessionId, onAnswer })
+  renderCard(cardProps)
+  dispatchKey(window, '2')
+
+  setTextareaValue(
+    requireElement(
+      container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+    ),
+    'Keep the new choice easy to compare.',
+  )
+  const storedDraftBeforeReload = window.localStorage.getItem(storageKey)
+  const storedChoiceBeforeReload = window.localStorage.getItem(choiceStorageKey)
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+  renderCard(cardProps)
+
+  const restoredComment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+  )
+  const persistedBeforeSend = restoredComment.value
+  const selectedAfterReload = Array.from(
+    container.querySelectorAll<HTMLInputElement>('.chat-proposal-option input'),
+    (input) => input.checked,
+  )
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.chat-proposal-actions button',
+      ),
+    ).click()
+  })
+  await act(async () => {
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    restoredComment: persistedBeforeSend,
+    selectedAfterReload,
+    answerCalls: onAnswer.mock.calls,
+    storedDraftBeforeReload,
+    storedChoiceBeforeReload,
+    storedDraft: window.localStorage.getItem(storageKey),
+    storedChoiceDraft: window.localStorage.getItem(choiceStorageKey),
+  })
+
+  expect(snapshot()).toEqual({
+    restoredComment: 'Keep the new choice easy to compare.',
+    selectedAfterReload: [false, true],
+    answerCalls: [
+      [{ choice: 1, comment: 'Keep the new choice easy to compare.' }],
+    ],
+    storedDraftBeforeReload: 'Keep the new choice easy to compare.',
+    storedChoiceBeforeReload: '1',
+    storedDraft: null,
+    storedChoiceDraft: null,
+  })
+})
+
+it('keeps proposal comments after an unsuccessful answer and reload', async () => {
+  const sessionId = crypto.randomUUID()
+  const storageKey = `agent-watch-web:card-draft:${JSON.stringify([
+    'proposal',
+    sessionId,
+    7,
+    'comment',
+  ])}`
+  const onAnswer = vi.fn<Props['onAnswer']>(() => Promise.resolve(false))
+  const cardProps = props({ sessionId, onAnswer })
+  renderCard(cardProps)
+  dispatchKey(window, '1')
+  setTextareaValue(
+    requireElement(
+      container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+    ),
+    'Keep this note until the request succeeds.',
+  )
+  await act(async () => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.chat-proposal-actions button',
+      ),
+    ).click()
+    await Promise.resolve()
+  })
+  const storedDraftAfterFailure = window.localStorage.getItem(storageKey)
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+  renderCard(cardProps)
+
+  const snapshot = () => ({
+    answerCalls: onAnswer.mock.calls,
+    restoredComment: requireElement(
+      container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+    ).value,
+    storedDraftAfterFailure,
+    storedDraftAfterReload: window.localStorage.getItem(storageKey),
+  })
+
+  expect(snapshot()).toEqual({
+    answerCalls: [
+      [{ choice: 0, comment: 'Keep this note until the request succeeds.' }],
+    ],
+    restoredComment: 'Keep this note until the request succeeds.',
+    storedDraftAfterFailure: 'Keep this note until the request succeeds.',
+    storedDraftAfterReload: 'Keep this note until the request succeeds.',
+  })
+})
+
 it('does not send Command-Enter when no choice is selected', () => {
   const onAnswer = vi.fn(() => Promise.resolve(true))
   renderCard(props({ onAnswer, defaultComment: 'Add a simpler option.' }))

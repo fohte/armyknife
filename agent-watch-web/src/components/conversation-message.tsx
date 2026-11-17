@@ -169,6 +169,10 @@ export function renderConversationMessage({
       actions?.answerQuestion === true
     return (
       <QuestionCard
+        {...(sessionId === undefined ? {} : { sessionId })}
+        {...(message.requestId === undefined
+          ? {}
+          : { requestId: message.requestId })}
         questions={message.questions}
         canAnswer={canAnswer}
         isMobile={isMobile}
@@ -188,6 +192,7 @@ export function renderConversationMessage({
   if (message.type === 'decision') {
     return (
       <DecisionCard
+        {...(sessionId === undefined ? {} : { sessionId })}
         decision={message}
         variant="conversation"
         selected={selected}

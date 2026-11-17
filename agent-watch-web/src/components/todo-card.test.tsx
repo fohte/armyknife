@@ -60,21 +60,19 @@ function requireElement<T extends Element>(element: T | null): T {
   return element
 }
 
-function normalizeBaseUiIds(markup: string | undefined) {
-  return markup?.replace(/ id="base-ui-[^"]+"/g, ' id="[generated]"')
-}
-
 function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
   act(() => {
     const valueSetter = Reflect.getOwnPropertyDescriptor(
       textarea.constructor.prototype,
       'value',
     )?.set
-    if (valueSetter !== undefined) {
-      Reflect.apply(valueSetter, textarea, [value])
-    }
+    if (valueSetter !== undefined) Reflect.apply(valueSetter, textarea, [value])
     textarea.dispatchEvent(new Event('input', { bubbles: true }))
   })
+}
+
+function normalizeBaseUiIds(markup: string | undefined) {
+  return markup?.replace(/ id="base-ui-[^"]+"/g, ' id="[generated]"')
 }
 
 async function pasteImage(textarea: HTMLTextAreaElement, file: File) {
@@ -311,6 +309,107 @@ it('sends a trimmed optional comment and keeps the task as completed', async () 
     completionComment: 'The layout looks good.',
     commentInput: false,
     buttonCount: 0,
+  })
+})
+
+it('restores a task comment after reload and clears it after resolving', async () => {
+  const sessionId = crypto.randomUUID()
+  const seq = 42
+  const storageKey = `agent-watch-web:card-draft:${JSON.stringify([
+    'todo',
+    sessionId,
+    seq,
+    'comment',
+  ])}`
+  const onResolve = vi.fn<Props['onResolve']>(() => Promise.resolve(true))
+  const cardProps = props({ sessionId, seq, onResolve })
+  renderCard(cardProps)
+  setTextareaValue(
+    requireElement(
+      container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+    ),
+    'The page works at narrow widths.',
+  )
+  const storedDraftBeforeReload = window.localStorage.getItem(storageKey)
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+  renderCard(cardProps)
+
+  const restoredComment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+  const persistedBeforeSend = restoredComment.value
+  await act(async () => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>('.chat-todo-footer button'),
+    ).click()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  })
+
+  const snapshot = () => ({
+    restoredComment: persistedBeforeSend,
+    resolveCalls: onResolve.mock.calls,
+    storedDraftBeforeReload,
+    storedDraft: window.localStorage.getItem(storageKey),
+  })
+
+  expect(snapshot()).toEqual({
+    restoredComment: 'The page works at narrow widths.',
+    resolveCalls: [['completed', 'The page works at narrow widths.']],
+    storedDraftBeforeReload: 'The page works at narrow widths.',
+    storedDraft: null,
+  })
+})
+
+it('keeps task comments after an unsuccessful resolution and reload', async () => {
+  const sessionId = crypto.randomUUID()
+  const seq = 43
+  const storageKey = `agent-watch-web:card-draft:${JSON.stringify([
+    'todo',
+    sessionId,
+    seq,
+    'comment',
+  ])}`
+  const onResolve = vi.fn<Props['onResolve']>(() => Promise.resolve(false))
+  const cardProps = props({ sessionId, seq, onResolve })
+  renderCard(cardProps)
+  setTextareaValue(
+    requireElement(
+      container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+    ),
+    'Retain the review note for another attempt.',
+  )
+  await act(async () => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>('.chat-todo-footer button'),
+    ).click()
+    await Promise.resolve()
+  })
+  const storedDraftAfterFailure = window.localStorage.getItem(storageKey)
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+  renderCard(cardProps)
+
+  const snapshot = () => ({
+    resolveCalls: onResolve.mock.calls,
+    restoredComment: requireElement(
+      container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+    ).value,
+    storedDraftAfterFailure,
+    storedDraftAfterReload: window.localStorage.getItem(storageKey),
+  })
+
+  expect(snapshot()).toEqual({
+    resolveCalls: [
+      ['completed', 'Retain the review note for another attempt.'],
+    ],
+    restoredComment: 'Retain the review note for another attempt.',
+    storedDraftAfterFailure: 'Retain the review note for another attempt.',
+    storedDraftAfterReload: 'Retain the review note for another attempt.',
   })
 })
 

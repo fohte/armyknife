@@ -163,6 +163,7 @@ export function DecisionsPanel({
             return (
               <DecisionCard
                 key={decision.seq}
+                sessionId={session.id}
                 decision={decision}
                 variant="panel"
                 relativeTimeReference={relativeTimeReference}
