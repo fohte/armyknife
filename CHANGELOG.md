@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.765](https://github.com/fohte/armyknife/compare/v0.1.764...v0.1.765) (2026-11-17)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** restore card input on reload ([#1914](https://github.com/fohte/armyknife/issues/1914)) ([4f788fa](https://github.com/fohte/armyknife/commit/4f788facf935a167e61c5e3f17ce5b047c42669c))
+
 ## [0.1.764](https://github.com/fohte/armyknife/compare/v0.1.763...v0.1.764) (2026-11-17)
 
 
