@@ -2579,7 +2579,7 @@ it('opens a session in the Inbox when selected from the palette on Board', async
   })
 })
 
-it('opens a mobile new-session form from the Board header', async () => {
+it('restores the Board with Back after opening a mobile new-session form', async () => {
   vi.stubGlobal(
     'fetch',
     createSessionLaunchFetcher(jsonResponse({ launchId: 'launch-fixture' })),
@@ -2590,17 +2590,199 @@ it('opens a mobile new-session form from the Board header', async () => {
   clickButton('.board-header [aria-label="New session"]')
   await waitForDirectoryResults()
 
-  const snapshot = () => ({
+  const openedForm = {
     activeView: readActiveView(),
     newSessionFormOpen: container.querySelector('.new-session-view') !== null,
     mobileScreen: container
       .querySelector('.agent-watch-shell')
       ?.getAttribute('data-mobile-screen'),
+  }
+
+  await act(async () => {
+    await changeHistory('back')
+  })
+
+  const snapshot = () => ({
+    openedForm,
+    returnedToBoard: {
+      activeView: readActiveView(),
+      newSessionFormOpen: container.querySelector('.new-session-view') !== null,
+      url: window.location.search,
+    },
   })
   expect(snapshot()).toEqual({
-    activeView: 'Inbox',
-    newSessionFormOpen: true,
-    mobileScreen: 'conversation',
+    openedForm: {
+      activeView: 'Inbox',
+      newSessionFormOpen: true,
+      mobileScreen: 'conversation',
+    },
+    returnedToBoard: {
+      activeView: 'Board',
+      newSessionFormOpen: false,
+      url: '?view=board',
+    },
+  })
+})
+
+it('returns to the Board when a new-session form is closed', async () => {
+  vi.stubGlobal(
+    'fetch',
+    createSessionLaunchFetcher(jsonResponse({ launchId: 'launch-fixture' })),
+  )
+  renderMobileApp('Board')
+  publishSessions({ revision: 1, sessions: [] })
+  clickButton('.board-header [aria-label="New session"]')
+  await waitForDirectoryResults()
+  const returnedToBoard = waitForPopState()
+  clickButton('[aria-label="Back to Inbox"]')
+  await act(async () => {
+    await returnedToBoard
+  })
+
+  const snapshot = () => ({
+    activeView: readActiveView(),
+    newSessionFormOpen: container.querySelector('.new-session-view') !== null,
+    url: window.location.search,
+  })
+  expect(snapshot()).toEqual({
+    activeView: 'Board',
+    newSessionFormOpen: false,
+    url: '?view=board',
+  })
+})
+
+it('returns to the previous screen after closing a new-session form from Inbox', async () => {
+  vi.stubGlobal(
+    'fetch',
+    createSessionLaunchFetcher(jsonResponse({ launchId: 'launch-fixture' })),
+  )
+  renderMobileApp('Board')
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-before', 'Earlier session')],
+  })
+  const boardUrl = window.location.search
+  clickButton('[aria-label="Open navigation"]')
+  clickButton('.mobile-nav-drawer .view-switch-button[aria-pressed="false"]')
+  const inboxUrl = window.location.search
+  clickButton('[aria-label="New session"]')
+  await waitForDirectoryResults()
+  const closedForm = waitForPopState()
+  clickButton('[aria-label="Back to Inbox"]')
+  await act(async () => {
+    await closedForm
+  })
+  const closedFormState = {
+    activeView: readActiveView(),
+    newSessionFormOpen: container.querySelector('.new-session-view') !== null,
+    url: window.location.search,
+  }
+
+  await act(async () => {
+    await changeHistory('back')
+  })
+
+  const snapshot = () => ({
+    closedForm: closedFormState,
+    previousScreen: {
+      activeView: readActiveView(),
+      url: window.location.search,
+    },
+  })
+  expect(snapshot()).toEqual({
+    closedForm: {
+      activeView: 'Inbox',
+      newSessionFormOpen: false,
+      url: inboxUrl,
+    },
+    previousScreen: {
+      activeView: 'Board',
+      url: boardUrl,
+    },
+  })
+})
+
+it('clears a directly loaded new-session form without leaving the page', () => {
+  window.history.replaceState(null, '', '/?newSession=form')
+  renderApp()
+  clickButton('[aria-label="Close new session"]')
+
+  const snapshot = () => ({
+    newSessionFormOpen: container.querySelector('.new-session-view') !== null,
+    url: window.location.search,
+  })
+  expect(snapshot()).toEqual({
+    newSessionFormOpen: false,
+    url: '',
+  })
+})
+
+it('restores the previous screen when a new-session palette is dismissed with Back', async () => {
+  vi.stubGlobal(
+    'fetch',
+    createSessionLaunchFetcher(jsonResponse({ launchId: 'launch-fixture' })),
+  )
+  renderMobileApp('Board')
+  publishSessions({ revision: 1, sessions: [] })
+  act(() => {
+    dispatchKey(window, 'k', { ctrlKey: true })
+  })
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+  )
+  if (input === null) throw new Error('Palette input was not rendered')
+  await act(async () => {
+    await userEvent.type(input, 'New session')
+    await userEvent.keyboard('{Enter}{Enter}')
+  })
+  await waitForDirectoryResults()
+
+  const openedPalette = {
+    newSessionPickerOpen:
+      container.querySelector('.new-session-picker') !== null,
+    url: window.location.search,
+  }
+
+  await act(async () => {
+    await changeHistory('back')
+  })
+
+  const returnedToBoard = {
+    activeView: readActiveView(),
+    newSessionPickerOpen:
+      container.querySelector('.new-session-picker') !== null,
+    url: window.location.search,
+  }
+
+  await act(async () => {
+    await changeHistory('forward')
+  })
+
+  const snapshot = () => ({
+    openedPalette,
+    returnedToBoard,
+    restoredPalette: {
+      activeView: readActiveView(),
+      newSessionPickerOpen:
+        container.querySelector('.new-session-picker') !== null,
+      url: window.location.search,
+    },
+  })
+  expect(snapshot()).toEqual({
+    openedPalette: {
+      newSessionPickerOpen: true,
+      url: '?view=board&newSession=palette',
+    },
+    returnedToBoard: {
+      activeView: 'Board',
+      newSessionPickerOpen: false,
+      url: '?view=board',
+    },
+    restoredPalette: {
+      activeView: 'Board',
+      newSessionPickerOpen: true,
+      url: '?view=board&newSession=palette',
+    },
   })
 })
 
@@ -2635,8 +2817,12 @@ it('opens the session when its launch ID appears in the feed', async () => {
     jsonResponse({ launchId: 'launch-fixture' }),
   )
   vi.stubGlobal('fetch', fetcher)
+  window.history.replaceState(null, '', '/?session=session-before')
   renderApp()
-  publishSessions({ revision: 1, sessions: [] })
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-before', 'Previous session')],
+  })
   clickButton('[aria-label="New session"]')
   await waitForDirectoryResults()
   clickButton('.new-session-directory-button')
@@ -2645,6 +2831,7 @@ it('opens the session when its launch ID appears in the feed', async () => {
   publishSessions({
     revision: 2,
     sessions: [
+      session('session-before', 'Previous session'),
       {
         ...session('session-launched', 'Created session'),
         launchId: 'launch-fixture',
@@ -2652,15 +2839,33 @@ it('opens the session when its launch ID appears in the feed', async () => {
     ],
   })
 
-  const snapshot = () => ({
+  const launchedSession = {
     newSessionFormOpen: container.querySelector('.new-session-view') !== null,
     selectedTitle: readSelectedTitle(),
     selectedId: new URLSearchParams(window.location.search).get('session'),
+  }
+
+  await act(async () => {
+    await changeHistory('back')
+  })
+
+  const snapshot = () => ({
+    launchedSession,
+    returnedToPreviousSession: {
+      selectedTitle: readSelectedTitle(),
+      url: window.location.search,
+    },
   })
   expect(snapshot()).toEqual({
-    newSessionFormOpen: false,
-    selectedTitle: 'Created session',
-    selectedId: 'session-launched',
+    launchedSession: {
+      newSessionFormOpen: false,
+      selectedTitle: 'Created session',
+      selectedId: 'session-launched',
+    },
+    returnedToPreviousSession: {
+      selectedTitle: 'Previous session',
+      url: '?session=session-before',
+    },
   })
 })
 
@@ -2703,7 +2908,11 @@ it('ignores a launch response after the new session form is closed', async () =>
   clickButton('.new-session-directory-button')
   clickButton('[aria-label="Select directory /Users/example/work/service"]')
   clickButton('.new-session-start')
+  const closedForm = waitForPopState()
   clickButton('.new-session-close')
+  await act(async () => {
+    await closedForm
+  })
   clickButton('[aria-label="New session"]')
 
   await act(async () => {

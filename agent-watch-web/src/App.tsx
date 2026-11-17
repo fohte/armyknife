@@ -45,6 +45,7 @@ import {
 } from '#session-operations'
 import type { Session } from '#types'
 import { useNewSession } from '#use-new-session'
+import { useNewSessionNavigation } from '#use-new-session-navigation'
 import { useSavedInboxViews } from '#use-saved-inbox-views'
 import { useSessionRefreshRevisions } from '#use-session-refresh-revisions'
 
@@ -114,8 +115,11 @@ function AppContent() {
     selectedId,
     view,
     conversationOpen: mobileConversationOpen,
+    newSessionMode,
+    backFromNewSession,
     backToInbox,
     navigate,
+    replaceNewSessionWithSession,
   } = useSessionHistory()
   const [hideQuietProjects, setHideQuietProjects] = useState(true)
   const [focusedProjectName, setFocusedProjectName] = useState<string | null>(
@@ -124,9 +128,6 @@ function AppContent() {
   const [inboxFilterQuery, setInboxFilterQuery] = useState('')
   const [statusPanelOpen, setStatusPanelOpen] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
-  const [newSessionMode, setNewSessionMode] = useState<
-    'form' | 'palette' | null
-  >(null)
   const [pendingLaunchId, setPendingLaunchId] = useState<string | null>(null)
   const [manualInboxCollapsed, setManualInboxCollapsed] = useState<
     boolean | null
@@ -536,29 +537,16 @@ function AppContent() {
     closeMobileNav()
     setCommandPaletteOpen(true)
   }, [closeMobileNav])
-  const openNewSession = useCallback(
-    (mode: 'form' | 'palette') => {
-      newSession.reset()
-      setPendingLaunchId(null)
-      setNewSessionMode(mode)
-      setCommandPaletteOpen(false)
-      closeMobileNav()
-      if (mode === 'form') {
-        navigate((current) => ({
-          ...current,
-          view: 'inbox',
-          selectedId: null,
-          conversationOpen: false,
-        }))
-      }
-    },
-    [closeMobileNav, navigate, newSession.reset, setCommandPaletteOpen],
-  )
-  const closeNewSession = useCallback(() => {
-    newSession.reset()
-    setPendingLaunchId(null)
-    setNewSessionMode(null)
-  }, [newSession.reset])
+  const { closeNewSession, openNewSession, switchFromNewSessionToSession } =
+    useNewSessionNavigation({
+      backFromNewSession,
+      closeMobileNav,
+      navigate,
+      replaceNewSessionWithSession,
+      resetNewSession: newSession.reset,
+      setCommandPaletteOpen,
+      setPendingLaunchId,
+    })
   const openSessionFromNavigation = useCallback(
     (id: string) => {
       closeMobileNav()
@@ -581,10 +569,14 @@ function AppContent() {
     )
     if (launchedSession === undefined) return
     setPendingLaunchId(null)
-    setNewSessionMode(null)
     setCommandPaletteOpen(false)
-    openSessionInInbox(launchedSession.id)
-  }, [openSessionInInbox, pendingLaunchId, sessionsWithElapsedTime])
+    openSessionInInbox(launchedSession.id, 'replace')
+  }, [
+    openSessionInInbox,
+    pendingLaunchId,
+    sessionsWithElapsedTime,
+    setCommandPaletteOpen,
+  ])
   const inboxProps = {
     error: error ?? savedViews.storageError,
     connectionError: error,
@@ -608,7 +600,10 @@ function AppContent() {
       setShowAllInProgress(true)
     },
     onSelect: (id: string) => {
-      if (newSessionMode === 'form') closeNewSession()
+      if (newSessionMode === 'form') {
+        switchFromNewSessionToSession(id, true)
+        return
+      }
       openConversation(id)
     },
     laterExpanded,
@@ -702,7 +697,10 @@ function AppContent() {
           onOptimisticSessionOperation={dispatchSessionOperation}
           onSelectSession={(id) => {
             if (!orderedSessions.some((session) => session.id === id)) return
-            if (newSessionMode === 'form') closeNewSession()
+            if (newSessionMode === 'form') {
+              switchFromNewSessionToSession(id, false)
+              return
+            }
             navigate((current) => ({ ...current, selectedId: id }))
           }}
         />

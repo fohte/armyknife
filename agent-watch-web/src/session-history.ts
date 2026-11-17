@@ -6,6 +6,7 @@ export type SessionHistoryState = {
   selectedId: string | null
   view: SessionView
   conversationOpen: boolean
+  newSessionMode: 'form' | 'palette' | null
 }
 
 export type HistoryMode = 'push' | 'replace'
@@ -30,7 +31,11 @@ function isSessionHistoryState(value: unknown): value is SessionHistoryState {
     (typeof record['selectedId'] === 'string' ||
       record['selectedId'] === null) &&
     (record['view'] === 'inbox' || record['view'] === 'board') &&
-    typeof record['conversationOpen'] === 'boolean'
+    typeof record['conversationOpen'] === 'boolean' &&
+    (record['newSessionMode'] === undefined ||
+      record['newSessionMode'] === null ||
+      record['newSessionMode'] === 'form' ||
+      record['newSessionMode'] === 'palette')
   )
 }
 
@@ -38,15 +43,22 @@ function readPreviousNavigation(value: unknown): SessionHistoryState | null {
   const historyState = asRecord(value)
   const entry = asRecord(historyState?.[sessionHistoryKey])
   const previousNavigation = entry?.['previousNavigation']
-  return isSessionHistoryState(previousNavigation) ? previousNavigation : null
+  if (!isSessionHistoryState(previousNavigation)) return null
+  return {
+    ...previousNavigation,
+    newSessionMode: previousNavigation.newSessionMode ?? null,
+  }
 }
 
 function readSessionHistoryState(url: URL): SessionHistoryState {
   const view = url.searchParams.get('view')
+  const newSession = url.searchParams.get('newSession')
   return {
     selectedId: url.searchParams.get('session'),
     view: view === 'board' ? 'board' : 'inbox',
     conversationOpen: url.searchParams.get('screen') === 'conversation',
+    newSessionMode:
+      newSession === 'form' || newSession === 'palette' ? newSession : null,
   }
 }
 
@@ -55,6 +67,7 @@ function sessionHistoryUrl(state: SessionHistoryState, currentUrl: URL): URL {
   url.searchParams.delete('session')
   url.searchParams.delete('view')
   url.searchParams.delete('screen')
+  url.searchParams.delete('newSession')
   if (state.selectedId !== null) {
     url.searchParams.set('session', state.selectedId)
   }
@@ -63,6 +76,9 @@ function sessionHistoryUrl(state: SessionHistoryState, currentUrl: URL): URL {
   }
   if (state.conversationOpen) {
     url.searchParams.set('screen', 'conversation')
+  }
+  if (state.newSessionMode !== null) {
+    url.searchParams.set('newSession', state.newSessionMode)
   }
   return url
 }
@@ -134,5 +150,38 @@ export function useSessionHistory() {
     navigate((current) => ({ ...current, conversationOpen: false }), 'replace')
   }, [navigate])
 
-  return { ...state, backToInbox, navigate }
+  const backFromNewSession = useCallback(() => {
+    const previousNavigation = readPreviousNavigation(window.history.state)
+    if (
+      stateRef.current.newSessionMode !== null &&
+      previousNavigation?.newSessionMode === null
+    ) {
+      window.history.back()
+      return
+    }
+    navigate((current) => ({ ...current, newSessionMode: null }), 'replace')
+  }, [navigate])
+
+  const replaceNewSessionWithSession = useCallback(
+    (sessionId: string, conversationOpen: boolean) => {
+      navigate(
+        (current) => ({
+          ...current,
+          selectedId: sessionId,
+          conversationOpen,
+          newSessionMode: null,
+        }),
+        'replace',
+      )
+    },
+    [navigate],
+  )
+
+  return {
+    ...state,
+    backFromNewSession,
+    backToInbox,
+    navigate,
+    replaceNewSessionWithSession,
+  }
 }

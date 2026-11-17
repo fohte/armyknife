@@ -190,7 +190,13 @@ export function useCommandPaletteController({
     },
   })
   const openConversation = withRecentSession(openConversationAction)
-  const openSessionInInbox = withRecentSession(openSessionInInboxAction)
+  const openSessionInInbox = useCallback(
+    (id: string, mode?: HistoryMode) => {
+      recordRecentSession(id)
+      openSessionInInboxAction(id, mode)
+    },
+    [openSessionInInboxAction, recordRecentSession],
+  )
   const openTodaySession = withRecentSession(openTodaySessionAction)
   const focusSession = useCallback(
     async (id: string) => {
