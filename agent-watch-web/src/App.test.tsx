@@ -2590,32 +2590,37 @@ it('restores the Board with Back after opening a mobile new-session form', async
   clickButton('.board-header [aria-label="New session"]')
   await waitForDirectoryResults()
 
-  const snapshot = () => ({
+  const openedForm = {
     activeView: readActiveView(),
     newSessionFormOpen: container.querySelector('.new-session-view') !== null,
     mobileScreen: container
       .querySelector('.agent-watch-shell')
       ?.getAttribute('data-mobile-screen'),
-  })
-  expect(snapshot()).toEqual({
-    activeView: 'Inbox',
-    newSessionFormOpen: true,
-    mobileScreen: 'conversation',
-  })
+  }
 
   await act(async () => {
     await changeHistory('back')
   })
 
-  const returnedToBoard = () => ({
-    activeView: readActiveView(),
-    newSessionFormOpen: container.querySelector('.new-session-view') !== null,
-    url: window.location.search,
+  const snapshot = () => ({
+    openedForm,
+    returnedToBoard: {
+      activeView: readActiveView(),
+      newSessionFormOpen: container.querySelector('.new-session-view') !== null,
+      url: window.location.search,
+    },
   })
-  expect(returnedToBoard()).toEqual({
-    activeView: 'Board',
-    newSessionFormOpen: false,
-    url: '?view=board',
+  expect(snapshot()).toEqual({
+    openedForm: {
+      activeView: 'Inbox',
+      newSessionFormOpen: true,
+      mobileScreen: 'conversation',
+    },
+    returnedToBoard: {
+      activeView: 'Board',
+      newSessionFormOpen: false,
+      url: '?view=board',
+    },
   })
 })
 
@@ -2834,28 +2839,33 @@ it('opens the session when its launch ID appears in the feed', async () => {
     ],
   })
 
-  const snapshot = () => ({
+  const launchedSession = {
     newSessionFormOpen: container.querySelector('.new-session-view') !== null,
     selectedTitle: readSelectedTitle(),
     selectedId: new URLSearchParams(window.location.search).get('session'),
-  })
-  expect(snapshot()).toEqual({
-    newSessionFormOpen: false,
-    selectedTitle: 'Created session',
-    selectedId: 'session-launched',
-  })
+  }
 
   await act(async () => {
     await changeHistory('back')
   })
 
-  const returnedToPreviousSession = () => ({
-    selectedTitle: readSelectedTitle(),
-    url: window.location.search,
+  const snapshot = () => ({
+    launchedSession,
+    returnedToPreviousSession: {
+      selectedTitle: readSelectedTitle(),
+      url: window.location.search,
+    },
   })
-  expect(returnedToPreviousSession()).toEqual({
-    selectedTitle: 'Previous session',
-    url: '?session=session-before',
+  expect(snapshot()).toEqual({
+    launchedSession: {
+      newSessionFormOpen: false,
+      selectedTitle: 'Created session',
+      selectedId: 'session-launched',
+    },
+    returnedToPreviousSession: {
+      selectedTitle: 'Previous session',
+      url: '?session=session-before',
+    },
   })
 })
 
