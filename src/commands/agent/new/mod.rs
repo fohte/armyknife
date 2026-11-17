@@ -1531,6 +1531,10 @@ mod tests {
                         EnvVars::session_launch_id_name().to_string(),
                         "launch-fixture".to_string(),
                     ),
+                    (
+                        EnvVars::session_has_initial_prompt_name().to_string(),
+                        "0".to_string(),
+                    ),
                 ],
                 true,
             ),

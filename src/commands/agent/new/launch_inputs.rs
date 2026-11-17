@@ -40,6 +40,10 @@ pub(super) fn build_env_vars(
             EnvVars::session_launch_id_name().to_string(),
             launch_id.clone(),
         ));
+        env_vars.push((
+            EnvVars::session_has_initial_prompt_name().to_string(),
+            if common.prompt.is_some() { "1" } else { "0" }.to_string(),
+        ));
     }
     if vibe {
         env_vars.push((
@@ -70,13 +74,19 @@ pub(super) fn build_env_vars(
 mod tests {
     use super::*;
     use crate::commands::agent::types::Engine;
+    use rstest::rstest;
 
-    #[test]
-    fn includes_the_watch_web_launch_id_in_the_child_environment() {
+    #[rstest]
+    #[case::without_initial_prompt(None, "0")]
+    #[case::with_initial_prompt(Some("Inspect the fixture."), "1")]
+    fn includes_watch_web_launch_metadata_in_the_child_environment(
+        #[case] prompt: Option<&str>,
+        #[case] expected_has_initial_prompt: &str,
+    ) {
         let common = CommonNewArgs {
             watch_web_launch_id: Some("launch-fixture".to_string()),
             watch_web_directory: None,
-            prompt: None,
+            prompt: prompt.map(str::to_string),
             child_launch: None,
             label: None,
             kind: None,
@@ -102,6 +112,10 @@ mod tests {
                 (
                     EnvVars::session_launch_id_name().to_string(),
                     "launch-fixture".to_string(),
+                ),
+                (
+                    EnvVars::session_has_initial_prompt_name().to_string(),
+                    expected_has_initial_prompt.to_string(),
                 ),
             ],
         );
