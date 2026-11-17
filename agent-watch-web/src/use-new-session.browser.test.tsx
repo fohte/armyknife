@@ -93,3 +93,58 @@ it('reloads skill suggestions when the selected engine and directory change', as
     ],
   })
 })
+
+it('keeps the current suggestions when an earlier request resolves last', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  container = document.createElement('div')
+  document.body.append(container)
+  const pendingRequests: {
+    url: string
+    resolve: (response: Response) => void
+  }[] = []
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    return new Promise((resolve) => {
+      pendingRequests.push({
+        url: requestUrl(input),
+        resolve,
+      })
+    })
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+
+  act(() => root?.render(<NewSessionHarness />))
+  act(() => currentState?.setEngine('codex'))
+
+  const resolveRequest = async (index: number, name: string) => {
+    const request = pendingRequests[index]
+    if (request === undefined)
+      throw new Error('Expected a pending skill request')
+    await act(async () => {
+      request.resolve(
+        new Response(
+          JSON.stringify({
+            skills: [{ name, description: 'A fixture skill.' }],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      )
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    })
+  }
+
+  await resolveRequest(1, 'codex-fixture-skill')
+  await resolveRequest(0, 'claude-fixture-skill')
+
+  const snapshot = () => ({
+    skills: currentState?.skillSuggestions,
+    requests: pendingRequests.map(({ url }) => url),
+  })
+  expect(snapshot()).toEqual({
+    skills: [{ name: 'codex-fixture-skill', description: 'A fixture skill.' }],
+    requests: [
+      '/api/skill-suggestions?engine=claude',
+      '/api/skill-suggestions?engine=codex',
+    ],
+  })
+})

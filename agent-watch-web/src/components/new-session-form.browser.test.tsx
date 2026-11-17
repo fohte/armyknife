@@ -1,4 +1,4 @@
-import { act } from 'react'
+import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
@@ -53,6 +53,25 @@ function renderForm(state: NewSessionState, onLaunched = vi.fn()) {
   return { onLaunched }
 }
 
+function StatefulSkillForm() {
+  const [initialMessage, setInitialMessage] = useState('/')
+  const state = makeState({
+    initialMessage,
+    skillSuggestions: [
+      { name: 'design-flow', description: 'Help shape a design.' },
+      { name: 'debug-flow', description: 'Investigate a failure.' },
+    ],
+    setInitialMessage,
+  })
+  return (
+    <NewSessionForm
+      state={state}
+      onClose={() => undefined}
+      onLaunched={() => undefined}
+    />
+  )
+}
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
@@ -76,17 +95,8 @@ it('requires a directory before the session can start', () => {
 })
 
 it('suggests and inserts skills in the first message field', async () => {
-  const setInitialMessage = vi.fn()
-  renderForm(
-    makeState({
-      initialMessage: '/',
-      skillSuggestions: [
-        { name: 'design-flow', description: 'Help shape a design.' },
-        { name: 'debug-flow', description: 'Investigate a failure.' },
-      ],
-      setInitialMessage,
-    }),
-  )
+  root = createRoot(container)
+  act(() => root?.render(<StatefulSkillForm />))
 
   const textarea = container.querySelector<HTMLTextAreaElement>(
     '[aria-label="First message"]',
@@ -98,17 +108,14 @@ it('suggests and inserts skills in the first message field', async () => {
   })
 
   const snapshot = () => ({
-    options: [...container.querySelectorAll('[role="option"]')].map(
-      (option) => option.textContent,
-    ),
-    initialMessages: setInitialMessage.mock.calls,
+    draft: textarea.value,
+    optionCount: container.querySelectorAll('[role="option"]').length,
+    expanded: textarea.getAttribute('aria-expanded'),
   })
   expect(snapshot()).toEqual({
-    options: [
-      '/design-flowHelp shape a design.',
-      '/debug-flowInvestigate a failure.',
-    ],
-    initialMessages: [['/debug-flow ']],
+    draft: '/debug-flow ',
+    optionCount: 0,
+    expanded: 'false',
   })
 })
 
