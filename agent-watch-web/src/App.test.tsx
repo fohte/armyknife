@@ -3837,17 +3837,20 @@ it('adds a session to Starred from the session row', async () => {
   ])
 })
 
-it('labels a Starred session for removal from its row', () => {
+it('keeps the Starred action in the selected session header', () => {
   renderApp()
   publishSessions({
     revision: 1,
     sessions: [{ ...session('session-a', 'First session'), isToday: true }],
   })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
 
   expect(
     container
       .querySelector<HTMLButtonElement>(
-        '.session-row-actions button[aria-pressed="true"]',
+        '.conversation-today-toggle[aria-pressed="true"]',
       )
       ?.getAttribute('aria-label'),
   ).toEqual('Remove from Starred')

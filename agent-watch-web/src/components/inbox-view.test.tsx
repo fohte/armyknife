@@ -276,10 +276,43 @@ it('labels the Starred session strip for assistive technology', () => {
   expect(snapshot()).toEqual({ role: 'group', label: 'Starred sessions' })
 })
 
-it('omits quick actions from iPhone inbox rows', () => {
+it.each([
+  ['desktop', false],
+  ['phone', true],
+] as const)('keeps quick actions out of %s Inbox rows', (_layout, isMobile) => {
+  renderInbox({ isMobile })
+
+  expect(container.querySelectorAll('.session-row-actions').length).toEqual(0)
+})
+
+it('places the mobile connection after the brand and before header actions', () => {
   renderInbox({ isMobile: true })
 
-  expect(container.querySelectorAll('.session-row-actions').length).toBe(0)
+  const brand = container.querySelector('.mobile-inbox-brand')
+  const dot = container.querySelector('.mobile-inbox-connection-dot')
+  const headerSnapshot = () => ({
+    children: Array.from(brand?.children ?? []).map((child) =>
+      child.classList.contains('brand-mark')
+        ? 'brand mark'
+        : child.classList.contains('mobile-inbox-connection')
+          ? 'connection status'
+          : child.classList.contains('mobile-nav-actions')
+            ? 'header actions'
+            : child.textContent,
+    ),
+    connectionDotBorderRadius:
+      dot === null ? null : getComputedStyle(dot).borderRadius,
+  })
+
+  expect(headerSnapshot()).toEqual({
+    children: [
+      'brand mark',
+      'agent watch',
+      'connection status',
+      'header actions',
+    ],
+    connectionDotBorderRadius: '50%',
+  })
 })
 
 it('keeps the iPhone inbox brand below the safe area', () => {
@@ -300,6 +333,18 @@ it('shows the connection time while the iPhone inbox is connected', () => {
     label: 'Connected · 22:00',
     dotClassName: 'mobile-inbox-connection-dot',
   })
+})
+
+it.each([
+  ['desktop', false],
+  ['phone', true],
+] as const)('shows the Later icon in the %s Inbox', (_layout, isMobile) => {
+  renderInbox({ isMobile })
+
+  expect(
+    container.querySelector('.later-collapsed-row')?.firstElementChild
+      ?.textContent,
+  ).toEqual('◷ Later')
 })
 
 it('shows the last update time and error dot while the iPhone inbox is disconnected', () => {
