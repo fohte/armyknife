@@ -26,7 +26,6 @@ type InboxViewProps = {
   onSelect: (id: string) => void
   laterExpanded: boolean
   onToggleLater: () => void
-  onLater: (id: string) => void
   onToggleToday: (id: string, isToday: boolean) => void
   todaySessions: readonly Session[]
   onSelectToday: (id: string) => void
@@ -71,8 +70,6 @@ export function InboxView({
   onSelect,
   laterExpanded,
   onToggleLater,
-  onLater,
-  onToggleToday,
   todaySessions,
   onSelectToday,
   isMobile,
@@ -193,13 +190,6 @@ export function InboxView({
           &gt;
         </span>
         <span>agent watch</span>
-        {isMobile ? (
-          <MobileNavigationActions
-            onOpenNavigation={onOpenNavigation}
-            onOpenPalette={onOpenPalette}
-            onNewSession={onNewSession}
-          />
-        ) : null}
         <span className="mobile-inbox-connection">
           <span
             className={`mobile-inbox-connection-dot${connected ? '' : ' is-disconnected'}`}
@@ -209,6 +199,13 @@ export function InboxView({
             ? `Connected · ${lastUpdatedTime}`
             : `Disconnected · Last updated ${lastUpdatedTime}`}
         </span>
+        {isMobile ? (
+          <MobileNavigationActions
+            onOpenNavigation={onOpenNavigation}
+            onOpenPalette={onOpenPalette}
+            onNewSession={onNewSession}
+          />
+        ) : null}
       </div>
       <header className="view-header">
         <h1 id="inbox-title">Inbox</h1>
@@ -326,8 +323,6 @@ export function InboxView({
           sessions: needsAction,
           selectedId,
           onSelect,
-          onLater,
-          onToggleToday,
           isMobile,
         })}
         <Button
@@ -337,7 +332,7 @@ export function InboxView({
           aria-expanded={laterExpanded}
           onClick={onToggleLater}
         >
-          <span>{isMobile ? 'Later' : '◷ Later'}</span>
+          <span>◷ Later</span>
           <span className="later-section-count">{later.length}</span>
           {later.length > 0 || isMobile ? (
             <span className="later-next-return">
@@ -363,8 +358,6 @@ export function InboxView({
                 session={session}
                 selectedId={selectedId}
                 onSelect={onSelect}
-                onLater={onLater}
-                onToggleToday={onToggleToday}
                 isMobile={isMobile}
               />
             ))}
@@ -390,8 +383,6 @@ export function InboxView({
           count: inProgress.length,
           selectedId,
           onSelect,
-          onLater,
-          onToggleToday,
           isMobile,
         })}
         {hiddenInProgressCount > 0 && !isMobile ? (
@@ -446,8 +437,6 @@ export function InboxView({
           sessions: isMobile && !doneExpanded ? [] : done,
           selectedId,
           onSelect,
-          onLater,
-          onToggleToday,
           isMobile,
           onCloseAll: () => {
             onCloseDone(allDone)

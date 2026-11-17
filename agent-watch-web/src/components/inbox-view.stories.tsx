@@ -204,7 +204,6 @@ const meta = {
     onSelect: () => undefined,
     laterExpanded: false,
     onToggleLater: () => undefined,
-    onLater: () => undefined,
     onToggleToday: () => undefined,
     todaySessions: sessions.filter(
       (session) => session.id === 'sample-question',

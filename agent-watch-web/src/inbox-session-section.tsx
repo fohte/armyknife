@@ -9,8 +9,6 @@ export function renderInboxSessionSection({
   count = sessions.length,
   selectedId,
   onSelect,
-  onLater,
-  onToggleToday,
   isMobile,
   className = '',
   onCloseAll,
@@ -21,8 +19,6 @@ export function renderInboxSessionSection({
   count?: number
   selectedId: string | null
   onSelect: (id: string) => void
-  onLater: (id: string) => void
-  onToggleToday: (id: string, isToday: boolean) => void
   isMobile: boolean
   className?: string
   onCloseAll?: () => void
@@ -53,8 +49,6 @@ export function renderInboxSessionSection({
               session={session}
               selectedId={selectedId}
               onSelect={onSelect}
-              onLater={onLater}
-              onToggleToday={onToggleToday}
               isMobile={isMobile}
             />
           ))}

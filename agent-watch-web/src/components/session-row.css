@@ -9,6 +9,7 @@
 
 .session-row-content.density-full {
   padding: 8px 18px 9px 14px;
+  gap: 8px;
 }
 
 .session-row-content.density-compact {
@@ -37,6 +38,10 @@
 .session-row-status.category-done,
 .session-row-status.category-later {
   color: var(--aw-text-muted);
+}
+
+.session-row-status.category-done {
+  color: var(--aw-text-disabled);
 }
 
 .session-row-status:has(.session-row-kind-icon--error) {
@@ -87,7 +92,7 @@
 .session-row-content .session-age {
   flex: none;
   margin-left: auto;
-  color: var(--aw-text-muted);
+  color: var(--aw-text-secondary);
   font-family: var(--font-mono);
   font-size: 11.5px;
   white-space: nowrap;
@@ -95,10 +100,14 @@
 
 .session-row-content .session-preview {
   overflow: hidden;
-  color: var(--aw-text-secondary);
+  color: var(--aw-text-muted);
   font-size: 12.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.session-row-content .session-preview.is-decision-preview {
+  color: var(--aw-text-body);
 }
 
 .session-row-content .session-meta-line,
@@ -120,6 +129,11 @@
   color: var(--aw-text-secondary);
 }
 
+.session-row-content.density-full .session-role-icon svg {
+  width: 12.5px;
+  height: 12.5px;
+}
+
 .session-row-content .session-engine,
 .session-row-content .session-task-reference,
 .session-row-content .session-repo {
@@ -130,7 +144,7 @@
 .session-row-content .session-meta-separator,
 .session-row-content .session-repo-separator {
   flex: none;
-  color: var(--aw-text-muted);
+  color: var(--aw-text-secondary);
 }
 
 .session-row-content .session-task {
@@ -182,7 +196,7 @@
 .session-row-content.is-mobile.density-full {
   padding: 10px 16px;
   grid-template-columns: 16px minmax(0, 1fr);
-  gap: 12px;
+  gap: 8px;
 }
 
 .session-row-content.is-mobile .session-row-status {
@@ -198,4 +212,9 @@
 .session-row-content.is-mobile .session-age,
 .session-row-content.is-mobile .session-meta-line {
   font-size: 12.5px;
+}
+
+.session-row-content.is-mobile.density-full .session-role-icon svg {
+  width: 13.5px;
+  height: 13.5px;
 }

@@ -103,8 +103,14 @@ export function SessionRow({
   const task = session.task
   const repo = session.repo.trim() || '—'
   const trimmedBranch = branch?.trim() ?? ''
-  const linkedTaskCount = formatLinkedTaskCount(session.tasks)
+  const linkedTaskCount =
+    density === 'compact' ? formatLinkedTaskCount(session.tasks) : ''
   const decisionLabel = formatSessionDecisionCount(session)
+  const decisionPreview =
+    session.category === 'done' && (session.unreviewedDecisionCount ?? 0) > 0
+      ? decisionLabel
+      : null
+  const preview = decisionPreview ?? session.preview
 
   return (
     <div
@@ -136,10 +142,12 @@ export function SessionRow({
             {formatElapsedTime(session.elapsedSeconds)}
           </span>
         </span>
-        {density === 'full' &&
-        session.preview !== null &&
-        session.preview.length > 0 ? (
-          <span className="session-preview">{session.preview}</span>
+        {density === 'full' && preview !== null && preview.length > 0 ? (
+          <span
+            className={`session-preview${decisionPreview === null ? '' : ' is-decision-preview'}`}
+          >
+            {preview}
+          </span>
         ) : null}
         <span className="session-meta-line">
           <span
@@ -181,7 +189,7 @@ export function SessionRow({
               <span className="session-repo">{repo}</span>
             </>
           ) : null}
-          {decisionLabel !== null ? (
+          {density === 'compact' && decisionLabel !== null ? (
             <span className="session-decision-count">{decisionLabel}</span>
           ) : null}
         </span>

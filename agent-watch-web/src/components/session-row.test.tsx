@@ -110,7 +110,7 @@ it('shows the full Inbox row with role, engine, task and repository', () => {
     preview: 'Should retries stop after three attempts?',
     role: 'development',
     engine: 'codex',
-    task: 'P2 #17 Improve request reliability +1',
+    task: 'P2 #17 Improve request reliability',
     repositoryLines: ['sample/service'],
   })
 })
@@ -142,8 +142,30 @@ it('keeps the full layout for mobile Inbox rows', () => {
     preview: 'Should retries stop after three attempts?',
     role: 'development',
     engine: 'codex',
-    task: 'P2 #17 Improve request reliability +1',
+    task: 'P2 #17 Improve request reliability',
     repositoryLines: ['sample/service'],
+  })
+})
+
+it('shows unreviewed decisions in the Done preview', () => {
+  renderRow('full', {
+    ...session,
+    category: 'done',
+    decisionCount: 3,
+    unreviewedDecisionCount: 2,
+  })
+
+  const decisionPreviewSnapshot = () => ({
+    preview: container.querySelector('.session-preview')?.textContent,
+    previewClassName: container.querySelector('.session-preview')?.className,
+    decisionCount:
+      container.querySelector('.session-decision-count')?.textContent ?? null,
+  })
+
+  expect(decisionPreviewSnapshot()).toEqual({
+    preview: '◇ 2 decisions to review',
+    previewClassName: 'session-preview is-decision-preview',
+    decisionCount: null,
   })
 })
 

@@ -3798,7 +3798,7 @@ it('ignores return times from an earlier Later menu request', async () => {
   expect(returnTime).toEqual('22:00')
 })
 
-it('adds a session to Starred from the session row', async () => {
+it('adds a session to Starred from the selected session header', async () => {
   const fetchMock = vi
     .fn<typeof fetch>()
     .mockImplementation((input) =>
@@ -3812,9 +3812,12 @@ it('adds a session to Starred from the session row', async () => {
     revision: 1,
     sessions: [session('session-a', 'First session')],
   })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
 
   const todayButton = container.querySelector<HTMLButtonElement>(
-    '[aria-label="Add to Starred"]',
+    '.conversation-today-toggle[aria-label="Add to Starred"]',
   )
   await act(async () => {
     todayButton?.click()
@@ -3837,17 +3840,20 @@ it('adds a session to Starred from the session row', async () => {
   ])
 })
 
-it('labels a Starred session for removal from its row', () => {
+it('keeps the Starred action in the selected session header', () => {
   renderApp()
   publishSessions({
     revision: 1,
     sessions: [{ ...session('session-a', 'First session'), isToday: true }],
   })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
 
   expect(
     container
       .querySelector<HTMLButtonElement>(
-        '.session-row-actions button[aria-pressed="true"]',
+        '.conversation-today-toggle[aria-pressed="true"]',
       )
       ?.getAttribute('aria-label'),
   ).toEqual('Remove from Starred')
@@ -3867,9 +3873,12 @@ it('reports a Starred update failure', async () => {
     revision: 1,
     sessions: [session('session-a', 'First session')],
   })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
 
   const starredButton = container.querySelector<HTMLButtonElement>(
-    '[aria-label="Add to Starred"]',
+    '.conversation-today-toggle[aria-label="Add to Starred"]',
   )
   await act(async () => {
     starredButton?.click()
