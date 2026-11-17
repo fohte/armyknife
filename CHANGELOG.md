@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.771](https://github.com/fohte/armyknife/compare/v0.1.770...v0.1.771) (2026-11-17)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align quota forecast display ([#1926](https://github.com/fohte/armyknife/issues/1926)) ([f20e9b0](https://github.com/fohte/armyknife/commit/f20e9b025ffe950ee85a8b16acfefe8e2637eded))
+
 ## [0.1.770](https://github.com/fohte/armyknife/compare/v0.1.769...v0.1.770) (2026-11-17)
 
 
