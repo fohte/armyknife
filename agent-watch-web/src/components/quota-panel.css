@@ -31,7 +31,7 @@
 
 .quota-window {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) 4ch 6ch 5ch;
+  grid-template-columns: 18px minmax(0, 1fr) 4ch minmax(6ch, max-content) 5ch;
   align-items: center;
   gap: 6px;
   color: #8b8b94;
