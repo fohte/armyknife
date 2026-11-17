@@ -7,7 +7,6 @@ import { page } from 'vitest/browser'
 
 import { type Decision, DecisionCard } from '#components/decision-card'
 import { MarkdownSessionLinksProvider } from '#components/markdown-message'
-import { setTextareaValue } from '#test/test-utils'
 import type { SessionLinkTarget } from '#types'
 
 let container: HTMLDivElement
@@ -66,6 +65,17 @@ function button(label: string) {
 function requireElement<T extends Element>(element: T | null): T {
   if (element === null) throw new Error('Expected element was not rendered')
   return element
+}
+
+function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
+  act(() => {
+    const valueSetter = Reflect.getOwnPropertyDescriptor(
+      textarea.constructor.prototype,
+      'value',
+    )?.set
+    if (valueSetter !== undefined) Reflect.apply(valueSetter, textarea, [value])
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+  })
 }
 
 beforeEach(() => {

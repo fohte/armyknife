@@ -4,13 +4,6 @@
   "packageManager": "pnpm@12.7.0",
   "type": "module",
   "imports": {
-    "#test/*": {
-      "types": [
-        "./test/*.tsx",
-        "./test/*.ts"
-      ],
-      "default": "./test/*"
-    },
     "#*": {
       "types": [
         "./src/*.tsx",

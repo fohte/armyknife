@@ -3,7 +3,6 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { MessageComposer } from '#components/message-composer'
-import { setTextareaValue } from '#test/test-utils'
 import type { SkillSuggestion } from '#types'
 
 let container: HTMLDivElement
@@ -12,6 +11,22 @@ let root: Root | null = null
 function requireElement<T extends Element>(element: T | null): T {
   if (element === null) throw new Error('Expected element was not rendered')
   return element
+}
+
+function setTextareaValue(
+  textarea: HTMLTextAreaElement,
+  value: string,
+  cursor = value.length,
+) {
+  act(() => {
+    const valueSetter = Reflect.getOwnPropertyDescriptor(
+      textarea.constructor.prototype,
+      'value',
+    )?.set
+    if (valueSetter !== undefined) Reflect.apply(valueSetter, textarea, [value])
+    textarea.setSelectionRange(cursor, cursor)
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+  })
 }
 
 function ComposerHarness({

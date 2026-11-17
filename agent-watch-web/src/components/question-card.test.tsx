@@ -2,11 +2,11 @@ import type { ComponentProps } from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { userEvent } from 'vitest/browser'
 
 import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import { ProposalCard } from '#components/proposal-card'
 import { QuestionCard } from '#components/question-card'
-import { setTextareaValue } from '#test/test-utils'
 import type { SessionLinkTarget } from '#types'
 
 type Props = ComponentProps<typeof QuestionCard>
@@ -530,12 +530,14 @@ it('restores question answers after reload and clears them after sending', async
   act(() => {
     choiceButton('Cedar').click()
   })
-  setTextareaValue(
-    requireElement(
-      container.querySelectorAll<HTMLTextAreaElement>('textarea').item(1),
-    ),
-    'Choose the icon with a clear silhouette.',
-  )
+  await act(async () => {
+    await userEvent.fill(
+      requireElement(
+        container.querySelectorAll<HTMLTextAreaElement>('textarea').item(1),
+      ),
+      'Choose the icon with a clear silhouette.',
+    )
+  })
   const storedDraftBeforeReload = window.localStorage.getItem(storageKey)
   const storedSelectionBeforeReload =
     window.localStorage.getItem(selectionStorageKey)
@@ -606,10 +608,12 @@ it('keeps freeform question answers after an unsuccessful send and reload', asyn
     onAnswer,
   })
   renderQuestion(cardProps)
-  setTextareaValue(
-    requireElement(container.querySelector<HTMLTextAreaElement>('textarea')),
-    'Use the lower impact option.',
-  )
+  await act(async () => {
+    await userEvent.fill(
+      requireElement(container.querySelector<HTMLTextAreaElement>('textarea')),
+      'Use the lower impact option.',
+    )
+  })
   await act(async () => {
     requireElement(
       container.querySelector<HTMLButtonElement>(
@@ -646,7 +650,7 @@ it('keeps freeform question answers after an unsuccessful send and reload', asyn
   })
 })
 
-it('warns when browser storage cannot save a question draft', () => {
+it('warns when browser storage cannot save a question draft', async () => {
   vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
     throw new DOMException('Storage is blocked.')
   })
@@ -658,10 +662,12 @@ it('warns when browser storage cannot save a question draft', () => {
       isMobile: true,
     }),
   )
-  setTextareaValue(
-    requireElement(container.querySelector<HTMLTextAreaElement>('textarea')),
-    'Use the stable option.',
-  )
+  await act(async () => {
+    await userEvent.fill(
+      requireElement(container.querySelector<HTMLTextAreaElement>('textarea')),
+      'Use the stable option.',
+    )
+  })
 
   const snapshot = () => ({
     answer: requireElement(
