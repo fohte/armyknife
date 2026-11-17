@@ -129,14 +129,49 @@ export const CritReviewAndBackgroundTasksAreWaiting: Story = {
   },
 }
 
+export const AllCritBackgroundTasksAreExpanded: Story = {
+  name: 'The Crit review shows every background task',
+  args: {
+    state: state('crit-review', 'crit · PR #318'),
+    backgroundTasks,
+    defaultBackgroundTasksExpanded: true,
+  },
+}
+
 export const AQuestionNeedsAnAnswer: Story = {
   name: 'The question row points back to its conversation card',
   args: { state: state('question', 'Which retry interval should be used?') },
 }
 
+export const AQuestionShowsBackgroundTasks: Story = {
+  name: 'The question row shows its background tasks on mobile',
+  args: {
+    state: state('question', 'Which retry interval should be used?'),
+    backgroundTasks,
+    defaultBackgroundTasksExpanded: true,
+    isMobile: true,
+  },
+  decorators: [
+    (Story) => (
+      <div style={{ width: '390px' }}>
+        <Story />
+      </div>
+    ),
+  ],
+}
+
 export const APermissionNeedsApproval: Story = {
   name: 'The permission row points back to its conversation card',
   args: { state: state('permission', 'Bash  cargo run --package fictional') },
+}
+
+export const APermissionShowsBackgroundTasks: Story = {
+  name: 'The permission row shows its background tasks',
+  args: {
+    state: state('permission', 'Bash  cargo run --package fictional'),
+    backgroundTasks,
+    defaultBackgroundTasksExpanded: true,
+  },
 }
 
 export const TheSessionIsWaitingForExternalWork: Story = {

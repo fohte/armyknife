@@ -260,7 +260,7 @@ export function ConversationPaneView({
   const returnToRequestCard = () => {
     const cardSelector =
       statusBandState?.kind === 'permission'
-        ? '.chat-permission-card'
+        ? '.chat-permission-card:not(.chat-permission-denied-card)'
         : '.chat-question-card[data-has-unanswered-question="true"]'
     const cards =
       conversationScrollRef.current?.querySelectorAll<HTMLElement>(cardSelector)

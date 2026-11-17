@@ -22,6 +22,12 @@
   padding: 0;
 }
 
+.conversation-status-band-compact-main {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
 .conversation-status-band-toggle[data-slot='button'] {
   display: flex;
   width: 100%;
@@ -38,6 +44,16 @@
   font: inherit;
   text-align: left;
   white-space: nowrap;
+}
+
+.conversation-status-band-compact-main
+  .conversation-status-band-toggle[data-slot='button'] {
+  width: auto;
+  flex: 1;
+}
+
+.conversation-status-band-compact-main .conversation-status-band-tasks {
+  margin-right: max(24px, calc((100% - 712px) / 2));
 }
 
 .conversation-status-band-toggle[data-slot='button']:hover {
@@ -319,6 +335,10 @@
   .conversation-status-band--compact .conversation-status-band-toggle {
     min-height: 43px;
     padding: 0 12px;
+  }
+
+  .conversation-status-band-compact-main .conversation-status-band-tasks {
+    margin-right: 12px;
   }
 
   .conversation-status-band--compact {

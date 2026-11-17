@@ -14,6 +14,7 @@ type ConversationStatusBandProps = {
   backgroundTasks: readonly BackgroundTask[]
   isMobile?: boolean
   defaultExpanded?: boolean
+  defaultBackgroundTasksExpanded?: boolean
   onReviewInCrit?: () => void
   onReturnToCard?: () => void
 }
@@ -35,6 +36,7 @@ export function ConversationStatusBand({
   backgroundTasks,
   isMobile = false,
   defaultExpanded = false,
+  defaultBackgroundTasksExpanded = false,
   onReviewInCrit,
   onReturnToCard,
 }: ConversationStatusBandProps) {
@@ -97,13 +99,10 @@ export function ConversationStatusBand({
             )}
           </div>
           {backgroundTasks.length > 0 ? (
-            <details className="conversation-status-band-tasks">
-              <summary>
-                Background tasks ({String(backgroundTasks.length)}){' '}
-                <span aria-hidden="true">▾</span>
-              </summary>
-              <BackgroundTaskList tasks={backgroundTasks} />
-            </details>
+            <BackgroundTaskDisclosure
+              tasks={backgroundTasks}
+              defaultOpen={defaultBackgroundTasksExpanded}
+            />
           ) : null}
         </div>
         <Button
@@ -124,8 +123,45 @@ export function ConversationStatusBand({
       ? backgroundTaskDetails
       : [
           ...(detail == null || detail === '' ? [] : [detail]),
-          ...(state.kind === 'waiting' ? backgroundTaskDetails : []),
+          ...backgroundTaskDetails,
         ]
+  const statusToggle = (
+    <Button
+      className="conversation-status-band-toggle"
+      type="button"
+      variant="plain"
+      aria-expanded={isCardReturn ? undefined : isExpanded}
+      aria-controls={isCardReturn ? undefined : detailsId}
+      onClick={
+        isCardReturn
+          ? () => onReturnToCard?.()
+          : () => {
+              setIsExpanded((expanded) => !expanded)
+            }
+      }
+    >
+      <span className="conversation-status-band-dot" aria-hidden="true" />
+      <strong className="conversation-status-band-label">{title}</strong>
+      {inlineDetail == null || inlineDetail === '' ? null : (
+        <>
+          <span
+            className="conversation-status-band-separator"
+            aria-hidden="true"
+          >
+            ·
+          </span>
+          <span
+            className={`conversation-status-band-inline-detail${state.kind === 'working' || state.kind === 'permission' ? ' is-monospace' : ''}`}
+          >
+            {inlineDetail}
+          </span>
+        </>
+      )}
+      <span className="conversation-status-band-chevron" aria-hidden="true">
+        {isCardReturn ? '↑' : isExpanded ? '▾' : '›'}
+      </span>
+    </Button>
+  )
 
   return (
     <section
@@ -133,41 +169,17 @@ export function ConversationStatusBand({
       aria-label="Conversation status"
       role="status"
     >
-      <Button
-        className="conversation-status-band-toggle"
-        type="button"
-        variant="plain"
-        aria-expanded={isCardReturn ? undefined : isExpanded}
-        aria-controls={isCardReturn ? undefined : detailsId}
-        onClick={
-          isCardReturn
-            ? () => onReturnToCard?.()
-            : () => {
-                setIsExpanded((expanded) => !expanded)
-              }
-        }
-      >
-        <span className="conversation-status-band-dot" aria-hidden="true" />
-        <strong className="conversation-status-band-label">{title}</strong>
-        {inlineDetail == null || inlineDetail === '' ? null : (
-          <>
-            <span
-              className="conversation-status-band-separator"
-              aria-hidden="true"
-            >
-              ·
-            </span>
-            <span
-              className={`conversation-status-band-inline-detail${state.kind === 'working' || state.kind === 'permission' ? ' is-monospace' : ''}`}
-            >
-              {inlineDetail}
-            </span>
-          </>
-        )}
-        <span className="conversation-status-band-chevron" aria-hidden="true">
-          {isCardReturn ? '↑' : isExpanded ? '▾' : '›'}
-        </span>
-      </Button>
+      {isCardReturn && backgroundTasks.length > 0 ? (
+        <div className="conversation-status-band-compact-main">
+          {statusToggle}
+          <BackgroundTaskDisclosure
+            tasks={backgroundTasks}
+            defaultOpen={defaultBackgroundTasksExpanded}
+          />
+        </div>
+      ) : (
+        statusToggle
+      )}
       {isExpanded && !isCardReturn ? (
         <div
           className="conversation-status-band-expanded"
@@ -185,6 +197,24 @@ export function ConversationStatusBand({
 
 function formatBackgroundTaskDetail(task: BackgroundTask) {
   return `${task.description} · ${formatElapsedTime(task.elapsedSeconds)}`
+}
+
+function BackgroundTaskDisclosure({
+  tasks,
+  defaultOpen = false,
+}: {
+  tasks: readonly BackgroundTask[]
+  defaultOpen?: boolean
+}) {
+  return (
+    <details className="conversation-status-band-tasks" open={defaultOpen}>
+      <summary>
+        Background tasks ({String(tasks.length)}){' '}
+        <span aria-hidden="true">▾</span>
+      </summary>
+      <BackgroundTaskList tasks={tasks} />
+    </details>
+  )
 }
 
 function BackgroundTaskList({ tasks }: { tasks: readonly BackgroundTask[] }) {

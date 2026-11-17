@@ -210,6 +210,17 @@ const otherPermission: ChatItem = {
   tool: 'Subagent sample-agent',
   description: 'Waiting for permission approval.',
 }
+
+const permissionDenied: ChatItem = {
+  type: 'permission_denied',
+  seq: 7,
+  toolUseId: 'fixture-denied-tool-call',
+  tool: 'Shell',
+  inputSummary: 'Run the fictional cleanup command.',
+  reason: 'The operation is not allowed.',
+  retryable: false,
+  resolved: false,
+}
 let container: HTMLDivElement
 let root: Root | null = null
 const originalExecCommand = Object.getOwnPropertyDescriptor(
@@ -3727,8 +3738,8 @@ it.each([
   },
   {
     kind: 'permission',
-    messages: [permission],
-    selector: '.chat-permission-card',
+    messages: [permission, permissionDenied],
+    selector: '.chat-permission-card:not(.chat-permission-denied-card)',
   },
 ])(
   'scrolls to the pending $kind card from its status row',

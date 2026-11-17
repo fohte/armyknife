@@ -8,6 +8,26 @@ import { ConversationStatusBand } from '#components/conversation-status-band'
 let container: HTMLDivElement
 let root: Root | null = null
 
+const backgroundTasks = [
+  {
+    id: 'fixture-task-one',
+    description: 'Rebuild the sample index',
+    elapsedSeconds: 128,
+    kind: 'background_task',
+  },
+  {
+    id: 'fixture-task-two',
+    description: 'Check the sample bundle',
+    elapsedSeconds: 62,
+    kind: 'background_task',
+  },
+] satisfies Parameters<typeof ConversationStatusBand>[0]['backgroundTasks']
+
+const backgroundTaskDetails = [
+  'Rebuild the sample index · 2m 8s',
+  'Check the sample bundle · 1m 2s',
+]
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
@@ -30,20 +50,7 @@ it('expands to every background task when the compact row is pressed', async () 
         state={{ kind: 'background-tasks', detail: 'Rebuild the sample index' }}
         elapsedSeconds={92}
         activeTool={undefined}
-        backgroundTasks={[
-          {
-            id: 'fixture-task-one',
-            description: 'Rebuild the sample index',
-            elapsedSeconds: 128,
-            kind: 'background_task',
-          },
-          {
-            id: 'fixture-task-two',
-            description: 'Check the sample bundle',
-            elapsedSeconds: 62,
-            kind: 'background_task',
-          },
-        ]}
+        backgroundTasks={backgroundTasks}
       />,
     )
   })
@@ -70,13 +77,130 @@ it('expands to every background task when the compact row is pressed', async () 
   await act(async () => userEvent.click(toggle))
   expect(snapshot()).toEqual({
     expanded: 'true',
-    details: [
-      'Rebuild the sample index · 2m 8s',
-      'Check the sample bundle · 1m 2s',
-    ],
+    details: backgroundTaskDetails,
     chevron: '▾',
   })
 })
+
+it.each([
+  {
+    kind: 'working' as const,
+    state: { kind: 'working', detail: null } as const,
+    activeTool: {
+      tool: 'exec',
+      target: 'cargo test --package fictional -- --show-output',
+    },
+    leadingDetail: 'Bash  cargo test --package fictional -- --show-output',
+  },
+  {
+    kind: 'compacting' as const,
+    state: { kind: 'compacting', detail: null } as const,
+    activeTool: undefined,
+    leadingDetail: '古い会話を要約しています',
+  },
+])(
+  'shows all background tasks after expanding a $kind status row',
+  async ({ state, activeTool, leadingDetail }) => {
+    root = createRoot(container)
+    act(() => {
+      root?.render(
+        <ConversationStatusBand
+          state={state}
+          elapsedSeconds={92}
+          activeTool={activeTool}
+          backgroundTasks={backgroundTasks}
+        />,
+      )
+    })
+
+    const toggle = container.querySelector<HTMLButtonElement>(
+      '.conversation-status-band-toggle',
+    )
+    if (toggle === null) throw new Error('The status row was not rendered')
+    await act(async () => userEvent.click(toggle))
+
+    const snapshot = () => ({
+      expanded: toggle.getAttribute('aria-expanded'),
+      details: Array.from(
+        container.querySelectorAll('.conversation-status-band-expanded p'),
+        (detail) => detail.textContent,
+      ),
+    })
+    expect(snapshot()).toEqual({
+      expanded: 'true',
+      details: [leadingDetail, ...backgroundTaskDetails],
+    })
+  },
+)
+
+it.each([
+  {
+    kind: 'question' as const,
+    detail: 'Which cache window should be used?',
+  },
+  {
+    kind: 'permission' as const,
+    detail: 'Bash  cargo run --package fictional',
+  },
+])(
+  'keeps background tasks available from the $kind card shortcut',
+  async ({ kind, detail }) => {
+    const onReturnToCard = vi.fn()
+    root = createRoot(container)
+    act(() => {
+      root?.render(
+        <ConversationStatusBand
+          state={{ kind, detail }}
+          elapsedSeconds={0}
+          activeTool={undefined}
+          backgroundTasks={backgroundTasks}
+          isMobile
+          onReturnToCard={onReturnToCard}
+        />,
+      )
+    })
+
+    const toggle = container.querySelector<HTMLButtonElement>(
+      '.conversation-status-band-toggle',
+    )
+    const summary = container.querySelector<HTMLElement>(
+      '.conversation-status-band-tasks summary',
+    )
+    if (toggle === null || summary === null) {
+      throw new Error('The status row or task disclosure was not rendered')
+    }
+    await act(async () => userEvent.click(toggle))
+    await act(async () => userEvent.click(summary))
+
+    const disclosure = container.querySelector<HTMLDetailsElement>(
+      '.conversation-status-band-tasks',
+    )
+    const band = container.querySelector<HTMLElement>(
+      '.conversation-status-band',
+    )
+    const snapshot = () => ({
+      statusLabel: toggle.querySelector('.conversation-status-band-label')
+        ?.textContent,
+      arrow: toggle.querySelector('.conversation-status-band-chevron')
+        ?.textContent,
+      returnCalls: onReturnToCard.mock.calls,
+      taskDisclosureOpen: disclosure?.open,
+      tasks: Array.from(
+        container.querySelectorAll('.conversation-status-band-tasks li'),
+        (item) => item.textContent,
+      ),
+      bandHeight: Math.round(band?.getBoundingClientRect().height ?? 0),
+    })
+    expect(snapshot()).toEqual({
+      statusLabel: kind === 'question' ? 'Question' : 'Permission',
+      arrow: '↑',
+      returnCalls: [[]],
+      taskDisclosureOpen: true,
+      tasks: ['Rebuild the sample index2m 8s', 'Check the sample bundle1m 2s'],
+      bandHeight: 44,
+    })
+  },
+)
 
 it('shows the full active-tool command after the compact row is pressed', async () => {
   const activeToolDetail =
