@@ -45,6 +45,7 @@ import {
 } from '#session-operations'
 import type { Session } from '#types'
 import { useNewSession } from '#use-new-session'
+import { useNewSessionNavigation } from '#use-new-session-navigation'
 import { useSavedInboxViews } from '#use-saved-inbox-views'
 import { useSessionRefreshRevisions } from '#use-session-refresh-revisions'
 
@@ -536,31 +537,16 @@ function AppContent() {
     closeMobileNav()
     setCommandPaletteOpen(true)
   }, [closeMobileNav])
-  const openNewSession = useCallback(
-    (mode: 'form' | 'palette') => {
-      newSession.reset()
-      setPendingLaunchId(null)
-      setCommandPaletteOpen(false)
-      closeMobileNav()
-      navigate((current) => ({
-        ...current,
-        ...(mode === 'form'
-          ? {
-              view: 'inbox' as const,
-              selectedId: null,
-              conversationOpen: false,
-            }
-          : {}),
-        newSessionMode: mode,
-      }))
-    },
-    [closeMobileNav, navigate, newSession.reset, setCommandPaletteOpen],
-  )
-  const closeNewSession = useCallback(() => {
-    newSession.reset()
-    setPendingLaunchId(null)
-    backFromNewSession()
-  }, [backFromNewSession, newSession.reset])
+  const { closeNewSession, openNewSession, switchFromNewSessionToSession } =
+    useNewSessionNavigation({
+      backFromNewSession,
+      closeMobileNav,
+      navigate,
+      replaceNewSessionWithSession,
+      resetNewSession: newSession.reset,
+      setCommandPaletteOpen,
+      setPendingLaunchId,
+    })
   const openSessionFromNavigation = useCallback(
     (id: string) => {
       closeMobileNav()
@@ -615,9 +601,7 @@ function AppContent() {
     },
     onSelect: (id: string) => {
       if (newSessionMode === 'form') {
-        newSession.reset()
-        setPendingLaunchId(null)
-        replaceNewSessionWithSession(id, true)
+        switchFromNewSessionToSession(id, true)
         return
       }
       openConversation(id)
@@ -714,9 +698,7 @@ function AppContent() {
           onSelectSession={(id) => {
             if (!orderedSessions.some((session) => session.id === id)) return
             if (newSessionMode === 'form') {
-              newSession.reset()
-              setPendingLaunchId(null)
-              replaceNewSessionWithSession(id, false)
+              switchFromNewSessionToSession(id, false)
               return
             }
             navigate((current) => ({ ...current, selectedId: id }))
