@@ -17,11 +17,11 @@ type ConversationStatusBandProps = {
 
 const statusLabels: Record<ConversationStatusBandState['kind'], string> = {
   working: 'Working',
-  compacting: 'Summarizing conversation',
-  'background-tasks': 'Background tasks',
-  'crit-review': 'Review needed',
-  question: 'Question',
-  permission: 'Permission needed',
+  compacting: 'Compacting conversation…',
+  'background-tasks': 'Waiting for background tasks',
+  'crit-review': 'Waiting for your review',
+  question: 'Waiting for your answer',
+  permission: 'Waiting for permission',
   waiting: 'Waiting',
 }
 
@@ -36,29 +36,68 @@ export function ConversationStatusBand({
   if (state === null) return null
 
   const isReview = state.kind === 'crit-review'
+  const isWarning =
+    state.kind === 'crit-review' ||
+    state.kind === 'question' ||
+    state.kind === 'permission'
   const title =
     state.kind === 'working'
       ? `Working · ${formatElapsedTime(elapsedSeconds)}`
       : statusLabels[state.kind]
+  const backgroundTask = backgroundTasks[0]
+  const toolName = (tool: string) =>
+    tool.toLowerCase() === 'exec' ? 'Bash' : tool
+  const activeToolDetail =
+    activeTool === undefined
+      ? null
+      : activeTool.target === undefined || activeTool.target === ''
+        ? toolName(activeTool.tool)
+        : `${toolName(activeTool.tool)}  ${activeTool.target}`
   const detail =
-    state.kind === 'working' && activeTool !== undefined
-      ? [activeTool.tool, activeTool.target].filter(Boolean).join(' · ')
-      : state.detail
+    state.kind === 'working' && activeToolDetail !== null
+      ? activeToolDetail
+      : state.kind === 'compacting'
+        ? '古い会話を要約しています'
+        : state.kind === 'background-tasks' && backgroundTask !== undefined
+          ? `${backgroundTask.description} · ${formatElapsedTime(backgroundTask.elapsedSeconds)}`
+          : state.detail
 
   return (
     <section
-      className={`conversation-status-band conversation-status-band--${state.kind}${state.kind !== 'working' && state.kind !== 'compacting' ? ' is-waiting' : ''}${isMobile ? ' is-mobile' : ''}`}
+      className={`conversation-status-band conversation-status-band--${state.kind}${state.kind !== 'working' && state.kind !== 'compacting' ? ' is-waiting' : ''}${isWarning ? ' is-warning' : ''}${isMobile ? ' is-mobile' : ''}`}
       aria-label="Conversation status"
       role="status"
     >
-      <div className="conversation-status-band-copy">
-        <div className="conversation-status-band-title">
-          <span className="conversation-status-band-dot" aria-hidden="true" />
-          <strong>{title}</strong>
+      <div className="conversation-status-band-main">
+        <div className="conversation-status-band-copy">
+          <div className="conversation-status-band-title">
+            <span className="conversation-status-band-dot" aria-hidden="true" />
+            <strong>{title}</strong>
+          </div>
+          {detail == null || detail === '' ? null : (
+            <p
+              className={`conversation-status-band-detail${state.kind === 'working' || state.kind === 'permission' ? ' is-monospace' : ''}`}
+            >
+              {detail}
+            </p>
+          )}
         </div>
-        {detail == null || detail === '' ? null : (
-          <p className="conversation-status-band-detail">{detail}</p>
-        )}
+        {backgroundTasks.length > 0 ? (
+          <details className="conversation-status-band-tasks">
+            <summary>
+              Background tasks ({String(backgroundTasks.length)}){' '}
+              <span aria-hidden="true">▾</span>
+            </summary>
+            <ul>
+              {backgroundTasks.map((task) => (
+                <li key={task.id}>
+                  <span>{task.description}</span>
+                  <span>{formatElapsedTime(task.elapsedSeconds)}</span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        ) : null}
       </div>
       {isReview ? (
         <Button
@@ -67,21 +106,8 @@ export function ConversationStatusBand({
           variant="secondary"
           onClick={onReviewInCrit}
         >
-          Review in crit
+          Review in crit <span aria-hidden="true">→</span>
         </Button>
-      ) : null}
-      {backgroundTasks.length > 0 ? (
-        <details className="conversation-status-band-tasks">
-          <summary>Background tasks ({String(backgroundTasks.length)})</summary>
-          <ul>
-            {backgroundTasks.map((task) => (
-              <li key={task.id}>
-                <span>{task.description}</span>
-                <span>{formatElapsedTime(task.elapsedSeconds)}</span>
-              </li>
-            ))}
-          </ul>
-        </details>
       ) : null}
     </section>
   )

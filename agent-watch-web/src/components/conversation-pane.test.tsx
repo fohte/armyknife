@@ -3732,7 +3732,7 @@ it('shows when the stopped session is waiting for background tasks', () => {
   })
 
   expect(snapshot()).toEqual({
-    status: 'Background tasks',
+    status: 'Waiting for background tasks',
     detail: 'Choose a retry policy',
     waitingDotVisible: true,
   })
@@ -3779,12 +3779,12 @@ it('shows background task descriptions and elapsed times on mobile', () => {
     ),
   })
   expect(snapshot()).toEqual({
-    summary: 'Background tasks (2)',
+    summary: 'Background tasks (2) ▾',
     tasks: ['Watch the build pipeline2m 8s', 'Review the generated report43s'],
   })
 })
 
-it('shows the compacting status while hiding elapsed time and stale tool details', () => {
+it('shows the compacting status and summary instead of stale tool details', () => {
   renderView(
     vi.fn().mockResolvedValue(true),
     { ...session, isCompacting: true, elapsedSeconds: 92 },
@@ -3801,13 +3801,14 @@ it('shows the compacting status while hiding elapsed time and stale tool details
   const getSnapshot = () => ({
     workingStatus: container.querySelector('.conversation-status-band-title')
       ?.textContent,
-    toolItems: container.querySelectorAll('.conversation-status-band-detail')
-      .length,
+    detail:
+      container.querySelector('.conversation-status-band-detail')
+        ?.textContent ?? null,
     inProgressItems: container.querySelectorAll('.tool-in-progress').length,
   })
   expect(getSnapshot()).toEqual({
-    workingStatus: 'Summarizing conversation',
-    toolItems: 0,
+    workingStatus: 'Compacting conversation…',
+    detail: '古い会話を要約しています',
     inProgressItems: 0,
   })
 })
@@ -3844,7 +3845,7 @@ it('shows an active tool and hides it from the completed conversation', () => {
 
   expect(snapshot()).toEqual({
     workingStatus: 'Working · 1m 32s',
-    activeTool: 'exec · cargo test --manifest-path fixture/Cargo.toml',
+    activeTool: 'Bash  cargo test --manifest-path fixture/Cargo.toml',
     toolSummary: '1 action',
     inProgressItems: 0,
   })
@@ -3914,7 +3915,7 @@ it('keeps background tasks visible while the session waits for input', () => {
   expect(snapshot()).toEqual({
     status: 'Waiting',
     waitingDotVisible: true,
-    backgroundTasks: 'Background tasks (1)',
+    backgroundTasks: 'Background tasks (1) ▾',
   })
 })
 
@@ -4023,13 +4024,13 @@ it('accepts classified messages and the active tool from messages endpoint', asy
   })
   expect(snapshot()).toEqual({
     workingStatus: 'Working · 30s',
-    activeTool: 'exec · cargo test',
+    activeTool: 'Bash  cargo test',
     peerMessage:
       'FROMFixture peer session (ended)A fictional peer update.fixture-peer-layout.html',
     peerImage: '/api/images/fixture-peer-image.png',
     peerFile: 'fixture-peer-layout.html',
     event: [{ text: 'A fictional event was blocked.', failed: 'true' }],
-    backgroundTasks: 'Background tasks (1)',
+    backgroundTasks: 'Background tasks (1) ▾',
     headerRunningCount: '1',
   })
 })

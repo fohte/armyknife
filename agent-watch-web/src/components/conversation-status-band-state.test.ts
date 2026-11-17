@@ -1,6 +1,9 @@
 import { expect, it } from 'vitest'
 
-import { getConversationStatusBandState } from '#components/conversation-status-band-state'
+import {
+  type ConversationStatusBandState,
+  getConversationStatusBandState,
+} from '#components/conversation-status-band-state'
 import type { BackgroundTask, ChatItem, Session } from '#types'
 
 const session: Session = {
@@ -48,7 +51,17 @@ const question: ChatItem = {
   ],
 }
 
-it.each([
+type StatusCase = {
+  name: string
+  input: {
+    session: Session
+    messages?: readonly ChatItem[]
+    backgroundTasks?: readonly BackgroundTask[]
+  }
+  expected: ConversationStatusBandState | null
+}
+
+const statusCases: StatusCase[] = [
   {
     name: 'working',
     input: { session: { ...session, activityStatus: 'working' as const } },
@@ -108,12 +121,13 @@ it.each([
         category: 'needs_action',
         activityStatus: 'waiting' as const,
         kind: 'Review',
+        pullRequest: { number: 742, state: 'Open' },
         critUrl: 'https://crit.example.test/review/fixture',
       },
     },
-    expected: { kind: 'crit-review', detail: 'Refresh the sample service' },
+    expected: { kind: 'crit-review', detail: 'crit · PR #742' },
   },
-  ...(['Todo', 'Proposal'] as const).map((kind) => ({
+  ...(['Todo', 'Proposal'] as const).map((kind): StatusCase => ({
     name: `crit review with ${kind} kind`,
     input: {
       session: {
@@ -124,7 +138,7 @@ it.each([
         critUrl: 'https://crit.example.test/review/fixture',
       },
     },
-    expected: { kind: 'crit-review', detail: 'Refresh the sample service' },
+    expected: { kind: 'crit-review', detail: 'crit' },
   })),
   {
     name: 'registered Crit review',
@@ -142,7 +156,7 @@ it.each([
         ],
       },
     },
-    expected: { kind: 'crit-review', detail: 'Refresh the sample service' },
+    expected: { kind: 'crit-review', detail: 'crit' },
   },
   {
     name: 'empty Crit URL',
@@ -182,7 +196,10 @@ it.each([
         } satisfies ChatItem,
       ],
     },
-    expected: { kind: 'permission', detail: 'cargo test --package sample' },
+    expected: {
+      kind: 'permission',
+      detail: 'Bash  cargo test --package sample',
+    },
   },
   {
     name: 'other wait',
@@ -202,15 +219,20 @@ it.each([
     },
     expected: null,
   },
-])('maps $name to its status band state', ({ input, expected }) => {
-  expect(
-    getConversationStatusBandState({
-      session: input.session,
-      messages: input.messages ?? [],
-      backgroundTasks: input.backgroundTasks ?? [],
-    }),
-  ).toEqual(expected)
-})
+]
+
+it.each(statusCases)(
+  'maps $name to its status band state',
+  ({ input, expected }) => {
+    expect(
+      getConversationStatusBandState({
+        session: input.session,
+        messages: input.messages ?? [],
+        backgroundTasks: input.backgroundTasks ?? [],
+      }),
+    ).toEqual(expected)
+  },
+)
 
 it('keeps Crit review primary while background tasks continue', () => {
   expect(
@@ -220,12 +242,13 @@ it('keeps Crit review primary while background tasks continue', () => {
         category: 'needs_action',
         activityStatus: 'waiting',
         kind: 'Review',
+        pullRequest: { number: 742, state: 'Open' },
         critUrl: 'https://crit.example.test/review/fixture',
       },
       messages: [],
       backgroundTasks,
     }),
-  ).toEqual({ kind: 'crit-review', detail: 'Refresh the sample service' })
+  ).toEqual({ kind: 'crit-review', detail: 'crit · PR #742' })
 })
 
 it('shows a pending question before the Crit review', () => {
@@ -266,7 +289,7 @@ it('shows a pending permission before the Crit review', () => {
       ],
       backgroundTasks: [],
     }),
-  ).toEqual({ kind: 'permission', detail: 'cargo test --package sample' })
+  ).toEqual({ kind: 'permission', detail: 'Bash  cargo test --package sample' })
 })
 
 it('ignores stale unanswered questions while the session waits for a Crit review', () => {
@@ -281,5 +304,5 @@ it('ignores stale unanswered questions while the session waits for a Crit review
       messages: [{ ...question, cancelled: true }],
       backgroundTasks: [],
     }),
-  ).toEqual({ kind: 'crit-review', detail: 'Refresh the sample service' })
+  ).toEqual({ kind: 'crit-review', detail: 'crit' })
 })

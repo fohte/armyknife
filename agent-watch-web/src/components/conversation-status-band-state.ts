@@ -67,13 +67,23 @@ export function getConversationStatusBandState({
     if (permission?.type === 'permission') {
       return {
         kind: 'permission',
-        detail: permission.command ?? permission.description,
+        detail: `${permission.tool.toLowerCase() === 'exec' ? 'Bash' : permission.tool}  ${permission.command ?? permission.description}`,
       }
     }
     if (getPendingCritReviewUrl(session) !== null) {
+      const pullRequests =
+        session.pullRequests !== undefined && session.pullRequests.length > 0
+          ? session.pullRequests
+          : session.pullRequest === null
+            ? []
+            : [session.pullRequest]
+      const pullRequest = pullRequests[0]
       return {
         kind: 'crit-review',
-        detail: session.task?.title ?? session.title,
+        detail:
+          pullRequest === undefined
+            ? 'crit'
+            : `crit · PR #${String(pullRequest.number)}`,
       }
     }
     return {
