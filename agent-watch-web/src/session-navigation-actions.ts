@@ -24,7 +24,10 @@ export function createSessionNavigationActions({
       conversationOpen: true,
     }))
   }
-  const openSessionInInbox = (sessionId: string) => {
+  const openSessionInInbox = (
+    sessionId: string,
+    mode: HistoryMode = 'push',
+  ) => {
     if (
       sessions.some(
         (session) => session.id === sessionId && session.category === 'later',
@@ -32,12 +35,16 @@ export function createSessionNavigationActions({
     ) {
       setLaterExpanded(true)
     }
-    navigate((current) => ({
-      ...current,
-      selectedId: sessionId,
-      view: 'inbox',
-      conversationOpen: true,
-    }))
+    navigate(
+      (current) => ({
+        ...current,
+        selectedId: sessionId,
+        view: 'inbox',
+        conversationOpen: true,
+        newSessionMode: null,
+      }),
+      mode,
+    )
   }
   const openTodaySession = (sessionId: string) => {
     if (

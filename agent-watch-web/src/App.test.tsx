@@ -2602,6 +2602,106 @@ it('opens a mobile new-session form from the Board header', async () => {
     newSessionFormOpen: true,
     mobileScreen: 'conversation',
   })
+
+  await act(async () => {
+    await changeHistory('back')
+  })
+
+  const returnedToBoard = () => ({
+    activeView: readActiveView(),
+    newSessionFormOpen: container.querySelector('.new-session-view') !== null,
+    url: window.location.search,
+  })
+  expect(returnedToBoard()).toEqual({
+    activeView: 'Board',
+    newSessionFormOpen: false,
+    url: '?view=board',
+  })
+})
+
+it('returns to the Board after closing a new-session form and pressing Back once', async () => {
+  vi.stubGlobal(
+    'fetch',
+    createSessionLaunchFetcher(jsonResponse({ launchId: 'launch-fixture' })),
+  )
+  renderMobileApp('Board')
+  publishSessions({ revision: 1, sessions: [] })
+  clickButton('.board-header [aria-label="New session"]')
+  await waitForDirectoryResults()
+  clickButton('[aria-label="Back to Inbox"]')
+
+  const closedForm = {
+    activeView: readActiveView(),
+    newSessionFormOpen: container.querySelector('.new-session-view') !== null,
+    url: window.location.search,
+  }
+
+  await act(async () => {
+    await changeHistory('back')
+  })
+
+  const snapshot = () => ({
+    closedForm,
+    restoredView: readActiveView(),
+    restoredUrl: window.location.search,
+  })
+  expect(snapshot()).toEqual({
+    closedForm: {
+      activeView: 'Inbox',
+      newSessionFormOpen: false,
+      url: '',
+    },
+    restoredView: 'Board',
+    restoredUrl: '?view=board',
+  })
+})
+
+it('restores the previous screen when a new-session palette is dismissed with Back', async () => {
+  vi.stubGlobal(
+    'fetch',
+    createSessionLaunchFetcher(jsonResponse({ launchId: 'launch-fixture' })),
+  )
+  renderMobileApp('Board')
+  publishSessions({ revision: 1, sessions: [] })
+  act(() => {
+    dispatchKey(window, 'k', { ctrlKey: true })
+  })
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+  )
+  if (input === null) throw new Error('Palette input was not rendered')
+  await act(async () => {
+    await userEvent.type(input, 'New session')
+    await userEvent.keyboard('{Enter}{Enter}')
+  })
+  await waitForDirectoryResults()
+
+  const openedPalette = {
+    newSessionPickerOpen:
+      container.querySelector('.new-session-picker') !== null,
+    url: window.location.search,
+  }
+
+  await act(async () => {
+    await changeHistory('back')
+  })
+
+  const snapshot = () => ({
+    openedPalette,
+    activeView: readActiveView(),
+    newSessionPickerOpen:
+      container.querySelector('.new-session-picker') !== null,
+    url: window.location.search,
+  })
+  expect(snapshot()).toEqual({
+    openedPalette: {
+      newSessionPickerOpen: true,
+      url: '?view=board&newSession=palette',
+    },
+    activeView: 'Board',
+    newSessionPickerOpen: false,
+    url: '?view=board',
+  })
 })
 
 it('opens an existing conversation after selecting it from the open new-session form', async () => {
@@ -2635,8 +2735,12 @@ it('opens the session when its launch ID appears in the feed', async () => {
     jsonResponse({ launchId: 'launch-fixture' }),
   )
   vi.stubGlobal('fetch', fetcher)
+  window.history.replaceState(null, '', '/?session=session-before')
   renderApp()
-  publishSessions({ revision: 1, sessions: [] })
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-before', 'Previous session')],
+  })
   clickButton('[aria-label="New session"]')
   await waitForDirectoryResults()
   clickButton('.new-session-directory-button')
@@ -2645,6 +2749,7 @@ it('opens the session when its launch ID appears in the feed', async () => {
   publishSessions({
     revision: 2,
     sessions: [
+      session('session-before', 'Previous session'),
       {
         ...session('session-launched', 'Created session'),
         launchId: 'launch-fixture',
@@ -2661,6 +2766,19 @@ it('opens the session when its launch ID appears in the feed', async () => {
     newSessionFormOpen: false,
     selectedTitle: 'Created session',
     selectedId: 'session-launched',
+  })
+
+  await act(async () => {
+    await changeHistory('back')
+  })
+
+  const returnedToPreviousSession = () => ({
+    selectedTitle: readSelectedTitle(),
+    url: window.location.search,
+  })
+  expect(returnedToPreviousSession()).toEqual({
+    selectedTitle: 'Previous session',
+    url: '?session=session-before',
   })
 })
 

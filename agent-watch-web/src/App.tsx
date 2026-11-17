@@ -114,6 +114,7 @@ function AppContent() {
     selectedId,
     view,
     conversationOpen: mobileConversationOpen,
+    newSessionMode,
     backToInbox,
     navigate,
   } = useSessionHistory()
@@ -124,9 +125,6 @@ function AppContent() {
   const [inboxFilterQuery, setInboxFilterQuery] = useState('')
   const [statusPanelOpen, setStatusPanelOpen] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
-  const [newSessionMode, setNewSessionMode] = useState<
-    'form' | 'palette' | null
-  >(null)
   const [pendingLaunchId, setPendingLaunchId] = useState<string | null>(null)
   const [manualInboxCollapsed, setManualInboxCollapsed] = useState<
     boolean | null
@@ -540,25 +538,27 @@ function AppContent() {
     (mode: 'form' | 'palette') => {
       newSession.reset()
       setPendingLaunchId(null)
-      setNewSessionMode(mode)
       setCommandPaletteOpen(false)
       closeMobileNav()
-      if (mode === 'form') {
-        navigate((current) => ({
-          ...current,
-          view: 'inbox',
-          selectedId: null,
-          conversationOpen: false,
-        }))
-      }
+      navigate((current) => ({
+        ...current,
+        ...(mode === 'form'
+          ? {
+              view: 'inbox' as const,
+              selectedId: null,
+              conversationOpen: false,
+            }
+          : {}),
+        newSessionMode: mode,
+      }))
     },
     [closeMobileNav, navigate, newSession.reset, setCommandPaletteOpen],
   )
   const closeNewSession = useCallback(() => {
     newSession.reset()
     setPendingLaunchId(null)
-    setNewSessionMode(null)
-  }, [newSession.reset])
+    navigate((current) => ({ ...current, newSessionMode: null }), 'replace')
+  }, [navigate, newSession.reset])
   const openSessionFromNavigation = useCallback(
     (id: string) => {
       closeMobileNav()
@@ -581,10 +581,14 @@ function AppContent() {
     )
     if (launchedSession === undefined) return
     setPendingLaunchId(null)
-    setNewSessionMode(null)
     setCommandPaletteOpen(false)
-    openSessionInInbox(launchedSession.id)
-  }, [openSessionInInbox, pendingLaunchId, sessionsWithElapsedTime])
+    openSessionInInbox(launchedSession.id, 'replace')
+  }, [
+    openSessionInInbox,
+    pendingLaunchId,
+    sessionsWithElapsedTime,
+    setCommandPaletteOpen,
+  ])
   const inboxProps = {
     error: error ?? savedViews.storageError,
     connectionError: error,
