@@ -1,7 +1,9 @@
 .quota-panel {
   display: grid;
   flex: 0 0 auto;
-  gap: 8px;
+  grid-template-columns: 18px minmax(0, 1fr) 4ch minmax(6ch, max-content) 5ch;
+  column-gap: 6px;
+  row-gap: 8px;
   padding: 10px 8px 12px;
   border-top: 1px solid #2a2a2a;
   background: #0f0f0f;
@@ -16,11 +18,14 @@
 }
 
 .quota-engine {
+  grid-column: 1 / -1;
   display: grid;
-  gap: 3px;
+  grid-template-columns: subgrid;
+  row-gap: 3px;
 }
 
 .quota-engine-name {
+  grid-column: 1 / -1;
   overflow: hidden;
   color: #d4d4d8;
   font-family: var(--font-mono);
@@ -30,8 +35,9 @@
 }
 
 .quota-window {
+  grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) 4ch minmax(6ch, max-content) 5ch;
+  grid-template-columns: subgrid;
   align-items: center;
   gap: 6px;
   color: #8b8b94;
@@ -73,6 +79,7 @@
 }
 
 .quota-panel-error {
+  grid-column: 1 / -1;
   color: #8b8b94;
   font-size: 11px;
 }
