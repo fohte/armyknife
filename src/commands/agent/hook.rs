@@ -1947,16 +1947,17 @@ mod tests {
     }
 
     #[rstest]
-    #[case::without_initial_prompt(false, SessionStatus::Stopped)]
-    #[case::with_initial_prompt(true, SessionStatus::Running)]
+    #[case::without_initial_prompt(Some(false), SessionStatus::Stopped)]
+    #[case::with_initial_prompt(Some(true), SessionStatus::Running)]
+    #[case::legacy_launch_without_marker(None, SessionStatus::Running)]
     fn watch_web_startup_status_matches_initial_prompt_presence(
-        #[case] has_initial_prompt: bool,
+        #[case] has_initial_prompt: Option<bool>,
         #[case] expected_status: SessionStatus,
     ) {
         let temp_dir = tempfile::TempDir::new().expect("temporary directory should be created");
         let env = EnvVars {
             session_launch_id: Some("launch-fixture".to_string()),
-            session_has_initial_prompt: Some(has_initial_prompt),
+            session_has_initial_prompt: has_initial_prompt,
             ..EnvVars::default()
         };
         let option_writes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
