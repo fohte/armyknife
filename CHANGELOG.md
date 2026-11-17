@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.767](https://github.com/fohte/armyknife/compare/v0.1.766...v0.1.767) (2026-11-17)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** suggest skills before launch ([#1917](https://github.com/fohte/armyknife/issues/1917)) ([bf1d9a6](https://github.com/fohte/armyknife/commit/bf1d9a64c7392350f4d6ff752238a1707b81db01))
+
 ## [0.1.766](https://github.com/fohte/armyknife/compare/v0.1.765...v0.1.766) (2026-11-17)
 
 
