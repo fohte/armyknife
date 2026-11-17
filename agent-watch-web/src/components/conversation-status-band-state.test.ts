@@ -91,6 +91,37 @@ it.each([
     expected: { kind: 'crit-review', detail: 'Refresh the sample service' },
   },
   {
+    name: 'registered Crit review',
+    input: {
+      session: {
+        ...session,
+        category: 'needs_action',
+        activityStatus: 'stopped' as const,
+        kind: 'Review',
+        webUis: [
+          {
+            name: 'crit',
+            url: 'https://crit.example.test/review/fixture',
+          },
+        ],
+      },
+    },
+    expected: { kind: 'crit-review', detail: 'Refresh the sample service' },
+  },
+  {
+    name: 'empty Crit URL',
+    input: {
+      session: {
+        ...session,
+        category: 'needs_action',
+        activityStatus: 'stopped' as const,
+        kind: 'Review',
+        critUrl: '',
+      },
+    },
+    expected: { kind: 'waiting', detail: null },
+  },
+  {
     name: 'question',
     input: {
       session: { ...session, category: 'needs_action', kind: 'Question' },

@@ -1,5 +1,6 @@
 import { type Dispatch, type SetStateAction, useEffect, useState } from 'react'
 
+import { getConversationCritUrl } from '#components/conversation-crit-url'
 import {
   isReviewDocumentResponse,
   type ReviewDocumentResponse,
@@ -144,14 +145,16 @@ export function useConversationStatusPanel({
     decisions.find((decision) => decision.seq === selectedDecisionSeq) ??
     decisions.find((decision) => decision.review === null) ??
     decisions[0]
+  const critUrl = getConversationCritUrl(session)
   const legacyCritUrl =
     session.kind === 'Review' &&
     session.category === 'needs_action' &&
-    session.critUrl != null &&
-    session.critUrl !== ''
-      ? session.critUrl
+    critUrl !== null
+      ? critUrl
       : null
-  const registeredWebUis = session.webUis ?? []
+  const registeredWebUis = (session.webUis ?? []).filter(
+    (webUi) => webUi.name !== 'crit' || webUi.url.trim() !== '',
+  )
   const webUis =
     legacyCritUrl !== null &&
     !registeredWebUis.some((webUi) => webUi.name === 'crit')

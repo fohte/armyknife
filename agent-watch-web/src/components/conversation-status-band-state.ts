@@ -1,3 +1,4 @@
+import { getConversationCritUrl } from '#components/conversation-crit-url'
 import type { BackgroundTask, ChatItem, Session } from '#types'
 
 export type ConversationStatusBandState = {
@@ -28,13 +29,6 @@ function pendingPermission(messages: readonly ChatItem[]) {
     .find((message) => message.type === 'permission')
 }
 
-function hasCritUrl(session: Session) {
-  return (
-    session.critUrl != null ||
-    session.webUis?.some((webUi) => webUi.name === 'crit') === true
-  )
-}
-
 export function getConversationStatusBandState({
   session,
   messages,
@@ -58,7 +52,11 @@ export function getConversationStatusBandState({
     return { kind: 'compacting', detail: null }
   }
   if (isWorking) return { kind: 'working', detail: null }
-  if (isWaitingForUser && session.kind === 'Review' && hasCritUrl(session)) {
+  if (
+    isWaitingForUser &&
+    session.kind === 'Review' &&
+    getConversationCritUrl(session) !== null
+  ) {
     return {
       kind: 'crit-review',
       detail: session.task?.title ?? session.title,
