@@ -26,14 +26,20 @@ type ToolSummaryProps = {
   items?: readonly ToolGroupItem[]
   children?: ReactNode
   open?: boolean
+  showOperationStatus?: boolean
 }
 
 type ToolOperationRowProps = {
   operation: ToolSummaryOperation
   failedSuffix: string | undefined
+  showOperationStatus: boolean
 }
 
-function ToolOperationRow({ operation, failedSuffix }: ToolOperationRowProps) {
+function ToolOperationRow({
+  operation,
+  failedSuffix,
+  showOperationStatus,
+}: ToolOperationRowProps) {
   return (
     <li
       data-has-target={
@@ -43,7 +49,8 @@ function ToolOperationRow({ operation, failedSuffix }: ToolOperationRowProps) {
       }
       data-failed={operation.failed === true ? 'true' : 'false'}
       data-has-status={
-        operation.failed === undefined && failedSuffix !== undefined
+        !showOperationStatus ||
+        (operation.failed === undefined && failedSuffix !== undefined)
           ? 'false'
           : undefined
       }
@@ -52,7 +59,8 @@ function ToolOperationRow({ operation, failedSuffix }: ToolOperationRowProps) {
       {typeof operation.target === 'string' && operation.target.length > 0 ? (
         <code className="chat-tool-target">{operation.target}</code>
       ) : null}
-      {operation.failed !== undefined || failedSuffix === undefined ? (
+      {showOperationStatus &&
+      (operation.failed !== undefined || failedSuffix === undefined) ? (
         <span
           className="chat-tool-operation-status"
           role="img"
@@ -107,6 +115,7 @@ export function ToolSummary({
   items,
   children,
   open = false,
+  showOperationStatus = true,
 }: ToolSummaryProps) {
   const [isOpen, setIsOpen] = useState(open)
   const failedSuffix = summary.match(/· \d+ failed$/)?.[0]
@@ -176,6 +185,7 @@ export function ToolSummary({
                 key={`${String(index)}-${item.tool}-${item.target ?? ''}`}
                 operation={item}
                 failedSuffix={undefined}
+                showOperationStatus={showOperationStatus}
               />
             ),
           )}
@@ -187,6 +197,7 @@ export function ToolSummary({
               key={`${String(index)}-${operation.tool}-${operation.target ?? ''}`}
               operation={operation}
               failedSuffix={failedSuffix}
+              showOperationStatus={showOperationStatus}
             />
           ))}
         </ul>

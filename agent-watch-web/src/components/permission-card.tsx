@@ -88,6 +88,7 @@ export function PermissionCard({
                 : [],
             )}
             items={message.items}
+            showOperationStatus={false}
           />
         </div>
       )}

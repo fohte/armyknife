@@ -70,6 +70,27 @@ export const FileReadShowsDescription: Story = {
   },
 }
 
+export const GroupedActivityShowsPendingToolWithoutStatus: Story = {
+  name: 'Grouped pending activity does not show a success status',
+  args: {
+    message: {
+      type: 'permission',
+      requestId: 'permission-request-activity-example',
+      tool: 'Read',
+      description: 'The assistant wants to inspect a sample file.',
+      items: [
+        { type: 'thinking', text: 'Check the fictional file request.' },
+        {
+          type: 'tool_use',
+          tool: 'Read',
+          target: 'sample/source.ts',
+          failed: false,
+        },
+      ],
+    },
+  },
+}
+
 export const ApprovalIsSending: Story = {
   name: 'The approval button shows that the request is being sent',
   args: {
