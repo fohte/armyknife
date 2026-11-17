@@ -185,7 +185,7 @@ export const BoardShowsPausedSessions: Story = {
 }
 
 export const BoardShowsQuietProjects: Story = {
-  name: 'The board shows project summaries, completed sessions, and overflow',
+  name: 'The board includes quiet projects when the filter is off',
   args: { hideQuietProjects: false },
   parameters: {
     overflowCheck: { ignoreSelectors: ['.board-projects-scroll'] },
