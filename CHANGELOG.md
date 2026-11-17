@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.776](https://github.com/fohte/armyknife/compare/v0.1.775...v0.1.776) (2026-11-17)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align Inbox rows and header ([#1936](https://github.com/fohte/armyknife/issues/1936)) ([a2d81e0](https://github.com/fohte/armyknife/commit/a2d81e00352026a86562b4f14570366f749e5041))
+
 ## [0.1.775](https://github.com/fohte/armyknife/compare/v0.1.774...v0.1.775) (2026-11-17)
 
 
