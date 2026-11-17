@@ -1666,8 +1666,16 @@ mod tests {
     }
 
     fn question_group(questions: Vec<super::super::super::QuestionPrompt>) -> ChatItem {
+        question_group_with_cancelled(questions, false)
+    }
+
+    fn question_group_with_cancelled(
+        questions: Vec<super::super::super::QuestionPrompt>,
+        cancelled: bool,
+    ) -> ChatItem {
         ChatItem::Question {
             request_id: None,
+            cancelled,
             questions,
         }
     }
@@ -2351,17 +2359,17 @@ mod tests {
             None,
         )])]
     )]
-    #[case::answer_extraction_fails(
+    #[case::cancelled(
         indoc! {r#"
             {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-cancelled","name":"AskUserQuestion","input":{"questions":[{"question":"Should the report include a chart?","options":[{"label":"Yes"},{"label":"No"}]}]}}]}}
             {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-cancelled","content":"The user cancelled this question."}]}}
         "#},
-        vec![question_group(vec![question_prompt(
+        vec![question_group_with_cancelled(vec![question_prompt(
             "Should the report include a chart?",
             vec![question_choice("Yes"), question_choice("No")],
             false,
             None,
-        )])]
+        )], true)]
     )]
     fn parses_question_answers_from_tool_results(
         #[case] transcript: &str,

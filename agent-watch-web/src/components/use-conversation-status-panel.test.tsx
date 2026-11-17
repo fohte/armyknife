@@ -200,6 +200,64 @@ it('shows linked tasks without adding a PRs tab', () => {
   ).toEqual(['Tasks1'])
 })
 
+it.each(['Todo', 'Proposal'] as const)(
+  'shows the legacy Crit tab for a needs_action %s session',
+  (kind) => {
+    act(() => {
+      root?.render(
+        <StatusPanelHarness
+          currentSession={{
+            ...session,
+            kind,
+            critUrl: 'https://crit.example.test/review/fixture',
+          }}
+        />,
+      )
+    })
+
+    const snapshot = () => ({
+      tabs: Array.from(
+        container.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+        (tab) => ({
+          label: tab.textContent,
+          selected: tab.getAttribute('aria-selected'),
+        }),
+      ),
+      paneTitle: container.querySelector('.web-ui-pane-title')?.textContent,
+    })
+
+    expect(snapshot()).toEqual({
+      tabs: [{ label: 'crit', selected: 'true' }],
+      paneTitle: 'crit',
+    })
+  },
+)
+
+it('does not synthesize a legacy Crit tab outside needs_action', () => {
+  act(() => {
+    root?.render(
+      <StatusPanelHarness
+        currentSession={{
+          ...session,
+          category: 'in_progress',
+          critUrl: 'https://crit.example.test/review/fixture',
+        }}
+      />,
+    )
+  })
+
+  const snapshot = () => ({
+    tabs: Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+      (tab) => tab.textContent,
+    ),
+    paneTitle:
+      container.querySelector('.web-ui-pane-title')?.textContent ?? null,
+  })
+
+  expect(snapshot()).toEqual({ tabs: [], paneTitle: null })
+})
+
 it('fetches and renders the review document when the status panel opens', async () => {
   const fetcher = vi.fn<typeof fetch>(() =>
     Promise.resolve(

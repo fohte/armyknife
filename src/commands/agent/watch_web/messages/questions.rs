@@ -111,6 +111,7 @@ pub(super) fn question_item_from_input(
         .collect::<Vec<_>>();
     (!questions.is_empty()).then_some(ChatItem::Question {
         request_id,
+        cancelled: false,
         questions,
     })
 }

@@ -195,6 +195,7 @@ export type ChatItem =
   | {
       type: 'question'
       requestId?: string
+      cancelled?: boolean
       questions: QuestionPrompt[]
     }
   | {

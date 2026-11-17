@@ -117,6 +117,8 @@ pub(super) enum ChatItem {
     Question {
         #[serde(rename = "requestId", skip_serializing_if = "Option::is_none")]
         request_id: Option<String>,
+        #[serde(skip_serializing_if = "is_false")]
+        cancelled: bool,
         questions: Vec<QuestionPrompt>,
     },
     Proposal {

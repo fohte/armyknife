@@ -1,4 +1,4 @@
-import { getConversationCritUrl } from '#components/conversation-crit-url'
+import { getPendingCritReviewUrl } from '#components/conversation-crit-url'
 import type { BackgroundTask, ChatItem, Session } from '#types'
 
 export type ConversationStatusBandState = {
@@ -19,6 +19,7 @@ function pendingQuestion(messages: readonly ChatItem[]) {
     .find(
       (message) =>
         message.type === 'question' &&
+        message.cancelled !== true &&
         message.questions.some((question) => question.answer === null),
     )
 }
@@ -52,17 +53,6 @@ export function getConversationStatusBandState({
     return { kind: 'compacting', detail: null }
   }
   if (isWorking) return { kind: 'working', detail: null }
-  if (
-    isWaitingForUser &&
-    session.kind === 'Review' &&
-    getConversationCritUrl(session) !== null
-  ) {
-    return {
-      kind: 'crit-review',
-      detail: session.task?.title ?? session.title,
-    }
-  }
-
   if (isWaitingForUser) {
     const question = pendingQuestion(messages)
     if (question?.type === 'question') {
@@ -78,6 +68,12 @@ export function getConversationStatusBandState({
       return {
         kind: 'permission',
         detail: permission.command ?? permission.description,
+      }
+    }
+    if (getPendingCritReviewUrl(session) !== null) {
+      return {
+        kind: 'crit-review',
+        detail: session.task?.title ?? session.title,
       }
     }
     return {

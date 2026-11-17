@@ -2892,6 +2892,34 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_question_serializes_its_cancellation_state() {
+        assert_eq!(
+            serde_json::to_value(ChatItem::Question {
+                request_id: None,
+                cancelled: true,
+                questions: vec![QuestionPrompt {
+                    header: None,
+                    question: "Should the sample report include a chart?".to_string(),
+                    choices: vec![question_choice("Yes")],
+                    multi_select: false,
+                    answer: None,
+                }],
+            })
+            .unwrap(),
+            json!({
+                "type": "question",
+                "cancelled": true,
+                "questions": [{
+                    "question": "Should the sample report include a chart?",
+                    "choices": [{"label": "Yes"}],
+                    "multi_select": false,
+                    "answer": null,
+                }],
+            }),
+        );
+    }
+
+    #[test]
     fn pending_question_does_not_create_a_permission_card() {
         let (_directory, transcript_path) = pending_question_transcript();
 
@@ -2936,6 +2964,7 @@ mod tests {
             .map(|conversation| conversation.messages),
             Some(vec![ChatItem::Question {
                 request_id: Some("permission-request-question".to_string()),
+                cancelled: false,
                 questions: vec![QuestionPrompt {
                     header: Some("Summary".to_string()),
                     question: "Should the summary be brief?".to_string(),
@@ -2984,6 +3013,7 @@ mod tests {
             Some(vec![
                 ChatItem::Question {
                     request_id: None,
+                    cancelled: false,
                     questions: vec![QuestionPrompt {
                         header: Some("Summary".to_string()),
                         question: "Should the summary be brief?".to_string(),
@@ -3106,6 +3136,7 @@ mod tests {
                 },
                 ChatItem::Question {
                     request_id: Some("permission-request-question".to_string()),
+                    cancelled: false,
                     questions: vec![QuestionPrompt {
                         header: Some("Summary".to_string()),
                         question: "Should the summary be brief?".to_string(),
