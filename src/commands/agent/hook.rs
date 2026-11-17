@@ -572,11 +572,7 @@ fn process_hook_event_impl_with_env(
                 work_type_pinned,
                 tmux_info,
                 if is_watch_web_launch {
-                    if env.session_has_initial_prompt == Some(false) {
-                        SessionStatus::Stopped
-                    } else {
-                        SessionStatus::Running
-                    }
+                    SessionStatus::initial_watch_web_launch(env.session_has_initial_prompt)
                 } else {
                     SessionStatus::Ended
                 },

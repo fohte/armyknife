@@ -266,4 +266,15 @@ mod tests {
         );
         assert_eq!(result.as_deref(), expected);
     }
+
+    #[rstest]
+    #[case::without_initial_prompt(Some("0"), Some(false))]
+    #[case::with_initial_prompt(Some("1"), Some(true))]
+    #[case::unset(None, None)]
+    fn loads_initial_prompt_marker(#[case] value: Option<&str>, #[case] expected: Option<bool>) {
+        let result = temp_env::with_vars([(SESSION_HAS_INITIAL_PROMPT, value)], || {
+            EnvVars::load().session_has_initial_prompt
+        });
+        assert_eq!(result, expected);
+    }
 }

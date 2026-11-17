@@ -108,12 +108,11 @@ fn record_in(
 ) -> Result<()> {
     let session_lock = store::lock_session_for_update(sessions_dir, session_id)?;
     let now = Utc::now();
-    let initial_status =
-        if metadata.launch_id.is_some() && metadata.has_initial_prompt == Some(false) {
-            SessionStatus::Stopped
-        } else {
-            SessionStatus::Running
-        };
+    let initial_status = if metadata.launch_id.is_some() {
+        SessionStatus::initial_watch_web_launch(metadata.has_initial_prompt)
+    } else {
+        SessionStatus::Running
+    };
     let mut session = session_lock.load()?.unwrap_or_else(|| Session {
         launch_id: None,
         archived_at: None,

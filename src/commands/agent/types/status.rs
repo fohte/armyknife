@@ -79,6 +79,14 @@ impl Session {
 }
 
 impl SessionStatus {
+    pub(crate) fn initial_watch_web_launch(has_initial_prompt: Option<bool>) -> Self {
+        if has_initial_prompt == Some(false) {
+            Self::Stopped
+        } else {
+            Self::Running
+        }
+    }
+
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::Running => "running",

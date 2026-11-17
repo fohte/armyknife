@@ -74,13 +74,19 @@ pub(super) fn build_env_vars(
 mod tests {
     use super::*;
     use crate::commands::agent::types::Engine;
+    use rstest::rstest;
 
-    #[test]
-    fn includes_the_watch_web_launch_id_in_the_child_environment() {
+    #[rstest]
+    #[case::without_initial_prompt(None, "0")]
+    #[case::with_initial_prompt(Some("Inspect the fixture."), "1")]
+    fn includes_watch_web_launch_metadata_in_the_child_environment(
+        #[case] prompt: Option<&str>,
+        #[case] expected_has_initial_prompt: &str,
+    ) {
         let common = CommonNewArgs {
             watch_web_launch_id: Some("launch-fixture".to_string()),
             watch_web_directory: None,
-            prompt: None,
+            prompt: prompt.map(str::to_string),
             child_launch: None,
             label: None,
             kind: None,
@@ -109,47 +115,7 @@ mod tests {
                 ),
                 (
                     EnvVars::session_has_initial_prompt_name().to_string(),
-                    "0".to_string(),
-                ),
-            ],
-        );
-    }
-
-    #[test]
-    fn marks_watch_web_launches_with_an_initial_prompt() {
-        let common = CommonNewArgs {
-            watch_web_launch_id: Some("launch-fixture".to_string()),
-            watch_web_directory: None,
-            prompt: Some("Inspect the fixture.".to_string()),
-            child_launch: None,
-            label: None,
-            kind: None,
-            type_name: None,
-            model: None,
-            parent_session_id: None,
-            repo: None,
-            engine: Some(Engine::Claude),
-            reasoning_effort: None,
-        };
-
-        let env_vars = temp_env::with_vars([("TQ_SESSION_ID", None::<&str>)], || {
-            build_env_vars(&common, false, None).unwrap()
-        });
-
-        assert_eq!(
-            env_vars,
-            vec![
-                (
-                    EnvVars::session_child_launch_name().to_string(),
-                    "allow".to_string(),
-                ),
-                (
-                    EnvVars::session_launch_id_name().to_string(),
-                    "launch-fixture".to_string(),
-                ),
-                (
-                    EnvVars::session_has_initial_prompt_name().to_string(),
-                    "1".to_string(),
+                    expected_has_initial_prompt.to_string(),
                 ),
             ],
         );
