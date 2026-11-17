@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.781](https://github.com/fohte/armyknife/compare/v0.1.780...v0.1.781) (2026-11-17)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** restore New session history ([#1944](https://github.com/fohte/armyknife/issues/1944)) ([34c7b94](https://github.com/fohte/armyknife/commit/34c7b9485fe4f7c543cfadbf729012d7149328cc))
+
 ## [0.1.780](https://github.com/fohte/armyknife/compare/v0.1.779...v0.1.780) (2026-11-17)
 
 
