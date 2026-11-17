@@ -125,6 +125,22 @@ export function ToolSummary({
       : summary.slice(0, -failedSuffix.length).trimEnd()
   const hasGroupedItems = items !== undefined && items.length > 0
   const hasOperations = operations.length > 0 || hasGroupedItems
+  const thoughtCount =
+    items?.filter((item) => item.type === 'thinking').length ?? 0
+  const toolCallCount =
+    items?.filter((item) => item.type === 'tool_use').length ?? 0
+  const expandedSummary = hasGroupedItems
+    ? [
+        ...(thoughtCount > 0
+          ? [`${String(thoughtCount)} thought${thoughtCount === 1 ? '' : 's'}`]
+          : []),
+        ...(toolCallCount > 0
+          ? [
+              `${String(toolCallCount)} tool call${toolCallCount === 1 ? '' : 's'}`,
+            ]
+          : []),
+      ].join(' · ')
+    : `${String(operations.length)} tool call${operations.length === 1 ? '' : 's'}`
 
   return (
     <details
@@ -136,16 +152,9 @@ export function ToolSummary({
       }}
     >
       <summary>
-        {operations.length > 0 && isOpen ? (
+        {hasOperations && isOpen ? (
           <>
-            <span>
-              {operations.length} tool call{operations.length === 1 ? '' : 's'}
-            </span>
-            <span className="chat-tool-summary-collapse">‹ Collapse</span>
-          </>
-        ) : hasGroupedItems && isOpen ? (
-          <>
-            <span className="chat-tool-summary-text">{summaryText}</span>
+            <span className="chat-tool-summary-text">{expandedSummary}</span>
             <span className="chat-tool-summary-collapse">‹ Collapse</span>
           </>
         ) : failedSuffix === undefined ? (
@@ -175,6 +184,9 @@ export function ToolSummary({
                     <span className="chat-tool-name">Thought</span>
                     <span className="chat-tool-thought-preview">
                       {item.text}
+                    </span>
+                    <span className="chat-tool-thought-length">
+                      {item.text.length} chars
                     </span>
                   </summary>
                   <p className="chat-tool-thought-full">{item.text}</p>
