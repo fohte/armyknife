@@ -33,7 +33,10 @@ const completedSession: Session = {
   title: 'Document the deployment procedure',
 }
 
-function renderBoard(sessions: Session[]) {
+function renderBoard(
+  sessions: Session[],
+  onHideQuietProjectsChange: (checked: boolean) => void = () => undefined,
+) {
   root = createRoot(container)
   act(() => {
     root?.render(
@@ -42,7 +45,7 @@ function renderBoard(sessions: Session[]) {
         loaded
         error={null}
         hideQuietProjects={false}
-        onHideQuietProjectsChange={() => undefined}
+        onHideQuietProjectsChange={onHideQuietProjectsChange}
         onNewSession={() => undefined}
         onSelectSession={() => undefined}
       />,
@@ -52,13 +55,38 @@ function renderBoard(sessions: Session[]) {
 
 function snapshot() {
   return {
-    group: container.querySelector('.board-group')?.getAttribute('aria-label'),
+    group: container
+      .querySelector('.board-group.done')
+      ?.getAttribute('aria-label'),
+    heading: container.querySelector('.board-group.done h3')?.textContent,
     badge: container.querySelector('.board-done-summary [data-slot="chip"]')
       ?.textContent,
-    pausedTitle: container.querySelector(
-      '.board-done-paused-session span:last-child',
-    )?.textContent,
     summary: container.querySelector('.board-done-summary')?.textContent,
+  }
+}
+
+function overflowSummarySnapshot() {
+  const more = container.querySelector<HTMLElement>('.board-more')
+
+  return {
+    tagName: more?.tagName,
+    text: more?.textContent,
+    role: more?.getAttribute('role'),
+    tabIndex: more?.tabIndex,
+    buttonCount: container.querySelectorAll('button.board-more').length,
+    cardCount: container.querySelectorAll('.board-card').length,
+  }
+}
+
+function quietToggleSnapshot(
+  input: HTMLInputElement | null,
+  onChange: ReturnType<typeof vi.fn>,
+) {
+  return {
+    type: input?.type,
+    checked: input?.checked,
+    label: input?.parentElement?.textContent,
+    changeCalls: onChange.mock.calls,
   }
 }
 
@@ -93,20 +121,67 @@ it('identifies paused sessions in the Done group', () => {
 
   expect(snapshot()).toEqual({
     group: 'Done (1)',
+    heading: undefined,
     badge: 'Paused',
-    pausedTitle: 'Prepare the next deployment window',
-    summary: 'PausedPrepare the next deployment window',
+    summary: '✓ Done · PausedPrepare the next deployment window',
   })
 })
 
 it('shows paused sessions beside the count of other Done sessions', () => {
-  renderBoard([pausedSession, completedSession])
+  renderBoard([completedSession, pausedSession])
 
   expect(snapshot()).toEqual({
     group: 'Done (2)',
+    heading: undefined,
     badge: 'Paused',
-    pausedTitle: 'Prepare the next deployment window',
-    summary: 'PausedPrepare the next deployment window · 1 other done',
+    summary: '✓ Done · PausedPrepare the next deployment window and 1 more',
+  })
+})
+
+it('shows the first completed session when no Done session is paused', () => {
+  renderBoard([completedSession])
+
+  expect(snapshot()).toEqual({
+    group: 'Done (1)',
+    heading: undefined,
+    badge: undefined,
+    summary: '✓ Done · Document the deployment procedure',
+  })
+})
+
+it('renders the overflow summary as non-interactive text', () => {
+  renderBoard(
+    Array.from({ length: 4 }, (_, index) => ({
+      ...completedSession,
+      id: `working-session-${String(index)}`,
+      category: 'in_progress' as const,
+    })),
+  )
+
+  expect(overflowSummarySnapshot()).toEqual({
+    tagName: 'SPAN',
+    text: '1 more',
+    role: null,
+    tabIndex: -1,
+    buttonCount: 0,
+    cardCount: 3,
+  })
+})
+
+it('keeps the quiet-project control as a labeled native checkbox', () => {
+  const onHideQuietProjectsChange = vi.fn()
+  renderBoard([completedSession], onHideQuietProjectsChange)
+
+  const input = container.querySelector<HTMLInputElement>(
+    '.board-quiet-toggle input',
+  )
+  act(() => input?.click())
+
+  expect(quietToggleSnapshot(input, onHideQuietProjectsChange)).toEqual({
+    type: 'checkbox',
+    checked: false,
+    label: 'Hide quiet projects (1)',
+    changeCalls: [[true]],
   })
 })
 

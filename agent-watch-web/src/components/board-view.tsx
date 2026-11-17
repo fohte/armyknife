@@ -65,16 +65,14 @@ function ProjectColumn({
   return (
     <section className="board-project" aria-label={project.name}>
       <header className="board-project-header">
-        <div className="board-project-title-line">
-          <h2>{project.name}</h2>
-          {project.needsActionCount > 0 ? (
-            <span className="board-project-need">
-              {project.needsActionCount} need action
-            </span>
-          ) : (
-            <span className="board-project-quiet">Nothing needed</span>
-          )}
-        </div>
+        <h2>{project.name}</h2>
+        {project.needsActionCount > 0 ? (
+          <div className="board-project-need">
+            {project.needsActionCount} need action
+          </div>
+        ) : (
+          <div className="board-project-quiet">Nothing needed</div>
+        )}
         {project.repos.length > 0 ? (
           <p className="board-project-repos">{project.repos.join(', ')}</p>
         ) : null}
@@ -88,8 +86,8 @@ function ProjectColumn({
         }
 
         if (category === 'done') {
-          const pausedSessions = sessions.filter((session) => session.isPaused)
-          const otherDoneCount = sessions.length - pausedSessions.length
+          const doneSessionToSummarize =
+            sessions.find((session) => session.isPaused) ?? sessions[0]
 
           return (
             <section
@@ -97,34 +95,20 @@ function ProjectColumn({
               className={`board-group ${className}`}
               aria-label={`${title} (${String(sessions.length)})`}
             >
-              <h3>
-                <span>{title}</span>
-                <span>{sessions.length}</span>
-              </h3>
               <p className="board-done-summary">
-                {pausedSessions.length > 0 ? (
+                <span className="board-done-label">✓ Done</span>
+                <span aria-hidden="true"> · </span>
+                {doneSessionToSummarize !== undefined ? (
                   <>
-                    {pausedSessions.map((session) => (
-                      <span
-                        className="board-done-paused-session"
-                        key={session.id}
-                      >
-                        <SessionPausedBadge isPaused />
-                        <span>{session.title}</span>
-                      </span>
-                    ))}
-                    {otherDoneCount > 0
-                      ? ` · ${String(otherDoneCount)} other done`
-                      : ''}
-                  </>
-                ) : (
-                  <>
-                    {sessions[0]?.title ?? ''}
+                    <SessionPausedBadge
+                      isPaused={doneSessionToSummarize.isPaused}
+                    />
+                    {doneSessionToSummarize.title}
                     {sessions.length > 1
                       ? ` and ${String(sessions.length - 1)} more`
                       : ''}
                   </>
-                )}
+                ) : null}
               </p>
             </section>
           )
@@ -138,10 +122,7 @@ function ProjectColumn({
             className={`board-group ${className}`}
             aria-label={`${title} (${String(sessions.length)})`}
           >
-            <h3>
-              <span>{title}</span>
-              <span>{sessions.length}</span>
-            </h3>
+            <h3>{title}</h3>
             <div className="board-card-list">
               {visibleSessions.map((session) => (
                 <ProjectCard
@@ -151,9 +132,9 @@ function ProjectColumn({
                 />
               ))}
               {sessions.length > visibleSessions.length ? (
-                <p className="board-more">
+                <span className="board-more">
                   {sessions.length - visibleSessions.length} more
-                </p>
+                </span>
               ) : null}
             </div>
           </section>
