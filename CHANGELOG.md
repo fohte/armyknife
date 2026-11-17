@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.773](https://github.com/fohte/armyknife/compare/v0.1.772...v0.1.773) (2026-11-17)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align nav and quota layout ([#1930](https://github.com/fohte/armyknife/issues/1930)) ([668e801](https://github.com/fohte/armyknife/commit/668e801c66b53349b9d34ba9c2bf8d0444e6e9a8))
+
 ## [0.1.772](https://github.com/fohte/armyknife/compare/v0.1.771...v0.1.772) (2026-11-17)
 
 
