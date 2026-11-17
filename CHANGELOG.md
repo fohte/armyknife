@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.780](https://github.com/fohte/armyknife/compare/v0.1.779...v0.1.780) (2026-11-17)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align rows without details ([#1946](https://github.com/fohte/armyknife/issues/1946)) ([c1f26f1](https://github.com/fohte/armyknife/commit/c1f26f11ce0c545bb0f25b816a96337d6aef61ba))
+
 ## [0.1.779](https://github.com/fohte/armyknife/compare/v0.1.778...v0.1.779) (2026-11-17)
 
 
