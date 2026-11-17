@@ -615,7 +615,6 @@ function AppContent() {
     onToggleLater: () => {
       setLaterExpanded((expanded) => !expanded)
     },
-    onLater: openLater,
     onToggleToday: toggleToday,
     todaySessions,
     onSelectToday: openTodaySession,

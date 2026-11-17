@@ -109,7 +109,6 @@ function renderInbox(props: Partial<ComponentProps<typeof InboxView>> = {}) {
         onSelect={() => undefined}
         laterExpanded
         onToggleLater={() => undefined}
-        onLater={() => undefined}
         onToggleToday={() => undefined}
         todaySessions={[]}
         onSelectToday={() => undefined}

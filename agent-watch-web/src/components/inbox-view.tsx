@@ -26,7 +26,6 @@ type InboxViewProps = {
   onSelect: (id: string) => void
   laterExpanded: boolean
   onToggleLater: () => void
-  onLater: (id: string) => void
   onToggleToday: (id: string, isToday: boolean) => void
   todaySessions: readonly Session[]
   onSelectToday: (id: string) => void
