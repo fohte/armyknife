@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.774](https://github.com/fohte/armyknife/compare/v0.1.773...v0.1.774) (2026-11-17)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** match palette to screens ([#1932](https://github.com/fohte/armyknife/issues/1932)) ([2c0bdda](https://github.com/fohte/armyknife/commit/2c0bddaa99ba015d58809aeafdecc16dd649e68f))
+
 ## [0.1.773](https://github.com/fohte/armyknife/compare/v0.1.772...v0.1.773) (2026-11-17)
 
 
