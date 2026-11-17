@@ -141,6 +141,14 @@ impl ProcessSnapshot {
             .map(|c| c.rsplit('/').next().unwrap_or(c.as_str()))
     }
 
+    pub(super) fn parent_pid(&self, pid: u32) -> Option<u32> {
+        self.parents.get(&pid).copied()
+    }
+
+    pub(super) fn command_line(&self, pid: u32) -> Option<&str> {
+        self.command_lines.get(&pid).map(String::as_str)
+    }
+
     fn codex_app_server_ancestors(&self, pid: u32) -> impl Iterator<Item = u32> + '_ {
         self.ancestors(pid)
             .into_iter()

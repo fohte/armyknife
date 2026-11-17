@@ -17,7 +17,9 @@ pub(crate) struct WorktreeProcessInspection {
     pub(crate) daemon_descendant_pgids: Vec<libc::pid_t>,
 }
 
-/// Finds non-shell processes whose current working directory is inside `path`.
+/// Finds non-shell processes whose current working directory is inside `path`,
+/// excluding shell-launched `sqlite3` processes whose arguments start with
+/// `-batch -noheader`, the invocation form used by zsh-histdb.
 ///
 /// Returns `None` when either process source cannot be inspected, so callers
 /// can refuse destructive work when they cannot verify the worktree is idle.
@@ -80,7 +82,7 @@ fn inspect_processes_in_path(
             continue;
         };
         let comm = comm.strip_prefix('-').unwrap_or(comm);
-        if !SHELL_COMMANDS.contains(&comm) {
+        if !SHELL_COMMANDS.contains(&comm) && !is_shell_histdb_sqlite3(snapshot, pid, comm) {
             non_shell_processes.push(ProcessInPath {
                 pid,
                 comm: comm.to_string(),
@@ -94,6 +96,32 @@ fn inspect_processes_in_path(
         non_shell_processes,
         daemon_descendant_pgids,
     }
+}
+
+fn is_shell_histdb_sqlite3(snapshot: &ProcessSnapshot, pid: u32, comm: &str) -> bool {
+    if comm != "sqlite3" {
+        return false;
+    }
+
+    let Some(parent_pid) = snapshot.parent_pid(pid) else {
+        return false;
+    };
+    let Some(parent_comm) = snapshot.comm_basename(parent_pid) else {
+        return false;
+    };
+    let parent_comm = parent_comm.strip_prefix('-').unwrap_or(parent_comm);
+    if !SHELL_COMMANDS.contains(&parent_comm) {
+        return false;
+    }
+
+    let Some(command_line) = snapshot.command_line(pid) else {
+        return false;
+    };
+    let mut args = command_line.split_whitespace();
+    let Some(_executable) = args.next() else {
+        return false;
+    };
+    args.next() == Some("-batch") && args.next() == Some("-noheader")
 }
 
 #[cfg(test)]
@@ -124,6 +152,11 @@ mod tests {
             80 1 80 /usr/bin/bash
             90 1 90 /usr/local/bin/codex
             91 90 91 worker
+            100 20 20 sqlite3
+            101 20 20 sqlite3
+            102 20 20 sqlite3
+            103 20 20 sqlite3
+            110 1 110 sqlite3
         "},
             indoc! {"
             60 /opt/homebrew/bin/codex app-server --listen unix:// --managed-daemon
@@ -135,6 +168,11 @@ mod tests {
             71 node node_repl
             90 /usr/local/bin/codex app-server --listen socket
             91 worker worker
+            100 sqlite3 -batch -noheader /Users/example/.histdb/history.db
+            101 sqlite3 /Users/example/.histdb/history.db
+            102 sqlite3 -batch /Users/example/.histdb/history.db
+            103 sqlite3 -noheader /Users/example/.histdb/history.db
+            110 sqlite3 -batch -noheader /Users/example/.histdb/history.db
         "},
         )
     }
@@ -142,6 +180,12 @@ mod tests {
     #[rstest]
     #[case::only_shells(&[(20, WORKTREE), (50, WORKTREE)], &[], &[])]
     #[case::non_shell_processes(&[(30, WORKTREE), (40, WORKTREE)], &[(30, "claude"), (40, "node")], &[])]
+    #[case::shell_histdb_sqlite3_is_ignored(&[(100, WORKTREE)], &[], &[])]
+    #[case::shell_agent_is_still_detected(&[(30, WORKTREE)], &[(30, "claude")], &[])]
+    #[case::other_shell_sqlite3_is_still_detected(&[(20, WORKTREE), (101, WORKTREE)], &[(101, "sqlite3")], &[])]
+    #[case::sqlite3_without_noheader_is_still_detected(&[(102, WORKTREE)], &[(102, "sqlite3")], &[])]
+    #[case::sqlite3_without_batch_is_still_detected(&[(103, WORKTREE)], &[(103, "sqlite3")], &[])]
+    #[case::unrelated_histdb_sqlite3_is_still_detected(&[(110, WORKTREE)], &[(110, "sqlite3")], &[])]
     #[case::caller_and_ancestor_are_excluded(&[(10, WORKTREE), (20, WORKTREE), (30, WORKTREE)], &[(30, "claude")], &[])]
     #[case::missing_ps_pid_is_ignored(&[(92, WORKTREE)], &[], &[])]
     #[case::login_shell_is_recognized(&[(20, WORKTREE)], &[], &[])]
