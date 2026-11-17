@@ -38,7 +38,7 @@ const mobileViewportDecorator: Decorator = (Story) => (
       height: '844px',
       display: 'flex',
       alignItems: 'end',
-      background: '#09090b',
+      background: '#0a0a0a',
     }}
   >
     <Story />

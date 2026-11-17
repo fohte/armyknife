@@ -52,7 +52,7 @@ const meta = {
   args: { usage: claudeUsage, nowSeconds: 1_794_832_000 },
   decorators: [
     (Story) => (
-      <div style={{ width: '672px', background: '#0f0f0f' }}>
+      <div style={{ width: '880px', background: '#0a0a0a' }}>
         <Story />
       </div>
     ),
@@ -81,7 +81,7 @@ export const MobileWrapsTheUsageRow: Story = {
   args: { usage: claudeUsage, isMobile: true, nowSeconds: 1_794_832_000 },
   decorators: [
     (Story) => (
-      <div style={{ width: '360px', background: '#0f0f0f' }}>
+      <div style={{ width: '360px', background: '#0a0a0a' }}>
         <Story />
       </div>
     ),

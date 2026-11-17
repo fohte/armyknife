@@ -29,6 +29,6 @@ it('announces current quota usage when the forecast is not available', () => {
       <SessionUsageRow nowSeconds={nowSeconds} usage={usage} />,
     ),
   ).toEqual(
-    '<div aria-label="Session usage" class="session-usage-row" data-mobile="false" role="group"><span class="session-usage-engine" title="Codex">codex</span><span aria-hidden="true" class="session-usage-separator">|</span><span aria-label="5h: 3% used" class="session-usage-rate" role="group" title="5h: 3% used"><span aria-hidden="true" class="session-usage-rate-current">5h 3%</span></span></div>',
+    '<div aria-label="Session usage" class="session-usage-row" data-mobile="false" role="group"><span class="session-usage-engine" title="Codex">codex</span><span aria-hidden="true" class="session-usage-separator">|</span><span aria-label="5h: 3% used" class="session-usage-rate session-usage-rate-five-hour" role="group" title="5h: 3% used"><span aria-hidden="true" class="session-usage-rate-current is-normal"><span class="session-usage-rate-label">5h</span><span class="session-usage-rate-percentage">3%</span></span></span></div>',
   )
 })

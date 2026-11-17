@@ -92,7 +92,7 @@ export const MobileHeaderShowsTaskAndRepository: Story = {
       ...session,
       category: 'done',
       title: 'Retry',
-      repo: 'svc',
+      repo: 'example/service',
       task: {
         id: 'sample-task-primary',
         number: 8,
