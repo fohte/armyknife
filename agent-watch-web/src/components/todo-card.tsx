@@ -30,17 +30,20 @@ type TodoCardProps = {
 
 export function TodoCard({
   seq = 0,
-  sessionId = 'todo',
+  sessionId,
   title,
   detail,
   resolution,
   defaultComment = '',
   onResolve,
 }: TodoCardProps) {
+  const [draftSessionId] = useState(() => sessionId ?? crypto.randomUUID())
   const commentId = useId()
-  const attachmentState = useAttachments(`${sessionId}:todo:${String(seq)}`)
+  const attachmentState = useAttachments(
+    `${sessionId ?? 'todo'}:todo:${String(seq)}`,
+  )
   const commentDraft = useDraft(
-    cardDraftStorageKey('todo', sessionId, seq, 'comment'),
+    cardDraftStorageKey('todo', draftSessionId, seq, 'comment'),
     defaultComment,
   )
   const { draft: comment, updateDraft, clearDraftIfUnchanged } = commentDraft
@@ -150,6 +153,11 @@ export function TodoCard({
       <label className="chat-todo-comment-label" htmlFor={commentId}>
         Comment (optional)
       </label>
+      {!commentDraft.storageAvailable ? (
+        <p className="conversation-error" role="status">
+          Browser storage is unavailable. Drafts may not survive a page reload.
+        </p>
+      ) : null}
       <textarea
         id={commentId}
         className="chat-todo-comment"

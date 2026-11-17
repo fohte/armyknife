@@ -7,6 +7,7 @@ import { page } from 'vitest/browser'
 
 import { type Decision, DecisionCard } from '#components/decision-card'
 import { MarkdownSessionLinksProvider } from '#components/markdown-message'
+import { setTextareaValue } from '#test/test-utils'
 import type { SessionLinkTarget } from '#types'
 
 let container: HTMLDivElement
@@ -65,17 +66,6 @@ function button(label: string) {
 function requireElement<T extends Element>(element: T | null): T {
   if (element === null) throw new Error('Expected element was not rendered')
   return element
-}
-
-function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
-  act(() => {
-    const valueSetter = Reflect.getOwnPropertyDescriptor(
-      textarea.constructor.prototype,
-      'value',
-    )?.set
-    if (valueSetter !== undefined) Reflect.apply(valueSetter, textarea, [value])
-    textarea.dispatchEvent(new Event('input', { bubbles: true }))
-  })
 }
 
 beforeEach(() => {
@@ -194,6 +184,7 @@ it('restores a change request after reload and clears it after sending', async (
     requireElement(container.querySelector<HTMLTextAreaElement>('textarea')),
     'Please include the review timing.',
   )
+  const storedDraftBeforeReload = window.localStorage.getItem(storageKey)
   act(() => {
     root?.unmount()
   })
@@ -215,13 +206,64 @@ it('restores a change request after reload and clears it after sending', async (
   const snapshot = () => ({
     restoredComment: persistedBeforeSend,
     changeCalls: onRequestChange.mock.calls,
+    storedDraftBeforeReload,
     storedDraft: window.localStorage.getItem(storageKey),
   })
 
   expect(snapshot()).toEqual({
     restoredComment: 'Please include the review timing.',
     changeCalls: [['Please include the review timing.']],
+    storedDraftBeforeReload: 'Please include the review timing.',
     storedDraft: null,
+  })
+})
+
+it('keeps change requests after an unsuccessful send and reload', async () => {
+  const sessionId = crypto.randomUUID()
+  const storageKey = `agent-watch-web:card-draft:${JSON.stringify([
+    'decision',
+    sessionId,
+    decision.seq,
+    'change-comment',
+  ])}`
+  const onRequestChange = vi.fn(() => Promise.resolve(false))
+  const cardProps = { sessionId, expanded: true, onRequestChange }
+  renderCard(cardProps)
+  act(() => {
+    button('Change…').click()
+  })
+  setTextareaValue(
+    requireElement(container.querySelector<HTMLTextAreaElement>('textarea')),
+    'Keep the request available for a retry.',
+  )
+  await act(async () => {
+    button('Send change request').click()
+    await Promise.resolve()
+  })
+  const storedDraftAfterFailure = window.localStorage.getItem(storageKey)
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+  renderCard(cardProps)
+  act(() => {
+    button('Change…').click()
+  })
+
+  const snapshot = () => ({
+    changeCalls: onRequestChange.mock.calls,
+    restoredComment: requireElement(
+      container.querySelector<HTMLTextAreaElement>('textarea'),
+    ).value,
+    storedDraftAfterFailure,
+    storedDraftAfterReload: window.localStorage.getItem(storageKey),
+  })
+
+  expect(snapshot()).toEqual({
+    changeCalls: [['Keep the request available for a retry.']],
+    restoredComment: 'Keep the request available for a retry.',
+    storedDraftAfterFailure: 'Keep the request available for a retry.',
+    storedDraftAfterReload: 'Keep the request available for a retry.',
   })
 })
 

@@ -42,7 +42,7 @@ type DecisionCardProps = {
 }
 
 export function DecisionCard({
-  sessionId = 'decision',
+  sessionId,
   decision,
   variant,
   expanded: controlledExpanded,
@@ -59,12 +59,19 @@ export function DecisionCard({
 }: DecisionCardProps) {
   const [localExpanded, setLocalExpanded] = useState(false)
   const [localEditing, setLocalEditing] = useState(false)
+  const [draftSessionId] = useState(() => sessionId ?? crypto.randomUUID())
   const {
     draft: comment,
     updateDraft,
     clearDraftIfUnchanged,
+    storageAvailable,
   } = useDraft(
-    cardDraftStorageKey('decision', sessionId, decision.seq, 'change-comment'),
+    cardDraftStorageKey(
+      'decision',
+      draftSessionId,
+      decision.seq,
+      'change-comment',
+    ),
   )
   const expanded = controlledExpanded ?? localExpanded
   const editing = controlledEditing ?? localEditing
@@ -196,6 +203,12 @@ export function DecisionCard({
                   void submitChange()
                 }}
               >
+                {!storageAvailable ? (
+                  <p className="conversation-error" role="status">
+                    Browser storage is unavailable. Drafts may not survive a
+                    page reload.
+                  </p>
+                ) : null}
                 <label htmlFor={`decision-change-${String(decision.seq)}`}>
                   Change request
                 </label>

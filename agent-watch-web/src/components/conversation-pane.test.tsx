@@ -15,6 +15,7 @@ import { SessionConversationCacheProvider } from '#components/session-conversati
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import { useSessionLinkTargets } from '#session-link-targets'
+import { setTextareaValue } from '#test/test-utils'
 import type {
   BackgroundTask,
   ChatItem,
@@ -249,19 +250,6 @@ function terminalFeedback() {
     container.querySelectorAll('.conversation-terminal-action-status'),
     (element) => element.textContent,
   ).filter((text) => text !== '')
-}
-
-function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
-  act(() => {
-    const valueSetter = Reflect.getOwnPropertyDescriptor(
-      textarea.constructor.prototype,
-      'value',
-    )?.set
-    if (valueSetter !== undefined) {
-      Reflect.apply(valueSetter, textarea, [value])
-    }
-    textarea.dispatchEvent(new Event('input', { bubbles: true }))
-  })
 }
 
 function expectDraftRetained(

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import { ProposalCard } from '#components/proposal-card'
+import { setTextareaValue } from '#test/test-utils'
 import type { SessionLinkTarget } from '#types'
 
 const { optimizeImageAttachmentMock } = vi.hoisted(() => ({
@@ -96,19 +97,6 @@ function renderCards(cardProps: Props[]) {
 function requireElement<T extends Element>(element: T | null): T {
   if (element === null) throw new Error('Expected element was not rendered')
   return element
-}
-
-function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
-  act(() => {
-    const valueSetter = Reflect.getOwnPropertyDescriptor(
-      textarea.constructor.prototype,
-      'value',
-    )?.set
-    if (valueSetter !== undefined) {
-      Reflect.apply(valueSetter, textarea, [value])
-    }
-    textarea.dispatchEvent(new Event('input', { bubbles: true }))
-  })
 }
 
 async function pasteImage(textarea: HTMLTextAreaElement, file: File) {
@@ -517,6 +505,8 @@ it('restores a proposal comment after reload and clears it after sending', async
     ),
     'Keep the new choice easy to compare.',
   )
+  const storedDraftBeforeReload = window.localStorage.getItem(storageKey)
+  const storedChoiceBeforeReload = window.localStorage.getItem(choiceStorageKey)
   act(() => {
     root?.unmount()
   })
@@ -546,6 +536,8 @@ it('restores a proposal comment after reload and clears it after sending', async
     restoredComment: persistedBeforeSend,
     selectedAfterReload,
     answerCalls: onAnswer.mock.calls,
+    storedDraftBeforeReload,
+    storedChoiceBeforeReload,
     storedDraft: window.localStorage.getItem(storageKey),
     storedChoiceDraft: window.localStorage.getItem(choiceStorageKey),
   })
@@ -556,8 +548,62 @@ it('restores a proposal comment after reload and clears it after sending', async
     answerCalls: [
       [{ choice: 1, comment: 'Keep the new choice easy to compare.' }],
     ],
+    storedDraftBeforeReload: 'Keep the new choice easy to compare.',
+    storedChoiceBeforeReload: '1',
     storedDraft: null,
     storedChoiceDraft: null,
+  })
+})
+
+it('keeps proposal comments after an unsuccessful answer and reload', async () => {
+  const sessionId = crypto.randomUUID()
+  const storageKey = `agent-watch-web:card-draft:${JSON.stringify([
+    'proposal',
+    sessionId,
+    7,
+    'comment',
+  ])}`
+  const onAnswer = vi.fn<Props['onAnswer']>(() => Promise.resolve(false))
+  const cardProps = props({ sessionId, onAnswer })
+  renderCard(cardProps)
+  dispatchKey(window, '1')
+  setTextareaValue(
+    requireElement(
+      container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+    ),
+    'Keep this note until the request succeeds.',
+  )
+  await act(async () => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.chat-proposal-actions button',
+      ),
+    ).click()
+    await Promise.resolve()
+  })
+  const storedDraftAfterFailure = window.localStorage.getItem(storageKey)
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+  renderCard(cardProps)
+
+  const snapshot = () => ({
+    answerCalls: onAnswer.mock.calls,
+    restoredComment: requireElement(
+      container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+    ).value,
+    storedDraftAfterFailure,
+    storedDraftAfterReload: window.localStorage.getItem(storageKey),
+  })
+
+  expect(snapshot()).toEqual({
+    answerCalls: [
+      [{ choice: 0, comment: 'Keep this note until the request succeeds.' }],
+    ],
+    restoredComment: 'Keep this note until the request succeeds.',
+    storedDraftAfterFailure: 'Keep this note until the request succeeds.',
+    storedDraftAfterReload: 'Keep this note until the request succeeds.',
   })
 })
 

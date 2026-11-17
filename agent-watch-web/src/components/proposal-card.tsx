@@ -39,7 +39,7 @@ function choiceLabel(choice: number) {
 }
 
 export function ProposalCard({
-  sessionId = 'proposal',
+  sessionId,
   seq,
   title,
   summary,
@@ -53,13 +53,16 @@ export function ProposalCard({
   defaultComment = '',
   onAnswer,
 }: ProposalCardProps) {
-  const attachmentState = useAttachments(`${sessionId}:proposal:${String(seq)}`)
+  const [draftSessionId] = useState(() => sessionId ?? crypto.randomUUID())
+  const attachmentState = useAttachments(
+    `${sessionId ?? 'proposal'}:proposal:${String(seq)}`,
+  )
   const commentDraft = useDraft(
-    cardDraftStorageKey('proposal', sessionId, seq, 'comment'),
+    cardDraftStorageKey('proposal', draftSessionId, seq, 'comment'),
     answer?.comment ?? defaultComment,
   )
   const choiceDraft = useDraft(
-    cardDraftStorageKey('proposal', sessionId, seq, 'choice'),
+    cardDraftStorageKey('proposal', draftSessionId, seq, 'choice'),
     defaultChoice === null ? '' : String(defaultChoice),
   )
   const [submittedAnswer, setSubmittedAnswer] = useState<ProposalAnswer | null>(
@@ -321,6 +324,12 @@ export function ProposalCard({
           />
         </>
       )}
+      {!isAnswered &&
+      (!commentDraft.storageAvailable || !choiceDraft.storageAvailable) ? (
+        <p className="conversation-error" role="status">
+          Browser storage is unavailable. Drafts may not survive a page reload.
+        </p>
+      ) : null}
       {answer === null && !resolved ? (
         <AttachmentPreviewList
           attachments={attachmentState.attachments}

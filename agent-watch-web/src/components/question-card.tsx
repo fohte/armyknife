@@ -25,8 +25,24 @@ type QuestionCardProps = {
   onOpenInTerminal: () => void
 }
 
+function serializeSelections(selected: Record<string, string[]>) {
+  const params = new URLSearchParams()
+  for (const [question, choices] of Object.entries(selected)) {
+    for (const choice of choices) params.append(question, choice)
+  }
+  return params.toString()
+}
+
+function parseSelections(serialized: string) {
+  const selected: Record<string, string[]> = {}
+  for (const [question, choice] of new URLSearchParams(serialized)) {
+    selected[question] = [...(selected[question] ?? []), choice]
+  }
+  return selected
+}
+
 export function QuestionCard({
-  sessionId = 'question',
+  sessionId,
   requestId,
   questions,
   canAnswer,
@@ -40,15 +56,28 @@ export function QuestionCard({
 }: QuestionCardProps) {
   const inputId = useId()
   const cardRef = useRef<HTMLElement | null>(null)
+  const [draftSessionId] = useState(() => sessionId ?? crypto.randomUUID())
   const questionCardId =
     requestId ?? questions.map((question) => question.question).join('\u0000')
   const answerDraft = useDraft(
-    cardDraftStorageKey('question', sessionId, questionCardId, 'answers'),
+    cardDraftStorageKey('question', draftSessionId, questionCardId, 'answers'),
   )
-  const [selected, setSelected] = useState<Record<string, string[]>>({})
+  const selectionDraft = useDraft(
+    cardDraftStorageKey(
+      'question',
+      draftSessionId,
+      questionCardId,
+      'selections',
+    ),
+  )
+  const [selected, setSelected] = useState<Record<string, string[]>>(() =>
+    parseSelections(selectionDraft.draft),
+  )
   const [drafts, setDrafts] = useState<Record<string, string>>(() =>
     Object.fromEntries(new URLSearchParams(answerDraft.draft).entries()),
   )
+  const selectedRef = useRef(selected)
+  const draftsRef = useRef(drafts)
   const [isSending, setIsSending] = useState(false)
   const [resolved, setResolved] = useState(false)
   const [sendFailed, setSendFailed] = useState(false)
@@ -85,7 +114,9 @@ export function QuestionCard({
     !isSending &&
     questions.every((question) => (answers()[question.question] ?? '') !== '')
 
-  const updateAnswerDrafts = (next: Record<string, string>) => {
+  const updateAnswerDraft = (question: string, value: string) => {
+    const next = { ...draftsRef.current, [question]: value }
+    draftsRef.current = next
     setDrafts(next)
     answerDraft.updateDraft(
       new URLSearchParams(
@@ -94,7 +125,21 @@ export function QuestionCard({
     )
   }
 
-  const sendAnswers = (answerValues: Record<string, string>) => {
+  const updateSelections = (
+    update: (current: Record<string, string[]>) => Record<string, string[]>,
+  ) => {
+    const next = update(selectedRef.current)
+    selectedRef.current = next
+    setSelected(next)
+    const serialized = serializeSelections(next)
+    selectionDraft.updateDraft(serialized)
+    return serialized
+  }
+
+  const sendAnswers = (
+    answerValues: Record<string, string>,
+    sentSelections = selectionDraft.draft,
+  ) => {
     if (!canAnswer || resolved || isSending) return
     const sentDraft = answerDraft.draft
     setIsSending(true)
@@ -102,7 +147,10 @@ export function QuestionCard({
       .then((sent) => {
         setResolved(sent)
         setSendFailed(!sent)
-        if (sent) answerDraft.clearDraftIfUnchanged(sentDraft)
+        if (sent) {
+          answerDraft.clearDraftIfUnchanged(sentDraft)
+          selectionDraft.clearDraftIfUnchanged(sentSelections)
+        }
       })
       .finally(() => {
         setIsSending(false)
@@ -111,8 +159,8 @@ export function QuestionCard({
 
   const toggleChoice = (question: QuestionPrompt, label: string) => {
     setSendFailed(false)
-    updateAnswerDrafts({ ...drafts, [question.question]: '' })
-    setSelected((current) => {
+    updateAnswerDraft(question.question, '')
+    updateSelections((current) => {
       const currentChoices = current[question.question] ?? []
       const nextChoices = question.multi_select
         ? currentChoices.includes(label)
@@ -126,9 +174,12 @@ export function QuestionCard({
   const answerSingleChoice = (question: QuestionPrompt, label: string) => {
     if (!canAnswer || resolved || isSending) return
     setSendFailed(false)
-    updateAnswerDrafts({ ...drafts, [question.question]: '' })
-    setSelected((current) => ({ ...current, [question.question]: [label] }))
-    sendAnswers({ [question.question]: label })
+    updateAnswerDraft(question.question, '')
+    const sentSelections = updateSelections((current) => ({
+      ...current,
+      [question.question]: [label],
+    }))
+    sendAnswers({ [question.question]: label }, sentSelections)
   }
 
   const submitAnswers = () => {
@@ -139,12 +190,16 @@ export function QuestionCard({
   const skipQuestions = () => {
     if (!canAnswer || resolved || isSending) return
     const sentDraft = answerDraft.draft
+    const sentSelections = selectionDraft.draft
     setIsSending(true)
     void onSkip()
       .then((skipped) => {
         setResolved(skipped)
         setSendFailed(!skipped)
-        if (skipped) answerDraft.clearDraftIfUnchanged(sentDraft)
+        if (skipped) {
+          answerDraft.clearDraftIfUnchanged(sentDraft)
+          selectionDraft.clearDraftIfUnchanged(sentSelections)
+        }
       })
       .finally(() => {
         setIsSending(false)
@@ -213,6 +268,13 @@ export function QuestionCard({
       ref={cardRef}
     >
       <h2>Question</h2>
+      {canAnswer &&
+      !resolved &&
+      (!answerDraft.storageAvailable || !selectionDraft.storageAvailable) ? (
+        <p className="conversation-error" role="status">
+          Browser storage is unavailable. Drafts may not survive a page reload.
+        </p>
+      ) : null}
       {showTerminalFallback ? (
         <div className="conversation-terminal-fallback">
           <span>Answer in terminal to continue.</span>
@@ -325,14 +387,11 @@ export function QuestionCard({
                   onChange={(event) => {
                     const draft = event.currentTarget.value
                     setSendFailed(false)
-                    setSelected((current) => ({
+                    updateSelections((current) => ({
                       ...current,
                       [question.question]: [],
                     }))
-                    updateAnswerDrafts({
-                      ...drafts,
-                      [question.question]: draft,
-                    })
+                    updateAnswerDraft(question.question, draft)
                   }}
                 />
               </div>

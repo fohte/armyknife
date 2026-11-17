@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import { ProposalCard } from '#components/proposal-card'
 import { QuestionCard } from '#components/question-card'
+import { setTextareaValue } from '#test/test-utils'
 import type { SessionLinkTarget } from '#types'
 
 type Props = ComponentProps<typeof QuestionCard>
@@ -91,17 +92,6 @@ function renderQuestions(cardProps: Props[]) {
 function requireElement<T extends Element>(element: T | null): T {
   if (element === null) throw new Error('Expected element was not rendered')
   return element
-}
-
-function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
-  act(() => {
-    const valueSetter = Reflect.getOwnPropertyDescriptor(
-      textarea.constructor.prototype,
-      'value',
-    )?.set
-    if (valueSetter !== undefined) Reflect.apply(valueSetter, textarea, [value])
-    textarea.dispatchEvent(new Event('input', { bubbles: true }))
-  })
 }
 
 function choiceButton(label: string): HTMLButtonElement {
@@ -523,19 +513,32 @@ it('restores question answers after reload and clears them after sending', async
     requestId,
     'answers',
   ])}`
+  const selectionStorageKey = `agent-watch-web:card-draft:${JSON.stringify([
+    'question',
+    sessionId,
+    requestId,
+    'selections',
+  ])}`
   const onAnswer = vi.fn(() => Promise.resolve(true))
   const cardProps = props({
     sessionId,
     requestId,
-    questions: singleChoiceQuestions,
     isMobile: true,
     onAnswer,
   })
   renderQuestion(cardProps)
+  act(() => {
+    choiceButton('Cedar').click()
+  })
   setTextareaValue(
-    requireElement(container.querySelector<HTMLTextAreaElement>('textarea')),
-    'Choose the southern route.',
+    requireElement(
+      container.querySelectorAll<HTMLTextAreaElement>('textarea').item(1),
+    ),
+    'Choose the icon with a clear silhouette.',
   )
+  const storedDraftBeforeReload = window.localStorage.getItem(storageKey)
+  const storedSelectionBeforeReload =
+    window.localStorage.getItem(selectionStorageKey)
   act(() => {
     root?.unmount()
   })
@@ -543,9 +546,10 @@ it('restores question answers after reload and clears them after sending', async
   renderQuestion(cardProps)
 
   const restoredAnswer = requireElement(
-    container.querySelector<HTMLTextAreaElement>('textarea'),
+    container.querySelectorAll<HTMLTextAreaElement>('textarea').item(1),
   )
   const persistedBeforeSend = restoredAnswer.value
+  const restoredChoice = choiceButton('Cedar').getAttribute('aria-pressed')
   await act(async () => {
     requireElement(
       container.querySelector<HTMLButtonElement>(
@@ -557,16 +561,119 @@ it('restores question answers after reload and clears them after sending', async
 
   const snapshot = () => ({
     restoredAnswer: persistedBeforeSend,
+    restoredChoice,
     answerCalls: onAnswer.mock.calls,
+    storedDraftBeforeReload,
+    storedSelectionBeforeReload,
     storedDraft: window.localStorage.getItem(storageKey),
+    storedSelection: window.localStorage.getItem(selectionStorageKey),
   })
 
   expect(snapshot()).toEqual({
-    restoredAnswer: 'Choose the southern route.',
+    restoredAnswer: 'Choose the icon with a clear silhouette.',
+    restoredChoice: 'true',
     answerCalls: [
-      [{ 'Which direction should be used?': 'Choose the southern route.' }],
+      [
+        {
+          'Which colors should be included?': 'Cedar',
+          'Which icon?': 'Choose the icon with a clear silhouette.',
+        },
+      ],
     ],
+    storedDraftBeforeReload:
+      'Which+icon%3F=Choose+the+icon+with+a+clear+silhouette.',
+    storedSelectionBeforeReload: 'Which+colors+should+be+included%3F=Cedar',
     storedDraft: null,
+    storedSelection: null,
+  })
+})
+
+it('keeps freeform question answers after an unsuccessful send and reload', async () => {
+  const sessionId = crypto.randomUUID()
+  const requestId = 'fixture-retry-question'
+  const storageKey = `agent-watch-web:card-draft:${JSON.stringify([
+    'question',
+    sessionId,
+    requestId,
+    'answers',
+  ])}`
+  const onAnswer = vi.fn(() => Promise.resolve(false))
+  const cardProps = props({
+    sessionId,
+    requestId,
+    questions: singleChoiceQuestions,
+    isMobile: true,
+    onAnswer,
+  })
+  renderQuestion(cardProps)
+  setTextareaValue(
+    requireElement(container.querySelector<HTMLTextAreaElement>('textarea')),
+    'Use the lower impact option.',
+  )
+  await act(async () => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.chat-question-actions button.aw-button--primary',
+      ),
+    ).click()
+    await Promise.resolve()
+  })
+  const storedDraftAfterFailure = window.localStorage.getItem(storageKey)
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+  renderQuestion(cardProps)
+
+  const snapshot = () => ({
+    answerCalls: onAnswer.mock.calls,
+    restoredAnswer: requireElement(
+      container.querySelector<HTMLTextAreaElement>('textarea'),
+    ).value,
+    storedDraftAfterFailure,
+    storedDraftAfterReload: window.localStorage.getItem(storageKey),
+  })
+
+  expect(snapshot()).toEqual({
+    answerCalls: [
+      [{ 'Which direction should be used?': 'Use the lower impact option.' }],
+    ],
+    restoredAnswer: 'Use the lower impact option.',
+    storedDraftAfterFailure:
+      'Which+direction+should+be+used%3F=Use+the+lower+impact+option.',
+    storedDraftAfterReload:
+      'Which+direction+should+be+used%3F=Use+the+lower+impact+option.',
+  })
+})
+
+it('warns when browser storage cannot save a question draft', () => {
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new DOMException('Storage is blocked.')
+  })
+  renderQuestion(
+    props({
+      sessionId: 'fixture-storage-session',
+      requestId: 'fixture-storage-question',
+      questions: singleChoiceQuestions,
+      isMobile: true,
+    }),
+  )
+  setTextareaValue(
+    requireElement(container.querySelector<HTMLTextAreaElement>('textarea')),
+    'Use the stable option.',
+  )
+
+  const snapshot = () => ({
+    answer: requireElement(
+      container.querySelector<HTMLTextAreaElement>('textarea'),
+    ).value,
+    notice: container.querySelector('[role="status"]')?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    answer: 'Use the stable option.',
+    notice:
+      'Browser storage is unavailable. Drafts may not survive a page reload.',
   })
 })
 
