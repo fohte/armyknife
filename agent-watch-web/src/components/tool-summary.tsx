@@ -57,15 +57,30 @@ export function summarizeToolGroupItems(
   items: readonly ToolGroupItem[],
 ): string {
   const thoughtCount = items.filter((item) => item.type === 'thinking').length
-  const toolCounts = new Map<string, number>()
+  const tools = new Map<string, { count: number; target: string | undefined }>()
   for (const item of items) {
     if (item.type === 'tool_use') {
-      toolCounts.set(item.tool, (toolCounts.get(item.tool) ?? 0) + 1)
+      const existing = tools.get(item.tool)
+      tools.set(item.tool, {
+        count: (existing?.count ?? 0) + 1,
+        target: existing?.target ?? item.target,
+      })
     }
   }
   const summary = [
     ...(thoughtCount > 0 ? [`Thought ×${String(thoughtCount)}`] : []),
-    ...[...toolCounts].map(([tool, count]) => `${tool} ×${String(count)}`),
+    ...[...tools].map(([tool, { count, target }]) => {
+      if (
+        tool === 'Edit' &&
+        count === 1 &&
+        target !== undefined &&
+        target !== ''
+      ) {
+        const fileName = target.split(/[\\/]/).at(-1)
+        return `Edit ${fileName === undefined || fileName === '' ? target : fileName}`
+      }
+      return `${tool} ×${String(count)}`
+    }),
   ]
   return summary.join(' · ')
 }

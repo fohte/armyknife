@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, it } from 'vitest'
 
-import { ToolSummary } from '#components/tool-summary'
+import { summarizeToolGroupItems, ToolSummary } from '#components/tool-summary'
 
 it('renders a collapsed summary without changing its text content', () => {
   expect(
@@ -84,6 +84,39 @@ it('renders thoughts and tools in the supplied group order', () => {
   ).toBe(
     '<details class="chat-tool-summary" data-has-operations="true" open=""><summary><span>1 tool call</span><span class="chat-tool-summary-collapse">‹ Collapse</span></summary><ul class="chat-tool-operations"><li class="chat-tool-thought"><details><summary><span class="chat-tool-name">Thought</span><span class="chat-tool-thought-preview">Review the fictional request.</span></summary><p class="chat-tool-thought-full">Review the fictional request.</p></details></li><li data-has-target="true" data-failed="false"><span class="chat-tool-name">Read</span><code class="chat-tool-target">fixture/source.rs</code><span class="chat-tool-operation-status" role="img" aria-label="Succeeded">✓</span></li></ul></details>',
   )
+})
+
+it('summarizes one edit by file name and counts the other tools', () => {
+  expect(
+    summarizeToolGroupItems([
+      { type: 'thinking', text: 'Review the first fictional requirement.' },
+      { type: 'thinking', text: 'Check the second fictional requirement.' },
+      {
+        type: 'tool_use',
+        tool: 'Edit',
+        target: 'fixture/client.ts',
+        failed: false,
+      },
+      {
+        type: 'tool_use',
+        tool: 'Read',
+        target: 'fixture/client.ts',
+        failed: false,
+      },
+      {
+        type: 'tool_use',
+        tool: 'Read',
+        target: 'fixture/settings.ts',
+        failed: false,
+      },
+      {
+        type: 'tool_use',
+        tool: 'Shell',
+        target: 'printf fixture',
+        failed: false,
+      },
+    ]),
+  ).toBe('Thought ×2 · Edit client.ts · Read ×2 · Shell ×1')
 })
 
 it('renders thinking without tools as a collapsible group', () => {
