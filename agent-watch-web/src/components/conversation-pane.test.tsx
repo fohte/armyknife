@@ -3733,6 +3733,12 @@ it.each([
         requestId: 'ask-request-answered',
         questions: [{ ...questionPrompt, answer: 'Window A' }],
       },
+      {
+        ...question,
+        requestId: 'ask-request-cancelled',
+        cancelled: true,
+        questions: [{ ...questionPrompt, answer: null }],
+      },
     ],
     selector: '.chat-question-card[data-has-unanswered-question="true"]',
   },

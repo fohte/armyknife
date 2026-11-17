@@ -15,6 +15,7 @@ type QuestionCardProps = {
   sessionId?: string
   requestId?: string
   questions: QuestionPrompt[]
+  cancelled?: boolean
   canAnswer: boolean
   isMobile: boolean
   showTerminalFallback: boolean
@@ -45,6 +46,7 @@ export function QuestionCard({
   sessionId,
   requestId,
   questions,
+  cancelled = false,
   canAnswer,
   isMobile,
   showTerminalFallback,
@@ -264,7 +266,7 @@ export function QuestionCard({
     <article
       className="chat-question-card"
       data-has-unanswered-question={
-        questions.some((question) => question.answer === null)
+        !cancelled && questions.some((question) => question.answer === null)
           ? 'true'
           : undefined
       }
