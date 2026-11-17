@@ -55,6 +55,6 @@ it('renders standalone thinking as a collapsible thought group', () => {
       }),
     ),
   ).toBe(
-    '<details class="chat-tool-summary" data-has-operations="true"><summary>Thought ×1</summary><ul class="chat-tool-operations"><li class="chat-tool-thought"><details><summary><span class="chat-tool-name">Thought</span><span class="chat-tool-thought-preview">Review the fictional request.</span></summary><p class="chat-tool-thought-full">Review the fictional request.</p></details></li></ul></details>',
+    '<details class="chat-tool-summary" data-has-operations="true"><summary>Thought ×1</summary><ul class="chat-tool-operations"><li class="chat-tool-thought"><details><summary><span class="chat-tool-name">Thought</span><span class="chat-tool-thought-preview">Review the fictional request.</span><span class="chat-tool-thought-length">29 chars</span></summary><p class="chat-tool-thought-full">Review the fictional request.</p></details></li></ul></details>',
   )
 })

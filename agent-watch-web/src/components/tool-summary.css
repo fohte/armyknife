@@ -104,8 +104,8 @@
 .chat-tool-thought details > summary {
   display: grid;
   min-width: 0;
-  grid-template-columns: 44px minmax(0, 1fr) 10px;
-  gap: 3px 12px;
+  grid-template-columns: max-content minmax(0, 1fr) 10px;
+  gap: 3px 8px;
   list-style: none;
 }
 
@@ -126,11 +126,30 @@
   white-space: nowrap;
 }
 
+.chat-tool-thought-length {
+  display: none;
+  color: var(--aw-text-disabled);
+  white-space: nowrap;
+}
+
+.chat-tool-thought details[open] > summary .chat-tool-thought-preview {
+  display: none;
+}
+
+.chat-tool-thought details[open] > summary .chat-tool-thought-length {
+  display: block;
+}
+
 .chat-tool-thought-full {
+  display: none;
   margin: 4px 0 4px 56px;
   color: var(--aw-text-body);
   font-size: 12.5px;
   white-space: pre-wrap;
+}
+
+.chat-tool-thought details[open] > .chat-tool-thought-full {
+  display: block;
 }
 
 .chat-tool-thought details[open] > summary::after {
