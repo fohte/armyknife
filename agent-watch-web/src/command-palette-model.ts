@@ -1,6 +1,5 @@
 import { Result } from 'neverthrow'
 
-import { buildWorkTypeNavGroups } from '#board-model'
 import type { Session } from '#types'
 
 export type PaletteScope =
@@ -171,12 +170,6 @@ function baseCommands(): PaletteCommandItem[] {
     },
     {
       type: 'command',
-      id: 'switch-inbox',
-      label: 'Switch to Inbox',
-      description: 'Show the session inbox',
-    },
-    {
-      type: 'command',
       id: 'close-done',
       label: 'Close all done',
       description: 'Close every done session',
@@ -191,6 +184,7 @@ function itemMatches(query: string, item: PaletteItem) {
         query,
         item.session.title,
         item.session.kind,
+        item.session.workType,
         item.session.task?.title,
         item.session.task === null
           ? null
@@ -223,7 +217,6 @@ export function buildCommandPaletteGroups(
   input: string,
   selectedScope: PaletteScope,
   recentSessionIds: readonly string[],
-  workTypeNavLabels: Readonly<Record<string, string>> = {},
 ): PaletteGroup[] {
   const { scope, query } = resolveScope(input, selectedScope)
   const tasks = taskItems(sessions)
@@ -231,44 +224,25 @@ export function buildCommandPaletteGroups(
   const commands = baseCommands()
 
   if (query.length === 0 && scope === 'all') {
-    const displayedSessionIds = new Set<string>()
-    const sessionItem = (session: Session): PaletteSessionItem => {
-      displayedSessionIds.add(session.id)
-      return { type: 'session', id: session.id, session }
-    }
-    const starred = sessions
-      .filter((session) => session.isToday === true)
-      .map(sessionItem)
+    const sessionItem = (session: Session): PaletteSessionItem => ({
+      type: 'session',
+      id: session.id,
+      session,
+    })
     const sessionsById = new Map(
       sessions.map((session) => [session.id, session] as const),
     )
-    const workTypeGroups = buildWorkTypeNavGroups(sessions, workTypeNavLabels)
-      .map((group) => ({
-        heading: group.label,
-        items: group.sessions.flatMap((session) => {
-          return displayedSessionIds.has(session.id)
-            ? []
-            : [sessionItem(session)]
-        }),
-      }))
-      .filter((group) => group.items.length > 0)
     const needsAction = sessions
-      .filter(
-        (session) =>
-          session.category === 'needs_action' &&
-          !displayedSessionIds.has(session.id),
-      )
+      .filter((session) => session.category === 'needs_action')
       .slice(0, 3)
       .map(sessionItem)
     const recentSessions = recentSessionIds.flatMap((id) => {
       const session = sessionsById.get(id)
-      return session === undefined || displayedSessionIds.has(id)
+      return session === undefined || session.category === 'needs_action'
         ? []
         : [sessionItem(session)]
     })
     const groups = [
-      { heading: 'STARRED', items: starred },
-      ...workTypeGroups,
       {
         heading: 'NEEDS ACTION',
         items: needsAction,

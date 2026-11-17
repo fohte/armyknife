@@ -37,12 +37,15 @@ export function itemSubtitle(item: PaletteItem) {
       )
       return labels.join(' · ')
     }
-    case 'task':
-      return aggregateSubtitle(item.sessions, item.task.priority)
+    case 'task': {
+      const count = item.sessions.length
+      const sessionLabel = count === 1 ? 'session' : 'sessions'
+      return `P${String(item.task.priority ?? '—')} · ${String(count)} ${sessionLabel}`
+    }
     case 'project':
       return aggregateSubtitle(item.sessions)
     case 'command':
-      return item.description
+      return ''
   }
 }
 
@@ -80,7 +83,7 @@ export function itemDetail(item: PaletteItem) {
       return `${String(Math.floor(elapsedHours / 24))}d`
     }
     case 'task':
-      return 'Show in Board'
+      return ''
     case 'project':
       return 'Show in Board'
     case 'command':
@@ -97,7 +100,9 @@ export function itemColor(item: PaletteItem) {
 export function itemIcon(item: PaletteItem) {
   if (item.type === 'task') return '#'
   if (item.type === 'project') return '▤'
-  if (item.type === 'command') return '›'
+  if (item.type === 'command') {
+    return item.id === 'new-session' ? '+' : '›'
+  }
   if (item.session.kind === 'Error') return '×'
 
   switch (item.session.category) {

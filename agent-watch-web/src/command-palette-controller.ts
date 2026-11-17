@@ -227,9 +227,6 @@ export function useCommandPaletteController({
           setFocusedProjectName(null)
           navigate((current) => ({ ...current, view: 'board' }))
           return
-        case 'switch-inbox':
-          navigate((current) => ({ ...current, view: 'inbox' }))
-          return
         case 'close-done': {
           await closeDoneSessions(sessions)
           return

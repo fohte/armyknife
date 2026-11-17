@@ -86,12 +86,6 @@ it('builds default groups from needs-action, recent, and available commands', ()
           },
           {
             type: 'command',
-            id: 'switch-inbox',
-            label: 'Switch to Inbox',
-            description: 'Show the session inbox',
-          },
-          {
-            type: 'command',
             id: 'close-done',
             label: 'Close all done',
             description: 'Close every done session',
@@ -102,7 +96,7 @@ it('builds default groups from needs-action, recent, and available commands', ()
   )
 })
 
-it('orders starred and work-type groups before unique needs-action and recent sessions', () => {
+it('shows needs-action and recent sessions without special starred or work-type groups', () => {
   const starred = {
     ...session(
       'starred',
@@ -135,23 +129,14 @@ it('orders starred and work-type groups before unique needs-action and recent se
       '',
       'all',
       ['pm-session', 'starred', 'recent', 'action-a'],
-      { pm: 'PM' },
     ),
   ).toEqual([
     {
-      heading: 'STARRED',
-      items: [{ type: 'session', id: 'starred', session: starred }],
-    },
-    {
-      heading: 'PM',
-      items: [{ type: 'session', id: 'pm-session', session: pm }],
-    },
-    {
       heading: 'NEEDS ACTION',
       items: [
+        { type: 'session', id: 'starred', session: starred },
+        { type: 'session', id: 'pm-session', session: pm },
         { type: 'session', id: 'action-a', session: actionA },
-        { type: 'session', id: 'action-b', session: actionB },
-        { type: 'session', id: 'action-c', session: actionC },
       ],
     },
     {
@@ -175,12 +160,6 @@ it('orders starred and work-type groups before unique needs-action and recent se
         },
         {
           type: 'command',
-          id: 'switch-inbox',
-          label: 'Switch to Inbox',
-          description: 'Show the session inbox',
-        },
-        {
-          type: 'command',
           id: 'close-done',
           label: 'Close all done',
           description: 'Close every done session',
@@ -188,6 +167,25 @@ it('orders starred and work-type groups before unique needs-action and recent se
       ],
     },
   ])
+})
+
+it('finds starred and work-type sessions in search results', () => {
+  const starred = {
+    ...session('starred', 'Starred session', 'needs_action', null, 'alpha'),
+    isToday: true,
+  }
+  const workType = {
+    ...session('work-type', 'Review delivery', 'in_progress', null, 'beta'),
+    workType: 'PM',
+  }
+
+  const results = ['Starred', 'PM'].map((query) =>
+    buildCommandPaletteGroups([starred, workType], query, 'all', []).map(
+      (group) => group.items.map((item) => item.id),
+    ),
+  )
+
+  expect(results).toEqual([[['starred']], [['work-type']]])
 })
 
 it('matches text and scopes task results from a leading prefix', () => {

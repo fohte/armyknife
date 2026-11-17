@@ -147,7 +147,7 @@ export default meta
 type Story = StoryObj<typeof meta>
 
 export const NothingIsTyped: Story = {
-  name: 'The top actions, recent activity, and commands appear by default',
+  name: 'Needs-action sessions, recent activity, and commands appear by default',
 }
 
 export const SearchShowsMatchingDestinations: Story = {
