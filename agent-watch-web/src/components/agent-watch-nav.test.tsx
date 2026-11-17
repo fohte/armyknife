@@ -138,6 +138,90 @@ it('opens a new session from the desktop navigation', async () => {
   expect(onNewSession.mock.calls).toEqual([[]])
 })
 
+it('places the new-session action before the palette shortcut with the designed style', () => {
+  renderNav([])
+
+  const newSessionButton = container.querySelector<HTMLButtonElement>(
+    '.brand-row [aria-label="New session"]',
+  )
+  const plusIcon = newSessionButton?.querySelector('svg')
+  if (
+    newSessionButton === null ||
+    plusIcon === null ||
+    plusIcon === undefined
+  ) {
+    throw new Error('The new-session button and icon are missing')
+  }
+
+  const snapshot = () => ({
+    actions: Array.from(
+      container.querySelectorAll<HTMLButtonElement>('.brand-row button'),
+      (button) => button.getAttribute('aria-label'),
+    ),
+    plusColor: getComputedStyle(newSessionButton).color,
+    plusSize: getComputedStyle(plusIcon).width,
+  })
+
+  expect(snapshot()).toEqual({
+    actions: ['New session', 'Jump to with Control K', 'Hide Inbox'],
+    plusColor: 'rgb(212, 212, 216)',
+    plusSize: '15px',
+  })
+})
+
+it('matches the designed section spacing and removes compact-row dividers', () => {
+  renderNav(
+    [
+      {
+        label: 'PM',
+        sessions: [baseTodaySession],
+      },
+    ],
+    {
+      savedViews: [
+        {
+          id: 'reviews',
+          name: 'Example reviews',
+          query: 'kind:review',
+          count: 1,
+          countTone: null,
+        },
+      ],
+      todaySessions: [baseTodaySession],
+      sessions: [
+        {
+          ...baseTodaySession,
+          id: 'recent-session',
+          lastPromptedAt: '2026-01-01T11:00:00.000Z',
+        },
+      ],
+    },
+  )
+
+  const savedViews = container.querySelector<HTMLElement>('.saved-views-nav')
+  const workType = container.querySelector<HTMLElement>('.work-type-nav')
+  if (savedViews === null || workType === null) {
+    throw new Error('The saved views and work type sections are missing')
+  }
+
+  const snapshot = () => ({
+    savedViewsMarginTop: getComputedStyle(savedViews).marginTop,
+    workTypeMarginTop: getComputedStyle(workType).marginTop,
+    compactRowBorders: Array.from(
+      container.querySelectorAll<HTMLElement>(
+        '.today-nav li, .recent-nav li, .work-type-nav li',
+      ),
+      (row) => getComputedStyle(row).borderBottomWidth,
+    ),
+  })
+
+  expect(snapshot()).toEqual({
+    savedViewsMarginTop: '0px',
+    workTypeMarginTop: '12px',
+    compactRowBorders: ['0px', '0px', '0px'],
+  })
+})
+
 it('renders no work type sections without configured groups', () => {
   renderNav([])
 

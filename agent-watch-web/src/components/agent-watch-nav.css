@@ -1,5 +1,5 @@
 .saved-views-nav {
-  margin-top: 12px;
+  margin-top: 0;
 }
 
 .recent-nav {
@@ -17,12 +17,6 @@
   margin: 0;
   padding: 0;
   list-style: none;
-}
-
-.today-nav li,
-.recent-nav li,
-.work-type-nav li {
-  border-bottom: 1px solid var(--aw-border-row);
 }
 
 .today-nav .session-row,
@@ -137,13 +131,12 @@
 }
 
 .work-type-nav {
-  margin-top: 14px;
+  margin-top: 12px;
 }
 
 .agent-watch-command {
   display: flex;
   align-items: center;
-  margin-left: auto;
   color: var(--aw-text-secondary);
 }
 
@@ -167,11 +160,11 @@
   height: 28px;
   flex: 0 0 28px;
   place-items: center;
-  margin-left: 2px;
+  margin-left: auto;
   border: 0;
   border-radius: var(--aw-radius);
   background: transparent;
-  color: var(--aw-text-secondary);
+  color: var(--aw-text-body);
   cursor: pointer;
 }
 

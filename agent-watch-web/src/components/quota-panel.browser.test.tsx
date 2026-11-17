@@ -81,3 +81,33 @@ it('hides an expired window while preserving the current window', () => {
     '7d: 52% used, projected 55% at window end, below quota pace, resets in 10h0m',
   ])
 })
+
+it('right-aligns the quota reset time', () => {
+  const nowSeconds = 1_800_000_000
+  const quota: EngineQuota = {
+    engine: 'claude',
+    rateLimits: {
+      fiveHour: {
+        usedPercentage: 41,
+        resetsAt: nowSeconds + 7_800,
+        windowSeconds: 18_000,
+      },
+      sevenDay: null,
+    },
+    observedAt: '2030-01-15T12:00:00Z',
+  }
+
+  act(() => {
+    root?.render(
+      <QuotaPanel
+        nowSeconds={nowSeconds}
+        quotas={{ claude: quota, codex: null }}
+      />,
+    )
+  })
+
+  const resetTime = container.querySelector<HTMLElement>('.quota-window-reset')
+  if (resetTime === null) throw new Error('The quota reset time is missing')
+
+  expect(getComputedStyle(resetTime).textAlign).toBe('right')
+})

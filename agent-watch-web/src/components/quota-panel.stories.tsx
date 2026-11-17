@@ -94,7 +94,7 @@ export const UsageAheadOfPaceIsHighlighted: Story = {
 }
 
 export const LongForecastKeepsResetColumnAligned: Story = {
-  name: 'A long forecast stays clear of aligned reset times',
+  name: 'The reset times align at the right edge beside long forecasts',
   args: {
     quotas: {
       claude: {
