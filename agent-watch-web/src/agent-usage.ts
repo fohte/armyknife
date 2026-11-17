@@ -141,6 +141,24 @@ export function getUsageLandingEstimate(
   return { percentage: Math.round(paceRatio * 100), status }
 }
 
+export function getUsageLandingDescription(
+  label: string,
+  usedPercentage: number,
+  window: RateLimitWindow,
+  nowSeconds: number,
+) {
+  const estimate = getUsageLandingEstimate(window, nowSeconds)
+  if (estimate === null) return null
+  const paceDescription = {
+    'on-pace': 'below quota pace',
+    warning: 'at or above quota pace',
+    danger: 'well above quota pace',
+  }[estimate.status]
+  const used = Math.round(usedPercentage)
+  const resetsIn = formatResetTime(window.resetsAt, nowSeconds)
+  return `${label}: ${String(used)}% used, projected ${String(estimate.percentage)}% at window end, ${paceDescription}, resets in ${resetsIn}`
+}
+
 export function getUsageSeverity(usedPercentage: number | null) {
   if (usedPercentage === null || usedPercentage < 80) return 'normal'
   if (usedPercentage < 95) return 'warning'

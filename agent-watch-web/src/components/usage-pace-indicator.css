@@ -3,7 +3,7 @@
 }
 
 .usage-pace-indicator.is-on-pace {
-  color: #d4d4d8;
+  color: #8b8b94;
 }
 
 .usage-pace-indicator.is-warning {
@@ -12,4 +12,5 @@
 
 .usage-pace-indicator.is-danger {
   color: #f87171;
+  font-weight: 700;
 }

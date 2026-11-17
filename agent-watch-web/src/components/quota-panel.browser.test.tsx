@@ -74,10 +74,10 @@ it('hides an expired window while preserving the current window', () => {
   expect(visibleQuotaState(container)).toEqual([
     '--',
     'Unavailable',
-    ' --',
+    '--',
     true,
     true,
     '52%',
-    '52% used',
+    '7d: 52% used, projected 55% at window end, below quota pace, resets in 10h0m',
   ])
 })

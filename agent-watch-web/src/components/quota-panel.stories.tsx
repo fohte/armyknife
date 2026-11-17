@@ -93,6 +93,26 @@ export const UsageAheadOfPaceIsHighlighted: Story = {
   },
 }
 
+export const LongForecastKeepsResetColumnAligned: Story = {
+  name: 'A long forecast stays clear of aligned reset times',
+  args: {
+    quotas: {
+      claude: {
+        ...claudeQuota,
+        rateLimits: {
+          ...claudeQuota.rateLimits,
+          fiveHour: {
+            usedPercentage: 100,
+            resetsAt: nowSeconds + 17_100,
+            windowSeconds: 18_000,
+          },
+        },
+      },
+      codex: codexQuota,
+    },
+  },
+}
+
 export const QuotaHasNotBeenRecorded: Story = {
   name: 'The panel shows placeholders before quota is recorded',
   args: { quotas: null },
