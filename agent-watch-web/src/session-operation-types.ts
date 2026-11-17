@@ -106,7 +106,7 @@ function operationKey(operation: SessionOperation) {
     return `${operation.sessionId}:${operation.type}:${String(operation.seq)}`
   }
   if (operation.type === 'merge') {
-    return `${operation.sessionId}:merge:${String(operation.number)}`
+    return `${operation.sessionId}:merge:${String(operation.number)}:${operation.owner}/${operation.repo}`
   }
   if (operation.type === 'today') {
     return `${operation.sessionId}:today:${String(operation.isToday)}`

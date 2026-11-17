@@ -14,6 +14,10 @@ import { MobileConversationActionsMenu } from '#components/mobile-conversation-a
 import { OpenInTerminalAction } from '#components/open-in-terminal-action'
 import { PullRequestMergeAction } from '#components/pull-request-merge-action'
 import { PullRequestMergeConfirmation } from '#components/pull-request-merge-confirmation'
+import {
+  PullRequestMergeFeedback,
+  type PullRequestMergeFeedbackKind,
+} from '#components/pull-request-merge-feedback'
 import { SessionHeading } from '#components/session-heading'
 import {
   getRepresentativePullRequest,
@@ -37,6 +41,14 @@ type MergeResponse =
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
+}
+
+type MergeFeedback = {
+  number: number
+  owner: string
+  repo: string
+  kind: PullRequestMergeFeedbackKind
+  message: string
 }
 
 function isMergeResponse(value: unknown): value is MergeResponse {
@@ -105,13 +117,7 @@ export function ConversationPaneHeader({
   const setPullRequestListOpen = (open: boolean) => {
     setInternalPullRequestListOpen(open)
   }
-  const [mergeFeedback, setMergeFeedback] = useState<{
-    number: number
-    owner: string
-    repo: string
-    kind: 'success' | 'queued' | 'error'
-    message: string
-  } | null>(null)
+  const [mergeFeedback, setMergeFeedback] = useState<MergeFeedback | null>(null)
   const { pendingOperations, run } = useSessionOperations()
   const parent = session.parent
   const pullRequests =
@@ -142,7 +148,9 @@ export function ConversationPaneHeader({
       ({ operation }) =>
         operation.type === 'merge' &&
         operation.sessionId === session.id &&
-        operation.number === mergeOperation.number,
+        operation.number === mergeOperation.number &&
+        operation.owner === mergeOperation.owner &&
+        operation.repo === mergeOperation.repo,
     )
   const mergeAction =
     mergeOperation === null ||
@@ -369,12 +377,11 @@ export function ConversationPaneHeader({
             onOpenChange={setPullRequestListOpen}
           />
           {visibleMergeFeedback !== null ? (
-            <span
-              className={`conversation-pr-merge-feedback conversation-pr-merge-feedback--${visibleMergeFeedback.kind} conversation-pr-merge-feedback--mobile`}
-              role={visibleMergeFeedback.kind === 'error' ? 'alert' : 'status'}
-            >
-              {visibleMergeFeedback.message}
-            </span>
+            <PullRequestMergeFeedback
+              kind={visibleMergeFeedback.kind}
+              message={visibleMergeFeedback.message}
+              isMobile
+            />
           ) : null}
         </>
       ) : (
@@ -454,14 +461,10 @@ export function ConversationPaneHeader({
                 />
                 {mergeAction}
                 {visibleMergeFeedback === null ? null : (
-                  <span
-                    className={`conversation-pr-merge-feedback conversation-pr-merge-feedback--${visibleMergeFeedback.kind}`}
-                    role={
-                      visibleMergeFeedback.kind === 'error' ? 'alert' : 'status'
-                    }
-                  >
-                    {visibleMergeFeedback.message}
-                  </span>
+                  <PullRequestMergeFeedback
+                    kind={visibleMergeFeedback.kind}
+                    message={visibleMergeFeedback.message}
+                  />
                 )}
                 {session.category === 'done' && onClose !== undefined ? (
                   <Button

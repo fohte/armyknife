@@ -1,0 +1,16 @@
+.conversation-pr-merge-feedback {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.conversation-pr-merge-feedback--success {
+  color: var(--aw-color-working);
+}
+
+.conversation-pr-merge-feedback--queued {
+  color: var(--aw-color-warning);
+}
+
+.conversation-pr-merge-feedback--error {
+  color: var(--aw-color-error);
+}

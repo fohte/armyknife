@@ -736,6 +736,118 @@ it('keeps merge feedback scoped to the repository when PR numbers match', async 
   })
 })
 
+it('keeps pending merge progress scoped to the PR repository identity', async () => {
+  const pendingResponses: Array<(response: Response) => void> = []
+  const fetchMock = vi.fn<typeof fetch>(
+    () =>
+      new Promise((resolve) => {
+        pendingResponses.push(resolve)
+      }),
+  )
+  vi.stubGlobal('fetch', fetchMock)
+  const firstPullRequest = {
+    number: 42,
+    state: 'Open' as const,
+    owner: 'example-org',
+    repo: 'example-repository',
+    url: 'https://github.com/example-org/example-repository/pull/42',
+    headSha: 'fixture-first-head',
+  }
+  const secondPullRequest = {
+    number: 42,
+    state: 'Open' as const,
+    owner: 'example-team',
+    repo: 'example-repository',
+    url: 'https://github.com/example-team/example-repository/pull/42',
+    headSha: 'fixture-second-head',
+  }
+  const baseSession = {
+    ...session,
+    pullRequests: [firstPullRequest, secondPullRequest],
+  }
+  renderHeader(
+    false,
+    vi.fn(() => Promise.resolve(true)),
+    baseSession,
+  )
+
+  const startMerge = () => {
+    act(() => {
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.conversation-pr-merge-button',
+        ),
+      ).click()
+    })
+    const confirmation = requireElement(
+      container.querySelector<HTMLElement>('[role="alertdialog"]'),
+    )
+    act(() => {
+      requireElement(
+        [...confirmation.querySelectorAll<HTMLButtonElement>('button')].find(
+          (button) => button.textContent === 'Confirm merge',
+        ) ?? null,
+      ).click()
+    })
+  }
+  const mergeAction = () => {
+    const button = container.querySelector<HTMLButtonElement>(
+      '.conversation-pr-merge-button',
+    )
+    return button === null
+      ? null
+      : { text: button.textContent, disabled: button.disabled }
+  }
+
+  startMerge()
+  renderHeader(
+    false,
+    vi.fn(() => Promise.resolve(true)),
+    {
+      ...baseSession,
+      pullRequests: [secondPullRequest, firstPullRequest],
+    },
+  )
+  const actionForSecondPullRequest = mergeAction()
+  if (actionForSecondPullRequest?.disabled === false) startMerge()
+  const actionWhileBothMergesArePending = mergeAction()
+  const resolveFirstResponse = pendingResponses[0]
+  if (resolveFirstResponse === undefined) {
+    throw new Error('Expected the first merge request')
+  }
+
+  await act(async () => {
+    resolveFirstResponse(Response.json({ result: 'merged' }))
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    }
+  })
+
+  const actionAfterFirstMergeCompletes = mergeAction()
+  const resolveSecondResponse = pendingResponses[1]
+  if (resolveSecondResponse !== undefined) {
+    await act(async () => {
+      resolveSecondResponse(Response.json({ result: 'merged' }))
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 0))
+      }
+    })
+  }
+
+  const mergeState = () => ({
+    actionForSecondPullRequest,
+    actionWhileBothMergesArePending,
+    actionAfterFirstMergeCompletes,
+    requestCount: fetchMock.mock.calls.length,
+  })
+  expect(mergeState()).toEqual({
+    actionForSecondPullRequest: { text: 'Merge', disabled: false },
+    actionWhileBothMergesArePending: { text: 'Merging…', disabled: true },
+    actionAfterFirstMergeCompletes: { text: 'Merging…', disabled: true },
+    requestCount: 2,
+  })
+})
+
 it('shows mobile merge feedback after confirming from the pull request sheet', async () => {
   const fetchMock = vi.fn<typeof fetch>(() =>
     Promise.resolve(Response.json({ result: 'merged' })),

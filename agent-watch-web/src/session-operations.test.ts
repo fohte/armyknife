@@ -772,6 +772,37 @@ it('keeps confirmation waiters distinct for different target values', () => {
   ])
 })
 
+it.each([
+  ['repository', 'example-org', 'example-infrastructure'],
+  ['owner', 'example-team', 'example-repository'],
+] as const)(
+  'keeps merge operation keys distinct by %s',
+  (_dimension, owner, repo) => {
+    const firstOperation: SessionOperation = {
+      type: 'merge',
+      sessionId: session.id,
+      number: 42,
+      owner: 'example-org',
+      repo: 'example-repository',
+      expectedHeadSha: 'fixture-first-head',
+    }
+    const secondOperation: SessionOperation = {
+      ...firstOperation,
+      owner,
+      repo,
+    }
+
+    const keys = () => [
+      sessionOperationKey(firstOperation),
+      sessionOperationKey(secondOperation),
+    ]
+    expect(keys()).toEqual([
+      `${session.id}:merge:42:example-org/example-repository`,
+      `${session.id}:merge:42:${owner}/${repo}`,
+    ])
+  },
+)
+
 it.each(requests)(
   '$name uses its session operation definition',
   async (testCase) => {
