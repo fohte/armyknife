@@ -115,6 +115,7 @@ function AppContent() {
     view,
     conversationOpen: mobileConversationOpen,
     newSessionMode,
+    backFromNewSession,
     backToInbox,
     navigate,
   } = useSessionHistory()
@@ -557,8 +558,24 @@ function AppContent() {
   const closeNewSession = useCallback(() => {
     newSession.reset()
     setPendingLaunchId(null)
-    navigate((current) => ({ ...current, newSessionMode: null }), 'replace')
-  }, [navigate, newSession.reset])
+    backFromNewSession()
+  }, [backFromNewSession, newSession.reset])
+  const replaceNewSessionWithSession = useCallback(
+    (id: string, conversationOpen: boolean) => {
+      newSession.reset()
+      setPendingLaunchId(null)
+      navigate(
+        (current) => ({
+          ...current,
+          selectedId: id,
+          conversationOpen,
+          newSessionMode: null,
+        }),
+        'replace',
+      )
+    },
+    [navigate, newSession.reset],
+  )
   const openSessionFromNavigation = useCallback(
     (id: string) => {
       closeMobileNav()
@@ -612,7 +629,10 @@ function AppContent() {
       setShowAllInProgress(true)
     },
     onSelect: (id: string) => {
-      if (newSessionMode === 'form') closeNewSession()
+      if (newSessionMode === 'form') {
+        replaceNewSessionWithSession(id, true)
+        return
+      }
       openConversation(id)
     },
     laterExpanded,
@@ -706,7 +726,10 @@ function AppContent() {
           onOptimisticSessionOperation={dispatchSessionOperation}
           onSelectSession={(id) => {
             if (!orderedSessions.some((session) => session.id === id)) return
-            if (newSessionMode === 'form') closeNewSession()
+            if (newSessionMode === 'form') {
+              replaceNewSessionWithSession(id, false)
+              return
+            }
             navigate((current) => ({ ...current, selectedId: id }))
           }}
         />

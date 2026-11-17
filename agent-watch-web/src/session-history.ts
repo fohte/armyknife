@@ -150,5 +150,17 @@ export function useSessionHistory() {
     navigate((current) => ({ ...current, conversationOpen: false }), 'replace')
   }, [navigate])
 
-  return { ...state, backToInbox, navigate }
+  const backFromNewSession = useCallback(() => {
+    const previousNavigation = readPreviousNavigation(window.history.state)
+    if (
+      stateRef.current.newSessionMode !== null &&
+      previousNavigation?.newSessionMode === null
+    ) {
+      window.history.back()
+      return
+    }
+    navigate((current) => ({ ...current, newSessionMode: null }), 'replace')
+  }, [navigate])
+
+  return { ...state, backFromNewSession, backToInbox, navigate }
 }
