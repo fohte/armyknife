@@ -2936,6 +2936,7 @@ mod tests {
             .map(|conversation| conversation.messages),
             Some(vec![ChatItem::Question {
                 request_id: Some("permission-request-question".to_string()),
+                cancelled: false,
                 questions: vec![QuestionPrompt {
                     header: Some("Summary".to_string()),
                     question: "Should the summary be brief?".to_string(),
@@ -2984,6 +2985,7 @@ mod tests {
             Some(vec![
                 ChatItem::Question {
                     request_id: None,
+                    cancelled: false,
                     questions: vec![QuestionPrompt {
                         header: Some("Summary".to_string()),
                         question: "Should the summary be brief?".to_string(),
@@ -3106,6 +3108,7 @@ mod tests {
                 },
                 ChatItem::Question {
                     request_id: Some("permission-request-question".to_string()),
+                    cancelled: false,
                     questions: vec![QuestionPrompt {
                         header: Some("Summary".to_string()),
                         question: "Should the summary be brief?".to_string(),

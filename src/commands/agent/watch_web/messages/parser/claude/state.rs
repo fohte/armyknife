@@ -11,7 +11,9 @@ use super::super::queue::QueueReplayEvent;
 use super::super::record_timestamp;
 use super::background_tasks::{BackgroundTaskTracker, task_notification_text};
 use super::events::{ClaudeEffect, TimedClaudeEvent};
-use super::questions::{append_questions, parse_question_answers, tool_use_result_answers};
+use super::questions::{
+    append_questions, is_question_cancelled, parse_question_answers, tool_use_result_answers,
+};
 use super::transcript_branch::{BranchMembership, TranscriptNode, is_inactive_branch};
 use super::user_input::{content_blocks, is_tool_result_only_user_record, user_content, user_text};
 
@@ -150,19 +152,26 @@ impl ClaudeParserState {
                         let Some(id) = block.get("tool_use_id").and_then(Value::as_str) else {
                             continue;
                         };
-                        if self.question_uses.remove(id)
-                            && let Some(answers) = match tool_use_result {
+                        if self.question_uses.remove(id) {
+                            let answers = match tool_use_result {
                                 Some(result) => tool_use_result_answers(result),
                                 None => block
                                     .get("content")
                                     .and_then(tool_result_text)
                                     .and_then(|text| parse_question_answers(&text)),
+                            };
+                            if let Some(answers) = answers {
+                                effects.push(ClaudeEffect::QuestionAnswers {
+                                    id: id.to_owned(),
+                                    answers,
+                                });
+                            } else if block
+                                .get("content")
+                                .and_then(tool_result_text)
+                                .is_some_and(|text| is_question_cancelled(&text))
+                            {
+                                effects.push(ClaudeEffect::QuestionCancelled { id: id.to_owned() });
                             }
-                        {
-                            effects.push(ClaudeEffect::QuestionAnswers {
-                                id: id.to_owned(),
-                                answers,
-                            });
                         }
                         if let Some(index) =
                             self.tool_uses.iter().position(|tool_use| tool_use.id == id)

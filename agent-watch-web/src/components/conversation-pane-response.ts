@@ -218,6 +218,8 @@ function isChatItem(value: unknown): value is ChatItem {
       return (
         (value['requestId'] === undefined ||
           typeof value['requestId'] === 'string') &&
+        (value['cancelled'] === undefined ||
+          typeof value['cancelled'] === 'boolean') &&
         Array.isArray(value['questions']) &&
         value['questions'].length > 0 &&
         value['questions'].every(

@@ -268,3 +268,18 @@ it('shows a pending permission before the Crit review', () => {
     }),
   ).toEqual({ kind: 'permission', detail: 'cargo test --package sample' })
 })
+
+it('ignores stale unanswered questions while the session waits for a Crit review', () => {
+  expect(
+    getConversationStatusBandState({
+      session: {
+        ...session,
+        category: 'needs_action',
+        kind: 'Review',
+        critUrl: 'https://crit.example.test/review/fixture',
+      },
+      messages: [{ ...question, cancelled: true }],
+      backgroundTasks: [],
+    }),
+  ).toEqual({ kind: 'crit-review', detail: 'Refresh the sample service' })
+})

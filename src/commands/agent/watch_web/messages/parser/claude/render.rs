@@ -8,7 +8,7 @@ use super::super::super::ChatItem;
 use super::super::cards::{CardKind, CardTimeline, TimedCard, cards_from_sources};
 use super::super::{ToolSummary, append_text_with_image_directory, classifier, tool_target};
 use super::events::{ClaudeEffect, TimedClaudeEvent};
-use super::questions::apply_question_answers;
+use super::questions::{apply_question_answers, mark_questions_cancelled};
 use super::state::{ClaudeParserState, ToolUse};
 use super::transcript_branch::BranchMembership;
 use super::{ParsedTranscript, ParserAdditions};
@@ -229,6 +229,11 @@ fn render_timed_event(
             ClaudeEffect::QuestionAnswers { id, answers } => {
                 if let Some(indices) = question_indices.get(id) {
                     apply_question_answers(items, indices, answers);
+                }
+            }
+            ClaudeEffect::QuestionCancelled { id } => {
+                if let Some(indices) = question_indices.get(id) {
+                    mark_questions_cancelled(items, indices);
                 }
             }
         }

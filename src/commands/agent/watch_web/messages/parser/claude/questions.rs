@@ -39,6 +39,10 @@ pub(super) fn tool_use_result_answers(tool_use_result: &Value) -> Option<Vec<(St
     (!answers.is_empty()).then_some(answers)
 }
 
+pub(super) fn is_question_cancelled(text: &str) -> bool {
+    text.trim() == "The user cancelled this question."
+}
+
 fn parse_quoted_json_string(value: &str) -> Option<(String, &str)> {
     if !value.starts_with('"') {
         return None;
@@ -58,6 +62,14 @@ fn parse_quoted_json_string(value: &str) -> Option<(String, &str)> {
     }
 
     None
+}
+
+pub(super) fn mark_questions_cancelled(items: &mut [ChatItem], question_indices: &[usize]) {
+    for index in question_indices {
+        if let Some(ChatItem::Question { cancelled, .. }) = items.get_mut(*index) {
+            *cancelled = true;
+        }
+    }
 }
 
 pub(super) fn apply_question_answers(

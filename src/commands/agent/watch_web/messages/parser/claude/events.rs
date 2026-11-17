@@ -49,4 +49,7 @@ pub(super) enum ClaudeEffect {
         id: String,
         answers: Vec<(String, String)>,
     },
+    QuestionCancelled {
+        id: String,
+    },
 }

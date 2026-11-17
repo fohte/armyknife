@@ -19,6 +19,7 @@ function pendingQuestion(messages: readonly ChatItem[]) {
     .find(
       (message) =>
         message.type === 'question' &&
+        message.cancelled !== true &&
         message.questions.some((question) => question.answer === null),
     )
 }

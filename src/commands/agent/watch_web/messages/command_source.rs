@@ -119,6 +119,7 @@ mod tests {
             },
             ChatItem::Question {
                 request_id: None,
+                cancelled: false,
                 questions: vec![QuestionPrompt {
                     header: None,
                     question: "question text".to_string(),
