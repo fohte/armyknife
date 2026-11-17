@@ -379,13 +379,23 @@ fn codex_rate_limits(limits: Option<&Value>) -> RateLimits {
     let Some(limits) = limits else {
         return RateLimits::default();
     };
+    let windows = ["primary", "secondary"]
+        .into_iter()
+        .filter_map(|key| codex_window(limits.get(key)))
+        .collect::<Vec<_>>();
     RateLimits {
-        five_hour: codex_window(limits.get("primary"), 5 * 60 * 60),
-        seven_day: codex_window(limits.get("secondary"), 7 * 24 * 60 * 60),
+        five_hour: windows
+            .iter()
+            .find(|window| window.window_seconds == 5 * 60 * 60)
+            .cloned(),
+        seven_day: windows
+            .iter()
+            .find(|window| window.window_seconds == 7 * 24 * 60 * 60)
+            .cloned(),
     }
 }
 
-fn codex_window(value: Option<&Value>, fallback_window_seconds: u64) -> Option<RateLimitWindow> {
+fn codex_window(value: Option<&Value>) -> Option<RateLimitWindow> {
     let value = value?;
     let used_percentage = value
         .get("used_percent")
@@ -401,8 +411,7 @@ fn codex_window(value: Option<&Value>, fallback_window_seconds: u64) -> Option<R
                 .and_then(Value::as_u64)
                 .map(|milliseconds| milliseconds / 1000)
         })
-        .or_else(|| value.get("window_duration_seconds").and_then(Value::as_u64))
-        .unwrap_or(fallback_window_seconds);
+        .or_else(|| value.get("window_duration_seconds").and_then(Value::as_u64))?;
 
     Some(RateLimitWindow {
         used_percentage,
@@ -436,6 +445,7 @@ mod tests {
 
     use chrono::{TimeZone, Utc};
     use indoc::indoc;
+    use rstest::{fixture, rstest};
     use tempfile::tempdir;
 
     use super::{read_latest_quota_from, read_transcript};
@@ -489,6 +499,58 @@ mod tests {
                 observed_at: Utc.with_ymd_and_hms(2026, 11, 16, 12, 0, 0).unwrap(),
             }),
         );
+    }
+
+    #[fixture]
+    fn rollout_directory() -> tempfile::TempDir {
+        tempdir().expect("temporary directory should be created")
+    }
+
+    #[rstest]
+    #[case::primary_weekly_window(
+        indoc! {r#"
+            {"type":"event_msg","timestamp":"2026-11-16T12:00:00Z","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":12,"window_minutes":10080,"resets_at":1795435200},"secondary":null}}}
+        "#},
+        Some(RateLimits {
+            five_hour: None,
+            seven_day: Some(RateLimitWindow {
+                used_percentage: 12.0,
+                resets_at: Some(1795435200),
+                window_seconds: 604800,
+            }),
+        }),
+    )]
+    #[case::unrecognized_duration(
+        indoc! {r#"
+            {"type":"event_msg","timestamp":"2026-11-16T12:00:00Z","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":12,"window_minutes":150,"resets_at":1794837600},"secondary":null}}}
+        "#},
+        None,
+    )]
+    #[case::missing_duration(
+        indoc! {r#"
+            {"type":"event_msg","timestamp":"2026-11-16T12:00:00Z","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":12,"resets_at":1794837600},"secondary":null}}}
+        "#},
+        None,
+    )]
+    fn classifies_codex_quota_by_window_duration(
+        rollout_directory: tempfile::TempDir,
+        #[case] rollout_event: &str,
+        #[case] expected_rate_limits: Option<RateLimits>,
+    ) {
+        let transcript = rollout_directory.path().join("fixture-rollout.jsonl");
+        fs::write(&transcript, rollout_event).expect("fixture rollout should be written");
+        let expected = expected_rate_limits.map(|rate_limits| SessionUsage {
+            session_id: "fixture-session".to_owned(),
+            engine: Engine::Codex,
+            model: None,
+            effort: None,
+            context: None,
+            rate_limits,
+            version: None,
+            observed_at: Utc.with_ymd_and_hms(2026, 11, 16, 12, 0, 0).unwrap(),
+        });
+
+        assert_eq!(read_transcript(&transcript, "fixture-session"), expected,);
     }
 
     #[test]
