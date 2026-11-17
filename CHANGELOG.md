@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.772](https://github.com/fohte/armyknife/compare/v0.1.771...v0.1.772) (2026-11-17)
+
+
+### Bug Fixes
+
+* **process:** ignore histdb sqlite3 in worktrees ([#1928](https://github.com/fohte/armyknife/issues/1928)) ([d0d1cd6](https://github.com/fohte/armyknife/commit/d0d1cd6299006beb27469c3e284b61ef0c36b591))
+
 ## [0.1.771](https://github.com/fohte/armyknife/compare/v0.1.770...v0.1.771) (2026-11-17)
 
 
