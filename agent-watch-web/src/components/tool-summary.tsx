@@ -2,7 +2,7 @@ import '#components/tool-summary.css'
 
 import { type ReactNode, useState } from 'react'
 
-import type { ToolOperation } from '#types'
+import type { ToolGroupItem, ToolOperation } from '#types'
 
 type ToolSummaryOperation = Omit<ToolOperation, 'target'> & {
   target?: string | null
@@ -11,13 +11,32 @@ type ToolSummaryOperation = Omit<ToolOperation, 'target'> & {
 type ToolSummaryProps = {
   summary: string
   operations: readonly ToolSummaryOperation[]
+  items?: readonly ToolGroupItem[]
   children?: ReactNode
   open?: boolean
+}
+
+export function summarizeToolGroupItems(
+  items: readonly ToolGroupItem[],
+): string {
+  const thoughtCount = items.filter((item) => item.type === 'thinking').length
+  const toolCounts = new Map<string, number>()
+  for (const item of items) {
+    if (item.type === 'tool_use') {
+      toolCounts.set(item.tool, (toolCounts.get(item.tool) ?? 0) + 1)
+    }
+  }
+  const summary = [
+    ...(thoughtCount > 0 ? [`Thought ×${String(thoughtCount)}`] : []),
+    ...[...toolCounts].map(([tool, count]) => `${tool} ×${String(count)}`),
+  ]
+  return summary.join(' · ')
 }
 
 export function ToolSummary({
   summary,
   operations,
+  items,
   children,
   open = false,
 }: ToolSummaryProps) {
@@ -27,11 +46,13 @@ export function ToolSummary({
     failedSuffix === undefined
       ? summary
       : summary.slice(0, -failedSuffix.length).trimEnd()
+  const hasGroupedItems = items !== undefined && items.length > 0
+  const hasOperations = operations.length > 0 || hasGroupedItems
 
   return (
     <details
       className="chat-tool-summary"
-      data-has-operations={operations.length > 0 ? 'true' : 'false'}
+      data-has-operations={hasOperations ? 'true' : 'false'}
       open={isOpen}
       onToggle={(event) => {
         setIsOpen(event.currentTarget.open)
@@ -43,6 +64,11 @@ export function ToolSummary({
             <span>
               {operations.length} tool call{operations.length === 1 ? '' : 's'}
             </span>
+            <span className="chat-tool-summary-collapse">‹ Collapse</span>
+          </>
+        ) : hasGroupedItems && isOpen ? (
+          <>
+            <span className="chat-tool-summary-text">{summaryText}</span>
             <span className="chat-tool-summary-collapse">‹ Collapse</span>
           </>
         ) : failedSuffix === undefined ? (
@@ -59,7 +85,50 @@ export function ToolSummary({
         )}
       </summary>
       {children}
-      {operations.length > 0 ? (
+      {hasGroupedItems ? (
+        <ul className="chat-tool-operations">
+          {items.map((item, index) =>
+            item.type === 'thinking' ? (
+              <li
+                className="chat-tool-thought"
+                key={`thought-${String(index)}`}
+              >
+                <details>
+                  <summary>
+                    <span className="chat-tool-name">Thought</span>
+                    <span className="chat-tool-thought-preview">
+                      {item.text}
+                    </span>
+                  </summary>
+                  <p className="chat-tool-thought-full">{item.text}</p>
+                </details>
+              </li>
+            ) : (
+              <li
+                key={`${String(index)}-${item.tool}-${item.target ?? ''}`}
+                data-has-target={
+                  item.target !== undefined && item.target.length > 0
+                    ? 'true'
+                    : 'false'
+                }
+                data-failed={item.failed ? 'true' : 'false'}
+              >
+                <span className="chat-tool-name">{item.tool}</span>
+                {item.target !== undefined && item.target.length > 0 ? (
+                  <code className="chat-tool-target">{item.target}</code>
+                ) : null}
+                <span
+                  className="chat-tool-operation-status"
+                  role="img"
+                  aria-label={item.failed ? 'Failed' : 'Succeeded'}
+                >
+                  {item.failed ? '✕' : '✓'}
+                </span>
+              </li>
+            ),
+          )}
+        </ul>
+      ) : operations.length > 0 ? (
         <ul className="chat-tool-operations">
           {operations.map((operation, index) => (
             <li

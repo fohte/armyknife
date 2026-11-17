@@ -47,6 +47,37 @@ export const AssistantMessage: Story = {
   name: 'The assistant message shows formatted conversation text',
 }
 
+export const NarrationInConversation: Story = {
+  name: 'Narration follows the conversation in lighter text',
+  args: {
+    message: {
+      type: 'narration',
+      text: 'I will inspect the fictional request before answering.',
+    },
+  },
+}
+
+export const PermissionIncludesItsThoughtSummary: Story = {
+  name: 'A permission request includes its grouped thought summary',
+  args: {
+    message: {
+      type: 'permission',
+      requestId: 'permission-request-fictional',
+      tool: 'Read',
+      description: 'Read the fictional source file.',
+      items: [
+        { type: 'thinking', text: 'Review the fictional source request.' },
+        {
+          type: 'tool_use',
+          tool: 'Read',
+          target: 'src/fixture.rs',
+          failed: false,
+        },
+      ],
+    },
+  },
+}
+
 export const AnswerableQuestion: Story = {
   name: 'A pending question offers answer choices',
   args: {

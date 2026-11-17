@@ -112,3 +112,71 @@ export const LongCollapsedOperationPathFitsConversation: Story = {
   },
   decorators: [conversationWidthDecorator],
 }
+
+export const ThoughtCountAppearsInTheCollapsedSummary: Story = {
+  name: 'The collapsed summary counts thoughts alongside tool activity',
+  args: {
+    summary: 'Thought ×2 · Edit sample.rs · Read ×1',
+    operations: [
+      { tool: 'Edit', target: 'src/sample.rs', failed: false },
+      { tool: 'Read', target: 'src/sample.rs', failed: false },
+    ],
+    items: [
+      { type: 'thinking', text: 'Review the first fictional requirement.' },
+      {
+        type: 'tool_use',
+        tool: 'Edit',
+        target: 'src/sample.rs',
+        failed: false,
+      },
+      { type: 'thinking', text: 'Check the second fictional requirement.' },
+      {
+        type: 'tool_use',
+        tool: 'Read',
+        target: 'src/sample.rs',
+        failed: false,
+      },
+    ],
+  },
+}
+
+export const ExpandedSummaryShowsThoughtsInSequence: Story = {
+  name: 'The expanded summary keeps thoughts in sequence with tool calls',
+  args: {
+    summary: 'Thought ×2 · Edit sample.rs · Read ×1',
+    operations: [
+      { tool: 'Edit', target: 'src/sample.rs', failed: false },
+      { tool: 'Read', target: 'src/sample.rs', failed: false },
+    ],
+    items: [
+      { type: 'thinking', text: 'Review the first fictional requirement.' },
+      {
+        type: 'tool_use',
+        tool: 'Edit',
+        target: 'src/sample.rs',
+        failed: false,
+      },
+      { type: 'thinking', text: 'Check the second fictional requirement.' },
+      {
+        type: 'tool_use',
+        tool: 'Read',
+        target: 'src/sample.rs',
+        failed: false,
+      },
+    ],
+    open: true,
+  },
+}
+
+export const ThinkingWithoutToolsFormsItsOwnSummary: Story = {
+  name: 'Thoughts without tool calls form an expandable summary',
+  args: {
+    summary: 'Thought ×2',
+    operations: [],
+    items: [
+      { type: 'thinking', text: 'Review the first fictional requirement.' },
+      { type: 'thinking', text: 'Check the second fictional requirement.' },
+    ],
+  },
+  decorators: [conversationWidthDecorator],
+}

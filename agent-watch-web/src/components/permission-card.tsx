@@ -5,6 +5,7 @@ import { Button } from '@fohte/ui/button'
 
 import { OpenInTerminalAction } from '#components/open-in-terminal-action'
 import { SyntaxCodeBlock } from '#components/syntax-code-block'
+import { summarizeToolGroupItems, ToolSummary } from '#components/tool-summary'
 import type { ChatItem, OpenInTerminalStatus, SessionActions } from '#types'
 
 type PendingPermissionAction = {
@@ -68,6 +69,27 @@ export function PermissionCard({
           code={message.command}
           language="bash"
         />
+      )}
+      {message.items === undefined || message.items.length === 0 ? null : (
+        <div className="permission-tool-activity">
+          <ToolSummary
+            summary={summarizeToolGroupItems(message.items)}
+            operations={message.items.flatMap((item) =>
+              item.type === 'tool_use'
+                ? [
+                    {
+                      tool: item.tool,
+                      ...(item.target === undefined
+                        ? {}
+                        : { target: item.target }),
+                      failed: item.failed,
+                    },
+                  ]
+                : [],
+            )}
+            items={message.items}
+          />
+        </div>
       )}
       {hasPermissionActions ? (
         <div className="permission-actions">

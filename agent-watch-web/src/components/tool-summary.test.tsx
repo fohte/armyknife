@@ -61,6 +61,49 @@ it('renders expanded operations as tool, target, and status rows', () => {
   )
 })
 
+it('renders thoughts and tools in the supplied group order', () => {
+  expect(
+    renderToStaticMarkup(
+      <ToolSummary
+        summary="Thought ×1 · Read ×1"
+        operations={[
+          { tool: 'Read', target: 'fixture/source.rs', failed: false },
+        ]}
+        items={[
+          { type: 'thinking', text: 'Review the fictional request.' },
+          {
+            type: 'tool_use',
+            tool: 'Read',
+            target: 'fixture/source.rs',
+            failed: false,
+          },
+        ]}
+        open
+      />,
+    ),
+  ).toBe(
+    '<details class="chat-tool-summary" data-has-operations="true" open=""><summary><span>1 tool call</span><span class="chat-tool-summary-collapse">‹ Collapse</span></summary><ul class="chat-tool-operations"><li class="chat-tool-thought"><details><summary><span class="chat-tool-name">Thought</span><span class="chat-tool-thought-preview">Review the fictional request.</span></summary><p class="chat-tool-thought-full">Review the fictional request.</p></details></li><li data-has-target="true" data-failed="false"><span class="chat-tool-name">Read</span><code class="chat-tool-target">fixture/source.rs</code><span class="chat-tool-operation-status" role="img" aria-label="Succeeded">✓</span></li></ul></details>',
+  )
+})
+
+it('renders thinking without tools as a collapsible group', () => {
+  expect(
+    renderToStaticMarkup(
+      <ToolSummary
+        summary="Thought ×2"
+        operations={[]}
+        items={[
+          { type: 'thinking', text: 'Review the first fictional detail.' },
+          { type: 'thinking', text: 'Review the second fictional detail.' },
+        ]}
+        open
+      />,
+    ),
+  ).toBe(
+    '<details class="chat-tool-summary" data-has-operations="true" open=""><summary><span class="chat-tool-summary-text">Thought ×2</span><span class="chat-tool-summary-collapse">‹ Collapse</span></summary><ul class="chat-tool-operations"><li class="chat-tool-thought"><details><summary><span class="chat-tool-name">Thought</span><span class="chat-tool-thought-preview">Review the first fictional detail.</span></summary><p class="chat-tool-thought-full">Review the first fictional detail.</p></details></li><li class="chat-tool-thought"><details><summary><span class="chat-tool-name">Thought</span><span class="chat-tool-thought-preview">Review the second fictional detail.</span></summary><p class="chat-tool-thought-full">Review the second fictional detail.</p></details></li></ul></details>',
+  )
+})
+
 it('omits empty targets from expanded operation rows', () => {
   const operations = [
     { tool: 'Read', target: null, failed: false },

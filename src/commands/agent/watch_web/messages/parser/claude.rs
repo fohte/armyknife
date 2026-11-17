@@ -420,7 +420,7 @@ mod tests {
                 .unwrap(),
             json!([{
                 "type": "tool_summary",
-                "summary": "Read ×1",
+                "summary": "Thought ×2 · Read ×1",
                 "operations": [{
                     "tool": "Read",
                     "target": "fixture/source.rs",

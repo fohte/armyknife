@@ -80,6 +80,13 @@ pub(super) enum ChatItem {
         #[serde(rename = "thinkingDurationMs", skip_serializing_if = "Option::is_none")]
         thinking_duration_ms: Option<u64>,
     },
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "retained for watch-web responses that use standalone thought items"
+        )
+    )]
     Thinking {
         text: String,
         #[serde(rename = "thinkingDurationMs", skip_serializing_if = "Option::is_none")]
