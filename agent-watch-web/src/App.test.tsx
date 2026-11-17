@@ -2579,7 +2579,7 @@ it('opens a session in the Inbox when selected from the palette on Board', async
   })
 })
 
-it('opens a mobile new-session form from the Board header', async () => {
+it('restores the Board with Back after opening a mobile new-session form', async () => {
   vi.stubGlobal(
     'fetch',
     createSessionLaunchFetcher(jsonResponse({ launchId: 'launch-fixture' })),
@@ -2686,21 +2686,42 @@ it('restores the previous screen when a new-session palette is dismissed with Ba
     await changeHistory('back')
   })
 
-  const snapshot = () => ({
-    openedPalette,
+  const returnedToBoard = {
     activeView: readActiveView(),
     newSessionPickerOpen:
       container.querySelector('.new-session-picker') !== null,
     url: window.location.search,
+  }
+
+  await act(async () => {
+    await changeHistory('forward')
+  })
+
+  const snapshot = () => ({
+    openedPalette,
+    returnedToBoard,
+    restoredPalette: {
+      activeView: readActiveView(),
+      newSessionPickerOpen:
+        container.querySelector('.new-session-picker') !== null,
+      url: window.location.search,
+    },
   })
   expect(snapshot()).toEqual({
     openedPalette: {
       newSessionPickerOpen: true,
       url: '?view=board&newSession=palette',
     },
-    activeView: 'Board',
-    newSessionPickerOpen: false,
-    url: '?view=board',
+    returnedToBoard: {
+      activeView: 'Board',
+      newSessionPickerOpen: false,
+      url: '?view=board',
+    },
+    restoredPalette: {
+      activeView: 'Board',
+      newSessionPickerOpen: true,
+      url: '?view=board&newSession=palette',
+    },
   })
 })
 
