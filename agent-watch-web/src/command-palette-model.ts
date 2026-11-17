@@ -1,6 +1,5 @@
 import { Result } from 'neverthrow'
 
-import { buildWorkTypeNavGroups } from '#board-model'
 import type { Session } from '#types'
 
 export type PaletteScope =
@@ -171,12 +170,6 @@ function baseCommands(): PaletteCommandItem[] {
     },
     {
       type: 'command',
-      id: 'switch-inbox',
-      label: 'Switch to Inbox',
-      description: 'Show the session inbox',
-    },
-    {
-      type: 'command',
       id: 'close-done',
       label: 'Close all done',
       description: 'Close every done session',
@@ -184,13 +177,21 @@ function baseCommands(): PaletteCommandItem[] {
   ]
 }
 
-function itemMatches(query: string, item: PaletteItem) {
+function itemMatches(
+  query: string,
+  item: PaletteItem,
+  workTypeNavLabels: Readonly<Record<string, string>> = {},
+) {
   switch (item.type) {
     case 'session':
       return matches(
         query,
         item.session.title,
         item.session.kind,
+        item.session.workType,
+        typeof item.session.workType === 'string'
+          ? workTypeNavLabels[item.session.workType]
+          : undefined,
         item.session.task?.title,
         item.session.task === null
           ? null
@@ -231,35 +232,21 @@ export function buildCommandPaletteGroups(
   const commands = baseCommands()
 
   if (query.length === 0 && scope === 'all') {
-    const displayedSessionIds = new Set<string>()
-    const sessionItem = (session: Session): PaletteSessionItem => {
-      displayedSessionIds.add(session.id)
-      return { type: 'session', id: session.id, session }
-    }
-    const starred = sessions
-      .filter((session) => session.isToday === true)
-      .map(sessionItem)
+    const sessionItem = (session: Session): PaletteSessionItem => ({
+      type: 'session',
+      id: session.id,
+      session,
+    })
     const sessionsById = new Map(
       sessions.map((session) => [session.id, session] as const),
     )
-    const workTypeGroups = buildWorkTypeNavGroups(sessions, workTypeNavLabels)
-      .map((group) => ({
-        heading: group.label,
-        items: group.sessions.flatMap((session) => {
-          return displayedSessionIds.has(session.id)
-            ? []
-            : [sessionItem(session)]
-        }),
-      }))
-      .filter((group) => group.items.length > 0)
     const needsAction = sessions
-      .filter(
-        (session) =>
-          session.category === 'needs_action' &&
-          !displayedSessionIds.has(session.id),
-      )
+      .filter((session) => session.category === 'needs_action')
       .slice(0, 3)
       .map(sessionItem)
+    const displayedSessionIds = new Set(
+      needsAction.map((session) => session.id),
+    )
     const recentSessions = recentSessionIds.flatMap((id) => {
       const session = sessionsById.get(id)
       return session === undefined || displayedSessionIds.has(id)
@@ -267,8 +254,6 @@ export function buildCommandPaletteGroups(
         : [sessionItem(session)]
     })
     const groups = [
-      { heading: 'STARRED', items: starred },
-      ...workTypeGroups,
       {
         heading: 'NEEDS ACTION',
         items: needsAction,
@@ -281,7 +266,11 @@ export function buildCommandPaletteGroups(
 
   const sessionItems = sessions
     .filter((session) =>
-      itemMatches(query, { type: 'session', id: session.id, session }),
+      itemMatches(
+        query,
+        { type: 'session', id: session.id, session },
+        workTypeNavLabels,
+      ),
     )
     .map((session) => ({ type: 'session' as const, id: session.id, session }))
   const candidates: Array<[PaletteScope, string, PaletteItem[]]> = [
@@ -292,7 +281,9 @@ export function buildCommandPaletteGroups(
   ]
   return candidates.flatMap(([candidateScope, heading, items]) => {
     if (scope !== 'all' && scope !== candidateScope) return []
-    const filtered = items.filter((item) => itemMatches(query, item))
+    const filtered = items.filter((item) =>
+      itemMatches(query, item, workTypeNavLabels),
+    )
     return filtered.length === 0 ? [] : [{ heading, items: filtered }]
   })
 }

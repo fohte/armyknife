@@ -358,7 +358,7 @@ it('shows task priority before the task result summary', () => {
 
   expect(
     container.querySelector('.command-palette-item-subtitle')?.textContent,
-  ).toBe('P1 · 1 sessions · 1 need action · example/web-app')
+  ).toBe('P1 · 1 session')
 })
 
 it('shows an em dash when a task has no priority', () => {
@@ -379,32 +379,107 @@ it('shows an em dash when a task has no priority', () => {
 
   expect(
     container.querySelector('.command-palette-item-subtitle')?.textContent,
-  ).toBe('P— · 1 sessions · 1 need action · example/web-app')
+  ).toBe('P— · 1 session')
 })
 
-it.each([
-  ['new session', '>New session'],
-  ['switch board', '>Switch to Board'],
-  ['switch inbox', '>Switch to Inbox'],
-  ['close done', '>Close all done'],
-] as const)(
-  'does not show an inactive keyboard shortcut for the %s command',
-  (_name, query) => {
-    renderPalette({ initialQuery: query })
+it('shows the three designed commands without subtitles or trailing details', () => {
+  renderPalette()
 
-    expect(
-      container.querySelector('.command-palette-item-detail')?.textContent,
-    ).toBe('')
-  },
-)
+  const getActual = () => ({
+    commands: Array.from(
+      container.querySelectorAll('.command-palette-item[data-tone="command"]'),
+    ).map((item) => ({
+      icon: item.querySelector('.command-palette-status')?.textContent,
+      title: item.querySelector('.command-palette-item-heading strong')
+        ?.textContent,
+      subtitle: item.querySelector('.command-palette-item-subtitle')
+        ?.textContent,
+      detail: item.querySelector('.command-palette-item-detail')?.textContent,
+    })),
+    scopes: Array.from(container.querySelectorAll('[role="tab"]')).map(
+      (tab) => tab.textContent,
+    ),
+  })
+  expect(getActual()).toEqual({
+    commands: [
+      {
+        icon: '+',
+        title: 'New session',
+        subtitle: undefined,
+        detail: undefined,
+      },
+      {
+        icon: '›',
+        title: 'Switch to Board',
+        subtitle: undefined,
+        detail: undefined,
+      },
+      {
+        icon: '›',
+        title: 'Close all done',
+        subtitle: undefined,
+        detail: undefined,
+      },
+    ],
+    scopes: ['All', 'Sessions', 'tq tasks', 'Projects', 'Commands'],
+  })
+})
 
-it('keeps non-session result details monospace', () => {
+it('keeps Tab keyboard scope switching without showing scope markers', async () => {
+  renderPalette()
+
+  await act(async () => {
+    await userEvent.keyboard('{Tab}{Tab}')
+  })
+
+  expect(
+    Array.from(container.querySelectorAll('[role="tab"]')).map((tab) => ({
+      label: tab.textContent,
+      selected: tab.getAttribute('aria-selected'),
+    })),
+  ).toEqual([
+    { label: 'All', selected: 'false' },
+    { label: 'Sessions', selected: 'false' },
+    { label: 'tq tasks', selected: 'true' },
+    { label: 'Projects', selected: 'false' },
+    { label: 'Commands', selected: 'false' },
+  ])
+})
+
+it('does not show Show in Board on task result rows', () => {
   renderPalette({ initialQuery: '#notification' })
 
-  const actual = Array.from(
-    container.querySelectorAll('.command-palette-item-detail'),
-  ).map((item) => item.className)
-  expect(actual).toEqual(['command-palette-item-detail is-monospace'])
+  const getActual = () => ({
+    subtitle: container.querySelector('.command-palette-item-subtitle')
+      ?.textContent,
+    detail: container.querySelector('.command-palette-item-detail')
+      ?.textContent,
+  })
+  expect(getActual()).toEqual({ subtitle: 'P1 · 1 session', detail: undefined })
+})
+
+it('keeps Show in Board on project result rows', () => {
+  renderPalette({ initialQuery: '@notification' })
+
+  const getActual = () =>
+    Array.from(container.querySelectorAll('.command-palette-item')).map(
+      (item) => ({
+        icon: item.querySelector('.command-palette-status')?.textContent,
+        title: item.querySelector('.command-palette-item-heading strong')
+          ?.textContent,
+        subtitle: item.querySelector('.command-palette-item-subtitle')
+          ?.textContent,
+        detail: item.querySelector('.command-palette-item-detail')?.textContent,
+      }),
+    )
+  expect(getActual()).toEqual([
+    {
+      icon: '▤',
+      title: 'notification refresh',
+      subtitle: '1 sessions · 1 need action · example/web-app',
+      detail: 'Show in Board',
+    },
+  ])
 })
 
 it.each([
@@ -476,9 +551,9 @@ it('runs the selected command with Ctrl-n and Enter', async () => {
     [
       {
         type: 'command',
-        id: 'switch-inbox',
-        label: 'Switch to Inbox',
-        description: 'Show the session inbox',
+        id: 'switch-board',
+        label: 'Switch to Board',
+        description: 'Show projects and sessions',
       },
     ],
   ])
