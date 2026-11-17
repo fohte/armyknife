@@ -85,6 +85,19 @@ export function AgentWatchNav({
             &gt;
           </span>
           <span className="brand-name">agent watch</span>
+          {!isMobile ? (
+            <button
+              aria-label="New session"
+              className="agent-watch-new-session"
+              onClick={() => {
+                onNewSession()
+              }}
+              title="New session"
+              type="button"
+            >
+              <Plus aria-hidden="true" size={15} />
+            </button>
+          ) : null}
           <button
             aria-label={
               isMobile
@@ -98,19 +111,6 @@ export function AgentWatchNav({
             <Search aria-hidden="true" size={13} />
             {!isMobile ? <span>{paletteShortcut.label}</span> : null}
           </button>
-          {!isMobile ? (
-            <button
-              aria-label="New session"
-              className="agent-watch-new-session"
-              onClick={() => {
-                onNewSession()
-              }}
-              title="New session"
-              type="button"
-            >
-              <Plus aria-hidden="true" size={16} />
-            </button>
-          ) : null}
           {!isMobile ? (
             <button
               aria-label={inboxCollapsed ? 'Show Inbox' : 'Hide Inbox'}
