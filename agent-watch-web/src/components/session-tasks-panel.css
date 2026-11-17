@@ -84,6 +84,7 @@
 }
 
 .session-tasks-panel-item--completed {
+  grid-template-columns: 14px minmax(0, 1fr) auto;
   padding-block: 6px;
   color: var(--aw-text-secondary);
 }
@@ -119,6 +120,13 @@
 
 .session-tasks-panel-item--completed .session-tasks-panel-title {
   grid-column: 2;
+}
+
+.session-tasks-panel-age {
+  color: var(--aw-text-muted);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  white-space: nowrap;
 }
 
 .session-tasks-panel-show-more {

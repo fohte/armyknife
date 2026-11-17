@@ -11,7 +11,11 @@ export function isSessionTask(value: unknown): value is SessionTask {
     typeof value['number'] === 'number' &&
     typeof value['title'] === 'string' &&
     (value['priority'] === null || typeof value['priority'] === 'number') &&
-    (value['isClosed'] === undefined || typeof value['isClosed'] === 'boolean')
+    (value['isClosed'] === undefined ||
+      typeof value['isClosed'] === 'boolean') &&
+    (value['updatedAt'] === undefined ||
+      value['updatedAt'] === null ||
+      typeof value['updatedAt'] === 'string')
   )
 }
 

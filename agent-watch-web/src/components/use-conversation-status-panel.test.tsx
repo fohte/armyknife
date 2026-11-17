@@ -137,6 +137,7 @@ it('shows linked open and completed tasks in the Tasks tab', () => {
               title: 'Document request behavior',
               priority: null,
               isClosed: true,
+              updatedAt: new Date(Date.now() - 3_600_000).toISOString(),
             },
           ],
         }}
@@ -167,8 +168,8 @@ it('shows linked open and completed tasks in the Tasks tab', () => {
   expect(snapshot()).toEqual({
     tabs: [{ text: 'Tasks2', selected: 'true' }],
     tasks: [
-      '●#18 Improve request reliabilityP1 · fixture/toolkit',
-      '✓#17 Document request behavior',
+      '●#18 Improve request reliabilityP1 · toolkit',
+      '✓#17 Document request behavior 1h',
     ],
     primaryControls: ['Primary', 'Make primary'],
   })

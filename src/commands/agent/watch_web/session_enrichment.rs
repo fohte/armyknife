@@ -188,6 +188,7 @@ impl SessionEnrichmentCache {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct SessionTaskMetadata {
     pub(super) links: HashMap<String, Vec<SessionTask>>,
+    pub(super) updated_at: HashMap<String, chrono::DateTime<chrono::Utc>>,
     pub(super) priorities: HashMap<String, Option<i32>>,
     pub(super) priority_order: HashMap<String, usize>,
     pub(super) task_projects: HashMap<String, String>,
@@ -317,6 +318,7 @@ async fn fetch_task_metadata(
     if task_ids.is_empty() {
         return Ok(SessionTaskMetadata {
             links,
+            updated_at: previous.updated_at,
             priorities: previous.priorities,
             priority_order: previous.priority_order,
             task_projects: previous.task_projects,
@@ -331,6 +333,8 @@ async fn fetch_task_metadata(
         }
     };
 
+    let updated_at = task_update_timestamps(&tasks);
+
     let (priorities, priority_order) = task_priority_metadata(tasks.clone());
     order_tasks_by_priority(&mut links, &priority_order);
     let task_projects = fetch_task_projects(tasks, previous.task_projects, || async {
@@ -343,10 +347,23 @@ async fn fetch_task_metadata(
 
     Ok(SessionTaskMetadata {
         links,
+        updated_at,
         priorities,
         priority_order,
         task_projects,
     })
+}
+
+fn task_update_timestamps(
+    tasks: &[TqTaskSummary],
+) -> HashMap<String, chrono::DateTime<chrono::Utc>> {
+    tasks
+        .iter()
+        .filter_map(|task| {
+            task.updated_at
+                .map(|updated_at| (task.id.clone(), updated_at))
+        })
+        .collect()
 }
 
 fn keep_cached_priority_metadata(
@@ -525,6 +542,7 @@ mod tests {
             id: id.to_string(),
             number: 1,
             title: "example task".to_string(),
+            updated_at: None,
             priority,
             project_id: None,
         }
@@ -582,6 +600,7 @@ mod tests {
     fn cached_priority_metadata_orders_new_links_after_task_lookup_failure() {
         let previous = SessionTaskMetadata {
             links: HashMap::new(),
+            updated_at: HashMap::new(),
             priorities: HashMap::from([
                 ("higher".to_string(), Some(0)),
                 ("lower".to_string(), Some(1)),
@@ -619,6 +638,20 @@ mod tests {
         assert_eq!(
             task_project_names(tasks, projects),
             HashMap::from([("task-a".to_string(), "Example project".to_string())]),
+        );
+    }
+
+    #[test]
+    fn maps_tq_task_timestamps_by_task_id() {
+        let updated_at = chrono::DateTime::parse_from_rfc3339("2026-10-02T03:04:05Z")
+            .expect("valid timestamp")
+            .with_timezone(&chrono::Utc);
+        let mut updated_task = task("task-a", None);
+        updated_task.updated_at = Some(updated_at);
+
+        assert_eq!(
+            task_update_timestamps(&[updated_task, task("task-b", None)]),
+            HashMap::from([("task-a".to_string(), updated_at)]),
         );
     }
 

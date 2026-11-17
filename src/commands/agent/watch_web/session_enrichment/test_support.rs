@@ -37,6 +37,7 @@ pub(super) fn metadata(session_ids: HashSet<String>) -> SessionTaskMetadata {
         .collect();
     SessionTaskMetadata {
         links,
+        updated_at: HashMap::new(),
         priorities: HashMap::new(),
         priority_order: HashMap::new(),
         task_projects: HashMap::new(),

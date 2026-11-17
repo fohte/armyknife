@@ -21,6 +21,7 @@ const meta = {
         title: 'Document request behavior',
         priority: null,
         isClosed: true,
+        updatedAt: new Date(Date.now() - 3_600_000).toISOString(),
       },
       {
         id: 'example-completed-task-b',
@@ -28,6 +29,7 @@ const meta = {
         title: 'Add a retry example',
         priority: 3,
         isClosed: true,
+        updatedAt: new Date(Date.now() - 86_400_000).toISOString(),
       },
     ],
   },
@@ -47,7 +49,7 @@ export default meta
 type Story = StoryObj<typeof meta>
 
 export const InProgressAndCompletedTasks: Story = {
-  name: 'The Tasks tab groups open and completed tasks',
+  name: 'The Tasks tab groups open and completed tasks.',
 }
 
 export const OnlyCompletedTasks: Story = {
@@ -60,8 +62,9 @@ export const OnlyCompletedTasks: Story = {
         title: 'Document request behavior',
         priority: null,
         isClosed: true,
+        updatedAt: new Date(Date.now() - 3_600_000).toISOString(),
       },
     ],
   },
-  name: 'The Tasks tab shows completed tasks when none are open',
+  name: 'The Tasks tab shows completed tasks when none are open.',
 }

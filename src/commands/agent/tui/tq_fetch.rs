@@ -114,6 +114,7 @@ mod tests {
             id: task_id.to_string(),
             number: 1,
             title: task_id.to_string(),
+            updated_at: None,
             priority,
             project_id: None,
         }

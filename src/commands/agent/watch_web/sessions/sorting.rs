@@ -43,6 +43,7 @@ mod tests {
             title: id.to_string(),
             priority,
             is_closed: false,
+            updated_at: None,
             priority_order,
         });
         SessionView {
@@ -109,6 +110,7 @@ mod tests {
                 title: "task".to_string(),
                 priority,
                 is_closed: false,
+                updated_at: None,
                 priority_order,
             })
         };

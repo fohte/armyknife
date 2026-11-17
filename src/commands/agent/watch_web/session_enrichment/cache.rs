@@ -76,6 +76,7 @@ fn prune_unlinked_task_metadata(
         .collect::<HashSet<_>>();
     for task_id in previous_task_ids.difference(&remaining_task_ids) {
         cached.priorities.remove(task_id);
+        cached.updated_at.remove(task_id);
         cached.priority_order.remove(task_id);
         cached.task_projects.remove(task_id);
     }
@@ -99,6 +100,11 @@ fn merge_refreshed_task_metadata(
         .map_or(0, |order| order + 1);
 
     for task_id in refreshed_task_ids {
+        if let Some(updated_at) = refreshed.updated_at.get(task_id) {
+            cached.updated_at.insert(task_id.clone(), *updated_at);
+        } else {
+            cached.updated_at.remove(task_id);
+        }
         cached.priority_order.remove(task_id);
         if let Some(priority) = refreshed.priorities.get(task_id) {
             cached.priorities.insert(task_id.clone(), *priority);
@@ -215,6 +221,49 @@ mod tests {
         result
     }
 
+    #[test]
+    fn refreshed_task_timestamps_replace_and_clear_cached_values() {
+        let previous_task_a_at = chrono::DateTime::parse_from_rfc3339("2026-10-01T00:00:00Z")
+            .expect("valid timestamp")
+            .with_timezone(&chrono::Utc);
+        let previous_task_b_at = chrono::DateTime::parse_from_rfc3339("2026-10-02T00:00:00Z")
+            .expect("valid timestamp")
+            .with_timezone(&chrono::Utc);
+        let refreshed_task_a_at = chrono::DateTime::parse_from_rfc3339("2026-10-03T00:00:00Z")
+            .expect("valid timestamp")
+            .with_timezone(&chrono::Utc);
+        let mut cached = SessionTaskMetadata {
+            links: HashMap::from([(
+                "session-a".to_string(),
+                vec![linked_task("task-a"), linked_task("task-b")],
+            )]),
+            updated_at: HashMap::from([
+                ("task-a".to_string(), previous_task_a_at),
+                ("task-b".to_string(), previous_task_b_at),
+            ]),
+            ..SessionTaskMetadata::default()
+        };
+        let refreshed = SessionTaskMetadata {
+            links: HashMap::from([(
+                "session-a".to_string(),
+                vec![linked_task("task-a"), linked_task("task-b")],
+            )]),
+            updated_at: HashMap::from([("task-a".to_string(), refreshed_task_a_at)]),
+            ..SessionTaskMetadata::default()
+        };
+
+        merge_session_task_metadata(
+            &mut cached,
+            refreshed,
+            &HashSet::from(["session-a".to_string()]),
+        );
+
+        assert_eq!(
+            cached.updated_at,
+            HashMap::from([("task-a".to_string(), refreshed_task_a_at)]),
+        );
+    }
+
     #[rstest]
     #[tokio::test]
     async fn alternating_session_sets_keep_each_sessions_task_metadata(
@@ -273,6 +322,7 @@ mod tests {
                             linked_task("regular"),
                         ],
                     )]),
+                    updated_at: HashMap::new(),
                     priorities: HashMap::from([
                         ("regular".to_string(), Some(0)),
                         ("unset".to_string(), None),
@@ -306,6 +356,7 @@ mod tests {
                         linked_task("deferred"),
                     ],
                 )]),
+                updated_at: HashMap::new(),
                 priorities: HashMap::from([
                     ("regular".to_string(), Some(0)),
                     ("unset".to_string(), None),
@@ -432,6 +483,7 @@ mod tests {
                     "session-b".to_string(),
                     vec![linked_task("task-session-b"), linked_task("task-session-a"),],
                 )]),
+                updated_at: HashMap::new(),
                 priorities: HashMap::from([
                     ("task-session-a".to_string(), Some(0)),
                     ("task-session-b".to_string(), Some(1)),

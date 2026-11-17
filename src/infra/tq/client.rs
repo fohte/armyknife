@@ -115,6 +115,8 @@ pub struct TqTaskSummary {
     pub number: u32,
     pub title: String,
     #[serde(default)]
+    pub updated_at: Option<DateTime<Utc>>,
+    #[serde(default)]
     pub priority: Option<i32>,
     #[serde(default)]
     pub project_id: Option<String>,
@@ -410,7 +412,7 @@ mod tests {
     fn parses_task_priorities_without_requiring_tq_process() {
         let json = indoc! {r#"
             [
-              { "id": "task-one", "number": 1, "title": "First task", "priority": 0, "projectId": "project-one" },
+              { "id": "task-one", "number": 1, "title": "First task", "updatedAt": "2026-10-01T00:00:00Z", "priority": 0, "projectId": "project-one" },
               { "id": "task-two", "number": 2, "title": "Second task" }
             ]
         "#};
@@ -422,6 +424,11 @@ mod tests {
                     id: "task-one".to_string(),
                     number: 1,
                     title: "First task".to_string(),
+                    updated_at: Some(
+                        DateTime::parse_from_rfc3339("2026-10-01T00:00:00Z")
+                            .expect("valid timestamp")
+                            .with_timezone(&Utc),
+                    ),
                     priority: Some(0),
                     project_id: Some("project-one".to_string()),
                 },
@@ -429,6 +436,7 @@ mod tests {
                     id: "task-two".to_string(),
                     number: 2,
                     title: "Second task".to_string(),
+                    updated_at: None,
                     priority: None,
                     project_id: None,
                 },

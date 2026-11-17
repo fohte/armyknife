@@ -18,6 +18,7 @@ const tasks: SessionTask[] = [
     title: `Document request behavior ${String(index + 1)}`,
     priority: null,
     isClosed: true,
+    updatedAt: new Date(Date.now() - (index + 1) * 3_600_000).toISOString(),
   })),
 ]
 
@@ -36,6 +37,7 @@ afterEach(() => {
   root = null
   container.remove()
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 it('groups open and completed linked tasks and reveals the remaining completed tasks', () => {
@@ -80,25 +82,25 @@ it('groups open and completed linked tasks and reveals the remaining completed t
       openTasks: [
         {
           href: 'https://tq.fohte.net/tasks/example-open-task',
-          text: '●#2048 Improve request reliabilityP1 · example/service',
+          text: '●#2048 Improve request reliabilityP1 · service',
         },
       ],
       completedTasks: [
         {
           href: 'https://tq.fohte.net/tasks/example-completed-task-1',
-          text: '✓#2047 Document request behavior 1',
+          text: '✓#2047 Document request behavior 1 1h',
         },
         {
           href: 'https://tq.fohte.net/tasks/example-completed-task-2',
-          text: '✓#2046 Document request behavior 2',
+          text: '✓#2046 Document request behavior 2 2h',
         },
         {
           href: 'https://tq.fohte.net/tasks/example-completed-task-3',
-          text: '✓#2045 Document request behavior 3',
+          text: '✓#2045 Document request behavior 3 3h',
         },
         {
           href: 'https://tq.fohte.net/tasks/example-completed-task-4',
-          text: '✓#2044 Document request behavior 4',
+          text: '✓#2044 Document request behavior 4 4h',
         },
       ],
       showMore: 'Show 1 more',
@@ -108,34 +110,77 @@ it('groups open and completed linked tasks and reveals the remaining completed t
       openTasks: [
         {
           href: 'https://tq.fohte.net/tasks/example-open-task',
-          text: '●#2048 Improve request reliabilityP1 · example/service',
+          text: '●#2048 Improve request reliabilityP1 · service',
         },
       ],
       completedTasks: [
         {
           href: 'https://tq.fohte.net/tasks/example-completed-task-1',
-          text: '✓#2047 Document request behavior 1',
+          text: '✓#2047 Document request behavior 1 1h',
         },
         {
           href: 'https://tq.fohte.net/tasks/example-completed-task-2',
-          text: '✓#2046 Document request behavior 2',
+          text: '✓#2046 Document request behavior 2 2h',
         },
         {
           href: 'https://tq.fohte.net/tasks/example-completed-task-3',
-          text: '✓#2045 Document request behavior 3',
+          text: '✓#2045 Document request behavior 3 3h',
         },
         {
           href: 'https://tq.fohte.net/tasks/example-completed-task-4',
-          text: '✓#2044 Document request behavior 4',
+          text: '✓#2044 Document request behavior 4 4h',
         },
         {
           href: 'https://tq.fohte.net/tasks/example-completed-task-5',
-          text: '✓#2043 Document request behavior 5',
+          text: '✓#2043 Document request behavior 5 5h',
         },
       ],
       showMore: undefined,
     },
   })
+})
+
+it('formats completed task ages in minutes and days', () => {
+  const now = Date.parse('2026-11-17T00:00:00.000Z')
+  vi.spyOn(Date, 'now').mockReturnValue(now)
+  const ageTasks: SessionTask[] = [
+    {
+      id: 'example-minute-task',
+      number: 2047,
+      title: 'Document request behavior',
+      priority: null,
+      isClosed: true,
+      updatedAt: new Date(now - 35 * 60_000).toISOString(),
+    },
+    {
+      id: 'example-day-task',
+      number: 2046,
+      title: 'Add a retry example',
+      priority: null,
+      isClosed: true,
+      updatedAt: new Date(now - 2 * 24 * 60 * 60_000).toISOString(),
+    },
+  ]
+
+  act(() => {
+    root?.render(
+      <SessionTasksPanel
+        tasks={ageTasks}
+        repo="example/service"
+        primaryTaskId={null}
+      />,
+    )
+  })
+
+  expect(
+    Array.from(
+      container.querySelectorAll('.session-tasks-panel-item--completed'),
+      (task) => task.textContent,
+    ),
+  ).toEqual([
+    '✓#2047 Document request behavior 35m',
+    '✓#2046 Add a retry example 2d',
+  ])
 })
 
 it('makes a completed secondary task primary from the Tasks tab', async () => {
