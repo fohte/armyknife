@@ -105,24 +105,40 @@ export function requestAgentUsage() {
   return requestJson('/api/usage', isAgentUsage)
 }
 
-export function getExpectedUsagePercentage(
-  window: RateLimitWindow,
-  nowSeconds: number,
-) {
+function getElapsedWindowRatio(window: RateLimitWindow, nowSeconds: number) {
   if (window.resetsAt === null || window.windowSeconds <= 0) return null
+  if (window.resetsAt <= nowSeconds) return null
   const elapsedRatio =
     (window.windowSeconds - (window.resetsAt - nowSeconds)) /
     window.windowSeconds
   if (elapsedRatio < 0.05) return null
+  return elapsedRatio
+}
+
+export function getExpectedUsagePercentage(
+  window: RateLimitWindow,
+  nowSeconds: number,
+) {
+  const elapsedRatio = getElapsedWindowRatio(window, nowSeconds)
+  if (elapsedRatio === null) return null
   return Math.max(0, Math.min(100, elapsedRatio * 100))
 }
 
-export function getUsagePaceStatus(
-  usedPercentage: number,
-  expectedPercentage: number | null,
-) {
-  if (expectedPercentage === null) return null
-  return usedPercentage > expectedPercentage ? 'ahead' : 'on-pace'
+export type UsageLandingEstimate = {
+  percentage: number
+  status: 'on-pace' | 'warning' | 'danger'
+}
+
+export function getUsageLandingEstimate(
+  window: RateLimitWindow,
+  nowSeconds: number,
+): UsageLandingEstimate | null {
+  const elapsedRatio = getElapsedWindowRatio(window, nowSeconds)
+  if (elapsedRatio === null) return null
+  const paceRatio = window.usedPercentage / 100 / elapsedRatio
+  const status =
+    paceRatio < 1 ? 'on-pace' : paceRatio < 1.5 ? 'warning' : 'danger'
+  return { percentage: Math.round(paceRatio * 100), status }
 }
 
 export function getUsageSeverity(usedPercentage: number | null) {

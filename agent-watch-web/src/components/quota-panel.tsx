@@ -4,10 +4,10 @@ import {
   type EngineQuota,
   formatResetTime,
   getExpectedUsagePercentage,
-  getUsagePaceStatus,
   getUsageSeverity,
   type RateLimitWindow,
 } from '#agent-usage'
+import { UsagePaceIndicator } from '#components/usage-pace-indicator'
 
 type Quotas = {
   claude: EngineQuota | null
@@ -39,15 +39,10 @@ function QuotaWindow({
       : window
   const usedPercentage =
     currentWindow === null ? null : Math.round(currentWindow.usedPercentage)
-  const actualPercentage = currentWindow?.usedPercentage ?? null
   const expectedPercentage =
     currentWindow === null
       ? null
       : getExpectedUsagePercentage(currentWindow, nowSeconds)
-  const paceStatus = getUsagePaceStatus(
-    actualPercentage ?? 0,
-    expectedPercentage,
-  )
   const severity = getUsageSeverity(usedPercentage)
   const color =
     severity === 'danger'
@@ -96,15 +91,7 @@ function QuotaWindow({
         {usedPercentage === null ? '--' : `${String(usedPercentage)}%`}
       </span>
       <span className="quota-window-reset">
-        {paceStatus === null ? null : (
-          <span
-            aria-label={`${paceStatus === 'ahead' ? 'Ahead of pace' : 'On pace'}: ${String(Math.round(expectedPercentage ?? 0))}% expected by now`}
-            className={`quota-window-mark${paceStatus === 'ahead' ? ' is-ahead' : ''}`}
-            title={`${paceStatus === 'ahead' ? 'Ahead of pace' : 'On pace'}: ${String(Math.round(expectedPercentage ?? 0))}% expected by now`}
-          >
-            {paceStatus === 'ahead' ? '▲' : '✓'}
-          </span>
-        )}{' '}
+        <UsagePaceIndicator nowSeconds={nowSeconds} window={currentWindow} />{' '}
         {reset}
       </span>
     </div>
