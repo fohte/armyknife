@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 use crate::commands::agent::user_turn::is_ask_user_question;
@@ -193,6 +193,7 @@ fn load_conversation_with_tail_window_from(
             main_permission_request_id.as_deref(),
             main_permission_data.as_ref(),
         );
+        supplement_skill_suggestions(&mut cached.conversation, &session, loaders);
         resolve_peer_session_titles(&mut cached.conversation.messages, &mut load_session)?;
         cached.conversation.update_metadata();
         cached
@@ -314,14 +315,23 @@ fn supplement_skill_suggestions(
     session: &Session,
     loaders: &RouteLoaders,
 ) {
-    if !conversation.skills.is_empty() {
+    if conversation.skill_suggestions_from_transcript {
         return;
+    }
+    if !conversation.skill_suggestions_are_fallback && !conversation.skills.is_empty() {
+        conversation.skill_suggestions_from_transcript = true;
+        return;
+    }
+    if conversation.skill_suggestions_are_fallback {
+        conversation.skills.clear();
+        conversation.skill_suggestions_are_fallback = false;
     }
 
     let codex_home = crate::shared::dirs::codex_home_dir();
-    match skill_listing_for_session(session, codex_home.as_deref()) {
+    match cached_skill_listing_for_session(session, loaders, codex_home.as_deref()) {
         Ok(Some(skills)) => {
             conversation.skills = skills;
+            conversation.skill_suggestions_from_transcript = true;
             return;
         }
         Ok(None) => {}
@@ -346,9 +356,10 @@ fn supplement_skill_suggestions(
     });
 
     for candidate in candidates {
-        match skill_listing_for_session(&candidate, codex_home.as_deref()) {
+        match cached_skill_listing_for_session(&candidate, loaders, codex_home.as_deref()) {
             Ok(Some(skills)) => {
                 conversation.skills = skills;
+                conversation.skill_suggestions_are_fallback = true;
                 return;
             }
             Ok(None) => {}
@@ -359,6 +370,49 @@ fn supplement_skill_suggestions(
             ),
         }
     }
+}
+
+fn cached_skill_listing_for_session(
+    session: &Session,
+    loaders: &RouteLoaders,
+    codex_home: Option<&Path>,
+) -> Result<Option<Vec<super::SkillSuggestion>>> {
+    let fingerprint = skill_listing_cache_fingerprint(session, codex_home)?;
+    loaders.cached_skill_listing(session, &fingerprint, || {
+        skill_listing_for_session(session, codex_home)
+    })
+}
+
+fn skill_listing_cache_fingerprint(session: &Session, codex_home: Option<&Path>) -> Result<String> {
+    let archived_path = archived_codex_transcript_path(
+        session.engine,
+        session.transcript_path.as_deref(),
+        codex_home,
+    )?;
+    let Some(path) = archived_path
+        .as_deref()
+        .or(session.transcript_path.as_deref())
+    else {
+        return Ok("no-transcript-path".to_string());
+    };
+    for candidate in [path.to_path_buf(), super::compressed_path(path)] {
+        match std::fs::metadata(&candidate) {
+            Ok(metadata) => {
+                return Ok(format!(
+                    "{}:{}:{:?}",
+                    candidate.display(),
+                    metadata.len(),
+                    metadata.modified().ok(),
+                ));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("read transcript metadata {}", candidate.display()));
+            }
+        }
+    }
+    Ok(format!("{}:missing", path.display()))
 }
 
 fn skill_listing_for_session(

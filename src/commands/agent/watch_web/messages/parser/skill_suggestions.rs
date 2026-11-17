@@ -13,6 +13,28 @@ pub(super) fn parse_claude_listing(content: Option<&Value>) -> Vec<SkillSuggesti
         .collect()
 }
 
+pub(super) fn update_claude_listing(
+    skills: &mut Vec<SkillSuggestion>,
+    listing: Vec<SkillSuggestion>,
+    is_initial: bool,
+) {
+    if is_initial {
+        *skills = listing;
+        return;
+    }
+
+    for skill in listing {
+        if let Some(existing) = skills
+            .iter_mut()
+            .find(|existing| existing.name == skill.name)
+        {
+            existing.description = skill.description;
+        } else {
+            skills.push(skill);
+        }
+    }
+}
+
 pub(super) fn capture_codex_listing(record: &Value, skills: &mut Vec<SkillSuggestion>) {
     if let Some(listing) = parse_codex_listing(record) {
         *skills = listing;
@@ -38,21 +60,10 @@ pub(in crate::commands::agent::watch_web::messages) fn read_transcript_listing(
                     continue;
                 }
                 let listing = parse_claude_listing(attachment.get("content"));
-                if attachment.get("isInitial").and_then(Value::as_bool) == Some(false) {
-                    let current = skills.get_or_insert_with(Vec::new);
-                    for skill in listing {
-                        if let Some(existing) = current
-                            .iter_mut()
-                            .find(|existing| existing.name == skill.name)
-                        {
-                            existing.description = skill.description;
-                        } else {
-                            current.push(skill);
-                        }
-                    }
-                } else {
-                    skills = Some(listing);
-                }
+                let is_initial =
+                    attachment.get("isInitial").and_then(Value::as_bool) != Some(false);
+                let current = skills.get_or_insert_with(Vec::new);
+                update_claude_listing(current, listing, is_initial);
             }
             Engine::Codex => {
                 if let Some(listing) = parse_codex_listing(&record) {
