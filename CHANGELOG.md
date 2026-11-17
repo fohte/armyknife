@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.782](https://github.com/fohte/armyknife/compare/v0.1.781...v0.1.782) (2026-11-17)
+
+
+### Features
+
+* **agent-watch-web:** show session PR status ([#1949](https://github.com/fohte/armyknife/issues/1949)) ([c4dc4eb](https://github.com/fohte/armyknife/commit/c4dc4ebcd0279493f8d8036e468fe52fa5f6b2bc))
+
 ## [0.1.781](https://github.com/fohte/armyknife/compare/v0.1.780...v0.1.781) (2026-11-17)
 
 
