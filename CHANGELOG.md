@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.762](https://github.com/fohte/armyknife/compare/v0.1.761...v0.1.762) (2026-11-17)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** wait without a prompt ([#1909](https://github.com/fohte/armyknife/issues/1909)) ([20597da](https://github.com/fohte/armyknife/commit/20597da49f7ef5c4cf298dc8d74cd03e9efe25e9))
+
 ## [0.1.761](https://github.com/fohte/armyknife/compare/v0.1.760...v0.1.761) (2026-11-17)
 
 
