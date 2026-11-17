@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.779](https://github.com/fohte/armyknife/compare/v0.1.778...v0.1.779) (2026-11-17)
+
+
+### Features
+
+* **agent-watch-web:** condense the status band ([#1943](https://github.com/fohte/armyknife/issues/1943)) ([36c89d2](https://github.com/fohte/armyknife/commit/36c89d2ba7fa0ffb5351a26035d4d9b289275081))
+
 ## [0.1.778](https://github.com/fohte/armyknife/compare/v0.1.777...v0.1.778) (2026-11-17)
 
 
