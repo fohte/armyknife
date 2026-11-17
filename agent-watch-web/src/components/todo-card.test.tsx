@@ -314,6 +314,54 @@ it('sends a trimmed optional comment and keeps the task as completed', async () 
   })
 })
 
+it('restores a task comment after reload and clears it after resolving', async () => {
+  const sessionId = crypto.randomUUID()
+  const seq = 42
+  const storageKey = `agent-watch-web:card-draft:${JSON.stringify([
+    'todo',
+    sessionId,
+    seq,
+    'comment',
+  ])}`
+  const onResolve = vi.fn<Props['onResolve']>(() => Promise.resolve(true))
+  const cardProps = props({ sessionId, seq, onResolve })
+  renderCard(cardProps)
+  setTextareaValue(
+    requireElement(
+      container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+    ),
+    'The page works at narrow widths.',
+  )
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+  renderCard(cardProps)
+
+  const restoredComment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+  const persistedBeforeSend = restoredComment.value
+  await act(async () => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>('.chat-todo-footer button'),
+    ).click()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  })
+
+  const snapshot = () => ({
+    restoredComment: persistedBeforeSend,
+    resolveCalls: onResolve.mock.calls,
+    storedDraft: window.localStorage.getItem(storageKey),
+  })
+
+  expect(snapshot()).toEqual({
+    restoredComment: 'The page works at narrow widths.',
+    resolveCalls: [['completed', 'The page works at narrow widths.']],
+    storedDraft: null,
+  })
+})
+
 it('previews and sends an image pasted into the task comment', async () => {
   let resolveTodo: (succeeded: boolean) => void = () => undefined
   const todoResult = new Promise<boolean>((resolve) => {

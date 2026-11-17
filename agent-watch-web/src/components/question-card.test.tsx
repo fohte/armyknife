@@ -93,6 +93,17 @@ function requireElement<T extends Element>(element: T | null): T {
   return element
 }
 
+function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
+  act(() => {
+    const valueSetter = Reflect.getOwnPropertyDescriptor(
+      textarea.constructor.prototype,
+      'value',
+    )?.set
+    if (valueSetter !== undefined) Reflect.apply(valueSetter, textarea, [value])
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
 function choiceButton(label: string): HTMLButtonElement {
   return requireElement(
     Array.from(
@@ -501,6 +512,62 @@ it('submits freeform answers for every question', async () => {
       },
     ],
   ])
+})
+
+it('restores question answers after reload and clears them after sending', async () => {
+  const sessionId = crypto.randomUUID()
+  const requestId = 'fixture-question-request'
+  const storageKey = `agent-watch-web:card-draft:${JSON.stringify([
+    'question',
+    sessionId,
+    requestId,
+    'answers',
+  ])}`
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  const cardProps = props({
+    sessionId,
+    requestId,
+    questions: singleChoiceQuestions,
+    isMobile: true,
+    onAnswer,
+  })
+  renderQuestion(cardProps)
+  setTextareaValue(
+    requireElement(container.querySelector<HTMLTextAreaElement>('textarea')),
+    'Choose the southern route.',
+  )
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+  renderQuestion(cardProps)
+
+  const restoredAnswer = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const persistedBeforeSend = restoredAnswer.value
+  await act(async () => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.chat-question-actions button.aw-button--primary',
+      ),
+    ).click()
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    restoredAnswer: persistedBeforeSend,
+    answerCalls: onAnswer.mock.calls,
+    storedDraft: window.localStorage.getItem(storageKey),
+  })
+
+  expect(snapshot()).toEqual({
+    restoredAnswer: 'Choose the southern route.',
+    answerCalls: [
+      [{ 'Which direction should be used?': 'Choose the southern route.' }],
+    ],
+    storedDraft: null,
+  })
 })
 
 it('keeps the answer after a failed submission and allows retry', async () => {

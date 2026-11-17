@@ -8,9 +8,12 @@ import { numberShortcutChoice } from '#components/conversation-keyboard'
 import { MarkdownMessage } from '#components/markdown-message'
 import { OpenInTerminalAction } from '#components/open-in-terminal-action'
 import { QuestionSendError } from '#components/question-send-error'
+import { cardDraftStorageKey, useDraft } from '#components/use-composer-draft'
 import type { OpenInTerminalStatus, QuestionPrompt } from '#types'
 
 type QuestionCardProps = {
+  sessionId?: string
+  requestId?: string
   questions: QuestionPrompt[]
   canAnswer: boolean
   isMobile: boolean
@@ -23,6 +26,8 @@ type QuestionCardProps = {
 }
 
 export function QuestionCard({
+  sessionId = 'question',
+  requestId,
   questions,
   canAnswer,
   isMobile,
@@ -35,8 +40,15 @@ export function QuestionCard({
 }: QuestionCardProps) {
   const inputId = useId()
   const cardRef = useRef<HTMLElement | null>(null)
+  const questionCardId =
+    requestId ?? questions.map((question) => question.question).join('\u0000')
+  const answerDraft = useDraft(
+    cardDraftStorageKey('question', sessionId, questionCardId, 'answers'),
+  )
   const [selected, setSelected] = useState<Record<string, string[]>>({})
-  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [drafts, setDrafts] = useState<Record<string, string>>(() =>
+    Object.fromEntries(new URLSearchParams(answerDraft.draft).entries()),
+  )
   const [isSending, setIsSending] = useState(false)
   const [resolved, setResolved] = useState(false)
   const [sendFailed, setSendFailed] = useState(false)
@@ -73,13 +85,24 @@ export function QuestionCard({
     !isSending &&
     questions.every((question) => (answers()[question.question] ?? '') !== '')
 
+  const updateAnswerDrafts = (next: Record<string, string>) => {
+    setDrafts(next)
+    answerDraft.updateDraft(
+      new URLSearchParams(
+        Object.entries(next).filter(([, value]) => value !== ''),
+      ).toString(),
+    )
+  }
+
   const sendAnswers = (answerValues: Record<string, string>) => {
     if (!canAnswer || resolved || isSending) return
+    const sentDraft = answerDraft.draft
     setIsSending(true)
     void onAnswer(answerValues)
       .then((sent) => {
         setResolved(sent)
         setSendFailed(!sent)
+        if (sent) answerDraft.clearDraftIfUnchanged(sentDraft)
       })
       .finally(() => {
         setIsSending(false)
@@ -88,7 +111,7 @@ export function QuestionCard({
 
   const toggleChoice = (question: QuestionPrompt, label: string) => {
     setSendFailed(false)
-    setDrafts((current) => ({ ...current, [question.question]: '' }))
+    updateAnswerDrafts({ ...drafts, [question.question]: '' })
     setSelected((current) => {
       const currentChoices = current[question.question] ?? []
       const nextChoices = question.multi_select
@@ -103,7 +126,7 @@ export function QuestionCard({
   const answerSingleChoice = (question: QuestionPrompt, label: string) => {
     if (!canAnswer || resolved || isSending) return
     setSendFailed(false)
-    setDrafts((current) => ({ ...current, [question.question]: '' }))
+    updateAnswerDrafts({ ...drafts, [question.question]: '' })
     setSelected((current) => ({ ...current, [question.question]: [label] }))
     sendAnswers({ [question.question]: label })
   }
@@ -115,11 +138,13 @@ export function QuestionCard({
 
   const skipQuestions = () => {
     if (!canAnswer || resolved || isSending) return
+    const sentDraft = answerDraft.draft
     setIsSending(true)
     void onSkip()
       .then((skipped) => {
         setResolved(skipped)
         setSendFailed(!skipped)
+        if (skipped) answerDraft.clearDraftIfUnchanged(sentDraft)
       })
       .finally(() => {
         setIsSending(false)
@@ -304,10 +329,10 @@ export function QuestionCard({
                       ...current,
                       [question.question]: [],
                     }))
-                    setDrafts((current) => ({
-                      ...current,
+                    updateAnswerDrafts({
+                      ...drafts,
                       [question.question]: draft,
-                    }))
+                    })
                   }}
                 />
               </div>

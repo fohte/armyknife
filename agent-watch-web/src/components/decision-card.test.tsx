@@ -176,6 +176,55 @@ it('sends a change comment from the expanded card', async () => {
   expect(onRequestChange.mock.calls).toEqual([['Add a timing sample first']])
 })
 
+it('restores a change request after reload and clears it after sending', async () => {
+  const sessionId = crypto.randomUUID()
+  const storageKey = `agent-watch-web:card-draft:${JSON.stringify([
+    'decision',
+    sessionId,
+    decision.seq,
+    'change-comment',
+  ])}`
+  const onRequestChange = vi.fn(() => Promise.resolve(true))
+  const cardProps = { sessionId, expanded: true, onRequestChange }
+  renderCard(cardProps)
+  act(() => {
+    button('Change…').click()
+  })
+  setTextareaValue(
+    requireElement(container.querySelector<HTMLTextAreaElement>('textarea')),
+    'Please include the review timing.',
+  )
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+  renderCard(cardProps)
+  act(() => {
+    button('Change…').click()
+  })
+
+  const restoredComment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const persistedBeforeSend = restoredComment.value
+  await act(async () => {
+    button('Send change request').click()
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    restoredComment: persistedBeforeSend,
+    changeCalls: onRequestChange.mock.calls,
+    storedDraft: window.localStorage.getItem(storageKey),
+  })
+
+  expect(snapshot()).toEqual({
+    restoredComment: 'Please include the review timing.',
+    changeCalls: [['Please include the review timing.']],
+    storedDraft: null,
+  })
+})
+
 it('sends the OK action from the expanded card', () => {
   const onOk = vi.fn(() => Promise.resolve(true))
   renderCard({ expanded: true, onOk })

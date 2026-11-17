@@ -4,6 +4,7 @@ import { Button } from '@fohte/ui/button'
 import { Fragment, useState } from 'react'
 
 import { MarkdownMessage } from '#components/markdown-message'
+import { cardDraftStorageKey, useDraft } from '#components/use-composer-draft'
 import type { ChatItem } from '#types'
 
 export type Decision = Extract<ChatItem, { type: 'decision' }>
@@ -24,6 +25,7 @@ function formatRelativeTime(createdAt: string, referenceTime: number) {
 }
 
 type DecisionCardProps = {
+  sessionId?: string
   decision: Decision
   variant: 'conversation' | 'panel'
   expanded?: boolean
@@ -40,6 +42,7 @@ type DecisionCardProps = {
 }
 
 export function DecisionCard({
+  sessionId = 'decision',
   decision,
   variant,
   expanded: controlledExpanded,
@@ -56,7 +59,13 @@ export function DecisionCard({
 }: DecisionCardProps) {
   const [localExpanded, setLocalExpanded] = useState(false)
   const [localEditing, setLocalEditing] = useState(false)
-  const [comment, setComment] = useState('')
+  const {
+    draft: comment,
+    updateDraft,
+    clearDraftIfUnchanged,
+  } = useDraft(
+    cardDraftStorageKey('decision', sessionId, decision.seq, 'change-comment'),
+  )
   const expanded = controlledExpanded ?? localExpanded
   const editing = controlledEditing ?? localEditing
   const detailsId = `decision-details-${variant}-${String(decision.seq)}`
@@ -80,7 +89,7 @@ export function DecisionCard({
   const submitChange = async () => {
     if (comment.trim() === '') return
     if (await onRequestChange(comment.trim())) {
-      setComment('')
+      clearDraftIfUnchanged(comment)
       setLocalEditing(false)
     }
   }
@@ -194,7 +203,7 @@ export function DecisionCard({
                   id={`decision-change-${String(decision.seq)}`}
                   value={comment}
                   onChange={(event) => {
-                    setComment(event.currentTarget.value)
+                    updateDraft(event.currentTarget.value)
                   }}
                   rows={3}
                   autoFocus
