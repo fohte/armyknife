@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.761](https://github.com/fohte/armyknife/compare/v0.1.760...v0.1.761) (2026-11-17)
+
+
+### Bug Fixes
+
+* **agent-usage:** classify Codex quota windows ([#1906](https://github.com/fohte/armyknife/issues/1906)) ([e049ea6](https://github.com/fohte/armyknife/commit/e049ea681679e407db6458e797de6629dc59bd64))
+
 ## [0.1.760](https://github.com/fohte/armyknife/compare/v0.1.759...v0.1.760) (2026-11-16)
 
 
