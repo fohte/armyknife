@@ -107,6 +107,8 @@ export function ConversationPaneHeader({
   }
   const [mergeFeedback, setMergeFeedback] = useState<{
     number: number
+    owner: string
+    repo: string
     kind: 'success' | 'queued' | 'error'
     message: string
   } | null>(null)
@@ -145,7 +147,9 @@ export function ConversationPaneHeader({
   const mergeAction =
     mergeOperation === null ||
     (mergeFeedback?.kind === 'success' &&
-      mergeFeedback.number === mergeOperation.number) ? null : (
+      mergeFeedback.number === mergeOperation.number &&
+      mergeFeedback.owner === mergeOperation.owner &&
+      mergeFeedback.repo === mergeOperation.repo) ? null : (
       <PullRequestMergeAction
         merging={merging}
         onClick={() => {
@@ -156,7 +160,10 @@ export function ConversationPaneHeader({
       />
     )
   const visibleMergeFeedback =
-    mergeFeedback !== null && mergeFeedback.number === pullRequest?.number
+    mergeFeedback !== null &&
+    mergeFeedback.number === pullRequest?.number &&
+    mergeFeedback.owner === pullRequest.owner &&
+    mergeFeedback.repo === pullRequest.repo
       ? mergeFeedback
       : null
   const linkedTasks = getSessionTasks(session)
@@ -164,6 +171,11 @@ export function ConversationPaneHeader({
 
   const confirmMerge = async () => {
     if (mergeOperation === null || merging) return
+    const mergeIdentity = {
+      number: mergeOperation.number,
+      owner: mergeOperation.owner,
+      repo: mergeOperation.repo,
+    }
     setMergeFeedback(null)
     setMergeConfirmationOpen(false)
     const result = await run(mergeOperation)
@@ -171,7 +183,7 @@ export function ConversationPaneHeader({
       (response) => {
         if (!isMergeResponse(response)) {
           setMergeFeedback({
-            number: mergeOperation.number,
+            ...mergeIdentity,
             kind: 'error',
             message: 'The server returned an invalid merge response.',
           })
@@ -184,14 +196,14 @@ export function ConversationPaneHeader({
               ? `PR #${String(mergeOperation.number)} was already merged.`
               : `PR #${String(mergeOperation.number)} was added to the merge queue: ${response.message}`
         setMergeFeedback({
-          number: mergeOperation.number,
+          ...mergeIdentity,
           kind: response.result === 'enqueued' ? 'queued' : 'success',
           message,
         })
       },
       (error) => {
         setMergeFeedback({
-          number: mergeOperation.number,
+          ...mergeIdentity,
           kind: 'error',
           message: error.message,
         })

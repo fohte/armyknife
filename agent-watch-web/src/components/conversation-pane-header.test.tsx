@@ -579,7 +579,7 @@ it('summarizes every pull request and opens the full list', () => {
   })
 })
 
-it('merges the same unmerged pull request shown in the summary', async () => {
+it('merges an open pull request when an earlier session PR is closed', async () => {
   const fetchMock = vi.fn<typeof fetch>(() =>
     Promise.resolve(Response.json({ result: 'merged' })),
   )
@@ -592,7 +592,7 @@ it('merges the same unmerged pull request shown in the summary', async () => {
       pullRequests: [
         {
           number: 41,
-          state: 'Merged',
+          state: 'Closed',
           owner: 'example-org',
           repo: 'example-repo',
           url: 'https://github.com/example-org/example-repo/pull/41',
@@ -648,6 +648,91 @@ it('merges the same unmerged pull request shown in the summary', async () => {
     summary: 'PR #42, open, CI passed. 1 more PR from this session',
     request: ['/api/sessions/fixture-session/pull-requests/42/merge'],
     feedback: 'PR #42 merged.',
+  })
+})
+
+it('keeps merge feedback scoped to the repository when PR numbers match', async () => {
+  const fetchMock = vi.fn<typeof fetch>(() =>
+    Promise.resolve(Response.json({ result: 'merged' })),
+  )
+  vi.stubGlobal('fetch', fetchMock)
+  const firstRepositoryPullRequest = {
+    number: 42,
+    state: 'Open' as const,
+    owner: 'example-org',
+    repo: 'example-repository',
+    url: 'https://github.com/example-org/example-repository/pull/42',
+    headSha: 'fixture-first-head',
+    ciState: 'Successful' as const,
+    isCurrentBranch: false,
+  }
+  const secondRepositoryPullRequest = {
+    number: 42,
+    state: 'Open' as const,
+    owner: 'example-org',
+    repo: 'example-infrastructure',
+    url: 'https://github.com/example-org/example-infrastructure/pull/42',
+    headSha: 'fixture-second-head',
+    ciState: 'Successful' as const,
+    isCurrentBranch: false,
+  }
+  renderHeader(
+    false,
+    vi.fn(() => Promise.resolve(true)),
+    {
+      ...session,
+      pullRequests: [firstRepositoryPullRequest, secondRepositoryPullRequest],
+    },
+  )
+
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.conversation-pr-merge-button',
+      ),
+    ).click()
+  })
+  const confirmation = requireElement(
+    container.querySelector<HTMLElement>('[role="alertdialog"]'),
+  )
+  await act(async () => {
+    requireElement(
+      [...confirmation.querySelectorAll<HTMLButtonElement>('button')].find(
+        (button) => button.textContent === 'Confirm merge',
+      ) ?? null,
+    ).click()
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (container.querySelector('[role="status"]') !== null) return
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    }
+  })
+
+  renderHeader(
+    false,
+    vi.fn(() => Promise.resolve(true)),
+    {
+      ...session,
+      pullRequests: [
+        { ...firstRepositoryPullRequest, state: 'Merged', headSha: null },
+        secondRepositoryPullRequest,
+      ],
+    },
+  )
+
+  const mergeState = () => ({
+    summary: container
+      .querySelector('.session-pr-trigger')
+      ?.getAttribute('aria-label'),
+    mergeButton:
+      container.querySelector('.conversation-pr-merge-button') !== null,
+    feedback:
+      container.querySelector('.conversation-pr-merge-feedback')?.textContent ??
+      null,
+  })
+  expect(mergeState()).toEqual({
+    summary: 'PR #42, open, CI passed. 1 more PR from this session',
+    mergeButton: true,
+    feedback: null,
   })
 })
 

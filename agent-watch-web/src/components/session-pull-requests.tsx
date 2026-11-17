@@ -53,7 +53,9 @@ function pullRequestGroups(pullRequests: readonly PullRequest[]) {
     {
       name: 'This branch',
       pullRequests: pullRequests.filter(
-        (pullRequest) => pullRequest.isCurrentBranch === true,
+        (pullRequest) =>
+          pullRequest.isCurrentBranch === true &&
+          pullRequest.state !== 'Merged',
       ),
     },
     {
@@ -96,7 +98,7 @@ export function getRepresentativePullRequest(
 ) {
   return (
     pullRequests.find((pullRequest) => pullRequest.isCurrentBranch === true) ??
-    pullRequests.find((pullRequest) => pullRequest.state !== 'Merged') ??
+    pullRequests.find((pullRequest) => pullRequest.state === 'Open') ??
     pullRequests[0]
   )
 }

@@ -41,11 +41,17 @@ const pullRequests: PullRequest[] = [
 let container: HTMLDivElement
 let root: Root | null = null
 
-function PullRequestHarness({ isMobile }: { isMobile: boolean }) {
+function PullRequestHarness({
+  isMobile,
+  pullRequests: sessionPullRequests = pullRequests,
+}: {
+  isMobile: boolean
+  pullRequests?: PullRequest[]
+}) {
   const [open, setOpen] = useState(false)
   return (
     <SessionPullRequests
-      pullRequests={pullRequests}
+      pullRequests={sessionPullRequests}
       repo="example-org/example-repo"
       isMobile={isMobile}
       open={open}
@@ -54,9 +60,17 @@ function PullRequestHarness({ isMobile }: { isMobile: boolean }) {
   )
 }
 
-function render(isMobile: boolean) {
+function render(
+  isMobile: boolean,
+  sessionPullRequests: PullRequest[] = pullRequests,
+) {
   act(() => {
-    root?.render(<PullRequestHarness isMobile={isMobile} />)
+    root?.render(
+      <PullRequestHarness
+        isMobile={isMobile}
+        pullRequests={sessionPullRequests}
+      />,
+    )
   })
 }
 
@@ -176,5 +190,61 @@ it.each([
       ],
     },
     closed: { expanded: 'false', dialogVisible: false },
+  })
+})
+
+it('lists a merged current-branch pull request only in Merged', () => {
+  render(false, [
+    {
+      number: 42,
+      state: 'Merged',
+      owner: 'example-org',
+      repo: 'example-repository',
+      title: 'Complete the session header change',
+      url: 'https://github.com/example-org/example-repository/pull/42',
+      ciState: 'Successful',
+      isCurrentBranch: true,
+    },
+    {
+      number: 43,
+      state: 'Open',
+      owner: 'example-org',
+      repo: 'example-infrastructure',
+      title: 'Add session header diagnostics',
+      url: 'https://github.com/example-org/example-infrastructure/pull/43',
+      ciState: 'InProgress',
+      isCurrentBranch: false,
+    },
+  ])
+
+  const trigger = container.querySelector<HTMLButtonElement>(
+    '.session-pr-trigger',
+  )
+  if (trigger === null) throw new Error('Expected pull request trigger')
+  act(() => {
+    trigger.click()
+  })
+
+  const list = () => ({
+    groupNames: Array.from(
+      container.querySelectorAll('.session-pr-group h3'),
+      (heading) => heading.textContent,
+    ),
+    pullRequests: Array.from(
+      container.querySelectorAll<HTMLAnchorElement>('.session-pr-row'),
+      (link) => ({
+        group:
+          link.closest('.session-pr-group')?.querySelector('h3')?.textContent ??
+          null,
+        number: link.querySelector('.session-pr-number')?.textContent ?? null,
+      }),
+    ),
+  })
+  expect(list()).toEqual({
+    groupNames: ['Opened elsewhere', 'Merged'],
+    pullRequests: [
+      { group: 'Opened elsewhere', number: '#43' },
+      { group: 'Merged', number: '#42' },
+    ],
   })
 })
