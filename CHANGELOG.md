@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.775](https://github.com/fohte/armyknife/compare/v0.1.774...v0.1.775) (2026-11-17)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** match conversation screens ([#1935](https://github.com/fohte/armyknife/issues/1935)) ([5ecc859](https://github.com/fohte/armyknife/commit/5ecc8595712f77b5fd9a0a0b6ab71bf32f4f9af1))
+
 ## [0.1.774](https://github.com/fohte/armyknife/compare/v0.1.773...v0.1.774) (2026-11-17)
 
 
