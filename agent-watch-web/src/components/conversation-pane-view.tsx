@@ -257,6 +257,18 @@ export function ConversationPaneView({
     messages,
     backgroundTasks,
   })
+  const returnToRequestCard = () => {
+    const cardSelector =
+      statusBandState?.kind === 'permission'
+        ? '.chat-permission-card'
+        : '.chat-question-card'
+    const cards =
+      conversationScrollRef.current?.querySelectorAll<HTMLElement>(cardSelector)
+    cards?.[cards.length - 1]?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'center',
+    })
+  }
   const handlePasteFiles = (files: File[]) => {
     onPasteFiles(files)
     onClearError()
@@ -401,6 +413,10 @@ export function ConversationPaneView({
         backgroundTasks={backgroundTasks}
         isMobile={isMobile}
         {...(onReviewInCrit === undefined ? {} : { onReviewInCrit })}
+        {...(statusBandState?.kind === 'question' ||
+        statusBandState?.kind === 'permission'
+          ? { onReturnToCard: returnToRequestCard }
+          : {})}
       />
 
       {(error ?? attachmentError) != null &&
