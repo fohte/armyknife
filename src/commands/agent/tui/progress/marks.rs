@@ -62,7 +62,7 @@ pub(in crate::commands::agent::tui) fn pr_ci_merge_marks(
                 PrCiState::Waiting => ProgressMark::Waiting,
                 PrCiState::InProgress => ProgressMark::Working,
                 PrCiState::Successful => ProgressMark::Done,
-                PrCiState::Unknown => ProgressMark::NotStarted,
+                PrCiState::Failed | PrCiState::Unknown => ProgressMark::NotStarted,
             };
             let merge = match progress.pull_request.state {
                 PrState::Merged => ProgressMark::Done,

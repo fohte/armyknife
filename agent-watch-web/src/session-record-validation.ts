@@ -30,6 +30,14 @@ export function isPullRequest(value: unknown): value is PullRequest {
     (value['url'] === undefined || typeof value['url'] === 'string') &&
     (value['headSha'] === undefined ||
       value['headSha'] === null ||
-      typeof value['headSha'] === 'string')
+      typeof value['headSha'] === 'string') &&
+    (value['ciState'] === undefined ||
+      value['ciState'] === 'Waiting' ||
+      value['ciState'] === 'InProgress' ||
+      value['ciState'] === 'Successful' ||
+      value['ciState'] === 'Failed' ||
+      value['ciState'] === 'Unknown') &&
+    (value['isCurrentBranch'] === undefined ||
+      typeof value['isCurrentBranch'] === 'boolean')
   )
 }

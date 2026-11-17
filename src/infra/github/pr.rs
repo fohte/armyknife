@@ -49,6 +49,7 @@ pub enum PrCiState {
     Waiting,
     InProgress,
     Successful,
+    Failed,
     Unknown,
 }
 
@@ -520,6 +521,7 @@ pub(super) fn parse_pr_progress_node(node: &serde_json::Value) -> Option<PrProgr
             "EXPECTED" => PrCiState::Waiting,
             "PENDING" => PrCiState::InProgress,
             "SUCCESS" => PrCiState::Successful,
+            "FAILURE" | "ERROR" => PrCiState::Failed,
             _ => PrCiState::Unknown,
         });
 
@@ -772,7 +774,8 @@ mod tests {
     #[case::waiting("EXPECTED", PrCiState::Waiting)]
     #[case::in_progress("PENDING", PrCiState::InProgress)]
     #[case::successful("SUCCESS", PrCiState::Successful)]
-    #[case::unhandled_failure("FAILURE", PrCiState::Unknown)]
+    #[case::failure("FAILURE", PrCiState::Failed)]
+    #[case::error("ERROR", PrCiState::Failed)]
     fn parses_supported_ci_states(#[case] state: &str, #[case] expected: PrCiState) {
         let input = json!({
             "number": 7,

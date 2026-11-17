@@ -28,7 +28,7 @@ use crate::commands::agent::types::{
 };
 use crate::commands::agent::user_turn::user_turns;
 use crate::commands::agent::vibe::VibeState;
-use crate::infra::github::PrState;
+use crate::infra::github::{PrCiState, PrState};
 use crate::shared::config::Config;
 use crate::shared::config::{self, AgentConfig};
 
@@ -93,6 +93,8 @@ struct SessionPullRequestView {
     url: String,
     head_sha: Option<String>,
     state: PrState,
+    ci_state: PrCiState,
+    is_current_branch: bool,
 }
 
 fn session_pull_request_view(pull_request: &SessionPullRequestInfo) -> SessionPullRequestView {
@@ -104,6 +106,8 @@ fn session_pull_request_view(pull_request: &SessionPullRequestInfo) -> SessionPu
         url: pull_request.progress.pull_request.url.clone(),
         head_sha: pull_request.progress.head_sha.clone(),
         state: pull_request.progress.pull_request.state.clone(),
+        ci_state: pull_request.progress.ci_state,
+        is_current_branch: pull_request.from_cwd_branch,
     }
 }
 
@@ -1052,13 +1056,14 @@ mod tests {
                     SessionPullRequestInfo {
                         owner: pull_request_context.owner,
                         repo: pull_request_context.repo,
-                        progress: crate::infra::github::PrHeadInfo {
+                        progress: crate::infra::github::PrProgressInfo {
                             pull_request: crate::infra::github::PrInfo {
                                 number: 42,
                                 title: "example pull request".to_string(),
                                 state: PrState::Open,
                                 url: "https://example.com/pull/42".to_string(),
                             },
+                            ci_state: PrCiState::Failed,
                             head_sha: Some("fixture-head".to_string()),
                         },
                         from_cwd_branch: true,
@@ -1066,13 +1071,14 @@ mod tests {
                     SessionPullRequestInfo {
                         owner: "example-org".to_string(),
                         repo: "example-repo".to_string(),
-                        progress: crate::infra::github::PrHeadInfo {
+                        progress: crate::infra::github::PrProgressInfo {
                             pull_request: crate::infra::github::PrInfo {
                                 number: 43,
                                 title: "submitted pull request".to_string(),
                                 state: PrState::Open,
                                 url: "https://example.com/pull/43".to_string(),
                             },
+                            ci_state: PrCiState::Successful,
                             head_sha: Some("submitted-head".to_string()),
                         },
                         from_cwd_branch: false,
@@ -1596,6 +1602,28 @@ mod tests {
         details: ExpectedSessionDetails<'_>,
         response: ExpectedSessionResponse<'_>,
     ) -> serde_json::Value {
+        let current_pull_request = serde_json::json!({
+            "number": 42,
+            "owner": "example-org",
+            "repo": "example-repo",
+            "title": "example pull request",
+            "url": "https://example.com/pull/42",
+            "headSha": "fixture-head",
+            "state": "Open",
+            "ciState": "Failed",
+            "isCurrentBranch": true,
+        });
+        let submitted_pull_request = serde_json::json!({
+            "number": 43,
+            "owner": "example-org",
+            "repo": "example-repo",
+            "title": "submitted pull request",
+            "url": "https://example.com/pull/43",
+            "headSha": "submitted-head",
+            "state": "Open",
+            "ciState": "Successful",
+            "isCurrentBranch": false,
+        });
         let mut expected = serde_json::json!({
             "revision": 7,
             "workTypeNavLabels": response.work_type_nav_labels,
@@ -1640,32 +1668,8 @@ mod tests {
                 "hasSessionTree": false,
                 "ancestorSessionIds": ["parent-session"],
                 "launchId": null,
-                "pullRequest": {
-                    "number": 42,
-                    "owner": "example-org",
-                    "repo": "example-repo",
-                    "title": "example pull request",
-                    "url": "https://example.com/pull/42",
-                    "headSha": "fixture-head",
-                    "state": "Open"
-                },
-                "pullRequests": [{
-                    "number": 42,
-                    "owner": "example-org",
-                    "repo": "example-repo",
-                    "title": "example pull request",
-                    "url": "https://example.com/pull/42",
-                    "headSha": "fixture-head",
-                    "state": "Open"
-                }, {
-                    "number": 43,
-                    "owner": "example-org",
-                    "repo": "example-repo",
-                    "title": "submitted pull request",
-                    "url": "https://example.com/pull/43",
-                    "headSha": "submitted-head",
-                    "state": "Open"
-                }],
+                "pullRequest": current_pull_request.clone(),
+                "pullRequests": [current_pull_request, submitted_pull_request],
                 "laterUntil": later_until,
                 "isToday": is_today,
                 "isCompacting": false,
