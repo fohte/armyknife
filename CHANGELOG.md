@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.778](https://github.com/fohte/armyknife/compare/v0.1.777...v0.1.778) (2026-11-17)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align panel with screens ([#1939](https://github.com/fohte/armyknife/issues/1939)) ([e09d094](https://github.com/fohte/armyknife/commit/e09d09453118bd989e3497a44621a8da2597373c))
+
 ## [0.1.777](https://github.com/fohte/armyknife/compare/v0.1.776...v0.1.777) (2026-11-17)
 
 
