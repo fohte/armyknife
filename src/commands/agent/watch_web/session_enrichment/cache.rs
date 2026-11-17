@@ -221,6 +221,49 @@ mod tests {
         result
     }
 
+    #[test]
+    fn refreshed_task_timestamps_replace_and_clear_cached_values() {
+        let previous_task_a_at = chrono::DateTime::parse_from_rfc3339("2026-10-01T00:00:00Z")
+            .expect("valid timestamp")
+            .with_timezone(&chrono::Utc);
+        let previous_task_b_at = chrono::DateTime::parse_from_rfc3339("2026-10-02T00:00:00Z")
+            .expect("valid timestamp")
+            .with_timezone(&chrono::Utc);
+        let refreshed_task_a_at = chrono::DateTime::parse_from_rfc3339("2026-10-03T00:00:00Z")
+            .expect("valid timestamp")
+            .with_timezone(&chrono::Utc);
+        let mut cached = SessionTaskMetadata {
+            links: HashMap::from([(
+                "session-a".to_string(),
+                vec![linked_task("task-a"), linked_task("task-b")],
+            )]),
+            updated_at: HashMap::from([
+                ("task-a".to_string(), previous_task_a_at),
+                ("task-b".to_string(), previous_task_b_at),
+            ]),
+            ..SessionTaskMetadata::default()
+        };
+        let refreshed = SessionTaskMetadata {
+            links: HashMap::from([(
+                "session-a".to_string(),
+                vec![linked_task("task-a"), linked_task("task-b")],
+            )]),
+            updated_at: HashMap::from([("task-a".to_string(), refreshed_task_a_at)]),
+            ..SessionTaskMetadata::default()
+        };
+
+        merge_session_task_metadata(
+            &mut cached,
+            refreshed,
+            &HashSet::from(["session-a".to_string()]),
+        );
+
+        assert_eq!(
+            cached.updated_at,
+            HashMap::from([("task-a".to_string(), refreshed_task_a_at)]),
+        );
+    }
+
     #[rstest]
     #[tokio::test]
     async fn alternating_session_sets_keep_each_sessions_task_metadata(

@@ -37,6 +37,7 @@ afterEach(() => {
   root = null
   container.remove()
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 it('groups open and completed linked tasks and reveals the remaining completed tasks', () => {
@@ -137,6 +138,49 @@ it('groups open and completed linked tasks and reveals the remaining completed t
       showMore: undefined,
     },
   })
+})
+
+it('formats completed task ages in minutes and days', () => {
+  const now = Date.parse('2026-11-17T00:00:00.000Z')
+  vi.spyOn(Date, 'now').mockReturnValue(now)
+  const ageTasks: SessionTask[] = [
+    {
+      id: 'example-minute-task',
+      number: 2047,
+      title: 'Document request behavior',
+      priority: null,
+      isClosed: true,
+      updatedAt: new Date(now - 35 * 60_000).toISOString(),
+    },
+    {
+      id: 'example-day-task',
+      number: 2046,
+      title: 'Add a retry example',
+      priority: null,
+      isClosed: true,
+      updatedAt: new Date(now - 2 * 24 * 60 * 60_000).toISOString(),
+    },
+  ]
+
+  act(() => {
+    root?.render(
+      <SessionTasksPanel
+        tasks={ageTasks}
+        repo="example/service"
+        primaryTaskId={null}
+      />,
+    )
+  })
+
+  expect(
+    Array.from(
+      container.querySelectorAll('.session-tasks-panel-item--completed'),
+      (task) => task.textContent,
+    ),
+  ).toEqual([
+    '✓#2047 Document request behavior 35m',
+    '✓#2046 Add a retry example 2d',
+  ])
 })
 
 it('makes a completed secondary task primary from the Tasks tab', async () => {

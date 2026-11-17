@@ -333,13 +333,7 @@ async fn fetch_task_metadata(
         }
     };
 
-    let updated_at = tasks
-        .iter()
-        .filter_map(|task| {
-            task.updated_at
-                .map(|updated_at| (task.id.clone(), updated_at))
-        })
-        .collect::<HashMap<_, _>>();
+    let updated_at = task_update_timestamps(&tasks);
 
     let (priorities, priority_order) = task_priority_metadata(tasks.clone());
     order_tasks_by_priority(&mut links, &priority_order);
@@ -358,6 +352,18 @@ async fn fetch_task_metadata(
         priority_order,
         task_projects,
     })
+}
+
+fn task_update_timestamps(
+    tasks: &[TqTaskSummary],
+) -> HashMap<String, chrono::DateTime<chrono::Utc>> {
+    tasks
+        .iter()
+        .filter_map(|task| {
+            task.updated_at
+                .map(|updated_at| (task.id.clone(), updated_at))
+        })
+        .collect()
 }
 
 fn keep_cached_priority_metadata(
@@ -632,6 +638,20 @@ mod tests {
         assert_eq!(
             task_project_names(tasks, projects),
             HashMap::from([("task-a".to_string(), "Example project".to_string())]),
+        );
+    }
+
+    #[test]
+    fn maps_tq_task_timestamps_by_task_id() {
+        let updated_at = chrono::DateTime::parse_from_rfc3339("2026-10-02T03:04:05Z")
+            .expect("valid timestamp")
+            .with_timezone(&chrono::Utc);
+        let mut updated_task = task("task-a", None);
+        updated_task.updated_at = Some(updated_at);
+
+        assert_eq!(
+            task_update_timestamps(&[updated_task, task("task-b", None)]),
+            HashMap::from([("task-a".to_string(), updated_at)]),
         );
     }
 
