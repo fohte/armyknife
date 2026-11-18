@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::time::Instant;
 
 use super::super::cache::{IncrementalTranscriptParser, MessageCache, TranscriptFingerprint};
+use super::super::log_tail_window_fallback;
 use super::super::parser;
 use super::super::parser::cards::filter_additional_cards_after_tail_window;
 use super::super::{
@@ -174,14 +175,6 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript_
     resolved_ids.dedup();
     conversation.tail_window_start = Some(cutoff);
     Ok(Some((conversation, resolved_ids)))
-}
-
-fn log_tail_window_fallback(started: Instant, reason: &'static str) {
-    tracing::info!(
-        reason,
-        elapsed_ms = started.elapsed().as_millis(),
-        "tail window unavailable; falling back to full parse"
-    );
 }
 
 fn filter_decisions_after_tail_window(

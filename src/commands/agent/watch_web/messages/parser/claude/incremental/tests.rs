@@ -215,6 +215,17 @@ const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
     "#},
     IncrementalAppend::Applied,
 )]
+#[case::assistant_continues_after_an_initial_attachment(
+    indoc! {r#"
+        {"type":"user","uuid":"fixture-request","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"A fixture request."}}
+        {"type":"assistant","uuid":"fixture-response","parentUuid":"fixture-request","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"text","text":"A fixture response."}]}}
+        {"type":"attachment","uuid":"fixture-reminder","parentUuid":"fixture-response","timestamp":"2026-01-01T00:00:03Z","attachment":{"type":"silent_turn_reminder"}}
+    "#},
+    indoc! {r#"
+        {"type":"assistant","uuid":"fixture-followup","parentUuid":"fixture-reminder","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"text","text":"A fixture follow-up."}]}}
+    "#},
+    IncrementalAppend::Applied,
+)]
 #[case::parallel_tool_results_share_the_same_parent(
     indoc! {r#"
         {"type":"assistant","uuid":"parallel-calls","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"call-a","name":"Read","input":{"file_path":"/fixture/a"}},{"type":"tool_use","id":"call-b","name":"Read","input":{"file_path":"/fixture/b"}}]}}

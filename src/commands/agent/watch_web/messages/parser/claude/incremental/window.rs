@@ -10,6 +10,7 @@ use super::super::super::record_timestamp;
 use super::super::state::record_parent_uuid;
 use super::tail_window;
 use super::{IncrementalClaudeParser, parse_record};
+use crate::commands::agent::watch_web::messages::log_tail_window_fallback;
 
 const INITIAL_WINDOW_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_WINDOW_BYTES: u64 = 64 * 1024 * 1024;
@@ -136,14 +137,6 @@ pub(super) fn new_tail_window_bounded(
             .retain(|event| event.timestamp.is_none_or(|timestamp| timestamp >= cutoff));
     }
     Ok(Some(parser))
-}
-
-fn log_tail_window_fallback(started: Instant, reason: &'static str) {
-    tracing::info!(
-        reason,
-        elapsed_ms = started.elapsed().as_millis(),
-        "tail window unavailable; falling back to full parse"
-    );
 }
 
 fn select_window_start(

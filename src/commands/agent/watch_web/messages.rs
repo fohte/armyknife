@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader, Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -58,6 +59,17 @@ use self::transcript_path::archived_codex_transcript_path;
 
 pub(super) fn registered_background_tasks(session_id: &str) -> Result<Vec<BackgroundTask>> {
     background_tasks::registered_background_tasks(session_id)
+}
+
+pub(in crate::commands::agent::watch_web::messages) fn log_tail_window_fallback(
+    started: Instant,
+    reason: &'static str,
+) {
+    tracing::info!(
+        reason,
+        elapsed_ms = started.elapsed().as_millis(),
+        "tail window unavailable; falling back to full parse"
+    );
 }
 
 pub(super) fn claude_content_text(content: Option<&Value>) -> String {
