@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.794](https://github.com/fohte/armyknife/compare/v0.1.793...v0.1.794) (2026-11-18)
+
+
+### Features
+
+* **agent-watch-web:** show and toggle vibe mode ([#1970](https://github.com/fohte/armyknife/issues/1970)) ([1aa81ae](https://github.com/fohte/armyknife/commit/1aa81ae224746c6dfb932a926034cf5e184cc07f))
+
 ## [0.1.793](https://github.com/fohte/armyknife/compare/v0.1.792...v0.1.793) (2026-11-18)
 
 
