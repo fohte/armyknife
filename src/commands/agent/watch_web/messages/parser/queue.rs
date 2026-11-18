@@ -234,21 +234,24 @@ impl Queue {
             _ if is_queued_command => (prompt_text.to_owned(), String::new()),
             _ => return,
         };
-        let Some(message_id) = super::super::queued_prompt::id_from_content(&body)
-            .or_else(|| super::super::queued_prompt::id_from_content(&trailing_text))
-        else {
+        let index = [
+            super::super::queued_prompt::id_from_content(&trailing_text),
+            super::super::queued_prompt::id_from_content(&body),
+        ]
+        .into_iter()
+        .flatten()
+        .find_map(|message_id| {
+            self.queued_prompt_ids_by_message_id
+                .get(message_id)
+                .copied()
+        });
+        let Some(index) = index else {
             return;
         };
-        if let Some(index) = self
-            .queued_prompt_ids_by_message_id
-            .get(message_id)
-            .copied()
-        {
-            let queued = &self.queued_prompts[index];
-            self.delivered_prompt_ids.insert(queued.id);
-            if !queued.resolved {
-                self.resolved_queued_prompt_ids.push(queued.id);
-            }
+        let queued = &self.queued_prompts[index];
+        self.delivered_prompt_ids.insert(queued.id);
+        if !queued.resolved {
+            self.resolved_queued_prompt_ids.push(queued.id);
         }
     }
 
@@ -612,10 +615,10 @@ mod tests {
     }
 
     #[test]
-    fn resolves_a_queued_peer_envelope_by_its_trailing_delivery_id() {
+    fn resolves_a_trailing_delivery_id_when_peer_body_has_an_old_id() {
         let marker = "⟦armyknife-user:fixture-marker-cobalt⟧";
         let transcript = indoc! {r#"
-            {"uuid":"fixture-user-message","parentUuid":null,"type":"user","origin":{"kind":"peer","from":"fixture-parent-id"},"timestamp":"2026-01-01T00:00:01Z","message":{"content":"⟦armyknife-user:fixture-marker-cobalt⟧\nThis message was typed by the human user in armyknife watch-web.\n<peer-message>\n- From session_id: fixture-parent-id\n\nDelivered request.\n</peer-message>\n\n<!-- armyknife-queued-prompt-id:fixture-message-7 -->"}}
+            {"uuid":"fixture-user-message","parentUuid":null,"type":"user","origin":{"kind":"peer","from":"fixture-parent-id"},"timestamp":"2026-01-01T00:00:01Z","message":{"content":"⟦armyknife-user:fixture-marker-cobalt⟧\nThis message was typed by the human user in armyknife watch-web.\n<peer-message>\n- From session_id: fixture-parent-id\n\nDelivered request.\n<!-- armyknife-queued-prompt-id:fixture-message-old -->\n</peer-message>\n\n<!-- armyknife-queued-prompt-id:fixture-message-7 -->"}}
         "#};
 
         assert_eq!(
@@ -632,7 +635,10 @@ mod tests {
                     failed: false,
                     timestamp: Some("2026-01-01T00:00:01+00:00".to_string()),
                     content: vec![UserContentPart::Text {
-                        text: "Delivered request.".to_string(),
+                        text: indoc! {"
+                            Delivered request.
+                            <!-- armyknife-queued-prompt-id:fixture-message-old -->"}
+                        .to_string(),
                     }],
                 }],
                 Vec::<BackgroundTask>::new(),
