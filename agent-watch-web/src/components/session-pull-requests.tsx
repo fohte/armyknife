@@ -1,6 +1,6 @@
 import '#components/session-pull-requests.css'
 
-import { Check, ChevronDown } from 'lucide-react'
+import { GitPullRequest } from 'lucide-react'
 import { type ReactNode, useEffect } from 'react'
 
 import type { PullRequest } from '#types'
@@ -119,9 +119,7 @@ export function SessionPullRequests({
   const triggerLabel =
     currentPullRequest === undefined
       ? ''
-      : allMerged
-        ? `All ${String(pullRequests.length)} pull requests are merged`
-        : `PR #${String(currentPullRequest.number)}, ${currentPullRequest.state.toLowerCase()}, ${ciStateLabel(currentPullRequest.ciState)}${additionalCount > 0 ? `. ${String(additionalCount)} more PR${additionalCount === 1 ? '' : 's'} from this session` : ''}`
+      : `${allMerged ? `All ${String(pullRequests.length)} pull requests are merged. ` : ''}PR #${String(currentPullRequest.number)}: ${currentPullRequest.title ?? 'Untitled pull request'}, ${currentPullRequest.state.toLowerCase()}, ${ciStateLabel(currentPullRequest.ciState)}${additionalCount > 0 ? `. ${String(additionalCount)} more PR${additionalCount === 1 ? '' : 's'} from this session` : ''}`
 
   useEffect(() => {
     if (!open) return
@@ -240,36 +238,19 @@ export function SessionPullRequests({
           onOpenChange(!open)
         }}
       >
-        {allMerged ? (
-          <Check className="session-pr-check" aria-hidden="true" size={13} />
-        ) : (
-          <span
-            className={`session-pr-ci-dot ${ciStateClass(currentPullRequest.ciState)}`}
-            aria-hidden="true"
-          />
-        )}
-        {allMerged ? (
-          <span>Merged</span>
-        ) : (
-          <>
-            <span className="session-pr-number">
-              #{String(currentPullRequest.number)}
-            </span>
-            <span className="session-pr-summary-state">
-              {currentPullRequest.state}
-            </span>
-          </>
-        )}
-        {additionalCount > 0 ? (
-          <span className="session-pr-additional-count">
-            +{String(additionalCount)}
-          </span>
-        ) : null}
-        <ChevronDown
-          className="session-pr-chevron"
+        <GitPullRequest
+          className="session-pr-icon"
           aria-hidden="true"
-          size={13}
+          size={isMobile ? 18 : 14}
+          strokeWidth={1.7}
         />
+        <span
+          className={`session-pr-trigger-ci-dot ${ciStateClass(currentPullRequest.ciState)}`}
+          aria-hidden="true"
+        />
+        <span className="session-pr-count" aria-hidden="true">
+          {pullRequests.length}
+        </span>
       </button>
       {open ? (
         isMobile ? (

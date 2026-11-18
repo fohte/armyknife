@@ -104,6 +104,12 @@ it.each([
 
   const openSnapshot = () => ({
     expanded: trigger.getAttribute('aria-expanded'),
+    hasPullRequestIcon: trigger.querySelector('.session-pr-icon') !== null,
+    count: container.querySelector('.session-pr-count')?.textContent ?? null,
+    triggerSize: {
+      width: getComputedStyle(trigger).width,
+      height: getComputedStyle(trigger).height,
+    },
     dialogLabel:
       container.querySelector('[role="dialog"]')?.getAttribute('aria-label') ??
       null,
@@ -159,6 +165,11 @@ it.each([
   expect(snapshot()).toEqual({
     opened: {
       expanded: 'true',
+      hasPullRequestIcon: true,
+      count: '3',
+      triggerSize: isMobile
+        ? { width: '44px', height: '44px' }
+        : { width: '30px', height: '26px' },
       dialogLabel: 'Pull requests from this session',
       mobileModal: isMobile ? 'true' : null,
       groupNames: ['This branch', 'Opened elsewhere', 'Merged'],
@@ -246,5 +257,42 @@ it('lists a merged current-branch pull request only in Merged', () => {
       { group: 'Opened elsewhere', number: '#43' },
       { group: 'Merged', number: '#42' },
     ],
+  })
+})
+
+it('dims the pull request icon when every pull request is merged', () => {
+  render(false, [
+    {
+      number: 42,
+      state: 'Merged',
+      owner: 'example-org',
+      repo: 'example-project',
+      title: 'Complete the delivery update',
+      url: 'https://github.com/example-org/example-project/pull/42',
+      ciState: 'Successful',
+      isCurrentBranch: true,
+    },
+  ])
+
+  const trigger = container.querySelector<HTMLButtonElement>(
+    '.session-pr-trigger',
+  )
+  if (trigger === null) throw new Error('Expected pull request trigger')
+  const icon = trigger.querySelector<SVGElement>('.session-pr-icon')
+  if (icon === null) throw new Error('Expected pull request icon')
+  const count = container.querySelector<HTMLElement>('.session-pr-count')
+  if (count === null) throw new Error('Expected pull request count')
+
+  const snapshot = () => ({
+    allMerged: trigger.classList.contains('is-all-merged'),
+    iconMatchesTriggerColor:
+      getComputedStyle(icon).color === getComputedStyle(trigger).color,
+    countMatchesTriggerColor:
+      getComputedStyle(count).color === getComputedStyle(trigger).color,
+  })
+  expect(snapshot()).toEqual({
+    allMerged: true,
+    iconMatchesTriggerColor: true,
+    countMatchesTriggerColor: true,
   })
 })

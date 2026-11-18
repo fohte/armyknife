@@ -564,7 +564,8 @@ it('summarizes every pull request and opens the full list', () => {
     ),
   })
   expect(snapshot()).toEqual({
-    triggerLabel: 'PR #42, open, CI running. 1 more PR from this session',
+    triggerLabel:
+      'PR #42: Untitled pull request, open, CI running. 1 more PR from this session',
     expanded: 'true',
     pullRequests: [
       {
@@ -576,6 +577,91 @@ it('summarizes every pull request and opens the full list', () => {
         href: 'https://github.com/example-org/example-repo/pull/43',
       },
     ],
+  })
+})
+
+it('places the compact mobile pull request button in the header actions', () => {
+  renderHeader(
+    true,
+    vi.fn(() => Promise.resolve(true)),
+    {
+      ...session,
+      pullRequest: {
+        number: 42,
+        state: 'Open',
+        owner: 'example-org',
+        repo: 'example-project',
+        title: 'Update the delivery flow',
+        url: 'https://github.com/example-org/example-project/pull/42',
+        headSha: 'fixture-head-sha',
+        ciState: 'Successful',
+        isCurrentBranch: true,
+      },
+      pullRequests: [
+        {
+          number: 42,
+          state: 'Open',
+          owner: 'example-org',
+          repo: 'example-project',
+          title: 'Update the delivery flow',
+          url: 'https://github.com/example-org/example-project/pull/42',
+          headSha: 'fixture-head-sha',
+          ciState: 'Successful',
+          isCurrentBranch: true,
+        },
+        {
+          number: 43,
+          state: 'Open',
+          owner: 'example-org',
+          repo: 'example-project',
+          title: 'Add delivery retries',
+          url: 'https://github.com/example-org/example-project/pull/43',
+          headSha: 'fixture-other-head-sha',
+          ciState: 'InProgress',
+          isCurrentBranch: false,
+        },
+      ],
+    },
+  )
+
+  const trigger = requireElement(
+    container.querySelector<HTMLButtonElement>('.session-pr-trigger--mobile'),
+  )
+  act(() => {
+    trigger.click()
+  })
+
+  const snapshot = () => ({
+    triggerLabel: trigger.getAttribute('aria-label'),
+    expanded: trigger.getAttribute('aria-expanded'),
+    iconVisible: trigger.querySelector('.session-pr-icon') !== null,
+    ciIndicator: trigger.querySelector('.session-pr-trigger-ci-dot')?.className,
+    count: container.querySelector('.session-pr-count')?.textContent,
+    inHeaderActions:
+      trigger.closest('.mobile-conversation-header-actions') !== null,
+    dedicatedPrRow:
+      container.querySelector(
+        '.mobile-conversation-context .session-pr-menu',
+      ) !== null,
+    dialogModal: container
+      .querySelector('[role="dialog"]')
+      ?.getAttribute('aria-modal'),
+    mergeAction: container
+      .querySelector('.session-pr-list-actions')
+      ?.querySelector('button.conversation-pr-merge-button')
+      ?.textContent.trim(),
+  })
+  expect(snapshot()).toEqual({
+    triggerLabel:
+      'PR #42: Update the delivery flow, open, CI passed. 1 more PR from this session',
+    expanded: 'true',
+    iconVisible: true,
+    ciIndicator: 'session-pr-trigger-ci-dot is-passed',
+    count: '2',
+    inHeaderActions: true,
+    dedicatedPrRow: false,
+    dialogModal: 'true',
+    mergeAction: 'Merge',
   })
 })
 
@@ -645,7 +731,8 @@ it('merges an open pull request when an earlier session PR is closed', async () 
     feedback: container.querySelector('[role="status"]')?.textContent,
   })
   expect(mergeState()).toEqual({
-    summary: 'PR #42, open, CI passed. 1 more PR from this session',
+    summary:
+      'PR #42: Untitled pull request, open, CI passed. 1 more PR from this session',
     request: ['/api/sessions/fixture-session/pull-requests/42/merge'],
     feedback: 'PR #42 merged.',
   })
@@ -730,7 +817,8 @@ it('keeps merge feedback scoped to the repository when PR numbers match', async 
       null,
   })
   expect(mergeState()).toEqual({
-    summary: 'PR #42, open, CI passed. 1 more PR from this session',
+    summary:
+      'PR #42: Untitled pull request, open, CI passed. 1 more PR from this session',
     mergeButton: true,
     feedback: null,
   })
@@ -1203,7 +1291,7 @@ it('hides the merge action when the session pull request has no head SHA', () =>
     ].some((button) => button.textContent === 'Merge'),
   })
   expect(headerState()).toEqual({
-    pullRequestLabel: 'PR #42, open, CI status unknown',
+    pullRequestLabel: 'PR #42: Untitled pull request, open, CI status unknown',
     mergeButton: false,
   })
 })

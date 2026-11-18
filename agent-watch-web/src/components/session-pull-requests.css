@@ -4,12 +4,14 @@
 }
 
 .session-pr-trigger {
+  position: relative;
   display: inline-flex;
+  width: 30px;
   height: 26px;
   min-height: 26px;
   align-items: center;
-  gap: 7px;
-  padding: 0 8px 0 9px;
+  justify-content: center;
+  padding: 0;
   border: 1px solid var(--aw-border);
   background: transparent;
   color: var(--aw-text-primary);
@@ -36,15 +38,18 @@
   background: var(--aw-border-emphasis);
 }
 
-.session-pr-ci-dot.is-running {
+.session-pr-ci-dot.is-running,
+.session-pr-trigger-ci-dot.is-running {
   background: var(--aw-color-warning);
 }
 
-.session-pr-ci-dot.is-passed {
+.session-pr-ci-dot.is-passed,
+.session-pr-trigger-ci-dot.is-passed {
   background: var(--aw-color-success);
 }
 
-.session-pr-ci-dot.is-failed {
+.session-pr-ci-dot.is-failed,
+.session-pr-trigger-ci-dot.is-failed {
   background: var(--aw-color-error);
 }
 
@@ -52,13 +57,37 @@
   font-family: var(--font-mono);
 }
 
-.session-pr-summary-state,
-.session-pr-additional-count {
+.session-pr-icon {
+  color: var(--aw-text-body);
+}
+
+.session-pr-trigger.is-all-merged .session-pr-icon {
   color: var(--aw-text-muted);
 }
 
-.session-pr-chevron {
+.session-pr-trigger-ci-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 5px;
+  height: 5px;
+  border: 1px solid var(--aw-bg-app);
+  border-radius: 50%;
+  background: var(--aw-border-emphasis);
+}
+
+.session-pr-count {
+  position: absolute;
+  right: 2px;
+  bottom: 1px;
+  min-width: 9px;
+  padding: 1px 2px;
+  background: var(--aw-bg-app);
   color: var(--aw-text-muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 1;
+  text-align: center;
 }
 
 .session-pr-popover {
@@ -152,21 +181,27 @@
 
 .session-pr-menu--mobile {
   display: block;
-  grid-column: 1 / -1;
-  grid-row: 3;
-  padding: 4px 0 8px 14px;
 }
 
 .session-pr-trigger--mobile {
+  width: 44px;
   height: 44px;
   min-height: 44px;
-  gap: 8px;
-  padding: 0 12px;
-  font-size: 13px;
+  border-color: var(--aw-border-control);
 }
 
-.session-pr-trigger--mobile .session-pr-number {
-  font-size: 12.5px;
+.session-pr-trigger--mobile .session-pr-trigger-ci-dot {
+  top: 6px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+}
+
+.session-pr-trigger--mobile .session-pr-count {
+  right: 5px;
+  bottom: 4px;
+  min-width: 10px;
+  font-size: 10px;
 }
 
 .session-pr-backdrop {
