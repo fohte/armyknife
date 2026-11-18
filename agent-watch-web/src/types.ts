@@ -63,6 +63,7 @@ export type Session = {
   task: SessionTask | null
   tasks?: SessionTask[]
   repo: string
+  vibeMode?: VibeMode
   branch?: string | null
   canOpenInTerminal?: boolean
   project: string
@@ -316,6 +317,7 @@ export type SkillSuggestion = {
 export type ConversationResponse = {
   messages: ChatItem[]
   backgroundTasks: BackgroundTask[]
+  vibeMode?: VibeMode
   skills?: SkillSuggestion[]
   epoch?: string
   olderCursor?: string
@@ -329,6 +331,12 @@ export type ConversationResponse = {
   hasUnansweredProposal: boolean
   activeQuestionIndex: number | null
 }
+
+export type VibeMode =
+  | { mode: 'enabled' }
+  | { mode: 'inherited'; ancestorSessionId: string }
+  | { mode: 'disabled' }
+  | { mode: 'repo_disabled' }
 
 export type SessionActions = {
   message: boolean

@@ -16,6 +16,7 @@ export type SessionOperation =
   | { type: 'focus'; sessionId: string }
   | { type: 'resume'; sessionId: string }
   | { type: 'interrupt'; sessionId: string }
+  | { type: 'vibe'; sessionId: string; enabled: boolean }
   | { type: 'title'; sessionId: string; title: string }
   | {
       type: 'message'

@@ -1,0 +1,11 @@
+.vibe-indicator {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  color: var(--aw-color-warning);
+  vertical-align: middle;
+}
+
+.vibe-indicator.is-inherited {
+  color: var(--aw-text-muted);
+}

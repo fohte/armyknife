@@ -69,6 +69,10 @@
   gap: 8px;
 }
 
+.session-row-content .session-title-line .vibe-indicator {
+  margin-left: -4px;
+}
+
 .session-row-content .session-title {
   overflow: hidden;
   min-width: 0;

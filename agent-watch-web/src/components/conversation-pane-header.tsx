@@ -25,6 +25,8 @@ import {
 } from '#components/session-pull-requests'
 import { SessionTaskLinks } from '#components/session-task-links'
 import { StarredSessionToggle } from '#components/starred-session-toggle'
+import { VibeIndicator } from '#components/vibe-indicator'
+import { VibeModeControl } from '#components/vibe-mode-control'
 import { useSessionOperations } from '#session-operation-context'
 import { getSessionTasks } from '#session-task-utils'
 import type {
@@ -32,6 +34,7 @@ import type {
   OpenInTerminalStatus,
   Session,
   SessionActions,
+  VibeMode,
 } from '#types'
 
 type MergeResponse =
@@ -63,6 +66,7 @@ function isMergeResponse(value: unknown): value is MergeResponse {
 
 type ConversationPaneHeaderProps = {
   session: Session
+  vibeMode?: VibeMode | undefined
   sessions: readonly Session[]
   actions: SessionActions | null
   isMobile: boolean
@@ -88,6 +92,7 @@ type ConversationPaneHeaderProps = {
 
 export function ConversationPaneHeader({
   session,
+  vibeMode = session.vibeMode,
   sessions,
   actions,
   isMobile,
@@ -118,6 +123,7 @@ export function ConversationPaneHeader({
     setInternalPullRequestListOpen(open)
   }
   const [mergeFeedback, setMergeFeedback] = useState<MergeFeedback | null>(null)
+  const [mobileVibeOpen, setMobileVibeOpen] = useState(false)
   const { pendingOperations, run } = useSessionOperations()
   const parent = session.parent
   const pullRequests =
@@ -274,6 +280,13 @@ export function ConversationPaneHeader({
         title={session.title}
         {...(isMobile ? {} : { sessionId: session.id })}
       />
+      {isMobile || vibeMode === undefined ? null : (
+        <VibeModeControl
+          sessionId={session.id}
+          repo={session.repo}
+          mode={vibeMode}
+        />
+      )}
       {isMobile ? null : (
         <Button
           className="session-title-edit cursor-pointer"
@@ -314,6 +327,9 @@ export function ConversationPaneHeader({
               />
             ) : null}
             {titleHeading}
+            {vibeMode === undefined ? null : (
+              <VibeIndicator mode={vibeMode} size={13} />
+            )}
           </div>
           <div className="mobile-conversation-header-actions">
             <Button
@@ -352,6 +368,7 @@ export function ConversationPaneHeader({
             />
             <MobileConversationActionsMenu
               sessionId={session.id}
+              vibeMode={vibeMode}
               isDone={session.category === 'done'}
               isStarred={isToday}
               {...(mobileActionsMenuOpen === undefined
@@ -363,7 +380,20 @@ export function ConversationPaneHeader({
                 ? {}
                 : { onToggleStarred: onToggleToday })}
               onEditTitle={editTitle}
+              onOpenVibe={() => {
+                setMobileVibeOpen(true)
+              }}
             />
+            {vibeMode === undefined ? null : (
+              <VibeModeControl
+                sessionId={session.id}
+                repo={session.repo}
+                mode={vibeMode}
+                isMobile
+                open={mobileVibeOpen}
+                onOpenChange={setMobileVibeOpen}
+              />
+            )}
           </div>
           <div className="mobile-conversation-context">
             <SessionTaskLinks

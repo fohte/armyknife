@@ -77,6 +77,23 @@ export const CompactSessionRow: Story = {
   args: { density: 'compact' },
 }
 
+export const VibeEnabledSession: Story = {
+  name: 'The enabled session shows a filled bolt beside its title',
+  args: {
+    session: { ...session, vibeMode: { mode: 'enabled' } },
+  },
+}
+
+export const VibeInheritedSession: Story = {
+  name: 'The inherited session shows an outlined bolt beside its title',
+  args: {
+    session: {
+      ...session,
+      vibeMode: { mode: 'inherited', ancestorSessionId: 'sample-parent' },
+    },
+  },
+}
+
 export const CompactSessionWithoutRole: Story = {
   name: 'A compact row keeps its role icon slot when no role is assigned',
   args: {

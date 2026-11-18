@@ -43,12 +43,14 @@ pub(super) async fn set_vibe(
     }
 
     let sessions_dir = resolve_sessions_dir(state.sessions_dir).map_err(ApiError::internal)?;
-    let inherited_from = if !request.enabled {
+    let resulting_vibe_mode = if request.enabled {
+        vibe::VibeState::Enabled
+    } else {
         let sessions_dir = sessions_dir.clone();
         let mut session_after_off = session.clone();
         session_after_off.vibe_enabled = false;
         let repo_identity = repo_identity.clone();
-        let state = run_blocking(move || {
+        run_blocking(move || {
             vibe::state_for_with_ancestor_loader(
                 &session_after_off,
                 repo_identity
@@ -58,15 +60,7 @@ pub(super) async fn set_vibe(
                 |ancestor_session_id| store::load_session_from(&sessions_dir, ancestor_session_id),
             )
         })
-        .await?;
-        match state {
-            vibe::VibeState::Inherited {
-                ancestor_session_id,
-            } => Some(ancestor_session_id),
-            _ => None,
-        }
-    } else {
-        None
+        .await?
     };
     // Delivery metadata must be available before persisting the requested setting.
     let marker = if session.engine == Engine::Claude {
@@ -90,12 +84,10 @@ pub(super) async fn set_vibe(
     })
     .await?;
 
-    let message = match (request.enabled, inherited_from) {
-        (true, _) => "watch-web からユーザーが vibe mode を on にしました。".to_string(),
-        (false, Some(ancestor_session_id)) => format!(
-            "watch-web からユーザーが vibe mode を off にしました。祖先セッション {ancestor_session_id} から引き継いでいるため、vibe mode は引き続き有効です。"
-        ),
-        (false, None) => "watch-web からユーザーが vibe mode を off にしました。".to_string(),
+    let message = if request.enabled {
+        "watch-web からユーザーが vibe mode を on にしました。".to_string()
+    } else {
+        "watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。".to_string()
     };
     let delivery = send_queued_prompt(QueuedPromptDelivery {
         runtime: state.runtime,
@@ -132,5 +124,6 @@ pub(super) async fn set_vibe(
     Ok(Json(json!({
         "ok": true,
         "queuedPromptId": queued_prompt_id,
+        "vibeMode": resulting_vibe_mode,
     })))
 }

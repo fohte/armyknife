@@ -86,6 +86,16 @@ function snapshot() {
   }
 }
 
+function vibeIndicatorState() {
+  const indicator = container.querySelector(
+    '.session-title-line .vibe-indicator',
+  )
+  return {
+    label: indicator?.getAttribute('aria-label'),
+    fill: indicator?.querySelector('svg')?.getAttribute('fill'),
+  }
+}
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
@@ -215,4 +225,23 @@ it.each([
   expect(
     container.querySelector('.session-row-kind-icon')?.getAttribute('class'),
   ).toEqual(expectedClass)
+})
+
+it.each([
+  {
+    name: 'enabled',
+    mode: { mode: 'enabled' } as const,
+    fill: 'currentColor',
+  },
+  {
+    name: 'inherited',
+    mode: { mode: 'inherited', ancestorSessionId: 'fixture-parent' } as const,
+    fill: 'none',
+  },
+])('shows the $name vibe state beside the session title', ({ mode, fill }) => {
+  renderRow('full', { ...session, vibeMode: mode })
+  expect(vibeIndicatorState()).toEqual({
+    label: mode.mode === 'enabled' ? 'Vibe on' : 'Vibe on · inherited',
+    fill,
+  })
 })

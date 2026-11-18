@@ -46,7 +46,11 @@ async fn enabling_vibe_updates_session_and_sends_a_queued_prompt(action_context:
         (
             json!({
                 "status": StatusCode::OK.as_u16(),
-                "body": { "ok": true, "queuedPromptId": "<message-id>" },
+                "body": {
+                    "ok": true,
+                    "queuedPromptId": "<message-id>",
+                    "vibeMode": { "mode": "enabled" },
+                },
                 "calls": [{
                     "kind": "message",
                     "sessionId": "fixture-session",
@@ -74,7 +78,7 @@ async fn enabling_vibe_updates_session_and_sends_a_queued_prompt(action_context:
     true,
     false,
     true,
-    "watch-web からユーザーが vibe mode を off にしました。"
+    "watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。"
 )]
 #[tokio::test]
 async fn failed_prompt_delivery_restores_the_previous_vibe_setting(
@@ -293,7 +297,11 @@ async fn enabling_vibe_uses_the_current_repo_policy(action_context: ActionContex
             }),
             json!({
                 "status": StatusCode::OK.as_u16(),
-                "body": { "ok": true, "queuedPromptId": "<message-id>" },
+                "body": {
+                    "ok": true,
+                    "queuedPromptId": "<message-id>",
+                    "vibeMode": { "mode": "enabled" },
+                },
                 "calls": [{
                     "kind": "message",
                     "sessionId": "fixture-session",
@@ -421,17 +429,24 @@ async fn disabling_vibe_reports_inherited_ancestor_state(action_context: ActionC
         (
             json!({
                 "status": StatusCode::OK.as_u16(),
-                "body": { "ok": true, "queuedPromptId": "<message-id>" },
+                "body": {
+                    "ok": true,
+                    "queuedPromptId": "<message-id>",
+                    "vibeMode": {
+                        "mode": "inherited",
+                        "ancestorSessionId": "fixture-parent",
+                    },
+                },
                 "calls": [{
                     "kind": "message",
                     "sessionId": "fixture-session",
-                    "content": "watch-web からユーザーが vibe mode を off にしました。祖先セッション fixture-parent から引き継いでいるため、vibe mode は引き続き有効です。",
+                    "content": "watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。",
                 }],
             }),
             false,
             json!([{
                 "id": "<prompt-id>",
-                "content": "watch-web からユーザーが vibe mode を off にしました。祖先セッション fixture-parent から引き継いでいるため、vibe mode は引き続き有効です。",
+                "content": "watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。",
                 "sentAt": "<sent-at>",
             }]),
         ),

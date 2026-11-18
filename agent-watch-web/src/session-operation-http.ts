@@ -74,6 +74,8 @@ function requestFor(operation: SessionOperation) {
       return { path: 'resume', body: undefined }
     case 'interrupt':
       return { path: 'interrupt', body: undefined }
+    case 'vibe':
+      return { path: 'vibe', body: { enabled: operation.enabled } }
     case 'title':
       return { path: 'title', body: { title: operation.title } }
     case 'message':
@@ -448,6 +450,7 @@ export function submitSessionOperation(operation: SessionOperation) {
         operation.type !== 'message' &&
         operation.type !== 'merge' &&
         operation.type !== 'rewind' &&
+        operation.type !== 'vibe' &&
         operation.type !== 'command_preview' &&
         operation.type !== 'command_execute'
       )

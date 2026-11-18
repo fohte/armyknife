@@ -6,12 +6,14 @@ const meta = {
   component: MobileConversationActionsMenu,
   args: {
     sessionId: 'sample-session',
+    vibeMode: { mode: 'disabled' },
     isDone: false,
     isStarred: false,
     open: false,
     onLater: () => undefined,
     onToggleStarred: () => undefined,
     onEditTitle: () => undefined,
+    onOpenVibe: () => undefined,
   },
 } satisfies Meta<typeof MobileConversationActionsMenu>
 
@@ -29,5 +31,13 @@ export const OpenForAStarredDoneSession: Story = {
     isStarred: true,
     open: true,
     onClose: () => undefined,
+  },
+}
+
+export const OpenWithInheritedVibe: Story = {
+  name: 'The open menu puts the inherited vibe state first',
+  args: {
+    vibeMode: { mode: 'inherited', ancestorSessionId: 'sample-parent' },
+    open: true,
   },
 }

@@ -7,6 +7,7 @@ import {
   subscribeToPageVisibility,
 } from '#session-visibility'
 import type { Session, SessionsResponse } from '#types'
+import { isVibeMode } from '#vibe-mode'
 
 type SessionEventSource = {
   addEventListener: (type: string, listener: EventListener) => void
@@ -119,6 +120,7 @@ function isSession(value: unknown): value is Session {
     typeof value['unread'] === 'boolean' &&
     validTask &&
     typeof value['repo'] === 'string' &&
+    (value['vibeMode'] === undefined || isVibeMode(value['vibeMode'])) &&
     validPullRequest &&
     validPullRequests
   )

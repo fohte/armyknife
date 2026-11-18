@@ -10,6 +10,7 @@ import type {
   SkillSuggestion,
   ToolGroupItem,
 } from '#types'
+import { isVibeMode } from '#vibe-mode'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -338,6 +339,7 @@ export function isConversationResponse(
     value['messages'].every(isChatItem) &&
     Array.isArray(value['backgroundTasks']) &&
     value['backgroundTasks'].every(isBackgroundTask) &&
+    (value['vibeMode'] === undefined || isVibeMode(value['vibeMode'])) &&
     (value['skills'] === undefined ||
       (Array.isArray(value['skills']) &&
         value['skills'].every(isSkillSuggestion))) &&

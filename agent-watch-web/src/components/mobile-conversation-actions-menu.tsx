@@ -3,9 +3,13 @@ import { Check, Clock3, Copy, Ellipsis, Pencil, Star, X } from 'lucide-react'
 import { useState } from 'react'
 
 import { useCopySessionId } from '#components/use-copy-session-id'
+import { VibeIndicator } from '#components/vibe-indicator'
+import type { VibeMode } from '#types'
+import { vibeModeShortLabel } from '#vibe-mode'
 
 type MobileConversationActionsMenuProps = {
   sessionId: string
+  vibeMode?: VibeMode | undefined
   isDone: boolean
   isStarred: boolean
   open?: boolean
@@ -13,10 +17,12 @@ type MobileConversationActionsMenuProps = {
   onClose?: () => void
   onToggleStarred?: (isStarred: boolean) => void
   onEditTitle: () => void
+  onOpenVibe?: () => void
 }
 
 export function MobileConversationActionsMenu({
   sessionId,
+  vibeMode,
   isDone,
   isStarred,
   open,
@@ -24,6 +30,7 @@ export function MobileConversationActionsMenu({
   onClose,
   onToggleStarred,
   onEditTitle,
+  onOpenVibe,
 }: MobileConversationActionsMenuProps) {
   const [isMenuOpen, setIsMenuOpen] = useState(false)
   const { status: copySessionIdStatus, copySessionId } =
@@ -52,6 +59,18 @@ export function MobileConversationActionsMenu({
               className="mobile-conversation-actions-menu"
               aria-label="Session actions"
             >
+              {vibeMode === undefined || onOpenVibe === undefined ? null : (
+                <Menu.Item
+                  className="mobile-conversation-actions-menu-item mobile-conversation-actions-menu-vibe"
+                  onClick={onOpenVibe}
+                >
+                  <VibeIndicator mode={vibeMode} size={16} />
+                  <span>Vibe mode</span>
+                  <span className="mobile-conversation-actions-menu-state">
+                    {vibeModeShortLabel(vibeMode)}
+                  </span>
+                </Menu.Item>
+              )}
               <Menu.Item
                 className="mobile-conversation-actions-menu-item"
                 onClick={() => onLater?.()}

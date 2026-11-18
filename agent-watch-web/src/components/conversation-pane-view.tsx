@@ -37,10 +37,12 @@ import type {
   SessionActions,
   SessionLinkTarget,
   SkillSuggestion,
+  VibeMode,
 } from '#types'
 
 type ConversationPaneViewProps = {
   session: Session
+  vibeMode?: VibeMode | undefined
   sessions?: readonly Session[]
   sessionLinkTargets?: readonly SessionLinkTarget[]
   messages: readonly ChatItem[]
@@ -97,6 +99,7 @@ type ConversationPaneViewProps = {
 
 export function ConversationPaneView({
   session,
+  vibeMode = session.vibeMode,
   sessions = [],
   sessionLinkTargets: providedSessionLinkTargets,
   messages,
@@ -329,6 +332,7 @@ export function ConversationPaneView({
       <ConversationPaneHeader
         key={session.id}
         session={session}
+        vibeMode={vibeMode}
         sessions={sessions}
         actions={actions}
         isMobile={isMobile}

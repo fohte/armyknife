@@ -10,6 +10,7 @@ import {
   Workflow,
 } from 'lucide-react'
 
+import { VibeIndicator } from '#components/vibe-indicator'
 import { formatSessionDecisionCount } from '#session-decision-count'
 import { sessionKindIcon } from '#session-kind-label'
 import { formatLinkedTaskCount } from '#session-task-count'
@@ -29,6 +30,7 @@ type SessionRowData = Pick<
       | 'decisionCount'
       | 'unreviewedDecisionCount'
       | 'pullRequest'
+      | 'vibeMode'
     >
   >
 
@@ -138,6 +140,9 @@ export function SessionRow({
           >
             {session.title}
           </span>
+          {session.vibeMode === undefined ? null : (
+            <VibeIndicator mode={session.vibeMode} />
+          )}
           <span className="session-age">
             {formatElapsedTime(session.elapsedSeconds)}
           </span>
