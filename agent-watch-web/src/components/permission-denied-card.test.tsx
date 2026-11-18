@@ -186,6 +186,27 @@ it('calls the dismissal action when Dismiss is pressed', () => {
   expect(onDismiss.mock.calls).toEqual([[]])
 })
 
+it('disables dismissal while the retry action is pending', () => {
+  renderCard({
+    pendingAction: {
+      action: 'retry',
+      status: 'sending',
+      requestId: 'fixture-request-id',
+    },
+  })
+
+  expect(
+    Array.from(container.querySelectorAll('button'), (button) => ({
+      text: button.textContent,
+      disabled: button.disabled,
+      busy: button.getAttribute('aria-busy'),
+    })),
+  ).toEqual([
+    { text: 'Sending…', disabled: true, busy: 'true' },
+    { text: 'Dismiss', disabled: true, busy: 'false' },
+  ])
+})
+
 it('shows dismissed denials as a collapsed command row that can expand', () => {
   renderCard({
     message: { ...operation, resolved: true, resolution: 'dismissed' },

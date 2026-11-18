@@ -294,6 +294,24 @@ it('rejects permission denial cards with an invalid retry state', () => {
   ).toBe(false)
 })
 
+it('rejects permission denial cards with an unknown resolution', () => {
+  expect(
+    isConversationResponse(
+      response({
+        type: 'permission_denied',
+        seq: 1,
+        toolUseId: 'tool-call-example',
+        tool: 'Bash',
+        inputSummary: 'printf example',
+        reason: '[Sensitive Operation]',
+        retryable: true,
+        resolved: true,
+        resolution: 'withdrawn',
+      }),
+    ),
+  ).toBe(false)
+})
+
 it.each([
   {
     name: 'a caption and timestamp',

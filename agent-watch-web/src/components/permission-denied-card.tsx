@@ -32,8 +32,6 @@ export function PermissionDeniedCard({
 }: PermissionDeniedCardProps) {
   const [expanded, setExpanded] = useState(defaultOpen)
   const retryAction = pendingAction?.action === 'retry' ? pendingAction : null
-  const dismissAction =
-    pendingAction?.action === 'dismiss' ? pendingAction : null
   const approved = message.resolution === 'approved' || message.resolved
   if (message.resolution === 'dismissed') {
     return (
@@ -92,7 +90,7 @@ export function PermissionDeniedCard({
           ) : null}
           <DismissButton
             canDismiss={canDismiss}
-            pending={dismissAction}
+            pending={pendingAction}
             onDismiss={onDismiss}
           />
         </div>
@@ -141,17 +139,18 @@ function DismissButton({
   pending: PendingPermissionActionState
   onDismiss: () => void
 }) {
+  const dismissAction = pending?.action === 'dismiss' ? pending : null
   return (
     <Button
       type="button"
       variant="plain"
       disabled={!canDismiss || pending !== null}
-      aria-busy={pending?.status === 'sending'}
+      aria-busy={dismissAction?.status === 'sending'}
       onClick={() => {
         onDismiss()
       }}
     >
-      {pending?.status === 'sending' ? 'Dismissing…' : 'Dismiss'}
+      {dismissAction?.status === 'sending' ? 'Dismissing…' : 'Dismiss'}
     </Button>
   )
 }

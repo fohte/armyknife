@@ -1,45 +1,51 @@
 use axum::Json;
 use axum::extract::{Path as RoutePath, State};
 use serde_json::json;
+use std::path::PathBuf;
+use tokio::sync::OwnedMutexGuard;
 
 use super::super::super::store::PermissionDeniedResolution;
 use super::super::super::{
     store,
-    types::{Engine, SessionStatus},
+    types::{Engine, Session, SessionStatus},
 };
 use super::{ActionState, ApiError, Success, load_session, resolve_sessions_dir, run_blocking};
+
+struct UnresolvedPermissionDenial {
+    _guard: OwnedMutexGuard<()>,
+    session: Session,
+    sessions_dir: PathBuf,
+    operation: store::PermissionDeniedOperation,
+}
 
 pub(super) async fn retry_permission_denied(
     State(state): State<ActionState>,
     RoutePath((id, seq)): RoutePath<(String, i64)>,
 ) -> Result<Json<Success>, ApiError> {
-    let retry_lock = state.permission_denied_locks.get_or_create(&id, seq).await;
-    let _retry_guard = retry_lock.lock().await;
-    let session = load_session(state.clone(), id.clone()).await?;
-    if session.engine != Engine::Claude {
-        return Err(ApiError::conflict(
-            "permission retry is unavailable for this session",
-        ));
-    }
-    if session.status == SessionStatus::Ended {
-        return Err(ApiError::conflict("session has ended"));
-    }
-
-    let sessions_dir =
-        resolve_sessions_dir(state.sessions_dir.clone()).map_err(ApiError::internal)?;
+    let UnresolvedPermissionDenial {
+        _guard: _denial_guard,
+        session,
+        sessions_dir,
+        operation: denied,
+    } = load_unresolved_permission_denial(
+        &state,
+        &id,
+        seq,
+        "denied operation was already retried",
+        |session| {
+            if session.engine != Engine::Claude {
+                return Err(ApiError::conflict(
+                    "permission retry is unavailable for this session",
+                ));
+            }
+            if session.status == SessionStatus::Ended {
+                return Err(ApiError::conflict("session has ended"));
+            }
+            Ok(())
+        },
+    )
+    .await?;
     let session_id = session.session_id.clone();
-    let denied = run_blocking({
-        let session_id = session_id.clone();
-        let sessions_dir = sessions_dir.clone();
-        move || store::permission_denied_operations_from(&sessions_dir, &session_id)
-    })
-    .await?
-    .into_iter()
-    .find(|operation| operation.seq == seq)
-    .ok_or_else(|| ApiError::conflict("denied operation is no longer available"))?;
-    if denied.resolved_at.is_some() {
-        return Err(ApiError::conflict("denied operation was already retried"));
-    }
     if !denied.has_classifier_verdict() {
         return Err(ApiError::conflict(
             "this denial has no classifier verdict and cannot be approved",
@@ -107,25 +113,20 @@ pub(super) async fn dismiss_permission_denied(
     State(state): State<ActionState>,
     RoutePath((id, seq)): RoutePath<(String, i64)>,
 ) -> Result<Json<Success>, ApiError> {
-    let retry_lock = state.permission_denied_locks.get_or_create(&id, seq).await;
-    let _retry_guard = retry_lock.lock().await;
-    let session = load_session(state.clone(), id.clone()).await?;
-    let sessions_dir =
-        resolve_sessions_dir(state.sessions_dir.clone()).map_err(ApiError::internal)?;
+    let UnresolvedPermissionDenial {
+        _guard: _denial_guard,
+        session,
+        sessions_dir,
+        operation: _denial,
+    } = load_unresolved_permission_denial(
+        &state,
+        &id,
+        seq,
+        "denied operation was already resolved",
+        |_| Ok(()),
+    )
+    .await?;
     let session_id = session.session_id.clone();
-    let denial = run_blocking({
-        let sessions_dir = sessions_dir.clone();
-        let session_id = session_id.clone();
-        move || store::permission_denied_operations_from(&sessions_dir, &session_id)
-    })
-    .await?
-    .into_iter()
-    .find(|operation| operation.seq == seq)
-    .ok_or_else(|| ApiError::conflict("denied operation is no longer available"))?;
-    if denial.resolved_at.is_some() {
-        return Err(ApiError::conflict("denied operation was already resolved"));
-    }
-
     let saved = run_blocking(move || {
         store::resolve_permission_denied_from(
             &sessions_dir,
@@ -139,4 +140,39 @@ pub(super) async fn dismiss_permission_denied(
         return Err(ApiError::conflict("denied operation was already resolved"));
     }
     Ok(Json(Success::new()))
+}
+
+async fn load_unresolved_permission_denial(
+    state: &ActionState,
+    id: &str,
+    seq: i64,
+    resolved_message: &'static str,
+    validate_session: impl FnOnce(&Session) -> Result<(), ApiError>,
+) -> Result<UnresolvedPermissionDenial, ApiError> {
+    let denial_lock = state.permission_denied_locks.get_or_create(id, seq).await;
+    let denial_guard = denial_lock.lock_owned().await;
+    let session = load_session(state.clone(), id.to_owned()).await?;
+    validate_session(&session)?;
+    let sessions_dir =
+        resolve_sessions_dir(state.sessions_dir.clone()).map_err(ApiError::internal)?;
+    let session_id = session.session_id.clone();
+    let operation = run_blocking({
+        let sessions_dir = sessions_dir.clone();
+        let session_id = session_id.clone();
+        move || store::permission_denied_operations_from(&sessions_dir, &session_id)
+    })
+    .await?
+    .into_iter()
+    .find(|operation| operation.seq == seq)
+    .ok_or_else(|| ApiError::conflict("denied operation is no longer available"))?;
+    if operation.resolved_at.is_some() {
+        return Err(ApiError::conflict(resolved_message));
+    }
+
+    Ok(UnresolvedPermissionDenial {
+        _guard: denial_guard,
+        session,
+        sessions_dir,
+        operation,
+    })
 }
