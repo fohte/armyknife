@@ -48,7 +48,7 @@ function ModelChoices({
   isLoading,
   error,
 }: Omit<NewSessionModelPickerProps, 'variant' | 'isOpen' | 'onOpenChange'>) {
-  const modelLabel = effectiveModelLabel(options, selectedModel, engine)
+  const modelLabel = effectiveModelLabel(options, null, engine)
   const models = options?.models ?? []
 
   return (

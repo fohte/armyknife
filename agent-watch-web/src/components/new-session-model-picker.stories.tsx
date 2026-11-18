@@ -38,6 +38,17 @@ export const PickerIsOpen: Story = {
   },
 }
 
+export const OtherModelIsSelected: Story = {
+  name: 'The Default option keeps the profile model visible while another model is selected',
+  args: {
+    variant: 'control',
+    isOpen: true,
+    selectedModel: 'fixture-model-comet',
+    selectedEffort: 'high',
+    activeModelOption: exampleModelOptions.models[1],
+  },
+}
+
 export const PalettePicker: Story = {
   name: 'The command palette shows the model and effort selection view',
   args: { variant: 'palette', isOpen: true },

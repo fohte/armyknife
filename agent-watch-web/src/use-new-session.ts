@@ -239,10 +239,12 @@ export function useNewSession(active: boolean) {
       engineUndo.current = null
       setModelChangeNotice(null)
       const selectedEffort = selectionRef.current.effort
-      const targetModel = model ?? modelOptions?.defaultModel
-      const target = modelOptions?.models.find(
-        (option) => option.id === targetModel,
-      )
+      const target =
+        model === null
+          ? modelOptions === null
+            ? undefined
+            : defaultEffortModelOption(modelOptions)
+          : modelOptions?.models.find((option) => option.id === model)
       const effort =
         selectedEffort !== null &&
         target !== undefined &&

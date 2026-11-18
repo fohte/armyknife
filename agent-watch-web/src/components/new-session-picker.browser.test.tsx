@@ -24,14 +24,25 @@ function PickerHarness({
   onClose = () => undefined,
   chooseModel = () => undefined,
   setSelectedEffort = () => undefined,
+  selectedDirectory: initialSelectedDirectory = null,
+  selectedModel = null,
+  selectedEffort = null,
+  activeModelOption = exampleModelOptions.models[0],
+  initialModelPickerOpen = false,
 }: {
   start: NewSessionState['start']
   onClose?: () => void
   chooseModel?: NewSessionState['chooseModel']
   setSelectedEffort?: NewSessionState['setSelectedEffort']
+  selectedDirectory?: NewSessionState['selectedDirectory']
+  selectedModel?: NewSessionState['selectedModel']
+  selectedEffort?: NewSessionState['selectedEffort']
+  activeModelOption?: NewSessionState['activeModelOption']
+  initialModelPickerOpen?: boolean
 }) {
-  const [selectedDirectory, setSelectedDirectory] =
-    useState<NewSessionState['selectedDirectory']>(null)
+  const [selectedDirectory, setSelectedDirectory] = useState<
+    NewSessionState['selectedDirectory']
+  >(initialSelectedDirectory)
   const [engine, setEngine] = useState<NewSessionState['engine']>('claude')
   const [worktree, setWorktree] = useState(false)
   const state: NewSessionState = {
@@ -42,10 +53,10 @@ function PickerHarness({
     modelOptions: exampleModelOptions,
     isLoadingModelOptions: false,
     modelOptionsError: null,
-    selectedModel: null,
-    selectedEffort: null,
+    selectedModel,
+    selectedEffort,
     modelChangeNotice: null,
-    activeModelOption: exampleModelOptions.models[0],
+    activeModelOption,
     worktree,
     initialMessage: '',
     skillSuggestions: [],
@@ -66,6 +77,7 @@ function PickerHarness({
   return (
     <NewSessionPicker
       state={state}
+      initialModelPickerOpen={initialModelPickerOpen}
       onClose={onClose}
       onLaunched={() => undefined}
     />
@@ -259,6 +271,29 @@ it('changes the model and effort with arrow keys in the model picker', async () 
     modelCalls: [['fixture-model-orbit']],
     effortCalls: [['low']],
   })
+})
+
+it('shows the profile model in Default while another model is selected', () => {
+  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <PickerHarness
+        activeModelOption={exampleModelOptions.models[1]}
+        initialModelPickerOpen
+        selectedDirectory={exampleSessionDirectories[0] ?? null}
+        selectedEffort="high"
+        selectedModel="fixture-model-comet"
+        start={start}
+      />,
+    )
+  })
+
+  expect(
+    container.querySelector(
+      '.new-session-model-option .new-session-model-detail',
+    )?.textContent,
+  ).toEqual('fixture-model-orbit')
 })
 
 it('closes the picker when Enter activates the close button', async () => {
