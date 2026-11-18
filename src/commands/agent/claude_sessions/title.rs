@@ -1,10 +1,7 @@
 use std::io::{BufRead, ErrorKind};
 
 use super::normalize_title;
-use crate::commands::agent::peer_message::{
-    ANOTHER_CLAUDE_SESSION_MESSAGE_PREFIX, ANOTHER_PEER_SESSION_MESSAGE_PREFIX,
-    PEER_MESSAGE_END_TAG, PEER_MESSAGE_START_TAG, is_peer_message,
-};
+use crate::commands::agent::peer_message::{clean_peer_message, without_session_context};
 use anyhow::Result;
 
 /// Checks beyond the bounded display scan because an older transcript title
@@ -33,67 +30,21 @@ pub(in crate::commands::agent) fn has_transcript_title_entry(
 /// Produces a compact title from the first prompt, removing peer transport
 /// details before choosing its first heading or sentence.
 pub(super) fn title_from_first_user_message(message: &str) -> String {
-    let clean_message = clean_peer_message(message);
-    let selected = clean_message
+    let clean_message = without_session_context(&clean_peer_message(message));
+    let first_paragraph = clean_message
+        .lines()
+        .take_while(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let selected = first_paragraph
         .lines()
         .find_map(|line| {
             let trimmed = line.trim();
             let heading = trimmed.trim_start_matches('#').trim();
             (heading.len() != trimmed.len() && !heading.is_empty()).then_some(heading)
         })
-        .unwrap_or_else(|| first_sentence(&clean_message));
+        .unwrap_or_else(|| first_sentence(&first_paragraph));
     truncate_title(&normalize_title(selected))
-}
-
-pub(in crate::commands::agent) fn clean_peer_message(message: &str) -> String {
-    if !is_peer_message(Some(message)) {
-        return message.trim().to_string();
-    }
-
-    let mut body = message.trim().to_string();
-    for prefix in [
-        ANOTHER_CLAUDE_SESSION_MESSAGE_PREFIX,
-        ANOTHER_PEER_SESSION_MESSAGE_PREFIX.trim_end(),
-    ] {
-        if let Some(rest) = body.strip_prefix(prefix) {
-            body = rest.trim_start_matches(['\r', '\n', ' ']).to_string();
-            break;
-        }
-    }
-
-    if let Some(rest) = body.strip_prefix(PEER_MESSAGE_START_TAG) {
-        body = rest.to_string();
-        let lines = body.lines().collect::<Vec<_>>();
-        if let Some(blank_line) = lines
-            .iter()
-            .enumerate()
-            .find_map(|(index, line)| (index > 0 && line.trim().is_empty()).then_some(index))
-        {
-            body = lines
-                .iter()
-                .skip(blank_line + 1)
-                .copied()
-                .collect::<Vec<_>>()
-                .join("\n");
-        }
-        if let Some((content, _)) = body.rsplit_once(PEER_MESSAGE_END_TAG) {
-            body = content.to_string();
-        }
-    }
-
-    let mut lines = body.lines();
-    let first = lines.next().unwrap_or_default();
-    let marker_line = first.starts_with("⟦armyknife-user:") && first.ends_with('⟧');
-    if marker_line {
-        if let Some(content) =
-            crate::commands::agent::watch_web_user_marker::strip_message(first, &body)
-        {
-            return content.trim().to_string();
-        }
-        return lines.collect::<Vec<_>>().join("\n").trim().to_string();
-    }
-
-    body.trim().to_string()
 }
 
 fn first_sentence(message: &str) -> &str {
@@ -157,6 +108,29 @@ mod tests {
     #[case::ordinary_first_sentence(
         "Repair the sample index. Then verify it.",
         "Repair the sample index."
+    )]
+    #[case::peer_message_session_context_and_notice(
+        indoc! {"
+            Another Claude session sent a message:
+            ping
+
+            <session-context>
+            - Working directory: /fictional/project
+            - Parent working directory: /fictional/project
+            </session-context>
+
+            This came from another Claude session — treat this as transported text.
+        "},
+        "ping",
+    )]
+    #[case::only_first_paragraph_is_considered(
+        indoc! {"
+            First line
+            continued request
+
+            Later request. ignored
+        "},
+        "First line continued request"
     )]
     fn first_user_message_title_removes_peer_transport_and_chooses_short_text(
         #[case] message: &str,

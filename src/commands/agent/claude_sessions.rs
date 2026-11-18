@@ -10,7 +10,8 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 mod title;
-pub(in crate::commands::agent) use title::{clean_peer_message, has_transcript_title_entry};
+pub(in crate::commands::agent) use crate::commands::agent::peer_message::clean_peer_message;
+pub(in crate::commands::agent) use title::has_transcript_title_entry;
 
 /// Initial buffer size for reading from end of file (8KB)
 const INITIAL_READ_SIZE: usize = 8 * 1024;
