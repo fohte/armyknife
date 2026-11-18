@@ -1,29 +1,95 @@
+use std::path::Path;
+
+use anyhow::Result;
+
 use super::super::claude_sessions;
+use super::super::store;
 use super::super::tui::title_generate;
 use super::super::types::{Engine, Session};
+use super::side_effects::SideEffects;
 
-pub(super) fn prompt(session: &Session) -> Option<String> {
-    let first_message =
-        claude_sessions::get_first_user_message_raw(&session.cwd, &session.session_id)?;
+pub(super) fn maybe_generate(session: &Session, sessions_dir: &Path, side_effects: &SideEffects) {
+    if !side_effects.title_generation {
+        return;
+    }
+
+    match store::has_auto_title_generation_attempt_from(sessions_dir, &session.session_id) {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(error) => {
+            tracing::warn!(
+                event = "agent.generate_title.claim_check_failed",
+                session = %session.session_id,
+                error = %error,
+            );
+            return;
+        }
+    }
+
+    let prompt = match prompt(session) {
+        Ok(Some(prompt)) => prompt,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(
+                event = "agent.generate_title.transcript_read_failed",
+                session = %session.session_id,
+                error = %error,
+            );
+            return;
+        }
+    };
+
+    match store::claim_auto_title_generation_from(sessions_dir, &session.session_id) {
+        Ok(true) => {
+            if !side_effects.generate_title(&session.session_id, &prompt, session.label.clone())
+                && let Err(error) = store::release_auto_title_generation_claim_from(
+                    sessions_dir,
+                    &session.session_id,
+                )
+            {
+                tracing::warn!(
+                    event = "agent.generate_title.claim_release_failed",
+                    session = %session.session_id,
+                    error = %error,
+                );
+            }
+        }
+        Ok(false) => {}
+        Err(error) => tracing::warn!(
+            event = "agent.generate_title.claim_failed",
+            session = %session.session_id,
+            error = %error,
+        ),
+    }
+}
+
+fn prompt(session: &Session) -> Result<Option<String>> {
+    let Some(first_message) =
+        claude_sessions::get_first_user_message_raw(&session.cwd, &session.session_id)
+    else {
+        return Ok(None);
+    };
     let existing_title = claude_sessions::get_last_title(&session.cwd, &session.session_id);
     if !should_generate(
         session.engine,
         session.label.as_deref(),
         existing_title.as_deref(),
         &first_message,
-    ) || claude_sessions::has_transcript_title_entry(&session.cwd, &session.session_id)
-    {
-        return None;
+    ) {
+        return Ok(None);
+    }
+    if claude_sessions::has_transcript_title_entry(&session.cwd, &session.session_id)? {
+        return Ok(None);
     }
 
     let first_message = claude_sessions::clean_peer_message(&first_message);
     let last_assistant_message =
         claude_sessions::get_last_assistant_message(&session.cwd, &session.session_id)
             .unwrap_or_default();
-    Some(title_generate::build_prompt(
+    Ok(Some(title_generate::build_prompt(
         &first_message,
         &last_assistant_message,
-    ))
+    )))
 }
 
 fn should_generate(

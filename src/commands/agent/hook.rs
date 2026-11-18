@@ -1074,39 +1074,8 @@ fn process_hook_event_impl_with_env(
         }
     }
 
-    if stop_block_reason.is_none()
-        && event == HookEvent::Stop
-        && side_effects.title_generation
-        && let Some(prompt) = title_generation::prompt(&session)
-    {
-        match store::claim_auto_title_generation_from(sessions_dir, &session.session_id) {
-            Ok(true)
-                if !side_effects.generate_title(
-                    &session.session_id,
-                    &prompt,
-                    session.label.clone(),
-                ) =>
-            {
-                if let Err(error) = store::release_auto_title_generation_claim_from(
-                    sessions_dir,
-                    &session.session_id,
-                ) {
-                    tracing::warn!(
-                        event = "agent.generate_title.claim_release_failed",
-                        session = %session.session_id,
-                        error = %error,
-                    );
-                }
-            }
-            // A launched worker consumes the single attempt even if its backend later fails.
-            Ok(true) => {}
-            Ok(false) => {}
-            Err(error) => tracing::warn!(
-                event = "agent.generate_title.claim_failed",
-                session = %session.session_id,
-                error = %error,
-            ),
-        }
+    if stop_block_reason.is_none() && event == HookEvent::Stop {
+        title_generation::maybe_generate(&session, sessions_dir, side_effects);
     }
 
     // On Stop events, spawn a detached schedule worker that will SIGTERM +

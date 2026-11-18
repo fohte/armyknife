@@ -90,6 +90,7 @@ fn generate_and_apply(args: &GenerateTitleDetachedArgs, backend: &dyn Backend) -
         );
     })?;
 
+    // Claude writes the transcript outside the session database, so recheck after generation.
     if args.check_transcript_title && transcript_has_title(&args.session_id)? {
         tracing::info!(
             target: EVENT_TARGET,
@@ -132,10 +133,7 @@ fn transcript_has_title(session_id: &str) -> Result<bool> {
         return Ok(false);
     };
 
-    Ok(claude_sessions::has_transcript_title_entry(
-        &session.cwd,
-        session_id,
-    ))
+    claude_sessions::has_transcript_title_entry(&session.cwd, session_id)
 }
 
 #[cfg(test)]
@@ -143,7 +141,7 @@ mod tests {
     use super::*;
     use crate::commands::agent::types::{Engine, Session, SessionStatus};
     use rstest::rstest;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use tempfile::TempDir;
 
     /// Test double for `Backend` that returns a fixed result instead of
@@ -153,6 +151,18 @@ mod tests {
     impl Backend for StubBackend {
         fn generate(&self, _prompt: &str) -> anyhow::Result<String> {
             self.0.clone().map_err(|e| anyhow::anyhow!(e))
+        }
+    }
+
+    struct TranscriptTitleBackend(PathBuf);
+
+    impl Backend for TranscriptTitleBackend {
+        fn generate(&self, _prompt: &str) -> anyhow::Result<String> {
+            fs::write(
+                &self.0,
+                r#"{"type":"custom-title","customTitle":"Human title"}"#,
+            )?;
+            Ok("Generated Title".to_string())
         }
     }
 
@@ -264,8 +274,6 @@ mod tests {
     #[rstest]
     fn automatic_generation_does_not_mask_an_older_transcript_title() {
         use crate::commands::agent::claude_sessions;
-        use std::path::PathBuf;
-
         let root = temp_cache_root();
         let home_dir = TempDir::new().expect("home directory");
         let cwd = PathBuf::from("/fictional/project");
@@ -310,6 +318,53 @@ mod tests {
             .expect("load should succeed")
             .expect("session exists");
         assert_eq!(reloaded.label, None);
+    }
+
+    #[test]
+    fn automatic_generation_keeps_a_title_added_during_generation() {
+        let root = temp_cache_root();
+        let home_dir = TempDir::new().expect("home directory");
+        let cwd = PathBuf::from("/fictional/project");
+        let mut session = create_test_session("fixture-title-race-session", None);
+        session.cwd = cwd.clone();
+        store::save_session_to(&root.sessions_dir, &session).expect("save should succeed");
+
+        let project_dir = home_dir
+            .path()
+            .join(".claude")
+            .join("projects")
+            .join(crate::commands::agent::claude_sessions::encode_project_path(&cwd));
+        fs::create_dir_all(&project_dir).expect("project directory");
+        let transcript_path = project_dir.join("fixture-title-race-session.jsonl");
+        fs::write(&transcript_path, "").expect("transcript fixture");
+
+        let tmp = TempDir::new().expect("prompt directory");
+        let args = GenerateTitleDetachedArgs {
+            session_id: "fixture-title-race-session".to_string(),
+            prompt_file: prompt_file(tmp.path()),
+            previous_label: None,
+            check_transcript_title: true,
+        };
+        let backend = TranscriptTitleBackend(transcript_path.clone());
+        let cache_home = root.cache_home.as_str();
+        let home = home_dir.path().to_str().expect("utf8 home");
+
+        temp_env::with_vars(
+            [("XDG_CACHE_HOME", Some(cache_home)), ("HOME", Some(home))],
+            || generate_and_apply(&args, &backend).expect("generation should succeed"),
+        );
+
+        let reloaded = store::load_session_from(&root.sessions_dir, "fixture-title-race-session")
+            .expect("load should succeed")
+            .expect("session exists");
+        let transcript = fs::read_to_string(transcript_path).expect("transcript should exist");
+        assert_eq!(
+            (reloaded.label, transcript),
+            (
+                None,
+                r#"{"type":"custom-title","customTitle":"Human title"}"#.to_string()
+            ),
+        );
     }
 
     #[rstest]

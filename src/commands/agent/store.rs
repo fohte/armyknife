@@ -178,6 +178,13 @@ pub(crate) fn claim_auto_title_generation_from(
     database::claim_auto_title_generation(sessions_dir, session_id)
 }
 
+pub(crate) fn has_auto_title_generation_attempt_from(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<bool> {
+    database::has_auto_title_generation_attempt(sessions_dir, session_id)
+}
+
 pub(crate) fn release_auto_title_generation_claim_from(
     sessions_dir: &Path,
     session_id: &str,

@@ -1,27 +1,33 @@
-use std::io::BufRead;
+use std::io::{BufRead, ErrorKind};
 
 use super::normalize_title;
 use crate::commands::agent::peer_message::{
     ANOTHER_CLAUDE_SESSION_MESSAGE_PREFIX, ANOTHER_PEER_SESSION_MESSAGE_PREFIX,
     PEER_MESSAGE_END_TAG, PEER_MESSAGE_START_TAG, is_peer_message,
 };
+use anyhow::Result;
 
 /// Checks beyond the bounded display scan because an older transcript title
 /// would otherwise be hidden by a generated session label.
 pub(in crate::commands::agent) fn has_transcript_title_entry(
     project_path: &std::path::Path,
     session_id: &str,
-) -> bool {
+) -> Result<bool> {
     let Some(jsonl_path) = super::session_jsonl_path(project_path, session_id) else {
-        return false;
+        return Ok(false);
     };
-    let Ok(file) = std::fs::File::open(jsonl_path) else {
-        return false;
+    let file = match std::fs::File::open(jsonl_path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
     };
 
-    std::io::BufReader::new(file)
-        .lines()
-        .any(|line| line.is_ok_and(|line| super::title_from_line(&line).is_some()))
+    for line in std::io::BufReader::new(file).lines() {
+        if super::title_from_line(&line?).is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Produces a compact title from the first prompt, removing peer transport
@@ -197,10 +203,35 @@ mod tests {
         let detected = temp_env::with_vars([("HOME", Some(home))], || {
             (
                 super::super::get_last_title_in_home(home_dir.path(), project_path, session_id),
-                has_transcript_title_entry(project_path, session_id),
+                has_transcript_title_entry(project_path, session_id).map_err(|_| "scan failed"),
             )
         });
 
-        assert_eq!(detected, (None, true));
+        assert_eq!(detected, (None, Ok(true)));
+    }
+
+    #[test]
+    fn transcript_title_scan_reports_read_errors() {
+        use std::path::Path;
+        use tempfile::TempDir;
+
+        let home_dir = TempDir::new().expect("home directory");
+        let project_path = Path::new("/fictional/project");
+        let session_id = "fixture-unreadable-title-session";
+        let project_dir = home_dir
+            .path()
+            .join(".claude")
+            .join("projects")
+            .join(super::super::encode_project_path(project_path));
+        std::fs::create_dir_all(&project_dir).expect("project directory");
+        std::fs::create_dir(project_dir.join(format!("{session_id}.jsonl")))
+            .expect("unreadable transcript fixture");
+
+        let home = home_dir.path().to_str().expect("utf8 home");
+        let result = temp_env::with_vars([("HOME", Some(home))], || {
+            has_transcript_title_entry(project_path, session_id).map_err(|_| "scan failed")
+        });
+
+        assert_eq!(result, Err("scan failed"));
     }
 }
