@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.797](https://github.com/fohte/armyknife/compare/v0.1.796...v0.1.797) (2026-11-18)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** speed up older pages ([#1981](https://github.com/fohte/armyknife/issues/1981)) ([e9f2530](https://github.com/fohte/armyknife/commit/e9f2530a7bd9c65a6bd116de960cc73b9a955709))
+
 ## [0.1.796](https://github.com/fohte/armyknife/compare/v0.1.795...v0.1.796) (2026-11-18)
 
 
