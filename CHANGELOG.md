@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.793](https://github.com/fohte/armyknife/compare/v0.1.792...v0.1.793) (2026-11-18)
+
+
+### Features
+
+* **agent-watch-web:** dismiss denied cards ([#1973](https://github.com/fohte/armyknife/issues/1973)) ([9fa8650](https://github.com/fohte/armyknife/commit/9fa8650f5c692784af5c1aa6ba61a182600ecdcc))
+
 ## [0.1.792](https://github.com/fohte/armyknife/compare/v0.1.791...v0.1.792) (2026-11-18)
 
 
