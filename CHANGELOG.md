@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.792](https://github.com/fohte/armyknife/compare/v0.1.791...v0.1.792) (2026-11-18)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** resume incremental parsing ([#1972](https://github.com/fohte/armyknife/issues/1972)) ([f2cfaed](https://github.com/fohte/armyknife/commit/f2cfaed6dee6dc4a538fc2c35beb075e5a7b4ebe))
+
 ## [0.1.791](https://github.com/fohte/armyknife/compare/v0.1.790...v0.1.791) (2026-11-18)
 
 
