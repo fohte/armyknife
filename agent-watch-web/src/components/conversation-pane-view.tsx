@@ -60,6 +60,7 @@ type ConversationPaneViewProps = {
   skills?: readonly SkillSuggestion[]
   actions: SessionActions | null
   actionsReady?: boolean
+  actionsSettled?: boolean
   pendingPermissionActions?: PendingPermissionActions | undefined
   openInTerminalStatus?: OpenInTerminalStatus
   loading: boolean
@@ -114,6 +115,7 @@ export function ConversationPaneView({
   skills = [],
   actions,
   actionsReady = true,
+  actionsSettled = true,
   pendingPermissionActions = {},
   openInTerminalStatus = null,
   loading,
@@ -439,7 +441,7 @@ export function ConversationPaneView({
         focusDraft={focusDraft}
         focusRequestId={composerFocusRequestId}
         onFocusRequestHandled={onComposerFocusRequestHandled}
-        actionsReady={actionsReady}
+        actionsSettled={actionsSettled}
         engine={session.engine}
         skills={skills}
         placeholder={

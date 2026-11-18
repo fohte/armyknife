@@ -39,7 +39,7 @@ export function useComposerFocus({
     if (
       textarea === null ||
       textarea.disabled ||
-      composer?.dataset['actionsReady'] !== 'true'
+      composer?.dataset['actionsSettled'] !== 'true'
     ) {
       return false
     }

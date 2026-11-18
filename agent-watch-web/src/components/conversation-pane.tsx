@@ -106,6 +106,7 @@ export function ConversationPane({
   const {
     actions,
     actionsReady,
+    actionsSettled,
     clearErrors,
     conversation,
     conversationRef,
@@ -376,6 +377,7 @@ export function ConversationPane({
       skills={conversation.skills ?? []}
       actions={actions}
       actionsReady={actionsReady}
+      actionsSettled={actionsSettled}
       composerFocusRequestId={composerFocusRequestId}
       onComposerFocusRequestHandled={onComposerFocusRequestHandled}
       pendingPermissionActions={pendingPermissionActions}

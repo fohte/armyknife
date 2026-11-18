@@ -22,7 +22,7 @@ type MessageComposerProps = {
   focusDraft?: string | null
   focusRequestId?: number | null
   onFocusRequestHandled?: (requestId: number) => void
-  actionsReady?: boolean
+  actionsSettled?: boolean
   placeholder: string
   disabled: boolean
   isSending: boolean
@@ -48,7 +48,7 @@ export function MessageComposer({
   focusDraft = null,
   focusRequestId = null,
   onFocusRequestHandled,
-  actionsReady = true,
+  actionsSettled = true,
   placeholder,
   disabled,
   isSending,
@@ -93,14 +93,14 @@ export function MessageComposer({
   }, [draft, focusDraft])
 
   useLayoutEffect(() => {
-    if (focusRequestId === null || !actionsReady) return
+    if (focusRequestId === null || !actionsSettled) return
     const textarea = skillCompletion.textareaRef.current
     if (textarea !== null && !disabled && !isMobile) {
       textarea.focus()
     }
     onFocusRequestHandled?.(focusRequestId)
   }, [
-    actionsReady,
+    actionsSettled,
     disabled,
     focusRequestId,
     isMobile,
@@ -121,7 +121,7 @@ export function MessageComposer({
     <form
       className="conversation-composer"
       aria-busy={isProcessingAttachments}
-      data-actions-ready={actionsReady ? 'true' : 'false'}
+      data-actions-settled={actionsSettled ? 'true' : 'false'}
       data-mobile={isMobile ? 'true' : undefined}
       onSubmit={handleSubmit}
     >

@@ -577,6 +577,18 @@ function mockComposerActions(message: boolean) {
   )
 }
 
+function mockComposerActionsFailure() {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn<typeof fetch>((input) => {
+      if (requestUrl(input).endsWith('/actions')) {
+        return Promise.resolve(jsonResponse({}, 500))
+      }
+      return mockPendingResponse()
+    }),
+  )
+}
+
 async function waitForComposerActions() {
   await act(async () => {
     for (
@@ -584,7 +596,7 @@ async function waitForComposerActions() {
       index < 12 &&
       container
         .querySelector<HTMLFormElement>('.conversation-composer')
-        ?.getAttribute('data-actions-ready') !== 'true';
+        ?.getAttribute('data-actions-settled') !== 'true';
       index += 1
     ) {
       await Promise.resolve()
@@ -4363,6 +4375,36 @@ it('does not focus the reply field on a mobile session selection', async () => {
   const textarea = container.querySelector<HTMLTextAreaElement>(
     '.conversation-composer textarea',
   )
+  const snapshot = () => ({
+    composerExists: textarea !== null,
+    focused: document.activeElement === textarea,
+    actionsSettled: container
+      .querySelector<HTMLFormElement>('.conversation-composer')
+      ?.getAttribute('data-actions-settled'),
+  })
+  expect(snapshot()).toEqual({
+    composerExists: true,
+    focused: false,
+    actionsSettled: 'true',
+  })
+})
+
+it('ignores the i shortcut on mobile', async () => {
+  mockComposerActions(true)
+  mobileViewportMatches = true
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('fixture-mobile-shortcut-session', 'Mobile session')],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  await waitForComposerActions()
+
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '.conversation-composer textarea',
+  )
   const outsideButton = document.createElement('button')
   document.body.append(outsideButton)
   outsideButton.focus()
@@ -4371,13 +4413,13 @@ it('does not focus the reply field on a mobile session selection', async () => {
     events.push(dispatchKey(outsideButton, 'i'))
   })
   const snapshot = () => ({
-    composerExists: textarea !== null,
     focused: document.activeElement === textarea,
+    buttonRetainsFocus: document.activeElement === outsideButton,
     defaultPrevented: events[0]?.defaultPrevented,
   })
   expect(snapshot()).toEqual({
-    composerExists: true,
     focused: false,
+    buttonRetainsFocus: true,
     defaultPrevented: false,
   })
   outsideButton.remove()
@@ -4417,6 +4459,44 @@ it('uses i to focus an enabled reply field without inserting the key', async () 
   expect(snapshot()).toEqual({
     focused: true,
     defaultPrevented: [false, false, false, false, true],
+    draft: '',
+  })
+  outsideButton.remove()
+})
+
+it('keeps reply focus available when action metadata cannot be loaded', async () => {
+  mockComposerActionsFailure()
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('fixture-action-error-session', 'Action error session')],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  await waitForComposerActions()
+
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '.conversation-composer textarea',
+  )
+  const focusedOnOpen = document.activeElement === textarea
+  const outsideButton = document.createElement('button')
+  document.body.append(outsideButton)
+  outsideButton.focus()
+  const events: KeyboardEvent[] = []
+  act(() => {
+    events.push(dispatchKey(outsideButton, 'i'))
+  })
+  const snapshot = () => ({
+    focusedOnOpen,
+    refocusedWithShortcut: document.activeElement === textarea,
+    shortcutPrevented: events[0]?.defaultPrevented,
+    draft: textarea?.value,
+  })
+  expect(snapshot()).toEqual({
+    focusedOnOpen: true,
+    refocusedWithShortcut: true,
+    shortcutPrevented: true,
     draft: '',
   })
   outsideButton.remove()
