@@ -251,6 +251,7 @@ function AppContent() {
     setIsOpen: setCommandPaletteOpen,
     recentSessionIds,
     runCommand: runPaletteCommand,
+    selectSession,
     openConversation,
     openSessionInInbox,
     openTodaySession,
@@ -260,6 +261,7 @@ function AppContent() {
     toggleToday,
   } = useCommandPaletteController({
     sessions: sessionsWithElapsedTime,
+    requestComposerFocus,
     navigate,
     setError,
     setCloseRetrySessionId,
@@ -554,14 +556,14 @@ function AppContent() {
       resetNewSession: newSession.reset,
       setCommandPaletteOpen,
       setPendingLaunchId,
+      requestComposerFocus,
     })
   const openSessionFromNavigation = useCallback(
     (id: string) => {
       closeMobileNav()
       openSessionInInbox(id)
-      requestComposerFocus(id)
     },
-    [closeMobileNav, openSessionInInbox, requestComposerFocus],
+    [closeMobileNav, openSessionInInbox],
   )
   const selectSavedViewFromNavigation = useCallback(
     (id: string) => {
@@ -580,11 +582,9 @@ function AppContent() {
     setPendingLaunchId(null)
     setCommandPaletteOpen(false)
     openSessionInInbox(launchedSession.id, 'replace')
-    requestComposerFocus(launchedSession.id)
   }, [
     openSessionInInbox,
     pendingLaunchId,
-    requestComposerFocus,
     sessionsWithElapsedTime,
     setCommandPaletteOpen,
   ])
@@ -613,11 +613,9 @@ function AppContent() {
     onSelect: (id: string) => {
       if (newSessionMode === 'form') {
         switchFromNewSessionToSession(id, true)
-        requestComposerFocus(id)
         return
       }
       openConversation(id)
-      requestComposerFocus(id)
     },
     laterExpanded,
     onToggleLater: () => {
@@ -627,7 +625,6 @@ function AppContent() {
     todaySessions,
     onSelectToday: (id: string) => {
       openTodaySession(id)
-      requestComposerFocus(id)
     },
     inProgressExpanded,
     onToggleInProgress: () => {
@@ -715,11 +712,9 @@ function AppContent() {
             if (!orderedSessions.some((session) => session.id === id)) return
             if (newSessionMode === 'form') {
               switchFromNewSessionToSession(id, false)
-              requestComposerFocus(id)
               return
             }
-            navigate((current) => ({ ...current, selectedId: id }))
-            requestComposerFocus(id)
+            selectSession(id)
           }}
           composerFocusRequest={composerFocusRequest}
           onComposerFocusRequestHandled={handleComposerFocusRequest}
@@ -735,7 +730,6 @@ function AppContent() {
           }}
           onSelectSession={(id) => {
             openSessionInInbox(id)
-            requestComposerFocus(id)
           }}
           projects={projects}
           focusedProjectName={focusedProjectName}
@@ -821,7 +815,6 @@ function AppContent() {
           onOpenSession={(id) => {
             setCommandPaletteOpen(false)
             openSessionInInbox(id)
-            requestComposerFocus(id)
           }}
           onOpenSessionBeside={(id) => {
             const query = new URLSearchParams({ session: id })

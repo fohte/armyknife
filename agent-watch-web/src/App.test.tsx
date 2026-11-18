@@ -2839,10 +2839,26 @@ it('restores the previous screen when a new-session palette is dismissed with Ba
 })
 
 it('opens an existing conversation after selecting it from the open new-session form', async () => {
-  vi.stubGlobal(
-    'fetch',
-    createSessionLaunchFetcher(jsonResponse({ launchId: 'launch-fixture' })),
-  )
+  vi.stubGlobal('fetch', (input: RequestInfo | URL) => {
+    const url = requestUrl(input)
+    if (url === '/api/directories') {
+      return Promise.resolve(
+        jsonResponse({ directories: [exampleLaunchDirectory] }),
+      )
+    }
+    if (requestPath(input).endsWith('/actions')) {
+      return Promise.resolve(
+        jsonResponse({
+          message: true,
+          answerQuestion: true,
+          interrupt: true,
+          openInTerminal: true,
+          rewind: false,
+        }),
+      )
+    }
+    return mockPendingResponse()
+  })
   renderApp()
   publishSessions({
     revision: 1,
@@ -2851,16 +2867,22 @@ it('opens an existing conversation after selecting it from the open new-session 
   clickButton('[aria-label="New session"]')
   await waitForDirectoryResults()
   clickButton('[data-session-row]')
+  await waitForComposerActions()
 
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '.conversation-composer textarea',
+  )
   const snapshot = () => ({
     newSessionFormOpen: container.querySelector('.new-session-view') !== null,
     conversationOpen: container.querySelector('.conversation-pane') !== null,
     selectedTitle: readSelectedTitle(),
+    replyFocused: document.activeElement === textarea,
   })
   expect(snapshot()).toEqual({
     newSessionFormOpen: false,
     conversationOpen: true,
     selectedTitle: 'Existing session',
+    replyFocused: true,
   })
 })
 
