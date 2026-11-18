@@ -1,4 +1,4 @@
-use std::io::Cursor;
+use std::io::{self, BufReader, Cursor, Read, Seek, SeekFrom};
 
 use chrono::{DateTime, TimeZone, Utc};
 use indoc::indoc;
@@ -55,6 +55,201 @@ fn saved_queued_prompt() -> WatchWebQueuedPrompt {
     }
 }
 
+const MAX_PREFIX_SEARCH_BYTES: u64 = 256 * 1024 * 1024;
+
+struct PrefixBeyondSearchLimit {
+    header: Vec<u8>,
+    boundary_record: Vec<u8>,
+    suffix: Vec<u8>,
+    padding_record: Vec<u8>,
+    prefix_length: u64,
+}
+
+impl PrefixBeyondSearchLimit {
+    fn reader(&self) -> BufReader<VirtualTranscript> {
+        BufReader::new(VirtualTranscript {
+            header: self.header.clone(),
+            boundary_record: self.boundary_record.clone(),
+            suffix: self.suffix.clone(),
+            padding_record: self.padding_record.clone(),
+            prefix_length: self.prefix_length,
+            position: 0,
+        })
+    }
+
+    fn reference_transcript(&self) -> Vec<u8> {
+        [
+            self.header.as_slice(),
+            self.boundary_record.as_slice(),
+            self.suffix.as_slice(),
+        ]
+        .concat()
+    }
+}
+
+#[rstest::fixture]
+fn prefix_beyond_search_limit() -> PrefixBeyondSearchLimit {
+    let marker = "⟦armyknife-user:fixture-marker-cyan⟧";
+    let delivery = indoc::formatdoc! {"
+        {marker}
+        Delivered fixture request.
+        <!-- armyknife-queued-prompt-id:fixture-message-cyan -->
+    "};
+    let header = [
+        serde_json::json!({
+            "type": "user",
+            "uuid": "fixture-root",
+            "parentUuid": null,
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {"content": "Fixture root."},
+        }),
+        serde_json::json!({
+            "type": "user",
+            "uuid": "fixture-delivery",
+            "parentUuid": "fixture-root",
+            "timestamp": "2026-01-01T00:00:01Z",
+            "origin": {"kind": "peer"},
+            "message": {"content": delivery},
+        }),
+        serde_json::json!({
+            "type": "attachment",
+            "uuid": "fixture-skill-baseline",
+            "parentUuid": "fixture-delivery",
+            "timestamp": "2026-01-01T00:00:02Z",
+            "attachment": {"type": "skill_listing", "isInitial": true, "content": []},
+        }),
+    ]
+    .into_iter()
+    .map(|record| record.to_string())
+    .collect::<Vec<_>>()
+    .join("\n")
+        + "\n";
+    let boundary_record = serde_json::json!({
+        "type": "system",
+        "uuid": "fixture-compact-boundary",
+        "parentUuid": null,
+        "logicalParentUuid": "fixture-skill-baseline",
+        "timestamp": "2026-01-01T00:00:02Z",
+        "subtype": "compact_boundary",
+    })
+    .to_string()
+        + "\n";
+    let mut suffix = Vec::new();
+    let mut parent_uuid = "fixture-compact-boundary".to_owned();
+    for index in 0..101 {
+        let uuid = format!("fixture-message-{index}");
+        let mut record = serde_json::json!({
+            "type": "user",
+            "uuid": uuid,
+            "parentUuid": parent_uuid,
+            "message": {"content": format!("Fixture request {index}.")},
+        });
+        if index != 100 {
+            record["timestamp"] = serde_json::json!("2026-01-01T00:00:03Z");
+        }
+        suffix.extend_from_slice(record.to_string().as_bytes());
+        if index != 100 {
+            suffix.push(b'\n');
+        }
+        parent_uuid = format!("fixture-message-{index}");
+    }
+    let padding_payload = "x".repeat(1024 * 1024);
+    let padding_record =
+        format!("{{\"type\":\"fixture-padding\",\"padding\":\"{padding_payload}\"}}\n")
+            .into_bytes();
+    let header = header.into_bytes();
+    let boundary_record = boundary_record.into_bytes();
+    let minimum_prefix_length = MAX_PREFIX_SEARCH_BYTES + 4 * 1024 * 1024;
+    let padding_records = minimum_prefix_length
+        .saturating_sub((header.len() + boundary_record.len()) as u64)
+        .div_ceil(padding_record.len() as u64);
+    let prefix_length = header.len() as u64
+        + padding_records * padding_record.len() as u64
+        + boundary_record.len() as u64;
+
+    PrefixBeyondSearchLimit {
+        header,
+        boundary_record,
+        suffix,
+        padding_record,
+        prefix_length,
+    }
+}
+
+struct VirtualTranscript {
+    header: Vec<u8>,
+    boundary_record: Vec<u8>,
+    suffix: Vec<u8>,
+    padding_record: Vec<u8>,
+    prefix_length: u64,
+    position: u64,
+}
+
+impl Read for VirtualTranscript {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        let total_length = self.prefix_length + self.suffix.len() as u64;
+        let padding_end = self.prefix_length - self.boundary_record.len() as u64;
+        let read_length = output
+            .len()
+            .min(total_length.saturating_sub(self.position) as usize);
+        let mut written = 0;
+        while written < read_length {
+            let position = self.position + written as u64;
+            if position < self.header.len() as u64 {
+                let source_start = position as usize;
+                let length = (read_length - written).min(self.header.len() - source_start);
+                output[written..written + length]
+                    .copy_from_slice(&self.header[source_start..source_start + length]);
+                written += length;
+            } else if position < padding_end {
+                let padding_position = (position - self.header.len() as u64) as usize;
+                let padding_offset = padding_position % self.padding_record.len();
+                let length = (read_length - written)
+                    .min(self.padding_record.len() - padding_offset)
+                    .min((padding_end - position) as usize);
+                output[written..written + length]
+                    .copy_from_slice(&self.padding_record[padding_offset..padding_offset + length]);
+                written += length;
+            } else if position < self.prefix_length {
+                let boundary_offset = (position - padding_end) as usize;
+                let length =
+                    (read_length - written).min(self.boundary_record.len() - boundary_offset);
+                output[written..written + length].copy_from_slice(
+                    &self.boundary_record[boundary_offset..boundary_offset + length],
+                );
+                written += length;
+            } else {
+                let source_start = (position - self.prefix_length) as usize;
+                let length = (read_length - written).min(self.suffix.len() - source_start);
+                output[written..written + length]
+                    .copy_from_slice(&self.suffix[source_start..source_start + length]);
+                written += length;
+            }
+        }
+        self.position += written as u64;
+        Ok(written)
+    }
+}
+
+impl Seek for VirtualTranscript {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        let total_length = self.prefix_length + self.suffix.len() as u64;
+        let position = match position {
+            SeekFrom::Start(position) => i128::from(position),
+            SeekFrom::Current(offset) => i128::from(self.position) + i128::from(offset),
+            SeekFrom::End(offset) => i128::from(total_length) + i128::from(offset),
+        };
+        if !(0..=i128::from(u64::MAX)).contains(&position) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "fixture seek position is outside the transcript",
+            ));
+        }
+        self.position = position as u64;
+        Ok(self.position)
+    }
+}
+
 fn queued_prompt_additions<'a>(queued_prompt: &'a WatchWebQueuedPrompt) -> ParserAdditions<'a> {
     ParserAdditions {
         user_marker: Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
@@ -77,6 +272,32 @@ fn parse_all(bytes: &[u8], additions: ParserAdditions<'_>) -> super::ParsedTrans
         .unwrap()
         .render_with(fixed_time(), additions)
         .unwrap()
+}
+
+fn last_messages(mut parsed: super::ParsedTranscript, limit: usize) -> super::ParsedTranscript {
+    parsed.0 = parsed
+        .0
+        .into_iter()
+        .rev()
+        .take(limit)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    parsed
+}
+
+fn last_message_and_state(mut parsed: super::ParsedTranscript) -> super::ParsedTranscript {
+    parsed.0 = parsed
+        .0
+        .into_iter()
+        .rev()
+        .take(1)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    parsed
 }
 
 fn incremental_result(
@@ -418,20 +639,134 @@ fn tail_window_matches_the_full_parse_after_a_compact_boundary_with_a_missing_pa
     .unwrap()
     .render_with(fixed_time(), additions)
     .unwrap();
-    let last_messages = |mut parsed: super::ParsedTranscript| {
-        parsed.0 = parsed
-            .0
-            .into_iter()
-            .rev()
-            .take(100)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-        parsed
-    };
+    assert_eq!(last_messages(actual, 100), last_messages(expected, 100));
+}
 
-    assert_eq!(last_messages(actual), last_messages(expected));
+#[test]
+fn tail_window_excludes_an_abandoned_branch_whose_parent_is_outside_the_window() {
+    let padding = "x".repeat(5 * 1024 * 1024);
+    let transcript = [
+        serde_json::json!({
+            "type": "user",
+            "uuid": "fixture-root",
+            "parentUuid": null,
+            "timestamp": "2026-01-01T00:00:01Z",
+            "message": {"content": "Fixture root."},
+        }),
+        serde_json::json!({
+            "type": "assistant",
+            "uuid": "fixture-abandoned-parent",
+            "parentUuid": "fixture-root",
+            "timestamp": "2026-01-01T00:00:02Z",
+            "message": {"content": [{"type": "text", "text": "Abandoned response."}]},
+        }),
+        serde_json::json!({
+            "type": "system",
+            "uuid": "fixture-padding",
+            "parentUuid": "fixture-root",
+            "padding": padding,
+        }),
+        serde_json::json!({
+            "type": "user",
+            "uuid": "fixture-abandoned-request",
+            "parentUuid": "fixture-abandoned-parent",
+            "timestamp": "2026-01-01T00:00:03Z",
+            "message": {"content": "Abandoned branch request."},
+        }),
+        serde_json::json!({
+            "type": "user",
+            "uuid": "fixture-replacement-request",
+            "parentUuid": "fixture-root",
+            "timestamp": "2026-01-01T00:00:04Z",
+            "message": {"content": "Replacement request."},
+        }),
+        serde_json::json!({
+            "type": "assistant",
+            "uuid": "fixture-replacement-response",
+            "parentUuid": "fixture-replacement-request",
+            "timestamp": "2026-01-01T00:00:05Z",
+            "message": {"content": [{"type": "text", "text": "Replacement response."}]},
+        }),
+        serde_json::json!({
+            "type": "user",
+            "uuid": "fixture-latest-request",
+            "parentUuid": "fixture-replacement-response",
+            "timestamp": "2026-01-01T00:00:06Z",
+            "message": {"content": "Latest request."},
+        }),
+    ]
+    .into_iter()
+    .map(|record| record.to_string())
+    .collect::<Vec<_>>()
+    .join("\n");
+    let additions = empty_additions();
+    let mut expected = parse_all(transcript.as_bytes(), additions);
+    expected.0 = expected.0.into_iter().skip(1).collect();
+    let actual =
+        IncrementalClaudeParser::new_tail_window(Cursor::new(transcript.as_bytes()), None, 3, &[])
+            .unwrap()
+            .unwrap()
+            .render_with(fixed_time(), additions)
+            .unwrap();
+
+    assert_eq!(actual, expected);
+}
+
+#[rstest]
+fn tail_window_matches_the_full_parse_when_the_prefix_exceeds_the_search_limit(
+    prefix_beyond_search_limit: PrefixBeyondSearchLimit,
+) {
+    let additions = empty_additions();
+    let reference_transcript = prefix_beyond_search_limit.reference_transcript();
+    let expected = parse_all(&reference_transcript, additions);
+    let tail_parser = IncrementalClaudeParser::new_tail_window(
+        prefix_beyond_search_limit.reader(),
+        None,
+        100,
+        &[],
+    )
+    .unwrap()
+    .unwrap();
+    let prefix_length = tail_parser.tail_window_start_offset().unwrap();
+    let actual = tail_parser.render_with(fixed_time(), additions).unwrap();
+    assert_eq!(
+        (
+            prefix_length > MAX_PREFIX_SEARCH_BYTES,
+            last_messages(actual, 100)
+        ),
+        (true, last_messages(expected, 100)),
+    );
+}
+
+#[rstest]
+fn queued_prompt_resolution_scans_a_prefix_over_the_search_limit(
+    prefix_beyond_search_limit: PrefixBeyondSearchLimit,
+) {
+    let user_marker = "⟦armyknife-user:fixture-marker-cyan⟧";
+    let tail_parser = IncrementalClaudeParser::new_tail_window(
+        prefix_beyond_search_limit.reader(),
+        None,
+        100,
+        &[],
+    )
+    .unwrap()
+    .unwrap();
+    let prefix_length = tail_parser.tail_window_start_offset().unwrap();
+    let queued_prompt = saved_queued_prompt();
+    let mut reader = prefix_beyond_search_limit.reader();
+    let resolved = tail_parser
+        .resolve_queued_prompt_ids_before_window(
+            &mut reader,
+            prefix_length,
+            &[queued_prompt],
+            Some(user_marker),
+        )
+        .unwrap();
+
+    assert_eq!(
+        (prefix_length > MAX_PREFIX_SEARCH_BYTES, resolved),
+        (true, Some(vec![7])),
+    );
 }
 
 #[test]
@@ -455,12 +790,7 @@ fn tail_window_matches_the_full_parse_when_an_attachment_follows_tool_results() 
             .unwrap()
             .render_with(fixed_time(), additions)
             .unwrap();
-    let last_messages = |mut parsed: super::ParsedTranscript| {
-        parsed.0 = parsed.0.into_iter().rev().take(2).collect::<Vec<_>>();
-        parsed
-    };
-
-    assert_eq!(last_messages(actual), last_messages(expected));
+    assert_eq!(last_messages(actual, 2), last_messages(expected, 2));
 }
 
 #[test]
@@ -490,22 +820,89 @@ fn tail_window_restores_an_older_pending_task_start() {
     .unwrap()
     .render_with(fixed_time(), additions)
     .unwrap();
-    let last_message_and_state = |mut parsed: super::ParsedTranscript| {
-        parsed.0 = parsed
-            .0
-            .into_iter()
-            .rev()
-            .take(1)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-        parsed
-    };
-
     assert_eq!(
         last_message_and_state(actual),
         last_message_and_state(expected)
+    );
+}
+
+#[test]
+fn tail_window_restores_a_running_task_behind_a_compact_boundary() {
+    let padding = "x".repeat(5 * 1024 * 1024);
+    let records = [
+        serde_json::json!({
+            "type": "user",
+            "uuid": "fixture-root",
+            "parentUuid": null,
+            "timestamp": "2026-01-01T00:00:01Z",
+            "message": {"content": "Fixture root."},
+        }),
+        serde_json::json!({
+            "type": "assistant",
+            "uuid": "fixture-task-call",
+            "parentUuid": "fixture-root",
+            "timestamp": "2026-01-01T00:00:02Z",
+            "message": {"content": [{
+                "type": "tool_use",
+                "id": "fixture-task-use",
+                "name": "Bash",
+                "input": {"command": "fixture background task", "run_in_background": true},
+            }]},
+        }),
+        serde_json::json!({
+            "type": "user",
+            "uuid": "fixture-task-started",
+            "parentUuid": "fixture-task-call",
+            "timestamp": "2026-01-01T00:00:03Z",
+            "toolUseResult": {"task_id": "fixture-task-id"},
+            "message": {"content": [{
+                "type": "tool_result",
+                "tool_use_id": "fixture-task-use",
+                "content": "Background task started (id: fixture-task-id)",
+            }]},
+        }),
+        serde_json::json!({
+            "type": "system",
+            "uuid": "fixture-compact-boundary",
+            "parentUuid": null,
+            "logicalParentUuid": "fixture-task-started",
+            "timestamp": "2026-01-01T00:00:04Z",
+            "subtype": "compact_boundary",
+        }),
+        serde_json::json!({
+            "type": "system",
+            "uuid": "fixture-padding",
+            "parentUuid": "fixture-compact-boundary",
+            "padding": padding,
+        }),
+        serde_json::json!({
+            "type": "user",
+            "uuid": "fixture-latest-request",
+            "parentUuid": "fixture-compact-boundary",
+            "timestamp": "2026-01-01T00:00:05Z",
+            "message": {"content": "Latest fixture request."},
+        }),
+    ]
+    .into_iter()
+    .map(|record| record.to_string())
+    .collect::<Vec<_>>()
+    .join("\n");
+    let additions = empty_additions();
+    let expected = parse_all(records.as_bytes(), additions);
+    let actual = IncrementalClaudeParser::new_tail_window(
+        Cursor::new(records.as_bytes()),
+        None,
+        1,
+        &["fixture-task-id".to_owned()],
+    )
+    .unwrap()
+    .unwrap()
+    .render_with(fixed_time(), additions)
+    .unwrap();
+
+    assert_eq!(
+        last_message_and_state(actual),
+        last_message_and_state(expected),
     );
 }
 
@@ -525,11 +922,6 @@ fn tail_window_restores_the_initial_skills_before_an_in_window_addition() {
             .unwrap()
             .render_with(fixed_time(), additions)
             .unwrap();
-    let last_message_and_state = |mut parsed: super::ParsedTranscript| {
-        parsed.0 = parsed.0.into_iter().rev().take(1).collect::<Vec<_>>();
-        parsed
-    };
-
     assert_eq!(
         last_message_and_state(actual),
         last_message_and_state(expected)

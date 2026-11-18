@@ -124,6 +124,65 @@ impl IncrementalClaudeParser {
         window::new_tail_window(reader, image_directory, message_limit, pending_task_ids)
     }
 
+    pub(super) fn from_tail_window_records(
+        records: Vec<Value>,
+        active_ancestor_uuids: Vec<String>,
+        image_directory: Option<&Path>,
+    ) -> Self {
+        let mut state = ClaudeParserState::new();
+        let mut latest_complete_uuid = None;
+        let mut graph_latest_uuid = None;
+        for record in &records {
+            if !is_attachment_record(record) {
+                latest_complete_uuid = record
+                    .get("uuid")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .or(latest_complete_uuid);
+            }
+            if let Some(uuid) = record.get("uuid").and_then(Value::as_str) {
+                graph_latest_uuid = Some(uuid.to_owned());
+                state.transcript_nodes.insert(
+                    uuid.to_owned(),
+                    TranscriptNode {
+                        parent_uuid: record_parent_uuid(record),
+                        membership: BranchMembership::Unknown,
+                    },
+                );
+            }
+        }
+        for uuid in active_ancestor_uuids {
+            state
+                .transcript_nodes
+                .entry(uuid)
+                .and_modify(|node| node.membership = BranchMembership::Active)
+                .or_insert(TranscriptNode {
+                    parent_uuid: None,
+                    membership: BranchMembership::Active,
+                });
+        }
+        state.latest_record_uuid = graph_latest_uuid.clone();
+        mark_active_branch(
+            &mut state.transcript_nodes,
+            graph_latest_uuid
+                .as_deref()
+                .or(latest_complete_uuid.as_deref()),
+        );
+        state.latest_uuid = latest_complete_uuid;
+        for record in records {
+            ingest_record(&mut state, record, Utc::now(), RecordOrigin::Initial);
+        }
+
+        Self {
+            state,
+            lines: JsonlLineBuffer::default(),
+            image_directory: image_directory.map(Path::to_path_buf),
+            pending_is_initial: true,
+            tail_window_start: None,
+            tail_window_start_offset: None,
+        }
+    }
+
     pub(in crate::commands::agent::watch_web::messages) fn tail_window_start(
         &self,
     ) -> Option<DateTime<Utc>> {
@@ -143,11 +202,6 @@ impl IncrementalClaudeParser {
         queued_prompts: &[crate::commands::agent::store::WatchWebQueuedPrompt],
         user_marker: Option<&str>,
     ) -> io::Result<Option<Vec<i64>>> {
-        const MAX_PREFIX_SEARCH_BYTES: u64 = 256 * 1024 * 1024;
-
-        if prefix_length > MAX_PREFIX_SEARCH_BYTES {
-            return Ok(None);
-        }
         let (resolved_ids, complete) = tail_window::find_queued_prompt_deliveries(
             reader,
             prefix_length,
