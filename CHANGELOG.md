@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.795](https://github.com/fohte/armyknife/compare/v0.1.794...v0.1.795) (2026-11-18)
+
+
+### Performance Improvements
+
+* **agent-watch-web:** open large sessions faster ([#1976](https://github.com/fohte/armyknife/issues/1976)) ([d41638b](https://github.com/fohte/armyknife/commit/d41638be56e1ee5cba7403f6e3ea5c89b352373c))
+
 ## [0.1.794](https://github.com/fohte/armyknife/compare/v0.1.793...v0.1.794) (2026-11-18)
 
 
