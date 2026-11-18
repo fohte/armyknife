@@ -77,6 +77,23 @@ function selectText(element: Element, rects?: readonly DOMRect[]) {
   })
 }
 
+function selectRange(
+  start: Node,
+  startOffset: number,
+  end: Node,
+  endOffset: number,
+) {
+  const range = document.createRange()
+  range.setStart(start, startOffset)
+  range.setEnd(end, endOffset)
+  act(() => {
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    document.dispatchEvent(new Event('selectionchange'))
+  })
+}
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   window.localStorage.clear()
@@ -148,6 +165,84 @@ it.each([
     })
   },
 )
+
+it.each([
+  {
+    kind: 'paragraph',
+    text: 'Earlier paragraph\n\nFinal paragraph',
+    selector: '.chat-assistant-message p:last-child',
+    expectedDraft: '> Final paragraph\n\n',
+  },
+  {
+    kind: 'list item',
+    text: 'Earlier paragraph\n\n- Earlier item\n- Final item',
+    selector: '.chat-assistant-message li:last-child',
+    expectedDraft: '> Final item\n\n',
+  },
+])(
+  'quotes the last $kind when selection ends at the following message',
+  ({ text, selector, expectedDraft }) => {
+    render([
+      { type: 'assistant', text },
+      { type: 'assistant', text: 'Following message' },
+    ])
+
+    const lastLine = requireElement(container.querySelector(selector))
+    const lastLineText = lastLine.firstChild
+    if (lastLineText === null || lastLineText.nodeType !== Node.TEXT_NODE) {
+      throw new Error('Expected the last line to contain a text node')
+    }
+    const messageParagraphs = container.querySelectorAll(
+      '.chat-assistant-message p',
+    )
+    const nextMessageText = requireElement(
+      messageParagraphs.item(messageParagraphs.length - 1),
+    ).firstChild
+    if (
+      nextMessageText === null ||
+      nextMessageText.nodeType !== Node.TEXT_NODE
+    ) {
+      throw new Error('Expected the following message to contain a text node')
+    }
+    selectRange(lastLineText, 0, nextMessageText, 0)
+
+    act(() => {
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.conversation-selection-reply button',
+        ),
+      ).click()
+    })
+
+    expect(
+      requireElement(container.querySelector<HTMLTextAreaElement>('textarea'))
+        .value,
+    ).toBe(expectedDraft)
+  },
+)
+
+it('does not offer replies when selected text crosses assistant messages', () => {
+  render([
+    { type: 'assistant', text: 'First message' },
+    { type: 'assistant', text: 'Second message' },
+  ])
+  const messageTexts = container.querySelectorAll('.chat-assistant-message p')
+  const firstText = requireElement(messageTexts.item(0)).firstChild
+  const secondText = requireElement(messageTexts.item(1)).firstChild
+  if (
+    firstText === null ||
+    firstText.nodeType !== Node.TEXT_NODE ||
+    secondText === null ||
+    secondText.nodeType !== Node.TEXT_NODE
+  ) {
+    throw new Error('Expected assistant messages to contain text nodes')
+  }
+  selectRange(firstText, 0, secondText, 1)
+
+  expect(
+    container.querySelector('.conversation-selection-reply') !== null,
+  ).toBe(false)
+})
 
 it('does not offer replies for text outside an assistant message', () => {
   render([{ type: 'user', text: 'A user message' }])
