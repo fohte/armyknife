@@ -87,127 +87,224 @@ pub(super) fn find_prefix_helpers<R: Read + Seek>(
     selected_uuids: &HashSet<String>,
     active_ancestor_uuid: Option<String>,
 ) -> io::Result<(Vec<Value>, Vec<String>, bool)> {
-    const MAX_SKILL_LISTINGS: usize = 4096;
-
     if task_ids.is_empty() && !needs_skill_baseline && active_ancestor_uuid.is_none() {
         return Ok((Vec::new(), Vec::new(), true));
     }
 
-    let mut unresolved = task_ids.iter().cloned().collect::<HashSet<_>>();
-    let mut task_records = BTreeMap::new();
-    let mut parent_uuids = HashSet::<String>::new();
-    let mut parent_records = BTreeMap::new();
-    let mut unresolved_active_uuids = active_ancestor_uuid.into_iter().collect::<HashSet<_>>();
-    let mut active_ancestor_uuids = Vec::new();
-    let mut resolved_active_uuids = HashSet::new();
-    let mut skill_listings = Vec::new();
-    let mut found_skill_reset = !needs_skill_baseline;
-    let mut exceeded_skill_limit = false;
+    let mut tasks = PendingTaskPrefix::new(task_ids);
+    let mut ancestry = ActiveAncestorPrefix::new(selected_uuids, active_ancestor_uuid);
+    let mut skills = SkillListingPrefix::new(needs_skill_baseline);
     let complete_scan = visit_prefix_lines_reverse(reader, prefix_length, |line| {
-        let has_requested_task_id = unresolved
-            .iter()
-            .any(|task_id| memmem::find(line, task_id.as_bytes()).is_some());
-        let has_task_notification =
-            has_requested_task_id && memmem::find(line, b"<task-notification>").is_some();
-        let has_task_result =
-            has_requested_task_id && memmem::find(line, b"toolUseResult").is_some();
-        let has_task_event = has_task_notification || has_task_result;
-        let has_uuid = parent_uuids
-            .iter()
-            .chain(&unresolved_active_uuids)
-            .any(|uuid| memmem::find(line, uuid.as_bytes()).is_some());
-        let has_skill_listing =
-            !found_skill_reset && memmem::find(line, b"skill_listing").is_some();
-        if !has_task_event && !has_uuid && !has_skill_listing {
+        let needs_task_record = tasks.needs_event_line(line);
+        let needs_parent_record = tasks.needs_parent_line(line);
+        let needs_ancestor_record = ancestry.needs_line(line);
+        let needs_skill_record = skills.needs_line(line);
+        if !needs_task_record
+            && !needs_parent_record
+            && !needs_ancestor_record
+            && !needs_skill_record
+        {
             return true;
         }
         let Some(record) = parse_record(line) else {
             return true;
         };
-        if has_task_event {
-            if has_task_notification
-                && let Some(text) = super::super::background_tasks::task_notification_text(&record)
-                && let Some(task_id) =
-                    super::super::background_tasks::finished_task_notification_id(&text)
-            {
-                unresolved.remove(task_id);
-            }
-            if record.get("type").and_then(Value::as_str) == Some("user") {
-                for key in [
-                    "task_id",
-                    "taskId",
-                    "background_task_id",
-                    "backgroundTaskId",
-                    "shell_id",
-                    "shellId",
-                    "agentId",
-                ] {
-                    let Some(task_id) = record
-                        .get("toolUseResult")
-                        .and_then(|result| result.get(key))
-                        .and_then(Value::as_str)
-                    else {
-                        continue;
-                    };
-                    if unresolved.remove(task_id) {
-                        if let Some(parent_uuid) = record_parent_uuid(&record) {
-                            parent_uuids.insert(parent_uuid);
-                        }
-                        task_records.insert(task_id.to_owned(), record.clone());
-                    }
-                }
-            }
+        if needs_task_record {
+            tasks.visit_event(line, &record);
         }
-        if has_uuid && let Some(uuid) = record.get("uuid").and_then(Value::as_str) {
-            if parent_uuids.remove(uuid) {
-                parent_records.insert(uuid.to_owned(), record.clone());
-            }
-            if unresolved_active_uuids.remove(uuid) {
-                active_ancestor_uuids.push(uuid.to_owned());
-                resolved_active_uuids.insert(uuid.to_owned());
-                if let Some(parent_uuid) = record_parent_uuid(&record)
-                    && !selected_uuids.contains(&parent_uuid)
-                    && !resolved_active_uuids.contains(&parent_uuid)
-                {
-                    unresolved_active_uuids.insert(parent_uuid);
-                }
-            }
+        if needs_parent_record {
+            tasks.visit_parent(&record);
         }
-        if has_skill_listing && is_skill_listing_record(&record) {
-            let resets_state = resets_skill_listing_state(&record);
-            skill_listings.push(record);
-            if resets_state {
-                found_skill_reset = true;
-            } else if skill_listings.len() >= MAX_SKILL_LISTINGS {
-                exceeded_skill_limit = true;
-            }
+        if needs_ancestor_record {
+            ancestry.visit(&record);
         }
-        if exceeded_skill_limit {
+        if needs_skill_record {
+            skills.visit(&record);
+        }
+        if skills.exceeded_limit() {
             return false;
         }
-        let found_task_records = unresolved.is_empty();
-        let found_parents = parent_uuids.is_empty();
-        if found_task_records
-            && found_parents
-            && found_skill_reset
-            && unresolved_active_uuids.is_empty()
-        {
-            return false;
-        }
-        true
+        !(tasks.complete() && ancestry.complete() && skills.complete(false))
     })?;
 
-    skill_listings.reverse();
-    let all_requested_records_found = unresolved.is_empty() && parent_uuids.is_empty();
-    let complete = !exceeded_skill_limit
-        && (found_skill_reset || complete_scan)
-        && (complete_scan || all_requested_records_found)
-        && (complete_scan || unresolved_active_uuids.is_empty());
-    let mut records = skill_listings;
-    records.extend(parent_records.into_values());
-    records.extend(task_records.into_values());
+    let complete = !skills.exceeded_limit()
+        && (tasks.complete() || complete_scan)
+        && (ancestry.complete() || complete_scan)
+        && skills.complete(complete_scan);
+    let mut records = skills.into_records();
+    records.extend(tasks.into_records());
     records.sort_by_key(record_timestamp);
-    Ok((records, active_ancestor_uuids, complete))
+    Ok((records, ancestry.into_uuids(), complete))
+}
+
+struct PendingTaskPrefix {
+    unresolved: HashSet<String>,
+    task_records: BTreeMap<String, Value>,
+    parent_uuids: HashSet<String>,
+    parent_records: BTreeMap<String, Value>,
+}
+
+impl PendingTaskPrefix {
+    fn new(task_ids: &[String]) -> Self {
+        Self {
+            unresolved: task_ids.iter().cloned().collect(),
+            task_records: BTreeMap::new(),
+            parent_uuids: HashSet::new(),
+            parent_records: BTreeMap::new(),
+        }
+    }
+
+    fn needs_event_line(&self, line: &[u8]) -> bool {
+        !self.unresolved.is_empty()
+            && (memmem::find(line, b"toolUseResult").is_some()
+                || memmem::find(line, b"<task-notification>").is_some())
+    }
+
+    fn needs_parent_line(&self, line: &[u8]) -> bool {
+        self.parent_uuids
+            .iter()
+            .any(|uuid| memmem::find(line, uuid.as_bytes()).is_some())
+    }
+
+    fn visit_event(&mut self, line: &[u8], record: &Value) {
+        if memmem::find(line, b"<task-notification>").is_some()
+            && let Some(text) = super::super::background_tasks::task_notification_text(record)
+            && let Some(task_id) =
+                super::super::background_tasks::finished_task_notification_id(&text)
+        {
+            self.unresolved.remove(task_id);
+        }
+        if record.get("type").and_then(Value::as_str) != Some("user") {
+            return;
+        }
+        let matching_task_ids = task_result_ids(record)
+            .filter(|task_id| self.unresolved.remove(*task_id))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if matching_task_ids.is_empty() {
+            return;
+        }
+        if let Some(parent_uuid) = record_parent_uuid(record) {
+            self.parent_uuids.insert(parent_uuid);
+        }
+        for task_id in matching_task_ids {
+            self.task_records.insert(task_id, record.clone());
+        }
+    }
+
+    fn visit_parent(&mut self, record: &Value) {
+        if let Some(uuid) = record.get("uuid").and_then(Value::as_str)
+            && self.parent_uuids.remove(uuid)
+        {
+            self.parent_records.insert(uuid.to_owned(), record.clone());
+        }
+    }
+
+    fn complete(&self) -> bool {
+        self.unresolved.is_empty() && self.parent_uuids.is_empty()
+    }
+
+    fn into_records(self) -> Vec<Value> {
+        self.parent_records
+            .into_values()
+            .chain(self.task_records.into_values())
+            .collect()
+    }
+}
+
+struct ActiveAncestorPrefix<'a> {
+    selected_uuids: &'a HashSet<String>,
+    unresolved_uuids: HashSet<String>,
+    resolved_uuids: HashSet<String>,
+    active_uuids: Vec<String>,
+}
+
+impl<'a> ActiveAncestorPrefix<'a> {
+    fn new(selected_uuids: &'a HashSet<String>, first_uuid: Option<String>) -> Self {
+        Self {
+            selected_uuids,
+            unresolved_uuids: first_uuid.into_iter().collect(),
+            resolved_uuids: HashSet::new(),
+            active_uuids: Vec::new(),
+        }
+    }
+
+    fn needs_line(&self, line: &[u8]) -> bool {
+        self.unresolved_uuids
+            .iter()
+            .any(|uuid| memmem::find(line, uuid.as_bytes()).is_some())
+    }
+
+    fn visit(&mut self, record: &Value) {
+        let Some(uuid) = record.get("uuid").and_then(Value::as_str) else {
+            return;
+        };
+        if !self.unresolved_uuids.remove(uuid) {
+            return;
+        }
+        self.active_uuids.push(uuid.to_owned());
+        self.resolved_uuids.insert(uuid.to_owned());
+        if let Some(parent_uuid) = record_parent_uuid(record)
+            && !self.selected_uuids.contains(&parent_uuid)
+            && !self.resolved_uuids.contains(&parent_uuid)
+        {
+            self.unresolved_uuids.insert(parent_uuid);
+        }
+    }
+
+    fn complete(&self) -> bool {
+        self.unresolved_uuids.is_empty()
+    }
+
+    fn into_uuids(self) -> Vec<String> {
+        self.active_uuids
+    }
+}
+
+struct SkillListingPrefix {
+    listings: Vec<Value>,
+    found_reset: bool,
+    exceeded_limit: bool,
+}
+
+impl SkillListingPrefix {
+    fn new(needs_baseline: bool) -> Self {
+        Self {
+            listings: Vec::new(),
+            found_reset: !needs_baseline,
+            exceeded_limit: false,
+        }
+    }
+
+    fn needs_line(&self, line: &[u8]) -> bool {
+        !self.found_reset && memmem::find(line, b"skill_listing").is_some()
+    }
+
+    fn visit(&mut self, record: &Value) {
+        const MAX_SKILL_LISTINGS: usize = 4096;
+
+        if !is_skill_listing_record(record) {
+            return;
+        }
+        self.found_reset = resets_skill_listing_state(record);
+        self.listings.push(record.clone());
+        if !self.found_reset && self.listings.len() >= MAX_SKILL_LISTINGS {
+            self.exceeded_limit = true;
+        }
+    }
+
+    fn complete(&self, complete_scan: bool) -> bool {
+        self.found_reset || complete_scan
+    }
+
+    fn exceeded_limit(&self) -> bool {
+        self.exceeded_limit
+    }
+
+    fn into_records(mut self) -> Vec<Value> {
+        self.listings.reverse();
+        self.listings
+    }
 }
 
 pub(super) fn find_queued_prompt_deliveries<R: Read + Seek>(
@@ -264,22 +361,26 @@ pub(super) fn find_queued_prompt_deliveries<R: Read + Seek>(
 }
 
 pub(super) fn record_has_task_id(record: &Value, task_id: &str) -> bool {
-    record
-        .get("toolUseResult")
-        .and_then(Value::as_object)
-        .is_some_and(|result| {
-            [
-                "task_id",
-                "taskId",
-                "background_task_id",
-                "backgroundTaskId",
-                "shell_id",
-                "shellId",
-                "agentId",
-            ]
-            .into_iter()
-            .any(|key| result.get(key).and_then(Value::as_str) == Some(task_id))
-        })
+    task_result_ids(record).any(|id| id == task_id)
+}
+
+fn task_result_ids(record: &Value) -> impl Iterator<Item = &str> + '_ {
+    const TASK_RESULT_ID_KEYS: [&str; 7] = [
+        "task_id",
+        "taskId",
+        "background_task_id",
+        "backgroundTaskId",
+        "shell_id",
+        "shellId",
+        "agentId",
+    ];
+
+    TASK_RESULT_ID_KEYS.into_iter().filter_map(move |key| {
+        record
+            .get("toolUseResult")
+            .and_then(|result| result.get(key))
+            .and_then(Value::as_str)
+    })
 }
 
 fn visit_prefix_lines_reverse<R: Read + Seek>(
