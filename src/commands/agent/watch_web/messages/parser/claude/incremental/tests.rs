@@ -59,6 +59,7 @@ const MAX_PREFIX_SEARCH_BYTES: u64 = 256 * 1024 * 1024;
 
 struct PrefixBeyondSearchLimit {
     header: Vec<u8>,
+    boundary_record: Vec<u8>,
     suffix: Vec<u8>,
     padding_record: Vec<u8>,
     prefix_length: u64,
@@ -68,6 +69,7 @@ impl PrefixBeyondSearchLimit {
     fn reader(&self) -> BufReader<VirtualTranscript> {
         BufReader::new(VirtualTranscript {
             header: self.header.clone(),
+            boundary_record: self.boundary_record.clone(),
             suffix: self.suffix.clone(),
             padding_record: self.padding_record.clone(),
             prefix_length: self.prefix_length,
@@ -76,7 +78,12 @@ impl PrefixBeyondSearchLimit {
     }
 
     fn reference_transcript(&self) -> Vec<u8> {
-        [self.header.as_slice(), self.suffix.as_slice()].concat()
+        [
+            self.header.as_slice(),
+            self.boundary_record.as_slice(),
+            self.suffix.as_slice(),
+        ]
+        .concat()
     }
 }
 
@@ -117,8 +124,18 @@ fn prefix_beyond_search_limit() -> PrefixBeyondSearchLimit {
     .collect::<Vec<_>>()
     .join("\n")
         + "\n";
+    let boundary_record = serde_json::json!({
+        "type": "system",
+        "uuid": "fixture-compact-boundary",
+        "parentUuid": null,
+        "logicalParentUuid": "fixture-skill-baseline",
+        "timestamp": "2026-01-01T00:00:02Z",
+        "subtype": "compact_boundary",
+    })
+    .to_string()
+        + "\n";
     let mut suffix = Vec::new();
-    let mut parent_uuid = "fixture-skill-baseline".to_owned();
+    let mut parent_uuid = "fixture-compact-boundary".to_owned();
     for index in 0..101 {
         let uuid = format!("fixture-message-{index}");
         let mut record = serde_json::json!({
@@ -141,14 +158,18 @@ fn prefix_beyond_search_limit() -> PrefixBeyondSearchLimit {
         format!("{{\"type\":\"fixture-padding\",\"padding\":\"{padding_payload}\"}}\n")
             .into_bytes();
     let header = header.into_bytes();
+    let boundary_record = boundary_record.into_bytes();
     let minimum_prefix_length = MAX_PREFIX_SEARCH_BYTES + 4 * 1024 * 1024;
     let padding_records = minimum_prefix_length
-        .saturating_sub(header.len() as u64)
+        .saturating_sub((header.len() + boundary_record.len()) as u64)
         .div_ceil(padding_record.len() as u64);
-    let prefix_length = header.len() as u64 + padding_records * padding_record.len() as u64;
+    let prefix_length = header.len() as u64
+        + padding_records * padding_record.len() as u64
+        + boundary_record.len() as u64;
 
     PrefixBeyondSearchLimit {
         header,
+        boundary_record,
         suffix,
         padding_record,
         prefix_length,
@@ -157,6 +178,7 @@ fn prefix_beyond_search_limit() -> PrefixBeyondSearchLimit {
 
 struct VirtualTranscript {
     header: Vec<u8>,
+    boundary_record: Vec<u8>,
     suffix: Vec<u8>,
     padding_record: Vec<u8>,
     prefix_length: u64,
@@ -166,6 +188,7 @@ struct VirtualTranscript {
 impl Read for VirtualTranscript {
     fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
         let total_length = self.prefix_length + self.suffix.len() as u64;
+        let padding_end = self.prefix_length - self.boundary_record.len() as u64;
         let read_length = output
             .len()
             .min(total_length.saturating_sub(self.position) as usize);
@@ -178,14 +201,22 @@ impl Read for VirtualTranscript {
                 output[written..written + length]
                     .copy_from_slice(&self.header[source_start..source_start + length]);
                 written += length;
-            } else if position < self.prefix_length {
+            } else if position < padding_end {
                 let padding_position = (position - self.header.len() as u64) as usize;
                 let padding_offset = padding_position % self.padding_record.len();
                 let length = (read_length - written)
                     .min(self.padding_record.len() - padding_offset)
-                    .min((self.prefix_length - position) as usize);
+                    .min((padding_end - position) as usize);
                 output[written..written + length]
                     .copy_from_slice(&self.padding_record[padding_offset..padding_offset + length]);
+                written += length;
+            } else if position < self.prefix_length {
+                let boundary_offset = (position - padding_end) as usize;
+                let length =
+                    (read_length - written).min(self.boundary_record.len() - boundary_offset);
+                output[written..written + length].copy_from_slice(
+                    &self.boundary_record[boundary_offset..boundary_offset + length],
+                );
                 written += length;
             } else {
                 let source_start = (position - self.prefix_length) as usize;
