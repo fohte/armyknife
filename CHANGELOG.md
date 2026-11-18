@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.788](https://github.com/fohte/armyknife/compare/v0.1.787...v0.1.788) (2026-11-18)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** focus reply field on open ([#1960](https://github.com/fohte/armyknife/issues/1960)) ([50160f9](https://github.com/fohte/armyknife/commit/50160f98232d7f11d2d4ce0f491ecd0c99bb1ce5))
+
 ## [0.1.787](https://github.com/fohte/armyknife/compare/v0.1.786...v0.1.787) (2026-11-18)
 
 
