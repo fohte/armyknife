@@ -183,6 +183,21 @@ pub(crate) fn claim_auto_title_generation(sessions_dir: &Path, session_id: &str)
     Ok(inserted == 1)
 }
 
+pub(crate) fn release_auto_title_generation_claim(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<()> {
+    validate_session_id(session_id)?;
+    let mut connection = open_connection(sessions_dir)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    transaction.execute(
+        "DELETE FROM agent_title_generation_attempt WHERE session_id = ?1",
+        [session_id],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
 pub(crate) fn lock_session_for_wake(sessions_dir: &Path, session_id: &str) -> Result<WakeLock> {
     validate_session_id(session_id)?;
     Ok(WakeLock {

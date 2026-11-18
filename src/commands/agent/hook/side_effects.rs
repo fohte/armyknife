@@ -197,30 +197,40 @@ impl SideEffects {
         session_id: &str,
         prompt: &str,
         previous_label: Option<String>,
-    ) {
+    ) -> bool {
         if !self.title_generation {
-            return;
+            return false;
         }
         #[cfg(test)]
-        if let Some(calls) = &self.title_generation_calls {
-            calls
-                .lock()
-                .expect("title_generation_calls mutex poisoned")
-                .push((session_id.to_string(), prompt.to_string(), previous_label));
+        {
+            if let Some(calls) = &self.title_generation_calls {
+                calls
+                    .lock()
+                    .expect("title_generation_calls mutex poisoned")
+                    .push((session_id.to_string(), prompt.to_string(), previous_label));
+                return true;
+            }
+            false
         }
         #[cfg(not(test))]
-        if let Err(error) = super::super::tui::title_generate::spawn_detached_title_generation(
-            super::super::tui::title_generate::SpawnTitleGenerationRequest {
-                session_id: session_id.to_string(),
-                prompt: prompt.to_string(),
-                previous_label,
-            },
-        ) {
-            tracing::warn!(
-                event = "agent.generate_title.spawn_failed",
-                session = %session_id,
-                error = %error,
-            );
+        {
+            match super::super::tui::title_generate::spawn_detached_title_generation(
+                super::super::tui::title_generate::SpawnTitleGenerationRequest {
+                    session_id: session_id.to_string(),
+                    prompt: prompt.to_string(),
+                    previous_label,
+                },
+            ) {
+                Ok(()) => true,
+                Err(error) => {
+                    tracing::warn!(
+                        event = "agent.generate_title.spawn_failed",
+                        session = %session_id,
+                        error = %error,
+                    );
+                    false
+                }
+            }
         }
     }
 

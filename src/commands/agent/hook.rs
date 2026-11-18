@@ -39,6 +39,7 @@ mod session_metadata;
 mod session_start;
 mod side_effects;
 mod stop;
+mod title_generation;
 mod vibe;
 mod work_type;
 
@@ -1076,10 +1077,28 @@ fn process_hook_event_impl_with_env(
     if stop_block_reason.is_none()
         && event == HookEvent::Stop
         && side_effects.title_generation
-        && let Some(prompt) = automatic_title_generation_prompt(&session)
+        && let Some(prompt) = title_generation::prompt(&session)
     {
         match store::claim_auto_title_generation_from(sessions_dir, &session.session_id) {
-            Ok(true) => side_effects.generate_title(&session.session_id, &prompt, None),
+            Ok(true)
+                if !side_effects.generate_title(
+                    &session.session_id,
+                    &prompt,
+                    session.label.clone(),
+                ) =>
+            {
+                if let Err(error) = store::release_auto_title_generation_claim_from(
+                    sessions_dir,
+                    &session.session_id,
+                ) {
+                    tracing::warn!(
+                        event = "agent.generate_title.claim_release_failed",
+                        session = %session.session_id,
+                        error = %error,
+                    );
+                }
+            }
+            Ok(true) => {}
             Ok(false) => {}
             Err(error) => tracing::warn!(
                 event = "agent.generate_title.claim_failed",
@@ -1136,41 +1155,6 @@ fn process_hook_event_impl_with_env(
     }
 
     Ok(ProcessResult::SessionSaved)
-}
-
-fn automatic_title_generation_prompt(session: &Session) -> Option<String> {
-    let first_message =
-        claude_sessions::get_first_user_message_raw(&session.cwd, &session.session_id)?;
-    let existing_title = claude_sessions::get_last_title(&session.cwd, &session.session_id);
-    if !should_generate_automatic_title(
-        session.engine,
-        session.label.as_deref(),
-        existing_title.as_deref(),
-        &first_message,
-    ) {
-        return None;
-    }
-
-    let first_message = claude_sessions::clean_peer_message(&first_message);
-    let last_assistant_message =
-        claude_sessions::get_last_assistant_message(&session.cwd, &session.session_id)
-            .unwrap_or_default();
-    Some(super::tui::title_generate::build_prompt(
-        &first_message,
-        &last_assistant_message,
-    ))
-}
-
-fn should_generate_automatic_title(
-    engine: Engine,
-    label: Option<&str>,
-    existing_title: Option<&str>,
-    first_message: &str,
-) -> bool {
-    engine == Engine::Claude
-        && !label.is_some_and(|label| !label.trim().is_empty())
-        && existing_title.is_none()
-        && super::peer_message::is_peer_message(Some(first_message))
 }
 
 fn is_headless_entrypoint(entrypoint: Option<&str>) -> bool {
@@ -1668,49 +1652,6 @@ mod tests {
         process_hook_event_impl_with_instruction(event, input, sessions_dir, side_effects, None)
     }
 
-    #[rstest]
-    #[case::peer_without_title(
-        Engine::Claude,
-        None,
-        None,
-        "Another peer session sent a message:\nInspect the sample report.",
-        true
-    )]
-    #[case::existing_label(
-        Engine::Claude,
-        Some("Manual label"),
-        None,
-        "Another peer session sent a message:\nInspect the sample report.",
-        false
-    )]
-    #[case::existing_transcript_title(
-        Engine::Claude,
-        None,
-        Some("Transcript title"),
-        "Another peer session sent a message:\nInspect the sample report.",
-        false
-    )]
-    #[case::ordinary_first_prompt(Engine::Claude, None, None, "Inspect the sample report.", false)]
-    #[case::codex_session(
-        Engine::Codex,
-        None,
-        None,
-        "Another peer session sent a message:\nInspect the sample report.",
-        false
-    )]
-    fn automatic_title_requires_an_untitled_claude_peer_session(
-        #[case] engine: Engine,
-        #[case] label: Option<&str>,
-        #[case] existing_title: Option<&str>,
-        #[case] first_message: &str,
-        #[case] expected: bool,
-    ) {
-        assert_eq!(
-            should_generate_automatic_title(engine, label, existing_title, first_message),
-            expected,
-        );
-    }
-
     #[test]
     fn stop_generates_a_clean_peer_title_only_once() {
         use indoc::indoc;
@@ -1735,6 +1676,11 @@ mod tests {
             "#},
         )
         .expect("transcript fixture");
+        let mut session = create_test_session(None);
+        session.session_id = session_id.to_string();
+        session.cwd = cwd.to_path_buf();
+        session.label = Some(" ".to_string());
+        store::save_session_to(sessions_dir.path(), &session).expect("save fixture session");
 
         let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let side_effects = SideEffects {
@@ -1742,25 +1688,52 @@ mod tests {
             title_generation_calls: Some(calls.clone()),
             ..SideEffects::none()
         };
+        let failed_spawn_side_effects = SideEffects {
+            title_generation: true,
+            ..SideEffects::none()
+        };
         let home = home_dir.path().to_str().expect("utf8 home");
+        let attempts = [
+            (false, &side_effects),
+            (true, &failed_spawn_side_effects),
+            (true, &side_effects),
+            (true, &side_effects),
+        ];
 
+        let mut outcomes = Vec::new();
         temp_env::with_vars([("HOME", Some(home))], || {
-            for _ in 0..2 {
+            for (stop_hook_active, effects) in attempts {
                 let input: HookInput = serde_json::from_value(serde_json::json!({
                     "session_id": session_id,
                     "cwd": cwd,
+                    "stop_hook_active": stop_hook_active,
                 }))
                 .expect("stop input");
-                process_hook_event_without_instruction(
+                let result = process_hook_event_impl_with_instruction(
                     HookEvent::Stop,
                     input,
                     sessions_dir.path(),
-                    &side_effects,
+                    effects,
+                    Some(TEST_STOP_HOOK_INSTRUCTION),
                 )
                 .expect("stop event should save");
+                let call_count = calls.lock().expect("title generation calls").len();
+                outcomes.push((result, call_count));
             }
         });
 
+        assert_eq!(
+            outcomes,
+            vec![
+                (
+                    ProcessResult::StopBlocked(TEST_STOP_HOOK_INSTRUCTION.to_string()),
+                    0,
+                ),
+                (ProcessResult::SessionSaved, 0),
+                (ProcessResult::SessionSaved, 1),
+                (ProcessResult::SessionSaved, 1),
+            ],
+        );
         assert_eq!(
             calls.lock().expect("title generation calls").clone(),
             vec![(
@@ -1774,7 +1747,7 @@ mod tests {
                     .trim_end(),
                     "The fictional index is repaired.",
                 ),
-                None,
+                Some(" ".to_string()),
             )],
         );
     }
