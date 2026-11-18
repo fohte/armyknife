@@ -87,6 +87,8 @@ type InboxConversationPanesProps = {
   onCloseSession: (id: string, keepWorktree?: boolean) => void
   onOptimisticSessionOperation?: (operation: SessionOperation) => void
   onSelectSession: (id: string) => void
+  composerFocusRequest?: { sessionId: string; requestId: number } | null
+  onComposerFocusRequestHandled?: (requestId: number) => void
   newSessionPane?: ReactNode
   showMobileNewSession?: boolean
 }
@@ -107,6 +109,8 @@ export function InboxConversationPanes({
   onCloseSession,
   onOptimisticSessionOperation,
   onSelectSession,
+  composerFocusRequest = null,
+  onComposerFocusRequestHandled = () => undefined,
   newSessionPane,
   showMobileNewSession = false,
 }: InboxConversationPanesProps) {
@@ -345,6 +349,12 @@ export function InboxConversationPanes({
           onCloseSession(selectedSession.id)
         }}
         isToday={selectedSession.isToday === true}
+        composerFocusRequestId={
+          composerFocusRequest?.sessionId === selectedSession.id
+            ? composerFocusRequest.requestId
+            : null
+        }
+        onComposerFocusRequestHandled={onComposerFocusRequestHandled}
         onToggleToday={(isToday) => {
           inboxProps.onToggleToday(selectedSession.id, isToday)
         }}

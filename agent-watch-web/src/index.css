@@ -245,7 +245,7 @@
   min-height: 32px;
   flex: 0 0 32px;
   align-items: center;
-  gap: 18px;
+  gap: 16px;
   padding: 0 16px;
   border-top: 1px solid var(--aw-border-row);
   color: var(--aw-text-secondary);

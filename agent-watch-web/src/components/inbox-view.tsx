@@ -446,6 +446,9 @@ export function InboxView({
       </div>
       <footer className="inbox-footer" aria-label="Keyboard shortcuts">
         <span>
+          <kbd>i</kbd> Reply
+        </span>
+        <span>
           <kbd>j</kbd> <kbd>k</kbd> Move
         </span>
         <span>

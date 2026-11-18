@@ -60,6 +60,8 @@ it('maps Later and Board shortcuts separately from row movement', () => {
     getSessionShortcutAction('l', false, 'inbox'),
     getSessionShortcutAction('E', false, 'inbox'),
     getSessionShortcutAction('E', true, 'inbox'),
+    getSessionShortcutAction('i', false, 'inbox'),
+    getSessionShortcutAction('i', true, 'inbox'),
   ]
 
   expect(getShortcutResults()).toEqual([
@@ -72,6 +74,8 @@ it('maps Later and Board shortcuts separately from row movement', () => {
     { type: 'later' },
     { type: 'later' },
     { type: 'close' },
+    null,
+    { type: 'focus-composer' },
     null,
   ])
 })

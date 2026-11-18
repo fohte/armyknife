@@ -20,6 +20,9 @@ import type { Session, SkillSuggestion } from '#types'
 type MessageComposerProps = {
   draft: string
   focusDraft?: string | null
+  focusRequestId?: number | null
+  onFocusRequestHandled?: (requestId: number) => void
+  actionsReady?: boolean
   placeholder: string
   disabled: boolean
   isSending: boolean
@@ -43,6 +46,9 @@ type ComposerAttachment = AttachmentPreview
 export function MessageComposer({
   draft,
   focusDraft = null,
+  focusRequestId = null,
+  onFocusRequestHandled,
+  actionsReady = true,
   placeholder,
   disabled,
   isSending,
@@ -86,6 +92,22 @@ export function MessageComposer({
     }
   }, [draft, focusDraft])
 
+  useLayoutEffect(() => {
+    if (focusRequestId === null || !actionsReady) return
+    const textarea = skillCompletion.textareaRef.current
+    if (textarea !== null && !disabled && !isMobile) {
+      textarea.focus()
+    }
+    onFocusRequestHandled?.(focusRequestId)
+  }, [
+    actionsReady,
+    disabled,
+    focusRequestId,
+    isMobile,
+    onFocusRequestHandled,
+    skillCompletion.textareaRef,
+  ])
+
   const handleSubmit = (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault()
     onSend()
@@ -99,6 +121,7 @@ export function MessageComposer({
     <form
       className="conversation-composer"
       aria-busy={isProcessingAttachments}
+      data-actions-ready={actionsReady ? 'true' : 'false'}
       data-mobile={isMobile ? 'true' : undefined}
       onSubmit={handleSubmit}
     >

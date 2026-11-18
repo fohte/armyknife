@@ -93,6 +93,8 @@ type ConversationPaneViewProps = {
   onClose?: () => void
   isToday?: boolean
   onToggleToday?: (isToday: boolean) => void
+  composerFocusRequestId?: number | null
+  onComposerFocusRequestHandled?: (requestId: number) => void
 }
 
 export function ConversationPaneView({
@@ -137,6 +139,8 @@ export function ConversationPaneView({
   onClose,
   isToday = false,
   onToggleToday,
+  composerFocusRequestId = null,
+  onComposerFocusRequestHandled = () => undefined,
 }: ConversationPaneViewProps) {
   const { usage } = useAgentUsageContext()
   const sessionUsage =
@@ -433,6 +437,9 @@ export function ConversationPaneView({
       <MessageComposer
         draft={draft}
         focusDraft={focusDraft}
+        focusRequestId={composerFocusRequestId}
+        onFocusRequestHandled={onComposerFocusRequestHandled}
+        actionsReady={actionsReady}
         engine={session.engine}
         skills={skills}
         placeholder={

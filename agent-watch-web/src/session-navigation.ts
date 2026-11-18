@@ -5,6 +5,7 @@ export type SessionView = 'inbox' | 'board'
 export type SessionShortcutAction =
   | { type: 'move'; key: 'j' | 'k' }
   | { type: 'view'; view: SessionView }
+  | { type: 'focus-composer' }
   | { type: 'later' }
   | { type: 'close' }
   | null
@@ -45,6 +46,10 @@ export function getSessionShortcutAction(
 
   if (!shiftKey && key.toLowerCase() === 'e') {
     return { type: 'close' }
+  }
+
+  if (!shiftKey && key.toLowerCase() === 'i') {
+    return { type: 'focus-composer' }
   }
 
   if (!shiftKey && (key === 'j' || key === 'k')) {

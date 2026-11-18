@@ -557,6 +557,41 @@ function mockSessionActionFetch(input: RequestInfo | URL) {
     : Promise.resolve(response)
 }
 
+function mockComposerActions(message: boolean) {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn<typeof fetch>((input) => {
+      if (requestUrl(input).endsWith('/actions')) {
+        return Promise.resolve(
+          jsonResponse({
+            message,
+            answerQuestion: true,
+            interrupt: true,
+            openInTerminal: true,
+            rewind: false,
+          }),
+        )
+      }
+      return mockPendingResponse()
+    }),
+  )
+}
+
+async function waitForComposerActions() {
+  await act(async () => {
+    for (
+      let index = 0;
+      index < 12 &&
+      container
+        .querySelector<HTMLFormElement>('.conversation-composer')
+        ?.getAttribute('data-actions-ready') !== 'true';
+      index += 1
+    ) {
+      await Promise.resolve()
+    }
+  })
+}
+
 function flushAsyncState() {
   return new Promise<void>((resolve) => window.setTimeout(resolve, 0))
 }
@@ -4224,6 +4259,204 @@ it('returns a Later session after its deadline without a feed update', async () 
   })
 })
 
+it('focuses the reply field after selecting a session in Inbox', async () => {
+  mockComposerActions(true)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('fixture-inbox-session', 'Inbox session')],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  await waitForComposerActions()
+
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '.conversation-composer textarea',
+  )
+  const snapshot = () => ({
+    composerExists: textarea !== null,
+    focused: document.activeElement === textarea,
+  })
+  expect(snapshot()).toEqual({ composerExists: true, focused: true })
+})
+
+it('focuses the reply field after opening a Board session', async () => {
+  mockComposerActions(true)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('fixture-board-session', 'Board session')],
+  })
+  act(() => {
+    dispatchKey(window, 'B', { shiftKey: true })
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Open in Inbox: Board session"]',
+      )
+      ?.click()
+  })
+  await waitForComposerActions()
+
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '.conversation-composer textarea',
+  )
+  const snapshot = () => ({
+    activeView: readActiveView(),
+    focused: document.activeElement === textarea,
+  })
+  expect(snapshot()).toEqual({ activeView: 'Inbox', focused: true })
+})
+
+it('does not move reply focus when navigating with j and k', async () => {
+  mockComposerActions(true)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('fixture-first-session', 'First session'),
+      session('fixture-second-session', 'Second session'),
+    ],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  await waitForComposerActions()
+  const outsideButton = document.createElement('button')
+  document.body.append(outsideButton)
+  outsideButton.focus()
+  act(() => {
+    dispatchKey(window, 'j')
+  })
+
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '.conversation-composer textarea',
+  )
+  const snapshot = () => ({
+    selectedTitle: readSelectedTitle(),
+    outsideButtonRetainsFocus: document.activeElement === outsideButton,
+    composerFocused: document.activeElement === textarea,
+  })
+  expect(snapshot()).toEqual({
+    selectedTitle: 'Second session',
+    outsideButtonRetainsFocus: true,
+    composerFocused: false,
+  })
+  outsideButton.remove()
+})
+
+it('does not focus the reply field on a mobile session selection', async () => {
+  mockComposerActions(true)
+  mobileViewportMatches = true
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('fixture-mobile-session', 'Mobile session')],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  await waitForComposerActions()
+
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '.conversation-composer textarea',
+  )
+  const outsideButton = document.createElement('button')
+  document.body.append(outsideButton)
+  outsideButton.focus()
+  const events: KeyboardEvent[] = []
+  act(() => {
+    events.push(dispatchKey(outsideButton, 'i'))
+  })
+  const snapshot = () => ({
+    composerExists: textarea !== null,
+    focused: document.activeElement === textarea,
+    defaultPrevented: events[0]?.defaultPrevented,
+  })
+  expect(snapshot()).toEqual({
+    composerExists: true,
+    focused: false,
+    defaultPrevented: false,
+  })
+  outsideButton.remove()
+})
+
+it('uses i to focus an enabled reply field without inserting the key', async () => {
+  mockComposerActions(true)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('fixture-shortcut-session', 'Shortcut session')],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  await waitForComposerActions()
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '.conversation-composer textarea',
+  )
+  const outsideButton = document.createElement('button')
+  document.body.append(outsideButton)
+  outsideButton.focus()
+  const events: KeyboardEvent[] = []
+  act(() => {
+    events.push(dispatchKey(outsideButton, 'i', { shiftKey: true }))
+    events.push(dispatchKey(outsideButton, 'i', { ctrlKey: true }))
+    events.push(dispatchKey(outsideButton, 'i', { metaKey: true }))
+    events.push(dispatchKey(outsideButton, 'i', { altKey: true }))
+    events.push(dispatchKey(outsideButton, 'i'))
+  })
+
+  const snapshot = () => ({
+    focused: document.activeElement === textarea,
+    defaultPrevented: events.map((event) => event.defaultPrevented),
+    draft: textarea?.value,
+  })
+  expect(snapshot()).toEqual({
+    focused: true,
+    defaultPrevented: [false, false, false, false, true],
+    draft: '',
+  })
+  outsideButton.remove()
+})
+
+it('does nothing when a selected session cannot accept replies', async () => {
+  mockComposerActions(false)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('fixture-disabled-session', 'Disabled session')],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  await waitForComposerActions()
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '.conversation-composer textarea',
+  )
+  const outsideButton = document.createElement('button')
+  document.body.append(outsideButton)
+  outsideButton.focus()
+  const events: KeyboardEvent[] = []
+  act(() => {
+    events.push(dispatchKey(outsideButton, 'i'))
+  })
+
+  const snapshot = () => ({
+    disabled: textarea?.disabled,
+    buttonRetainsFocus: document.activeElement === outsideButton,
+    defaultPrevented: events[0]?.defaultPrevented,
+  })
+  expect(snapshot()).toEqual({
+    disabled: true,
+    buttonRetainsFocus: true,
+    defaultPrevented: false,
+  })
+  outsideButton.remove()
+})
+
 it('ignores shortcuts from input fields and events with modifiers', () => {
   renderApp()
   publishSessions({
@@ -4233,6 +4466,7 @@ it('ignores shortcuts from input fields and events with modifiers', () => {
 
   const input = document.createElement('input')
   const textarea = document.createElement('textarea')
+  textarea.value = 'Keep this draft'
   const select = document.createElement('select')
   const editable = document.createElement('div')
   editable.contentEditable = 'true'
@@ -4244,6 +4478,10 @@ it('ignores shortcuts from input fields and events with modifiers', () => {
     events.push(dispatchKey(textarea, 'j'))
     events.push(dispatchKey(select, 'j'))
     events.push(dispatchKey(editable, 'j'))
+    events.push(dispatchKey(input, 'i'))
+    events.push(dispatchKey(textarea, 'i'))
+    events.push(dispatchKey(select, 'i'))
+    events.push(dispatchKey(editable, 'i'))
     events.push(dispatchKey(input, '['))
     events.push(dispatchKey(input, '.', { metaKey: true }))
     events.push(dispatchKey(window, 'j', { altKey: true }))
@@ -4254,12 +4492,18 @@ it('ignores shortcuts from input fields and events with modifiers', () => {
 
   const snapshot = () => ({
     selectedTitle: readSelectedTitle(),
+    textareaValue: textarea.value,
     defaultPrevented: events.map((event) => event.defaultPrevented),
   })
 
   expect(snapshot()).toEqual({
     selectedTitle: 'First session',
+    textareaValue: 'Keep this draft',
     defaultPrevented: [
+      false,
+      false,
+      false,
+      false,
       false,
       false,
       false,
