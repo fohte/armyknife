@@ -155,6 +155,7 @@ impl IncrementalClaudeParser {
             state
                 .transcript_nodes
                 .entry(uuid)
+                .and_modify(|node| node.membership = BranchMembership::Active)
                 .or_insert(TranscriptNode {
                     parent_uuid: None,
                     membership: BranchMembership::Active,

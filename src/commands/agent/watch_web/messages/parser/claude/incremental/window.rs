@@ -75,6 +75,8 @@ pub(super) fn new_tail_window_bounded(
         })
         .collect::<HashSet<_>>();
     let active_ancestor_uuid = active_ancestor_uuid(&selected_records);
+    let branch_ancestor_uuids =
+        branch_ancestor_uuids(&selected_records, active_ancestor_uuid.as_deref());
     if missing_task_ids.len() > 4096 {
         log_tail_window_fallback(started, "pending_task_search_limit_exceeded");
         return Ok(None);
@@ -87,6 +89,7 @@ pub(super) fn new_tail_window_bounded(
         needs_skill_baseline,
         &selected_uuids,
         active_ancestor_uuid,
+        branch_ancestor_uuids,
     )?;
     if !complete {
         log_tail_window_fallback(started, "prefix_parser_state_unavailable");
@@ -135,6 +138,52 @@ fn active_ancestor_uuid(records: &[Value]) -> Option<String> {
         current_uuid = parent_uuid;
     }
     None
+}
+
+fn branch_ancestor_uuids(records: &[Value], active_ancestor_uuid: Option<&str>) -> HashSet<String> {
+    let parents = records
+        .iter()
+        .filter_map(|record| {
+            let uuid = record.get("uuid").and_then(Value::as_str)?;
+            Some((uuid.to_owned(), record_parent_uuid(record)))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let selected_uuids = parents.keys().cloned().collect::<HashSet<_>>();
+    let mut active_uuids = HashSet::new();
+    let mut current_uuid = records
+        .iter()
+        .rev()
+        .find_map(|record| record.get("uuid").and_then(Value::as_str))
+        .map(str::to_owned);
+    while let Some(uuid) = current_uuid {
+        if !active_uuids.insert(uuid.clone()) {
+            break;
+        }
+        let Some(parent_uuid) = parents.get(&uuid).and_then(Clone::clone) else {
+            break;
+        };
+        if !selected_uuids.contains(&parent_uuid) {
+            break;
+        }
+        current_uuid = Some(parent_uuid);
+    }
+
+    records
+        .iter()
+        .filter_map(|record| {
+            let uuid = record.get("uuid").and_then(Value::as_str)?;
+            if active_uuids.contains(uuid) {
+                return None;
+            }
+            let parent_uuid = record_parent_uuid(record)?;
+            if selected_uuids.contains(&parent_uuid)
+                || Some(parent_uuid.as_str()) == active_ancestor_uuid
+            {
+                return None;
+            }
+            Some(parent_uuid)
+        })
+        .collect()
 }
 
 fn select_window_start(

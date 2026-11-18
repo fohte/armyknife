@@ -86,13 +86,19 @@ pub(super) fn find_prefix_helpers<R: Read + Seek>(
     needs_skill_baseline: bool,
     selected_uuids: &HashSet<String>,
     active_ancestor_uuid: Option<String>,
+    branch_ancestor_uuids: HashSet<String>,
 ) -> io::Result<(Vec<Value>, Vec<String>, bool)> {
-    if task_ids.is_empty() && !needs_skill_baseline && active_ancestor_uuid.is_none() {
+    if task_ids.is_empty()
+        && !needs_skill_baseline
+        && active_ancestor_uuid.is_none()
+        && branch_ancestor_uuids.is_empty()
+    {
         return Ok((Vec::new(), Vec::new(), true));
     }
 
     let mut tasks = PendingTaskPrefix::new(task_ids);
-    let mut ancestry = ActiveAncestorPrefix::new(selected_uuids, active_ancestor_uuid);
+    let mut ancestry =
+        ActiveAncestorPrefix::new(selected_uuids, active_ancestor_uuid, branch_ancestor_uuids);
     let mut skills = SkillListingPrefix::new(needs_skill_baseline);
     let complete_scan = visit_prefix_lines_reverse(reader, prefix_length, |line| {
         let needs_task_record = tasks.needs_event_line(line);
@@ -133,6 +139,7 @@ pub(super) fn find_prefix_helpers<R: Read + Seek>(
         && skills.complete(complete_scan);
     let mut records = skills.into_records();
     records.extend(tasks.into_records());
+    records.extend(ancestry.take_branch_records());
     records.sort_by_key(record_timestamp);
     Ok((records, ancestry.into_uuids(), complete))
 }
@@ -217,21 +224,32 @@ struct ActiveAncestorPrefix<'a> {
     unresolved_uuids: HashSet<String>,
     resolved_uuids: HashSet<String>,
     active_uuids: Vec<String>,
+    unresolved_branch_uuids: HashSet<String>,
+    resolved_branch_uuids: HashSet<String>,
+    branch_records: BTreeMap<String, Value>,
 }
 
 impl<'a> ActiveAncestorPrefix<'a> {
-    fn new(selected_uuids: &'a HashSet<String>, first_uuid: Option<String>) -> Self {
+    fn new(
+        selected_uuids: &'a HashSet<String>,
+        first_uuid: Option<String>,
+        branch_ancestor_uuids: HashSet<String>,
+    ) -> Self {
         Self {
             selected_uuids,
             unresolved_uuids: first_uuid.into_iter().collect(),
             resolved_uuids: HashSet::new(),
             active_uuids: Vec::new(),
+            unresolved_branch_uuids: branch_ancestor_uuids,
+            resolved_branch_uuids: HashSet::new(),
+            branch_records: BTreeMap::new(),
         }
     }
 
     fn needs_line(&self, line: &[u8]) -> bool {
         self.unresolved_uuids
             .iter()
+            .chain(&self.unresolved_branch_uuids)
             .any(|uuid| memmem::find(line, uuid.as_bytes()).is_some())
     }
 
@@ -239,16 +257,34 @@ impl<'a> ActiveAncestorPrefix<'a> {
         let Some(uuid) = record.get("uuid").and_then(Value::as_str) else {
             return;
         };
-        if !self.unresolved_uuids.remove(uuid) {
+        let on_active_path = self.unresolved_uuids.remove(uuid);
+        let on_branch_path = self.unresolved_branch_uuids.remove(uuid);
+        if !on_active_path && !on_branch_path {
             return;
         }
-        self.active_uuids.push(uuid.to_owned());
-        self.resolved_uuids.insert(uuid.to_owned());
-        if let Some(parent_uuid) = record_parent_uuid(record)
-            && !self.selected_uuids.contains(&parent_uuid)
-            && !self.resolved_uuids.contains(&parent_uuid)
-        {
-            self.unresolved_uuids.insert(parent_uuid);
+        if on_active_path {
+            self.active_uuids.push(uuid.to_owned());
+            self.resolved_uuids.insert(uuid.to_owned());
+            if let Some(parent_uuid) = record_parent_uuid(record)
+                && !self.selected_uuids.contains(&parent_uuid)
+                && !self.resolved_uuids.contains(&parent_uuid)
+            {
+                self.unresolved_uuids.insert(parent_uuid);
+            }
+        }
+        if on_branch_path {
+            self.resolved_branch_uuids.insert(uuid.to_owned());
+            if !self.resolved_uuids.contains(uuid) {
+                self.branch_records.insert(uuid.to_owned(), record.clone());
+                if let Some(parent_uuid) = record_parent_uuid(record)
+                    && !self.selected_uuids.contains(&parent_uuid)
+                    && !self.resolved_uuids.contains(&parent_uuid)
+                    && !self.unresolved_uuids.contains(&parent_uuid)
+                    && !self.resolved_branch_uuids.contains(&parent_uuid)
+                {
+                    self.unresolved_branch_uuids.insert(parent_uuid);
+                }
+            }
         }
     }
 
@@ -258,6 +294,12 @@ impl<'a> ActiveAncestorPrefix<'a> {
 
     fn into_uuids(self) -> Vec<String> {
         self.active_uuids
+    }
+
+    fn take_branch_records(&mut self) -> Vec<Value> {
+        std::mem::take(&mut self.branch_records)
+            .into_values()
+            .collect()
     }
 }
 

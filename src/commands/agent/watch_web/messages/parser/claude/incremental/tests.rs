@@ -274,6 +274,32 @@ fn parse_all(bytes: &[u8], additions: ParserAdditions<'_>) -> super::ParsedTrans
         .unwrap()
 }
 
+fn last_messages(mut parsed: super::ParsedTranscript, limit: usize) -> super::ParsedTranscript {
+    parsed.0 = parsed
+        .0
+        .into_iter()
+        .rev()
+        .take(limit)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    parsed
+}
+
+fn last_message_and_state(mut parsed: super::ParsedTranscript) -> super::ParsedTranscript {
+    parsed.0 = parsed
+        .0
+        .into_iter()
+        .rev()
+        .take(1)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    parsed
+}
+
 fn incremental_result(
     prefix: &[u8],
     suffix: &[u8],
@@ -613,20 +639,77 @@ fn tail_window_matches_the_full_parse_after_a_compact_boundary_with_a_missing_pa
     .unwrap()
     .render_with(fixed_time(), additions)
     .unwrap();
-    let last_messages = |mut parsed: super::ParsedTranscript| {
-        parsed.0 = parsed
-            .0
-            .into_iter()
-            .rev()
-            .take(100)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-        parsed
-    };
+    assert_eq!(last_messages(actual, 100), last_messages(expected, 100));
+}
 
-    assert_eq!(last_messages(actual), last_messages(expected));
+#[test]
+fn tail_window_excludes_an_abandoned_branch_whose_parent_is_outside_the_window() {
+    let padding = "x".repeat(5 * 1024 * 1024);
+    let transcript = [
+        serde_json::json!({
+            "type": "user",
+            "uuid": "fixture-root",
+            "parentUuid": null,
+            "timestamp": "2026-01-01T00:00:01Z",
+            "message": {"content": "Fixture root."},
+        }),
+        serde_json::json!({
+            "type": "assistant",
+            "uuid": "fixture-abandoned-parent",
+            "parentUuid": "fixture-root",
+            "timestamp": "2026-01-01T00:00:02Z",
+            "message": {"content": [{"type": "text", "text": "Abandoned response."}]},
+        }),
+        serde_json::json!({
+            "type": "system",
+            "uuid": "fixture-padding",
+            "parentUuid": "fixture-root",
+            "padding": padding,
+        }),
+        serde_json::json!({
+            "type": "user",
+            "uuid": "fixture-abandoned-request",
+            "parentUuid": "fixture-abandoned-parent",
+            "timestamp": "2026-01-01T00:00:03Z",
+            "message": {"content": "Abandoned branch request."},
+        }),
+        serde_json::json!({
+            "type": "user",
+            "uuid": "fixture-replacement-request",
+            "parentUuid": "fixture-root",
+            "timestamp": "2026-01-01T00:00:04Z",
+            "message": {"content": "Replacement request."},
+        }),
+        serde_json::json!({
+            "type": "assistant",
+            "uuid": "fixture-replacement-response",
+            "parentUuid": "fixture-replacement-request",
+            "timestamp": "2026-01-01T00:00:05Z",
+            "message": {"content": [{"type": "text", "text": "Replacement response."}]},
+        }),
+        serde_json::json!({
+            "type": "user",
+            "uuid": "fixture-latest-request",
+            "parentUuid": "fixture-replacement-response",
+            "timestamp": "2026-01-01T00:00:06Z",
+            "message": {"content": "Latest request."},
+        }),
+    ]
+    .into_iter()
+    .map(|record| record.to_string())
+    .collect::<Vec<_>>()
+    .join("\n");
+    let additions = empty_additions();
+    let mut expected = parse_all(transcript.as_bytes(), additions);
+    expected.0 = expected.0.into_iter().skip(1).collect();
+    let actual =
+        IncrementalClaudeParser::new_tail_window(Cursor::new(transcript.as_bytes()), None, 3, &[])
+            .unwrap()
+            .unwrap()
+            .render_with(fixed_time(), additions)
+            .unwrap();
+
+    assert_eq!(actual, expected);
 }
 
 #[rstest]
@@ -646,25 +729,12 @@ fn tail_window_matches_the_full_parse_when_the_prefix_exceeds_the_search_limit(
     .unwrap();
     let prefix_length = tail_parser.tail_window_start_offset().unwrap();
     let actual = tail_parser.render_with(fixed_time(), additions).unwrap();
-    let last_messages = |mut parsed: super::ParsedTranscript| {
-        parsed.0 = parsed
-            .0
-            .into_iter()
-            .rev()
-            .take(100)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-        parsed
-    };
-
     assert_eq!(
         (
             prefix_length > MAX_PREFIX_SEARCH_BYTES,
-            last_messages(actual)
+            last_messages(actual, 100)
         ),
-        (true, last_messages(expected)),
+        (true, last_messages(expected, 100)),
     );
 }
 
@@ -720,12 +790,7 @@ fn tail_window_matches_the_full_parse_when_an_attachment_follows_tool_results() 
             .unwrap()
             .render_with(fixed_time(), additions)
             .unwrap();
-    let last_messages = |mut parsed: super::ParsedTranscript| {
-        parsed.0 = parsed.0.into_iter().rev().take(2).collect::<Vec<_>>();
-        parsed
-    };
-
-    assert_eq!(last_messages(actual), last_messages(expected));
+    assert_eq!(last_messages(actual, 2), last_messages(expected, 2));
 }
 
 #[test]
@@ -755,22 +820,89 @@ fn tail_window_restores_an_older_pending_task_start() {
     .unwrap()
     .render_with(fixed_time(), additions)
     .unwrap();
-    let last_message_and_state = |mut parsed: super::ParsedTranscript| {
-        parsed.0 = parsed
-            .0
-            .into_iter()
-            .rev()
-            .take(1)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-        parsed
-    };
-
     assert_eq!(
         last_message_and_state(actual),
         last_message_and_state(expected)
+    );
+}
+
+#[test]
+fn tail_window_restores_a_running_task_behind_a_compact_boundary() {
+    let padding = "x".repeat(5 * 1024 * 1024);
+    let records = [
+        serde_json::json!({
+            "type": "user",
+            "uuid": "fixture-root",
+            "parentUuid": null,
+            "timestamp": "2026-01-01T00:00:01Z",
+            "message": {"content": "Fixture root."},
+        }),
+        serde_json::json!({
+            "type": "assistant",
+            "uuid": "fixture-task-call",
+            "parentUuid": "fixture-root",
+            "timestamp": "2026-01-01T00:00:02Z",
+            "message": {"content": [{
+                "type": "tool_use",
+                "id": "fixture-task-use",
+                "name": "Bash",
+                "input": {"command": "fixture background task", "run_in_background": true},
+            }]},
+        }),
+        serde_json::json!({
+            "type": "user",
+            "uuid": "fixture-task-started",
+            "parentUuid": "fixture-task-call",
+            "timestamp": "2026-01-01T00:00:03Z",
+            "toolUseResult": {"task_id": "fixture-task-id"},
+            "message": {"content": [{
+                "type": "tool_result",
+                "tool_use_id": "fixture-task-use",
+                "content": "Background task started (id: fixture-task-id)",
+            }]},
+        }),
+        serde_json::json!({
+            "type": "system",
+            "uuid": "fixture-compact-boundary",
+            "parentUuid": null,
+            "logicalParentUuid": "fixture-task-started",
+            "timestamp": "2026-01-01T00:00:04Z",
+            "subtype": "compact_boundary",
+        }),
+        serde_json::json!({
+            "type": "system",
+            "uuid": "fixture-padding",
+            "parentUuid": "fixture-compact-boundary",
+            "padding": padding,
+        }),
+        serde_json::json!({
+            "type": "user",
+            "uuid": "fixture-latest-request",
+            "parentUuid": "fixture-compact-boundary",
+            "timestamp": "2026-01-01T00:00:05Z",
+            "message": {"content": "Latest fixture request."},
+        }),
+    ]
+    .into_iter()
+    .map(|record| record.to_string())
+    .collect::<Vec<_>>()
+    .join("\n");
+    let additions = empty_additions();
+    let expected = parse_all(records.as_bytes(), additions);
+    let actual = IncrementalClaudeParser::new_tail_window(
+        Cursor::new(records.as_bytes()),
+        None,
+        1,
+        &["fixture-task-id".to_owned()],
+    )
+    .unwrap()
+    .unwrap()
+    .render_with(fixed_time(), additions)
+    .unwrap();
+
+    assert_eq!(
+        last_message_and_state(actual),
+        last_message_and_state(expected),
     );
 }
 
@@ -790,11 +922,6 @@ fn tail_window_restores_the_initial_skills_before_an_in_window_addition() {
             .unwrap()
             .render_with(fixed_time(), additions)
             .unwrap();
-    let last_message_and_state = |mut parsed: super::ParsedTranscript| {
-        parsed.0 = parsed.0.into_iter().rev().take(1).collect::<Vec<_>>();
-        parsed
-    };
-
     assert_eq!(
         last_message_and_state(actual),
         last_message_and_state(expected)
