@@ -71,6 +71,7 @@ export type Session = {
   pullRequest: PullRequest | null
   pullRequests?: PullRequest[]
   critUrl?: string | null
+  isWaitingForCritReview?: boolean
   webUis?: { name: string; url: string; exposedUrl?: string | null }[]
   reviewDocumentId?: string | null
   laterUntil?: string | null

@@ -210,6 +210,7 @@ it.each(['Todo', 'Proposal'] as const)(
           currentSession={{
             ...session,
             kind,
+            isWaitingForCritReview: true,
             critUrl: 'https://crit.example.test/review/fixture',
           }}
         />,

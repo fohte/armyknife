@@ -26,7 +26,7 @@ use crate::commands::agent::tq_session_tasks::SessionTask as LinkedSessionTask;
 use crate::commands::agent::types::{
     DisplayStatus, Engine, Session, SessionStatus, WebUiRegistration,
 };
-use crate::commands::agent::user_turn::user_turns;
+use crate::commands::agent::user_turn::{UserTurnKind, user_turns};
 use crate::commands::agent::vibe::VibeState;
 use crate::infra::github::{PrCiState, PrState};
 use crate::shared::config::Config;
@@ -161,6 +161,7 @@ struct SessionView {
     pull_request: Option<SessionPullRequestView>,
     pull_requests: Vec<SessionPullRequestView>,
     crit_url: Option<String>,
+    is_waiting_for_crit_review: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     web_uis: Vec<WebUiRegistration>,
     later_until: Option<DateTime<Utc>>,
@@ -599,6 +600,7 @@ async fn list_sessions<S: SessionSource>(
                 pull_request,
                 pull_requests: session_pull_requests,
                 crit_url,
+                is_waiting_for_crit_review: turn == Some(UserTurnKind::Crit),
                 web_uis,
                 later_until: state.and_then(|state| state.later_until),
                 is_today: state.is_some_and(|state| state.is_today),
@@ -1675,7 +1677,8 @@ mod tests {
                 "isCompacting": false,
                 "decisionCount": 4,
                 "unreviewedDecisionCount": 2,
-                "critUrl": details.crit_url
+                "critUrl": details.crit_url,
+                "isWaitingForCritReview": false
             }]
         });
         expected["sessions"][0]["vibeMode"] = serde_json::json!({ "mode": "repo_disabled" });
@@ -1956,6 +1959,10 @@ mod tests {
         source.sessions[0].last_prompted_at =
             Some(Utc.timestamp_opt(900, 0).single().expect("valid timestamp"));
         source.sessions[0].crit_urls = vec!["http://127.0.0.1:6000".to_string()];
+        source.unanswered_todo_titles.insert(
+            "child-session".to_string(),
+            "Check the sample page".to_string(),
+        );
         source.sessions[0].web_uis = vec![
             WebUiRegistration {
                 name: "Editor".to_owned(),
@@ -1987,7 +1994,7 @@ mod tests {
             None,
             false,
             ExpectedSessionDetails {
-                kind: Some("Review"),
+                kind: Some("Todo"),
                 category_when_not_later: "needs_action",
                 is_paused: false,
                 unread: false,
@@ -2016,6 +2023,50 @@ mod tests {
         ]);
         expected["sessions"][0]["reviewDocumentId"] = serde_json::json!("fixture-review");
         expected["sessions"][0]["lastPromptedAt"] = serde_json::json!("1970-01-01T00:15:00Z");
+        expected["sessions"][0]["isWaitingForCritReview"] = serde_json::json!(true);
+        expected["sessions"][0]["preview"] = serde_json::json!("Check the sample page");
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_feed_reports_completed_crit_review_while_todo_remains(
+        mut source: TestSessionSource,
+    ) {
+        source.sessions[0].status = SessionStatus::Running;
+        source.sessions[0].crit_urls = vec!["http://127.0.0.1:6000".to_string()];
+        source.unanswered_todo_titles.insert(
+            "child-session".to_string(),
+            "Check the sample page".to_string(),
+        );
+
+        let mut expected = expected_response(
+            "needs_action",
+            Some("1970-01-01T01:18:20Z"),
+            true,
+            ExpectedSessionDetails {
+                kind: Some("Todo"),
+                category_when_not_later: "needs_action",
+                is_paused: false,
+                unread: false,
+                crit_url: Some("http://127.0.0.1:6000"),
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["activityStatus"] = serde_json::json!("working");
+        expected["sessions"][0]["preview"] = serde_json::json!("Check the sample page");
+        expected["sessions"][0]["webUis"] = serde_json::json!([{
+            "name": "crit",
+            "url": "http://127.0.0.1:6000",
+        }]);
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }

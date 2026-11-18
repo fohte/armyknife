@@ -5216,6 +5216,7 @@ it('opens the Crit review fullscreen from the status band in one click', async (
           ...session,
           category: 'needs_action',
           activityStatus: 'stopped',
+          isWaitingForCritReview: true,
           kind: 'Review',
           critUrl: 'https://crit.example.test/review/fixture',
           webUis: [],
