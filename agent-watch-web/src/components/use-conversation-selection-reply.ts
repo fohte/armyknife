@@ -25,7 +25,11 @@ export function useConversationSelectionReply({
 
   const updateSelectionReply = useCallback(() => {
     const selection = window.getSelection()
-    if (selection === null || selection.isCollapsed) {
+    if (
+      selection === null ||
+      selection.isCollapsed ||
+      selection.rangeCount !== 1
+    ) {
       setSelectionReply(null)
       return
     }

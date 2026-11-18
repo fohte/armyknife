@@ -237,6 +237,39 @@ it('does not offer replies when selected text crosses assistant messages', () =>
   ).toBe(false)
 })
 
+it('does not offer replies for a selection with multiple ranges', () => {
+  render([
+    { type: 'assistant', text: 'First message' },
+    { type: 'assistant', text: 'Second message' },
+  ])
+  const firstText = requireElement(
+    container.querySelector('.chat-assistant-message p'),
+  ).firstChild
+  if (firstText === null || firstText.nodeType !== Node.TEXT_NODE) {
+    throw new Error('Expected the first assistant message to contain text')
+  }
+  const range = document.createRange()
+  range.setStart(firstText, 0)
+  range.setEnd(firstText, firstText.textContent?.length ?? 0)
+  const selection = window.getSelection()
+  if (selection === null) throw new Error('Expected a browser selection')
+
+  act(() => {
+    selection.removeAllRanges()
+    selection.addRange(range)
+    Object.defineProperty(selection, 'rangeCount', {
+      configurable: true,
+      value: 2,
+    })
+    document.dispatchEvent(new Event('selectionchange'))
+    Reflect.deleteProperty(selection, 'rangeCount')
+  })
+
+  expect(
+    container.querySelector('.conversation-selection-reply') !== null,
+  ).toBe(false)
+})
+
 it('preserves paragraph breaks when quoting across paragraphs', () => {
   render([{ type: 'assistant', text: 'First paragraph\n\nSecond paragraph' }])
   const paragraphs = container.querySelectorAll('.chat-assistant-message p')
