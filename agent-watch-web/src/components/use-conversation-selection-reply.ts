@@ -25,12 +25,15 @@ export function useConversationSelectionReply({
 
   const updateSelectionReply = useCallback(() => {
     const selection = window.getSelection()
-    if (selection === null || selection.isCollapsed) {
+    if (
+      selection === null ||
+      selection.isCollapsed ||
+      selection.rangeCount !== 1
+    ) {
       setSelectionReply(null)
       return
     }
 
-    const text = selection.toString()
     const range = selection.getRangeAt(0)
     const startNode =
       range.startContainer instanceof Element
@@ -41,17 +44,40 @@ export function useConversationSelectionReply({
         ? range.endContainer
         : range.endContainer.parentElement
     const message = startNode?.closest('.chat-assistant-message')
-    if (
-      text.trim() === '' ||
-      message === null ||
-      message === undefined ||
-      message !== endNode?.closest('.chat-assistant-message')
-    ) {
+    if (message === null || message === undefined) {
       setSelectionReply(null)
       return
     }
 
-    const rects = Array.from(range.getClientRects()).filter(
+    let messageRange = range
+    let selectionEndsAtMessageBoundary = false
+    if (message !== endNode?.closest('.chat-assistant-message')) {
+      if (range.endOffset !== 0) {
+        setSelectionReply(null)
+        return
+      }
+
+      const outsideRange = range.cloneRange()
+      outsideRange.setStartAfter(message)
+      if (outsideRange.toString() !== '') {
+        setSelectionReply(null)
+        return
+      }
+
+      messageRange = range.cloneRange()
+      messageRange.setEnd(message, message.childNodes.length)
+      selectionEndsAtMessageBoundary = true
+    }
+
+    const text = selectionEndsAtMessageBoundary
+      ? selection.toString().replace(/\n+$/, '')
+      : selection.toString()
+    if (text.trim() === '') {
+      setSelectionReply(null)
+      return
+    }
+
+    const rects = Array.from(messageRange.getClientRects()).filter(
       (rect) => rect.width > 0 && rect.height > 0,
     )
     const visibleRects = rects.filter(
@@ -60,7 +86,7 @@ export function useConversationSelectionReply({
     const measuredRects = visibleRects.length > 0 ? visibleRects : rects
     const rect =
       measuredRects[Math.floor(measuredRects.length / 2)] ??
-      range.getBoundingClientRect()
+      messageRange.getBoundingClientRect()
     const menuWidth = 88
     const menuHeight = 42
     const edge = 8
