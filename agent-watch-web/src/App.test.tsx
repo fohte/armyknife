@@ -1477,6 +1477,7 @@ it('shows crit in the mobile status panel without changing desktop layout', () =
       {
         ...session('session-review', 'Review the retry policy'),
         kind: 'Review',
+        isWaitingForCritReview: true,
         critUrl: 'http://127.0.0.1:5000/review/sample',
       },
     ],
@@ -1530,11 +1531,13 @@ it('updates the crit frame when keyboard navigation selects another review', () 
       {
         ...session('session-review-first', 'First review'),
         kind: 'Review',
+        isWaitingForCritReview: true,
         critUrl: 'https://example.test/review/first',
       },
       {
         ...session('session-review-second', 'Second review'),
         kind: 'Review',
+        isWaitingForCritReview: true,
         critUrl: 'https://example.test/review/second',
       },
     ],
@@ -1582,6 +1585,7 @@ it('auto-collapses the Inbox for the status panel unless manually overridden', (
       {
         ...session('session-review', 'Review the retry policy'),
         kind: 'Review',
+        isWaitingForCritReview: true,
         critUrl: 'https://example.test/review',
       },
     ],
@@ -1661,6 +1665,7 @@ it('toggles the Inbox and status panel by keyboard while keeping j and k navigat
       {
         ...session('session-review', 'Review the retry policy'),
         kind: 'Review',
+        isWaitingForCritReview: true,
         critUrl: 'https://example.test/review',
       },
       session('session-next', 'Next session'),

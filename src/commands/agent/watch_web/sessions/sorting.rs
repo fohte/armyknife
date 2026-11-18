@@ -81,6 +81,7 @@ mod tests {
             pull_request: None,
             pull_requests: Vec::new(),
             crit_url: None,
+            is_waiting_for_crit_review: false,
             web_uis: Vec::new(),
             later_until: None,
             is_today: false,

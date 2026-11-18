@@ -120,6 +120,7 @@ const statusCases: StatusCase[] = [
         ...session,
         category: 'needs_action',
         activityStatus: 'waiting' as const,
+        isWaitingForCritReview: true,
         kind: 'Review',
         pullRequest: { number: 742, state: 'Open' },
         critUrl: 'https://crit.example.test/review/fixture',
@@ -134,6 +135,7 @@ const statusCases: StatusCase[] = [
         ...session,
         category: 'needs_action',
         activityStatus: 'waiting' as const,
+        isWaitingForCritReview: true,
         kind: 'Review',
         pullRequests: [
           { number: 864, state: 'Open' },
@@ -151,6 +153,7 @@ const statusCases: StatusCase[] = [
         ...session,
         category: 'needs_action' as const,
         activityStatus: 'waiting' as const,
+        isWaitingForCritReview: true,
         kind,
         critUrl: 'https://crit.example.test/review/fixture',
       },
@@ -164,6 +167,7 @@ const statusCases: StatusCase[] = [
         ...session,
         category: 'needs_action',
         activityStatus: 'stopped' as const,
+        isWaitingForCritReview: true,
         kind: 'Review',
         webUis: [
           {
@@ -174,6 +178,21 @@ const statusCases: StatusCase[] = [
       },
     },
     expected: { kind: 'crit-review', detail: 'crit' },
+  },
+  {
+    name: 'crit already replied while todo remains',
+    input: {
+      session: {
+        ...session,
+        category: 'needs_action',
+        activityStatus: 'working' as const,
+        isWaitingForCritReview: false,
+        kind: 'Todo',
+        preview: 'Check the sample page',
+        critUrl: 'https://crit.example.test/review/fixture',
+      },
+    },
+    expected: { kind: 'waiting', detail: 'Check the sample page' },
   },
   {
     name: 'empty Crit URL',
@@ -258,6 +277,7 @@ it('keeps Crit review primary while background tasks continue', () => {
         ...session,
         category: 'needs_action',
         activityStatus: 'waiting',
+        isWaitingForCritReview: true,
         kind: 'Review',
         pullRequest: { number: 742, state: 'Open' },
         critUrl: 'https://crit.example.test/review/fixture',
@@ -274,6 +294,7 @@ it('shows a pending question before the Crit review', () => {
       session: {
         ...session,
         category: 'needs_action',
+        isWaitingForCritReview: true,
         kind: 'Todo',
         critUrl: 'https://crit.example.test/review/fixture',
       },
@@ -292,6 +313,7 @@ it('shows a pending permission before the Crit review', () => {
       session: {
         ...session,
         category: 'needs_action',
+        isWaitingForCritReview: true,
         kind: 'Todo',
         critUrl: 'https://crit.example.test/review/fixture',
       },
@@ -315,6 +337,7 @@ it('ignores stale unanswered questions while the session waits for a Crit review
       session: {
         ...session,
         category: 'needs_action',
+        isWaitingForCritReview: true,
         kind: 'Review',
         critUrl: 'https://crit.example.test/review/fixture',
       },

@@ -13,7 +13,7 @@ function getConversationCritUrl(session: Pick<Session, 'critUrl' | 'webUis'>) {
 }
 
 export function getPendingCritReviewUrl(session: Session) {
-  return session.category === 'needs_action'
+  return session.isWaitingForCritReview === true
     ? getConversationCritUrl(session)
     : null
 }
