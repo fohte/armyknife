@@ -2,7 +2,9 @@ use crate::commands::agent::types::Engine;
 use crate::shared::config::LayoutNode;
 
 use super::execution::execute_layout_for_socket;
-use super::{LayoutCommandsSpec, TmuxCommand, build_layout_commands, is_engine_command};
+use super::{
+    LayoutCommandsSpec, TmuxCommand, build_layout_commands, count_agent_panes, is_engine_command,
+};
 
 /// Inputs for opening the configured layout around a resumed agent.
 pub struct ResumeLayoutSpec<'a> {
@@ -58,11 +60,24 @@ fn build_resume_layout_with_executor(
         agent_command,
         socket_path,
     } = spec;
+    // A valid editor-only layout still needs a pane for the resumed agent.
+    let layout_with_agent = if count_agent_panes(layout, engine) == 0 {
+        LayoutNode::Split(crate::shared::config::SplitConfig {
+            direction: crate::shared::config::SplitDirection::Horizontal,
+            first: Box::new(layout.clone()),
+            second: Box::new(LayoutNode::Pane(crate::shared::config::PaneConfig {
+                command: engine.process_name().to_string(),
+                focus: true,
+            })),
+        })
+    } else {
+        layout.clone()
+    };
     let mut commands = build_layout_commands(LayoutCommandsSpec {
         session,
         cwd,
         window_name,
-        layout,
+        layout: &layout_with_agent,
         model: None,
         reasoning_effort: None,
         prompt_file: None,
@@ -173,6 +188,51 @@ mod tests {
                         ["send-keys", "-t", "fixture-session:=fixture-agent.2", "-l", "--", "a agent resume fixture-session --engine codex"],
                         ["send-keys", "-t", "fixture-session:=fixture-agent.2", "C-m"],
                         ["select-pane", "-t", "fixture-session:=fixture-agent.1"],
+                    ],
+                })],
+            ),
+        );
+    }
+
+    #[test]
+    fn resume_adds_an_agent_pane_when_the_layout_has_none() {
+        let executor = FakeLayoutExecutor::default();
+        let layout = LayoutNode::Pane(PaneConfig {
+            command: "nvim".to_string(),
+            focus: true,
+        });
+
+        let result = build_resume_layout_with_executor(
+            ResumeLayoutSpec {
+                session: "fixture-session",
+                cwd: "/fixture/worktree",
+                window_name: "fixture-agent",
+                layout: &layout,
+                engine: Engine::Codex,
+                agent_command: "a agent resume fixture-session --engine codex",
+                socket_path: Some("/fixture/tmux.sock"),
+            },
+            &executor,
+        );
+
+        assert_eq!(
+            (result.unwrap(), executor.calls.lock().unwrap().clone()),
+            (
+                "fixture-window-id".to_string(),
+                vec![json!({
+                    "session": "fixture-session",
+                    "windowName": "fixture-agent",
+                    "socketPath": "/fixture/tmux.sock",
+                    "commands": [
+                        ["new-window", "-d", "-t", "fixture-session", "-c", "/fixture/worktree", "-n", "fixture-agent"],
+                        ["split-window", "-h", "-t", "fixture-session:=fixture-agent.1", "-c", "/fixture/worktree"],
+                        ["select-pane", "-t", "fixture-session:=fixture-agent.1"],
+                        ["send-keys", "-t", "fixture-session:=fixture-agent.1", "-l", "--", "nvim"],
+                        ["send-keys", "-t", "fixture-session:=fixture-agent.1", "C-m"],
+                        ["select-pane", "-t", "fixture-session:=fixture-agent.2"],
+                        ["send-keys", "-t", "fixture-session:=fixture-agent.2", "-l", "--", "a agent resume fixture-session --engine codex"],
+                        ["send-keys", "-t", "fixture-session:=fixture-agent.2", "C-m"],
+                        ["select-pane", "-t", "fixture-session:=fixture-agent.2"],
                     ],
                 })],
             ),
