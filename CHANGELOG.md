@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.789](https://github.com/fohte/armyknife/compare/v0.1.788...v0.1.789) (2026-11-18)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show selected children ([#1964](https://github.com/fohte/armyknife/issues/1964)) ([0cefdcb](https://github.com/fohte/armyknife/commit/0cefdcbe96aaecc29a0f29e6ce257e9ef9929f4c))
+
 ## [0.1.788](https://github.com/fohte/armyknife/compare/v0.1.787...v0.1.788) (2026-11-18)
 
 
