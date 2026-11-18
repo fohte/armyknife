@@ -1,9 +1,11 @@
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use super::{HookRunner, Relay, RelayKey};
 
@@ -11,6 +13,22 @@ const RELAY_REGISTRATIONS_FILE: &str = "web_ui_relays.state";
 pub(super) const WEB_UI_URL_ENV: &str = "ARMYKNIFE_WEB_UI_URL";
 pub(super) const WEB_UI_PORT_ENV: &str = "ARMYKNIFE_WEB_UI_PORT";
 pub(super) const WEB_UI_EXPOSED_URL_ENV: &str = "ARMYKNIFE_WEB_UI_EXPOSED_URL";
+
+#[derive(Debug, Error)]
+pub(super) enum RelayRegistrationsLoadError {
+    #[error("failed to read relay registrations from {path}: {source}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to parse relay registrations from {path}: {source}")]
+    Parse {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub(super) struct RelayRegistration {
@@ -57,19 +75,19 @@ pub(super) async fn unexpose_registration(
     Ok(())
 }
 
-pub(super) fn load_relay_registrations(sessions_dir: &Path) -> Result<Vec<RelayRegistration>> {
+pub(super) fn load_relay_registrations(
+    sessions_dir: &Path,
+) -> Result<Vec<RelayRegistration>, RelayRegistrationsLoadError> {
     let path = sessions_dir.join(RELAY_REGISTRATIONS_FILE);
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let contents = fs::read(&path)
-        .with_context(|| format!("failed to read relay registrations from {}", path.display()))?;
-    serde_json::from_slice(&contents).with_context(|| {
-        format!(
-            "failed to parse relay registrations from {}",
-            path.display()
-        )
-    })
+    let contents = fs::read(&path).map_err(|source| RelayRegistrationsLoadError::Read {
+        path: path.clone(),
+        source,
+    })?;
+    serde_json::from_slice(&contents)
+        .map_err(|source| RelayRegistrationsLoadError::Parse { path, source })
 }
 
 pub(super) fn save_relay_registrations(
@@ -104,16 +122,26 @@ pub(super) fn remove_relay_registration(
     Ok(())
 }
 
+pub(super) fn remove_and_save_relay_registration(
+    sessions_dir: &Path,
+    registrations: &mut Vec<RelayRegistration>,
+    registration: &RelayRegistration,
+) -> Result<()> {
+    registrations.retain(|stored| stored != registration);
+    save_relay_registrations(sessions_dir, registrations)
+}
+
 pub(super) fn add_relay_registration(
     sessions_dir: &Path,
     registration: &RelayRegistration,
 ) -> Result<()> {
     let mut registrations = match load_relay_registrations(sessions_dir) {
         Ok(registrations) => registrations,
-        Err(error) => {
+        Err(error @ RelayRegistrationsLoadError::Parse { .. }) => {
             tracing::warn!(%error, "replacing unreadable web UI relay registrations");
             Vec::new()
         }
+        Err(error) => return Err(error.into()),
     };
     registrations.retain(|stored| stored != registration);
     registrations.push(registration.clone());

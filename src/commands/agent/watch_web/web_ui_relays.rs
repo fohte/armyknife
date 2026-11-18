@@ -23,9 +23,12 @@ mod registrations;
 
 use registrations::{
     RelayRegistration, WEB_UI_PORT_ENV, WEB_UI_URL_ENV, add_relay_registration,
-    load_relay_registrations, remove_relay_registration, save_relay_registrations,
+    load_relay_registrations, remove_and_save_relay_registration, remove_relay_registration,
     unexpose_registration,
 };
+
+#[cfg(test)]
+use registrations::save_relay_registrations;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct RelayKey {
@@ -107,8 +110,7 @@ impl WebUiRelays {
     }
 
     async fn sync(&mut self) -> Result<()> {
-        let registrations = load_relay_registrations(&self.sessions_dir);
-        let mut registrations = match registrations {
+        let mut registrations = match load_relay_registrations(&self.sessions_dir) {
             Ok(registrations) => Some(registrations),
             Err(error) => {
                 tracing::warn!(%error, "failed to load web UI relay registrations");
@@ -134,9 +136,12 @@ impl WebUiRelays {
                 .collect::<Vec<_>>();
             for registration in stale_registrations {
                 if active_ports.contains(&registration.port) {
-                    registrations.retain(|stored| stored != &registration);
-                    if let Err(error) = save_relay_registrations(&self.sessions_dir, registrations)
-                    {
+                    // The hook removes by port, so an old record must not target a live relay.
+                    if let Err(error) = remove_and_save_relay_registration(
+                        &self.sessions_dir,
+                        registrations,
+                        &registration,
+                    ) {
                         tracing::warn!(
                             session = %registration.session_id,
                             web_ui = %registration.name,
@@ -148,10 +153,11 @@ impl WebUiRelays {
                 }
                 match unexpose_registration(self.hook_runner.clone(), &registration).await {
                     Ok(()) => {
-                        registrations.retain(|stored| stored != &registration);
-                        if let Err(error) =
-                            save_relay_registrations(&self.sessions_dir, registrations)
-                        {
+                        if let Err(error) = remove_and_save_relay_registration(
+                            &self.sessions_dir,
+                            registrations,
+                            &registration,
+                        ) {
                             tracing::warn!(
                                 session = %registration.session_id,
                                 web_ui = %registration.name,
@@ -862,6 +868,43 @@ mod tests {
         assert_eq!(
             actual,
             (vec![active_registration], vec!["web-ui-expose".to_owned()],),
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn relay_state_read_error_does_not_block_sync_or_replace_the_state_path()
+    -> anyhow::Result<()> {
+        let directory = TempDir::new()?;
+        store::save_session_to(directory.path(), &session_with_one_web_ui())?;
+        fs::create_dir(directory.path().join("web_ui_relays.state"))?;
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut relays = WebUiRelays::with_hook_runner(
+            directory.path().to_path_buf(),
+            hook_runner(calls.clone()),
+        );
+
+        relays.sync().await?;
+        let hook_names = calls
+            .lock()
+            .expect("hook call lock should succeed")
+            .iter()
+            .map(|(hook, _)| hook.clone())
+            .collect::<Vec<_>>();
+        let actual = (
+            relays.active.len(),
+            directory.path().join("web_ui_relays.state").is_dir(),
+            hook_names,
+        );
+        relays.stop_all().await;
+
+        assert_eq!(
+            actual,
+            (
+                1,
+                true,
+                vec!["web-ui-expose".to_owned(), "web-ui-unexpose".to_owned()],
+            ),
         );
         Ok(())
     }
