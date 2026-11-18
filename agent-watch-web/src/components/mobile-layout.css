@@ -575,6 +575,16 @@ html[data-mobile-layout='true'] {
   font-size: 13px;
 }
 
+.mobile-conversation-actions-menu-state {
+  margin-left: auto;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.mobile-conversation-actions-menu-vibe svg {
+  color: var(--aw-color-warning);
+}
+
 .mobile-conversation-actions-menu-item
   + .mobile-conversation-actions-menu-item {
   border-top: 1px solid var(--aw-border);

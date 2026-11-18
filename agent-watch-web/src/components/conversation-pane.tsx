@@ -362,6 +362,7 @@ export function ConversationPane({
   const conversationView = (
     <ConversationPaneView
       session={session}
+      vibeMode={conversation.vibeMode ?? session.vibeMode}
       sessions={sessions}
       sessionLinkTargets={sessionLinkTargets}
       messages={messages}

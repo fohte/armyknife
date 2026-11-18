@@ -74,6 +74,8 @@ function requestFor(operation: SessionOperation) {
       return { path: 'resume', body: undefined }
     case 'interrupt':
       return { path: 'interrupt', body: undefined }
+    case 'vibe':
+      return { path: 'vibe', body: { enabled: operation.enabled } }
     case 'title':
       return { path: 'title', body: { title: operation.title } }
     case 'message':

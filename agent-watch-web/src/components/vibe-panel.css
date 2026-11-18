@@ -1,0 +1,144 @@
+.vibe-panel {
+  display: flex;
+  width: min(360px, calc(100vw - 32px));
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--aw-border);
+  background: var(--aw-bg-surface);
+  color: var(--aw-text-body);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 28%);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.vibe-panel-title {
+  margin: 0;
+  color: var(--aw-text-primary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.vibe-panel-reason {
+  margin: 0;
+}
+
+.vibe-panel-message {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.vibe-panel-message-label {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.vibe-panel-message blockquote {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--aw-border);
+  background: var(--aw-bg-app);
+  color: var(--aw-text-body);
+  overflow-wrap: anywhere;
+}
+
+.vibe-panel-error {
+  margin: 0;
+  color: var(--aw-color-error);
+}
+
+.vibe-panel-actions {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.vibe-panel-change {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--aw-text-primary);
+  background: var(--aw-text-primary);
+  color: var(--aw-bg-app);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.vibe-panel-close {
+  min-height: 30px;
+  padding: 0 8px;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.vibe-panel-backdrop {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 55%);
+}
+
+.vibe-panel--mobile {
+  width: min(520px, 100%);
+  padding: 20px 16px max(20px, env(safe-area-inset-bottom));
+  border-radius: 12px 12px 0 0;
+  font-size: 13px;
+}
+
+.vibe-panel--mobile .vibe-panel-title {
+  font-size: 15px;
+}
+
+.vibe-panel--mobile .vibe-panel-actions {
+  min-height: 44px;
+  justify-content: space-between;
+}
+
+.vibe-panel--mobile .vibe-panel-change,
+.vibe-panel--mobile .vibe-panel-close {
+  min-height: 44px;
+  font-size: 12px;
+}
+
+.vibe-control {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.vibe-control-popover {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  right: 0;
+}
+
+.vibe-control-trigger {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  border: 1px solid var(--aw-border);
+  background: transparent;
+  color: var(--aw-text-body);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.vibe-control-trigger.is-on {
+  border-color: color-mix(in srgb, var(--aw-color-warning) 50%, transparent);
+  color: var(--aw-color-warning);
+}
+
+.vibe-control-trigger.is-open {
+  background: var(--aw-bg-pressed);
+}

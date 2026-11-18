@@ -56,6 +56,32 @@ it('accepts a compact boundary event from the conversation API', () => {
   ).toBe(true)
 })
 
+it.each([
+  {
+    name: 'inherited vibe mode',
+    vibeMode: { mode: 'inherited', ancestorSessionId: 'fixture-parent' },
+    expected: true,
+  },
+  {
+    name: 'vibe mode with a missing ancestor id',
+    vibeMode: { mode: 'inherited' },
+    expected: false,
+  },
+])('validates $name from the conversation API', ({ vibeMode, expected }) => {
+  expect(
+    isConversationResponse({
+      messages: [],
+      backgroundTasks: [],
+      start: 0,
+      total: 0,
+      decisions: [],
+      hasUnansweredProposal: false,
+      activeQuestionIndex: null,
+      vibeMode,
+    }),
+  ).toEqual(expected)
+})
+
 it('accepts narration and grouped thinking from the conversation API', () => {
   expect(
     isConversationResponse({

@@ -117,7 +117,8 @@ function mobileActionMenuItems() {
 
 function mobileActionMenuItem(label: string) {
   return requireElement(
-    mobileActionMenuItems().find((item) => item.textContent === label) ?? null,
+    mobileActionMenuItems().find((item) => item.textContent.includes(label)) ??
+      null,
   )
 }
 
@@ -420,6 +421,44 @@ it('runs Later from the mobile actions menu', async () => {
     menuClosed: isMobileActionMenuClosed(),
   })
   expect(snapshot()).toEqual({ calls: [[]], menuClosed: true })
+})
+
+it('opens the inherited vibe sheet from the first mobile menu item', async () => {
+  renderHeader(
+    true,
+    vi.fn(() => Promise.resolve(true)),
+    {
+      ...session,
+      vibeMode: { mode: 'inherited', ancestorSessionId: 'fixture-parent' },
+    },
+  )
+  await act(async () => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        'button[aria-label="More actions"]',
+      ),
+    ).click()
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+  })
+  const firstItem = mobileActionMenuItems()[0]?.textContent
+  await act(async () => {
+    mobileActionMenuItem('Vibe mode').click()
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+  })
+
+  const snapshot = () => ({
+    firstItem,
+    menuClosed: isMobileActionMenuClosed(),
+    sheetTitle: document.body.querySelector('.vibe-panel-title')?.textContent,
+    preview: document.body.querySelector('.vibe-panel-message blockquote')
+      ?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    firstItem: 'Vibe modeOn · inherited',
+    menuClosed: true,
+    sheetTitle: 'Vibe on · inherited',
+    preview: 'watch-web からユーザーが vibe mode を on にしました。',
+  })
 })
 
 it('runs Close from the mobile actions menu for a Done session', async () => {
