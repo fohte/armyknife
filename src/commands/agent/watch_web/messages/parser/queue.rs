@@ -7,6 +7,7 @@ use serde_json::Value;
 use super::super::{ChatItem, ParentSession, UserContentPart, claude_content_text};
 use super::append_text_with_user_marker_and_image_directory;
 use super::classifier::marked_user_body;
+use crate::commands::agent::peer_message::extract_peer_message;
 use crate::commands::agent::store::WatchWebQueuedPrompt;
 
 #[derive(Clone)]
@@ -228,24 +229,29 @@ impl Queue {
         let Some(prompt_text) = event.prompt.as_deref() else {
             return;
         };
-        let body = match marked_user_body(prompt_text, user_marker) {
-            Some(body) => body,
-            None if is_queued_command => prompt_text.to_owned(),
-            None => return,
+        let (body, trailing_text) = match extract_peer_message(prompt_text, user_marker) {
+            Some(message) if message.has_user_marker => (message.body, message.trailing_text),
+            _ if is_queued_command => (prompt_text.to_owned(), String::new()),
+            _ => return,
         };
-        let Some(message_id) = super::super::queued_prompt::id_from_content(&body) else {
+        let index = [
+            super::super::queued_prompt::id_from_content(&trailing_text),
+            super::super::queued_prompt::id_from_content(&body),
+        ]
+        .into_iter()
+        .flatten()
+        .find_map(|message_id| {
+            self.queued_prompt_ids_by_message_id
+                .get(message_id)
+                .copied()
+        });
+        let Some(index) = index else {
             return;
         };
-        if let Some(index) = self
-            .queued_prompt_ids_by_message_id
-            .get(message_id)
-            .copied()
-        {
-            let queued = &self.queued_prompts[index];
-            self.delivered_prompt_ids.insert(queued.id);
-            if !queued.resolved {
-                self.resolved_queued_prompt_ids.push(queued.id);
-            }
+        let queued = &self.queued_prompts[index];
+        self.delivered_prompt_ids.insert(queued.id);
+        if !queued.resolved {
+            self.resolved_queued_prompt_ids.push(queued.id);
         }
     }
 
@@ -399,7 +405,7 @@ mod tests {
     use super::super::claude::ParserAdditions;
     use crate::commands::agent::store::WatchWebQueuedPrompt;
     use crate::commands::agent::watch_web::messages::{
-        BackgroundTask, ChatItem, ParentSession, UserContentPart,
+        BackgroundTask, ChatItem, ParentSession, PeerDirection, UserContentPart,
     };
 
     #[rstest]
@@ -601,6 +607,39 @@ mod tests {
                     timestamp: Some("2026-01-01T00:00:01+00:00".to_string()),
                     from: None,
                     queued_prompt_id: Some("fixture-message-7".to_string()),
+                }],
+                Vec::<BackgroundTask>::new(),
+                vec![7],
+            ),
+        );
+    }
+
+    #[test]
+    fn resolves_a_trailing_delivery_id_when_peer_body_has_an_old_id() {
+        let marker = "⟦armyknife-user:fixture-marker-cobalt⟧";
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-user-message","parentUuid":null,"type":"user","origin":{"kind":"peer","from":"fixture-parent-id"},"timestamp":"2026-01-01T00:00:01Z","message":{"content":"⟦armyknife-user:fixture-marker-cobalt⟧\nThis message was typed by the human user in armyknife watch-web.\n<peer-message>\n- From session_id: fixture-parent-id\n\nDelivered request.\n<!-- armyknife-queued-prompt-id:fixture-message-old -->\n</peer-message>\n\n<!-- armyknife-queued-prompt-id:fixture-message-7 -->"}}
+        "#};
+
+        assert_eq!(
+            parse_with_saved_prompts(
+                transcript,
+                &[saved_prompt(7, "Delivered request.")],
+                Some(marker),
+            ),
+            (
+                vec![ChatItem::Peer {
+                    direction: PeerDirection::From,
+                    session_id: "fixture-parent-id".to_string(),
+                    session_title: None,
+                    failed: false,
+                    timestamp: Some("2026-01-01T00:00:01+00:00".to_string()),
+                    content: vec![UserContentPart::Text {
+                        text: indoc! {"
+                            Delivered request.
+                            <!-- armyknife-queued-prompt-id:fixture-message-old -->"}
+                        .to_string(),
+                    }],
                 }],
                 Vec::<BackgroundTask>::new(),
                 vec![7],
