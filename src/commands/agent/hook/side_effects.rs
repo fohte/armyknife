@@ -15,7 +15,7 @@ use crate::{infra::tmux, infra::tmux::PaneInfo};
 pub(super) type PrContextCapture = Arc<dyn Fn(&Path) -> Option<SessionPrContext> + Send + Sync>;
 
 #[cfg(test)]
-type TitleGenerationCall = (String, String, Option<String>);
+type TitleGenerationCall = (String, String, Option<String>, bool);
 #[cfg(test)]
 type TitleGenerationCallSink = std::sync::Arc<std::sync::Mutex<Vec<TitleGenerationCall>>>;
 
@@ -201,26 +201,31 @@ impl SideEffects {
         if !self.title_generation {
             return false;
         }
+        let request = super::super::tui::title_generate::SpawnTitleGenerationRequest {
+            session_id: session_id.to_string(),
+            prompt: prompt.to_string(),
+            previous_label,
+            check_transcript_title: true,
+        };
         #[cfg(test)]
         {
             if let Some(calls) = &self.title_generation_calls {
                 calls
                     .lock()
                     .expect("title_generation_calls mutex poisoned")
-                    .push((session_id.to_string(), prompt.to_string(), previous_label));
+                    .push((
+                        request.session_id,
+                        request.prompt,
+                        request.previous_label,
+                        request.check_transcript_title,
+                    ));
                 return true;
             }
             false
         }
         #[cfg(not(test))]
         {
-            match super::super::tui::title_generate::spawn_detached_title_generation(
-                super::super::tui::title_generate::SpawnTitleGenerationRequest {
-                    session_id: session_id.to_string(),
-                    prompt: prompt.to_string(),
-                    previous_label,
-                },
-            ) {
+            match super::super::tui::title_generate::spawn_detached_title_generation(request) {
                 Ok(()) => true,
                 Err(error) => {
                     tracing::warn!(

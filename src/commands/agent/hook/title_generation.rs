@@ -11,7 +11,8 @@ pub(super) fn prompt(session: &Session) -> Option<String> {
         session.label.as_deref(),
         existing_title.as_deref(),
         &first_message,
-    ) {
+    ) || claude_sessions::has_transcript_title_entry(&session.cwd, &session.session_id)
+    {
         return None;
     }
 

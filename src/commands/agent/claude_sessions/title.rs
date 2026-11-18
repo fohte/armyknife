@@ -1,8 +1,28 @@
+use std::io::BufRead;
+
 use super::normalize_title;
 use crate::commands::agent::peer_message::{
     ANOTHER_CLAUDE_SESSION_MESSAGE_PREFIX, ANOTHER_PEER_SESSION_MESSAGE_PREFIX,
     PEER_MESSAGE_END_TAG, PEER_MESSAGE_START_TAG, is_peer_message,
 };
+
+/// Checks beyond the bounded display scan because an older transcript title
+/// would otherwise be hidden by a generated session label.
+pub(in crate::commands::agent) fn has_transcript_title_entry(
+    project_path: &std::path::Path,
+    session_id: &str,
+) -> bool {
+    let Some(jsonl_path) = super::session_jsonl_path(project_path, session_id) else {
+        return false;
+    };
+    let Ok(file) = std::fs::File::open(jsonl_path) else {
+        return false;
+    };
+
+    std::io::BufReader::new(file)
+        .lines()
+        .any(|line| line.is_ok_and(|line| super::title_from_line(&line).is_some()))
+}
 
 /// Produces a compact title from the first prompt, removing peer transport
 /// details before choosing its first heading or sentence.
@@ -101,7 +121,7 @@ mod tests {
     use indoc::indoc;
     use rstest::rstest;
 
-    use super::title_from_first_user_message;
+    use super::{has_transcript_title_entry, title_from_first_user_message};
 
     #[rstest]
     #[case::claude_peer_heading(
@@ -144,5 +164,43 @@ mod tests {
         let title = title_from_first_user_message(&"x".repeat(81));
 
         assert_eq!(title, format!("{}…", "x".repeat(79)));
+    }
+
+    #[test]
+    fn transcript_title_is_detected_beyond_the_bounded_title_scan() {
+        use std::path::Path;
+        use tempfile::TempDir;
+
+        let home_dir = TempDir::new().expect("home directory");
+        let project_path = Path::new("/fictional/project");
+        let session_id = "fixture-title-session";
+        let project_dir = home_dir
+            .path()
+            .join(".claude")
+            .join("projects")
+            .join(super::super::encode_project_path(project_path));
+        std::fs::create_dir_all(&project_dir).expect("project directory");
+
+        let mut transcript =
+            String::from(r#"{"type":"custom-title","customTitle":"Existing title"}"#);
+        transcript.push('\n');
+        for index in 0..1500 {
+            transcript.push_str(&format!(
+                r#"{{"type":"user","message":{{"content":"fictional padding {index}"}}}}"#
+            ));
+            transcript.push('\n');
+        }
+        std::fs::write(project_dir.join(format!("{session_id}.jsonl")), transcript)
+            .expect("transcript fixture");
+
+        let home = home_dir.path().to_str().expect("utf8 home");
+        let detected = temp_env::with_vars([("HOME", Some(home))], || {
+            (
+                super::super::get_last_title_in_home(home_dir.path(), project_path, session_id),
+                has_transcript_title_entry(project_path, session_id),
+            )
+        });
+
+        assert_eq!(detected, (None, true));
     }
 }

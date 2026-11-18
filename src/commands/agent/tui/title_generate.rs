@@ -26,6 +26,8 @@ pub(in crate::commands::agent) struct SpawnTitleGenerationRequest {
     /// through to the detached process so it can no-op if the label has
     /// since changed (e.g. a manual rename while generation was running).
     pub previous_label: Option<String>,
+    /// Automatic generation must not mask a title appended to the transcript.
+    pub check_transcript_title: bool,
 }
 
 /// Handles `Ctrl+g` from `AppMode::Edit`: reads the session's first user
@@ -64,6 +66,7 @@ pub(super) fn request_generate_title(app: &mut App) -> Option<SpawnTitleGenerati
         session_id,
         prompt,
         previous_label,
+        check_transcript_title: false,
     })
 }
 
@@ -105,7 +108,7 @@ pub(in crate::commands::agent) fn spawn_detached_title_generation(
     use std::io::Write;
     use std::path::Path;
 
-    use crate::infra::process::spawn_detached;
+    use crate::infra::process::spawn_detached_with_env_overrides;
 
     let exe = std::env::current_exe().context("failed to resolve current exe")?;
 
@@ -132,8 +135,12 @@ pub(in crate::commands::agent) fn spawn_detached_title_generation(
         args.push(OsString::from("--previous-label"));
         args.push(OsString::from(label));
     }
+    if request.check_transcript_title {
+        args.push(OsString::from("--check-transcript-title"));
+    }
 
-    match spawn_detached(&exe, &args, Some(Path::new("/")), &[]) {
+    match spawn_detached_with_env_overrides(&exe, &args, Some(Path::new("/")), &[], &["CLAUDECODE"])
+    {
         Ok(()) => Ok(()),
         Err(e) => {
             // Roll back the persisted prompt file; without the child it
@@ -301,6 +308,7 @@ mod tests {
                     session_id: "s1".to_string(),
                     prompt: build_prompt("Fix the login bug", "Updated auth.rs"),
                     previous_label: Some("Old Title".to_string()),
+                    check_transcript_title: false,
                 }),
                 AppMode::Edit {
                     session_id: "s1".to_string()

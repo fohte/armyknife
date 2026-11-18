@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::Args;
 
-use crate::commands::agent::{store, window_status};
+use crate::commands::agent::{claude_sessions, store, window_status};
 use crate::commands::name_branch::{Backend, detect_backend};
 
 /// Tracing target for events emitted by this subcommand.
@@ -32,6 +32,9 @@ pub struct GenerateTitleDetachedArgs {
     /// was in flight. Absence means the label was unset at request time.
     #[arg(long, value_name = "LABEL")]
     pub previous_label: Option<String>,
+    /// Keep transcript titles from being hidden by automatic generation.
+    #[arg(long, hide = true)]
+    pub check_transcript_title: bool,
 }
 
 pub fn run(args: &GenerateTitleDetachedArgs) -> Result<()> {
@@ -68,6 +71,16 @@ fn generate_and_apply(args: &GenerateTitleDetachedArgs, backend: &dyn Backend) -
     // doesn't linger in `/tmp` across repeated Ctrl+g presses.
     let _ = fs::remove_file(&args.prompt_file);
 
+    if args.check_transcript_title && transcript_has_title(&args.session_id)? {
+        tracing::info!(
+            target: EVENT_TARGET,
+            event = "agent.generate_title.stale",
+            session_id = %args.session_id,
+            reason = "transcript_title_exists",
+        );
+        return Ok(());
+    }
+
     let title = backend.generate(&prompt).inspect_err(|e| {
         tracing::warn!(
             target: EVENT_TARGET,
@@ -76,6 +89,16 @@ fn generate_and_apply(args: &GenerateTitleDetachedArgs, backend: &dyn Backend) -
             msg = format!("{e:#}"),
         );
     })?;
+
+    if args.check_transcript_title && transcript_has_title(&args.session_id)? {
+        tracing::info!(
+            target: EVENT_TARGET,
+            event = "agent.generate_title.stale",
+            session_id = %args.session_id,
+            reason = "transcript_title_exists",
+        );
+        return Ok(());
+    }
 
     let applied = store::update_session_label_if_unchanged(
         &args.session_id,
@@ -102,6 +125,17 @@ fn generate_and_apply(args: &GenerateTitleDetachedArgs, backend: &dyn Backend) -
     }
 
     Ok(())
+}
+
+fn transcript_has_title(session_id: &str) -> Result<bool> {
+    let Some(session) = store::load_session(session_id)? else {
+        return Ok(false);
+    };
+
+    Ok(claude_sessions::has_transcript_title_entry(
+        &session.cwd,
+        session_id,
+    ))
 }
 
 #[cfg(test)]
@@ -210,6 +244,7 @@ mod tests {
             session_id: "s1".to_string(),
             prompt_file: prompt_path.clone(),
             previous_label: None,
+            check_transcript_title: false,
         };
         let backend = StubBackend(Ok("Generated Title".to_string()));
 
@@ -227,6 +262,57 @@ mod tests {
     }
 
     #[rstest]
+    fn automatic_generation_does_not_mask_an_older_transcript_title() {
+        use crate::commands::agent::claude_sessions;
+        use std::path::PathBuf;
+
+        let root = temp_cache_root();
+        let home_dir = TempDir::new().expect("home directory");
+        let cwd = PathBuf::from("/fictional/project");
+        let mut session = create_test_session("fixture-title-session", None);
+        session.cwd = cwd.clone();
+        store::save_session_to(&root.sessions_dir, &session).expect("save should succeed");
+
+        let project_dir = home_dir
+            .path()
+            .join(".claude")
+            .join("projects")
+            .join(claude_sessions::encode_project_path(&cwd));
+        fs::create_dir_all(&project_dir).expect("project directory");
+        let mut transcript =
+            String::from(r#"{"type":"custom-title","customTitle":"Existing title"}"#);
+        transcript.push('\n');
+        for index in 0..1500 {
+            transcript.push_str(&format!(
+                r#"{{"type":"user","message":{{"content":"fictional padding {index}"}}}}"#
+            ));
+            transcript.push('\n');
+        }
+        fs::write(project_dir.join("fixture-title-session.jsonl"), transcript)
+            .expect("transcript fixture");
+
+        let args = GenerateTitleDetachedArgs {
+            session_id: "fixture-title-session".to_string(),
+            prompt_file: prompt_file(home_dir.path()),
+            previous_label: None,
+            check_transcript_title: true,
+        };
+        let backend = StubBackend(Ok("Generated Title".to_string()));
+        let cache_home = root.cache_home.as_str();
+        let home = home_dir.path().to_str().expect("utf8 home");
+
+        temp_env::with_vars(
+            [("XDG_CACHE_HOME", Some(cache_home)), ("HOME", Some(home))],
+            || generate_and_apply(&args, &backend).expect("generation should succeed"),
+        );
+
+        let reloaded = store::load_session_from(&root.sessions_dir, "fixture-title-session")
+            .expect("load should succeed")
+            .expect("session exists");
+        assert_eq!(reloaded.label, None);
+    }
+
+    #[rstest]
     fn cas_mismatch_leaves_label_untouched() {
         let root = temp_cache_root();
         let session = create_test_session("s1", Some("Manually Renamed"));
@@ -238,6 +324,7 @@ mod tests {
             prompt_file: prompt_file(tmp.path()),
             // Snapshot taken before the manual rename above landed.
             previous_label: None,
+            check_transcript_title: false,
         };
         let backend = StubBackend(Ok("Generated Title".to_string()));
 
@@ -262,6 +349,7 @@ mod tests {
             session_id: "s1".to_string(),
             prompt_file: prompt_file(tmp.path()),
             previous_label: None,
+            check_transcript_title: false,
         };
         let backend = StubBackend(Err("claude exited with status 1".to_string()));
 
@@ -286,6 +374,7 @@ mod tests {
             session_id: "s1".to_string(),
             prompt_file: PathBuf::from("/nonexistent/prompt.txt"),
             previous_label: None,
+            check_transcript_title: false,
         };
         let backend = StubBackend(Ok("Generated Title".to_string()));
 

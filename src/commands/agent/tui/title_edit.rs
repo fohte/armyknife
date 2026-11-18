@@ -328,6 +328,7 @@ mod tests {
                         "Updated auth.rs"
                     ),
                     previous_label: None,
+                    check_transcript_title: false,
                 })
             )
         );

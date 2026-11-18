@@ -1098,6 +1098,7 @@ fn process_hook_event_impl_with_env(
                     );
                 }
             }
+            // A launched worker consumes the single attempt even if its backend later fails.
             Ok(true) => {}
             Ok(false) => {}
             Err(error) => tracing::warn!(
@@ -1722,33 +1723,37 @@ mod tests {
             }
         });
 
-        assert_eq!(
+        let observed = (
             outcomes,
-            vec![
-                (
-                    ProcessResult::StopBlocked(TEST_STOP_HOOK_INSTRUCTION.to_string()),
-                    0,
-                ),
-                (ProcessResult::SessionSaved, 0),
-                (ProcessResult::SessionSaved, 1),
-                (ProcessResult::SessionSaved, 1),
-            ],
+            calls.lock().expect("title generation calls").clone(),
         );
         assert_eq!(
-            calls.lock().expect("title generation calls").clone(),
-            vec![(
-                session_id.to_string(),
-                super::super::tui::title_generate::build_prompt(
-                    indoc! {"
-                        ## Rebuild the sample index
+            observed,
+            (
+                vec![
+                    (
+                        ProcessResult::StopBlocked(TEST_STOP_HOOK_INSTRUCTION.to_string()),
+                        0,
+                    ),
+                    (ProcessResult::SessionSaved, 0),
+                    (ProcessResult::SessionSaved, 1),
+                    (ProcessResult::SessionSaved, 1),
+                ],
+                vec![(
+                    session_id.to_string(),
+                    super::super::tui::title_generate::build_prompt(
+                        indoc! {"
+                            ## Rebuild the sample index
 
-                        Please rebuild the sample index.
-                    "}
-                    .trim_end(),
-                    "The fictional index is repaired.",
-                ),
-                Some(" ".to_string()),
-            )],
+                            Please rebuild the sample index.
+                        "}
+                        .trim_end(),
+                        "The fictional index is repaired.",
+                    ),
+                    Some(" ".to_string()),
+                    true,
+                )],
+            ),
         );
     }
 
