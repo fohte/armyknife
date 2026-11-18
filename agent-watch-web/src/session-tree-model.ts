@@ -14,6 +14,19 @@ export type VisibleSessionTreeRow = {
   needsActionDescendantCount: number
 }
 
+function selectedSessionPath(
+  byId: ReadonlyMap<string, SessionTreeNode>,
+  selectedId: string,
+): Set<string> {
+  const expanded = new Set([selectedId])
+  let current = byId.get(selectedId)
+  while (current !== undefined && current.parentId !== null) {
+    expanded.add(current.parentId)
+    current = byId.get(current.parentId)
+  }
+  return expanded
+}
+
 export function expandSessionAncestors(
   sessions: readonly SessionTreeNode[],
   selectedId: string,
@@ -21,12 +34,7 @@ export function expandSessionAncestors(
 ): SessionTreeViewState {
   const byId = new Map(sessions.map((session) => [session.id, session]))
   const expanded = new Set(viewState.expandedSessionIds)
-  expanded.add(selectedId)
-  let current = byId.get(selectedId)
-  while (current !== undefined && current.parentId !== null) {
-    expanded.add(current.parentId)
-    current = byId.get(current.parentId)
-  }
+  for (const id of selectedSessionPath(byId, selectedId)) expanded.add(id)
   if (expanded.size === viewState.expandedSessionIds.length) return viewState
   return { ...viewState, expandedSessionIds: [...expanded] }
 }
@@ -52,13 +60,7 @@ export function defaultExpandedSessionIds(
 ): Set<string> {
   const children = childrenByParent(sessions)
   const byId = new Map(sessions.map((session) => [session.id, session]))
-  const expanded = new Set<string>()
-  expanded.add(selectedId)
-  let current = byId.get(selectedId)
-  while (current !== undefined) {
-    if (current.parentId !== null) expanded.add(current.parentId)
-    current = current.parentId === null ? undefined : byId.get(current.parentId)
-  }
+  const expanded = selectedSessionPath(byId, selectedId)
   const openDescendants = (id: string) => {
     for (const child of children.get(id) ?? []) {
       expanded.add(id)
