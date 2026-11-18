@@ -168,12 +168,7 @@ fn origin(record: &Value) -> Option<&Value> {
 }
 
 fn peer_transport_body(text: &str) -> String {
-    extract_peer_message(text, None).map_or_else(
-        || text.to_owned(),
-        |message| {
-            crate::commands::agent::peer_message::without_transport_notice(&message.body).to_owned()
-        },
-    )
+    extract_peer_message(text, None).map_or_else(|| text.to_owned(), |message| message.body)
 }
 
 fn event(tag: &str, body: &str, record: &Value) -> MessageKind {
@@ -343,24 +338,20 @@ fn is_hidden_legacy_row(record: &Value, text: &str) -> bool {
 
 pub(super) fn marked_user_body(text: &str, marker: Option<&str>) -> Option<String> {
     let message = extract_peer_message(text, marker)?;
-    message.has_user_marker.then(|| {
-        crate::commands::agent::peer_message::without_transport_notice(&message.body).to_owned()
-    })
+    message.has_user_marker.then_some(message.body)
 }
 
 fn marked_or_peer_message(text: &str, marker: Option<&str>) -> Option<MessageKind> {
     let message = extract_peer_message(text, marker)?;
     if message.has_user_marker_in_body || (message.sender_id.is_none() && message.has_user_marker) {
-        return Some(marked_user_message_body(
-            crate::commands::agent::peer_message::without_transport_notice(&message.body)
-                .to_owned(),
-        ));
+        return Some(marked_user_message_body(message.body));
     }
     let session_id = message.sender_id?;
-    Some(MessageKind::PeerIn {
-        session_id,
-        text: message.body,
-    })
+    let text = message.transport_notice_suffix.map_or_else(
+        || message.body.clone(),
+        |notice| format!("{}{}", message.body, notice),
+    );
+    Some(MessageKind::PeerIn { session_id, text })
 }
 
 fn marked_user_message_body(body: String) -> MessageKind {

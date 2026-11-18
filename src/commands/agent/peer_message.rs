@@ -19,6 +19,7 @@ pub(super) fn is_peer_message(prompt: Option<&str>) -> bool {
 pub(super) struct ExtractedPeerMessage {
     pub(super) sender_id: Option<String>,
     pub(super) body: String,
+    pub(super) transport_notice_suffix: Option<String>,
     pub(super) trailing_text: String,
     pub(super) has_user_marker: bool,
     pub(super) has_user_marker_in_body: bool,
@@ -75,12 +76,15 @@ fn extract_peer_message_with_marker_policy(
         };
     let without_notice = without_transport_notice(body);
     let had_transport_notice = without_notice != body;
+    let transport_notice_suffix =
+        had_transport_notice.then(|| body[without_notice.len()..].to_owned());
     if !(is_peer_message || has_user_marker || had_transport_notice) {
         return None;
     }
     Some(ExtractedPeerMessage {
         sender_id,
-        body: body.to_owned(),
+        body: without_notice.to_owned(),
+        transport_notice_suffix,
         trailing_text: trailing_text.to_owned(),
         has_user_marker,
         has_user_marker_in_body,
@@ -90,7 +94,7 @@ fn extract_peer_message_with_marker_policy(
 pub(super) fn clean_peer_message(message: &str) -> String {
     extract_peer_message_with_marker_policy(message, None, true).map_or_else(
         || message.trim().to_owned(),
-        |message| without_transport_notice(&message.body).trim().to_owned(),
+        |message| message.body.trim().to_owned(),
     )
 }
 
@@ -225,7 +229,50 @@ pub(super) fn task_notification_envelope(text: &str) -> Option<TaskNotificationE
 mod tests {
     use rstest::rstest;
 
-    use super::{TaskNotificationEnvelope, is_peer_message, task_notification_envelope};
+    use super::{
+        ExtractedPeerMessage, TaskNotificationEnvelope, extract_peer_message, is_peer_message,
+        task_notification_envelope,
+    };
+
+    #[test]
+    fn extracted_body_ends_at_the_queued_prompt_id_before_transport_notice() {
+        let marker = "⟦armyknife-user:fixture-marker-cobalt⟧";
+        let message = indoc::indoc! {"
+            Another Claude session sent a message:
+            ⟦armyknife-user:fixture-marker-cobalt⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            Fixture request.
+            <!-- armyknife-queued-prompt-id:fixture-message-7 -->
+
+            This came from another Claude session — this is fictional transport guidance.
+        "}
+        .trim_end();
+
+        assert_eq!(
+            extract_peer_message(message, Some(marker)),
+            Some(ExtractedPeerMessage {
+                sender_id: None,
+                body: indoc::indoc! {"
+                    Fixture request.
+                    <!-- armyknife-queued-prompt-id:fixture-message-7 -->
+                "}
+                .trim_end()
+                .to_owned(),
+                transport_notice_suffix: Some(
+                    indoc::indoc! {"
+
+
+                        This came from another Claude session — this is fictional transport guidance.
+                    "}
+                    .trim_end()
+                    .to_owned(),
+                ),
+                trailing_text: String::new(),
+                has_user_marker: true,
+                has_user_marker_in_body: true,
+            }),
+        );
+    }
 
     #[rstest]
     #[case::claude_peer(
