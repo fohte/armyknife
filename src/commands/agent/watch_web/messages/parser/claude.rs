@@ -328,6 +328,7 @@ mod tests {
                     available: true,
                 }],
                 caption: Some("Inspect the sample image.".to_owned()),
+                origin: super::super::super::FileAttachmentOrigin::Transcript,
                 timestamp: Some("2030-01-01T12:00:01+00:00".to_owned()),
             }]
         );

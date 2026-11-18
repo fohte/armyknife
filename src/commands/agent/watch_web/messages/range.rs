@@ -420,10 +420,22 @@ fn epoch_identity_digests(messages: &[ChatItem]) -> Option<Vec<(usize, String)>>
 fn epoch_identity_message(message: &ChatItem) -> Option<ChatItem> {
     let mut identity = match message {
         // Stored files are merged after parsing and cannot anchor transcript epochs.
-        ChatItem::FileAttachment { .. } => return None,
+        ChatItem::FileAttachment {
+            origin: super::FileAttachmentOrigin::Stored,
+            ..
+        } => return None,
         message => message.clone(),
     };
     match &mut identity {
+        ChatItem::FileAttachment { files, .. } => {
+            for file in files {
+                file.size = 0;
+                file.is_image = false;
+                file.preview_type =
+                    crate::commands::agent::file_attachment_support::FilePreviewType::Download;
+                file.available = false;
+            }
+        }
         ChatItem::Peer {
             session_title,
             content,
@@ -526,7 +538,24 @@ mod tests {
     }
 
     #[test]
-    fn epoch_anchor_matches_messages_after_display_enrichment() {
+    fn epoch_anchor_keeps_transcript_attachments_after_stored_files_are_merged() {
+        let transcript_attachment = ChatItem::FileAttachment {
+            files: vec![
+                crate::commands::agent::watch_web::file_attachments::ChatFile {
+                    name: "fixture-transcript.txt".to_owned(),
+                    source: "/api/sessions/fixture-session/transcript-files/fixture-tool/0"
+                        .to_owned(),
+                    size: 16,
+                    is_image: false,
+                    preview_type:
+                        crate::commands::agent::file_attachment_support::FilePreviewType::Text,
+                    available: true,
+                },
+            ],
+            caption: Some("Fixture transcript attachment".to_owned()),
+            origin: super::super::FileAttachmentOrigin::Transcript,
+            timestamp: Some("2026-01-01T00:00:00+00:00".to_owned()),
+        };
         let mut transcript_messages = vec![ChatItem::Peer {
             direction: crate::commands::agent::watch_web::messages::PeerDirection::From,
             session_id: "fixture-peer-session".to_owned(),
@@ -539,6 +568,7 @@ mod tests {
             timestamp: Some("2026-01-01T00:00:00+00:00".to_owned()),
             failed: false,
         }];
+        transcript_messages.insert(0, transcript_attachment);
         transcript_messages.extend((0..30).map(|index| ChatItem::Assistant {
             text: format!("Fixture message {index}."),
         }));
@@ -547,16 +577,66 @@ mod tests {
             *session_title = Some("Fixture peer title".to_owned());
         }
         enriched_messages.insert(
-            1,
+            2,
             ChatItem::FileAttachment {
-                files: Vec::new(),
+                files: vec![
+                    crate::commands::agent::watch_web::file_attachments::ChatFile {
+                        name: "fixture-stored.txt".to_owned(),
+                        source: "/api/sessions/fixture-session/files/fixture-file".to_owned(),
+                        size: 12,
+                        is_image: false,
+                        preview_type:
+                            crate::commands::agent::file_attachment_support::FilePreviewType::Text,
+                        available: true,
+                    },
+                ],
                 caption: Some("Fixture stored file".to_owned()),
+                origin: super::super::FileAttachmentOrigin::Stored,
                 timestamp: Some("2026-01-01T00:00:01+00:00".to_owned()),
             },
         );
         let cursor = MessageEpochCursor::from_messages(&enriched_messages).unwrap();
 
+        if let ChatItem::FileAttachment { files, .. } = &mut transcript_messages[0] {
+            files[0].size = 0;
+            files[0].is_image = true;
+            files[0].preview_type =
+                crate::commands::agent::file_attachment_support::FilePreviewType::Download;
+            files[0].available = false;
+        }
+
         assert_eq!(cursor.find_start(&transcript_messages), Some(0));
+    }
+
+    #[test]
+    fn epoch_anchor_matches_images_after_availability_changes() {
+        let mut messages = vec![ChatItem::UserWithContent {
+            content: vec![
+                crate::commands::agent::watch_web::messages::UserContentPart::Image {
+                    source: "/api/images/fixture-image".to_owned(),
+                    available: true,
+                },
+            ],
+            rewind_id: None,
+            queued_prompt_id: None,
+            timestamp: Some("2026-01-01T00:00:00+00:00".to_owned()),
+            from: None,
+        }];
+        messages.extend((0..30).map(|index| ChatItem::Assistant {
+            text: format!("Fixture message {index}."),
+        }));
+        let cursor = MessageEpochCursor::from_messages(&messages).unwrap();
+
+        if let ChatItem::UserWithContent { content, .. } = &mut messages[0]
+            && let crate::commands::agent::watch_web::messages::UserContentPart::Image {
+                available,
+                ..
+            } = &mut content[0]
+        {
+            *available = false;
+        }
+
+        assert_eq!(cursor.find_start(&messages), Some(0));
     }
 
     #[test]

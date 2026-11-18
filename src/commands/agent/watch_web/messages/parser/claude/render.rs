@@ -274,6 +274,7 @@ fn send_user_file_item(
             .get("caption")
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned),
+        origin: super::super::super::FileAttachmentOrigin::Transcript,
         timestamp: timestamp.map(|timestamp| timestamp.to_rfc3339()),
     })
 }

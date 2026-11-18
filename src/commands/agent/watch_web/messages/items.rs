@@ -9,6 +9,12 @@ use crate::commands::agent::store::{
 
 use super::questions::QuestionPrompt;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FileAttachmentOrigin {
+    Transcript,
+    Stored,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(super) enum ChatItem {
@@ -71,6 +77,8 @@ pub(super) enum ChatItem {
     FileAttachment {
         files: Vec<super::super::file_attachments::ChatFile>,
         caption: Option<String>,
+        #[serde(skip)]
+        origin: FileAttachmentOrigin,
         #[serde(skip_serializing_if = "Option::is_none")]
         timestamp: Option<String>,
     },

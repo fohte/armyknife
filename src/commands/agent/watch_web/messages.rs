@@ -35,6 +35,7 @@ mod transcript_path;
 pub(super) use self::conversation::conversation_contains_markdown_source;
 #[cfg(test)]
 use self::conversation::load_conversation_with_queued_prompts;
+use self::items::FileAttachmentOrigin;
 pub(super) use self::items::{BackgroundTask, BackgroundTaskKind, SkillSuggestion};
 use self::items::{
     ChatItem, ConversationResponse, EventKind, ParentSession, PeerDirection, ToolGroupItem,
