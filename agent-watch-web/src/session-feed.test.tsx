@@ -403,59 +403,74 @@ it('delivers session metadata and enriched pull request status', async () => {
   })
 })
 
-it('rejects a session with a non-boolean paused state', async () => {
-  const source = new FakeEventSource()
-  const failureReported = deferred<undefined>()
-  const errors: (string | null)[] = []
-  let delivered = false
-  const fetcher = vi.fn().mockResolvedValue(
-    jsonResponse({
-      revision: 1,
-      sessions: [
-        {
-          id: 'invalid-paused-session',
-          category: 'done',
-          isPaused: 'true',
-          kind: null,
-          title: 'Prepare the next deployment window',
-          preview: null,
-          elapsedSeconds: 20,
-          unread: false,
-          task: null,
-          repo: 'example/service',
-          pullRequest: null,
-        },
-      ],
-    }),
-  )
+const invalidSessionCases: {
+  name: string
+  overrides: Record<string, unknown>
+}[] = [
+  { name: 'a non-boolean paused state', overrides: { isPaused: 'true' } },
+  {
+    name: 'an inherited vibe state without an ancestor ID',
+    overrides: { isPaused: false, vibeMode: { mode: 'inherited' } },
+  },
+]
 
-  const stop = startSessionFeed(
-    () => {
-      delivered = true
-    },
-    (message) => {
-      errors.push(message)
-      if (message === 'Unable to load sessions. Retrying…') {
-        failureReported.resolve(undefined)
-      }
-    },
-    {
-      fetcher,
-      createEventSource: () => source,
-      requestRetryDelayMs: 5_000,
-    },
-  )
+it.each(invalidSessionCases)(
+  'rejects a session with $name',
+  async ({ overrides }) => {
+    const source = new FakeEventSource()
+    const failureReported = deferred<undefined>()
+    const errors: (string | null)[] = []
+    let delivered = false
+    const fetcher = vi.fn().mockResolvedValue(
+      jsonResponse({
+        revision: 1,
+        sessions: [
+          {
+            id: 'invalid-paused-session',
+            category: 'done',
+            isPaused: false,
+            kind: null,
+            title: 'Prepare the next deployment window',
+            preview: null,
+            elapsedSeconds: 20,
+            unread: false,
+            task: null,
+            repo: 'example/service',
+            pullRequest: null,
+            ...overrides,
+          },
+        ],
+      }),
+    )
 
-  await failureReported.promise
-  stop()
+    const stop = startSessionFeed(
+      () => {
+        delivered = true
+      },
+      (message) => {
+        errors.push(message)
+        if (message === 'Unable to load sessions. Retrying…') {
+          failureReported.resolve(undefined)
+        }
+      },
+      {
+        fetcher,
+        createEventSource: () => source,
+        requestRetryDelayMs: 5_000,
+      },
+    )
 
-  const snapshot = () => ({ delivered, errors, closed: source.closed })
-  expect(snapshot()).toEqual({
-    delivered: false,
-    errors: ['Unable to load sessions. Retrying…'],
-    closed: true,
-  })
-})
+    await failureReported.promise
+    stop()
+
+    const snapshot = () => ({ delivered, errors, closed: source.closed })
+    expect(snapshot()).toEqual({
+      delivered: false,
+      errors: ['Unable to load sessions. Retrying…'],
+      closed: true,
+    })
+  },
+)
 
 it('coalesces session events and refreshes when the stream reconnects', async () => {
   const source = new FakeEventSource()

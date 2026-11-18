@@ -67,10 +67,8 @@ export function VibeModeControl({
     const change = vibeModeChange(currentMode)
     const result = await setVibeMode(sessionId, change.enabled)
     result.match(
-      () => {
-        setCurrentMode(
-          change.enabled ? { mode: 'enabled' } : { mode: 'disabled' },
-        )
+      (resultingMode) => {
+        setCurrentMode(resultingMode)
         setOpen(false)
       },
       (requestError) => {

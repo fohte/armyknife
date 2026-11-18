@@ -437,6 +437,7 @@ export function submitSessionOperation(operation: SessionOperation) {
         operation.type !== 'message' &&
         operation.type !== 'merge' &&
         operation.type !== 'rewind' &&
+        operation.type !== 'vibe' &&
         operation.type !== 'command_preview' &&
         operation.type !== 'command_execute'
       )

@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { VibeModeControl } from '#components/vibe-mode-control'
+import type { VibeMode } from '#types'
 
 let container: HTMLDivElement
 let root: Root | null = null
@@ -31,14 +32,14 @@ function errorState() {
   }
 }
 
-function renderControl() {
+function renderControl(mode: VibeMode = { mode: 'disabled' }) {
   root = createRoot(container)
   act(() => {
     root?.render(
       <VibeModeControl
         sessionId="fixture-session"
         repo="example/service"
-        mode={{ mode: 'disabled' }}
+        mode={mode}
       />,
     )
   })
@@ -63,23 +64,73 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it('enables vibe mode and sends the previewed state change', async () => {
+const modeChangeCases: {
+  name: string
+  mode: VibeMode
+  enabled: boolean
+  resultingMode: VibeMode
+  triggerLabel: string
+  actionLabel: string
+  expectedLabel: string
+  message: string
+}[] = [
+  {
+    name: 'enables disabled mode',
+    mode: { mode: 'disabled' },
+    enabled: true,
+    resultingMode: { mode: 'enabled' },
+    triggerLabel: 'Vibe off',
+    actionLabel: 'Turn on and send',
+    expectedLabel: 'Vibe on',
+    message: 'watch-web からユーザーが vibe mode を on にしました。',
+  },
+  {
+    name: 'keeps inherited mode active when clearing the local setting',
+    mode: { mode: 'enabled' },
+    enabled: false,
+    resultingMode: { mode: 'inherited', ancestorSessionId: 'fixture-parent' },
+    triggerLabel: 'Vibe on',
+    actionLabel: 'Turn off and send',
+    expectedLabel: 'Vibe on · inherited',
+    message:
+      'watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。',
+  },
+  {
+    name: 'enables inherited mode explicitly for this session',
+    mode: { mode: 'inherited', ancestorSessionId: 'fixture-parent' },
+    enabled: true,
+    resultingMode: { mode: 'enabled' },
+    triggerLabel: 'Vibe on · inherited',
+    actionLabel: 'Turn on here and send',
+    expectedLabel: 'Vibe on',
+    message: 'watch-web からユーザーが vibe mode を on にしました。',
+  },
+]
+
+it.each(modeChangeCases)('$name', async (testCase) => {
   fetchMock.mockResolvedValue(
     new Response(
-      JSON.stringify({ ok: true, queuedPromptId: 'queue-fixture' }),
+      JSON.stringify({
+        ok: true,
+        queuedPromptId: 'queue-fixture',
+        vibeMode: testCase.resultingMode,
+      }),
       {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       },
     ),
   )
-  renderControl()
+  renderControl(testCase.mode)
 
   act(() => {
-    requireButton('Vibe off').click()
+    requireButton(testCase.triggerLabel).click()
   })
+  expect(container.querySelector('blockquote')?.textContent).toBe(
+    testCase.message,
+  )
   await act(async () => {
-    requireButton('Turn on and send').click()
+    requireButton(testCase.actionLabel).click()
     await finishRequest()
   })
 
@@ -90,11 +141,11 @@ it('enables vibe mode and sends the previewed state change', async () => {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ enabled: true }),
+          body: JSON.stringify({ enabled: testCase.enabled }),
         },
       ],
     ],
-    status: 'Vibe on',
+    status: testCase.expectedLabel,
     panel: false,
   })
 })
