@@ -1,8 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::io::{self, BufRead, Read, Seek, SeekFrom};
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use super::super::super::record_timestamp;
@@ -12,10 +11,6 @@ use super::{IncrementalClaudeParser, parse_record};
 
 const INITIAL_WINDOW_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_WINDOW_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_PREFIX_SEARCH_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_ANCESTRY_SEARCHES: usize = 4096;
-type TimedRecord = (Option<DateTime<Utc>>, Value);
-
 pub(super) fn new_tail_window(
     reader: impl BufRead + Seek,
     image_directory: Option<&Path>,
@@ -53,18 +48,6 @@ pub(super) fn new_tail_window_bounded(
         .split(|byte| *byte == b'\n')
         .filter_map(parse_record)
         .collect::<Vec<_>>();
-    let mut graph_records = selected_records
-        .iter()
-        .filter_map(|record| {
-            let uuid = record.get("uuid").and_then(Value::as_str)?;
-            Some((uuid.to_owned(), record_parent_uuid(record)))
-        })
-        .collect::<BTreeMap<_, _>>();
-    let mut unresolved = graph_records
-        .values()
-        .filter_map(Clone::clone)
-        .filter(|uuid| !graph_records.contains_key(uuid))
-        .collect::<BTreeSet<_>>();
     let missing_task_ids = pending_task_ids
         .iter()
         .filter(|task_id| {
@@ -77,48 +60,41 @@ pub(super) fn new_tail_window_bounded(
     let needs_skill_baseline = !selected_records
         .iter()
         .any(tail_window::resets_skill_listing_state);
-    if window_start > MAX_PREFIX_SEARCH_BYTES
-        && (!unresolved.is_empty()
-            || !missing_task_ids.is_empty()
-            || (needs_skill_baseline && window_start > 0))
-    {
-        return Ok(None);
-    }
-    if missing_task_ids.len() > MAX_ANCESTRY_SEARCHES {
-        return Ok(None);
-    }
-
-    let mut searches = 0;
-    if !unresolved.is_empty()
-        && !tail_window::resolve_ancestry_from_prefix(
-            &mut reader,
-            window_start,
-            &mut unresolved,
-            &mut graph_records,
-            MAX_ANCESTRY_SEARCHES,
-            &mut searches,
-        )?
-    {
+    let selected_uuids = selected_records
+        .iter()
+        .filter_map(|record| {
+            record
+                .get("uuid")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect::<HashSet<_>>();
+    let active_ancestor_uuid = active_ancestor_uuid(&selected_records);
+    if missing_task_ids.len() > 4096 {
         return Ok(None);
     }
 
-    let Some(helper_records) = restore_prefix_state(
+    let (mut helper_records, active_ancestor_uuids, complete) = tail_window::find_prefix_helpers(
         &mut reader,
         window_start,
-        needs_skill_baseline,
         &missing_task_ids,
-        &mut graph_records,
-    )?
-    else {
+        needs_skill_baseline,
+        &selected_uuids,
+        active_ancestor_uuid,
+    )?;
+    if !complete {
         return Ok(None);
-    };
-    let selected_bytes = assemble_parser_input(&selected_records, &helper_records, &graph_records)?;
+    }
+    helper_records.extend(selected_records.iter().cloned());
     let tail_window_start = selected_records
         .iter()
         .find(|record| tail_window::is_human_input_record(record))
         .and_then(record_timestamp);
-    let mut parser =
-        IncrementalClaudeParser::new(std::io::Cursor::new(selected_bytes), image_directory)?;
+    let mut parser = IncrementalClaudeParser::from_tail_window_records(
+        helper_records,
+        active_ancestor_uuids,
+        image_directory,
+    );
     parser.tail_window_start = tail_window_start;
     parser.tail_window_start_offset = Some(window_start);
     if let Some(cutoff) = tail_window_start {
@@ -128,6 +104,30 @@ pub(super) fn new_tail_window_bounded(
             .retain(|event| event.timestamp.is_none_or(|timestamp| timestamp >= cutoff));
     }
     Ok(Some(parser))
+}
+
+fn active_ancestor_uuid(records: &[Value]) -> Option<String> {
+    let parents = records
+        .iter()
+        .filter_map(|record| {
+            let uuid = record.get("uuid").and_then(Value::as_str)?;
+            Some((uuid.to_owned(), record_parent_uuid(record)))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut current_uuid = records
+        .iter()
+        .rev()
+        .find_map(|record| record.get("uuid").and_then(Value::as_str))?
+        .to_owned();
+    let mut visited = HashSet::new();
+    while visited.insert(current_uuid.clone()) {
+        let parent_uuid = parents.get(&current_uuid).and_then(Clone::clone)?;
+        if !parents.contains_key(&parent_uuid) {
+            return Some(parent_uuid);
+        }
+        current_uuid = parent_uuid;
+    }
+    None
 }
 
 fn select_window_start(
@@ -157,6 +157,9 @@ fn select_window_start(
         for line in bytes[aligned_start..].split(|byte| *byte == b'\n') {
             let offset = row_offset;
             row_offset += line.len() + 1;
+            if !has_user_record_type(line) {
+                continue;
+            }
             if let Ok(record) = serde_json::from_slice::<tail_window::GraphRecord>(line)
                 && tail_window::is_human_input_line(&record, line)
             {
@@ -180,6 +183,22 @@ fn select_window_start(
     }
 }
 
+fn has_user_record_type(line: &[u8]) -> bool {
+    let mut search_start = 0;
+    while let Some(relative_type_key) = memchr::memmem::find(&line[search_start..], b"\"type\"") {
+        let type_key = search_start + relative_type_key;
+        let suffix = line[type_key + b"\"type\"".len()..].trim_ascii_start();
+        if suffix
+            .strip_prefix(b":")
+            .is_some_and(|value| value.trim_ascii_start().starts_with(b"\"user\""))
+        {
+            return true;
+        }
+        search_start = type_key + 1;
+    }
+    false
+}
+
 fn read_selected_window(
     reader: &mut (impl Read + Seek),
     file_length: u64,
@@ -191,96 +210,4 @@ fn read_selected_window(
     reader.seek(SeekFrom::Start(window_start))?;
     reader.read_exact(&mut bytes)?;
     Ok(bytes)
-}
-
-fn restore_prefix_state(
-    reader: &mut (impl Read + Seek),
-    window_start: u64,
-    needs_skill_baseline: bool,
-    missing_task_ids: &[String],
-    graph_records: &mut BTreeMap<String, Option<String>>,
-) -> io::Result<Option<Vec<TimedRecord>>> {
-    let mut helper_records = Vec::new();
-    if needs_skill_baseline {
-        let (skill_listings, complete) =
-            tail_window::find_skill_listing_prefix_state(reader, window_start)?;
-        if !complete {
-            return Ok(None);
-        }
-        helper_records.extend(
-            skill_listings
-                .into_iter()
-                .map(|record| (record_timestamp(&record), record)),
-        );
-    }
-    if !missing_task_ids.is_empty() {
-        let (task_results, complete) = tail_window::find_pending_background_task_starts(
-            reader,
-            window_start,
-            missing_task_ids,
-        )?;
-        if !complete {
-            return Ok(None);
-        }
-        let parent_uuids = task_results
-            .values()
-            .filter_map(record_parent_uuid)
-            .collect::<HashSet<_>>();
-        let (tool_uses, complete) =
-            tail_window::find_records_by_uuid(reader, window_start, &parent_uuids)?;
-        if !complete {
-            return Ok(None);
-        }
-        for tool_use in tool_uses.into_values() {
-            if let Some(uuid) = tool_use.get("uuid").and_then(Value::as_str) {
-                graph_records.insert(uuid.to_owned(), record_parent_uuid(&tool_use));
-            }
-            helper_records.push((record_timestamp(&tool_use), tool_use));
-        }
-        for result in task_results.into_values() {
-            if let Some(uuid) = result.get("uuid").and_then(Value::as_str) {
-                graph_records.insert(uuid.to_owned(), record_parent_uuid(&result));
-            }
-            helper_records.push((record_timestamp(&result), result));
-        }
-    }
-    helper_records.sort_by_key(|(timestamp, _)| *timestamp);
-    Ok(Some(helper_records))
-}
-
-fn assemble_parser_input(
-    selected_records: &[Value],
-    helper_records: &[TimedRecord],
-    graph_records: &BTreeMap<String, Option<String>>,
-) -> io::Result<Vec<u8>> {
-    let mut selected_bytes = Vec::new();
-    for (uuid, parent_uuid) in graph_records.iter().filter(|(uuid, _)| {
-        !selected_records
-            .iter()
-            .any(|record| record.get("uuid").and_then(Value::as_str) == Some(uuid.as_str()))
-    }) {
-        let mut record = serde_json::Map::new();
-        record.insert("uuid".to_owned(), Value::String(uuid.clone()));
-        if let Some(parent_uuid) = parent_uuid {
-            record.insert("parentUuid".to_owned(), Value::String(parent_uuid.clone()));
-        } else {
-            record.insert("parentUuid".to_owned(), Value::Null);
-        }
-        append_json_line(&mut selected_bytes, &record)?;
-    }
-    for (_, record) in helper_records {
-        append_json_line(&mut selected_bytes, record)?;
-    }
-    for record in selected_records {
-        append_json_line(&mut selected_bytes, record)?;
-    }
-    Ok(selected_bytes)
-}
-
-fn append_json_line(bytes: &mut Vec<u8>, record: &impl serde::Serialize) -> io::Result<()> {
-    let encoded = serde_json::to_vec(record)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
-    bytes.extend_from_slice(&encoded);
-    bytes.push(b'\n');
-    Ok(())
 }

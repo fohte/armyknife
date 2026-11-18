@@ -376,6 +376,112 @@ fn tail_window_matches_the_full_parse_after_a_compact_boundary_with_a_missing_pa
 }
 
 #[test]
+fn tail_window_matches_the_full_parse_when_the_prefix_exceeds_a_small_search_limit() {
+    let simulated_prefix_search_limit = 16 * 1024;
+    let padding = "fixture padding ".repeat(2048);
+    let mut records = vec![format!(
+        r#"{{"type":"fixture-padding","padding":"{padding}"}}"#
+    )];
+    let mut parent_uuid = None;
+    for index in 0..101 {
+        let uuid = format!("fixture-message-{index}");
+        records.push(format!(
+            r#"{{"type":"user","uuid":"{uuid}","parentUuid":{},"timestamp":"2026-01-01T00:00:03Z","message":{{"content":"Fixture request {index}."}}}}"#,
+            parent_uuid
+                .as_ref()
+                .map(|parent| format!("\"{parent}\""))
+                .unwrap_or_else(|| "null".to_owned()),
+        ));
+        parent_uuid = Some(uuid);
+    }
+    let transcript = records.join("\n");
+    let additions = empty_additions();
+    let expected = parse_all(transcript.as_bytes(), additions);
+    let tail_parser = IncrementalClaudeParser::new_tail_window(
+        Cursor::new(transcript.as_bytes()),
+        None,
+        100,
+        &[],
+    )
+    .unwrap()
+    .unwrap();
+    let prefix_length = tail_parser.tail_window_start_offset().unwrap();
+    let actual = tail_parser.render_with(fixed_time(), additions).unwrap();
+    let last_messages = |mut parsed: super::ParsedTranscript| {
+        parsed.0 = parsed
+            .0
+            .into_iter()
+            .rev()
+            .take(100)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        parsed
+    };
+
+    assert_eq!(
+        (
+            prefix_length > simulated_prefix_search_limit,
+            last_messages(actual)
+        ),
+        (true, last_messages(expected)),
+    );
+}
+
+#[test]
+fn queued_prompt_resolution_scans_a_prefix_over_a_small_search_limit() {
+    let simulated_prefix_search_limit = 16 * 1024;
+    let user_marker = "⟦armyknife-user:fixture-marker-cyan⟧";
+    let delivery = indoc::formatdoc! {"
+        {user_marker}
+        Delivered fixture request.
+        <!-- armyknife-queued-prompt-id:fixture-message-cyan -->
+    "};
+    let padding = "fixture padding ".repeat(2048);
+    let mut records = vec![
+        r#"{"type":"user","uuid":"fixture-root","parentUuid":null,"timestamp":"2026-01-01T00:00:00Z","message":{"content":"Fixture root."}}"#.to_owned(),
+        format!(
+            r#"{{"type":"user","uuid":"fixture-delivery","parentUuid":"fixture-root","timestamp":"2026-01-01T00:00:01Z","origin":{{"kind":"peer"}},"message":{{"content":{}}}}}"#,
+            serde_json::Value::String(delivery).to_string(),
+        ),
+        format!(r#"{{"type":"fixture-padding","padding":"{padding}"}}"#),
+    ];
+    let mut parent_uuid = "fixture-delivery".to_owned();
+    for index in 0..101 {
+        let uuid = format!("fixture-message-{index}");
+        records.push(format!(
+            r#"{{"type":"user","uuid":"{uuid}","parentUuid":"{parent_uuid}","timestamp":"2026-01-01T00:00:02Z","message":{{"content":"Fixture request {index}."}}}}"#
+        ));
+        parent_uuid = uuid;
+    }
+    let transcript = records.join("\n");
+    let tail_parser = IncrementalClaudeParser::new_tail_window(
+        Cursor::new(transcript.as_bytes()),
+        None,
+        100,
+        &[],
+    )
+    .unwrap()
+    .unwrap();
+    let prefix_length = tail_parser.tail_window_start_offset().unwrap();
+    let queued_prompt = saved_queued_prompt();
+    let resolved = tail_parser
+        .resolve_queued_prompt_ids_before_window(
+            &mut Cursor::new(transcript.as_bytes()),
+            prefix_length,
+            &[queued_prompt],
+            Some(user_marker),
+        )
+        .unwrap();
+
+    assert_eq!(
+        (prefix_length > simulated_prefix_search_limit, resolved),
+        (true, Some(vec![7])),
+    );
+}
+
+#[test]
 fn tail_window_matches_the_full_parse_when_an_attachment_follows_tool_results() {
     let transcript = indoc! {r#"
         {"type":"user","uuid":"fixture-earlier-request","parentUuid":null,"timestamp":"2026-01-01T00:00:00Z","message":{"content":"Earlier fixture request."}}
