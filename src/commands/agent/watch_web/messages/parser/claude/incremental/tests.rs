@@ -654,6 +654,56 @@ fn tail_window_matches_the_full_parse_after_a_compact_boundary_with_a_missing_pa
 }
 
 #[test]
+fn tail_window_preserves_an_initial_incomplete_jsonl_row_after_append() {
+    let padding = serde_json::json!({
+        "fixturePadding": "x".repeat(5 * 1024 * 1024),
+    })
+    .to_string();
+    let mut records = vec![padding];
+    let mut parent_uuid = None;
+    for index in 0..120 {
+        let uuid = format!("fixture-message-{index}");
+        records.push(
+            serde_json::json!({
+                "type": "user",
+                "uuid": uuid,
+                "parentUuid": parent_uuid,
+                "timestamp": "2026-01-01T00:00:01Z",
+                "message": {"content": format!("Fixture request {index}.")},
+            })
+            .to_string(),
+        );
+        parent_uuid = Some(uuid);
+    }
+    let appended_line = serde_json::json!({
+        "type": "user",
+        "uuid": "fixture-appended-message",
+        "parentUuid": parent_uuid,
+        "timestamp": "2026-01-01T00:00:02Z",
+        "message": {"content": "The fixture row completes after initialization."},
+    })
+    .to_string();
+    let split_at = appended_line.len() / 2;
+    let initial_transcript = format!("{}\n{}", records.join("\n"), &appended_line[..split_at]);
+    let appended_suffix = format!("{}\n", &appended_line[split_at..]);
+    let complete_transcript = format!("{initial_transcript}{appended_suffix}");
+    let mut parser = tail_window_parser(Cursor::new(initial_transcript.as_bytes()), 100, &[])
+        .unwrap()
+        .unwrap();
+    let append_result = parser
+        .append_bytes(appended_suffix.as_bytes(), fixed_time())
+        .unwrap();
+    let actual = parser.render_with(fixed_time(), empty_additions()).unwrap();
+    let mut expected = parse_all(complete_transcript.as_bytes(), empty_additions());
+    expected.0 = expected.0.into_iter().skip(20).collect();
+
+    assert_eq!(
+        (append_result, actual),
+        (IncrementalAppend::Applied, expected)
+    );
+}
+
+#[test]
 fn tail_window_excludes_an_abandoned_branch_whose_parent_is_outside_the_window() {
     let padding = "x".repeat(5 * 1024 * 1024);
     let transcript = [

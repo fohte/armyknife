@@ -83,7 +83,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_initial_or_full_for
                 fingerprint,
                 cache,
             ) {
-                tracing::warn!(%error, "failed to cache initial tail-window parser");
+                tracing::warn!(session_id, %error, "failed to cache initial tail-window parser");
             }
             Ok((
                 tail.conversation,
@@ -184,7 +184,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript_
         log_tail_window_fallback(started, "tail_window_start_unavailable");
         return Ok(None);
     };
-    let Some((_, prior_resolved_ids)) = resolve_queued_prompts_before_window(
+    let Some(prior_resolved_ids) = resolve_queued_prompt_ids_before_window(
         input.path,
         parser.tail_window_start_offset().unwrap_or_default(),
         input.additions.queued_prompts,
@@ -309,21 +309,16 @@ fn filter_todos_after_tail_window(
         .collect()
 }
 
-fn resolve_queued_prompts_before_window(
+fn resolve_queued_prompt_ids_before_window(
     path: Option<&std::path::Path>,
     window_start: u64,
     queued_prompts: &[crate::commands::agent::store::WatchWebQueuedPrompt],
     cutoff: chrono::DateTime<chrono::Utc>,
     user_marker: Option<&str>,
     parser: &parser::claude::IncrementalClaudeParser,
-) -> Result<
-    Option<(
-        Vec<crate::commands::agent::store::WatchWebQueuedPrompt>,
-        Vec<i64>,
-    )>,
-> {
+) -> Result<Option<Vec<i64>>> {
     let Some(path) = path else {
-        return Ok(Some((queued_prompts.to_vec(), Vec::new())));
+        return Ok(Some(Vec::new()));
     };
     let unresolved_prompts = queued_prompts
         .iter()
@@ -331,10 +326,10 @@ fn resolve_queued_prompts_before_window(
         .cloned()
         .collect::<Vec<_>>();
     if unresolved_prompts.is_empty() {
-        return Ok(Some((queued_prompts.to_vec(), Vec::new())));
+        return Ok(Some(Vec::new()));
     }
     let Some(mut reader) = open_seekable_transcript(path)? else {
-        return Ok(Some((queued_prompts.to_vec(), Vec::new())));
+        return Ok(Some(Vec::new()));
     };
     let Some(prior_resolved_ids) = parser.resolve_queued_prompt_ids_before_window(
         &mut reader,
@@ -345,16 +340,7 @@ fn resolve_queued_prompts_before_window(
     else {
         return Ok(None);
     };
-    let resolved_set = prior_resolved_ids
-        .iter()
-        .copied()
-        .collect::<std::collections::HashSet<_>>();
-    let remaining_prompts = queued_prompts
-        .iter()
-        .filter(|prompt| !resolved_set.contains(&prompt.id))
-        .cloned()
-        .collect();
-    Ok(Some((remaining_prompts, prior_resolved_ids)))
+    Ok(Some(prior_resolved_ids))
 }
 
 #[cfg(test)]

@@ -29,6 +29,9 @@ impl MessageRange {
 
     pub(super) fn requires_full_history(&self) -> bool {
         self.older_cursor.is_some()
+            && self.limit.is_some()
+            && self.before.is_none()
+            && self.from.is_none()
     }
 
     pub(super) fn initial_tail_window_limit(&self) -> Option<usize> {

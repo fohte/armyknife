@@ -3986,7 +3986,7 @@ mod tests {
         let epoch = tail_initial.2["epoch"].as_str().unwrap().to_owned();
         let older_cursor = tail_initial.2["olderCursor"].as_str().unwrap();
         let start = tail_initial.2["start"].as_u64().unwrap();
-        let mut refresh_query = format!("?from={start}&epoch={epoch}");
+        let mut refresh_query = format!("?from={start}&epoch={epoch}&olderCursor={older_cursor}");
         if let (Some(stable_start), Some(stable_end), Some(stable_digest)) = (
             tail_initial.2["stableStart"].as_u64(),
             tail_initial.2["stableEnd"].as_u64(),
@@ -4037,37 +4037,31 @@ mod tests {
             .unwrap()
             .as_ref()
             .map(|entry| (entry.last_change, entry.tail_window.is_some()));
-        let full_marked_ids = full_marked_ids.lock().unwrap().clone();
-        let tail_marked_ids = tail_marked_ids.lock().unwrap().clone();
         let refreshed_epoch = tail_responses[2].2["epoch"].as_str().map(str::to_owned);
         let refreshed_older_cursor = tail_responses[2].2["olderCursor"]
             .as_str()
             .map(str::to_owned);
         let refresh_reset = tail_responses[2].2["epochReset"].as_bool().unwrap_or(false);
-
-        let full_older_page = message_response_with_query(
-            &full_router,
-            &format!("?limit=100&epoch={epoch}&olderCursor={older_cursor}"),
-        )
-        .await;
-        let old_epoch = full_older_page.2["epoch"].as_str().unwrap();
-        let old_epoch_query = format!("?from=0&epoch={old_epoch}");
-        let full_old_epoch = message_response_with_query(&full_router, &old_epoch_query).await;
-        let tail_old_epoch = message_response_with_query(&tail_router, &old_epoch_query).await;
-        let tail_parser_after_old_epoch = parser_slot
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|entry| entry.tail_window.is_some());
-
         let older_query = format!(
             "?limit=100&epoch={epoch}&olderCursor={}",
             refreshed_older_cursor.as_deref().unwrap_or(older_cursor)
         );
+        let tail_parser_before_older_page = parser_slot
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|entry| entry.tail_window.is_some());
         full_responses.push(message_response_with_query(&full_router, &older_query).await);
         tail_responses.push(message_response_with_query(&tail_router, &older_query).await);
         let older_reset = tail_responses[3].2["epochReset"].as_bool().unwrap_or(false);
         let older_message_count = tail_responses[3].2["messages"].as_array().map(Vec::len);
+        let tail_parser_after_older_page = parser_slot
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|entry| entry.tail_window.is_some());
+        let full_marked_ids = full_marked_ids.lock().unwrap().clone();
+        let tail_marked_ids = tail_marked_ids.lock().unwrap().clone();
         assert_eq!(
             (
                 full_responses,
@@ -4078,8 +4072,8 @@ mod tests {
                 refreshed_older_cursor.is_some(),
                 refresh_reset,
                 cached_parser,
-                tail_old_epoch,
-                tail_parser_after_old_epoch,
+                tail_parser_before_older_page,
+                tail_parser_after_older_page,
                 older_reset,
                 older_message_count,
             ),
@@ -4092,7 +4086,7 @@ mod tests {
                 true,
                 false,
                 Some((TranscriptChange::Appended, true)),
-                full_old_epoch,
+                Some(true),
                 Some(false),
                 false,
                 Some(100),
@@ -4190,6 +4184,103 @@ mod tests {
         assert_eq!(
             (tail_response, tail_window_cached),
             (full_response, Some(false)),
+        );
+    }
+
+    #[tokio::test]
+    async fn tail_window_falls_back_when_the_requested_epoch_is_outside_the_window() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        let compressed_path = directory.path().join("full-transcript.jsonl.zst");
+        let mut records = Vec::new();
+        let mut parent_uuid = None;
+        for index in 0..120 {
+            let uuid = format!("fixture-old-message-{index}");
+            records.push(
+                json!({
+                    "type": "user",
+                    "uuid": uuid,
+                    "parentUuid": parent_uuid,
+                    "timestamp": "2026-01-01T00:00:01Z",
+                    "message": {"content": format!("Earlier fixture request {index}.")},
+                })
+                .to_string(),
+            );
+            parent_uuid = Some(uuid);
+        }
+        records.push(json!({"fixturePadding": "x".repeat(5 * 1024 * 1024)}).to_string());
+        for index in 0..120 {
+            let uuid = format!("fixture-current-message-{index}");
+            records.push(
+                json!({
+                    "type": "user",
+                    "uuid": uuid,
+                    "parentUuid": parent_uuid,
+                    "timestamp": "2026-01-01T00:00:02Z",
+                    "message": {"content": format!("Current fixture request {index}.")},
+                })
+                .to_string(),
+            );
+            parent_uuid = Some(uuid);
+        }
+        let transcript = format!("{}\n", records.join("\n"));
+        std::fs::write(&transcript_path, &transcript).unwrap();
+        std::fs::write(
+            &compressed_path,
+            zstd::stream::encode_all(transcript.as_bytes(), 0).unwrap(),
+        )
+        .unwrap();
+
+        let make_router = |path: &Path| {
+            let mut session = stored_session();
+            session.transcript_path = Some(path.to_path_buf());
+            let cache = MessageCache::default();
+            let mut loaders = empty_route_loaders();
+            loaders.message_cache = cache.clone();
+            (
+                routes_with_proposals_and_peer_out_messages(
+                    move |_| Ok(Some(session.clone())),
+                    |_| Ok(None),
+                    loaders,
+                ),
+                cache,
+            )
+        };
+        let (full_router, _) = make_router(&compressed_path);
+        let (tail_router, tail_cache) = make_router(&transcript_path);
+        let full_initial = message_response_with_query(&full_router, "?limit=100").await;
+        let full_epoch = full_initial.2["epoch"].as_str().unwrap();
+        let full_older_cursor = full_initial.2["olderCursor"].as_str().unwrap();
+        let full_older_page = message_response_with_query(
+            &full_router,
+            &format!("?limit=100&epoch={full_epoch}&olderCursor={full_older_cursor}"),
+        )
+        .await;
+        let older_epoch = full_older_page.2["epoch"].as_str().unwrap();
+        let query = format!("?from=0&epoch={older_epoch}");
+        let full_response = message_response_with_query(&full_router, &query).await;
+        let tail_initial = message_response_with_query(&tail_router, "?limit=100").await;
+        let parser_slot = tail_cache.transcript_parser_slot("fixture-session");
+        let tail_window_cached_before_request = parser_slot
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|entry| entry.tail_window.is_some());
+        let tail_response = message_response_with_query(&tail_router, &query).await;
+        let tail_window_cached_after_request = parser_slot
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|entry| entry.tail_window.is_some());
+
+        assert_eq!(
+            (
+                tail_initial,
+                tail_response,
+                tail_window_cached_before_request,
+                tail_window_cached_after_request,
+            ),
+            (full_initial, full_response, Some(true), Some(false),),
         );
     }
 

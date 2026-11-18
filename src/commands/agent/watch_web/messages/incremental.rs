@@ -135,6 +135,7 @@ pub(super) fn parse_session_transcript_incrementally_for_range(
     let parser = create_parser(&input, captured_length)?;
     if let Some(reason) = restart_reason {
         tracing::info!(
+            session_id,
             reason,
             elapsed_ms = parse_started.elapsed().as_millis(),
             "incremental transcript parser restarted with a full parse"
