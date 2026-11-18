@@ -3,6 +3,7 @@ import type { Session } from '#types'
 
 type SessionNavigationOptions = {
   sessions: readonly Session[]
+  requestComposerFocus: (sessionId: string) => void
   navigate: (
     update: (current: SessionHistoryState) => SessionHistoryState,
     mode?: HistoryMode,
@@ -13,16 +14,22 @@ type SessionNavigationOptions = {
 
 export function createSessionNavigationActions({
   sessions,
+  requestComposerFocus,
   navigate,
   setLaterExpanded,
   toggleToday,
 }: SessionNavigationOptions) {
+  const selectSession = (sessionId: string) => {
+    navigate((current) => ({ ...current, selectedId: sessionId }))
+    requestComposerFocus(sessionId)
+  }
   const openConversation = (sessionId: string) => {
     navigate((current) => ({
       ...current,
       selectedId: sessionId,
       conversationOpen: true,
     }))
+    requestComposerFocus(sessionId)
   }
   const openSessionInInbox = (
     sessionId: string,
@@ -45,6 +52,7 @@ export function createSessionNavigationActions({
       }),
       mode,
     )
+    requestComposerFocus(sessionId)
   }
   const openTodaySession = (sessionId: string) => {
     if (
@@ -57,6 +65,7 @@ export function createSessionNavigationActions({
     openConversation(sessionId)
   }
   return {
+    selectSession,
     openConversation,
     openSessionInInbox,
     openTodaySession,

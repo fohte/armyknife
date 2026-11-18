@@ -18,6 +18,7 @@ type NewSessionNavigationOptions = {
   resetNewSession: () => void
   setCommandPaletteOpen: (isOpen: boolean) => void
   setPendingLaunchId: (sessionId: string | null) => void
+  requestComposerFocus: (sessionId: string) => void
 }
 
 export function useNewSessionNavigation({
@@ -28,6 +29,7 @@ export function useNewSessionNavigation({
   resetNewSession,
   setCommandPaletteOpen,
   setPendingLaunchId,
+  requestComposerFocus,
 }: NewSessionNavigationOptions) {
   const openNewSession = useCallback(
     (mode: NewSessionMode) => {
@@ -65,8 +67,14 @@ export function useNewSessionNavigation({
       resetNewSession()
       setPendingLaunchId(null)
       replaceNewSessionWithSession(sessionId, conversationOpen)
+      requestComposerFocus(sessionId)
     },
-    [replaceNewSessionWithSession, resetNewSession, setPendingLaunchId],
+    [
+      replaceNewSessionWithSession,
+      requestComposerFocus,
+      resetNewSession,
+      setPendingLaunchId,
+    ],
   )
 
   return { closeNewSession, openNewSession, switchFromNewSessionToSession }

@@ -101,7 +101,7 @@
   }
 
   .inbox-view .inbox-footer {
-    gap: 14px;
+    gap: 12px;
     padding-right: 18px;
     padding-left: 18px;
     border-top-color: var(--aw-border);

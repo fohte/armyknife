@@ -31,6 +31,7 @@ type CloseBatch = {
 
 type CommandPaletteControllerOptions = {
   sessions: readonly Session[]
+  requestComposerFocus: (sessionId: string) => void
   navigate: Navigate
   setError: (error: string | null) => void
   setCloseRetrySessionId: (id: string | null) => void
@@ -48,6 +49,7 @@ type CommandPaletteControllerOptions = {
 
 export function useCommandPaletteController({
   sessions,
+  requestComposerFocus,
   navigate,
   setError,
   setCloseRetrySessionId,
@@ -173,12 +175,14 @@ export function useCommandPaletteController({
     [recordRecentSession],
   )
   const {
+    selectSession: selectSessionAction,
     openConversation: openConversationAction,
     openSessionInInbox: openSessionInInboxAction,
     openTodaySession: openTodaySessionAction,
     toggleToday,
   } = createSessionNavigationActions({
     sessions,
+    requestComposerFocus,
     navigate,
     setLaterExpanded,
     toggleToday: (id, isToday) => {
@@ -270,6 +274,7 @@ export function useCommandPaletteController({
     setIsOpen,
     recentSessionIds,
     openConversation,
+    selectSession: selectSessionAction,
     openSessionInInbox,
     openTodaySession,
     focusSession,

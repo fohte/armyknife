@@ -55,6 +55,8 @@ type ConversationPaneProps = {
   onOptimisticSessionOperation?: (operation: SessionOperation) => void
   isToday?: boolean
   onToggleToday?: (isToday: boolean) => void
+  composerFocusRequestId?: number | null
+  onComposerFocusRequestHandled?: (requestId: number) => void
 } & SessionTreeCallbacks
 
 export function ConversationPane({
@@ -81,6 +83,8 @@ export function ConversationPane({
   onOptimisticSessionOperation,
   isToday = false,
   onToggleToday = () => undefined,
+  composerFocusRequestId = null,
+  onComposerFocusRequestHandled = () => undefined,
 }: ConversationPaneProps) {
   const sessionLinkTargets = useSessionLinkTargets(sessions)
   const onSelectSessionRef = useRef(onSelectSession)
@@ -102,6 +106,7 @@ export function ConversationPane({
   const {
     actions,
     actionsReady,
+    actionsSettled,
     clearErrors,
     conversation,
     conversationRef,
@@ -372,6 +377,9 @@ export function ConversationPane({
       skills={conversation.skills ?? []}
       actions={actions}
       actionsReady={actionsReady}
+      actionsSettled={actionsSettled}
+      composerFocusRequestId={composerFocusRequestId}
+      onComposerFocusRequestHandled={onComposerFocusRequestHandled}
       pendingPermissionActions={pendingPermissionActions}
       openInTerminalStatus={displayOpenInTerminalStatus}
       interruptPending={interruptPending}

@@ -65,6 +65,7 @@ export function useConversationPaneData({
   const [actions, setActions] = useState<SessionActions | null>(null)
   const actionsRef = useRef<SessionActions | null>(null)
   const [actionsReady, setActionsReady] = useState(false)
+  const [actionsSettled, setActionsSettled] = useState(false)
   const [loading, setLoading] = useState(
     initialCachedConversation === undefined,
   )
@@ -168,6 +169,7 @@ export function useConversationPaneData({
     } else {
       actionsError.current = result.error.message
     }
+    setActionsSettled(true)
     setError(messagesError.current ?? actionsError.current)
   }, [confirmPendingOperations, sessionId])
 
@@ -387,6 +389,7 @@ export function useConversationPaneData({
   return {
     actions,
     actionsReady,
+    actionsSettled,
     actionsRef,
     clearErrors,
     conversation,

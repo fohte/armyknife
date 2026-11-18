@@ -56,6 +56,7 @@ type ConversationPaneViewProps = {
   skills?: readonly SkillSuggestion[]
   actions: SessionActions | null
   actionsReady?: boolean
+  actionsSettled?: boolean
   isResuming?: boolean
   pendingPermissionActions?: PendingPermissionActions | undefined
   openInTerminalStatus?: OpenInTerminalStatus
@@ -90,6 +91,8 @@ type ConversationPaneViewProps = {
   onClose?: () => void
   isToday?: boolean
   onToggleToday?: (isToday: boolean) => void
+  composerFocusRequestId?: number | null
+  onComposerFocusRequestHandled?: (requestId: number) => void
 }
 
 export function ConversationPaneView({
@@ -109,6 +112,7 @@ export function ConversationPaneView({
   skills = [],
   actions,
   actionsReady = true,
+  actionsSettled = true,
   isResuming = false,
   pendingPermissionActions = {},
   openInTerminalStatus = null,
@@ -135,6 +139,8 @@ export function ConversationPaneView({
   onClose,
   isToday = false,
   onToggleToday,
+  composerFocusRequestId = null,
+  onComposerFocusRequestHandled = () => undefined,
 }: ConversationPaneViewProps) {
   const { usage } = useAgentUsageContext()
   const sessionUsage =
@@ -411,6 +417,9 @@ export function ConversationPaneView({
           <MessageComposer
             draft={draft}
             focusDraft={focusDraft}
+            focusRequestId={composerFocusRequestId}
+            onFocusRequestHandled={onComposerFocusRequestHandled}
+            actionsSettled={actionsSettled}
             engine={session.engine}
             skills={skills}
             placeholder={

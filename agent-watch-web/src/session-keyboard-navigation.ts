@@ -27,6 +27,7 @@ type SessionKeyboardNavigationOptions = {
   ) => void
   toggleInbox: () => void
   toggleStatusPanel: () => void
+  focusComposer: () => boolean
 }
 
 export function useSessionKeyboardNavigation({
@@ -43,6 +44,7 @@ export function useSessionKeyboardNavigation({
   navigate,
   toggleInbox,
   toggleStatusPanel,
+  focusComposer,
 }: SessionKeyboardNavigationOptions) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -115,6 +117,8 @@ export function useSessionKeyboardNavigation({
           }),
           'replace',
         )
+      } else if (action?.type === 'focus-composer' && focusComposer()) {
+        event.preventDefault()
       } else if (
         action?.type === 'later' &&
         selectedId !== null &&
@@ -152,6 +156,7 @@ export function useSessionKeyboardNavigation({
     submitLater,
     toggleInbox,
     toggleStatusPanel,
+    focusComposer,
     view,
   ])
 }

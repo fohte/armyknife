@@ -557,6 +557,53 @@ function mockSessionActionFetch(input: RequestInfo | URL) {
     : Promise.resolve(response)
 }
 
+function mockComposerActions(message: boolean) {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn<typeof fetch>((input) => {
+      if (requestUrl(input).endsWith('/actions')) {
+        return Promise.resolve(
+          jsonResponse({
+            message,
+            answerQuestion: true,
+            interrupt: true,
+            openInTerminal: true,
+            rewind: false,
+          }),
+        )
+      }
+      return mockPendingResponse()
+    }),
+  )
+}
+
+function mockComposerActionsFailure() {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn<typeof fetch>((input) => {
+      if (requestUrl(input).endsWith('/actions')) {
+        return Promise.resolve(jsonResponse({}, 500))
+      }
+      return mockPendingResponse()
+    }),
+  )
+}
+
+async function waitForComposerActions() {
+  await act(async () => {
+    for (
+      let index = 0;
+      index < 12 &&
+      container
+        .querySelector<HTMLFormElement>('.conversation-composer')
+        ?.getAttribute('data-actions-settled') !== 'true';
+      index += 1
+    ) {
+      await Promise.resolve()
+    }
+  })
+}
+
 function flushAsyncState() {
   return new Promise<void>((resolve) => window.setTimeout(resolve, 0))
 }
@@ -2792,10 +2839,26 @@ it('restores the previous screen when a new-session palette is dismissed with Ba
 })
 
 it('opens an existing conversation after selecting it from the open new-session form', async () => {
-  vi.stubGlobal(
-    'fetch',
-    createSessionLaunchFetcher(jsonResponse({ launchId: 'launch-fixture' })),
-  )
+  vi.stubGlobal('fetch', (input: RequestInfo | URL) => {
+    const url = requestUrl(input)
+    if (url === '/api/directories') {
+      return Promise.resolve(
+        jsonResponse({ directories: [exampleLaunchDirectory] }),
+      )
+    }
+    if (requestPath(input).endsWith('/actions')) {
+      return Promise.resolve(
+        jsonResponse({
+          message: true,
+          answerQuestion: true,
+          interrupt: true,
+          openInTerminal: true,
+          rewind: false,
+        }),
+      )
+    }
+    return mockPendingResponse()
+  })
   renderApp()
   publishSessions({
     revision: 1,
@@ -2804,16 +2867,22 @@ it('opens an existing conversation after selecting it from the open new-session 
   clickButton('[aria-label="New session"]')
   await waitForDirectoryResults()
   clickButton('[data-session-row]')
+  await waitForComposerActions()
 
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '.conversation-composer textarea',
+  )
   const snapshot = () => ({
     newSessionFormOpen: container.querySelector('.new-session-view') !== null,
     conversationOpen: container.querySelector('.conversation-pane') !== null,
     selectedTitle: readSelectedTitle(),
+    replyFocused: document.activeElement === textarea,
   })
   expect(snapshot()).toEqual({
     newSessionFormOpen: false,
     conversationOpen: true,
     selectedTitle: 'Existing session',
+    replyFocused: true,
   })
 })
 
@@ -4224,6 +4293,284 @@ it('returns a Later session after its deadline without a feed update', async () 
   })
 })
 
+it('focuses the reply field after selecting a session in Inbox', async () => {
+  mockComposerActions(true)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('fixture-inbox-session', 'Inbox session')],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  await waitForComposerActions()
+
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '.conversation-composer textarea',
+  )
+  const snapshot = () => ({
+    composerExists: textarea !== null,
+    focused: document.activeElement === textarea,
+  })
+  expect(snapshot()).toEqual({ composerExists: true, focused: true })
+})
+
+it('focuses the reply field after opening a Board session', async () => {
+  mockComposerActions(true)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('fixture-board-session', 'Board session')],
+  })
+  act(() => {
+    dispatchKey(window, 'B', { shiftKey: true })
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Open in Inbox: Board session"]',
+      )
+      ?.click()
+  })
+  await waitForComposerActions()
+
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '.conversation-composer textarea',
+  )
+  const snapshot = () => ({
+    activeView: readActiveView(),
+    focused: document.activeElement === textarea,
+  })
+  expect(snapshot()).toEqual({ activeView: 'Inbox', focused: true })
+})
+
+it('does not move reply focus when navigating with j and k', async () => {
+  mockComposerActions(true)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('fixture-first-session', 'First session'),
+      session('fixture-second-session', 'Second session'),
+    ],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  await waitForComposerActions()
+  const outsideButton = document.createElement('button')
+  document.body.append(outsideButton)
+  outsideButton.focus()
+  act(() => {
+    dispatchKey(window, 'j')
+  })
+
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '.conversation-composer textarea',
+  )
+  const snapshot = () => ({
+    selectedTitle: readSelectedTitle(),
+    outsideButtonRetainsFocus: document.activeElement === outsideButton,
+    composerFocused: document.activeElement === textarea,
+  })
+  expect(snapshot()).toEqual({
+    selectedTitle: 'Second session',
+    outsideButtonRetainsFocus: true,
+    composerFocused: false,
+  })
+  outsideButton.remove()
+})
+
+it('does not focus the reply field on a mobile session selection', async () => {
+  mockComposerActions(true)
+  mobileViewportMatches = true
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('fixture-mobile-session', 'Mobile session')],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  await waitForComposerActions()
+
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '.conversation-composer textarea',
+  )
+  const snapshot = () => ({
+    composerExists: textarea !== null,
+    focused: document.activeElement === textarea,
+    actionsSettled: container
+      .querySelector<HTMLFormElement>('.conversation-composer')
+      ?.getAttribute('data-actions-settled'),
+  })
+  expect(snapshot()).toEqual({
+    composerExists: true,
+    focused: false,
+    actionsSettled: 'true',
+  })
+})
+
+it('ignores the i shortcut on mobile', async () => {
+  mockComposerActions(true)
+  mobileViewportMatches = true
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('fixture-mobile-shortcut-session', 'Mobile session')],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  await waitForComposerActions()
+
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '.conversation-composer textarea',
+  )
+  const outsideButton = document.createElement('button')
+  document.body.append(outsideButton)
+  outsideButton.focus()
+  const events: KeyboardEvent[] = []
+  act(() => {
+    events.push(dispatchKey(outsideButton, 'i'))
+  })
+  const snapshot = () => ({
+    focused: document.activeElement === textarea,
+    buttonRetainsFocus: document.activeElement === outsideButton,
+    defaultPrevented: events[0]?.defaultPrevented,
+  })
+  expect(snapshot()).toEqual({
+    focused: false,
+    buttonRetainsFocus: true,
+    defaultPrevented: false,
+  })
+  outsideButton.remove()
+})
+
+it('uses i to focus an enabled reply field without inserting the key', async () => {
+  mockComposerActions(true)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('fixture-shortcut-session', 'Shortcut session')],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  await waitForComposerActions()
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '.conversation-composer textarea',
+  )
+  const outsideButton = document.createElement('button')
+  document.body.append(outsideButton)
+  outsideButton.focus()
+  const events: KeyboardEvent[] = []
+  act(() => {
+    events.push(dispatchKey(outsideButton, 'i', { shiftKey: true }))
+    events.push(dispatchKey(outsideButton, 'i', { ctrlKey: true }))
+    events.push(dispatchKey(outsideButton, 'i', { metaKey: true }))
+    events.push(dispatchKey(outsideButton, 'i', { altKey: true }))
+    events.push(dispatchKey(outsideButton, 'i'))
+  })
+
+  const snapshot = () => ({
+    focused: document.activeElement === textarea,
+    defaultPrevented: events.map((event) => event.defaultPrevented),
+    draft: textarea?.value,
+  })
+  expect(snapshot()).toEqual({
+    focused: true,
+    defaultPrevented: [false, false, false, false, true],
+    draft: '',
+  })
+  outsideButton.remove()
+})
+
+it('keeps reply focus available when action metadata cannot be loaded', async () => {
+  mockComposerActionsFailure()
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('fixture-action-error-session', 'Action error session')],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  await waitForComposerActions()
+
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '.conversation-composer textarea',
+  )
+  const focusedOnOpen = document.activeElement === textarea
+  const outsideButton = document.createElement('button')
+  document.body.append(outsideButton)
+  outsideButton.focus()
+  const events: KeyboardEvent[] = []
+  act(() => {
+    events.push(dispatchKey(outsideButton, 'i'))
+  })
+  const snapshot = () => ({
+    focusedOnOpen,
+    refocusedWithShortcut: document.activeElement === textarea,
+    shortcutPrevented: events[0]?.defaultPrevented,
+    draft: textarea?.value,
+  })
+  expect(snapshot()).toEqual({
+    focusedOnOpen: true,
+    refocusedWithShortcut: true,
+    shortcutPrevented: true,
+    draft: '',
+  })
+  outsideButton.remove()
+})
+
+it('does nothing when a selected session cannot accept replies', async () => {
+  mockComposerActions(false)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('fixture-disabled-session', 'Disabled session')],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  await act(async () => {
+    for (
+      let index = 0;
+      index < 12 && container.querySelector('.conversation-ended') === null;
+      index += 1
+    ) {
+      await Promise.resolve()
+    }
+  })
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '.conversation-composer textarea',
+  )
+  const outsideButton = document.createElement('button')
+  document.body.append(outsideButton)
+  outsideButton.focus()
+  const events: KeyboardEvent[] = []
+  act(() => {
+    events.push(dispatchKey(outsideButton, 'i'))
+  })
+
+  const snapshot = () => ({
+    selectedTitle: readSelectedTitle(),
+    endedBannerVisible: container.querySelector('.conversation-ended') !== null,
+    composerExists: textarea !== null,
+    buttonRetainsFocus: document.activeElement === outsideButton,
+    defaultPrevented: events[0]?.defaultPrevented,
+  })
+  expect(snapshot()).toEqual({
+    selectedTitle: 'Disabled session',
+    endedBannerVisible: true,
+    composerExists: false,
+    buttonRetainsFocus: true,
+    defaultPrevented: false,
+  })
+  outsideButton.remove()
+})
+
 it('ignores shortcuts from input fields and events with modifiers', () => {
   renderApp()
   publishSessions({
@@ -4233,6 +4580,7 @@ it('ignores shortcuts from input fields and events with modifiers', () => {
 
   const input = document.createElement('input')
   const textarea = document.createElement('textarea')
+  textarea.value = 'Keep this draft'
   const select = document.createElement('select')
   const editable = document.createElement('div')
   editable.contentEditable = 'true'
@@ -4244,6 +4592,10 @@ it('ignores shortcuts from input fields and events with modifiers', () => {
     events.push(dispatchKey(textarea, 'j'))
     events.push(dispatchKey(select, 'j'))
     events.push(dispatchKey(editable, 'j'))
+    events.push(dispatchKey(input, 'i'))
+    events.push(dispatchKey(textarea, 'i'))
+    events.push(dispatchKey(select, 'i'))
+    events.push(dispatchKey(editable, 'i'))
     events.push(dispatchKey(input, '['))
     events.push(dispatchKey(input, '.', { metaKey: true }))
     events.push(dispatchKey(window, 'j', { altKey: true }))
@@ -4254,12 +4606,18 @@ it('ignores shortcuts from input fields and events with modifiers', () => {
 
   const snapshot = () => ({
     selectedTitle: readSelectedTitle(),
+    textareaValue: textarea.value,
     defaultPrevented: events.map((event) => event.defaultPrevented),
   })
 
   expect(snapshot()).toEqual({
     selectedTitle: 'First session',
+    textareaValue: 'Keep this draft',
     defaultPrevented: [
+      false,
+      false,
+      false,
+      false,
       false,
       false,
       false,
@@ -4604,25 +4962,32 @@ it('opens a known session ID from a conversation message', async () => {
   const fetcher = vi.fn<typeof fetch>()
   fetcher.mockImplementation((input) => {
     const path = new URL(requestUrl(input), 'http://localhost').pathname
-    const body = path.endsWith('/messages')
-      ? {
-          messages: [{ type: 'assistant', text: `Open ${linkedId}` }],
-          backgroundTasks: [],
-          start: 0,
-          total: 1,
-          decisions: [],
-          hasUnansweredProposal: false,
-          activeQuestionIndex: null,
-        }
-      : {
-          message: true,
-          answerQuestion: false,
-          interrupt: true,
-          openInTerminal: true,
-          rewind: false,
-        }
+    const actionsFailed = path === `/api/sessions/${linkedId}/actions`
+    let body: unknown
+    if (path.endsWith('/messages')) {
+      body = {
+        messages: [{ type: 'assistant', text: `Open ${linkedId}` }],
+        backgroundTasks: [],
+        start: 0,
+        total: 1,
+        decisions: [],
+        hasUnansweredProposal: false,
+        activeQuestionIndex: null,
+      }
+    } else if (actionsFailed) {
+      body = { error: 'Action metadata is unavailable.' }
+    } else {
+      body = {
+        message: true,
+        answerQuestion: false,
+        interrupt: true,
+        openInTerminal: true,
+        rewind: false,
+      }
+    }
     return Promise.resolve(
       new Response(JSON.stringify(body), {
+        status: actionsFailed ? 500 : 200,
         headers: { 'Content-Type': 'application/json' },
       }),
     )
@@ -4653,10 +5018,19 @@ it('opens a known session ID from a conversation message', async () => {
   await act(async () => {
     for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
+  await waitForComposerActions()
 
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '.conversation-composer textarea',
+  )
   const snapshot = () => ({
     selectedTitle: readSelectedTitle(),
     url: window.location.search,
+    replyFocused: document.activeElement === textarea,
+    replyEnabled: textarea?.disabled === false,
+    actionsSettled: textarea
+      ?.closest<HTMLFormElement>('.conversation-composer')
+      ?.getAttribute('data-actions-settled'),
     linkTitle,
     linkClass,
     underlineStyle,
@@ -4664,6 +5038,9 @@ it('opens a known session ID from a conversation message', async () => {
   expect(snapshot()).toEqual({
     selectedTitle: 'Linked session',
     url: `?session=${linkedId}`,
+    replyFocused: true,
+    replyEnabled: true,
+    actionsSettled: 'true',
     linkTitle: '',
     linkClass: 'session-link-trigger',
     underlineStyle: 'dotted',

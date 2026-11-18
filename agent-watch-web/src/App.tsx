@@ -7,32 +7,16 @@ import {
   useState,
 } from 'react'
 
-import { buildBoardProjects, buildWorkTypeNavGroups } from '#board-model'
+import { AppWorkspace } from '#app-workspace'
 import { useCommandPaletteController } from '#command-palette-controller'
 import { getCommandPaletteShortcut } from '#command-palette-shortcut'
 import { AgentUsageProvider } from '#components/agent-usage-context'
-import { AgentWatchNav } from '#components/agent-watch-nav'
-import { BoardView } from '#components/board-view'
-import { CommandPalette } from '#components/command-palette'
-import { InboxConversationPanes } from '#components/inbox-conversation-panes'
-import { LaterMenu } from '#components/later-menu'
-import { MobileNavDrawer } from '#components/mobile-nav-drawer'
-import { NewSessionForm } from '#components/new-session-form'
-import { NewSessionPicker } from '#components/new-session-picker'
-import { ResizableColumns } from '#components/resizable-columns'
 import { SessionConversationCacheProvider } from '#components/session-conversation-cache'
-import {
-  filterInboxSessions,
-  formatInboxFilterQuery,
-  parseInboxFilterQuery,
-} from '#inbox-filter'
 import { useMobileLayout, useSessionMobileNavigation } from '#mobile-layout'
 import { findLaunchedSession } from '#new-session-navigation'
-import { getLaterPresetTimes } from '#session-actions'
 import { startSessionFeed } from '#session-feed'
 import { useSessionHistory } from '#session-history'
 import { useSessionKeyboardNavigation } from '#session-keyboard-navigation'
-import { type LaterPreset, type LaterPresetTimes } from '#session-navigation'
 import {
   SessionOperationProvider,
   useSessionOperations,
@@ -44,9 +28,11 @@ import {
   type SessionOperation,
 } from '#session-operations'
 import type { Session } from '#types'
+import { useAppSessionProjection } from '#use-app-session-projection'
+import { useComposerFocus } from '#use-composer-focus'
+import { useLaterSessionActions } from '#use-later-session-actions'
 import { useNewSession } from '#use-new-session'
 import { useNewSessionNavigation } from '#use-new-session-navigation'
-import { useSavedInboxViews } from '#use-saved-inbox-views'
 import { useSessionRefreshRevisions } from '#use-session-refresh-revisions'
 
 export function App() {
@@ -121,6 +107,12 @@ function AppContent() {
     navigate,
     replaceNewSessionWithSession,
   } = useSessionHistory()
+  const {
+    composerFocusRequest,
+    requestComposerFocus,
+    handleComposerFocusRequest,
+    focusComposer,
+  } = useComposerFocus({ isMobile, selectedId })
   const [hideQuietProjects, setHideQuietProjects] = useState(true)
   const [focusedProjectName, setFocusedProjectName] = useState<string | null>(
     null,
@@ -134,11 +126,6 @@ function AppContent() {
   >(null)
   const [showAllInProgress, setShowAllInProgress] = useState(false)
   const [laterExpanded, setLaterExpanded] = useState(false)
-  const [laterSessionId, setLaterSessionId] = useState<string | null>(null)
-  const [laterTimes, setLaterTimes] = useState<LaterPresetTimes | null>(null)
-  const [laterTimesError, setLaterTimesError] = useState(false)
-  const laterSubmissionInFlight = useRef(false)
-  const laterRequestId = useRef(0)
   const [error, setError] = useState<string | null>(null)
   const [closeRetrySessionId, setCloseRetrySessionId] = useState<string | null>(
     null,
@@ -175,75 +162,51 @@ function AppContent() {
       }),
     [confirm, dispatchSessionOperation, run],
   )
-  const elapsedOffsetSeconds = Math.floor(
-    Math.max(0, nowMs - sessionsReceivedAt) / 1_000,
-  )
-  const sessionsWithElapsedTime = useMemo(
-    () =>
-      optimisticSessions.map((session) => {
-        const deadlinePassed =
-          session.category === 'later' &&
-          session.laterUntil !== null &&
-          session.laterUntil !== undefined &&
-          Date.parse(session.laterUntil) <= nowMs
-        return {
-          ...session,
-          category: deadlinePassed
-            ? (session.categoryWhenNotLater ?? 'needs_action')
-            : session.category,
-          elapsedSeconds: session.elapsedSeconds + elapsedOffsetSeconds,
-        }
-      }),
-    [elapsedOffsetSeconds, optimisticSessions],
-  )
-  const todaySessions = useMemo(
-    () => sessionsWithElapsedTime.filter((session) => session.isToday === true),
-    [sessionsWithElapsedTime],
-  )
-  const orderedSessions = useMemo(
-    () => [
-      ...sessionsWithElapsedTime.filter(
-        (session) => session.category === 'needs_action',
-      ),
-      ...sessionsWithElapsedTime.filter(
-        (session) => session.category === 'later',
-      ),
-      ...sessionsWithElapsedTime.filter(
-        (session) => session.category === 'in_progress',
-      ),
-      ...sessionsWithElapsedTime.filter(
-        (session) => session.category === 'done',
-      ),
-    ],
-    [sessionsWithElapsedTime],
-  )
-  const inboxFilters = useMemo(
-    () => parseInboxFilterQuery(inboxFilterQuery),
-    [inboxFilterQuery],
-  )
-  const filteredOrderedSessions = useMemo(
-    () => filterInboxSessions(orderedSessions, inboxFilters),
-    [inboxFilters, orderedSessions],
-  )
-  const normalizedInboxFilterQuery = formatInboxFilterQuery(inboxFilters)
-  const savedViews = useSavedInboxViews(
+  const {
     sessionsWithElapsedTime,
-    normalizedInboxFilterQuery,
-    view === 'inbox',
+    todaySessions,
+    orderedSessions,
+    navigableSessions,
+    savedViews,
+    projects,
+    workTypeNavGroups,
+    needsActionCount,
+  } = useAppSessionProjection({
+    optimisticSessions,
+    nowMs,
+    sessionsReceivedAt,
+    inboxFilterQuery,
+    laterExpanded,
+    workTypeNavLabels,
+    view,
     setError,
-  )
-  const navigableSessions = useMemo(
-    () =>
-      filteredOrderedSessions.filter(
-        (session) => laterExpanded || session.category !== 'later',
-      ),
-    [filteredOrderedSessions, laterExpanded],
-  )
+  })
+  const {
+    laterSessionId,
+    laterTimes,
+    laterTimesError,
+    laterSubmissionInFlight,
+    laterMutationPending,
+    openLater,
+    closeLater,
+    submitLater,
+    submitBackNow,
+  } = useLaterSessionActions({
+    isMobile,
+    sessions,
+    navigableSessions,
+    pendingOperations,
+    navigate,
+    runSessionOperation,
+    setError,
+    setLaterExpanded,
+  })
   const {
     isOpen: commandPaletteOpen,
     setIsOpen: setCommandPaletteOpen,
     recentSessionIds,
     runCommand: runPaletteCommand,
+    selectSession,
     openConversation,
     openSessionInInbox,
     openTodaySession,
@@ -253,6 +216,7 @@ function AppContent() {
     toggleToday,
   } = useCommandPaletteController({
     sessions: sessionsWithElapsedTime,
+    requestComposerFocus,
     navigate,
     setError,
     setCloseRetrySessionId,
@@ -267,128 +231,6 @@ function AppContent() {
     conversationOpen: mobileConversationOpen,
     runOperation: runSessionOperation,
   })
-  const projects = useMemo(
-    () => buildBoardProjects(sessionsWithElapsedTime),
-    [sessionsWithElapsedTime],
-  )
-  const workTypeNavGroups = useMemo(
-    () => buildWorkTypeNavGroups(sessionsWithElapsedTime, workTypeNavLabels),
-    [sessionsWithElapsedTime, workTypeNavLabels],
-  )
-
-  const openLater = useCallback((id: string) => {
-    const requestId = ++laterRequestId.current
-    setLaterTimes(null)
-    setLaterTimesError(false)
-    setLaterSessionId(id)
-    setError(null)
-    void getLaterPresetTimes().match(
-      (times) => {
-        if (requestId === laterRequestId.current) {
-          setLaterTimes(times)
-        }
-      },
-      () => {
-        if (requestId === laterRequestId.current) {
-          setLaterTimesError(true)
-          setError('Could not load Later return times.')
-        }
-      },
-    )
-  }, [])
-  const closeLater = useCallback(() => {
-    laterRequestId.current += 1
-    setLaterSessionId(null)
-  }, [])
-  const beginLaterMutation = useCallback(() => {
-    if (laterSubmissionInFlight.current) {
-      return false
-    }
-    laterSubmissionInFlight.current = true
-    return true
-  }, [])
-  const finishLaterMutation = useCallback(() => {
-    laterSubmissionInFlight.current = false
-  }, [])
-  const submitLater = useCallback(
-    (sessionId: string, preset: LaterPreset) => {
-      const expectedDeadline = laterTimes?.[preset].deadline
-      if (expectedDeadline === undefined) {
-        return
-      }
-      if (!beginLaterMutation()) {
-        return
-      }
-
-      void runSessionOperation({
-        type: 'later',
-        sessionId,
-        preset,
-        expectedDeadline,
-      }).then((result) => {
-        result.match(
-          () => {
-            finishLaterMutation()
-            closeLater()
-            if (isMobile) {
-              setLaterExpanded(false)
-              navigate(
-                (current) => ({
-                  ...current,
-                  selectedId:
-                    navigableSessions.find(
-                      (session) => session.id !== sessionId,
-                    )?.id ?? null,
-                  conversationOpen: false,
-                }),
-                'push',
-              )
-            }
-            setError(null)
-          },
-          () => {
-            finishLaterMutation()
-            openLater(sessionId)
-            setError('Could not move the session to Later.')
-          },
-        )
-      })
-    },
-    [
-      beginLaterMutation,
-      closeLater,
-      finishLaterMutation,
-      isMobile,
-      laterTimes,
-      navigableSessions,
-      navigate,
-      openLater,
-      runSessionOperation,
-    ],
-  )
-  const submitBackNow = useCallback(
-    (sessionId: string) => {
-      if (!beginLaterMutation()) {
-        return
-      }
-      void runSessionOperation({ type: 'back_now', sessionId }).then(
-        (result) => {
-          result.match(
-            () => {
-              finishLaterMutation()
-              closeLater()
-              setError(null)
-            },
-            () => {
-              finishLaterMutation()
-              setError('Could not return the session now.')
-            },
-          )
-        },
-      )
-    },
-    [beginLaterMutation, closeLater, finishLaterMutation, runSessionOperation],
-  )
 
   const closeDoneSession = useCallback(
     (sessionId: string, keepWorktree = false) => {
@@ -453,15 +295,6 @@ function AppContent() {
   }, [orderedSessions, selectedId])
 
   useEffect(() => {
-    if (
-      laterSessionId !== null &&
-      !sessions.some((session) => session.id === laterSessionId)
-    ) {
-      closeLater()
-    }
-  }, [closeLater, laterSessionId, sessions])
-
-  useEffect(() => {
     if (view !== 'inbox') {
       return
     }
@@ -487,18 +320,11 @@ function AppContent() {
     navigate,
     toggleInbox,
     toggleStatusPanel,
+    focusComposer,
   })
 
-  const needsActionCount = filteredOrderedSessions.filter(
-    (session) => session.category === 'needs_action',
-  ).length
   const laterSession = sessionsWithElapsedTime.find(
     (session) => session.id === laterSessionId,
-  )
-  const laterMutationPending = pendingOperations.some(
-    ({ operation }) =>
-      operation.sessionId === laterSessionId &&
-      (operation.type === 'later' || operation.type === 'back_now'),
   )
   const selectedSession = sessionsWithElapsedTime.find(
     (session) => session.id === selectedId,
@@ -546,6 +372,7 @@ function AppContent() {
       resetNewSession: newSession.reset,
       setCommandPaletteOpen,
       setPendingLaunchId,
+      requestComposerFocus,
     })
   const openSessionFromNavigation = useCallback(
     (id: string) => {
@@ -577,256 +404,93 @@ function AppContent() {
     sessionsWithElapsedTime,
     setCommandPaletteOpen,
   ])
-  const inboxProps = {
-    error: error ?? savedViews.storageError,
-    connectionError: error,
-    lastUpdatedAt: sessionsReceivedAt,
-    loaded,
-    selectedId,
-    sessions: sessionsWithElapsedTime,
-    filterQuery: inboxFilterQuery,
-    onFilterQueryChange: setInboxFilterQuery,
-    saveViewOpen: savedViews.saveViewOpen,
-    saveViewName: savedViews.saveViewName,
-    onSaveViewOpenChange: savedViews.setSaveViewOpen,
-    onSaveViewNameChange: savedViews.setSaveViewName,
-    onSaveView: savedViews.saveView,
-    savedViews: savedViews.savedViewsForNav,
-    selectedSavedViewId: savedViews.activeSavedViewId,
-    onSelectSavedView: selectInboxSavedView,
-    onDeleteSavedView: savedViews.deleteView,
-    showAllInProgress,
-    onShowMore: () => {
-      setShowAllInProgress(true)
-    },
-    onSelect: (id: string) => {
-      if (newSessionMode === 'form') {
-        switchFromNewSessionToSession(id, true)
-        return
-      }
-      openConversation(id)
-    },
-    laterExpanded,
-    onToggleLater: () => {
-      setLaterExpanded((expanded) => !expanded)
-    },
-    onToggleToday: toggleToday,
-    todaySessions,
-    onSelectToday: openTodaySession,
-    inProgressExpanded,
-    onToggleInProgress: () => {
-      setInProgressExpanded((expanded) => !expanded)
-    },
-    doneExpanded,
-    onToggleDone: () => {
-      setDoneExpanded((expanded) => !expanded)
-    },
-    onCloseDone: (doneSessions: readonly Session[]) => {
-      void closeDoneSessions(doneSessions)
-    },
-    closeRetrySessionId,
-    onOpenNavigation: () => {
-      setMobileNavOpen(true)
-    },
-    onOpenPalette: openMobilePalette,
-    onNewSession: () => {
-      openNewSession('form')
-    },
-    onCloseKeepWorktree: (sessionId: string) => {
-      closeDoneSession(sessionId, true)
-    },
-  }
-  const navigation = (
-    <AgentWatchNav
-      activeView={view}
-      isMobile={isMobile}
-      paletteShortcut={getCommandPaletteShortcut(navigator.platform)}
-      needsActionCount={needsActionCount}
-      savedViews={savedViews.savedViewsForNav}
-      selectedSavedViewId={savedViews.activeSavedViewId}
-      todaySessions={todaySessions}
-      sessions={sessionsWithElapsedTime}
-      workTypeNavGroups={workTypeNavGroups}
-      onViewChange={(nextView) => {
-        navigate((current) => ({ ...current, view: nextView }))
-        closeMobileNav()
-      }}
-      onSelectSavedView={selectSavedViewFromNavigation}
-      onDeleteSavedView={savedViews.deleteView}
-      onSelectToday={openSessionFromNavigation}
-      onSelectSession={openSessionFromNavigation}
-      onOpenPalette={openMobilePalette}
-      onNewSession={() => {
-        openNewSession('form')
-      }}
-      inboxCollapsed={inboxCollapsed}
-      onToggleInbox={toggleInbox}
-    />
-  )
-  const main = (
-    <main className="agent-watch-main">
-      {view === 'inbox' ? (
-        <InboxConversationPanes
-          inboxProps={inboxProps}
-          sessions={sessionsWithElapsedTime}
-          selectedSession={selectedSession}
-          sessionRefreshRevisions={sessionRevisions}
-          isMobile={isMobile}
-          showMobileConversation={showMobileConversation}
-          inboxCollapsed={inboxCollapsed}
-          statusPanelOpen={statusPanelOpen}
-          onToggleStatusPanel={toggleStatusPanel}
-          onCloseStatusPanel={() => {
-            setStatusPanelOpen(false)
-          }}
-          onBack={backToInbox}
-          newSessionPane={
-            newSessionMode === 'form' ? (
-              <NewSessionForm
-                isMobile={isMobile}
-                launchPending={pendingLaunchId !== null}
-                onClose={closeNewSession}
-                onLaunched={setPendingLaunchId}
-                state={newSession}
-              />
-            ) : undefined
-          }
-          showMobileNewSession={newSessionMode === 'form'}
-          onLater={openLater}
-          onCloseSession={closeDoneSession}
-          onOptimisticSessionOperation={dispatchSessionOperation}
-          onSelectSession={(id) => {
-            if (!orderedSessions.some((session) => session.id === id)) return
-            if (newSessionMode === 'form') {
-              switchFromNewSessionToSession(id, false)
-              return
-            }
-            navigate((current) => ({ ...current, selectedId: id }))
-          }}
-        />
-      ) : (
-        <BoardView
-          error={error}
-          hideQuietProjects={hideQuietProjects}
-          loaded={loaded}
-          onHideQuietProjectsChange={setHideQuietProjects}
-          onNewSession={() => {
-            openNewSession('form')
-          }}
-          onSelectSession={openSessionInInbox}
-          projects={projects}
-          focusedProjectName={focusedProjectName}
-          isMobile={isMobile}
-          onOpenNavigation={() => {
-            setMobileNavOpen(true)
-          }}
-          onOpenPalette={openMobilePalette}
-        />
-      )}
-    </main>
-  )
   return (
-    <div
-      className="agent-watch-shell"
-      data-layout={isMobile ? 'mobile' : 'desktop'}
-      data-mobile-screen={
-        showMobileConversation || newSessionMode === 'form'
-          ? 'conversation'
-          : 'inbox'
-      }
-    >
-      {isMobile ? (
-        main
-      ) : (
-        <ResizableColumns
-          first={navigation}
-          second={main}
-          storageKey="agent-watch:navigation-width"
-          firstSize={240}
-          firstMinSize={160}
-          secondMinSize={508}
-          label="Resize navigation and content"
-        />
-      )}
-      {isMobile && !showMobileConversation ? (
-        <MobileNavDrawer onClose={closeMobileNav} open={mobileNavOpen}>
-          {navigation}
-        </MobileNavDrawer>
-      ) : null}
-      {laterSession !== undefined ? (
-        <LaterMenu
-          sessionTitle={laterSession.title}
-          isLater={laterSession.category === 'later'}
-          laterTimes={laterTimes}
-          laterTimesError={laterTimesError}
-          isSubmitting={laterMutationPending}
-          onClose={() => {
-            if (!laterSubmissionInFlight.current) {
-              closeLater()
-            }
-          }}
-          onBackNow={() => {
-            submitBackNow(laterSession.id)
-          }}
-          onSelect={(preset) => {
-            submitLater(laterSession.id, preset)
-          }}
-        />
-      ) : null}
-      {commandPaletteOpen ? (
-        <CommandPalette
-          onClose={() => {
-            setCommandPaletteOpen(false)
-          }}
-          onLater={(id) => {
-            setCommandPaletteOpen(false)
-            openLater(id)
-          }}
-          onOpenInTerminal={(id) => {
-            void focusSession(id)
-          }}
-          onOpenProject={(project) => {
-            setCommandPaletteOpen(false)
-            setFocusedProjectName(project)
-            navigate((current) => ({
-              ...current,
-              selectedId: null,
-              view: 'board',
-              conversationOpen: false,
-            }))
-          }}
-          onOpenSession={(id) => {
-            setCommandPaletteOpen(false)
-            openSessionInInbox(id)
-          }}
-          onOpenSessionBeside={(id) => {
-            const query = new URLSearchParams({ session: id })
-            if (isMobile) query.set('screen', 'conversation')
-            window.open(`?${query.toString()}`, '_blank', 'noopener,noreferrer')
-            setCommandPaletteOpen(false)
-          }}
-          onRunCommand={(command) => {
-            if (command.id === 'new-session') {
-              openNewSession('palette')
-              return
-            }
-            void runPaletteCommand(command)
-          }}
-          recentSessionIds={recentSessionIds}
-          sessions={sessionsWithElapsedTime}
-          workTypeNavLabels={workTypeNavLabels}
-          pendingFocusSessionId={pendingFocusSessionId}
-        />
-      ) : null}
-      {newSessionMode === 'palette' ? (
-        <NewSessionPicker
-          isMobile={isMobile}
-          launchPending={pendingLaunchId !== null}
-          onClose={closeNewSession}
-          onLaunched={setPendingLaunchId}
-          state={newSession}
-        />
-      ) : null}
-    </div>
+    <AppWorkspace
+      state={{
+        isMobile,
+        view,
+        selectedId,
+        selectedSession,
+        showMobileConversation,
+        newSessionMode,
+        mobileNavOpen,
+        inboxCollapsed,
+        sessions: sessionsWithElapsedTime,
+        todaySessions,
+        sessionRefreshRevisions: sessionRevisions,
+        sessionsReceivedAt,
+        loaded,
+        error,
+        inboxFilterQuery,
+        showAllInProgress,
+        laterExpanded,
+        inProgressExpanded,
+        doneExpanded,
+        closeRetrySessionId,
+        statusPanelOpen,
+        pendingLaunchId,
+        projects,
+        focusedProjectName,
+        hideQuietProjects,
+        workTypeNavGroups,
+        needsActionCount,
+        composerFocusRequest,
+        laterSession,
+        laterTimes,
+        laterTimesError,
+        laterMutationPending,
+        commandPaletteOpen,
+        recentSessionIds,
+        workTypeNavLabels,
+        pendingFocusSessionId,
+      }}
+      actions={{
+        setInboxFilterQuery,
+        setShowAllInProgress,
+        setLaterExpanded,
+        setInProgressExpanded,
+        setDoneExpanded,
+        setMobileNavOpen,
+        setStatusPanelOpen,
+        setPendingLaunchId,
+        setHideQuietProjects,
+        setCommandPaletteOpen,
+        setFocusedProjectName,
+        toggleInbox,
+        toggleStatusPanel,
+        toggleToday,
+        selectInboxSavedView,
+        selectSavedViewFromNavigation,
+        openSessionFromNavigation,
+        openMobilePalette,
+        openNewSession,
+        closeNewSession,
+        switchFromNewSessionToSession,
+        openConversation,
+        openTodaySession,
+        openSessionInInbox,
+        closeDoneSessions: (doneSessions) => {
+          void closeDoneSessions(doneSessions)
+        },
+        closeDoneSession,
+        onLater: openLater,
+        closeLater,
+        laterSubmissionInFlight,
+        submitLater,
+        submitBackNow,
+        dispatchSessionOperation,
+        selectSession,
+        orderedSessions,
+        onBack: backToInbox,
+        onComposerFocusRequestHandled: handleComposerFocusRequest,
+        focusSession,
+        runPaletteCommand,
+        navigate,
+        closeMobileNav,
+      }}
+      savedViews={savedViews}
+      newSession={newSession}
+      paletteShortcut={getCommandPaletteShortcut(navigator.platform)}
+    />
   )
 }
