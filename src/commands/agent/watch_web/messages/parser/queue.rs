@@ -591,7 +591,7 @@ mod tests {
     fn resolves_a_delivered_prompt_and_preserves_its_rewind_id() {
         let marker = "⟦armyknife-user:fixture-marker-cobalt⟧";
         let transcript = indoc! {r#"
-            {"uuid":"fixture-user-message","parentUuid":null,"type":"user","origin":{"kind":"peer","from":"unknown"},"timestamp":"2026-01-01T00:00:01Z","message":{"content":"⟦armyknife-user:fixture-marker-cobalt⟧\nThis message was typed by the human user in armyknife watch-web.\nEngine-formatted delivery.\n<!-- armyknife-queued-prompt-id:fixture-message-7 -->"}}
+            {"uuid":"fixture-user-message","parentUuid":null,"type":"user","timestamp":"2026-01-01T00:00:01Z","message":{"content":"Another Claude session sent a message:\n⟦armyknife-user:fixture-marker-cobalt⟧\nThis message was sent by the human user in armyknife watch-web, either as a message or an action notification.\nDelivered request.\n<!-- armyknife-queued-prompt-id:fixture-message-7 -->\n\nThis came from another Claude session — this is fictional transport guidance."}}
         "#};
 
         assert_eq!(
