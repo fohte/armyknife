@@ -1,4 +1,5 @@
 use std::io::{Cursor, Read};
+use std::time::Instant;
 
 use anyhow::Result;
 
@@ -37,12 +38,17 @@ pub(super) fn parse_session_transcript_incrementally(
     let mut cached = parser_slot
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut restart_reason = None;
     let can_reuse = if let Some(entry) = cached.as_mut()
         && entry.engine == input.engine
         && parser_matches_engine(&entry.parser, input.engine)
     {
         match advance_cached_parser(entry, &fingerprint) {
-            Ok(can_reuse) => can_reuse,
+            Ok(ParserAdvance::Reuse) => true,
+            Ok(ParserAdvance::Restart(reason)) => {
+                restart_reason = Some(reason);
+                false
+            }
             Err(error) => {
                 *cached = None;
                 return Err(error);
@@ -67,7 +73,15 @@ pub(super) fn parse_session_transcript_incrementally(
 
     *cached = None;
     let captured_length = (!fingerprint.is_compressed()).then(|| fingerprint.len());
+    let parse_started = Instant::now();
     let parser = create_parser(&input, captured_length)?;
+    if let Some(reason) = restart_reason {
+        tracing::info!(
+            reason,
+            elapsed_ms = parse_started.elapsed().as_millis(),
+            "incremental transcript parser restarted with a full parse"
+        );
+    }
     let tail = if fingerprint.is_compressed() {
         Vec::new()
     } else {
@@ -114,7 +128,7 @@ fn parser_matches_engine(parser: &IncrementalTranscriptParser, engine: Engine) -
 fn advance_cached_parser(
     entry: &mut CachedTranscriptParser,
     fingerprint: &TranscriptFingerprint,
-) -> Result<bool> {
+) -> Result<ParserAdvance> {
     let (change, suffix) = fingerprint.read_delta_from(&entry.fingerprint, &entry.tail)?;
     match change {
         TranscriptChange::Unchanged => {
@@ -122,34 +136,44 @@ fn advance_cached_parser(
             {
                 entry.last_change = change;
             }
-            Ok(true)
+            Ok(ParserAdvance::Reuse)
         }
-        TranscriptChange::Rewritten => Ok(false),
+        TranscriptChange::Rewritten => Ok(ParserAdvance::Restart("transcript_rewritten")),
         TranscriptChange::Appended => {
-            let appended = match &mut entry.parser {
-                IncrementalTranscriptParser::Claude(parser) => matches!(
-                    parser.append_bytes(&suffix, chrono::Utc::now())?,
-                    parser::claude::IncrementalAppend::Applied
-                ),
+            let restart_reason = match &mut entry.parser {
+                IncrementalTranscriptParser::Claude(parser) => {
+                    match parser.append_bytes(&suffix, chrono::Utc::now())? {
+                        parser::claude::IncrementalAppend::Applied => None,
+                        parser::claude::IncrementalAppend::RestartRequired => {
+                            Some("append_requires_branch_reparse")
+                        }
+                    }
+                }
                 IncrementalTranscriptParser::Codex(parser) => {
                     parser.append(Cursor::new(suffix.as_slice()))?;
-                    true
+                    None
                 }
             };
-            if appended {
-                let Some(tail) = fingerprint.tail_bytes()? else {
-                    return Ok(false);
-                };
-                entry.tail = tail;
-                entry.fingerprint = fingerprint.clone();
-                #[cfg(test)]
-                {
-                    entry.last_change = change;
-                }
+            if let Some(reason) = restart_reason {
+                return Ok(ParserAdvance::Restart(reason));
             }
-            Ok(appended)
+            let Some(tail) = fingerprint.tail_bytes()? else {
+                return Ok(ParserAdvance::Restart("transcript_tail_unavailable"));
+            };
+            entry.tail = tail;
+            entry.fingerprint = fingerprint.clone();
+            #[cfg(test)]
+            {
+                entry.last_change = change;
+            }
+            Ok(ParserAdvance::Reuse)
         }
     }
+}
+
+enum ParserAdvance {
+    Reuse,
+    Restart(&'static str),
 }
 
 fn create_parser(
