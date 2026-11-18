@@ -75,6 +75,70 @@ pub(super) async fn unexpose_registration(
     Ok(())
 }
 
+pub(super) async fn expose_and_record_registration(
+    sessions_dir: &Path,
+    hook_runner: Arc<HookRunner>,
+    key: &RelayKey,
+    relay: &mut Relay,
+) {
+    let should_rollback_on_save_failure = !relay.exposed;
+    if !relay.exposed {
+        match super::invoke_hook(
+            hook_runner.clone(),
+            "web-ui-expose",
+            vec![
+                (WEB_UI_URL_ENV.to_owned(), relay.url.clone()),
+                (WEB_UI_PORT_ENV.to_owned(), relay.port.to_string()),
+            ],
+        )
+        .await
+        {
+            Ok(exposed_url) => {
+                relay.exposed = true;
+                relay.exposed_url = exposed_url.and_then(super::valid_exposed_url);
+            }
+            Err(error) => {
+                tracing::warn!(
+                    session = %key.session_id,
+                    web_ui = %key.name,
+                    %error,
+                    "web-ui-expose hook failed"
+                );
+                return;
+            }
+        }
+    }
+
+    if relay.registration_saved {
+        return;
+    }
+
+    let registration = RelayRegistration::from_relay(key, relay);
+    if let Err(error) = add_relay_registration(sessions_dir, &registration) {
+        tracing::warn!(
+            session = %key.session_id,
+            web_ui = %key.name,
+            %error,
+            "failed to save web UI relay registration"
+        );
+        if should_rollback_on_save_failure {
+            if let Err(error) = unexpose_registration(hook_runner, &registration).await {
+                tracing::warn!(
+                    session = %key.session_id,
+                    web_ui = %key.name,
+                    %error,
+                    "failed to undo unrecorded web UI relay registration"
+                );
+            } else {
+                relay.exposed = false;
+                relay.exposed_url = None;
+            }
+        }
+        return;
+    }
+    relay.registration_saved = true;
+}
+
 pub(super) fn load_relay_registrations(
     sessions_dir: &Path,
 ) -> Result<Vec<RelayRegistration>, RelayRegistrationsLoadError> {
