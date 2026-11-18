@@ -175,3 +175,31 @@ it('shows the API reason when the server rejects a change', async () => {
     panel: true,
   })
 })
+
+it('keeps the desktop popover inside a wide pane beside a short title', () => {
+  container.style.cssText =
+    'box-sizing: border-box; height: 260px; overflow: hidden; padding: 10px 24px; position: relative; width: 520px;'
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <div style={{ display: 'flex', gap: '4px' }}>
+        <span>Fixture title</span>
+        <VibeModeControl
+          sessionId="fixture-session"
+          repo="example/service"
+          mode={{ mode: 'disabled' }}
+          open
+        />
+      </div>,
+    )
+  })
+
+  const popover = container.querySelector<HTMLElement>('.vibe-control-popover')
+  if (popover === null) throw new Error('Expected vibe mode popover')
+  const paneRect = container.getBoundingClientRect()
+  const popoverRect = popover.getBoundingClientRect()
+
+  expect(
+    popoverRect.left >= paneRect.left && popoverRect.right <= paneRect.right,
+  ).toEqual(true)
+})
