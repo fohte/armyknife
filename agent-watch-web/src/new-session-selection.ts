@@ -16,7 +16,12 @@ export function defaultEffortModelOption(
   const configuredModel = options.models.find(
     (option) => option.id === options.defaultModel,
   )
-  if (configuredModel !== undefined) return configuredModel
+  if (configuredModel !== undefined) {
+    return {
+      ...configuredModel,
+      defaultEffort: options.defaultEffort ?? configuredModel.defaultEffort,
+    }
+  }
 
   const [firstModel, ...otherModels] = options.models
   if (firstModel === undefined) return undefined

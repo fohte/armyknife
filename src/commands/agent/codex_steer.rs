@@ -124,13 +124,17 @@ impl Client {
         Self::connect_to(&socket_path)
     }
 
-    fn connect_to(socket_path: &Path) -> anyhow::Result<Self> {
+    pub(crate) fn connect_to(socket_path: &Path) -> anyhow::Result<Self> {
         let stream = UnixStream::connect(socket_path).with_context(|| {
             format!(
                 "failed to connect to Codex app-server control socket {}",
                 socket_path.display()
             )
         })?;
+        Self::connect_stream(stream)
+    }
+
+    pub(crate) fn connect_stream(stream: UnixStream) -> anyhow::Result<Self> {
         stream
             .set_read_timeout(Some(RESPONSE_TIMEOUT))
             .context("failed to set Codex app-server read timeout")?;
@@ -575,6 +579,79 @@ mod tests {
                     ],
                 }),
                 vec![None, Some("fixture-cursor-next".to_string())],
+            ),
+        );
+    }
+
+    #[test]
+    fn sends_model_list_requests_and_collects_their_pages() {
+        let (mut client, mut server) = connected_client_and_server().expect("connected sockets");
+        let server_thread = std::thread::spawn(move || {
+            let first_request = server.read().expect("first model/list request");
+            let first_request: Value =
+                serde_json::from_str(first_request.to_text().expect("text request"))
+                    .expect("request JSON");
+            server
+                .send(Message::Text(
+                    json!({
+                        "id": TURN_STATUS_READ_REQUEST_ID_START,
+                        "result": {
+                            "data": [{"model": "fixture-model-first"}],
+                            "nextCursor": "fixture-cursor-next",
+                        },
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .expect("first model/list response");
+
+            let next_request = server.read().expect("next model/list request");
+            let next_request: Value =
+                serde_json::from_str(next_request.to_text().expect("text request"))
+                    .expect("request JSON");
+            server
+                .send(Message::Text(
+                    json!({
+                        "id": TURN_STATUS_READ_REQUEST_ID_START + 1,
+                        "result": {
+                            "data": [{"model": "fixture-model-second"}],
+                            "nextCursor": null,
+                        },
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .expect("next model/list response");
+            (first_request, next_request)
+        });
+
+        let models = client.list_models().expect("models");
+        let requests = server_thread.join().expect("server thread");
+
+        assert_eq!(
+            (models, requests),
+            (
+                json!({
+                    "data": [
+                        {"model": "fixture-model-first"},
+                        {"model": "fixture-model-second"},
+                    ],
+                }),
+                (
+                    json!({
+                        "id": TURN_STATUS_READ_REQUEST_ID_START,
+                        "method": "model/list",
+                        "params": {"includeHidden": false},
+                    }),
+                    json!({
+                        "id": TURN_STATUS_READ_REQUEST_ID_START + 1,
+                        "method": "model/list",
+                        "params": {
+                            "includeHidden": false,
+                            "cursor": "fixture-cursor-next",
+                        },
+                    }),
+                ),
             ),
         );
     }

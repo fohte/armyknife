@@ -40,7 +40,19 @@ export function NewSessionPicker({
   const [activeIndex, setActiveIndex] = useState(0)
   const [modelPickerOpen, setModelPickerOpen] = useState(initialModelPickerOpen)
   const firstMessageRef = useRef<HTMLInputElement>(null)
+  const modelOptionRef = useRef<HTMLButtonElement>(null)
+  const pickerRef = useRef<HTMLElement>(null)
+  const wasModelPickerOpen = useRef(false)
   const selectedDirectory = state.selectedDirectory
+
+  useEffect(() => {
+    if (modelPickerOpen) {
+      pickerRef.current?.focus()
+    } else if (wasModelPickerOpen.current) {
+      modelOptionRef.current?.focus()
+    }
+    wasModelPickerOpen.current = modelPickerOpen
+  }, [modelPickerOpen])
 
   useEffect(() => {
     if (selectedDirectory !== null) firstMessageRef.current?.focus()
@@ -52,6 +64,8 @@ export function NewSessionPicker({
         aria-label="New session"
         aria-modal="true"
         className={`new-session-picker${isMobile ? ' is-mobile' : ''}`}
+        ref={pickerRef}
+        tabIndex={-1}
         onKeyDown={(event) => {
           if (isImeEnter(event)) return
           if (modelPickerOpen) {
@@ -302,6 +316,7 @@ export function NewSessionPicker({
             <button
               aria-expanded={modelPickerOpen}
               className="new-session-picker-option new-session-picker-model"
+              ref={modelOptionRef}
               onClick={() => {
                 setModelPickerOpen(true)
               }}

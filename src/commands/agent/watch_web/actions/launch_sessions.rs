@@ -5,6 +5,7 @@ use axum::extract::State;
 use axum::routing::post;
 use axum::{Json, Router};
 use chrono::Utc;
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::agent::new::{CommonNewArgs, NewArgs};
@@ -117,14 +118,11 @@ async fn launch_session(
 }
 
 fn parse_reasoning_effort(value: &str) -> Result<ReasoningEffort, String> {
-    match value {
-        "low" => Ok(ReasoningEffort::Low),
-        "medium" => Ok(ReasoningEffort::Medium),
-        "high" => Ok(ReasoningEffort::High),
-        "xhigh" => Ok(ReasoningEffort::XHigh),
-        "max" => Ok(ReasoningEffort::Max),
-        _ => Err("reasoningEffort must be low, medium, high, xhigh, or max".to_string()),
-    }
+    ReasoningEffort::value_variants()
+        .iter()
+        .copied()
+        .find(|effort| effort.as_str() == value)
+        .ok_or_else(|| "reasoningEffort must be low, medium, high, xhigh, or max".to_string())
 }
 
 fn branch_name_for_time(now: chrono::DateTime<Utc>, launch_id: &str) -> String {

@@ -1,6 +1,7 @@
 mod actions;
 mod assets;
 mod attachments;
+mod codex_model_catalog;
 mod directories;
 mod events;
 pub(super) mod file_attachments;

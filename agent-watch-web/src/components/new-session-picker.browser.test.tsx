@@ -22,9 +22,13 @@ function requireButton(selector: string) {
 function PickerHarness({
   start,
   onClose = () => undefined,
+  chooseModel = () => undefined,
+  setSelectedEffort = () => undefined,
 }: {
   start: NewSessionState['start']
   onClose?: () => void
+  chooseModel?: NewSessionState['chooseModel']
+  setSelectedEffort?: NewSessionState['setSelectedEffort']
 }) {
   const [selectedDirectory, setSelectedDirectory] =
     useState<NewSessionState['selectedDirectory']>(null)
@@ -51,8 +55,8 @@ function PickerHarness({
     setDirectoryQuery: () => undefined,
     chooseDirectory: setSelectedDirectory,
     setEngine,
-    chooseModel: () => undefined,
-    setSelectedEffort: () => undefined,
+    chooseModel,
+    setSelectedEffort,
     undoEngineChange: () => undefined,
     setWorktree,
     setInitialMessage: () => undefined,
@@ -217,6 +221,44 @@ it('toggles the worktree option with Option+W', async () => {
       .querySelector<HTMLButtonElement>('.new-session-picker-worktree')
       ?.getAttribute('aria-pressed'),
   ).toBe('true')
+})
+
+it('changes the model and effort with arrow keys in the model picker', async () => {
+  const start = vi.fn<NewSessionState['start']>(() => Promise.resolve())
+  const chooseModel = vi.fn<NewSessionState['chooseModel']>()
+  const setSelectedEffort = vi.fn<NewSessionState['setSelectedEffort']>()
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <PickerHarness
+        chooseModel={chooseModel}
+        setSelectedEffort={setSelectedEffort}
+        start={start}
+      />,
+    )
+  })
+  await act(async () => {
+    await userEvent.click(
+      requireButton(
+        '[aria-label="Select directory /Users/example/work/service"]',
+      ),
+    )
+  })
+  await act(async () => {
+    await userEvent.click(requireButton('.new-session-picker-model'))
+  })
+  await act(async () => {
+    await userEvent.keyboard('{ArrowDown}{ArrowRight}')
+  })
+
+  const snapshot = () => ({
+    modelCalls: chooseModel.mock.calls,
+    effortCalls: setSelectedEffort.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    modelCalls: [['fixture-model-orbit']],
+    effortCalls: [['low']],
+  })
 })
 
 it('closes the picker when Enter activates the close button', async () => {

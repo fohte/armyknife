@@ -1,22 +1,16 @@
 use std::sync::Arc;
 
+use anyhow::Context;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::agent::codex_steer::Client as CodexClient;
 use crate::commands::agent::types::{Engine, ReasoningEffort};
 use crate::shared::config::{ResolvedLaunchOptions, load_config};
-
-const REASONING_EFFORTS: [ReasoningEffort; 5] = [
-    ReasoningEffort::Low,
-    ReasoningEffort::Medium,
-    ReasoningEffort::High,
-    ReasoningEffort::XHigh,
-    ReasoningEffort::Max,
-];
 
 pub(super) fn router() -> Router {
     router_with_source(Arc::new(LiveModelOptionsSource))
@@ -47,11 +41,29 @@ impl ModelOptionsSource for LiveModelOptionsSource {
             .resolve_launch_options(None, Some(engine), None, None);
         match engine {
             Engine::Claude => Ok(claude_options(resolved)),
-            Engine::Codex => {
-                let mut client = CodexClient::connect()?;
-                codex_options(client.list_models()?, resolved)
-            }
+            Engine::Codex => codex_options(load_codex_model_list()?, resolved),
         }
+    }
+}
+
+fn load_codex_model_list() -> anyhow::Result<serde_json::Value> {
+    load_model_list_with_fallback(
+        || {
+            let mut client = CodexClient::connect()?;
+            client.list_models()
+        },
+        crate::commands::agent::watch_web::codex_model_catalog::list_models,
+    )
+}
+
+fn load_model_list_with_fallback(
+    persistent: impl FnOnce() -> anyhow::Result<serde_json::Value>,
+    temporary: impl FnOnce() -> anyhow::Result<serde_json::Value>,
+) -> anyhow::Result<serde_json::Value> {
+    match persistent() {
+        Ok(response) => Ok(response),
+        Err(error) => temporary()
+            .with_context(|| format!("persistent Codex app-server request failed: {error:#}")),
     }
 }
 
@@ -130,7 +142,7 @@ fn claude_options(resolved: ResolvedLaunchOptions) -> ModelOptionsResponse {
         id: id.to_string(),
         label: label.to_string(),
         default_effort: Some(default_effort.to_string()),
-        efforts: REASONING_EFFORTS
+        efforts: ReasoningEffort::value_variants()
             .iter()
             .map(|effort| effort.as_str().to_string())
             .collect(),
@@ -198,7 +210,7 @@ fn codex_options(
 }
 
 fn known_effort(value: &str) -> Option<&'static str> {
-    REASONING_EFFORTS
+    ReasoningEffort::value_variants()
         .iter()
         .find(|effort| effort.as_str() == value)
         .map(ReasoningEffort::as_str)
