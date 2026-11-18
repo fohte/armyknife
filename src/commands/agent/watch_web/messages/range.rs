@@ -34,6 +34,23 @@ impl MessageRange {
                 && self.from.is_some()
                 && self.limit.is_none()
                 && self.before.is_none())
+            && !(self.epoch.is_some()
+                && self.older_cursor.is_some()
+                && self.limit.is_some()
+                && self.before.is_none()
+                && self.from.is_none())
+    }
+
+    pub(super) fn older_page_limit(&self) -> Option<usize> {
+        if self.epoch.is_some()
+            && self.older_cursor.is_some()
+            && self.before.is_none()
+            && self.from.is_none()
+        {
+            self.limit
+        } else {
+            None
+        }
     }
 
     pub(super) fn initial_tail_window_limit(&self) -> Option<usize> {
@@ -243,6 +260,12 @@ impl ConversationResponse {
             .is_some()
     }
 
+    pub(super) fn has_older_epoch_page(&self, epoch: &str, limit: usize) -> bool {
+        MessageEpochCursor::decode(epoch)
+            .and_then(|cursor| cursor.find_start(&self.messages))
+            .is_some_and(|epoch_start| epoch_start >= limit)
+    }
+
     fn apply_initial_epoch_range(&mut self) {
         let page_start = self
             .messages
@@ -301,7 +324,9 @@ impl ConversationResponse {
         self.stable_digest = stable_digest;
         self.messages = page;
         self.epoch = new_cursor.clone();
-        self.older_cursor = (page_start > 0).then_some(new_cursor).flatten();
+        self.older_cursor = (page_start > 0 || self.tail_window_start.is_some())
+            .then_some(new_cursor)
+            .flatten();
     }
 
     fn apply_empty_older_epoch_page_from_start(&mut self, epoch_start: usize, epoch: &str) {
@@ -489,6 +514,15 @@ mod tests {
         MessageRange { from: Some(0), epoch: Some("fixture-epoch".to_owned()), ..MessageRange::default() },
         false,
     )]
+    #[case::older_epoch_page(
+        MessageRange {
+            limit: Some(100),
+            epoch: Some("fixture-epoch".to_owned()),
+            older_cursor: Some("fixture-epoch".to_owned()),
+            ..MessageRange::default()
+        },
+        false,
+    )]
     #[case::unbounded_history(MessageRange::default(), true)]
     #[case::numeric_page(
         MessageRange { limit: Some(100), before: Some(100), ..MessageRange::default() },
@@ -499,6 +533,18 @@ mod tests {
         #[case] expected: bool,
     ) {
         assert_eq!(range.requires_full_history(), expected);
+    }
+
+    #[test]
+    fn older_epoch_page_exposes_its_requested_limit() {
+        let range = MessageRange {
+            limit: Some(100),
+            epoch: Some("fixture-epoch".to_owned()),
+            older_cursor: Some("fixture-epoch".to_owned()),
+            ..MessageRange::default()
+        };
+
+        assert_eq!(range.older_page_limit(), Some(100));
     }
 
     #[test]

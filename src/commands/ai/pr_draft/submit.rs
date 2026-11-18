@@ -1945,7 +1945,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case::created_pr(None, 1, vec![(
+    #[case::created_pr("sample-repository", None, 1, vec![(
         "sample-owner".to_string(),
         "sample-repository".to_string(),
         "Submit a change".to_string(),
@@ -1953,20 +1953,21 @@ mod tests {
         None,
         false,
     )], Vec::new())]
-    #[case::updated_pr(Some(23), 23, Vec::new(), vec![23])]
+    #[case::updated_pr("sample-repository-updated", Some(23), 23, Vec::new(), vec![23])]
     #[tokio::test]
     async fn submit_records_the_url_for_created_and_updated_prs(
         sessions_dir_with_cwd_pr_context: tempfile::TempDir,
+        #[case] draft_repo: &str,
         #[case] existing_pr_number: Option<u64>,
         #[case] pull_request_number: u64,
         #[case] expected_create_calls: Vec<CreatePrCall>,
         #[case] expected_update_calls: Vec<u64>,
     ) {
-        let _draft_directory = TestDraftDirectory::new("sample-owner", "sample-repository");
+        let _draft_directory = TestDraftDirectory::new("sample-owner", draft_repo);
         let branch = "feature/submitted-change";
         let draft_path = create_approved_draft(
             "sample-owner",
-            "sample-repository",
+            draft_repo,
             branch,
             "Submit a change",
             "Body content",

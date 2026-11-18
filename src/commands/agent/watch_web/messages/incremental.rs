@@ -23,7 +23,23 @@ pub(super) use tail_window::parse_initial_or_full_for_range;
 #[derive(Clone, Copy, Default)]
 pub(super) struct TranscriptRangeContext<'a> {
     pub(super) requested_epoch: Option<&'a str>,
+    pub(super) older_page_limit: Option<usize>,
     pub(super) require_full_history: bool,
+}
+
+pub(super) fn cached_tail_window_message_limit(
+    session_id: &str,
+    cache: &MessageCache,
+) -> Option<usize> {
+    let parser_slot = cache.transcript_parser_slot(session_id);
+    let cached = parser_slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    cached
+        .as_ref()
+        .filter(|entry| entry.engine == Engine::Claude)
+        .and_then(|entry| entry.tail_window.as_ref())
+        .map(|state| state.message_limit)
 }
 
 pub(super) fn parse_session_transcript(
