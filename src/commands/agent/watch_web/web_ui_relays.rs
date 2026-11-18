@@ -107,38 +107,66 @@ impl WebUiRelays {
     }
 
     async fn sync(&mut self) -> Result<()> {
-        let mut registrations = load_relay_registrations(&self.sessions_dir)?;
-        let active_registrations = self
-            .active
-            .iter()
-            .filter(|(_, relay)| relay.exposed)
-            .map(|(key, relay)| RelayRegistration::from_relay(key, relay))
-            .collect::<HashSet<_>>();
-        let stale_registrations = registrations
-            .iter()
-            .filter(|registration| !active_registrations.contains(*registration))
-            .cloned()
-            .collect::<Vec<_>>();
-        for registration in stale_registrations {
-            match unexpose_registration(self.hook_runner.clone(), &registration).await {
-                Ok(()) => {
+        let registrations = load_relay_registrations(&self.sessions_dir);
+        let mut registrations = match registrations {
+            Ok(registrations) => Some(registrations),
+            Err(error) => {
+                tracing::warn!(%error, "failed to load web UI relay registrations");
+                None
+            }
+        };
+        if let Some(registrations) = &mut registrations {
+            let active_registrations = self
+                .active
+                .iter()
+                .filter(|(_, relay)| relay.exposed)
+                .map(|(key, relay)| RelayRegistration::from_relay(key, relay))
+                .collect::<HashSet<_>>();
+            let active_ports = self
+                .active
+                .values()
+                .map(|relay| relay.port)
+                .collect::<HashSet<_>>();
+            let stale_registrations = registrations
+                .iter()
+                .filter(|registration| !active_registrations.contains(*registration))
+                .cloned()
+                .collect::<Vec<_>>();
+            for registration in stale_registrations {
+                if active_ports.contains(&registration.port) {
                     registrations.retain(|stored| stored != &registration);
-                    if let Err(error) = save_relay_registrations(&self.sessions_dir, &registrations)
+                    if let Err(error) = save_relay_registrations(&self.sessions_dir, registrations)
                     {
                         tracing::warn!(
                             session = %registration.session_id,
                             web_ui = %registration.name,
                             %error,
-                            "failed to save web UI relay registrations after cleanup"
+                            "failed to remove conflicting web UI relay registration"
                         );
                     }
+                    continue;
                 }
-                Err(error) => tracing::warn!(
-                    session = %registration.session_id,
-                    web_ui = %registration.name,
-                    %error,
-                    "failed to unexpose stale web UI relay"
-                ),
+                match unexpose_registration(self.hook_runner.clone(), &registration).await {
+                    Ok(()) => {
+                        registrations.retain(|stored| stored != &registration);
+                        if let Err(error) =
+                            save_relay_registrations(&self.sessions_dir, registrations)
+                        {
+                            tracing::warn!(
+                                session = %registration.session_id,
+                                web_ui = %registration.name,
+                                %error,
+                                "failed to save web UI relay registrations after cleanup"
+                            );
+                        }
+                    }
+                    Err(error) => tracing::warn!(
+                        session = %registration.session_id,
+                        web_ui = %registration.name,
+                        %error,
+                        "failed to unexpose stale web UI relay"
+                    ),
+                }
             }
         }
 
@@ -445,6 +473,7 @@ fn direct_remote_url(url: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::fs;
     use std::sync::{Arc, Mutex};
 
     use anyhow::Context;
@@ -453,7 +482,9 @@ mod tests {
     use serde_json::json;
     use tempfile::TempDir;
 
-    use super::{RelayRegistration, WebUiRelays, load_relay_registrations, store};
+    use super::{
+        RelayRegistration, WebUiRelays, load_relay_registrations, save_relay_registrations, store,
+    };
     use crate::commands::agent::types::{Session, WebUiRegistration};
 
     type HookCalls = Arc<Mutex<Vec<(String, Vec<(String, String)>)>>>;
@@ -792,6 +823,91 @@ mod tests {
                     "web-ui-unexpose".to_owned(),
                 ],
             ),
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unreadable_relay_state_does_not_block_sync_and_is_replaced() -> anyhow::Result<()> {
+        let directory = TempDir::new()?;
+        store::save_session_to(directory.path(), &session_with_one_web_ui())?;
+        fs::write(
+            directory.path().join("web_ui_relays.state"),
+            b"invalid state",
+        )?;
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut relays = WebUiRelays::with_hook_runner(
+            directory.path().to_path_buf(),
+            hook_runner(calls.clone()),
+        );
+
+        relays.sync().await?;
+        let active_registration = relays
+            .active
+            .iter()
+            .map(|(key, relay)| RelayRegistration::from_relay(key, relay))
+            .next()
+            .context("relay should start despite malformed state")?;
+        let actual = (
+            load_relay_registrations(directory.path())?,
+            calls
+                .lock()
+                .expect("hook call lock should succeed")
+                .iter()
+                .map(|(hook, _)| hook.clone())
+                .collect::<Vec<_>>(),
+        );
+        relays.stop_all().await;
+
+        assert_eq!(
+            actual,
+            (vec![active_registration], vec!["web-ui-expose".to_owned()],),
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stale_registration_with_active_port_is_removed_without_unexposing()
+    -> anyhow::Result<()> {
+        let directory = TempDir::new()?;
+        store::save_session_to(directory.path(), &session_with_one_web_ui())?;
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut relays = WebUiRelays::with_hook_runner(
+            directory.path().to_path_buf(),
+            hook_runner(calls.clone()),
+        );
+
+        relays.sync().await?;
+        let current_registration = relays
+            .active
+            .iter()
+            .map(|(key, relay)| RelayRegistration::from_relay(key, relay))
+            .next()
+            .context("current relay should be active")?;
+        let mut stale_registration = current_registration.clone();
+        stale_registration.session_id = "stale-fixture-session".to_owned();
+        stale_registration.name = "Old preview".to_owned();
+        stale_registration.exposed_url = Some("https://old.example.invalid/relay/".to_owned());
+        save_relay_registrations(
+            directory.path(),
+            &[stale_registration, current_registration.clone()],
+        )?;
+
+        relays.sync().await?;
+        let actual = (
+            calls
+                .lock()
+                .expect("hook call lock should succeed")
+                .iter()
+                .map(|(hook, _)| hook.clone())
+                .collect::<Vec<_>>(),
+            load_relay_registrations(directory.path())?,
+        );
+        relays.stop_all().await;
+
+        assert_eq!(
+            actual,
+            (vec!["web-ui-expose".to_owned()], vec![current_registration],),
         );
         Ok(())
     }

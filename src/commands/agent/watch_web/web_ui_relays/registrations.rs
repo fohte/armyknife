@@ -108,7 +108,13 @@ pub(super) fn add_relay_registration(
     sessions_dir: &Path,
     registration: &RelayRegistration,
 ) -> Result<()> {
-    let mut registrations = load_relay_registrations(sessions_dir)?;
+    let mut registrations = match load_relay_registrations(sessions_dir) {
+        Ok(registrations) => registrations,
+        Err(error) => {
+            tracing::warn!(%error, "replacing unreadable web UI relay registrations");
+            Vec::new()
+        }
+    };
     registrations.retain(|stored| stored != registration);
     registrations.push(registration.clone());
     save_relay_registrations(sessions_dir, &registrations)
