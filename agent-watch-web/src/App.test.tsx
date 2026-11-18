@@ -4950,25 +4950,32 @@ it('opens a known session ID from a conversation message', async () => {
   const fetcher = vi.fn<typeof fetch>()
   fetcher.mockImplementation((input) => {
     const path = new URL(requestUrl(input), 'http://localhost').pathname
-    const body = path.endsWith('/messages')
-      ? {
-          messages: [{ type: 'assistant', text: `Open ${linkedId}` }],
-          backgroundTasks: [],
-          start: 0,
-          total: 1,
-          decisions: [],
-          hasUnansweredProposal: false,
-          activeQuestionIndex: null,
-        }
-      : {
-          message: true,
-          answerQuestion: false,
-          interrupt: true,
-          openInTerminal: true,
-          rewind: false,
-        }
+    const actionsFailed = path === `/api/sessions/${linkedId}/actions`
+    let body: unknown
+    if (path.endsWith('/messages')) {
+      body = {
+        messages: [{ type: 'assistant', text: `Open ${linkedId}` }],
+        backgroundTasks: [],
+        start: 0,
+        total: 1,
+        decisions: [],
+        hasUnansweredProposal: false,
+        activeQuestionIndex: null,
+      }
+    } else if (actionsFailed) {
+      body = { error: 'Action metadata is unavailable.' }
+    } else {
+      body = {
+        message: true,
+        answerQuestion: false,
+        interrupt: true,
+        openInTerminal: true,
+        rewind: false,
+      }
+    }
     return Promise.resolve(
       new Response(JSON.stringify(body), {
+        status: actionsFailed ? 500 : 200,
         headers: { 'Content-Type': 'application/json' },
       }),
     )
@@ -4999,10 +5006,19 @@ it('opens a known session ID from a conversation message', async () => {
   await act(async () => {
     for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
+  await waitForComposerActions()
 
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    '.conversation-composer textarea',
+  )
   const snapshot = () => ({
     selectedTitle: readSelectedTitle(),
     url: window.location.search,
+    replyFocused: document.activeElement === textarea,
+    replyEnabled: textarea?.disabled === false,
+    actionsSettled: textarea
+      ?.closest<HTMLFormElement>('.conversation-composer')
+      ?.getAttribute('data-actions-settled'),
     linkTitle,
     linkClass,
     underlineStyle,
@@ -5010,6 +5026,9 @@ it('opens a known session ID from a conversation message', async () => {
   expect(snapshot()).toEqual({
     selectedTitle: 'Linked session',
     url: `?session=${linkedId}`,
+    replyFocused: true,
+    replyEnabled: true,
+    actionsSettled: 'true',
     linkTitle: '',
     linkClass: 'session-link-trigger',
     underlineStyle: 'dotted',
