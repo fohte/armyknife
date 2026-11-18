@@ -1,4 +1,4 @@
-use std::io::{self, BufReader, Cursor, Read, Seek, SeekFrom};
+use std::io::{self, BufRead, BufReader, Cursor, Read, Seek, SeekFrom};
 
 use chrono::{DateTime, TimeZone, Utc};
 use indoc::indoc;
@@ -17,6 +17,22 @@ use crate::commands::agent::watch_web::messages::incremental::{
 
 fn fixed_time() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).single().unwrap()
+}
+
+fn tail_window_parser(
+    mut reader: impl BufRead + Seek,
+    message_limit: usize,
+    pending_task_ids: &[String],
+) -> io::Result<Option<IncrementalClaudeParser>> {
+    let file_length = reader.seek(SeekFrom::End(0))?;
+    reader.seek(SeekFrom::Start(0))?;
+    IncrementalClaudeParser::new_tail_window_with_length(
+        reader,
+        None,
+        message_limit,
+        pending_task_ids,
+        file_length,
+    )
 }
 
 fn empty_additions() -> ParserAdditions<'static> {
@@ -629,16 +645,11 @@ fn tail_window_matches_the_full_parse_after_a_compact_boundary_with_a_missing_pa
     let transcript = records.join("\n");
     let additions = empty_additions();
     let expected = parse_all(transcript.as_bytes(), additions);
-    let actual = IncrementalClaudeParser::new_tail_window(
-        Cursor::new(transcript.as_bytes()),
-        None,
-        100,
-        &[],
-    )
-    .unwrap()
-    .unwrap()
-    .render_with(fixed_time(), additions)
-    .unwrap();
+    let actual = tail_window_parser(Cursor::new(transcript.as_bytes()), 100, &[])
+        .unwrap()
+        .unwrap()
+        .render_with(fixed_time(), additions)
+        .unwrap();
     assert_eq!(last_messages(actual, 100), last_messages(expected, 100));
 }
 
@@ -702,12 +713,11 @@ fn tail_window_excludes_an_abandoned_branch_whose_parent_is_outside_the_window()
     let additions = empty_additions();
     let mut expected = parse_all(transcript.as_bytes(), additions);
     expected.0 = expected.0.into_iter().skip(1).collect();
-    let actual =
-        IncrementalClaudeParser::new_tail_window(Cursor::new(transcript.as_bytes()), None, 3, &[])
-            .unwrap()
-            .unwrap()
-            .render_with(fixed_time(), additions)
-            .unwrap();
+    let actual = tail_window_parser(Cursor::new(transcript.as_bytes()), 3, &[])
+        .unwrap()
+        .unwrap()
+        .render_with(fixed_time(), additions)
+        .unwrap();
 
     assert_eq!(actual, expected);
 }
@@ -719,14 +729,9 @@ fn tail_window_matches_the_full_parse_when_the_prefix_exceeds_the_search_limit(
     let additions = empty_additions();
     let reference_transcript = prefix_beyond_search_limit.reference_transcript();
     let expected = parse_all(&reference_transcript, additions);
-    let tail_parser = IncrementalClaudeParser::new_tail_window(
-        prefix_beyond_search_limit.reader(),
-        None,
-        100,
-        &[],
-    )
-    .unwrap()
-    .unwrap();
+    let tail_parser = tail_window_parser(prefix_beyond_search_limit.reader(), 100, &[])
+        .unwrap()
+        .unwrap();
     let prefix_length = tail_parser.tail_window_start_offset().unwrap();
     let actual = tail_parser.render_with(fixed_time(), additions).unwrap();
     assert_eq!(
@@ -743,14 +748,9 @@ fn queued_prompt_resolution_scans_a_prefix_over_the_search_limit(
     prefix_beyond_search_limit: PrefixBeyondSearchLimit,
 ) {
     let user_marker = "⟦armyknife-user:fixture-marker-cyan⟧";
-    let tail_parser = IncrementalClaudeParser::new_tail_window(
-        prefix_beyond_search_limit.reader(),
-        None,
-        100,
-        &[],
-    )
-    .unwrap()
-    .unwrap();
+    let tail_parser = tail_window_parser(prefix_beyond_search_limit.reader(), 100, &[])
+        .unwrap()
+        .unwrap();
     let prefix_length = tail_parser.tail_window_start_offset().unwrap();
     let queued_prompt = saved_queued_prompt();
     let mut reader = prefix_beyond_search_limit.reader();
@@ -784,12 +784,11 @@ fn tail_window_matches_the_full_parse_when_an_attachment_follows_tool_results() 
     "#};
     let additions = empty_additions();
     let expected = parse_all(transcript.as_bytes(), additions);
-    let actual =
-        IncrementalClaudeParser::new_tail_window(Cursor::new(transcript.as_bytes()), None, 2, &[])
-            .unwrap()
-            .unwrap()
-            .render_with(fixed_time(), additions)
-            .unwrap();
+    let actual = tail_window_parser(Cursor::new(transcript.as_bytes()), 2, &[])
+        .unwrap()
+        .unwrap()
+        .render_with(fixed_time(), additions)
+        .unwrap();
     assert_eq!(last_messages(actual, 2), last_messages(expected, 2));
 }
 
@@ -810,9 +809,8 @@ fn tail_window_restores_an_older_pending_task_start() {
     let transcript = [prefix, &padded_record, suffix].join("\n");
     let additions = empty_additions();
     let expected = parse_all(transcript.as_bytes(), additions);
-    let actual = IncrementalClaudeParser::new_tail_window(
+    let actual = tail_window_parser(
         Cursor::new(transcript.as_bytes()),
-        None,
         1,
         &["fixture-task-id".to_owned()],
     )
@@ -889,9 +887,8 @@ fn tail_window_restores_a_running_task_behind_a_compact_boundary() {
     .join("\n");
     let additions = empty_additions();
     let expected = parse_all(records.as_bytes(), additions);
-    let actual = IncrementalClaudeParser::new_tail_window(
+    let actual = tail_window_parser(
         Cursor::new(records.as_bytes()),
-        None,
         1,
         &["fixture-task-id".to_owned()],
     )
@@ -916,12 +913,11 @@ fn tail_window_restores_the_initial_skills_before_an_in_window_addition() {
     "#};
     let additions = empty_additions();
     let expected = parse_all(transcript.as_bytes(), additions);
-    let actual =
-        IncrementalClaudeParser::new_tail_window(Cursor::new(transcript.as_bytes()), None, 1, &[])
-            .unwrap()
-            .unwrap()
-            .render_with(fixed_time(), additions)
-            .unwrap();
+    let actual = tail_window_parser(Cursor::new(transcript.as_bytes()), 1, &[])
+        .unwrap()
+        .unwrap()
+        .render_with(fixed_time(), additions)
+        .unwrap();
     assert_eq!(
         last_message_and_state(actual),
         last_message_and_state(expected)
@@ -960,12 +956,7 @@ fn pending_json_completed_after_a_second_append_matches_a_full_parse() {
 
 #[rstest]
 fn tail_window_expansion_handles_files_smaller_than_the_next_window(oversized_transcript: String) {
-    let actual = IncrementalClaudeParser::new_tail_window(
-        Cursor::new(oversized_transcript.as_bytes()),
-        None,
-        2,
-        &[],
-    );
+    let actual = tail_window_parser(Cursor::new(oversized_transcript.as_bytes()), 2, &[]);
 
     assert_eq!(
         actual

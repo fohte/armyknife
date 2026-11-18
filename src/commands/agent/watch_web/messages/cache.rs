@@ -245,9 +245,16 @@ pub(super) struct CachedTranscriptParser {
     pub(super) fingerprint: TranscriptFingerprint,
     pub(super) tail: Vec<u8>,
     pub(super) engine: Engine,
+    pub(super) tail_window: Option<TailWindowParserState>,
     #[cfg(test)]
     pub(super) last_change: TranscriptChange,
     pub(super) parser: IncrementalTranscriptParser,
+}
+
+#[derive(Clone)]
+pub(super) struct TailWindowParserState {
+    pub(super) cutoff: chrono::DateTime<chrono::Utc>,
+    pub(super) prior_resolved_ids: Vec<i64>,
 }
 
 pub(super) enum IncrementalTranscriptParser {

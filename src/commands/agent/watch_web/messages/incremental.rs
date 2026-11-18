@@ -4,8 +4,8 @@ use std::time::Instant;
 use anyhow::Result;
 
 use super::cache::{
-    CachedTranscriptParser, IncrementalTranscriptParser, MessageCache, TranscriptChange,
-    TranscriptFingerprint,
+    CachedTranscriptParser, IncrementalTranscriptParser, MessageCache, TailWindowParserState,
+    TranscriptChange, TranscriptFingerprint,
 };
 use super::parser;
 use super::{
@@ -15,7 +15,16 @@ use super::{
 
 mod tail_window;
 
-pub(super) use tail_window::{filter_after_tail_window, parse_initial_or_full};
+pub(super) use tail_window::filter_after_tail_window;
+pub(super) use tail_window::parse_initial_or_full;
+
+pub(super) use tail_window::parse_initial_or_full_for_range;
+
+#[derive(Clone, Copy, Default)]
+pub(super) struct TranscriptRangeContext<'a> {
+    pub(super) requested_epoch: Option<&'a str>,
+    pub(super) require_full_history: bool,
+}
 
 pub(super) fn parse_session_transcript(
     input: TranscriptInput<'_>,
@@ -30,6 +39,22 @@ pub(super) fn parse_session_transcript_incrementally(
     fingerprint: Option<TranscriptFingerprint>,
     cache: &MessageCache,
 ) -> Result<(ConversationResponse, Vec<i64>)> {
+    parse_session_transcript_incrementally_for_range(
+        session_id,
+        input,
+        fingerprint,
+        cache,
+        TranscriptRangeContext::default(),
+    )
+}
+
+pub(super) fn parse_session_transcript_incrementally_for_range(
+    session_id: &str,
+    input: TranscriptInput<'_>,
+    fingerprint: Option<TranscriptFingerprint>,
+    cache: &MessageCache,
+    range: TranscriptRangeContext<'_>,
+) -> Result<(ConversationResponse, Vec<i64>)> {
     let Some(fingerprint) = fingerprint else {
         clear_parser(cache, session_id);
         return parse_session_transcript(input);
@@ -43,15 +68,20 @@ pub(super) fn parse_session_transcript_incrementally(
         && entry.engine == input.engine
         && parser_matches_engine(&entry.parser, input.engine)
     {
-        match advance_cached_parser(entry, &fingerprint) {
-            Ok(ParserAdvance::Reuse) => true,
-            Ok(ParserAdvance::Restart(reason)) => {
-                restart_reason = Some(reason);
-                false
-            }
-            Err(error) => {
-                *cached = None;
-                return Err(error);
+        if entry.tail_window.is_some() && range.require_full_history {
+            restart_reason = Some("older_page_requires_full_history");
+            false
+        } else {
+            match advance_cached_parser(entry, &fingerprint) {
+                Ok(ParserAdvance::Reuse) => true,
+                Ok(ParserAdvance::Restart(reason)) => {
+                    restart_reason = Some(reason);
+                    false
+                }
+                Err(error) => {
+                    *cached = None;
+                    return Err(error);
+                }
             }
         }
     } else {
@@ -59,16 +89,44 @@ pub(super) fn parse_session_transcript_incrementally(
     };
 
     if can_reuse {
-        let entry = cached
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("incremental transcript parser was not initialized"))?;
-        return match render_parser(&entry.parser, &input) {
-            Ok(conversation) => Ok(conversation),
-            Err(error) => {
-                *cached = None;
-                Err(error)
+        let rendered = {
+            let entry = cached.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("incremental transcript parser was not initialized")
+            })?;
+            match (&entry.parser, &entry.tail_window) {
+                (IncrementalTranscriptParser::Claude(parser), Some(state)) => {
+                    tail_window::render_tail_window_parser(parser, state, &input)
+                }
+                _ => render_parser(&entry.parser, &input),
             }
         };
+        match rendered {
+            Ok((mut conversation, resolved_ids)) => {
+                let tail_window_cached = cached
+                    .as_ref()
+                    .is_some_and(|entry| entry.tail_window.is_some());
+                if tail_window_cached {
+                    let cutoff = cached
+                        .as_ref()
+                        .and_then(|entry| entry.tail_window.as_ref())
+                        .map(|state| state.cutoff);
+                    conversation.tail_window_start = cutoff;
+                }
+                let missing_anchor = tail_window_cached
+                    && range
+                        .requested_epoch
+                        .is_some_and(|epoch| !conversation.epoch_anchor_is_present(epoch));
+                if !missing_anchor {
+                    return Ok((conversation, resolved_ids));
+                }
+                restart_reason = Some("epoch_anchor_outside_tail_window");
+                *cached = None;
+            }
+            Err(error) => {
+                *cached = None;
+                return Err(error);
+            }
+        }
     }
 
     *cached = None;
@@ -94,6 +152,7 @@ pub(super) fn parse_session_transcript_incrementally(
         fingerprint,
         tail,
         engine: input.engine,
+        tail_window: None,
         #[cfg(test)]
         last_change: TranscriptChange::Rewritten,
         parser,
@@ -108,6 +167,34 @@ pub(super) fn parse_session_transcript_incrementally(
             Err(error)
         }
     }
+}
+
+pub(super) fn cache_tail_window_parser(
+    session_id: &str,
+    parser: parser::claude::IncrementalClaudeParser,
+    state: TailWindowParserState,
+    fingerprint: Option<TranscriptFingerprint>,
+    cache: &MessageCache,
+) -> Result<()> {
+    let Some(fingerprint) = fingerprint else {
+        return Ok(());
+    };
+    let Some(tail) = fingerprint.tail_bytes()? else {
+        return Ok(());
+    };
+    let parser_slot = cache.transcript_parser_slot(session_id);
+    *parser_slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(CachedTranscriptParser {
+        fingerprint,
+        tail,
+        engine: Engine::Claude,
+        tail_window: Some(state),
+        #[cfg(test)]
+        last_change: TranscriptChange::Unchanged,
+        parser: IncrementalTranscriptParser::Claude(Box::new(parser)),
+    });
+    Ok(())
 }
 
 fn clear_parser(cache: &MessageCache, session_id: &str) {
@@ -224,28 +311,7 @@ fn render_parser(
     input: &TranscriptInput<'_>,
 ) -> Result<(ConversationResponse, Vec<i64>)> {
     match parser {
-        IncrementalTranscriptParser::Claude(parser) => {
-            let (mut messages, background_tasks, mut resolved_ids, skills) =
-                parser.render_with(chrono::Utc::now(), input.additions)?;
-            resolved_ids.extend(super::queued_prompt::resolve_transcript_messages(
-                &mut messages,
-                input.additions.queued_prompts,
-            ));
-            resolved_ids.sort_unstable();
-            resolved_ids.dedup();
-            if let Some(path) = input.path {
-                subagent_reports::add_descriptions(path, &mut messages);
-            }
-            Ok((
-                ConversationResponse {
-                    messages,
-                    background_tasks,
-                    skills,
-                    ..ConversationResponse::default()
-                },
-                resolved_ids,
-            ))
-        }
+        IncrementalTranscriptParser::Claude(parser) => render_claude_parser(parser, input),
         IncrementalTranscriptParser::Codex(parser) => {
             let placement_cards = parser::cards::cards_from_sources(
                 input.additions.decisions,
@@ -278,6 +344,32 @@ fn render_parser(
             ))
         }
     }
+}
+
+pub(super) fn render_claude_parser(
+    parser: &parser::claude::IncrementalClaudeParser,
+    input: &TranscriptInput<'_>,
+) -> Result<(ConversationResponse, Vec<i64>)> {
+    let (mut messages, background_tasks, mut resolved_ids, skills) =
+        parser.render_with(chrono::Utc::now(), input.additions)?;
+    resolved_ids.extend(super::queued_prompt::resolve_transcript_messages(
+        &mut messages,
+        input.additions.queued_prompts,
+    ));
+    resolved_ids.sort_unstable();
+    resolved_ids.dedup();
+    if let Some(path) = input.path {
+        subagent_reports::add_descriptions(path, &mut messages);
+    }
+    Ok((
+        ConversationResponse {
+            messages,
+            background_tasks,
+            skills,
+            ..ConversationResponse::default()
+        },
+        resolved_ids,
+    ))
 }
 
 #[cfg(test)]

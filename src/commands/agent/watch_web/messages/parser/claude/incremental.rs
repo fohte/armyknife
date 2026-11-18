@@ -115,19 +115,27 @@ impl IncrementalClaudeParser {
         })
     }
 
-    pub(in crate::commands::agent::watch_web::messages) fn new_tail_window(
+    pub(in crate::commands::agent::watch_web::messages) fn new_tail_window_with_length(
         reader: impl BufRead + Seek,
         image_directory: Option<&Path>,
         message_limit: usize,
         pending_task_ids: &[String],
+        file_length: u64,
     ) -> io::Result<Option<Self>> {
-        window::new_tail_window(reader, image_directory, message_limit, pending_task_ids)
+        window::new_tail_window_with_length(
+            reader,
+            image_directory,
+            message_limit,
+            pending_task_ids,
+            file_length,
+        )
     }
 
     pub(super) fn from_tail_window_records(
         records: Vec<Value>,
         active_ancestor_uuids: Vec<String>,
         image_directory: Option<&Path>,
+        pending_line: Vec<u8>,
     ) -> Self {
         let mut state = ClaudeParserState::new();
         let mut latest_complete_uuid = None;
@@ -175,7 +183,7 @@ impl IncrementalClaudeParser {
 
         Self {
             state,
-            lines: JsonlLineBuffer::default(),
+            lines: JsonlLineBuffer::with_pending(pending_line),
             image_directory: image_directory.map(Path::to_path_buf),
             pending_is_initial: true,
             tail_window_start: None,

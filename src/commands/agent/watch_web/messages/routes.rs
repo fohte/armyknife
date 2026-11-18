@@ -24,6 +24,7 @@ use crate::commands::agent::types::{Engine, Session};
 use super::cache::MessageCache;
 use super::conversation::{
     load_conversation_with_initial_tail_window, load_conversation_with_queued_prompts,
+    load_conversation_with_queued_prompts_for_range,
 };
 use super::range::MessageRange;
 use super::{BackgroundTask, SkillSuggestion, background_task_outputs, question_preview};
@@ -297,6 +298,8 @@ async fn get_messages(
         return StatusCode::BAD_REQUEST.into_response();
     }
     let tail_window_limit = range.initial_tail_window_limit();
+    let requested_epoch = range.requested_epoch().map(str::to_owned);
+    let require_full_history = range.requires_full_history();
 
     match tokio::task::spawn_blocking(move || -> Result<Option<(
         super::ConversationResponse,
@@ -346,11 +349,21 @@ async fn get_messages(
                 &loaders,
                 limit,
             ),
-            None => load_conversation_with_queued_prompts(
+            None if requested_epoch.is_none() && !require_full_history => {
+                load_conversation_with_queued_prompts(
+                    &session_id,
+                    |id| load_session(id),
+                    |id| load_user_marker(id),
+                    &loaders,
+                )
+            }
+            None => load_conversation_with_queued_prompts_for_range(
                 &session_id,
                 |id| load_session(id),
                 |id| load_user_marker(id),
                 &loaders,
+                requested_epoch.as_deref(),
+                require_full_history,
             ),
         }?;
         Ok(conversation.map(|conversation| (conversation, vibe_mode)))

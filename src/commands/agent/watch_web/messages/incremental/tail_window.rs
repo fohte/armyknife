@@ -1,14 +1,14 @@
 use anyhow::Result;
 use std::time::Instant;
 
-use super::super::cache::{IncrementalTranscriptParser, MessageCache, TranscriptFingerprint};
+use super::super::cache::{MessageCache, TailWindowParserState, TranscriptFingerprint};
 use super::super::log_tail_window_fallback;
 use super::super::parser;
 use super::super::parser::cards::filter_additional_cards_after_tail_window;
 use super::super::{
     ChatItem, ConversationResponse, Engine, TranscriptInput, open_seekable_transcript,
 };
-use super::render_parser;
+use super::{TranscriptRangeContext, render_claude_parser};
 use crate::commands::agent::store::{AgentDecision, AgentTodo};
 
 pub(in crate::commands::agent::watch_web::messages) fn parse_initial_or_full<'a>(
@@ -19,17 +19,88 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_initial_or_full<'a>
     fingerprint: Option<TranscriptFingerprint>,
     cache: &MessageCache,
 ) -> Result<(ConversationResponse, Vec<i64>, bool)> {
+    parse_initial_or_full_for_range(
+        session_id,
+        input,
+        tail_window_limit,
+        pending_task_ids,
+        fingerprint,
+        cache,
+        TranscriptRangeContext::default(),
+    )
+}
+
+pub(in crate::commands::agent::watch_web::messages) fn parse_initial_or_full_for_range<'a>(
+    session_id: &str,
+    input: TranscriptInput<'a>,
+    tail_window_limit: Option<usize>,
+    pending_task_ids: &[String],
+    fingerprint: Option<TranscriptFingerprint>,
+    cache: &MessageCache,
+    range: TranscriptRangeContext<'_>,
+) -> Result<(ConversationResponse, Vec<i64>, bool)> {
     let tail_window_started = Instant::now();
-    let tail_result = match tail_window_limit {
-        Some(limit) => parse_session_transcript_tail_window(&input, limit, pending_task_ids),
-        None => Ok(None),
+    let tail_length = fingerprint
+        .as_ref()
+        .filter(|fingerprint| !fingerprint.is_compressed())
+        .map(TranscriptFingerprint::len);
+    let tail_result = match (tail_window_limit, tail_length) {
+        (Some(limit), Some(file_length)) => {
+            parse_session_transcript_tail_window(&input, limit, pending_task_ids, file_length)
+                .map(|parsed| parsed.map(|tail| InitialTranscriptParse::Tail(Box::new(tail))))
+        }
+        (None, _) => Ok(None),
+        (Some(_), None) => Ok(None),
     };
-    parse_tail_window_or_full(tail_result, tail_window_started.elapsed(), || {
-        super::parse_session_transcript_incrementally(session_id, input, fingerprint, cache)
-    })
-    .map(|((conversation, resolved_ids), used_tail_window)| {
-        (conversation, resolved_ids, used_tail_window)
-    })
+    let parse_full = || {
+        let result = if range.requested_epoch.is_none() && !range.require_full_history {
+            super::parse_session_transcript_incrementally(
+                session_id,
+                input,
+                fingerprint.clone(),
+                cache,
+            )
+        } else {
+            super::parse_session_transcript_incrementally_for_range(
+                session_id,
+                input,
+                fingerprint.clone(),
+                cache,
+                range,
+            )
+        };
+        result.map(|full| InitialTranscriptParse::Full(Box::new(full)))
+    };
+    let (parsed, used_tail_window) =
+        parse_tail_window_or_full(tail_result, tail_window_started.elapsed(), parse_full)?;
+    match parsed {
+        InitialTranscriptParse::Tail(tail) => {
+            let tail = *tail;
+            if let Err(error) = super::cache_tail_window_parser(
+                session_id,
+                tail.parser,
+                tail.state,
+                fingerprint,
+                cache,
+            ) {
+                tracing::warn!(%error, "failed to cache initial tail-window parser");
+            }
+            Ok((
+                tail.conversation,
+                tail.resolved_queued_prompt_ids,
+                used_tail_window,
+            ))
+        }
+        InitialTranscriptParse::Full(full) => {
+            let (conversation, resolved_ids) = *full;
+            Ok((conversation, resolved_ids, used_tail_window))
+        }
+    }
+}
+
+enum InitialTranscriptParse {
+    Tail(Box<TailWindowParse>),
+    Full(Box<(ConversationResponse, Vec<i64>)>),
 }
 
 fn parse_tail_window_or_full<T>(
@@ -79,7 +150,8 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript_
     input: &TranscriptInput<'_>,
     message_limit: usize,
     pending_task_ids: &[String],
-) -> Result<Option<(ConversationResponse, Vec<i64>)>> {
+    file_length: u64,
+) -> Result<Option<TailWindowParse>> {
     let started = Instant::now();
     if input.engine != Engine::Claude
         || input
@@ -98,11 +170,12 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript_
         .flatten()
         .unwrap_or_else(|| Box::new(std::io::Cursor::new(Vec::new())));
     let image_directory = super::super::super::image_attachments::storage_directory().ok();
-    let parser = parser::claude::IncrementalClaudeParser::new_tail_window(
+    let parser = parser::claude::IncrementalClaudeParser::new_tail_window_with_length(
         reader,
         image_directory.as_deref(),
         message_limit,
         pending_task_ids,
+        file_length,
     )?;
     let Some(parser) = parser else {
         return Ok(None);
@@ -111,7 +184,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript_
         log_tail_window_fallback(started, "tail_window_start_unavailable");
         return Ok(None);
     };
-    let Some((queued_prompts, prior_resolved_ids)) = resolve_queued_prompts_before_window(
+    let Some((_, prior_resolved_ids)) = resolve_queued_prompts_before_window(
         input.path,
         parser.tail_window_start_offset().unwrap_or_default(),
         input.additions.queued_prompts,
@@ -123,7 +196,36 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript_
         log_tail_window_fallback(started, "queued_prompt_state_unavailable");
         return Ok(None);
     };
-    let decisions = filter_decisions_after_tail_window(input.additions.decisions, cutoff);
+    let state = TailWindowParserState {
+        cutoff,
+        prior_resolved_ids,
+    };
+    let (conversation, resolved_ids) = render_tail_window_parser(&parser, &state, input)?;
+    // Branch filtering can leave older visible messages outside the selected suffix.
+    if conversation.messages.len() < message_limit {
+        return Ok(None);
+    }
+    Ok(Some(TailWindowParse {
+        conversation,
+        resolved_queued_prompt_ids: resolved_ids,
+        parser,
+        state,
+    }))
+}
+
+pub(super) struct TailWindowParse {
+    pub(super) conversation: ConversationResponse,
+    pub(super) resolved_queued_prompt_ids: Vec<i64>,
+    pub(super) parser: parser::claude::IncrementalClaudeParser,
+    pub(super) state: TailWindowParserState,
+}
+
+pub(super) fn render_tail_window_parser(
+    parser: &parser::claude::IncrementalClaudeParser,
+    state: &TailWindowParserState,
+    input: &TranscriptInput<'_>,
+) -> Result<(ConversationResponse, Vec<i64>)> {
+    let decisions = filter_decisions_after_tail_window(input.additions.decisions, state.cutoff);
     let proposals = input
         .additions
         .proposals
@@ -135,20 +237,32 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript_
                     resolved: false,
                     ..
                 }
-            ) || proposal.created_at >= cutoff
+            ) || proposal.created_at >= state.cutoff
         })
         .cloned()
         .collect::<Vec<_>>();
-    let todos = filter_todos_after_tail_window(input.additions.todos, cutoff);
+    let todos = filter_todos_after_tail_window(input.additions.todos, state.cutoff);
     let peer_out_messages = input
         .additions
         .peer_out_messages
         .iter()
-        .filter(|message| message.sent_at >= cutoff)
+        .filter(|message| message.sent_at >= state.cutoff)
         .cloned()
         .collect::<Vec<_>>();
     let additional_cards =
-        filter_additional_cards_after_tail_window(input.additions.additional_cards, cutoff);
+        filter_additional_cards_after_tail_window(input.additions.additional_cards, state.cutoff);
+    let prior_resolved = state
+        .prior_resolved_ids
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    let queued_prompts = input
+        .additions
+        .queued_prompts
+        .iter()
+        .filter(|prompt| !prior_resolved.contains(&prompt.id))
+        .cloned()
+        .collect::<Vec<_>>();
     let tail_input = TranscriptInput {
         path: input.path,
         engine: input.engine,
@@ -162,19 +276,12 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript_
             ..input.additions
         },
     };
-    let (mut conversation, mut resolved_ids) = render_parser(
-        &IncrementalTranscriptParser::Claude(Box::new(parser)),
-        &tail_input,
-    )?;
-    // Branch filtering can leave older visible messages outside the selected suffix.
-    if conversation.messages.len() < message_limit {
-        return Ok(None);
-    }
-    resolved_ids.extend(prior_resolved_ids);
-    resolved_ids.sort_unstable();
-    resolved_ids.dedup();
-    conversation.tail_window_start = Some(cutoff);
-    Ok(Some((conversation, resolved_ids)))
+    let mut result = render_claude_parser(parser, &tail_input)?;
+    result.1.extend(state.prior_resolved_ids.iter().copied());
+    result.1.sort_unstable();
+    result.1.dedup();
+    result.0.tail_window_start = Some(state.cutoff);
+    Ok(result)
 }
 
 fn filter_decisions_after_tail_window(

@@ -23,6 +23,14 @@ pub(super) struct MessageRange {
 }
 
 impl MessageRange {
+    pub(super) fn requested_epoch(&self) -> Option<&str> {
+        self.epoch.as_deref()
+    }
+
+    pub(super) fn requires_full_history(&self) -> bool {
+        self.older_cursor.is_some()
+    }
+
     pub(super) fn initial_tail_window_limit(&self) -> Option<usize> {
         (self.limit == Some(INITIAL_EPOCH_MESSAGE_COUNT)
             && self.before.is_none()
@@ -207,6 +215,12 @@ impl ConversationResponse {
         self.apply_numeric_range(range);
     }
 
+    pub(super) fn epoch_anchor_is_present(&self, epoch: &str) -> bool {
+        MessageEpochCursor::decode(epoch)
+            .and_then(|cursor| cursor.find_start(&self.messages))
+            .is_some()
+    }
+
     fn apply_initial_epoch_range(&mut self) {
         let page_start = self
             .messages
@@ -239,7 +253,9 @@ impl ConversationResponse {
         self.decisions = decisions;
         self.has_unanswered_proposal = has_unanswered_proposal;
         self.epoch = range.epoch.clone();
-        self.older_cursor = (epoch_start > 0).then(|| range.epoch.clone()).flatten();
+        self.older_cursor = (epoch_start > 0 || self.tail_window_start.is_some())
+            .then(|| range.epoch.clone())
+            .flatten();
         self.apply_numeric_range(range);
     }
 

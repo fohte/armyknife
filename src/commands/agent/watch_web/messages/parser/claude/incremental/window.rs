@@ -13,11 +13,12 @@ use crate::commands::agent::watch_web::messages::log_tail_window_fallback;
 
 const INITIAL_WINDOW_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_WINDOW_BYTES: u64 = 64 * 1024 * 1024;
-pub(super) fn new_tail_window(
+pub(super) fn new_tail_window_with_length(
     reader: impl BufRead + Seek,
     image_directory: Option<&Path>,
     message_limit: usize,
     pending_task_ids: &[String],
+    file_length: u64,
 ) -> io::Result<Option<IncrementalClaudeParser>> {
     new_tail_window_bounded(
         reader,
@@ -25,6 +26,7 @@ pub(super) fn new_tail_window(
         message_limit,
         pending_task_ids,
         MAX_WINDOW_BYTES,
+        file_length,
     )
 }
 
@@ -34,9 +36,9 @@ pub(super) fn new_tail_window_bounded(
     message_limit: usize,
     pending_task_ids: &[String],
     max_window_bytes: u64,
+    file_length: u64,
 ) -> io::Result<Option<IncrementalClaudeParser>> {
     let started = Instant::now();
-    let file_length = reader.seek(SeekFrom::End(0))?;
     let Some(window_start) =
         select_window_start(&mut reader, file_length, message_limit, max_window_bytes)?
     else {
@@ -49,7 +51,15 @@ pub(super) fn new_tail_window_bounded(
     }
 
     let window_bytes = read_selected_window(&mut reader, file_length, window_start)?;
-    let selected_records = window_bytes
+    let (complete_window, pending_line) = match window_bytes.iter().rposition(|byte| *byte == b'\n')
+    {
+        Some(last_newline) => (
+            &window_bytes[..=last_newline],
+            window_bytes[last_newline + 1..].to_vec(),
+        ),
+        None => (&[][..], window_bytes),
+    };
+    let selected_records = complete_window
         .split(|byte| *byte == b'\n')
         .filter_map(parse_record)
         .collect::<Vec<_>>();
@@ -104,6 +114,7 @@ pub(super) fn new_tail_window_bounded(
         helper_records,
         active_ancestor_uuids,
         image_directory,
+        pending_line,
     );
     parser.tail_window_start = tail_window_start;
     parser.tail_window_start_offset = Some(window_start);

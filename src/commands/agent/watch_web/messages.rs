@@ -227,7 +227,7 @@ mod tests {
     use serde_json::json;
     use tower::ServiceExt;
 
-    use super::cache::TranscriptChange;
+    use super::cache::{MessageCache, TranscriptChange};
     use super::{
         ChatItem, MAX_PERMISSION_COMMAND_BYTES, QuestionChoice, QuestionPrompt, RouteLoaders,
         load_conversation_with_queued_prompts, load_messages_with,
@@ -3889,7 +3889,8 @@ mod tests {
             .iter()
             .map(serde_json::Value::to_string)
             .collect::<Vec<_>>()
-            .join("\n");
+            .join("\n")
+            + "\n";
         std::fs::write(&transcript_path, &transcript).unwrap();
         let compressed_path = directory.path().join("full-transcript.jsonl.zst");
         std::fs::write(
@@ -3966,14 +3967,18 @@ mod tests {
             )
             .with_todo_loader(move |_| Ok(vec![pending_todo.clone()]))
             .with_permission_denied_loader(move |_| Ok(vec![pending_denial.clone()]));
-            routes_with_proposals_and_peer_out_messages(
+            let cache = MessageCache::default();
+            let mut loaders = loaders;
+            loaders.message_cache = cache.clone();
+            let router = routes_with_proposals_and_peer_out_messages(
                 move |_| Ok(Some(session.clone())),
                 |_| Ok(Some("⟦armyknife-user:fixture-marker-cobalt⟧".to_string())),
                 loaders,
-            )
+            );
+            (router, cache)
         };
-        let full_router = make_router(Arc::clone(&full_marked_ids), &compressed_path);
-        let tail_router = make_router(Arc::clone(&tail_marked_ids), &transcript_path);
+        let (full_router, _) = make_router(Arc::clone(&full_marked_ids), &compressed_path);
+        let (tail_router, tail_cache) = make_router(Arc::clone(&tail_marked_ids), &transcript_path);
         let full_initial = message_response_with_query(&full_router, "?limit=100").await;
         let tail_initial = message_response_with_query(&tail_router, "?limit=100").await;
         let mut full_responses = vec![full_initial];
@@ -3981,7 +3986,7 @@ mod tests {
         let epoch = tail_initial.2["epoch"].as_str().unwrap().to_owned();
         let older_cursor = tail_initial.2["olderCursor"].as_str().unwrap();
         let start = tail_initial.2["start"].as_u64().unwrap();
-        let mut refresh_query = format!("?from={start}&epoch={epoch}&olderCursor={older_cursor}");
+        let mut refresh_query = format!("?from={start}&epoch={epoch}");
         if let (Some(stable_start), Some(stable_end), Some(stable_digest)) = (
             tail_initial.2["stableStart"].as_u64(),
             tail_initial.2["stableEnd"].as_u64(),
@@ -3991,52 +3996,78 @@ mod tests {
                 "&stableStart={stable_start}&stableEnd={stable_end}&stableDigest={stable_digest}"
             ));
         }
-        let last_record = records.last_mut().unwrap();
-        let last_uuid = last_record["uuid"].as_str().unwrap().to_owned();
-        last_record["message"]["content"] = json!("Updated active fixture request.");
-        records.push(json!({
-            "type": "user",
-            "uuid": "fixture-appended-request",
-            "parentUuid": last_uuid,
-            "timestamp": "2026-01-01T00:00:02Z",
-            "message": {"content": "Appended active fixture request."},
-        }));
-        let updated_transcript = records
-            .iter()
-            .map(serde_json::Value::to_string)
-            .collect::<Vec<_>>()
-            .join("\n");
-        std::fs::write(&transcript_path, &updated_transcript).unwrap();
+        let last_uuid = records
+            .last()
+            .and_then(|record| record["uuid"].as_str())
+            .unwrap()
+            .to_owned();
+        let appended_line = format!(
+            "{{\"type\":\"user\",\"uuid\":\"fixture-appended-request\",\"parentUuid\":\"{last_uuid}\",\"timestamp\":\"2026-01-01T00:00:02Z\",\"message\":{{\"content\":\"Appended active fixture request.\"}}}}"
+        );
+        let partial_transcript = format!(
+            "{}{}",
+            transcript,
+            &appended_line[..appended_line.len() / 2]
+        );
+        std::fs::write(&transcript_path, &partial_transcript).unwrap();
         std::fs::write(
             &compressed_path,
-            zstd::stream::encode_all(updated_transcript.as_bytes(), 0).unwrap(),
+            zstd::stream::encode_all(partial_transcript.as_bytes(), 0).unwrap(),
+        )
+        .unwrap();
+        full_responses.push(message_response_with_query(&full_router, &refresh_query).await);
+        tail_responses.push(message_response_with_query(&tail_router, &refresh_query).await);
+
+        let complete_transcript = format!(
+            "{partial_transcript}{}\n",
+            &appended_line[appended_line.len() / 2..]
+        );
+        std::fs::write(&transcript_path, &complete_transcript).unwrap();
+        std::fs::write(
+            &compressed_path,
+            zstd::stream::encode_all(complete_transcript.as_bytes(), 0).unwrap(),
         )
         .unwrap();
 
         full_responses.push(message_response_with_query(&full_router, &refresh_query).await);
         tail_responses.push(message_response_with_query(&tail_router, &refresh_query).await);
-        let refreshed_epoch = tail_responses[1].2["epoch"].as_str().map(str::to_owned);
-        let refresh_reset = tail_responses[1].2["epochReset"].as_bool().unwrap_or(false);
-        let refreshed_user_messages = tail_responses[1].2["messages"]
-            .as_array()
+        let parser_slot = tail_cache.transcript_parser_slot("fixture-session");
+        let cached_parser = parser_slot
+            .lock()
             .unwrap()
-            .iter()
-            .filter(|message| message["type"] == "user")
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .take(2)
-            .rev()
-            .map(|message| message["text"].as_str().unwrap().to_owned())
-            .collect::<Vec<_>>();
-
-        let older_query = format!("?limit=100&epoch={epoch}&olderCursor={older_cursor}");
-        full_responses.push(message_response_with_query(&full_router, &older_query).await);
-        tail_responses.push(message_response_with_query(&tail_router, &older_query).await);
-        let older_reset = tail_responses[2].2["epochReset"].as_bool().unwrap_or(false);
-        let older_message_count = tail_responses[2].2["messages"].as_array().map(Vec::len);
+            .as_ref()
+            .map(|entry| (entry.last_change, entry.tail_window.is_some()));
         let full_marked_ids = full_marked_ids.lock().unwrap().clone();
         let tail_marked_ids = tail_marked_ids.lock().unwrap().clone();
+        let refreshed_epoch = tail_responses[2].2["epoch"].as_str().map(str::to_owned);
+        let refreshed_older_cursor = tail_responses[2].2["olderCursor"]
+            .as_str()
+            .map(str::to_owned);
+        let refresh_reset = tail_responses[2].2["epochReset"].as_bool().unwrap_or(false);
+
+        let full_older_page = message_response_with_query(
+            &full_router,
+            &format!("?limit=100&epoch={epoch}&olderCursor={older_cursor}"),
+        )
+        .await;
+        let old_epoch = full_older_page.2["epoch"].as_str().unwrap();
+        let old_epoch_query = format!("?from=0&epoch={old_epoch}");
+        let full_old_epoch = message_response_with_query(&full_router, &old_epoch_query).await;
+        let tail_old_epoch = message_response_with_query(&tail_router, &old_epoch_query).await;
+        let tail_parser_after_old_epoch = parser_slot
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|entry| entry.tail_window.is_some());
+
+        let older_query = format!(
+            "?limit=100&epoch={epoch}&olderCursor={}",
+            refreshed_older_cursor.as_deref().unwrap_or(older_cursor)
+        );
+        full_responses.push(message_response_with_query(&full_router, &older_query).await);
+        tail_responses.push(message_response_with_query(&tail_router, &older_query).await);
+        let older_reset = tail_responses[3].2["epochReset"].as_bool().unwrap_or(false);
+        let older_message_count = tail_responses[3].2["messages"].as_array().map(Vec::len);
         assert_eq!(
             (
                 full_responses,
@@ -4044,9 +4075,12 @@ mod tests {
                 full_marked_ids.clone(),
                 tail_marked_ids,
                 refreshed_epoch,
+                refreshed_older_cursor.is_some(),
                 refresh_reset,
+                cached_parser,
+                tail_old_epoch,
+                tail_parser_after_old_epoch,
                 older_reset,
-                refreshed_user_messages,
                 older_message_count,
             ),
             (
@@ -4055,14 +4089,107 @@ mod tests {
                 full_marked_ids.clone(),
                 full_marked_ids,
                 Some(epoch),
+                true,
                 false,
+                Some((TranscriptChange::Appended, true)),
+                full_old_epoch,
+                Some(false),
                 false,
-                vec![
-                    "Updated active fixture request.".to_owned(),
-                    "Appended active fixture request.".to_owned(),
-                ],
                 Some(100),
             ),
+        );
+    }
+
+    #[tokio::test]
+    async fn tail_window_parser_restarts_after_a_branch_switch() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        let compressed_path = directory.path().join("full-transcript.jsonl.zst");
+        let padding_record = json!({
+            "type": "system",
+            "padding": "x".repeat(5 * 1024 * 1024),
+        })
+        .to_string();
+        let mut records = vec![padding_record];
+        let mut parent_uuid = None;
+        for index in 0..120 {
+            let uuid = format!("fixture-message-{index}");
+            records.push(
+                json!({
+                    "type": "user",
+                    "uuid": uuid,
+                    "parentUuid": parent_uuid,
+                    "timestamp": "2026-01-01T00:00:01Z",
+                    "message": {"content": format!("Fixture request {index}.")},
+                })
+                .to_string(),
+            );
+            parent_uuid = Some(uuid);
+        }
+        let transcript = format!("{}\n", records.join("\n"));
+        std::fs::write(&transcript_path, &transcript).unwrap();
+        std::fs::write(
+            &compressed_path,
+            zstd::stream::encode_all(transcript.as_bytes(), 0).unwrap(),
+        )
+        .unwrap();
+
+        let make_router = |path: &Path| {
+            let mut session = stored_session();
+            session.transcript_path = Some(path.to_path_buf());
+            let cache = MessageCache::default();
+            let mut loaders = empty_route_loaders();
+            loaders.message_cache = cache.clone();
+            (
+                routes_with_proposals_and_peer_out_messages(
+                    move |_| Ok(Some(session.clone())),
+                    |_| Ok(None),
+                    loaders,
+                ),
+                cache,
+            )
+        };
+        let (full_router, _) = make_router(&compressed_path);
+        let (tail_router, tail_cache) = make_router(&transcript_path);
+        let initial = message_response_with_query(&tail_router, "?limit=100").await;
+        let epoch = initial.2["epoch"].as_str().unwrap();
+        let parser_slot = tail_cache.transcript_parser_slot("fixture-session");
+        assert_eq!(
+            parser_slot
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|entry| entry.tail_window.is_some()),
+            Some(true),
+        );
+        let switched_branch = json!({
+            "type": "user",
+            "uuid": "fixture-switched-branch",
+            "parentUuid": "fixture-parent-outside-window",
+            "timestamp": "2026-01-01T00:00:02Z",
+            "message": {"content": "The fixture switched branches."},
+        })
+        .to_string();
+        let switched_transcript = format!("{transcript}{switched_branch}\n");
+        std::fs::write(&transcript_path, &switched_transcript).unwrap();
+        std::fs::write(
+            &compressed_path,
+            zstd::stream::encode_all(switched_transcript.as_bytes(), 0).unwrap(),
+        )
+        .unwrap();
+
+        let query = format!("?from=0&epoch={epoch}");
+        let full_response = message_response_with_query(&full_router, &query).await;
+        let tail_response = message_response_with_query(&tail_router, &query).await;
+        let tail_window_cached = parser_slot
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|entry| entry.tail_window.is_some());
+
+        assert_eq!(
+            (tail_response, tail_window_cached),
+            (full_response, Some(false)),
         );
     }
 
