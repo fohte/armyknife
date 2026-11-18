@@ -38,15 +38,18 @@
   background: var(--aw-border-emphasis);
 }
 
-.session-pr-ci-dot.is-running {
+.session-pr-ci-dot.is-running,
+.session-pr-trigger-ci-dot.is-running {
   background: var(--aw-color-warning);
 }
 
-.session-pr-ci-dot.is-passed {
+.session-pr-ci-dot.is-passed,
+.session-pr-trigger-ci-dot.is-passed {
   background: var(--aw-color-success);
 }
 
-.session-pr-ci-dot.is-failed {
+.session-pr-ci-dot.is-failed,
+.session-pr-trigger-ci-dot.is-failed {
   background: var(--aw-color-error);
 }
 
@@ -58,6 +61,10 @@
   color: var(--aw-text-body);
 }
 
+.session-pr-trigger.is-all-merged .session-pr-icon {
+  color: var(--aw-text-muted);
+}
+
 .session-pr-trigger-ci-dot {
   position: absolute;
   top: 3px;
@@ -67,18 +74,6 @@
   border: 1px solid var(--aw-bg-app);
   border-radius: 50%;
   background: var(--aw-border-emphasis);
-}
-
-.session-pr-trigger-ci-dot.is-running {
-  background: var(--aw-color-warning);
-}
-
-.session-pr-trigger-ci-dot.is-passed {
-  background: var(--aw-color-success);
-}
-
-.session-pr-trigger-ci-dot.is-failed {
-  background: var(--aw-color-error);
 }
 
 .session-pr-count {

@@ -259,3 +259,40 @@ it('lists a merged current-branch pull request only in Merged', () => {
     ],
   })
 })
+
+it('dims the pull request icon when every pull request is merged', () => {
+  render(false, [
+    {
+      number: 42,
+      state: 'Merged',
+      owner: 'example-org',
+      repo: 'example-project',
+      title: 'Complete the delivery update',
+      url: 'https://github.com/example-org/example-project/pull/42',
+      ciState: 'Successful',
+      isCurrentBranch: true,
+    },
+  ])
+
+  const trigger = container.querySelector<HTMLButtonElement>(
+    '.session-pr-trigger',
+  )
+  if (trigger === null) throw new Error('Expected pull request trigger')
+  const icon = trigger.querySelector<SVGElement>('.session-pr-icon')
+  if (icon === null) throw new Error('Expected pull request icon')
+  const count = container.querySelector<HTMLElement>('.session-pr-count')
+  if (count === null) throw new Error('Expected pull request count')
+
+  const snapshot = () => ({
+    allMerged: trigger.classList.contains('is-all-merged'),
+    iconMatchesTriggerColor:
+      getComputedStyle(icon).color === getComputedStyle(trigger).color,
+    countMatchesTriggerColor:
+      getComputedStyle(count).color === getComputedStyle(trigger).color,
+  })
+  expect(snapshot()).toEqual({
+    allMerged: true,
+    iconMatchesTriggerColor: true,
+    countMatchesTriggerColor: true,
+  })
+})
