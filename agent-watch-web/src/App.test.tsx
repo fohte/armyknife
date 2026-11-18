@@ -4534,7 +4534,15 @@ it('does nothing when a selected session cannot accept replies', async () => {
   act(() => {
     container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
   })
-  await waitForComposerActions()
+  await act(async () => {
+    for (
+      let index = 0;
+      index < 12 && container.querySelector('.conversation-ended') === null;
+      index += 1
+    ) {
+      await Promise.resolve()
+    }
+  })
   const textarea = container.querySelector<HTMLTextAreaElement>(
     '.conversation-composer textarea',
   )
@@ -4547,11 +4555,15 @@ it('does nothing when a selected session cannot accept replies', async () => {
   })
 
   const snapshot = () => ({
+    selectedTitle: readSelectedTitle(),
+    endedBannerVisible: container.querySelector('.conversation-ended') !== null,
     composerExists: textarea !== null,
     buttonRetainsFocus: document.activeElement === outsideButton,
     defaultPrevented: events[0]?.defaultPrevented,
   })
   expect(snapshot()).toEqual({
+    selectedTitle: 'Disabled session',
+    endedBannerVisible: true,
     composerExists: false,
     buttonRetainsFocus: true,
     defaultPrevented: false,
