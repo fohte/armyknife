@@ -171,6 +171,46 @@ pub(crate) fn lock_session_for_update(
     })
 }
 
+pub(crate) fn claim_auto_title_generation(sessions_dir: &Path, session_id: &str) -> Result<bool> {
+    validate_session_id(session_id)?;
+    let mut connection = open_connection(sessions_dir)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let inserted = transaction.execute(
+        "INSERT OR IGNORE INTO agent_title_generation_attempt (session_id) VALUES (?1)",
+        [session_id],
+    )?;
+    transaction.commit()?;
+    Ok(inserted == 1)
+}
+
+pub(crate) fn has_auto_title_generation_attempt(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<bool> {
+    validate_session_id(session_id)?;
+    let connection = open_connection(sessions_dir)?;
+    Ok(connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM agent_title_generation_attempt WHERE session_id = ?1)",
+        [session_id],
+        |row| row.get(0),
+    )?)
+}
+
+pub(crate) fn release_auto_title_generation_claim(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<()> {
+    validate_session_id(session_id)?;
+    let mut connection = open_connection(sessions_dir)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    transaction.execute(
+        "DELETE FROM agent_title_generation_attempt WHERE session_id = ?1",
+        [session_id],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
 pub(crate) fn lock_session_for_wake(sessions_dir: &Path, session_id: &str) -> Result<WakeLock> {
     validate_session_id(session_id)?;
     Ok(WakeLock {

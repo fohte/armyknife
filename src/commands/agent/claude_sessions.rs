@@ -9,6 +9,9 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+mod title;
+pub(in crate::commands::agent) use title::{clean_peer_message, has_transcript_title_entry};
+
 /// Initial buffer size for reading from end of file (8KB)
 const INITIAL_READ_SIZE: usize = 8 * 1024;
 
@@ -350,11 +353,11 @@ fn title_from_line(line: &str) -> Option<TitleEntry> {
 
 /// Reads the first user message from a session's `.jsonl` file.
 pub fn get_first_user_message(project_path: &Path, session_id: &str) -> Option<String> {
-    get_title_from_jsonl(project_path, session_id)
+    get_first_user_message_raw(project_path, session_id).map(|message| normalize_title(&message))
 }
 
-/// Reads the first user prompt from a session's .jsonl file.
-fn get_title_from_jsonl(project_path: &Path, session_id: &str) -> Option<String> {
+/// Reads the first user prompt from a session's .jsonl file without title cleanup.
+pub(crate) fn get_first_user_message_raw(project_path: &Path, session_id: &str) -> Option<String> {
     let jsonl_path = session_jsonl_path(project_path, session_id)?;
 
     if !jsonl_path.exists() {
@@ -383,12 +386,16 @@ fn get_title_from_jsonl(project_path: &Path, session_id: &str) -> Option<String>
             && let Some(message) = entry.message
             && let Some(content) = message.content
         {
-            // Truncation is handled by the display layer
-            return Some(normalize_title(&content));
+            return Some(content);
         }
     }
 
     None
+}
+
+fn get_title_from_jsonl(project_path: &Path, session_id: &str) -> Option<String> {
+    get_first_user_message_raw(project_path, session_id)
+        .map(|message| title::title_from_first_user_message(&message))
 }
 
 /// Retrieves the last assistant text message from a session's .jsonl file.

@@ -171,6 +171,27 @@ pub(crate) fn watch_web_user_marker(session_id: &str) -> Result<Option<String>> 
     database::watch_web_user_marker(&sessions_dir()?, session_id)
 }
 
+pub(crate) fn claim_auto_title_generation_from(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<bool> {
+    database::claim_auto_title_generation(sessions_dir, session_id)
+}
+
+pub(crate) fn has_auto_title_generation_attempt_from(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<bool> {
+    database::has_auto_title_generation_attempt(sessions_dir, session_id)
+}
+
+pub(crate) fn release_auto_title_generation_claim_from(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<()> {
+    database::release_auto_title_generation_claim(sessions_dir, session_id)
+}
+
 pub(crate) fn watch_web_user_marker_from(
     sessions_dir: &Path,
     session_id: &str,

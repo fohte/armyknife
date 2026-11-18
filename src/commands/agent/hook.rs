@@ -39,6 +39,7 @@ mod session_metadata;
 mod session_start;
 mod side_effects;
 mod stop;
+mod title_generation;
 mod vibe;
 mod work_type;
 
@@ -1073,6 +1074,10 @@ fn process_hook_event_impl_with_env(
         }
     }
 
+    if stop_block_reason.is_none() && event == HookEvent::Stop {
+        title_generation::maybe_generate(&session, sessions_dir, side_effects);
+    }
+
     // On Stop events, spawn a detached schedule worker that will SIGTERM +
     // `claude -r -p "/compact"` after the configured idle timeout. The
     // worker re-checks user activity / branch state on wake-up so a quick
@@ -1615,6 +1620,110 @@ mod tests {
         side_effects: &SideEffects,
     ) -> Result<ProcessResult> {
         process_hook_event_impl_with_instruction(event, input, sessions_dir, side_effects, None)
+    }
+
+    #[test]
+    fn stop_generates_a_clean_peer_title_only_once() {
+        use indoc::indoc;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let sessions_dir = TempDir::new().expect("sessions dir");
+        let home_dir = TempDir::new().expect("home dir");
+        let cwd = Path::new("/fictional/project");
+        let session_id = "fixture-title-session";
+        let project_dir = home_dir
+            .path()
+            .join(".claude")
+            .join("projects")
+            .join(claude_sessions::encode_project_path(cwd));
+        fs::create_dir_all(&project_dir).expect("project dir");
+        fs::write(
+            project_dir.join(format!("{session_id}.jsonl")),
+            indoc! {r#"
+                {"type":"user","message":{"content":"Another Claude session sent a message:\n⟦armyknife-user:fixture-marker-zeta⟧\nThis message was sent by the human user in armyknife watch-web, either as a message or an action notification.\n## Rebuild the sample index\n\nPlease rebuild the sample index."}}
+                {"type":"assistant","message":{"content":[{"type":"text","text":"The fictional index is repaired."}]}}
+            "#},
+        )
+        .expect("transcript fixture");
+        let mut session = create_test_session(None);
+        session.session_id = session_id.to_string();
+        session.cwd = cwd.to_path_buf();
+        session.label = Some(" ".to_string());
+        store::save_session_to(sessions_dir.path(), &session).expect("save fixture session");
+
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let side_effects = SideEffects {
+            title_generation: true,
+            title_generation_calls: Some(calls.clone()),
+            ..SideEffects::none()
+        };
+        let failed_spawn_side_effects = SideEffects {
+            title_generation: true,
+            ..SideEffects::none()
+        };
+        let home = home_dir.path().to_str().expect("utf8 home");
+        let attempts = [
+            (false, &side_effects),
+            (true, &failed_spawn_side_effects),
+            (true, &side_effects),
+            (true, &side_effects),
+        ];
+
+        let mut outcomes = Vec::new();
+        temp_env::with_vars([("HOME", Some(home))], || {
+            for (stop_hook_active, effects) in attempts {
+                let input: HookInput = serde_json::from_value(serde_json::json!({
+                    "session_id": session_id,
+                    "cwd": cwd,
+                    "stop_hook_active": stop_hook_active,
+                }))
+                .expect("stop input");
+                let result = process_hook_event_impl_with_instruction(
+                    HookEvent::Stop,
+                    input,
+                    sessions_dir.path(),
+                    effects,
+                    Some(TEST_STOP_HOOK_INSTRUCTION),
+                )
+                .expect("stop event should save");
+                let call_count = calls.lock().expect("title generation calls").len();
+                outcomes.push((result, call_count));
+            }
+        });
+
+        let observed = (
+            outcomes,
+            calls.lock().expect("title generation calls").clone(),
+        );
+        assert_eq!(
+            observed,
+            (
+                vec![
+                    (
+                        ProcessResult::StopBlocked(TEST_STOP_HOOK_INSTRUCTION.to_string()),
+                        0,
+                    ),
+                    (ProcessResult::SessionSaved, 0),
+                    (ProcessResult::SessionSaved, 1),
+                    (ProcessResult::SessionSaved, 1),
+                ],
+                vec![(
+                    session_id.to_string(),
+                    super::super::tui::title_generate::build_prompt(
+                        indoc! {"
+                            ## Rebuild the sample index
+
+                            Please rebuild the sample index.
+                        "}
+                        .trim_end(),
+                        "The fictional index is repaired.",
+                    ),
+                    Some(" ".to_string()),
+                    true,
+                )],
+            ),
+        );
     }
 
     #[test]
@@ -3543,6 +3652,7 @@ mod tests {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            title_generation: false,
             capture_pr_context: None,
             tq_archive: false,
             track_bg_run_tasks: false,
@@ -3553,6 +3663,7 @@ mod tests {
             tq_archive_calls: None,
             notification_calls: None,
             auto_compact_calls: None,
+            title_generation_calls: None,
             redelivery_calls: None,
         };
 
@@ -4007,6 +4118,7 @@ mod tests {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            title_generation: false,
             capture_pr_context: None,
             tq_archive: false,
             track_bg_run_tasks: false,
@@ -4017,6 +4129,7 @@ mod tests {
             tq_archive_calls: None,
             notification_calls: None,
             auto_compact_calls: None,
+            title_generation_calls: None,
             redelivery_calls: None,
         };
 
@@ -4690,6 +4803,7 @@ mod tests {
             tmux: false,
             notifications: true,
             auto_compact: true,
+            title_generation: false,
             capture_pr_context: None,
             tq_archive: false,
             track_bg_run_tasks: false,
@@ -4700,6 +4814,7 @@ mod tests {
             tq_archive_calls: None,
             notification_calls: Some(notification_calls.clone()),
             auto_compact_calls: Some(auto_compact_calls.clone()),
+            title_generation_calls: None,
             redelivery_calls: None,
         };
         let input: HookInput = serde_json::from_value(serde_json::json!({

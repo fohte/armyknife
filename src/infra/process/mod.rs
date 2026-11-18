@@ -180,7 +180,24 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    detached_command(program, args, cwd, extra_env)
+    spawn_detached_with_env_overrides(program, args, cwd, extra_env, &[])
+}
+
+/// Spawns a detached process with explicit additions and removals from the
+/// inherited environment.
+pub fn spawn_detached_with_env_overrides<P, I, S>(
+    program: P,
+    args: I,
+    cwd: Option<&Path>,
+    extra_env: &[(&str, &str)],
+    removed_env: &[&str],
+) -> io::Result<()>
+where
+    P: AsRef<OsStr>,
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    detached_command(program, args, cwd, extra_env, removed_env)
         .spawn()
         .map(|_| ())
 }
@@ -198,7 +215,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    detached_command(program, args, cwd, extra_env)
+    detached_command(program, args, cwd, extra_env, &[])
         .spawn()
         .map(|child| child.id())
 }
@@ -208,6 +225,7 @@ fn detached_command<P, I, S>(
     args: I,
     cwd: Option<&Path>,
     extra_env: &[(&str, &str)],
+    removed_env: &[&str],
 ) -> Command
 where
     P: AsRef<OsStr>,
@@ -224,6 +242,9 @@ where
     }
     for (k, v) in extra_env {
         cmd.env(k, v);
+    }
+    for key in removed_env {
+        cmd.env_remove(key);
     }
 
     // SAFETY: `setsid` only manipulates the calling process's session
@@ -407,8 +428,25 @@ pub fn kill_process_groups(pgids: &[libc::pid_t]) -> usize {
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
+    use std::ffi::OsStr;
 
     use super::*;
+
+    #[test]
+    fn detached_title_generation_removes_claudecode() {
+        let command = detached_command(
+            "unused-program",
+            std::iter::empty::<&str>(),
+            None,
+            &[],
+            &["CLAUDECODE"],
+        );
+
+        assert_eq!(
+            command.get_envs().collect::<Vec<_>>(),
+            vec![(OsStr::new("CLAUDECODE"), None)],
+        );
+    }
 
     // `setsid` is only observable after the spawn boundary, so this test uses
     // the POSIX-guaranteed `sh` rather than an optional external tool.

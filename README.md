@@ -1154,6 +1154,8 @@ Stopped sessions that have not been focused since their most recent Stop render 
 
 The same sync also mirrors a session title into the window-scoped `@armyknife-cc-window-title` option: the `label` of the first session in the window (in pane order) that has one set, or an empty string if none do — titles are not concatenated across sessions in the same window. Press `e` in `a agent watch` to rename the selected session's title, persisting it as `label`; the tmux option is refreshed best-effort on confirm (skipped silently if the pane has no resolvable window), and otherwise catches up on the next status-changing hook event for that window. While renaming, press `Ctrl+g` to generate a title from the session's transcript (its first user message and latest assistant message) — this returns you to the session list immediately, no waiting: generation runs in a fully detached background process that keeps going even if `agent watch` is closed entirely, and applies the generated title directly once it lands, but only if you haven't renamed the session again in the meantime. Generation shells out to the same backend as `a agent new` (the `claude` CLI, falling back to `opencode`), so it requires one of those to be installed and authenticated.
 
+For an untitled Claude session whose first prompt is a peer message, the Stop hook starts the same detached title generation once. It skips sessions that already have a label, custom title, or AI title.
+
 Reference both options from tmux's `window-status-format` to surface per-window session state and title next to the window index. `#{?...}` falls back to `#W` (the tmux window name) when no session in the window has a title set:
 
 ```tmux

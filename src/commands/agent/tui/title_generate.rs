@@ -19,13 +19,15 @@ use super::app::{App, AppMode};
 /// Everything needed to spawn the detached title-generation process for
 /// one Ctrl+g press.
 #[derive(Debug, PartialEq, Eq)]
-pub struct SpawnTitleGenerationRequest {
+pub(in crate::commands::agent) struct SpawnTitleGenerationRequest {
     pub session_id: String,
     pub prompt: String,
     /// The session's `label` at the moment Ctrl+g was pressed. Passed
     /// through to the detached process so it can no-op if the label has
     /// since changed (e.g. a manual rename while generation was running).
     pub previous_label: Option<String>,
+    /// Automatic generation must not mask a title appended to the transcript.
+    pub check_transcript_title: bool,
 }
 
 /// Handles `Ctrl+g` from `AppMode::Edit`: reads the session's first user
@@ -64,11 +66,15 @@ pub(super) fn request_generate_title(app: &mut App) -> Option<SpawnTitleGenerati
         session_id,
         prompt,
         previous_label,
+        check_transcript_title: false,
     })
 }
 
 /// Builds the LLM prompt for generating a session title from its transcript.
-pub fn build_prompt(first_user_message: &str, last_assistant_message: &str) -> String {
+pub(in crate::commands::agent) fn build_prompt(
+    first_user_message: &str,
+    last_assistant_message: &str,
+) -> String {
     formatdoc! {r#"
         Task: Generate a short session title in Japanese describing what the user is working on in this Claude Code session.
 
@@ -95,12 +101,14 @@ pub fn build_prompt(first_user_message: &str, last_assistant_message: &str) -> S
 /// `agent watch` exiting. The prompt is written to a persisted temp file
 /// (never unlinked -- relies on OS `/tmp` GC, same policy as the
 /// clean-detached paths file) since it can exceed a comfortable argv size.
-pub(super) fn spawn_detached_title_generation(request: SpawnTitleGenerationRequest) -> Result<()> {
+pub(in crate::commands::agent) fn spawn_detached_title_generation(
+    request: SpawnTitleGenerationRequest,
+) -> Result<()> {
     use std::ffi::OsString;
     use std::io::Write;
     use std::path::Path;
 
-    use crate::infra::process::spawn_detached;
+    use crate::infra::process::spawn_detached_with_env_overrides;
 
     let exe = std::env::current_exe().context("failed to resolve current exe")?;
 
@@ -127,8 +135,12 @@ pub(super) fn spawn_detached_title_generation(request: SpawnTitleGenerationReque
         args.push(OsString::from("--previous-label"));
         args.push(OsString::from(label));
     }
+    if request.check_transcript_title {
+        args.push(OsString::from("--check-transcript-title"));
+    }
 
-    match spawn_detached(&exe, &args, Some(Path::new("/")), &[]) {
+    match spawn_detached_with_env_overrides(&exe, &args, Some(Path::new("/")), &[], &["CLAUDECODE"])
+    {
         Ok(()) => Ok(()),
         Err(e) => {
             // Roll back the persisted prompt file; without the child it
@@ -296,6 +308,7 @@ mod tests {
                     session_id: "s1".to_string(),
                     prompt: build_prompt("Fix the login bug", "Updated auth.rs"),
                     previous_label: Some("Old Title".to_string()),
+                    check_transcript_title: false,
                 }),
                 AppMode::Edit {
                     session_id: "s1".to_string()
