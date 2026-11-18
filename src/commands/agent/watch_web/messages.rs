@@ -266,6 +266,74 @@ mod tests {
         )
     }
 
+    struct OlderPageFixture {
+        _directory: tempfile::TempDir,
+        transcript: String,
+        transcript_path: PathBuf,
+        compressed_path: PathBuf,
+        full_router: Router,
+        tail_router: Router,
+        tail_cache: MessageCache,
+    }
+
+    #[fixture]
+    fn older_page_fixture(#[default(400)] record_count: usize) -> OlderPageFixture {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        let compressed_path = directory.path().join("full-transcript.jsonl.zst");
+        let mut records = Vec::new();
+        let mut parent_uuid = None;
+        for index in 0..record_count {
+            let uuid = format!("fixture-message-{index}");
+            records.push(json!({
+                "type": "user",
+                "uuid": uuid,
+                "parentUuid": parent_uuid,
+                "timestamp": "2026-01-01T00:00:01Z",
+                "message": {"content": format!("Fixture request {index}.")},
+            }));
+            parent_uuid = Some(uuid);
+        }
+        let transcript = records
+            .iter()
+            .map(serde_json::Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        std::fs::write(&transcript_path, &transcript).unwrap();
+        std::fs::write(
+            &compressed_path,
+            zstd::stream::encode_all(transcript.as_bytes(), 0).unwrap(),
+        )
+        .unwrap();
+
+        let make_router = |path: &Path| {
+            let mut session = stored_session();
+            session.transcript_path = Some(path.to_path_buf());
+            let cache = MessageCache::default();
+            let mut loaders = empty_route_loaders();
+            loaders.message_cache = cache.clone();
+            let router = routes_with_proposals_and_peer_out_messages(
+                move |_| Ok(Some(session.clone())),
+                |_| Ok(None),
+                loaders,
+            );
+            (router, cache)
+        };
+        let (full_router, _) = make_router(&compressed_path);
+        let (tail_router, tail_cache) = make_router(&transcript_path);
+
+        OlderPageFixture {
+            _directory: directory,
+            transcript,
+            transcript_path,
+            compressed_path,
+            full_router,
+            tail_router,
+            tail_cache,
+        }
+    }
+
     #[rstest]
     #[case::already_archived(false)]
     #[case::archived_during_loading(true)]
@@ -4163,52 +4231,20 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn older_epoch_pages_expand_and_reuse_the_tail_window() {
-        let directory = tempfile::tempdir().unwrap();
-        let transcript_path = directory.path().join("transcript.jsonl");
-        let compressed_path = directory.path().join("full-transcript.jsonl.zst");
-        let mut records = Vec::new();
-        let mut parent_uuid = None;
-        for index in 0..400 {
-            let uuid = format!("fixture-message-{index}");
-            records.push(json!({
-                "type": "user",
-                "uuid": uuid,
-                "parentUuid": parent_uuid,
-                "timestamp": "2026-01-01T00:00:01Z",
-                "message": {"content": format!("Fixture request {index}.")},
-            }));
-            parent_uuid = Some(uuid);
-        }
-        let transcript = records
-            .iter()
-            .map(serde_json::Value::to_string)
-            .collect::<Vec<_>>()
-            .join("\n")
-            + "\n";
-        std::fs::write(&transcript_path, &transcript).unwrap();
-        std::fs::write(
-            &compressed_path,
-            zstd::stream::encode_all(transcript.as_bytes(), 0).unwrap(),
-        )
-        .unwrap();
-
-        let make_router = |path: &Path| {
-            let mut session = stored_session();
-            session.transcript_path = Some(path.to_path_buf());
-            let cache = MessageCache::default();
-            let mut loaders = empty_route_loaders();
-            loaders.message_cache = cache.clone();
-            let router = routes_with_proposals_and_peer_out_messages(
-                move |_| Ok(Some(session.clone())),
-                |_| Ok(None),
-                loaders,
-            );
-            (router, cache)
-        };
-        let (full_router, _) = make_router(&compressed_path);
-        let (tail_router, tail_cache) = make_router(&transcript_path);
+    async fn older_epoch_pages_expand_and_reuse_the_tail_window(
+        #[with(400)] older_page_fixture: OlderPageFixture,
+    ) {
+        let OlderPageFixture {
+            transcript,
+            transcript_path,
+            compressed_path,
+            full_router,
+            tail_router,
+            tail_cache,
+            ..
+        } = older_page_fixture;
         let full_initial = message_response_with_query(&full_router, "?limit=100").await;
         let tail_initial = message_response_with_query(&tail_router, "?limit=100").await;
         let epoch = tail_initial.2["epoch"].as_str().unwrap();
@@ -4281,52 +4317,56 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn older_epoch_pages_fall_back_at_the_transcript_start() {
-        let directory = tempfile::tempdir().unwrap();
-        let transcript_path = directory.path().join("transcript.jsonl");
-        let compressed_path = directory.path().join("full-transcript.jsonl.zst");
-        let mut records = Vec::new();
-        let mut parent_uuid = None;
-        for index in 0..150 {
-            let uuid = format!("fixture-message-{index}");
-            records.push(json!({
-                "type": "user",
-                "uuid": uuid,
-                "parentUuid": parent_uuid,
-                "timestamp": "2026-01-01T00:00:01Z",
-                "message": {"content": format!("Fixture request {index}.")},
-            }));
-            parent_uuid = Some(uuid);
+    async fn older_epoch_pages_expand_geometrically_for_stale_cursors(
+        #[with(1_000)] older_page_fixture: OlderPageFixture,
+    ) {
+        let OlderPageFixture {
+            full_router,
+            tail_router,
+            tail_cache,
+            ..
+        } = older_page_fixture;
+        let full_initial = message_response_with_query(&full_router, "?limit=100").await;
+        let tail_initial = message_response_with_query(&tail_router, "?limit=100").await;
+        let mut full_page = full_initial.clone();
+        for _ in 0..4 {
+            let epoch = full_page.2["epoch"].as_str().unwrap();
+            let cursor = full_page.2["olderCursor"].as_str().unwrap();
+            let query = format!("?limit=100&epoch={epoch}&olderCursor={cursor}");
+            full_page = message_response_with_query(&full_router, &query).await;
         }
-        let transcript = records
-            .iter()
-            .map(serde_json::Value::to_string)
-            .collect::<Vec<_>>()
-            .join("\n")
-            + "\n";
-        std::fs::write(&transcript_path, &transcript).unwrap();
-        std::fs::write(
-            &compressed_path,
-            zstd::stream::encode_all(transcript.as_bytes(), 0).unwrap(),
-        )
-        .unwrap();
+        let epoch = full_page.2["epoch"].as_str().unwrap();
+        let cursor = full_page.2["olderCursor"].as_str().unwrap();
+        let stale_query = format!("?limit=100&epoch={epoch}&olderCursor={cursor}");
+        let expected_page = message_response_with_query(&full_router, &stale_query).await;
+        let actual_page = message_response_with_query(&tail_router, &stale_query).await;
+        let cached_limit = tail_cache
+            .transcript_parser_slot("fixture-session")
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|entry| entry.tail_window.as_ref())
+            .map(|state| state.message_limit);
 
-        let make_router = |path: &Path| {
-            let mut session = stored_session();
-            session.transcript_path = Some(path.to_path_buf());
-            let cache = MessageCache::default();
-            let mut loaders = empty_route_loaders();
-            loaders.message_cache = cache.clone();
-            let router = routes_with_proposals_and_peer_out_messages(
-                move |_| Ok(Some(session.clone())),
-                |_| Ok(None),
-                loaders,
-            );
-            (router, cache)
-        };
-        let (full_router, _) = make_router(&compressed_path);
-        let (tail_router, tail_cache) = make_router(&transcript_path);
+        assert_eq!(
+            (tail_initial, actual_page, cached_limit),
+            (full_initial, expected_page, Some(800)),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn older_epoch_pages_fall_back_at_the_transcript_start(
+        #[with(150)] older_page_fixture: OlderPageFixture,
+    ) {
+        let OlderPageFixture {
+            full_router,
+            tail_router,
+            tail_cache,
+            ..
+        } = older_page_fixture;
         let full_initial = message_response_with_query(&full_router, "?limit=100").await;
         let tail_initial = message_response_with_query(&tail_router, "?limit=100").await;
         let epoch = tail_initial.2["epoch"].as_str().unwrap();

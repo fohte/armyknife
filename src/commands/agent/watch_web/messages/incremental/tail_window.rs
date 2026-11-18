@@ -131,7 +131,10 @@ fn parse_older_page_tail_window(
         return Ok(None);
     }
 
-    let mut message_limit = cached_limit.saturating_add(page_limit);
+    let Some(mut message_limit) = cached_limit.checked_add(page_limit) else {
+        return Ok(None);
+    };
+    let mut increment = page_limit;
     loop {
         let Some(tail) = parse_session_transcript_tail_window(
             input,
@@ -145,9 +148,13 @@ fn parse_older_page_tail_window(
         if tail.conversation.has_older_epoch_page(epoch, page_limit) {
             return Ok(Some(tail));
         }
-        let Some(next_limit) = message_limit.checked_add(page_limit) else {
+        let Some(next_increment) = increment.checked_mul(2) else {
             return Ok(None);
         };
+        let Some(next_limit) = message_limit.checked_add(next_increment) else {
+            return Ok(None);
+        };
+        increment = next_increment;
         message_limit = next_limit;
     }
 }
