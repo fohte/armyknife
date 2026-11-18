@@ -206,6 +206,29 @@ it.each([
   expect(document.querySelector('.vibe-control-popover')).toBeNull()
 })
 
+it('closes the mobile sheet on Escape', async () => {
+  const onOpenChange = vi.fn()
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <VibeModeControl
+        sessionId="fixture-session"
+        repo="example/service"
+        mode={{ mode: 'disabled' }}
+        isMobile
+        open
+        onOpenChange={onOpenChange}
+      />,
+    )
+  })
+
+  await act(async () => {
+    await userEvent.keyboard('{Escape}')
+  })
+
+  expect(onOpenChange.mock.calls).toEqual([[false]])
+})
+
 it.each([
   { name: 'short title', title: 'Fixture title' },
   {
@@ -258,3 +281,34 @@ it.each([
     })
   },
 )
+
+it('anchors the desktop popover when its trigger is hidden', async () => {
+  container.className = 'resizable-columns-pane'
+  container.style.cssText =
+    'box-sizing: border-box; height: 260px; overflow: hidden; position: relative; width: 520px;'
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <VibeModeControl
+        sessionId="fixture-session"
+        repo="example/service"
+        mode={{ mode: 'disabled' }}
+        showTrigger={false}
+        open
+      />,
+    )
+  })
+
+  await vi.waitFor(() => {
+    const popover = document.querySelector<HTMLElement>('.vibe-control-popover')
+    if (popover === null) throw new Error('Expected vibe mode popover')
+    const paneRect = container.getBoundingClientRect()
+    const popoverRect = popover.getBoundingClientRect()
+    expect(
+      popoverRect.top >= paneRect.top &&
+        popoverRect.right <= paneRect.right &&
+        popoverRect.bottom <= paneRect.bottom &&
+        popoverRect.left >= paneRect.left,
+    ).toEqual(true)
+  })
+})

@@ -34,12 +34,14 @@ export function VibeModeControl({
   const [localOpen, setLocalOpen] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [controlAnchor, setControlAnchor] = useState<HTMLElement | null>(null)
   const [collisionBoundary, setCollisionBoundary] = useState<Element | null>(
     null,
   )
   const isOpen = open ?? localOpen
 
-  const setTriggerRef = useCallback((node: HTMLElement | null) => {
+  const setControlRef = useCallback((node: HTMLElement | null) => {
+    setControlAnchor(node)
     setCollisionBoundary(node?.closest('.resizable-columns-pane') ?? null)
   }, [])
 
@@ -118,10 +120,9 @@ export function VibeModeControl({
 
   return (
     <Popover.Root open={isOpen} onOpenChange={setOpen} modal={false}>
-      <span className="vibe-control">
+      <span ref={setControlRef} className="vibe-control">
         {showTrigger ? (
           <Popover.Trigger
-            ref={setTriggerRef}
             className={`vibe-control-trigger${vibeModeIsOn(currentMode) ? ' is-on' : ''}${isOpen ? ' is-open' : ''}`}
             type="button"
             aria-haspopup="dialog"
@@ -137,6 +138,7 @@ export function VibeModeControl({
       <Popover.Portal>
         <Popover.Positioner
           className="vibe-control-positioner"
+          anchor={showTrigger ? undefined : controlAnchor}
           side="bottom"
           align="start"
           sideOffset={8}
