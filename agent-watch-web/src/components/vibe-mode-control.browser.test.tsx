@@ -1,7 +1,12 @@
+import '#components/conversation-pane-view.css'
+import '#components/conversation-pane.css'
+import '#components/resizable-columns.css'
+
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
+import { SessionHeading } from '#components/session-heading'
 import { VibeModeControl } from '#components/vibe-mode-control'
 import type { VibeMode } from '#types'
 
@@ -10,7 +15,7 @@ let root: Root | null = null
 const fetchMock = vi.fn()
 
 function requireButton(label: string) {
-  const button = Array.from(container.querySelectorAll('button')).find(
+  const button = Array.from(document.querySelectorAll('button')).find(
     (candidate) => candidate.textContent.includes(label),
   )
   if (button === undefined) throw new Error(`Expected ${label} button`)
@@ -21,14 +26,14 @@ function controlState() {
   return {
     requests: fetchMock.mock.calls,
     status: container.querySelector('button')?.getAttribute('aria-label'),
-    panel: container.querySelector('[role="dialog"]') !== null,
+    panel: document.querySelector('[role="dialog"]') !== null,
   }
 }
 
 function errorState() {
   return {
-    error: container.querySelector('[role="alert"]')?.textContent,
-    panel: container.querySelector('[role="dialog"]') !== null,
+    error: document.querySelector('[role="alert"]')?.textContent,
+    panel: document.querySelector('[role="dialog"]') !== null,
   }
 }
 
@@ -126,7 +131,7 @@ it.each(modeChangeCases)('$name', async (testCase) => {
   act(() => {
     requireButton(testCase.triggerLabel).click()
   })
-  expect(container.querySelector('blockquote')?.textContent).toBe(
+  expect(document.querySelector('blockquote')?.textContent).toBe(
     testCase.message,
   )
   await act(async () => {
@@ -176,25 +181,41 @@ it('shows the API reason when the server rejects a change', async () => {
   })
 })
 
-it('keeps the desktop popover inside a wide pane beside a short title', () => {
+it.each([
+  { name: 'short title', title: 'Fixture title' },
+  {
+    name: 'long title',
+    title:
+      'A fictional conversation title long enough to reach the right edge of the pane',
+  },
+])('keeps the desktop popover inside its pane for a $name', ({ title }) => {
+  container.className = 'resizable-columns-pane'
   container.style.cssText =
-    'box-sizing: border-box; height: 260px; overflow: hidden; padding: 10px 24px; position: relative; width: 520px;'
+    'box-sizing: border-box; height: 260px; overflow: hidden; position: relative; width: 520px;'
   root = createRoot(container)
   act(() => {
     root?.render(
-      <div style={{ display: 'flex', gap: '4px' }}>
-        <span>Fixture title</span>
-        <VibeModeControl
-          sessionId="fixture-session"
-          repo="example/service"
-          mode={{ mode: 'disabled' }}
-          open
-        />
+      <div className="conversation-pane">
+        <header className="conversation-header">
+          <div className="conversation-header-copy">
+            <div className="session-title-heading">
+              <SessionHeading title={title} sessionId="fixture-session" />
+              <VibeModeControl
+                sessionId="fixture-session"
+                repo="example/service"
+                mode={{ mode: 'disabled' }}
+                open
+              />
+              <span className="session-title-edit" />
+            </div>
+          </div>
+          <div className="conversation-header-actions" />
+        </header>
       </div>,
     )
   })
 
-  const popover = container.querySelector<HTMLElement>('.vibe-control-popover')
+  const popover = document.querySelector<HTMLElement>('.vibe-control-popover')
   if (popover === null) throw new Error('Expected vibe mode popover')
   const paneRect = container.getBoundingClientRect()
   const popoverRect = popover.getBoundingClientRect()

@@ -113,10 +113,13 @@
 }
 
 .vibe-control-popover {
-  position: absolute;
+  position: fixed;
   z-index: 30;
-  top: calc(100% + 8px);
-  left: 0;
+  display: block;
+}
+
+.vibe-control-popover > .vibe-panel {
+  width: 100%;
 }
 
 .vibe-control-trigger {
