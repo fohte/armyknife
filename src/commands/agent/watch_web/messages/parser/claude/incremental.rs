@@ -88,6 +88,11 @@ impl IncrementalClaudeParser {
         reader.seek(SeekFrom::Start(0))?;
         let mut state = ClaudeParserState::new();
         state.transcript_nodes = transcript_nodes;
+        state.latest_record_uuid = if pending_uuid.is_some() {
+            pending_record.as_ref().and_then(record_parent_uuid)
+        } else {
+            graph_latest_uuid
+        };
         state.latest_uuid = if pending_uuid.is_some() {
             pending_record.as_ref().and_then(record_parent_uuid)
         } else {
@@ -155,6 +160,7 @@ impl IncrementalClaudeParser {
                     membership: BranchMembership::Active,
                 });
         }
+        state.latest_record_uuid = graph_latest_uuid.clone();
         mark_active_branch(
             &mut state.transcript_nodes,
             graph_latest_uuid
@@ -313,6 +319,9 @@ fn ingest_record(
             },
         );
         mark_active_branch(&mut state.transcript_nodes, Some(uuid));
+        if matches!(origin, RecordOrigin::Appended) {
+            state.latest_record_uuid = Some(uuid.to_owned());
+        }
         if matches!(origin, RecordOrigin::Appended)
             && !parallel_tool_result
             && !is_attachment_record(&record)
@@ -348,11 +357,11 @@ fn is_active_branch_continuation(state: &ClaudeParserState, record: &Value) -> b
         return false;
     }
 
-    let parent_is_latest = state.latest_uuid.as_deref() == Some(parent_uuid.as_str());
     if is_tool_result_only {
-        return parent_is_latest
+        return state.latest_uuid.as_deref() == Some(parent_uuid.as_str())
             || state.tool_result_parent.as_deref() == Some(parent_uuid.as_str());
     }
+    let parent_is_latest = state.latest_record_uuid.as_deref() == Some(parent_uuid.as_str());
     if is_task_notification {
         return parent_is_latest;
     }

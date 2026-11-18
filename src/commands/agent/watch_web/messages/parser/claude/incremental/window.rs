@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::io::{self, BufRead, Read, Seek, SeekFrom};
 use std::path::Path;
+use std::time::Instant;
 
 use serde_json::Value;
 
@@ -8,6 +9,7 @@ use super::super::super::record_timestamp;
 use super::super::state::record_parent_uuid;
 use super::tail_window;
 use super::{IncrementalClaudeParser, parse_record};
+use crate::commands::agent::watch_web::messages::log_tail_window_fallback;
 
 const INITIAL_WINDOW_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_WINDOW_BYTES: u64 = 64 * 1024 * 1024;
@@ -33,13 +35,16 @@ pub(super) fn new_tail_window_bounded(
     pending_task_ids: &[String],
     max_window_bytes: u64,
 ) -> io::Result<Option<IncrementalClaudeParser>> {
+    let started = Instant::now();
     let file_length = reader.seek(SeekFrom::End(0))?;
     let Some(window_start) =
         select_window_start(&mut reader, file_length, message_limit, max_window_bytes)?
     else {
+        log_tail_window_fallback(started, "message_window_not_found_within_limit");
         return Ok(None);
     };
     if window_start == 0 {
+        log_tail_window_fallback(started, "window_includes_transcript_start");
         return Ok(None);
     }
 
@@ -71,6 +76,7 @@ pub(super) fn new_tail_window_bounded(
         .collect::<HashSet<_>>();
     let active_ancestor_uuid = active_ancestor_uuid(&selected_records);
     if missing_task_ids.len() > 4096 {
+        log_tail_window_fallback(started, "pending_task_search_limit_exceeded");
         return Ok(None);
     }
 
@@ -83,6 +89,7 @@ pub(super) fn new_tail_window_bounded(
         active_ancestor_uuid,
     )?;
     if !complete {
+        log_tail_window_fallback(started, "prefix_parser_state_unavailable");
         return Ok(None);
     }
     helper_records.extend(selected_records.iter().cloned());

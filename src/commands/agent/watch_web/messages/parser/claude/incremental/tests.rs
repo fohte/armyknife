@@ -204,6 +204,28 @@ const INITIAL_PENDING_SIBLING_TRANSCRIPT: &str = indoc! {r#"
     "#},
     IncrementalAppend::Applied,
 )]
+#[case::assistant_continues_after_an_appended_attachment(
+    indoc! {r#"
+        {"type":"user","uuid":"fixture-request","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"A fixture request."}}
+        {"type":"assistant","uuid":"fixture-response","parentUuid":"fixture-request","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"text","text":"A fixture response."}]}}
+    "#},
+    indoc! {r#"
+        {"type":"attachment","uuid":"fixture-reminder","parentUuid":"fixture-response","timestamp":"2026-01-01T00:00:03Z","attachment":{"type":"silent_turn_reminder"}}
+        {"type":"assistant","uuid":"fixture-followup","parentUuid":"fixture-reminder","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"text","text":"A fixture follow-up."}]}}
+    "#},
+    IncrementalAppend::Applied,
+)]
+#[case::assistant_continues_after_an_initial_attachment(
+    indoc! {r#"
+        {"type":"user","uuid":"fixture-request","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"A fixture request."}}
+        {"type":"assistant","uuid":"fixture-response","parentUuid":"fixture-request","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"text","text":"A fixture response."}]}}
+        {"type":"attachment","uuid":"fixture-reminder","parentUuid":"fixture-response","timestamp":"2026-01-01T00:00:03Z","attachment":{"type":"silent_turn_reminder"}}
+    "#},
+    indoc! {r#"
+        {"type":"assistant","uuid":"fixture-followup","parentUuid":"fixture-reminder","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"text","text":"A fixture follow-up."}]}}
+    "#},
+    IncrementalAppend::Applied,
+)]
 #[case::parallel_tool_results_share_the_same_parent(
     indoc! {r#"
         {"type":"assistant","uuid":"parallel-calls","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"call-a","name":"Read","input":{"file_path":"/fixture/a"}},{"type":"tool_use","id":"call-b","name":"Read","input":{"file_path":"/fixture/b"}}]}}
@@ -300,6 +322,43 @@ fn appended_transcript_matches_a_full_parse(
     assert_eq!(
         incremental_result(prefix.as_bytes(), suffix.as_bytes()),
         (expected_append, parse_all(&transcript, empty_additions()),),
+    );
+}
+
+#[test]
+fn assistant_appended_after_an_attachment_in_a_separate_update_matches_a_full_parse() {
+    let prefix = indoc! {r#"
+        {"type":"user","uuid":"fixture-request","parentUuid":null,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"A fixture request."}}
+        {"type":"assistant","uuid":"fixture-response","parentUuid":"fixture-request","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"text","text":"A fixture response."}]}}
+    "#};
+    let attachment = indoc! {r#"
+        {"type":"attachment","uuid":"fixture-reminder","parentUuid":"fixture-response","timestamp":"2026-01-01T00:00:03Z","attachment":{"type":"silent_turn_reminder"}}
+    "#};
+    let assistant = indoc! {r#"
+        {"type":"assistant","uuid":"fixture-followup","parentUuid":"fixture-reminder","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"text","text":"A fixture follow-up."}]}}
+    "#};
+    let mut transcript = prefix.as_bytes().to_vec();
+    transcript.extend_from_slice(attachment.as_bytes());
+    transcript.extend_from_slice(assistant.as_bytes());
+    let mut parser = incremental_parser(prefix.as_bytes());
+    let attachment_append = parser
+        .append_bytes(attachment.as_bytes(), fixed_time())
+        .unwrap();
+    let assistant_append = parser
+        .append_bytes(assistant.as_bytes(), fixed_time())
+        .unwrap();
+
+    assert_eq!(
+        (
+            attachment_append,
+            assistant_append,
+            parser.render_with(fixed_time(), empty_additions()).unwrap(),
+        ),
+        (
+            IncrementalAppend::Applied,
+            IncrementalAppend::Applied,
+            parse_all(&transcript, empty_additions()),
+        ),
     );
 }
 

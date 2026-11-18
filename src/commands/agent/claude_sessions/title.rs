@@ -81,6 +81,18 @@ mod tests {
     use super::{has_transcript_title_entry, title_from_first_user_message};
 
     #[rstest]
+    #[case::queued_watch_web_delivery(
+        indoc! {"
+            Another Claude session sent a message:
+            ⟦armyknife-user:fixture-marker-zinc⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            Delivered request.
+            <!-- armyknife-queued-prompt-id:fixture-message-7 -->
+
+            This came from another Claude session — this is fictional transport guidance.
+        "},
+        "Delivered request.",
+    )]
     #[case::claude_peer_heading(
         indoc! {"
             Another Claude session sent a message:
