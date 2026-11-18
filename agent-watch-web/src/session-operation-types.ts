@@ -14,6 +14,7 @@ export type SessionOperation =
   | { type: 'back_now'; sessionId: string }
   | { type: 'close'; sessionId: string; keepWorktree: boolean }
   | { type: 'focus'; sessionId: string }
+  | { type: 'resume'; sessionId: string }
   | { type: 'interrupt'; sessionId: string }
   | { type: 'title'; sessionId: string; title: string }
   | {

@@ -16,6 +16,171 @@ pub(super) fn is_peer_message(prompt: Option<&str>) -> bool {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub(super) struct ExtractedPeerMessage {
+    pub(super) sender_id: Option<String>,
+    pub(super) body: String,
+    pub(super) trailing_text: String,
+    pub(super) has_user_marker: bool,
+    pub(super) has_user_marker_in_body: bool,
+}
+
+/// Removes transport details shared by provisional titles and watch-web messages.
+pub(super) fn extract_peer_message(
+    message: &str,
+    marker: Option<&str>,
+) -> Option<ExtractedPeerMessage> {
+    extract_peer_message_with_marker_policy(message, marker, false)
+}
+
+fn extract_peer_message_with_marker_policy(
+    message: &str,
+    marker: Option<&str>,
+    allow_unverified_marker: bool,
+) -> Option<ExtractedPeerMessage> {
+    let mut body = message;
+    let mut is_peer_message = false;
+
+    for prefix in [
+        ANOTHER_CLAUDE_SESSION_MESSAGE_PREFIX,
+        ANOTHER_PEER_SESSION_MESSAGE_PREFIX.trim_end(),
+    ] {
+        if let Some(rest) = body.strip_prefix(prefix) {
+            body = rest.trim_start_matches(['\r', '\n', ' ']);
+            is_peer_message = true;
+            break;
+        }
+    }
+
+    let mut sender_id = None;
+    let mut trailing_text = "";
+    let (body, has_user_marker, has_user_marker_in_body) =
+        if let Some((id, envelope_body, envelope_trailing_text)) = peer_message_parts(body) {
+            let envelope_start = body.find(PEER_MESSAGE_START_TAG)?;
+            let (_, has_user_marker_before_envelope) =
+                strip_watch_web_marker(&body[..envelope_start], marker, allow_unverified_marker);
+            let (body, has_user_marker_in_body) =
+                strip_watch_web_marker(envelope_body, marker, allow_unverified_marker);
+            sender_id = Some(id.to_owned());
+            trailing_text = envelope_trailing_text;
+            is_peer_message = true;
+            (
+                body,
+                has_user_marker_before_envelope || has_user_marker_in_body,
+                has_user_marker_in_body,
+            )
+        } else {
+            let (body, has_user_marker) =
+                strip_watch_web_marker(body, marker, allow_unverified_marker);
+            (body, has_user_marker, has_user_marker)
+        };
+    let without_notice = without_transport_notice(body);
+    let had_transport_notice = without_notice != body;
+    if !(is_peer_message || has_user_marker || had_transport_notice) {
+        return None;
+    }
+    Some(ExtractedPeerMessage {
+        sender_id,
+        body: body.to_owned(),
+        trailing_text: trailing_text.to_owned(),
+        has_user_marker,
+        has_user_marker_in_body,
+    })
+}
+
+pub(super) fn clean_peer_message(message: &str) -> String {
+    extract_peer_message_with_marker_policy(message, None, true).map_or_else(
+        || message.trim().to_owned(),
+        |message| without_transport_notice(&message.body).trim().to_owned(),
+    )
+}
+
+pub(super) fn without_session_context(body: &str) -> String {
+    let Some(start) = body.find("<session-context>") else {
+        return body.trim().to_owned();
+    };
+    let Some(end) = body[start..].find("</session-context>") else {
+        return body.trim().to_owned();
+    };
+    let after_context = start + end + "</session-context>".len();
+    let before = body[..start].trim_end();
+    let after = body[after_context..].trim_start();
+    match (before.is_empty(), after.is_empty()) {
+        (false, false) => {
+            let mut result = before.to_owned();
+            result.push('\n');
+            result.push('\n');
+            result.push_str(after);
+            result
+        }
+        (false, true) => before.to_owned(),
+        (true, false) => after.to_owned(),
+        (true, true) => String::new(),
+    }
+}
+
+fn strip_watch_web_marker<'a>(
+    body: &'a str,
+    marker: Option<&str>,
+    allow_unverified_marker: bool,
+) -> (&'a str, bool) {
+    let marker_offset = match marker {
+        Some(marker) => body.match_indices(marker).find_map(|(offset, _)| {
+            (offset == 0 || body[..offset].ends_with('\n')).then_some((offset, marker))
+        }),
+        None if allow_unverified_marker => {
+            body.lines().enumerate().find_map(|(line_number, line)| {
+                (line.starts_with("⟦armyknife-user:") && line.ends_with('⟧')).then_some((
+                    body.lines().take(line_number).map(str::len).sum::<usize>() + line_number,
+                    line,
+                ))
+            })
+        }
+        None => None,
+    };
+    let Some((offset, marker)) = marker_offset else {
+        return (body, false);
+    };
+    let marked_message = &body[offset..];
+    crate::commands::agent::watch_web_user_marker::strip_message(marker, marked_message)
+        .map_or_else(
+            || {
+                (
+                    marked_message
+                        .strip_prefix(marker)
+                        .unwrap_or(marked_message)
+                        .trim_start_matches('\n'),
+                    true,
+                )
+            },
+            |body| (body, true),
+        )
+}
+
+pub(super) fn without_transport_notice(body: &str) -> &str {
+    body.rsplit_once(concat!("\n", "\n", "This came from another Claude session"))
+        .map_or(body, |(body, _)| body)
+}
+
+fn peer_message_parts(message: &str) -> Option<(&str, &str, &str)> {
+    let (_, full_envelope) = message.split_once(PEER_MESSAGE_START_TAG)?;
+    let end = full_envelope.rfind(PEER_MESSAGE_END_MARKER)?;
+    let envelope = full_envelope[..end].strip_prefix('\n')?;
+    let (header, body) = envelope.split_once(concat!("\n", "\n"))?;
+    let mut header_lines = header.lines();
+    let sender_id = header_lines.next()?.strip_prefix("- From session_id: ")?;
+    if sender_id.is_empty()
+        || header_lines
+            .next()
+            .is_some_and(|line| !line.starts_with("- Sender engine: "))
+        || header_lines.next().is_some()
+    {
+        return None;
+    }
+    let trailing_text = &full_envelope[end + PEER_MESSAGE_END_MARKER.len()..];
+    Some((sender_id, body, trailing_text))
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub(super) struct TaskNotificationEnvelope<'a> {
     pub(super) notification: &'a str,
     pub(super) trailing_text: &'a str,

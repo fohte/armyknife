@@ -5,10 +5,29 @@ use anyhow::Result;
 
 use super::super::super::types::{Engine, Session, TmuxInfo};
 use super::{ActionRuntime, CommandResult};
+use crate::shared::config::Config;
 
 pub(super) struct LiveActionRuntime;
 
 impl ActionRuntime for LiveActionRuntime {
+    fn resume_session(&self, session: &Session) -> Result<()> {
+        match session.status {
+            crate::commands::agent::types::SessionStatus::Paused => {
+                crate::commands::agent::resume::respawn_paused_session(session)?;
+            }
+            crate::commands::agent::types::SessionStatus::Ended => {
+                let config = crate::shared::config::load_config_or_default();
+                resume_ended_session_with_config(
+                    session,
+                    &config,
+                    &super::resume::TmuxEndedSessionHost,
+                )?;
+            }
+            _ => anyhow::bail!("session is not ended or paused"),
+        }
+        Ok(())
+    }
+
     fn execute_command(&self, cwd: &std::path::Path, command: &str) -> Result<CommandResult> {
         super::bang_commands::execute_command(cwd, command)
     }
@@ -111,5 +130,80 @@ impl ActionRuntime for LiveActionRuntime {
             pr_number,
             expected_head_sha,
         ))
+    }
+}
+
+fn resume_ended_session_with_config(
+    session: &Session,
+    config: &Config,
+    host: &impl super::resume::EndedSessionHost,
+) -> Result<()> {
+    super::resume::resume_ended_session(session, &config.agent.worktree.layout, host)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use anyhow::Result;
+    use serde_json::{Value, json};
+
+    use super::resume_ended_session_with_config;
+    use crate::commands::agent::types::{Engine, Session, TmuxInfo};
+    use crate::infra::tmux::layout::ResumeLayoutSpec;
+    use crate::shared::config::{Config, LayoutNode, PaneConfig};
+
+    #[derive(Default)]
+    struct FakeEndedSessionHost {
+        calls: Mutex<Vec<Value>>,
+    }
+
+    impl super::super::resume::EndedSessionHost for FakeEndedSessionHost {
+        fn open_layout(&self, spec: ResumeLayoutSpec<'_>) -> Result<()> {
+            self.calls.lock().unwrap().push(json!({
+                "layout": serde_json::to_value(spec.layout).unwrap(),
+                "agentCommand": spec.agent_command,
+            }));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn ended_resume_uses_the_worktree_layout_from_config() {
+        let mut config = Config::default();
+        config.agent.worktree.layout = LayoutNode::Pane(PaneConfig {
+            command: "fixture-editor".to_string(),
+            focus: true,
+        });
+        let mut session: Session = serde_json::from_value(json!({
+            "session_id": "fixture-session",
+            "cwd": "/fixture/worktree",
+            "transcript_path": null,
+            "tmux_info": null,
+            "status": "ended",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": null,
+        }))
+        .unwrap();
+        session.engine = Engine::Codex;
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "fixture-session-window".to_string(),
+            window_name: "fixture-agent".to_string(),
+            window_index: 2,
+            pane_id: "%17".to_string(),
+            socket_path: Some("/fixture/tmux.sock".to_string()),
+        });
+        let host = FakeEndedSessionHost::default();
+
+        resume_ended_session_with_config(&session, &config, &host).unwrap();
+
+        assert_eq!(
+            *host.calls.lock().unwrap(),
+            vec![json!({
+                "layout": { "command": "fixture-editor", "focus": true },
+                "agentCommand": "a agent resume fixture-session --engine codex",
+            })],
+        );
     }
 }

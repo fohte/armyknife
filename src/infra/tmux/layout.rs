@@ -10,6 +10,7 @@ mod codex;
 mod execution;
 mod launch;
 mod prompt;
+mod resume;
 mod route;
 mod split;
 use crate::shared::env_var::EnvVars;
@@ -21,6 +22,7 @@ use prompt::{
     apply_prompt_if_agent, clear_managed_codex_launch_env, is_engine_command,
     retarget_agent_command, scope_session_launch_env,
 };
+pub use resume::{ResumeLayoutSpec, build_resume_layout};
 pub use route::AgentLaunchRoute;
 pub(crate) use split::split_pane_with_initial_prompt_marker;
 #[cfg(test)]

@@ -4547,12 +4547,12 @@ it('does nothing when a selected session cannot accept replies', async () => {
   })
 
   const snapshot = () => ({
-    disabled: textarea?.disabled,
+    composerExists: textarea !== null,
     buttonRetainsFocus: document.activeElement === outsideButton,
     defaultPrevented: events[0]?.defaultPrevented,
   })
   expect(snapshot()).toEqual({
-    disabled: true,
+    composerExists: false,
     buttonRetainsFocus: true,
     defaultPrevented: false,
   })

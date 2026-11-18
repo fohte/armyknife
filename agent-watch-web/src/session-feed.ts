@@ -113,6 +113,8 @@ function isSession(value: unknown): value is Session {
     (kind === null || typeof kind === 'string') &&
     typeof value['title'] === 'string' &&
     (value['preview'] === null || typeof value['preview'] === 'string') &&
+    (value['updatedAt'] === undefined ||
+      typeof value['updatedAt'] === 'string') &&
     typeof value['elapsedSeconds'] === 'number' &&
     typeof value['unread'] === 'boolean' &&
     validTask &&

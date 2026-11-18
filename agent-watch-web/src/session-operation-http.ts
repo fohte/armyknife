@@ -70,6 +70,8 @@ function requestFor(operation: SessionOperation) {
       return { path: 'close', body: { keepWorktree: operation.keepWorktree } }
     case 'focus':
       return { path: 'focus', body: undefined }
+    case 'resume':
+      return { path: 'resume', body: undefined }
     case 'interrupt':
       return { path: 'interrupt', body: undefined }
     case 'title':
@@ -224,6 +226,8 @@ export function createSessionOperation(
         : errOperation('Invalid close operation')
     case 'focus':
       return ok<SessionOperation, Error>({ type: 'focus', sessionId })
+    case 'resume':
+      return ok<SessionOperation, Error>({ type: 'resume', sessionId })
     case 'interrupt':
       return ok<SessionOperation, Error>({ type: 'interrupt', sessionId })
     case 'title': {

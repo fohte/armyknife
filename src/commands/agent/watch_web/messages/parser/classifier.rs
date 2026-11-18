@@ -1,9 +1,6 @@
 use serde_json::Value;
 
-use crate::commands::agent::peer_message::{
-    ANOTHER_PEER_SESSION_MESSAGE_PREFIX, PEER_MESSAGE_END_MARKER, PEER_MESSAGE_START_TAG,
-    task_notification_envelope,
-};
+use crate::commands::agent::peer_message::{extract_peer_message, task_notification_envelope};
 
 mod system_record;
 
@@ -71,34 +68,12 @@ pub(super) fn classify_inbound(
         return message;
     }
 
-    if let Some((tag, body)) = tagged {
-        if let Some((session_id, peer_body)) = peer_message_parts(text) {
-            if let Some(message) = marked_user_message(peer_body, user_marker) {
-                return message;
-            }
-            return MessageKind::PeerIn {
-                session_id: session_id.to_owned(),
-                text: peer_body.to_owned(),
-            };
-        }
-        if let Some(message) = marked_user_message(text, user_marker) {
-            return message;
-        }
-        return event(tag, body, record);
-    }
-
-    if let Some((session_id, peer_body)) = peer_message_parts(text) {
-        if let Some(message) = marked_user_message(peer_body, user_marker) {
-            return message;
-        }
-        return MessageKind::PeerIn {
-            session_id: session_id.to_owned(),
-            text: peer_body.to_owned(),
-        };
-    }
-
-    if let Some(message) = marked_user_message(text, user_marker) {
+    if let Some(message) = marked_or_peer_message(text, user_marker) {
         return message;
+    }
+
+    if let Some((tag, body)) = tagged {
+        return event(tag, body, record);
     }
 
     if record.get("type").and_then(Value::as_str) == Some("system") {
@@ -138,7 +113,7 @@ pub(super) fn classify_inbound(
             .to_owned();
         return MessageKind::PeerIn {
             session_id,
-            text: peer_transport_body(text).to_owned(),
+            text: peer_transport_body(text),
         };
     }
 
@@ -192,11 +167,13 @@ fn origin(record: &Value) -> Option<&Value> {
         .filter(|origin| !origin.is_null())
 }
 
-fn peer_transport_body(text: &str) -> &str {
-    let body = text
-        .strip_prefix(ANOTHER_PEER_SESSION_MESSAGE_PREFIX)
-        .unwrap_or(text);
-    without_peer_transport_notice(body)
+fn peer_transport_body(text: &str) -> String {
+    extract_peer_message(text, None).map_or_else(
+        || text.to_owned(),
+        |message| {
+            crate::commands::agent::peer_message::without_transport_notice(&message.body).to_owned()
+        },
+    )
 }
 
 fn event(tag: &str, body: &str, record: &Value) -> MessageKind {
@@ -365,39 +342,35 @@ fn is_hidden_legacy_row(record: &Value, text: &str) -> bool {
 }
 
 pub(super) fn marked_user_body(text: &str, marker: Option<&str>) -> Option<String> {
-    let marker = marker?;
-    if let Some(body) = crate::commands::agent::watch_web_user_marker::strip_message(marker, text) {
-        return Some(without_peer_transport_notice(body).to_owned());
-    }
-    if let Some((_, body)) = peer_message_parts(text)
-        && let Some(body) =
-            crate::commands::agent::watch_web_user_marker::strip_message(marker, body)
-    {
-        return Some(without_peer_transport_notice(body).to_owned());
-    }
-    let marker_offset = text.match_indices(marker).find_map(|(offset, _)| {
-        let prefix = &text[..offset];
-        (offset == 0 || prefix.ends_with('\n')).then_some(offset)
-    })?;
-    let marked_text = &text[marker_offset..];
-    if let Some(body) =
-        crate::commands::agent::watch_web_user_marker::strip_message(marker, marked_text)
-    {
-        return Some(without_peer_transport_notice(body).to_owned());
-    }
-    let body = marked_text.strip_prefix(marker)?.strip_prefix('\n')?;
-    Some(without_peer_transport_notice(body).to_owned())
+    let message = extract_peer_message(text, marker)?;
+    message.has_user_marker.then(|| {
+        crate::commands::agent::peer_message::without_transport_notice(&message.body).to_owned()
+    })
 }
 
-fn marked_user_message(text: &str, marker: Option<&str>) -> Option<MessageKind> {
-    let body = marked_user_body(text, marker)?;
+fn marked_or_peer_message(text: &str, marker: Option<&str>) -> Option<MessageKind> {
+    let message = extract_peer_message(text, marker)?;
+    if message.has_user_marker_in_body || (message.sender_id.is_none() && message.has_user_marker) {
+        return Some(marked_user_message_body(
+            crate::commands::agent::peer_message::without_transport_notice(&message.body)
+                .to_owned(),
+        ));
+    }
+    let session_id = message.sender_id?;
+    Some(MessageKind::PeerIn {
+        session_id,
+        text: message.body,
+    })
+}
+
+fn marked_user_message_body(body: String) -> MessageKind {
     match tagged_body(&body) {
-        Some((tag, event_body)) if is_watch_web_action_tag(tag) => Some(MessageKind::Event {
+        Some((tag, event_body)) if is_watch_web_action_tag(tag) => MessageKind::Event {
             kind: EventKind::Armyknife,
             text: one_line(event_body),
             failed: false,
-        }),
-        _ => Some(MessageKind::User { text: body }),
+        },
+        _ => MessageKind::User { text: body },
     }
 }
 
@@ -406,29 +379,6 @@ pub(super) fn is_watch_web_action_tag(tag: &str) -> bool {
         tag,
         "armyknife-todo-completed" | "armyknife-todo-rejected" | "armyknife-decision-change"
     )
-}
-
-fn without_peer_transport_notice(body: &str) -> &str {
-    body.rsplit_once(concat!("\n", "\n", "This came from another Claude session"))
-        .map_or(body, |(body, _)| body)
-}
-
-fn peer_message_parts(message: &str) -> Option<(&str, &str)> {
-    let envelope = message.split_once(PEER_MESSAGE_START_TAG)?.1;
-    let end = envelope.rfind(PEER_MESSAGE_END_MARKER)?;
-    let envelope = envelope[..end].strip_prefix('\n')?;
-    let (header, body) = envelope.split_once(concat!("\n", "\n"))?;
-    let mut header_lines = header.lines();
-    let sender_id = header_lines.next()?.strip_prefix("- From session_id: ")?;
-    if sender_id.is_empty()
-        || header_lines
-            .next()
-            .is_some_and(|line| !line.starts_with("- Sender engine: "))
-        || header_lines.next().is_some()
-    {
-        return None;
-    }
-    Some((sender_id, body))
 }
 
 #[cfg(test)]
@@ -471,6 +421,35 @@ mod tests {
         "#},
         None,
         MessageKind::PeerIn { session_id: "fixture-peer-id".to_owned(), text: "Continue the fictional task.".to_owned() }
+    )]
+    #[case::peer_context_remains_visible(
+        json!({"type":"user","origin":{"kind":"peer","from":"fixture-peer-id"}}),
+        indoc! {r#"
+            <peer-message>
+            - From session_id: fixture-peer-id
+
+            ping
+
+            <session-context>
+            - Working directory: /fictional/project
+            </session-context>
+
+            This came from another Claude session — synthetic transport notice.
+            </peer-message>
+        "#},
+        None,
+        MessageKind::PeerIn {
+            session_id: "fixture-peer-id".to_owned(),
+            text: indoc! {"
+                ping
+
+                <session-context>
+                - Working directory: /fictional/project
+                </session-context>
+
+                This came from another Claude session — synthetic transport notice.
+            "}.trim().to_owned(),
+        }
     )]
     #[case::subagent_handback_uses_report_text(
         json!({"type":"user","origin":{"kind":"peer","from":"fixture-agent-id","name":"general-purpose","handback":true,"handbackReportText":"The fictional task is complete."}}),

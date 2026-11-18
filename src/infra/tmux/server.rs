@@ -52,7 +52,10 @@ fn socket_command_args<S: AsRef<OsStr>>(socket_path: Option<&str>, args: &[S]) -
     full_args
 }
 
-fn run_tmux_for_socket<S: AsRef<OsStr>>(socket_path: Option<&str>, args: &[S]) -> Result<()> {
+pub(crate) fn run_tmux_for_socket<S: AsRef<OsStr>>(
+    socket_path: Option<&str>,
+    args: &[S],
+) -> Result<()> {
     run_tmux_output_for_socket(socket_path, args).map(|_| ())
 }
 
