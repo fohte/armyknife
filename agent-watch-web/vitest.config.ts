@@ -67,6 +67,7 @@ const appTestFiles = [
   'src/components/use-conversation-status-panel.test.tsx',
   'src/components/pull-request-list-panel.browser.test.tsx',
   'src/components/session-tree-panel.test.tsx',
+  'src/components/inbox-conversation-panes.test.tsx',
   'src/components/running-tasks-panel.test.tsx',
   'src/components/session-tasks-panel.test.tsx',
   'src/components/decision-card.test.tsx',
