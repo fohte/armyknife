@@ -58,14 +58,16 @@ function render(messages: readonly ChatItem[], isMobile = false) {
   })
 }
 
-function selectText(element: Element, rects?: readonly DOMRect[]) {
-  const textNode = element.firstChild
-  if (textNode === null || textNode.nodeType !== Node.TEXT_NODE) {
-    throw new Error('Expected a text node')
-  }
+function selectRange(
+  start: Node,
+  startOffset: number,
+  end: Node,
+  endOffset: number,
+  rects?: readonly DOMRect[],
+) {
   const range = document.createRange()
-  range.setStart(textNode, 0)
-  range.setEnd(textNode, textNode.textContent?.length ?? 0)
+  range.setStart(start, startOffset)
+  range.setEnd(end, endOffset)
   if (rects !== undefined) {
     Object.defineProperty(range, 'getClientRects', { value: () => rects })
   }
@@ -77,21 +79,12 @@ function selectText(element: Element, rects?: readonly DOMRect[]) {
   })
 }
 
-function selectRange(
-  start: Node,
-  startOffset: number,
-  end: Node,
-  endOffset: number,
-) {
-  const range = document.createRange()
-  range.setStart(start, startOffset)
-  range.setEnd(end, endOffset)
-  act(() => {
-    const selection = window.getSelection()
-    selection?.removeAllRanges()
-    selection?.addRange(range)
-    document.dispatchEvent(new Event('selectionchange'))
-  })
+function selectText(element: Element, rects?: readonly DOMRect[]) {
+  const textNode = element.firstChild
+  if (textNode === null || textNode.nodeType !== Node.TEXT_NODE) {
+    throw new Error('Expected a text node')
+  }
+  selectRange(textNode, 0, textNode, textNode.textContent?.length ?? 0, rects)
 }
 
 beforeEach(() => {
@@ -238,6 +231,30 @@ it('does not offer replies when selected text crosses assistant messages', () =>
     throw new Error('Expected assistant messages to contain text nodes')
   }
   selectRange(firstText, 0, secondText, 1)
+
+  expect(
+    container.querySelector('.conversation-selection-reply') !== null,
+  ).toBe(false)
+})
+
+it('does not offer replies when selected text crosses an intervening message', () => {
+  render([
+    { type: 'assistant', text: 'First assistant message' },
+    { type: 'user', text: 'Intervening user message' },
+    { type: 'assistant', text: 'Final assistant message' },
+  ])
+  const messageTexts = container.querySelectorAll('.chat-assistant-message p')
+  const firstText = requireElement(messageTexts.item(0)).firstChild
+  const finalText = requireElement(messageTexts.item(1)).firstChild
+  if (
+    firstText === null ||
+    firstText.nodeType !== Node.TEXT_NODE ||
+    finalText === null ||
+    finalText.nodeType !== Node.TEXT_NODE
+  ) {
+    throw new Error('Expected assistant messages to contain text nodes')
+  }
+  selectRange(firstText, 0, finalText, 0)
 
   expect(
     container.querySelector('.conversation-selection-reply') !== null,
