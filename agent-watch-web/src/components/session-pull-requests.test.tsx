@@ -104,6 +104,12 @@ it.each([
 
   const openSnapshot = () => ({
     expanded: trigger.getAttribute('aria-expanded'),
+    hasPullRequestIcon: trigger.querySelector('.session-pr-icon') !== null,
+    count: container.querySelector('.session-pr-count')?.textContent ?? null,
+    triggerSize: {
+      width: getComputedStyle(trigger).width,
+      height: getComputedStyle(trigger).height,
+    },
     dialogLabel:
       container.querySelector('[role="dialog"]')?.getAttribute('aria-label') ??
       null,
@@ -159,6 +165,11 @@ it.each([
   expect(snapshot()).toEqual({
     opened: {
       expanded: 'true',
+      hasPullRequestIcon: true,
+      count: '3',
+      triggerSize: isMobile
+        ? { width: '44px', height: '44px' }
+        : { width: '30px', height: '26px' },
       dialogLabel: 'Pull requests from this session',
       mobileModal: isMobile ? 'true' : null,
       groupNames: ['This branch', 'Opened elsewhere', 'Merged'],

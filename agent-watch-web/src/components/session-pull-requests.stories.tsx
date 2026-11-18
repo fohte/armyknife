@@ -69,7 +69,7 @@ export default meta
 type Story = StoryObj<typeof meta>
 
 export const OnePullRequestWithRunningChecks: Story = {
-  name: 'The header shows one open pull request with running checks',
+  name: 'The desktop header shows a compact icon for a pull request with running checks',
 }
 
 export const MorePullRequestsAreAvailable: Story = {
@@ -80,7 +80,7 @@ export const MorePullRequestsAreAvailable: Story = {
 }
 
 export const AllPullRequestsAreMerged: Story = {
-  name: 'The header dims its summary when all pull requests are merged',
+  name: 'The header dims the pull request icon when all pull requests are merged',
   args: {
     pullRequests: [
       { ...currentBranchPullRequest, state: 'Merged' },
@@ -124,12 +124,39 @@ export const CheckStatusIsUnknown: Story = {
   },
 }
 
+export const DesktopPullRequestListIsOpen: Story = {
+  name: 'The desktop header shows the existing pull request list',
+  args: {
+    pullRequests: [currentBranchPullRequest, ...otherPullRequests],
+    open: true,
+  },
+  decorators: [
+    (Story) => (
+      <div
+        style={{
+          minHeight: 460,
+          padding: 16,
+          background: 'var(--aw-bg-app)',
+          color: 'var(--aw-text-primary)',
+        }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
 export const MobilePullRequestSheetIsOpen: Story = {
   name: 'The mobile header opens the pull request list as a bottom sheet',
   args: {
     pullRequests: [currentBranchPullRequest, ...otherPullRequests],
     isMobile: true,
     open: true,
+    mobileAction: (
+      <button className="conversation-pr-merge-button" type="button">
+        Merge
+      </button>
+    ),
   },
   decorators: [
     (Story) => (
@@ -144,6 +171,32 @@ export const MobilePullRequestSheetIsOpen: Story = {
         }}
       >
         <Story />
+      </div>
+    ),
+  ],
+}
+
+export const MobileCompactHeaderButton: Story = {
+  name: 'The mobile header shows a compact pull request icon and total count',
+  args: {
+    pullRequests: [currentBranchPullRequest, ...otherPullRequests],
+    isMobile: true,
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="conversation-pane"
+        data-mobile="true"
+        style={{
+          position: 'relative',
+          height: 120,
+          background: 'var(--aw-bg-app)',
+          color: 'var(--aw-text-primary)',
+        }}
+      >
+        <div className="mobile-conversation-header-actions">
+          <Story />
+        </div>
       </div>
     ),
   ],

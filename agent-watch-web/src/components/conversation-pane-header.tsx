@@ -291,7 +291,7 @@ export function ConversationPaneHeader({
 
   return (
     <header
-      className={`conversation-header${isMobile && pullRequests.length > 0 ? ' has-session-prs' : ''}${isMobile && visibleMergeFeedback !== null ? ' has-session-pr-feedback' : ''}`}
+      className={`conversation-header${isMobile && visibleMergeFeedback !== null ? ' has-session-pr-feedback' : ''}`}
     >
       {isMobile ? (
         <>
@@ -342,6 +342,14 @@ export function ConversationPaneHeader({
                 <PanelRightOpen aria-hidden="true" size={18} />
               )}
             </Button>
+            <SessionPullRequests
+              pullRequests={pullRequests}
+              repo={session.repo}
+              isMobile
+              open={pullRequestListOpen}
+              {...(mergeAction === null ? {} : { mobileAction: mergeAction })}
+              onOpenChange={setPullRequestListOpen}
+            />
             <MobileConversationActionsMenu
               sessionId={session.id}
               isDone={session.category === 'done'}
@@ -368,14 +376,6 @@ export function ConversationPaneHeader({
             {session.task ? <span aria-hidden="true">·</span> : null}
             <span className="mobile-conversation-repo">{mobileRepoName}</span>
           </div>
-          <SessionPullRequests
-            pullRequests={pullRequests}
-            repo={session.repo}
-            isMobile
-            open={pullRequestListOpen}
-            {...(mergeAction === null ? {} : { mobileAction: mergeAction })}
-            onOpenChange={setPullRequestListOpen}
-          />
           {visibleMergeFeedback !== null ? (
             <PullRequestMergeFeedback
               kind={visibleMergeFeedback.kind}
