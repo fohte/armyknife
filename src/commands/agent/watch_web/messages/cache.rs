@@ -255,6 +255,7 @@ pub(super) struct CachedTranscriptParser {
 pub(super) struct TailWindowParserState {
     pub(super) cutoff: chrono::DateTime<chrono::Utc>,
     pub(super) prior_resolved_ids: Vec<i64>,
+    pub(super) message_limit: usize,
 }
 
 pub(super) enum IncrementalTranscriptParser {

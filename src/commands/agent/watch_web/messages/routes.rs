@@ -299,6 +299,7 @@ async fn get_messages(
     }
     let tail_window_limit = range.initial_tail_window_limit();
     let requested_epoch = range.requested_epoch().map(str::to_owned);
+    let older_page_limit = range.older_page_limit();
     let require_full_history = range.requires_full_history();
 
     match tokio::task::spawn_blocking(move || -> Result<Option<(
@@ -363,6 +364,7 @@ async fn get_messages(
                 |id| load_user_marker(id),
                 &loaders,
                 requested_epoch.as_deref(),
+                older_page_limit,
                 require_full_history,
             ),
         }?;

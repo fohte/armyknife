@@ -38,6 +38,7 @@ pub(super) fn load_conversation_with_queued_prompts(
         load_user_marker,
         loaders,
         None,
+        None,
         false,
     )
 }
@@ -48,6 +49,7 @@ pub(super) fn load_conversation_with_queued_prompts_for_range(
     load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
     loaders: &RouteLoaders,
     requested_epoch: Option<&str>,
+    older_page_limit: Option<usize>,
     require_full_history: bool,
 ) -> Result<Option<ConversationResponse>> {
     load_conversation_with_tail_window_and_marker_updates(
@@ -60,6 +62,7 @@ pub(super) fn load_conversation_with_queued_prompts_for_range(
             mark_resolved_queued_prompts: true,
             range: TranscriptRangeContext {
                 requested_epoch,
+                older_page_limit,
                 require_full_history,
             },
         },

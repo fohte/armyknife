@@ -8,7 +8,7 @@ use super::super::parser::cards::filter_additional_cards_after_tail_window;
 use super::super::{
     ChatItem, ConversationResponse, Engine, TranscriptInput, open_seekable_transcript,
 };
-use super::{TranscriptRangeContext, render_claude_parser};
+use super::{TranscriptRangeContext, cached_tail_window_message_limit, render_claude_parser};
 use crate::commands::agent::store::{AgentDecision, AgentTodo};
 
 pub(in crate::commands::agent::watch_web::messages) fn parse_initial_or_full<'a>(
@@ -49,10 +49,24 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_initial_or_full_for
             parse_session_transcript_tail_window(&input, limit, pending_task_ids, file_length)
                 .map(|parsed| parsed.map(|tail| InitialTranscriptParse::Tail(Box::new(tail))))
         }
-        (None, _) => Ok(None),
-        (Some(_), None) => Ok(None),
+        (None, Some(file_length)) if range.older_page_limit.is_some() => {
+            parse_older_page_tail_window(
+                session_id,
+                &input,
+                pending_task_ids,
+                file_length,
+                range,
+                cache,
+            )
+            .map(|parsed| parsed.map(|tail| InitialTranscriptParse::Tail(Box::new(tail))))
+        }
+        _ => Ok(None),
     };
     let parse_full = || {
+        let range = TranscriptRangeContext {
+            require_full_history: range.require_full_history || range.older_page_limit.is_some(),
+            ..range
+        };
         let result = if range.requested_epoch.is_none() && !range.require_full_history {
             super::parse_session_transcript_incrementally(
                 session_id,
@@ -95,6 +109,46 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_initial_or_full_for
             let (conversation, resolved_ids) = *full;
             Ok((conversation, resolved_ids, used_tail_window))
         }
+    }
+}
+
+fn parse_older_page_tail_window(
+    session_id: &str,
+    input: &TranscriptInput<'_>,
+    pending_task_ids: &[String],
+    file_length: u64,
+    range: TranscriptRangeContext<'_>,
+    cache: &MessageCache,
+) -> Result<Option<TailWindowParse>> {
+    let (Some(epoch), Some(page_limit), Some(cached_limit)) = (
+        range.requested_epoch,
+        range.older_page_limit,
+        cached_tail_window_message_limit(session_id, cache),
+    ) else {
+        return Ok(None);
+    };
+    if page_limit == 0 {
+        return Ok(None);
+    }
+
+    let mut message_limit = cached_limit.saturating_add(page_limit);
+    loop {
+        let Some(tail) = parse_session_transcript_tail_window(
+            input,
+            message_limit,
+            pending_task_ids,
+            file_length,
+        )?
+        else {
+            return Ok(None);
+        };
+        if tail.conversation.has_older_epoch_page(epoch, page_limit) {
+            return Ok(Some(tail));
+        }
+        let Some(next_limit) = message_limit.checked_add(page_limit) else {
+            return Ok(None);
+        };
+        message_limit = next_limit;
     }
 }
 
@@ -199,6 +253,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript_
     let state = TailWindowParserState {
         cutoff,
         prior_resolved_ids,
+        message_limit,
     };
     let (conversation, resolved_ids) = render_tail_window_parser(&parser, &state, input)?;
     // Branch filtering can leave older visible messages outside the selected suffix.
