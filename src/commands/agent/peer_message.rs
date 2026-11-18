@@ -230,7 +230,8 @@ mod tests {
     use rstest::rstest;
 
     use super::{
-        TaskNotificationEnvelope, extract_peer_message, is_peer_message, task_notification_envelope,
+        ExtractedPeerMessage, TaskNotificationEnvelope, extract_peer_message, is_peer_message,
+        task_notification_envelope,
     };
 
     #[test]
@@ -244,18 +245,32 @@ mod tests {
             <!-- armyknife-queued-prompt-id:fixture-message-7 -->
 
             This came from another Claude session — this is fictional transport guidance.
-        "};
+        "}
+        .trim_end();
 
         assert_eq!(
-            extract_peer_message(message, Some(marker)).map(|message| message.body),
-            Some(
-                indoc::indoc! {"
+            extract_peer_message(message, Some(marker)),
+            Some(ExtractedPeerMessage {
+                sender_id: None,
+                body: indoc::indoc! {"
                     Fixture request.
                     <!-- armyknife-queued-prompt-id:fixture-message-7 -->
                 "}
                 .trim_end()
                 .to_owned(),
-            ),
+                transport_notice_suffix: Some(
+                    indoc::indoc! {"
+
+
+                        This came from another Claude session — this is fictional transport guidance.
+                    "}
+                    .trim_end()
+                    .to_owned(),
+                ),
+                trailing_text: String::new(),
+                has_user_marker: true,
+                has_user_marker_in_body: true,
+            }),
         );
     }
 
