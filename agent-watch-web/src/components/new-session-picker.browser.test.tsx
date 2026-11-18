@@ -4,7 +4,10 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
 import { NewSessionPicker } from '#components/new-session-picker'
-import { exampleSessionDirectories } from '#new-session-story-fixtures.test'
+import {
+  exampleModelOptions,
+  exampleSessionDirectories,
+} from '#new-session-story-fixtures.test'
 import type { NewSessionState } from '#use-new-session'
 
 let container: HTMLDivElement
@@ -32,6 +35,13 @@ function PickerHarness({
     directories: exampleSessionDirectories,
     selectedDirectory,
     engine,
+    modelOptions: exampleModelOptions,
+    isLoadingModelOptions: false,
+    modelOptionsError: null,
+    selectedModel: null,
+    selectedEffort: null,
+    modelChangeNotice: null,
+    activeModelOption: exampleModelOptions.models[0],
     worktree,
     initialMessage: '',
     skillSuggestions: [],
@@ -41,6 +51,9 @@ function PickerHarness({
     setDirectoryQuery: () => undefined,
     chooseDirectory: setSelectedDirectory,
     setEngine,
+    chooseModel: () => undefined,
+    setSelectedEffort: () => undefined,
+    undoEngineChange: () => undefined,
     setWorktree,
     setInitialMessage: () => undefined,
     start,

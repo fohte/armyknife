@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 
 import {
   getSessionDirectories,
+  getSessionModelOptions,
   getSessionSkillSuggestions,
   launchSession,
 } from '#new-session-api'
@@ -72,6 +73,42 @@ it('loads skill suggestions for the selected engine and optional directory', asy
       ],
       ['/api/skill-suggestions?engine=codex'],
     ],
+  })
+})
+
+it('loads the model catalog for the selected engine', async () => {
+  const modelOptions = {
+    defaultModel: 'fixture-model-orbit',
+    defaultEffort: 'medium',
+    models: [
+      {
+        id: 'fixture-model-orbit',
+        label: 'Orbit',
+        defaultEffort: 'medium',
+        efforts: ['low', 'medium', 'high'],
+      },
+    ],
+  }
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+    new Response(JSON.stringify(modelOptions), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+  )
+  vi.stubGlobal('fetch', fetcher)
+
+  const result = await getSessionModelOptions('codex')
+
+  const snapshot = () => ({
+    result: result.match(
+      (value) => value,
+      (error) => error.message,
+    ),
+    requests: fetcher.mock.calls.map(([url]) => url),
+  })
+  expect(snapshot()).toEqual({
+    result: modelOptions,
+    requests: ['/api/model-options?engine=codex'],
   })
 })
 
@@ -158,4 +195,39 @@ it('includes the first message in the launch request', async () => {
       ],
     ],
   })
+})
+
+it('includes selected model and effort in the launch request', async () => {
+  const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+    new Response(JSON.stringify({ launchId: 'launch-fixture' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+  )
+  vi.stubGlobal('fetch', fetcher)
+
+  await launchSession({
+    directory: '/Users/example/work/service',
+    engine: 'codex',
+    worktree: false,
+    model: 'fixture-model-orbit',
+    reasoningEffort: 'xhigh',
+  })
+
+  expect(fetcher.mock.calls).toEqual([
+    [
+      '/api/sessions',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          directory: '/Users/example/work/service',
+          engine: 'codex',
+          worktree: false,
+          model: 'fixture-model-orbit',
+          reasoningEffort: 'xhigh',
+        }),
+      },
+    ],
+  ])
 })

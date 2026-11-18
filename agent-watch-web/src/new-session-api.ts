@@ -9,10 +9,25 @@ export type SessionDirectory = {
 
 export type SessionEngine = 'claude' | 'codex'
 
+export type SessionModelOption = {
+  id: string
+  label: string
+  defaultEffort: string | null
+  efforts: string[]
+}
+
+export type SessionModelOptions = {
+  defaultModel: string | null
+  defaultEffort: string | null
+  models: SessionModelOption[]
+}
+
 export type LaunchSessionRequest = {
   directory: string
   engine: SessionEngine
   worktree: boolean
+  model?: string
+  reasoningEffort?: string
   initialMessage?: string
 }
 
@@ -63,6 +78,27 @@ function isLaunchSessionResponse(
   return isRecord(value) && typeof value['launchId'] === 'string'
 }
 
+function isSessionModelOptions(value: unknown): value is SessionModelOptions {
+  return (
+    isRecord(value) &&
+    (typeof value['defaultModel'] === 'string' ||
+      value['defaultModel'] === null) &&
+    (typeof value['defaultEffort'] === 'string' ||
+      value['defaultEffort'] === null) &&
+    Array.isArray(value['models']) &&
+    value['models'].every(
+      (model) =>
+        isRecord(model) &&
+        typeof model['id'] === 'string' &&
+        typeof model['label'] === 'string' &&
+        (typeof model['defaultEffort'] === 'string' ||
+          model['defaultEffort'] === null) &&
+        Array.isArray(model['efforts']) &&
+        model['efforts'].every((effort) => typeof effort === 'string'),
+    )
+  )
+}
+
 export function getSessionDirectories(query: string) {
   const search = new URLSearchParams()
   if (query.length > 0) search.set('q', query)
@@ -84,10 +120,20 @@ export function getSessionSkillSuggestions(
   ).map(({ skills }) => skills)
 }
 
+export function getSessionModelOptions(engine: SessionEngine) {
+  const search = new URLSearchParams({ engine })
+  return requestJson(
+    `/api/model-options?${search.toString()}`,
+    isSessionModelOptions,
+  )
+}
+
 export function launchSession(request: LaunchSessionRequest) {
-  const { initialMessage, ...fields } = request
+  const { initialMessage, model, reasoningEffort, ...fields } = request
   const body = {
     ...fields,
+    ...(model === undefined ? {} : { model }),
+    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
     ...(initialMessage === undefined || initialMessage.trim().length === 0
       ? {}
       : { initialMessage }),

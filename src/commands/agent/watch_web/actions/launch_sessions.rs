@@ -8,7 +8,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::agent::new::{CommonNewArgs, NewArgs};
-use crate::commands::agent::types::Engine;
+use crate::commands::agent::types::{Engine, ReasoningEffort};
 use crate::commands::agent::watch_web::paths::normalize_directory;
 
 use super::ApiError;
@@ -46,6 +46,8 @@ struct LaunchRequest {
     directory: String,
     engine: String,
     worktree: bool,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
     initial_message: Option<String>,
 }
 
@@ -67,6 +69,12 @@ async fn launch_session(
         "codex" => Engine::Codex,
         _ => return Err(ApiError::bad_request("engine must be claude or codex")),
     };
+    let reasoning_effort = request
+        .reasoning_effort
+        .as_deref()
+        .map(parse_reasoning_effort)
+        .transpose()
+        .map_err(ApiError::bad_request)?;
     let launch_id = uuid::Uuid::new_v4().to_string();
     let initial_message = request
         .initial_message
@@ -89,11 +97,11 @@ async fn launch_session(
             label: None,
             kind: None,
             type_name: None,
-            model: None,
+            model: request.model,
             parent_session_id: None,
             repo: request.worktree.then_some(directory),
             engine: Some(engine),
-            reasoning_effort: None,
+            reasoning_effort,
         },
         skip_hooks: false,
         dry_run: false,
@@ -106,6 +114,17 @@ async fn launch_session(
         .map_err(ApiError::operation)?;
 
     Ok(Json(LaunchResponse { launch_id }))
+}
+
+fn parse_reasoning_effort(value: &str) -> Result<ReasoningEffort, String> {
+    match value {
+        "low" => Ok(ReasoningEffort::Low),
+        "medium" => Ok(ReasoningEffort::Medium),
+        "high" => Ok(ReasoningEffort::High),
+        "xhigh" => Ok(ReasoningEffort::XHigh),
+        "max" => Ok(ReasoningEffort::Max),
+        _ => Err("reasoningEffort must be low, medium, high, xhigh, or max".to_string()),
+    }
 }
 
 fn branch_name_for_time(now: chrono::DateTime<Utc>, launch_id: &str) -> String {
@@ -135,6 +154,8 @@ mod tests {
         exact_directory: Option<PathBuf>,
         engine: Option<Engine>,
         prompt: Option<String>,
+        model: Option<String>,
+        reasoning_effort: Option<ReasoningEffort>,
         worktree: Option<Option<String>>,
     }
 
@@ -146,6 +167,8 @@ mod tests {
                 exact_directory: args.common.watch_web_directory,
                 engine: args.common.engine,
                 prompt: args.common.prompt,
+                model: args.common.model,
+                reasoning_effort: args.common.reasoning_effort,
                 worktree: args.worktree,
             }
         }
@@ -203,8 +226,38 @@ mod tests {
                     exact_directory: Some(directory.path().canonicalize().unwrap()),
                     engine: Some(Engine::Codex),
                     prompt: Some("Inspect the fixture.".to_string()),
+                    model: None,
+                    reasoning_effort: None,
                     worktree: None,
                 },
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn forwards_selected_model_and_reasoning_effort_to_launch() {
+        let directory = tempfile::tempdir().unwrap();
+        let host = Arc::new(FakeLaunchHost::default());
+        let router = router_with_host(host.clone());
+        let (status, _) = request(
+            &router,
+            json!({
+                "directory": directory.path(),
+                "engine": "codex",
+                "worktree": false,
+                "model": "fixture-model",
+                "reasoningEffort": "xhigh",
+            }),
+        )
+        .await;
+        let args = LaunchCapture::from(host.calls.lock().unwrap().pop().unwrap());
+
+        assert_eq!(
+            (status, args.model, args.reasoning_effort),
+            (
+                StatusCode::OK,
+                Some("fixture-model".to_string()),
+                Some(ReasoningEffort::XHigh),
             ),
         );
     }
@@ -239,6 +292,8 @@ mod tests {
                 args.exact_directory,
                 args.engine,
                 args.prompt,
+                args.model,
+                args.reasoning_effort,
                 worktree,
             ),
             (
@@ -248,6 +303,8 @@ mod tests {
                 None,
                 Some(Engine::Claude),
                 None,
+                None,
+                None,
                 Some(Some(format!("watch-web-<timestamp>-{launch_id}"))),
             ),
         );
@@ -256,6 +313,7 @@ mod tests {
     #[rstest::rstest]
     #[case::unsupported_engine(json!({"directory":"/","engine":"shell","worktree":false}), StatusCode::BAD_REQUEST)]
     #[case::missing_directory(json!({"directory":"/missing-fixture-directory","engine":"claude","worktree":false}), StatusCode::BAD_REQUEST)]
+    #[case::unsupported_effort(json!({"directory":"/","engine":"claude","worktree":false,"reasoningEffort":"focused"}), StatusCode::BAD_REQUEST)]
     #[tokio::test]
     async fn rejects_invalid_engine_or_directory(
         #[case] body: Value,

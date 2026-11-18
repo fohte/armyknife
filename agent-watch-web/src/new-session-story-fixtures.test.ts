@@ -1,5 +1,24 @@
-import type { SessionDirectory } from '#new-session-api'
+import type { SessionDirectory, SessionModelOptions } from '#new-session-api'
 import type { NewSessionState } from '#use-new-session'
+
+export const exampleModelOptions: SessionModelOptions = {
+  defaultModel: 'fixture-model-orbit',
+  defaultEffort: 'medium',
+  models: [
+    {
+      id: 'fixture-model-orbit',
+      label: 'Orbit',
+      defaultEffort: 'medium',
+      efforts: ['low', 'medium', 'high'],
+    },
+    {
+      id: 'fixture-model-comet',
+      label: 'Comet',
+      defaultEffort: 'high',
+      efforts: ['low', 'high'],
+    },
+  ],
+}
 
 export const exampleSessionDirectories: SessionDirectory[] = [
   { path: '/Users/example/work/service', source: 'recent' },
@@ -15,6 +34,13 @@ export function createNewSessionStoryState(
     directories: exampleSessionDirectories,
     selectedDirectory: null,
     engine: 'claude',
+    modelOptions: exampleModelOptions,
+    isLoadingModelOptions: false,
+    modelOptionsError: null,
+    selectedModel: null,
+    selectedEffort: null,
+    modelChangeNotice: null,
+    activeModelOption: exampleModelOptions.models[0],
     worktree: false,
     initialMessage: '',
     skillSuggestions: [],
@@ -24,6 +50,9 @@ export function createNewSessionStoryState(
     setDirectoryQuery: () => undefined,
     chooseDirectory: () => undefined,
     setEngine: () => undefined,
+    chooseModel: () => undefined,
+    setSelectedEffort: () => undefined,
+    undoEngineChange: () => undefined,
     setWorktree: () => undefined,
     setInitialMessage: () => undefined,
     start: () => Promise.resolve(),

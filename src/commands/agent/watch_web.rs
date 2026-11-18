@@ -8,6 +8,7 @@ mod image_attachments;
 mod interrupted;
 mod limits;
 mod messages;
+mod model_options;
 mod paths;
 mod restart;
 mod review_document;
@@ -277,6 +278,7 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
         ))
         .merge(usage::router())
         .merge(directories::router())
+        .merge(model_options::router())
         .merge(events::router(enrichment_updates, restart_signal))
         .merge(messages::routes_with_proposals_and_peer_out_messages(
             load_session,

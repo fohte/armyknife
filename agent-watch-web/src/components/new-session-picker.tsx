@@ -1,6 +1,6 @@
 import '#components/new-session.css'
 
-import { Folder, GitBranch, X } from 'lucide-react'
+import { Cpu, Folder, GitBranch, X } from 'lucide-react'
 import {
   type KeyboardEvent as ReactKeyboardEvent,
   useEffect,
@@ -8,6 +8,7 @@ import {
   useState,
 } from 'react'
 
+import { NewSessionModelPicker } from '#components/new-session-model-picker'
 import { SessionDirectoryOptions } from '#components/session-directory-options'
 import type { NewSessionState } from '#use-new-session'
 
@@ -22,6 +23,7 @@ function isImeEnter(event: ReactKeyboardEvent) {
 type NewSessionPickerProps = {
   state: NewSessionState
   isMobile?: boolean
+  initialModelPickerOpen?: boolean
   launchPending?: boolean
   onClose: () => void
   onLaunched: (launchId: string) => void
@@ -30,11 +32,13 @@ type NewSessionPickerProps = {
 export function NewSessionPicker({
   state,
   isMobile = false,
+  initialModelPickerOpen = false,
   launchPending = false,
   onClose,
   onLaunched,
 }: NewSessionPickerProps) {
   const [activeIndex, setActiveIndex] = useState(0)
+  const [modelPickerOpen, setModelPickerOpen] = useState(initialModelPickerOpen)
   const firstMessageRef = useRef<HTMLInputElement>(null)
   const selectedDirectory = state.selectedDirectory
 
@@ -50,6 +54,49 @@ export function NewSessionPicker({
         className={`new-session-picker${isMobile ? ' is-mobile' : ''}`}
         onKeyDown={(event) => {
           if (isImeEnter(event)) return
+          if (modelPickerOpen) {
+            if (event.key === 'Escape' || event.key === 'Backspace') {
+              event.preventDefault()
+              setModelPickerOpen(false)
+              return
+            }
+            if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+              event.preventDefault()
+              const options = state.modelOptions?.models ?? []
+              const models = [null, ...options.map((model) => model.id)]
+              const currentIndex = models.indexOf(state.selectedModel)
+              const nextIndex =
+                (currentIndex +
+                  (event.key === 'ArrowDown' ? 1 : -1) +
+                  models.length) %
+                models.length
+              state.chooseModel(models[nextIndex] ?? null)
+              return
+            }
+            if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+              event.preventDefault()
+              const efforts = state.activeModelOption?.efforts ?? []
+              const currentIndex =
+                state.selectedEffort === null
+                  ? 0
+                  : efforts.indexOf(state.selectedEffort) + 1
+              const nextIndex = Math.max(
+                0,
+                Math.min(
+                  efforts.length,
+                  currentIndex + (event.key === 'ArrowRight' ? 1 : -1),
+                ),
+              )
+              state.setSelectedEffort(efforts[nextIndex - 1] ?? null)
+              return
+            }
+            if (event.key === 'Enter') {
+              if (event.target instanceof HTMLButtonElement) return
+              event.preventDefault()
+              setModelPickerOpen(false)
+              return
+            }
+          }
           if (
             event.key === 'Enter' &&
             event.target instanceof HTMLButtonElement
@@ -176,6 +223,21 @@ export function NewSessionPicker({
             onSelect={state.chooseDirectory}
             query={state.directoryQuery}
           />
+        ) : modelPickerOpen ? (
+          <NewSessionModelPicker
+            activeModelOption={state.activeModelOption}
+            engine={state.engine}
+            error={state.modelOptionsError}
+            isLoading={state.isLoadingModelOptions}
+            isOpen
+            onEffortChange={state.setSelectedEffort}
+            onModelChange={state.chooseModel}
+            onOpenChange={setModelPickerOpen}
+            options={state.modelOptions}
+            selectedEffort={state.selectedEffort}
+            selectedModel={state.selectedModel}
+            variant="palette"
+          />
         ) : (
           <div
             aria-label="Session options"
@@ -238,6 +300,27 @@ export function NewSessionPicker({
             </button>
             <h2>OPTIONS</h2>
             <button
+              aria-expanded={modelPickerOpen}
+              className="new-session-picker-option new-session-picker-model"
+              onClick={() => {
+                setModelPickerOpen(true)
+              }}
+              role="option"
+              type="button"
+            >
+              <Cpu aria-hidden="true" size={14} />
+              <span>Model · effort</span>
+              <kbd>
+                {state.selectedModel ??
+                  state.modelOptions?.defaultModel ??
+                  'default'}{' '}
+                ·{' '}
+                {state.selectedEffort ??
+                  state.activeModelOption?.defaultEffort ??
+                  'default'}
+              </kbd>
+            </button>
+            <button
               aria-pressed={state.worktree}
               className="new-session-picker-option new-session-picker-worktree"
               onClick={() => {
@@ -257,30 +340,11 @@ export function NewSessionPicker({
             ) : null}
           </div>
         )}
-        <footer className="new-session-picker-footer">
-          {isMobile ? (
-            <button
-              className="new-session-picker-start"
-              disabled={
-                selectedDirectory === null || state.isStarting || launchPending
-              }
-              onClick={() => {
-                if (!launchPending) void state.start(onLaunched, state.engine)
-              }}
-              type="button"
-            >
-              {state.isStarting || launchPending
-                ? 'Starting… Waiting for session'
-                : `Start with ${state.engine === 'claude' ? 'Claude Code' : 'Codex'}`}
-            </button>
-          ) : (
-            <>
-              <span>↑↓ Engine</span>
-              <span>⌥W Worktree</span>
-              <span>⌫ Change directory</span>
+        {modelPickerOpen ? null : (
+          <footer className="new-session-picker-footer">
+            {isMobile ? (
               <button
-                aria-label={`Start session with ${state.engine === 'claude' ? 'Claude Code' : 'Codex'}`}
-                className="new-session-picker-start new-session-picker-start-desktop"
+                className="new-session-picker-start"
                 disabled={
                   selectedDirectory === null ||
                   state.isStarting ||
@@ -291,18 +355,42 @@ export function NewSessionPicker({
                 }}
                 type="button"
               >
-                ↵ Start
+                {state.isStarting || launchPending
+                  ? 'Starting… Waiting for session'
+                  : `Start with ${state.engine === 'claude' ? 'Claude Code' : 'Codex'}`}
               </button>
-              <span className="new-session-picker-summary">
-                {launchPending
-                  ? 'Waiting for session feed…'
-                  : state.isStarting
-                    ? 'Starting session…'
-                    : `${state.engine} · ${selectedDirectory?.path ?? 'choose directory'}${state.worktree ? ' · new worktree' : ''}`}
-              </span>
-            </>
-          )}
-        </footer>
+            ) : (
+              <>
+                <span>↑↓ Engine / model</span>
+                <span>⌥W Worktree</span>
+                <span>⌫ Change directory</span>
+                <button
+                  aria-label={`Start session with ${state.engine === 'claude' ? 'Claude Code' : 'Codex'}`}
+                  className="new-session-picker-start new-session-picker-start-desktop"
+                  disabled={
+                    selectedDirectory === null ||
+                    state.isStarting ||
+                    launchPending
+                  }
+                  onClick={() => {
+                    if (!launchPending)
+                      void state.start(onLaunched, state.engine)
+                  }}
+                  type="button"
+                >
+                  ↵ Start
+                </button>
+                <span className="new-session-picker-summary">
+                  {launchPending
+                    ? 'Waiting for session feed…'
+                    : state.isStarting
+                      ? 'Starting session…'
+                      : `${state.engine} · ${selectedDirectory?.path ?? 'choose directory'}${state.worktree ? ' · new worktree' : ''}`}
+                </span>
+              </>
+            )}
+          </footer>
+        )}
       </section>
     </div>
   )

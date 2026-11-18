@@ -2,6 +2,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, expect, it, vi } from 'vitest'
 
+import { exampleModelOptions } from '#new-session-story-fixtures.test'
 import { type NewSessionState, useNewSession } from '#use-new-session'
 
 let container: HTMLDivElement
@@ -39,15 +40,23 @@ it('reloads skill suggestions when the selected engine and directory change', as
   document.body.append(container)
   const fetcher = vi.fn<typeof fetch>((input) => {
     const query = new URL(requestUrl(input), window.location.href).searchParams
+    const url = new URL(requestUrl(input), window.location.href)
     const engine = query.get('engine') ?? 'unknown'
     const directory = query.get('directory') ?? 'recent'
     return Promise.resolve(
       new Response(
-        JSON.stringify({
-          skills: [
-            { name: `${engine}-${directory}`, description: 'A fixture skill.' },
-          ],
-        }),
+        JSON.stringify(
+          url.pathname === '/api/model-options'
+            ? exampleModelOptions
+            : {
+                skills: [
+                  {
+                    name: `${engine}-${directory}`,
+                    description: 'A fixture skill.',
+                  },
+                ],
+              },
+        ),
         { status: 200, headers: { 'content-type': 'application/json' } },
       ),
     )
@@ -87,7 +96,9 @@ it('reloads skill suggestions when the selected engine and directory change', as
       },
     ],
     requests: [
+      '/api/model-options?engine=claude',
       '/api/skill-suggestions?engine=claude',
+      '/api/model-options?engine=codex',
       '/api/skill-suggestions?engine=codex',
       '/api/skill-suggestions?engine=codex&directory=%2Ffixture%2Fproject',
     ],
@@ -103,9 +114,18 @@ it('keeps the current suggestions when an earlier request resolves last', async 
     resolve: (response: Response) => void
   }[] = []
   const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.startsWith('/api/model-options')) {
+      return Promise.resolve(
+        new Response(JSON.stringify(exampleModelOptions), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+    }
     return new Promise((resolve) => {
       pendingRequests.push({
-        url: requestUrl(input),
+        url,
         resolve,
       })
     })
@@ -146,5 +166,123 @@ it('keeps the current suggestions when an earlier request resolves last', async 
       '/api/skill-suggestions?engine=claude',
       '/api/skill-suggestions?engine=codex',
     ],
+  })
+})
+
+it('forwards the selected model and effort when starting a session', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  container = document.createElement('div')
+  document.body.append(container)
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url === '/api/model-options?engine=claude') {
+      return Promise.resolve(
+        new Response(JSON.stringify(exampleModelOptions), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+    }
+    if (url.startsWith('/api/skill-suggestions')) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ skills: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+    }
+    return Promise.resolve(
+      new Response(JSON.stringify({ launchId: 'launch-fixture' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+
+  act(() => root?.render(<NewSessionHarness />))
+  await flushRequests()
+  act(() => {
+    currentState?.chooseDirectory({
+      path: '/fixture/project',
+      source: 'recent',
+    })
+    currentState?.chooseModel('fixture-model-orbit')
+    currentState?.setSelectedEffort('high')
+  })
+  await act(async () => {
+    await currentState?.start(() => undefined)
+  })
+
+  const launchRequest = fetcher.mock.calls.find(
+    ([input]) => requestUrl(input) === '/api/sessions',
+  )
+  expect(launchRequest?.[1]?.body).toBe(
+    JSON.stringify({
+      directory: '/fixture/project',
+      engine: 'claude',
+      worktree: false,
+      model: 'fixture-model-orbit',
+      reasoningEffort: 'high',
+    }),
+  )
+})
+
+it('falls back to the new engine default and keeps a supported effort', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  container = document.createElement('div')
+  document.body.append(container)
+  const codexOptions = {
+    defaultModel: 'fixture-model-codex',
+    defaultEffort: 'medium',
+    models: [
+      {
+        id: 'fixture-model-codex',
+        label: 'Codex fixture',
+        defaultEffort: 'medium',
+        efforts: ['medium', 'xhigh'],
+      },
+    ],
+  }
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    const options =
+      url === '/api/model-options?engine=codex'
+        ? codexOptions
+        : exampleModelOptions
+    return Promise.resolve(
+      new Response(
+        JSON.stringify(
+          url.startsWith('/api/skill-suggestions') ? { skills: [] } : options,
+        ),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    )
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+
+  act(() => root?.render(<NewSessionHarness />))
+  await flushRequests()
+  act(() => {
+    currentState?.chooseModel('fixture-model-comet')
+    currentState?.setSelectedEffort('xhigh')
+    currentState?.setEngine('codex')
+  })
+  await flushRequests()
+
+  const snapshot = () => ({
+    engine: currentState?.engine,
+    selectedModel: currentState?.selectedModel,
+    selectedEffort: currentState?.selectedEffort,
+    notice: currentState?.modelChangeNotice,
+  })
+  expect(snapshot()).toEqual({
+    engine: 'codex',
+    selectedModel: null,
+    selectedEffort: 'xhigh',
+    notice:
+      'Codex has no fixture-model-comet, so the model is back to the default. Effort stays xhigh.',
   })
 })

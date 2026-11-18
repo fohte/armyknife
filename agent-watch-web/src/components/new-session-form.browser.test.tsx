@@ -4,7 +4,10 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
 import { NewSessionForm } from '#components/new-session-form'
-import { exampleSessionDirectories } from '#new-session-story-fixtures.test'
+import {
+  exampleModelOptions,
+  exampleSessionDirectories,
+} from '#new-session-story-fixtures.test'
 import type { NewSessionState } from '#use-new-session'
 
 let container: HTMLDivElement
@@ -22,6 +25,13 @@ function makeState(overrides: Partial<NewSessionState> = {}): NewSessionState {
     directories: exampleSessionDirectories,
     selectedDirectory: null,
     engine: 'claude',
+    modelOptions: exampleModelOptions,
+    isLoadingModelOptions: false,
+    modelOptionsError: null,
+    selectedModel: null,
+    selectedEffort: null,
+    modelChangeNotice: null,
+    activeModelOption: exampleModelOptions.models[0],
     worktree: false,
     initialMessage: '',
     skillSuggestions: [],
@@ -31,6 +41,9 @@ function makeState(overrides: Partial<NewSessionState> = {}): NewSessionState {
     setDirectoryQuery: () => undefined,
     chooseDirectory: () => undefined,
     setEngine: () => undefined,
+    chooseModel: () => undefined,
+    setSelectedEffort: () => undefined,
+    undoEngineChange: () => undefined,
     setWorktree: () => undefined,
     setInitialMessage: () => undefined,
     start: () => Promise.resolve(),
@@ -134,6 +147,44 @@ it('opens directory suggestions and selects the clicked directory', async () => 
   })
 
   expect(chooseDirectory.mock.calls).toEqual([[exampleSessionDirectories[0]]])
+})
+
+it('selects a model and supported effort from the model chip', async () => {
+  const chooseModel = vi.fn()
+  const setSelectedEffort = vi.fn()
+  renderForm(
+    makeState({
+      chooseModel,
+      setSelectedEffort,
+    }),
+  )
+  await act(async () => {
+    await userEvent.click(
+      requireButton('[aria-label="Model and reasoning effort"]'),
+    )
+  })
+  const modelOption = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('.new-session-model-option'),
+  ).find((option) => option.textContent.includes('Comet'))
+  if (modelOption === undefined) throw new Error('Expected the Comet model')
+  const effortOption = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('.new-session-effort-option'),
+  ).find((option) => option.textContent === 'high')
+  if (effortOption === undefined) throw new Error('Expected high effort')
+
+  await act(async () => {
+    await userEvent.click(modelOption)
+    await userEvent.click(effortOption)
+  })
+
+  const snapshot = () => ({
+    modelCalls: chooseModel.mock.calls,
+    effortCalls: setSelectedEffort.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    modelCalls: [['fixture-model-comet']],
+    effortCalls: [['high']],
+  })
 })
 
 it('starts the session and reports the returned launch ID', async () => {

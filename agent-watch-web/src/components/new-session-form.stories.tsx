@@ -52,6 +52,37 @@ export const FirstMessageAndWorktreeAreSelected: Story = {
   },
 }
 
+export const ModelAndEffortPickerIsOpen: Story = {
+  name: 'The selected model shows its available effort levels',
+  args: {
+    initialModelPickerOpen: true,
+    state: createNewSessionStoryState({
+      selectedDirectory: exampleSessionDirectories[0] ?? null,
+      selectedModel: 'fixture-model-orbit',
+      selectedEffort: 'high',
+      activeModelOption: {
+        id: 'fixture-model-orbit',
+        label: 'Orbit',
+        defaultEffort: 'medium',
+        efforts: ['low', 'medium', 'high'],
+      },
+    }),
+  },
+}
+
+export const EngineSwitchResetsTheModelWithUndo: Story = {
+  name: 'An unavailable model returns to the engine default and can be restored',
+  args: {
+    state: createNewSessionStoryState({
+      selectedDirectory: exampleSessionDirectories[0] ?? null,
+      engine: 'codex',
+      modelChangeNotice:
+        'Codex has no fixture-model-comet, so the model is back to the default. Effort stays xhigh.',
+      selectedEffort: 'xhigh',
+    }),
+  },
+}
+
 export const SessionIsStarting: Story = {
   name: 'The form waits for the launched session to appear in the feed',
   args: {
