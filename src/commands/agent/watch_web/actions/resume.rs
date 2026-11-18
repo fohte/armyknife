@@ -7,8 +7,11 @@ use axum::Json;
 use axum::extract::{Path as RoutePath, State};
 use tokio::sync::Mutex;
 
-use super::super::super::types::{Session, SessionStatus};
-use super::{ActionState, ApiError, Success, load_session};
+use super::super::super::{
+    store,
+    types::{Session, SessionStatus},
+};
+use super::{ActionState, ApiError, Success, load_session, resolve_sessions_dir, run_blocking};
 use crate::infra::tmux::layout::ResumeLayoutSpec;
 use crate::shared::config::LayoutNode;
 
@@ -39,6 +42,7 @@ pub(super) fn resume_ended_session(
     let cwd = session.cwd.to_string_lossy();
     host.open_layout(ResumeLayoutSpec {
         session: &tmux_info.session_name,
+        agent_session_id: &session.session_id,
         cwd: cwd.as_ref(),
         window_name: &tmux_info.window_name,
         layout,
@@ -89,12 +93,27 @@ pub(super) async fn resume_session(
     State(state): State<ActionState>,
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Success>, ApiError> {
-    let lock = state.resume_locks.get_or_create(id.clone()).await;
+    let requested_session = load_session(state.clone(), id.clone()).await?;
+    let sessions_dir =
+        resolve_sessions_dir(state.sessions_dir.clone()).map_err(ApiError::internal)?;
+    let requested_id = id.clone();
+    let current_id =
+        run_blocking(move || store::resolve_current_session_id_from(&sessions_dir, &requested_id))
+            .await?;
+    let lock = state.resume_locks.get_or_create(current_id.clone()).await;
     let _guard = lock
         .try_lock_owned()
         .map_err(|_| ApiError::conflict("session resume is already in progress"))?;
-    let session = load_session(state.clone(), id.clone()).await?;
-    if state.resume_pending.is_pending(&id, session.status).await {
+    let session = if current_id == id {
+        requested_session
+    } else {
+        load_session(state.clone(), current_id.clone()).await?
+    };
+    if state
+        .resume_pending
+        .is_pending(&current_id, session.status)
+        .await
+    {
         return Err(ApiError::conflict("session resume is already in progress"));
     }
     if !matches!(session.status, SessionStatus::Ended | SessionStatus::Paused) {
@@ -106,7 +125,7 @@ pub(super) async fn resume_session(
         .await
         .map_err(ApiError::internal)?
         .map_err(ApiError::operation)?;
-    state.resume_pending.mark_pending(id).await;
+    state.resume_pending.mark_pending(current_id).await;
 
     Ok(Json(Success::new()))
 }
@@ -135,6 +154,7 @@ mod tests {
                 "kind": "layout",
                 "socketPath": spec.socket_path,
                 "sessionName": spec.session,
+                "agentSessionId": spec.agent_session_id,
                 "cwd": spec.cwd,
                 "windowName": spec.window_name,
                 "engine": spec.engine,
@@ -180,6 +200,7 @@ mod tests {
                 "kind": "layout",
                 "socketPath": "/fixture/tmux.sock",
                 "sessionName": "fixture-session-window",
+                "agentSessionId": "fixture-session",
                 "cwd": "/fixture/worktree",
                 "windowName": "fixture-agent",
                 "engine": "codex",

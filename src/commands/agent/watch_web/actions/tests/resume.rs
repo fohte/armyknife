@@ -6,6 +6,7 @@ use serde_json::json;
 use tower::ServiceExt;
 
 use super::{ActionContext, action_context, post_empty, response_snapshot, session};
+use crate::commands::agent::store;
 use crate::commands::agent::types::SessionStatus;
 
 #[rstest]
@@ -50,6 +51,38 @@ async fn resume_endpoint_rejects_sessions_that_are_not_ended_or_paused(
     let response = action_context
         .router()
         .oneshot(post_empty("/sessions/fixture-session/resume"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response_snapshot(response, &action_context).await,
+        json!({
+            "status": StatusCode::CONFLICT.as_u16(),
+            "body": { "error": "session is not ended or paused" },
+            "calls": [],
+        }),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn resume_endpoint_rejects_a_replaced_id_when_its_successor_is_active(
+    action_context: ActionContext,
+) {
+    let mut replaced = session("fixture-replaced");
+    replaced.status = SessionStatus::Ended;
+    let mut successor = session("fixture-successor");
+    successor.status = SessionStatus::Running;
+    store::save_rewind_sessions(
+        &action_context.temp_dir.path().join("sessions"),
+        &replaced,
+        &successor,
+    )
+    .unwrap();
+
+    let response = action_context
+        .router()
+        .oneshot(post_empty("/sessions/fixture-replaced/resume"))
         .await
         .unwrap();
 

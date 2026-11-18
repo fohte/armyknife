@@ -1,4 +1,4 @@
-use crate::commands::agent::types::Engine;
+use crate::commands::agent::types::{Engine, TMUX_SESSION_OPTION};
 use crate::shared::config::LayoutNode;
 
 use super::execution::execute_layout_for_socket;
@@ -9,6 +9,7 @@ use super::{
 /// Inputs for opening the configured layout around a resumed agent.
 pub struct ResumeLayoutSpec<'a> {
     pub session: &'a str,
+    pub agent_session_id: &'a str,
     pub cwd: &'a str,
     pub window_name: &'a str,
     pub layout: &'a LayoutNode,
@@ -53,6 +54,7 @@ fn build_resume_layout_with_executor(
 ) -> anyhow::Result<String> {
     let ResumeLayoutSpec {
         session,
+        agent_session_id,
         cwd,
         window_name,
         layout,
@@ -86,19 +88,38 @@ fn build_resume_layout_with_executor(
         background: true,
         restore_automatic_rename: false,
     });
-    let agent_command_slot = commands.iter_mut().find_map(|command| {
+    let agent_command_slot = commands.iter().enumerate().find_map(|(index, command)| {
         if command.args.first().map(String::as_str) != Some("send-keys") {
             return None;
         }
 
         let command_index = command.args.iter().position(|arg| arg == "--")? + 1;
         let pane_command = command.args.get(command_index)?;
-        is_engine_command(pane_command, engine).then_some((command, command_index))
+        if !is_engine_command(pane_command, engine) {
+            return None;
+        }
+
+        let target_index = command.args.iter().position(|arg| arg == "-t")? + 1;
+        let pane_target = command.args.get(target_index)?.clone();
+        Some((index, command_index, pane_target))
     });
-    let Some((command, command_index)) = agent_command_slot else {
+    let Some((agent_command_index, command_index, pane_target)) = agent_command_slot else {
         anyhow::bail!("tmux layout has no agent pane for {engine:?}");
     };
-    command.args[command_index] = agent_command.to_string();
+    commands[agent_command_index].args[command_index] = agent_command.to_string();
+    commands.insert(
+        agent_command_index,
+        TmuxCommand {
+            args: vec![
+                "set-option".to_string(),
+                "-p".to_string(),
+                "-t".to_string(),
+                pane_target,
+                TMUX_SESSION_OPTION.to_string(),
+                agent_session_id.to_string(),
+            ],
+        },
+    );
 
     executor.execute(&commands, session, window_name, socket_path)
 }
@@ -160,6 +181,7 @@ mod tests {
         let result = build_resume_layout_with_executor(
             ResumeLayoutSpec {
                 session: "fixture-session",
+                agent_session_id: "fixture-session",
                 cwd: "/fixture/worktree",
                 window_name: "fixture-agent",
                 layout: &layout,
@@ -185,6 +207,7 @@ mod tests {
                         ["send-keys", "-t", "fixture-session:=fixture-agent.1", "-l", "--", "nvim"],
                         ["send-keys", "-t", "fixture-session:=fixture-agent.1", "C-m"],
                         ["select-pane", "-t", "fixture-session:=fixture-agent.2"],
+                        ["set-option", "-p", "-t", "fixture-session:=fixture-agent.2", "@armyknife-last-agent-session-id", "fixture-session"],
                         ["send-keys", "-t", "fixture-session:=fixture-agent.2", "-l", "--", "a agent resume fixture-session --engine codex"],
                         ["send-keys", "-t", "fixture-session:=fixture-agent.2", "C-m"],
                         ["select-pane", "-t", "fixture-session:=fixture-agent.1"],
@@ -205,6 +228,7 @@ mod tests {
         let result = build_resume_layout_with_executor(
             ResumeLayoutSpec {
                 session: "fixture-session",
+                agent_session_id: "fixture-session",
                 cwd: "/fixture/worktree",
                 window_name: "fixture-agent",
                 layout: &layout,
@@ -230,6 +254,7 @@ mod tests {
                         ["send-keys", "-t", "fixture-session:=fixture-agent.1", "-l", "--", "nvim"],
                         ["send-keys", "-t", "fixture-session:=fixture-agent.1", "C-m"],
                         ["select-pane", "-t", "fixture-session:=fixture-agent.2"],
+                        ["set-option", "-p", "-t", "fixture-session:=fixture-agent.2", "@armyknife-last-agent-session-id", "fixture-session"],
                         ["send-keys", "-t", "fixture-session:=fixture-agent.2", "-l", "--", "a agent resume fixture-session --engine codex"],
                         ["send-keys", "-t", "fixture-session:=fixture-agent.2", "C-m"],
                         ["select-pane", "-t", "fixture-session:=fixture-agent.2"],
