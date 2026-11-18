@@ -1184,7 +1184,7 @@ When `tq` isn't on `PATH`, or the command fails, rows keep task associations fro
 
 Press `t` to open the selected session's linked task in the browser (no-op if the session has no linked task).
 
-armyknife distinguishes a `Paused` session (auto-paused by `a agent sweep`, resumable) from an `Ended` one (the user exited; gone for good) -- tq's own hooks see both as the same `SessionEnd` event. Claude Code `SessionEnd`, Codex exits through `a agent codex` or `a agent resume`, explicit close with `a agent close` or watch-web (including paused sessions), and thread takeovers can transition sessions to `Ended`. Codex `SessionEnd` keeps an existing `Paused` session paused, records a sweep-signaled shutdown as `Paused`, and otherwise records `Stopped` because a daemon restart also triggers it. Ended sessions are archived by a detached `a agent archive-tq-session-detached --session <id>` worker. Archiving is best-effort and never blocks session shutdown; failures are logged and ignored. This requires a tq CLI that supports `tq session archive`.
+armyknife distinguishes a `Paused` session (auto-paused by `a agent sweep`, resumable) from an `Ended` one (the agent exited; watch-web can resume it from the saved session ID) -- tq's own hooks see both as the same `SessionEnd` event. Claude Code `SessionEnd`, Codex exits through `a agent codex` or `a agent resume`, explicit close with `a agent close` or watch-web (including paused sessions), and thread takeovers can transition sessions to `Ended`. Codex `SessionEnd` keeps an existing `Paused` session paused, records a sweep-signaled shutdown as `Paused`, and otherwise records `Stopped` because a daemon restart also triggers it. Ended sessions are archived by a detached `a agent archive-tq-session-detached --session <id>` worker. Archiving is best-effort and never blocks session shutdown; failures are logged and ignored. This requires a tq CLI that supports `tq session archive`.
 
 #### Environment Variables
 
@@ -1234,6 +1234,7 @@ Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` on
 - `POST /api/sessions/{id}/permission/approve` with `{"requestId":"..."}`
 - `POST /api/sessions/{id}/permission/reject` with `{"requestId":"..."}`
 - `POST /api/sessions/{id}/permission-denials/{seq}/retry` sends a one-time approval message for a classifier denial; denials without a classifier verdict cannot be retried
+- `POST /api/sessions/{id}/resume` resumes an ended session in a new tmux window or respawns a paused session in its existing pane
 - `POST /api/sessions/{id}/interrupt`
 - `POST /api/sessions/{id}/focus`
 - `POST /api/sessions/{id}/read`

@@ -2,21 +2,14 @@ import '#components/conversation-pane.css'
 import '#components/conversation-pane-view.css'
 
 import { Button } from '@fohte/ui/button'
-import {
-  type KeyboardEvent as ReactKeyboardEvent,
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react'
+import { type ReactNode, useCallback, useMemo, useRef, useState } from 'react'
 
 import { useAgentUsageContext } from '#components/agent-usage-context'
 import { ConversationPaneHeader } from '#components/conversation-pane-header'
 import { ConversationSelectionReply } from '#components/conversation-selection-reply'
 import { ConversationStatusBand } from '#components/conversation-status-band'
 import { getConversationStatusBandState } from '#components/conversation-status-band-state'
+import { EndedSessionBanner } from '#components/ended-session-banner'
 import { MarkdownCommandContextProvider } from '#components/markdown-command-context'
 import { MessageComposer } from '#components/message-composer'
 import type {
@@ -29,9 +22,11 @@ import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
 import { useConversationFileDrop } from '#components/use-conversation-file-drop'
 import { useConversationMessageElements } from '#components/use-conversation-message-elements'
+import { useConversationPaneKeyboard } from '#components/use-conversation-pane-keyboard'
 import { useConversationScroll } from '#components/use-conversation-scroll'
 import { useConversationSelectionReply } from '#components/use-conversation-selection-reply'
 import { useOwnMessageKeyboardNavigation } from '#components/use-own-message-keyboard-navigation'
+import { useSessionResume } from '#components/use-session-resume'
 import { useSessionLinkTargets } from '#session-link-targets'
 import type {
   BackgroundTask,
@@ -142,17 +137,17 @@ export function ConversationPaneView({
   onToggleToday,
 }: ConversationPaneViewProps) {
   const { usage } = useAgentUsageContext()
-  const endedTime = formatEndedTime(session.updatedAt)
   const sessionUsage =
     usage?.sessions.find((entry) => entry.sessionId === session.id) ?? null
   const interruptInFlight = useRef(false)
   const [isInterrupting, setIsInterrupting] = useState(false)
-  const [resumeRequested, setResumeRequested] = useState(false)
   const isEnded = actions?.message === false
-  const isResumePending = isEnded && (isResuming || resumeRequested)
-  useEffect(() => {
-    if (!isEnded) setResumeRequested(false)
-  }, [isEnded, session.id])
+  const { isPending: isResumePending, resume } = useSessionResume(
+    session.id,
+    isEnded,
+    isResuming,
+    onAction,
+  )
   const currentDate = new Date()
   const currentYear = currentDate.getFullYear()
   const currentMonth = currentDate.getMonth()
@@ -293,18 +288,6 @@ export function ConversationPaneView({
     }
     void onAction('interrupt').then(finish, finish)
   }, [actions?.interrupt, onAction])
-  const resume = useCallback(() => {
-    if (isResumePending) return
-    setResumeRequested(true)
-    void onAction('resume').then(
-      (success) => {
-        if (!success) setResumeRequested(false)
-      },
-      () => {
-        setResumeRequested(false)
-      },
-    )
-  }, [isResumePending, onAction])
   const {
     isFileDragActive,
     handleDragEnter,
@@ -313,46 +296,14 @@ export function ConversationPaneView({
     handleDrop,
   } = useConversationFileDrop(handlePasteFiles)
 
-  const onComposerKeyDown = (
-    event: ReactKeyboardEvent<HTMLTextAreaElement>,
-  ) => {
-    if (
-      event.nativeEvent.isComposing ||
-      Reflect.get(event.nativeEvent, 'keyCode') === 229
-    ) {
-      return
-    }
-    if (
-      event.key === 'Escape' &&
-      actions?.interrupt === true &&
-      !interruptPending
-    ) {
-      event.preventDefault()
-      interrupt()
-      return
-    }
-    if (event.key === 'Enter' && !isMobile && event.altKey && !event.shiftKey) {
-      event.preventDefault()
-      const textarea = event.currentTarget
-      textarea.setRangeText(
-        '\n',
-        textarea.selectionStart,
-        textarea.selectionEnd,
-        'end',
-      )
-      updateDraft(textarea.value)
-      return
-    }
-    if (
-      event.key === 'Enter' &&
-      !isMobile &&
-      !event.shiftKey &&
-      !event.altKey
-    ) {
-      event.preventDefault()
-      void sendMessage()
-    }
-  }
+  const onComposerKeyDown = useConversationPaneKeyboard({
+    isMobile,
+    canInterrupt: actions?.interrupt === true,
+    interruptPending,
+    interrupt,
+    updateDraft,
+    sendMessage,
+  })
 
   const conversationPane = (
     <section
@@ -429,37 +380,13 @@ export function ConversationPaneView({
       </div>
 
       {isEnded ? (
-        <div className="conversation-ended" role="status">
-          <span className="conversation-ended-dot" aria-hidden="true" />
-          <span className="conversation-ended-copy">
-            <span className="conversation-ended-title">
-              This session has ended
-            </span>
-            {endedTime === null ? null : (
-              <span className="conversation-ended-time">
-                {' · '}
-                <time dateTime={session.updatedAt}>{endedTime}</time>
-              </span>
-            )}
-            {isMobile ? null : (
-              <span className="conversation-ended-hint">
-                {' · Resume it to keep talking'}
-              </span>
-            )}
-          </span>
-          <Button
-            className="conversation-ended-resume"
-            type="button"
-            disabled={isResumePending}
-            onClick={resume}
-          >
-            {isResumePending
-              ? 'Resuming…'
-              : isMobile
-                ? 'Resume session'
-                : 'Resume'}
-          </Button>
-        </div>
+        <EndedSessionBanner
+          endedAt={session.updatedAt}
+          isMobile={isMobile}
+          isResuming={isResumePending}
+          canResume={actions.resume !== false}
+          onResume={resume}
+        />
       ) : (
         <>
           <ConversationStatusBand
@@ -537,15 +464,4 @@ export function ConversationPaneView({
       {conversationPane}
     </SessionLinkElapsedSecondsContext.Provider>
   )
-}
-
-function formatEndedTime(updatedAt?: string) {
-  if (updatedAt === undefined) return null
-  const date = new Date(updatedAt)
-  if (Number.isNaN(date.getTime())) return null
-  return new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).format(date)
 }

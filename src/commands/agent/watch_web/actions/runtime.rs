@@ -15,23 +15,7 @@ impl ActionRuntime for LiveActionRuntime {
                 crate::commands::agent::resume::respawn_paused_session(session)?;
             }
             crate::commands::agent::types::SessionStatus::Ended => {
-                let tmux_info = session
-                    .tmux_info
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("session has no tmux location"))?;
-                let command =
-                    crate::commands::agent::resurrect::resume_command_for_session(session);
-                let pane_id = crate::infra::tmux::new_window_for_socket(
-                    tmux_info.socket_path.as_deref(),
-                    &tmux_info.session_name,
-                    &session.cwd,
-                    &tmux_info.window_name,
-                )?;
-                crate::infra::tmux::send_keys_sequence_for_socket(
-                    tmux_info.socket_path.as_deref(),
-                    &pane_id,
-                    &[&command, "Enter"],
-                )?;
+                super::resume::resume_ended_session(session, &super::resume::TmuxEndedSessionHost)?;
             }
             _ => anyhow::bail!("session is not ended or paused"),
         }

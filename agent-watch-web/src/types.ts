@@ -332,6 +332,7 @@ export type ConversationResponse = {
 export type SessionActions = {
   message: boolean
   answerQuestion: boolean
+  resume?: boolean
   permission?: { approve: boolean; reject: boolean }
   interrupt: boolean
   openInTerminal: boolean

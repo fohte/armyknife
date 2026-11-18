@@ -45,6 +45,7 @@ const endedActions: SessionActions = {
   ...actions,
   message: false,
   answerQuestion: false,
+  resume: true,
   interrupt: false,
 }
 

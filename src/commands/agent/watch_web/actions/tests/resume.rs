@@ -1,3 +1,5 @@
+use axum::body::Body;
+use axum::http::Request;
 use axum::http::StatusCode;
 use rstest::rstest;
 use serde_json::json;
@@ -56,6 +58,87 @@ async fn resume_endpoint_rejects_sessions_that_are_not_ended_or_paused(
         json!({
             "status": StatusCode::CONFLICT.as_u16(),
             "body": { "error": "session is not ended or paused" },
+            "calls": [],
+        }),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn resume_endpoint_rejects_a_second_request_until_the_session_starts(
+    action_context: ActionContext,
+) {
+    let mut session = session("fixture-session");
+    session.status = SessionStatus::Ended;
+    action_context.save_session(&session);
+    let app = action_context.router();
+
+    let first = app
+        .clone()
+        .oneshot(post_empty("/sessions/fixture-session/resume"))
+        .await
+        .unwrap();
+    let second = app
+        .oneshot(post_empty("/sessions/fixture-session/resume"))
+        .await
+        .unwrap();
+
+    let calls = json!([{
+        "kind": "resume",
+        "sessionId": "fixture-session",
+        "status": SessionStatus::Ended,
+    }]);
+    assert_eq!(
+        (
+            response_snapshot(first, &action_context).await,
+            response_snapshot(second, &action_context).await,
+        ),
+        (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": calls.clone(),
+            }),
+            json!({
+                "status": StatusCode::CONFLICT.as_u16(),
+                "body": { "error": "session resume is already in progress" },
+                "calls": calls,
+            }),
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn ended_session_without_tmux_location_cannot_be_resumed(action_context: ActionContext) {
+    let mut session = session("fixture-session");
+    session.status = SessionStatus::Ended;
+    session.tmux_info = None;
+    action_context.save_session(&session);
+
+    let response = action_context
+        .router()
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/fixture-session/actions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response_snapshot(response, &action_context).await,
+        json!({
+            "status": StatusCode::OK.as_u16(),
+            "body": {
+                "message": false,
+                "answerQuestion": false,
+                "resume": false,
+                "interrupt": false,
+                "openInTerminal": false,
+                "rewind": false,
+            },
             "calls": [],
         }),
     );
