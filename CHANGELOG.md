@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.785](https://github.com/fohte/armyknife/compare/v0.1.784...v0.1.785) (2026-11-18)
+
+
+### Bug Fixes
+
+* **watch-web:** quote final assistant lines ([#1956](https://github.com/fohte/armyknife/issues/1956)) ([3397626](https://github.com/fohte/armyknife/commit/33976261ed3d12ec944d5eeafc7d567499f176b8))
+
 ## [0.1.784](https://github.com/fohte/armyknife/compare/v0.1.783...v0.1.784) (2026-11-18)
 
 
