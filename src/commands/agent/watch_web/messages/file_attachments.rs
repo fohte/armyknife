@@ -41,6 +41,7 @@ pub(super) fn merge_stored_files(
                         storage_root,
                     ),
                     caption,
+                    origin: super::FileAttachmentOrigin::Stored,
                     timestamp: Some(created_at.to_rfc3339()),
                 },
             )

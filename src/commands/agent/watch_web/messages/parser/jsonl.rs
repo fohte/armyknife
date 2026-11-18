@@ -6,6 +6,10 @@ pub(super) struct JsonlLineBuffer {
 }
 
 impl JsonlLineBuffer {
+    pub(super) fn with_pending(pending: Vec<u8>) -> Self {
+        Self { pending }
+    }
+
     pub(super) fn feed(&mut self, bytes: &[u8], mut visit: impl FnMut(&[u8])) {
         self.pending.extend_from_slice(bytes);
         let mut start = 0;

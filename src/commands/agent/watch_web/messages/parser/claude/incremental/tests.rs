@@ -1,4 +1,4 @@
-use std::io::{self, BufReader, Cursor, Read, Seek, SeekFrom};
+use std::io::{self, BufRead, BufReader, Cursor, Read, Seek, SeekFrom};
 
 use chrono::{DateTime, TimeZone, Utc};
 use indoc::indoc;
@@ -17,6 +17,22 @@ use crate::commands::agent::watch_web::messages::incremental::{
 
 fn fixed_time() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).single().unwrap()
+}
+
+fn tail_window_parser(
+    mut reader: impl BufRead + Seek,
+    message_limit: usize,
+    pending_task_ids: &[String],
+) -> io::Result<Option<IncrementalClaudeParser>> {
+    let file_length = reader.seek(SeekFrom::End(0))?;
+    reader.seek(SeekFrom::Start(0))?;
+    IncrementalClaudeParser::new_tail_window_with_length(
+        reader,
+        None,
+        message_limit,
+        pending_task_ids,
+        file_length,
+    )
 }
 
 fn empty_additions() -> ParserAdditions<'static> {
@@ -629,17 +645,128 @@ fn tail_window_matches_the_full_parse_after_a_compact_boundary_with_a_missing_pa
     let transcript = records.join("\n");
     let additions = empty_additions();
     let expected = parse_all(transcript.as_bytes(), additions);
-    let actual = IncrementalClaudeParser::new_tail_window(
-        Cursor::new(transcript.as_bytes()),
-        None,
-        100,
-        &[],
-    )
-    .unwrap()
-    .unwrap()
-    .render_with(fixed_time(), additions)
-    .unwrap();
+    let actual = tail_window_parser(Cursor::new(transcript.as_bytes()), 100, &[])
+        .unwrap()
+        .unwrap()
+        .render_with(fixed_time(), additions)
+        .unwrap();
     assert_eq!(last_messages(actual, 100), last_messages(expected, 100));
+}
+
+#[test]
+fn tail_window_preserves_an_initial_incomplete_jsonl_row_after_append() {
+    let padding = serde_json::json!({
+        "fixturePadding": "x".repeat(5 * 1024 * 1024),
+    })
+    .to_string();
+    let mut records = vec![padding];
+    let mut parent_uuid = None;
+    for index in 0..120 {
+        let uuid = format!("fixture-message-{index}");
+        records.push(
+            serde_json::json!({
+                "type": "user",
+                "uuid": uuid,
+                "parentUuid": parent_uuid,
+                "timestamp": "2026-01-01T00:00:01Z",
+                "message": {"content": format!("Fixture request {index}.")},
+            })
+            .to_string(),
+        );
+        parent_uuid = Some(uuid);
+    }
+    let appended_line = serde_json::json!({
+        "type": "user",
+        "uuid": "fixture-appended-message",
+        "parentUuid": parent_uuid,
+        "timestamp": "2026-01-01T00:00:02Z",
+        "message": {"content": "The fixture row completes after initialization."},
+    })
+    .to_string();
+    let split_at = appended_line.len() / 2;
+    let initial_transcript = format!("{}\n{}", records.join("\n"), &appended_line[..split_at]);
+    let appended_suffix = format!("{}\n", &appended_line[split_at..]);
+    let complete_transcript = format!("{initial_transcript}{appended_suffix}");
+    let mut parser = tail_window_parser(Cursor::new(initial_transcript.as_bytes()), 100, &[])
+        .unwrap()
+        .unwrap();
+    let append_result = parser
+        .append_bytes(appended_suffix.as_bytes(), fixed_time())
+        .unwrap();
+    let actual = parser.render_with(fixed_time(), empty_additions()).unwrap();
+    let mut expected = parse_all(complete_transcript.as_bytes(), empty_additions());
+    expected.0 = expected.0.into_iter().skip(20).collect();
+
+    assert_eq!(
+        (append_result, actual),
+        (IncrementalAppend::Applied, expected)
+    );
+}
+
+#[test]
+fn tail_window_uses_an_unterminated_record_to_select_the_active_branch() {
+    let padding = serde_json::json!({
+        "type": "system",
+        "padding": "x".repeat(5 * 1024 * 1024),
+    });
+    let mut records = vec![
+        serde_json::json!({
+            "type": "user",
+            "uuid": "fixture-root",
+            "parentUuid": null,
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {"content": "Fixture root."},
+        }),
+        padding,
+    ];
+    let mut parent_uuid = "fixture-root".to_owned();
+    for index in 0..120 {
+        let uuid = format!("fixture-old-branch-{index}");
+        records.push(serde_json::json!({
+            "type": "user",
+            "uuid": uuid,
+            "parentUuid": parent_uuid,
+            "timestamp": format!("2026-01-01T00:00:{:02}Z", index % 60),
+            "message": {"content": format!("Abandoned fixture message {index}.")},
+        }));
+        parent_uuid = uuid;
+    }
+    let transcript = records
+        .iter()
+        .map(serde_json::Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let pending_branch_switch = serde_json::json!({
+        "type": "user",
+        "uuid": "fixture-current-branch",
+        "parentUuid": "fixture-root",
+        "timestamp": "2026-01-01T00:01:00Z",
+        "message": {"content": "Current fixture branch."},
+    })
+    .to_string();
+    let initial_transcript = format!("{transcript}\n{pending_branch_switch}");
+    let additions = empty_additions();
+    let actual = tail_window_parser(Cursor::new(initial_transcript.as_bytes()), 100, &[])
+        .unwrap()
+        .unwrap()
+        .render_with(fixed_time(), additions)
+        .unwrap();
+
+    assert_eq!(
+        actual,
+        (
+            vec![ChatItem::User {
+                text: "Current fixture branch.".to_owned(),
+                rewind_id: Some("fixture-current-branch".to_owned()),
+                queued_prompt_id: None,
+                timestamp: Some("2026-01-01T00:01:00+00:00".to_owned()),
+                from: None,
+            }],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ),
+    );
 }
 
 #[test]
@@ -702,12 +829,11 @@ fn tail_window_excludes_an_abandoned_branch_whose_parent_is_outside_the_window()
     let additions = empty_additions();
     let mut expected = parse_all(transcript.as_bytes(), additions);
     expected.0 = expected.0.into_iter().skip(1).collect();
-    let actual =
-        IncrementalClaudeParser::new_tail_window(Cursor::new(transcript.as_bytes()), None, 3, &[])
-            .unwrap()
-            .unwrap()
-            .render_with(fixed_time(), additions)
-            .unwrap();
+    let actual = tail_window_parser(Cursor::new(transcript.as_bytes()), 3, &[])
+        .unwrap()
+        .unwrap()
+        .render_with(fixed_time(), additions)
+        .unwrap();
 
     assert_eq!(actual, expected);
 }
@@ -719,14 +845,9 @@ fn tail_window_matches_the_full_parse_when_the_prefix_exceeds_the_search_limit(
     let additions = empty_additions();
     let reference_transcript = prefix_beyond_search_limit.reference_transcript();
     let expected = parse_all(&reference_transcript, additions);
-    let tail_parser = IncrementalClaudeParser::new_tail_window(
-        prefix_beyond_search_limit.reader(),
-        None,
-        100,
-        &[],
-    )
-    .unwrap()
-    .unwrap();
+    let tail_parser = tail_window_parser(prefix_beyond_search_limit.reader(), 100, &[])
+        .unwrap()
+        .unwrap();
     let prefix_length = tail_parser.tail_window_start_offset().unwrap();
     let actual = tail_parser.render_with(fixed_time(), additions).unwrap();
     assert_eq!(
@@ -743,14 +864,9 @@ fn queued_prompt_resolution_scans_a_prefix_over_the_search_limit(
     prefix_beyond_search_limit: PrefixBeyondSearchLimit,
 ) {
     let user_marker = "⟦armyknife-user:fixture-marker-cyan⟧";
-    let tail_parser = IncrementalClaudeParser::new_tail_window(
-        prefix_beyond_search_limit.reader(),
-        None,
-        100,
-        &[],
-    )
-    .unwrap()
-    .unwrap();
+    let tail_parser = tail_window_parser(prefix_beyond_search_limit.reader(), 100, &[])
+        .unwrap()
+        .unwrap();
     let prefix_length = tail_parser.tail_window_start_offset().unwrap();
     let queued_prompt = saved_queued_prompt();
     let mut reader = prefix_beyond_search_limit.reader();
@@ -784,12 +900,11 @@ fn tail_window_matches_the_full_parse_when_an_attachment_follows_tool_results() 
     "#};
     let additions = empty_additions();
     let expected = parse_all(transcript.as_bytes(), additions);
-    let actual =
-        IncrementalClaudeParser::new_tail_window(Cursor::new(transcript.as_bytes()), None, 2, &[])
-            .unwrap()
-            .unwrap()
-            .render_with(fixed_time(), additions)
-            .unwrap();
+    let actual = tail_window_parser(Cursor::new(transcript.as_bytes()), 2, &[])
+        .unwrap()
+        .unwrap()
+        .render_with(fixed_time(), additions)
+        .unwrap();
     assert_eq!(last_messages(actual, 2), last_messages(expected, 2));
 }
 
@@ -810,9 +925,8 @@ fn tail_window_restores_an_older_pending_task_start() {
     let transcript = [prefix, &padded_record, suffix].join("\n");
     let additions = empty_additions();
     let expected = parse_all(transcript.as_bytes(), additions);
-    let actual = IncrementalClaudeParser::new_tail_window(
+    let actual = tail_window_parser(
         Cursor::new(transcript.as_bytes()),
-        None,
         1,
         &["fixture-task-id".to_owned()],
     )
@@ -889,9 +1003,8 @@ fn tail_window_restores_a_running_task_behind_a_compact_boundary() {
     .join("\n");
     let additions = empty_additions();
     let expected = parse_all(records.as_bytes(), additions);
-    let actual = IncrementalClaudeParser::new_tail_window(
+    let actual = tail_window_parser(
         Cursor::new(records.as_bytes()),
-        None,
         1,
         &["fixture-task-id".to_owned()],
     )
@@ -916,12 +1029,11 @@ fn tail_window_restores_the_initial_skills_before_an_in_window_addition() {
     "#};
     let additions = empty_additions();
     let expected = parse_all(transcript.as_bytes(), additions);
-    let actual =
-        IncrementalClaudeParser::new_tail_window(Cursor::new(transcript.as_bytes()), None, 1, &[])
-            .unwrap()
-            .unwrap()
-            .render_with(fixed_time(), additions)
-            .unwrap();
+    let actual = tail_window_parser(Cursor::new(transcript.as_bytes()), 1, &[])
+        .unwrap()
+        .unwrap()
+        .render_with(fixed_time(), additions)
+        .unwrap();
     assert_eq!(
         last_message_and_state(actual),
         last_message_and_state(expected)
@@ -960,12 +1072,7 @@ fn pending_json_completed_after_a_second_append_matches_a_full_parse() {
 
 #[rstest]
 fn tail_window_expansion_handles_files_smaller_than_the_next_window(oversized_transcript: String) {
-    let actual = IncrementalClaudeParser::new_tail_window(
-        Cursor::new(oversized_transcript.as_bytes()),
-        None,
-        2,
-        &[],
-    );
+    let actual = tail_window_parser(Cursor::new(oversized_transcript.as_bytes()), 2, &[]);
 
     assert_eq!(
         actual
