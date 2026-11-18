@@ -21,6 +21,7 @@ export function expandSessionAncestors(
 ): SessionTreeViewState {
   const byId = new Map(sessions.map((session) => [session.id, session]))
   const expanded = new Set(viewState.expandedSessionIds)
+  expanded.add(selectedId)
   let current = byId.get(selectedId)
   while (current !== undefined && current.parentId !== null) {
     expanded.add(current.parentId)
