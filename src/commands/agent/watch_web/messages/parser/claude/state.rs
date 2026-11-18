@@ -25,6 +25,7 @@ pub(super) fn is_attachment_record(record: &Value) -> bool {
 pub(super) struct ClaudeParserState {
     pub(super) transcript_nodes: BTreeMap<String, TranscriptNode>,
     pub(super) latest_uuid: Option<String>,
+    pub(super) latest_record_uuid: Option<String>,
     pub(super) tool_result_parent: Option<String>,
     pub(super) events: Vec<TimedClaudeEvent>,
     pub(super) queue_events: Vec<QueueReplayEvent>,
@@ -39,6 +40,7 @@ impl ClaudeParserState {
         Self {
             transcript_nodes: BTreeMap::new(),
             latest_uuid: None,
+            latest_record_uuid: None,
             tool_result_parent: None,
             events: Vec::new(),
             queue_events: Vec::new(),

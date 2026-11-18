@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::io::{self, BufRead, Read, Seek, SeekFrom};
 use std::path::Path;
+use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -9,6 +10,7 @@ use super::super::super::record_timestamp;
 use super::super::state::record_parent_uuid;
 use super::tail_window;
 use super::{IncrementalClaudeParser, parse_record};
+use crate::commands::agent::watch_web::messages::log_tail_window_fallback;
 
 const INITIAL_WINDOW_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_WINDOW_BYTES: u64 = 64 * 1024 * 1024;
@@ -38,13 +40,16 @@ pub(super) fn new_tail_window_bounded(
     pending_task_ids: &[String],
     max_window_bytes: u64,
 ) -> io::Result<Option<IncrementalClaudeParser>> {
+    let started = Instant::now();
     let file_length = reader.seek(SeekFrom::End(0))?;
     let Some(window_start) =
         select_window_start(&mut reader, file_length, message_limit, max_window_bytes)?
     else {
+        log_tail_window_fallback(started, "message_window_not_found_within_limit");
         return Ok(None);
     };
     if window_start == 0 {
+        log_tail_window_fallback(started, "window_includes_transcript_start");
         return Ok(None);
     }
 
@@ -82,9 +87,11 @@ pub(super) fn new_tail_window_bounded(
             || !missing_task_ids.is_empty()
             || (needs_skill_baseline && window_start > 0))
     {
+        log_tail_window_fallback(started, "prefix_search_limit_exceeded");
         return Ok(None);
     }
     if missing_task_ids.len() > MAX_ANCESTRY_SEARCHES {
+        log_tail_window_fallback(started, "pending_task_search_limit_exceeded");
         return Ok(None);
     }
 
@@ -99,6 +106,7 @@ pub(super) fn new_tail_window_bounded(
             &mut searches,
         )?
     {
+        log_tail_window_fallback(started, "transcript_ancestry_unavailable");
         return Ok(None);
     }
 
@@ -110,6 +118,7 @@ pub(super) fn new_tail_window_bounded(
         &mut graph_records,
     )?
     else {
+        log_tail_window_fallback(started, "prefix_parser_state_unavailable");
         return Ok(None);
     };
     let selected_bytes = assemble_parser_input(&selected_records, &helper_records, &graph_records)?;

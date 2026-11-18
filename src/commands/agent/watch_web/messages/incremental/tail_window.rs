@@ -1,6 +1,8 @@
 use anyhow::Result;
+use std::time::Instant;
 
 use super::super::cache::{IncrementalTranscriptParser, MessageCache, TranscriptFingerprint};
+use super::super::log_tail_window_fallback;
 use super::super::parser;
 use super::super::parser::cards::filter_additional_cards_after_tail_window;
 use super::super::{
@@ -17,11 +19,12 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_initial_or_full<'a>
     fingerprint: Option<TranscriptFingerprint>,
     cache: &MessageCache,
 ) -> Result<(ConversationResponse, Vec<i64>, bool)> {
+    let tail_window_started = Instant::now();
     let tail_result = match tail_window_limit {
         Some(limit) => parse_session_transcript_tail_window(&input, limit, pending_task_ids),
         None => Ok(None),
     };
-    parse_tail_window_or_full(tail_result, || {
+    parse_tail_window_or_full(tail_result, tail_window_started.elapsed(), || {
         super::parse_session_transcript_incrementally(session_id, input, fingerprint, cache)
     })
     .map(|((conversation, resolved_ids), used_tail_window)| {
@@ -31,6 +34,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_initial_or_full<'a>
 
 fn parse_tail_window_or_full<T>(
     tail_result: Result<Option<T>>,
+    tail_window_elapsed: std::time::Duration,
     full_parse: impl FnOnce() -> Result<T>,
 ) -> Result<(T, bool)> {
     match tail_result {
@@ -39,6 +43,8 @@ fn parse_tail_window_or_full<T>(
         Err(error) if contains_io_error(&error) => {
             tracing::warn!(
                 error = %error,
+                reason = "tail_window_read_error",
+                elapsed_ms = tail_window_elapsed.as_millis(),
                 "failed to read transcript tail window; falling back to full parse"
             );
             full_parse().map(|result| (result, false))
@@ -74,6 +80,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript_
     message_limit: usize,
     pending_task_ids: &[String],
 ) -> Result<Option<(ConversationResponse, Vec<i64>)>> {
+    let started = Instant::now();
     if input.engine != Engine::Claude
         || input
             .path
@@ -81,6 +88,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript_
             .and_then(|extension| extension.to_str())
             == Some("zst")
     {
+        log_tail_window_fallback(started, "tail_window_unsupported_for_transcript");
         return Ok(None);
     }
     let reader = input
@@ -100,6 +108,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript_
         return Ok(None);
     };
     let Some(cutoff) = parser.tail_window_start() else {
+        log_tail_window_fallback(started, "tail_window_start_unavailable");
         return Ok(None);
     };
     let Some((queued_prompts, prior_resolved_ids)) = resolve_queued_prompts_before_window(
@@ -111,6 +120,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript_
         &parser,
     )?
     else {
+        log_tail_window_fallback(started, "queued_prompt_state_unavailable");
         return Ok(None);
     };
     let decisions = filter_decisions_after_tail_window(input.additions.decisions, cutoff);
@@ -261,6 +271,7 @@ mod tests {
         let full_result = ("full transcript".to_owned(), vec![3, 7]);
         let actual = parse_tail_window_or_full::<(String, Vec<i64>)>(
             Err(std::io::Error::other("fixture read failure").into()),
+            std::time::Duration::ZERO,
             || Ok(full_result.clone()),
         )
         .unwrap();
