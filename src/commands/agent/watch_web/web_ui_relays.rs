@@ -1,12 +1,10 @@
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use reqwest::Url;
-use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -18,12 +16,16 @@ use crate::shared::hooks;
 
 const SYNC_INTERVAL: Duration = Duration::from_secs(1);
 const HOOK_TIMEOUT: Duration = Duration::from_secs(30);
-const WEB_UI_URL_ENV: &str = "ARMYKNIFE_WEB_UI_URL";
-const WEB_UI_PORT_ENV: &str = "ARMYKNIFE_WEB_UI_PORT";
-const WEB_UI_EXPOSED_URL_ENV: &str = "ARMYKNIFE_WEB_UI_EXPOSED_URL";
-const RELAY_REGISTRATIONS_FILE: &str = "web_ui_relays.json";
 
 type HookRunner = dyn Fn(&str, &[(&str, &str)]) -> Result<Option<String>> + Send + Sync;
+
+mod registrations;
+
+use registrations::{
+    RelayRegistration, WEB_UI_PORT_ENV, WEB_UI_URL_ENV, add_relay_registration,
+    load_relay_registrations, remove_relay_registration, save_relay_registrations,
+    unexpose_registration,
+};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct RelayKey {
@@ -48,38 +50,6 @@ struct Relay {
     exposed_url: Option<String>,
     exposed: bool,
     server: JoinHandle<()>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-struct RelayRegistration {
-    session_id: String,
-    name: String,
-    url: String,
-    port: u16,
-    exposed_url: Option<String>,
-}
-
-impl RelayRegistration {
-    fn from_relay(key: &RelayKey, relay: &Relay) -> Self {
-        Self {
-            session_id: key.session_id.clone(),
-            name: key.name.clone(),
-            url: relay.url.clone(),
-            port: relay.port,
-            exposed_url: relay.exposed_url.clone(),
-        }
-    }
-
-    fn hook_variables(&self) -> Vec<(String, String)> {
-        vec![
-            (WEB_UI_URL_ENV.to_owned(), self.url.clone()),
-            (WEB_UI_PORT_ENV.to_owned(), self.port.to_string()),
-            (
-                WEB_UI_EXPOSED_URL_ENV.to_owned(),
-                self.exposed_url.clone().unwrap_or_default(),
-            ),
-        ]
-    }
 }
 
 pub(super) struct WebUiRelays {
@@ -153,7 +123,15 @@ impl WebUiRelays {
             match unexpose_registration(self.hook_runner.clone(), &registration).await {
                 Ok(()) => {
                     registrations.retain(|stored| stored != &registration);
-                    save_relay_registrations(&self.sessions_dir, &registrations)?;
+                    if let Err(error) = save_relay_registrations(&self.sessions_dir, &registrations)
+                    {
+                        tracing::warn!(
+                            session = %registration.session_id,
+                            web_ui = %registration.name,
+                            %error,
+                            "failed to save web UI relay registrations after cleanup"
+                        );
+                    }
                 }
                 Err(error) => tracing::warn!(
                     session = %registration.session_id,
@@ -388,76 +366,6 @@ impl WebUiRelays {
     }
 }
 
-async fn unexpose_registration(
-    hook_runner: Arc<HookRunner>,
-    registration: &RelayRegistration,
-) -> Result<()> {
-    invoke_hook(
-        hook_runner,
-        "web-ui-unexpose",
-        registration.hook_variables(),
-    )
-    .await?;
-    Ok(())
-}
-
-fn load_relay_registrations(sessions_dir: &std::path::Path) -> Result<Vec<RelayRegistration>> {
-    let path = sessions_dir.join(RELAY_REGISTRATIONS_FILE);
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let contents = fs::read(&path)
-        .with_context(|| format!("failed to read relay registrations from {}", path.display()))?;
-    serde_json::from_slice(&contents).with_context(|| {
-        format!(
-            "failed to parse relay registrations from {}",
-            path.display()
-        )
-    })
-}
-
-fn save_relay_registrations(
-    sessions_dir: &std::path::Path,
-    registrations: &[RelayRegistration],
-) -> Result<()> {
-    fs::create_dir_all(sessions_dir)?;
-    let path = sessions_dir.join(RELAY_REGISTRATIONS_FILE);
-    let temp_path = path.with_extension("tmp");
-    let contents = serde_json::to_vec_pretty(registrations)?;
-    fs::write(&temp_path, contents).with_context(|| {
-        format!(
-            "failed to write relay registrations to {}",
-            temp_path.display()
-        )
-    })?;
-    fs::rename(&temp_path, &path)
-        .with_context(|| format!("failed to save relay registrations to {}", path.display()))?;
-    Ok(())
-}
-
-fn remove_relay_registration(
-    sessions_dir: &std::path::Path,
-    registration: &RelayRegistration,
-) -> Result<()> {
-    let mut registrations = load_relay_registrations(sessions_dir)?;
-    let previous_len = registrations.len();
-    registrations.retain(|stored| stored != registration);
-    if registrations.len() != previous_len {
-        save_relay_registrations(sessions_dir, &registrations)?;
-    }
-    Ok(())
-}
-
-fn add_relay_registration(
-    sessions_dir: &std::path::Path,
-    registration: &RelayRegistration,
-) -> Result<()> {
-    let mut registrations = load_relay_registrations(sessions_dir)?;
-    registrations.retain(|stored| stored != registration);
-    registrations.push(registration.clone());
-    save_relay_registrations(sessions_dir, &registrations)
-}
-
 async fn invoke_hook(
     hook_runner: Arc<HookRunner>,
     name: &'static str,
@@ -541,7 +449,7 @@ mod tests {
 
     use anyhow::Context;
     use reqwest::Url;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use serde_json::json;
     use tempfile::TempDir;
 
@@ -549,6 +457,11 @@ mod tests {
     use crate::commands::agent::types::{Session, WebUiRegistration};
 
     type HookCalls = Arc<Mutex<Vec<(String, Vec<(String, String)>)>>>;
+
+    struct PreviousProcess {
+        directory: TempDir,
+        registration: RelayRegistration,
+    }
 
     fn session() -> Session {
         serde_json::from_value(json!({
@@ -590,6 +503,33 @@ mod tests {
             ));
             Ok((hook == "web-ui-expose")
                 .then(|| "https://public.example.invalid/relay/".to_owned()))
+        }
+    }
+
+    #[fixture]
+    async fn previous_process() -> PreviousProcess {
+        let directory = TempDir::new().expect("temporary sessions directory should be created");
+        store::save_session_to(directory.path(), &session_with_one_web_ui())
+            .expect("fixture session should be saved");
+        let mut previous =
+            WebUiRelays::with_hook_runner(directory.path().to_path_buf(), |_, _| Ok(None));
+        previous.sync().await.expect("previous relay should start");
+        let registration = load_relay_registrations(directory.path())
+            .expect("previous relay registration should load")
+            .first()
+            .cloned()
+            .expect("previous relay should be recorded without a public URL");
+        previous
+            .active
+            .values()
+            .next()
+            .expect("previous relay should be active")
+            .server
+            .abort();
+        drop(previous);
+        PreviousProcess {
+            directory,
+            registration,
         }
     }
 
@@ -714,34 +654,18 @@ mod tests {
         Ok(())
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn startup_unexposes_previous_process_relays_and_keeps_current_registration()
-    -> anyhow::Result<()> {
-        let directory = TempDir::new()?;
-        store::save_session_to(directory.path(), &session_with_one_web_ui())?;
-        let mut previous = WebUiRelays::with_hook_runner(
-            directory.path().to_path_buf(),
-            hook_runner(Arc::new(Mutex::new(Vec::new()))),
-        );
-        previous.sync().await?;
-        let previous_registration = load_relay_registrations(directory.path())?
-            .first()
-            .cloned()
-            .context("previous relay should be recorded")?;
-        previous
-            .active
-            .values()
-            .next()
-            .context("previous relay should be active")?
-            .server
-            .abort();
-        drop(previous);
+    async fn startup_unexposes_previous_process_relays_and_keeps_current_registration(
+        #[future] previous_process: PreviousProcess,
+    ) -> anyhow::Result<()> {
+        let previous_process = previous_process.await;
+        let directory = previous_process.directory.path();
+        let previous_registration = previous_process.registration;
 
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let mut current = WebUiRelays::with_hook_runner(
-            directory.path().to_path_buf(),
-            hook_runner(calls.clone()),
-        );
+        let mut current =
+            WebUiRelays::with_hook_runner(directory.to_path_buf(), hook_runner(calls.clone()));
         current.sync().await?;
         let current_registration = current
             .active
@@ -765,7 +689,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        let registrations = load_relay_registrations(directory.path())?;
+        let registrations = load_relay_registrations(directory)?;
         current.stop_all().await;
 
         assert_eq!(
@@ -808,31 +732,18 @@ mod tests {
         Ok(())
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn failed_stale_unexpose_is_retried_on_the_next_sync() -> anyhow::Result<()> {
-        let directory = TempDir::new()?;
-        store::save_session_to(directory.path(), &session_with_one_web_ui())?;
-        let mut previous = WebUiRelays::with_hook_runner(
-            directory.path().to_path_buf(),
-            hook_runner(Arc::new(Mutex::new(Vec::new()))),
-        );
-        previous.sync().await?;
-        let previous_registration = load_relay_registrations(directory.path())?
-            .first()
-            .cloned()
-            .context("previous relay should be recorded")?;
-        previous
-            .active
-            .values()
-            .next()
-            .context("previous relay should be active")?
-            .server
-            .abort();
-        drop(previous);
+    async fn failed_stale_unexpose_is_retried_on_the_next_sync(
+        #[future] previous_process: PreviousProcess,
+    ) -> anyhow::Result<()> {
+        let previous_process = previous_process.await;
+        let directory = previous_process.directory.path();
+        let previous_registration = previous_process.registration;
 
         let fail_first_unexpose = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let mut current = WebUiRelays::with_hook_runner(directory.path().to_path_buf(), {
+        let mut current = WebUiRelays::with_hook_runner(directory.to_path_buf(), {
             let fail_first_unexpose = fail_first_unexpose.clone();
             let calls = calls.clone();
             move |hook, variables| {
@@ -859,9 +770,9 @@ mod tests {
             .map(|(key, relay)| RelayRegistration::from_relay(key, relay))
             .next()
             .context("current relay should be active")?;
-        let after_failure = load_relay_registrations(directory.path())?;
+        let after_failure = load_relay_registrations(directory)?;
         current.sync().await?;
-        let after_retry = load_relay_registrations(directory.path())?;
+        let after_retry = load_relay_registrations(directory)?;
         let hook_names = calls
             .lock()
             .expect("hook call lock should succeed")
