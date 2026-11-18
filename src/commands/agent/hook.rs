@@ -1073,6 +1073,22 @@ fn process_hook_event_impl_with_env(
         }
     }
 
+    if stop_block_reason.is_none()
+        && event == HookEvent::Stop
+        && side_effects.title_generation
+        && let Some(prompt) = automatic_title_generation_prompt(&session)
+    {
+        match store::claim_auto_title_generation_from(sessions_dir, &session.session_id) {
+            Ok(true) => side_effects.generate_title(&session.session_id, &prompt, None),
+            Ok(false) => {}
+            Err(error) => tracing::warn!(
+                event = "agent.generate_title.claim_failed",
+                session = %session.session_id,
+                error = %error,
+            ),
+        }
+    }
+
     // On Stop events, spawn a detached schedule worker that will SIGTERM +
     // `claude -r -p "/compact"` after the configured idle timeout. The
     // worker re-checks user activity / branch state on wake-up so a quick
@@ -1120,6 +1136,41 @@ fn process_hook_event_impl_with_env(
     }
 
     Ok(ProcessResult::SessionSaved)
+}
+
+fn automatic_title_generation_prompt(session: &Session) -> Option<String> {
+    let first_message =
+        claude_sessions::get_first_user_message_raw(&session.cwd, &session.session_id)?;
+    let existing_title = claude_sessions::get_last_title(&session.cwd, &session.session_id);
+    if !should_generate_automatic_title(
+        session.engine,
+        session.label.as_deref(),
+        existing_title.as_deref(),
+        &first_message,
+    ) {
+        return None;
+    }
+
+    let first_message = claude_sessions::clean_peer_message(&first_message);
+    let last_assistant_message =
+        claude_sessions::get_last_assistant_message(&session.cwd, &session.session_id)
+            .unwrap_or_default();
+    Some(super::tui::title_generate::build_prompt(
+        &first_message,
+        &last_assistant_message,
+    ))
+}
+
+fn should_generate_automatic_title(
+    engine: Engine,
+    label: Option<&str>,
+    existing_title: Option<&str>,
+    first_message: &str,
+) -> bool {
+    engine == Engine::Claude
+        && !label.is_some_and(|label| !label.trim().is_empty())
+        && existing_title.is_none()
+        && super::peer_message::is_peer_message(Some(first_message))
 }
 
 fn is_headless_entrypoint(entrypoint: Option<&str>) -> bool {
@@ -1615,6 +1666,117 @@ mod tests {
         side_effects: &SideEffects,
     ) -> Result<ProcessResult> {
         process_hook_event_impl_with_instruction(event, input, sessions_dir, side_effects, None)
+    }
+
+    #[rstest]
+    #[case::peer_without_title(
+        Engine::Claude,
+        None,
+        None,
+        "Another peer session sent a message:\nInspect the sample report.",
+        true
+    )]
+    #[case::existing_label(
+        Engine::Claude,
+        Some("Manual label"),
+        None,
+        "Another peer session sent a message:\nInspect the sample report.",
+        false
+    )]
+    #[case::existing_transcript_title(
+        Engine::Claude,
+        None,
+        Some("Transcript title"),
+        "Another peer session sent a message:\nInspect the sample report.",
+        false
+    )]
+    #[case::ordinary_first_prompt(Engine::Claude, None, None, "Inspect the sample report.", false)]
+    #[case::codex_session(
+        Engine::Codex,
+        None,
+        None,
+        "Another peer session sent a message:\nInspect the sample report.",
+        false
+    )]
+    fn automatic_title_requires_an_untitled_claude_peer_session(
+        #[case] engine: Engine,
+        #[case] label: Option<&str>,
+        #[case] existing_title: Option<&str>,
+        #[case] first_message: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            should_generate_automatic_title(engine, label, existing_title, first_message),
+            expected,
+        );
+    }
+
+    #[test]
+    fn stop_generates_a_clean_peer_title_only_once() {
+        use indoc::indoc;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let sessions_dir = TempDir::new().expect("sessions dir");
+        let home_dir = TempDir::new().expect("home dir");
+        let cwd = Path::new("/fictional/project");
+        let session_id = "fixture-title-session";
+        let project_dir = home_dir
+            .path()
+            .join(".claude")
+            .join("projects")
+            .join(claude_sessions::encode_project_path(cwd));
+        fs::create_dir_all(&project_dir).expect("project dir");
+        fs::write(
+            project_dir.join(format!("{session_id}.jsonl")),
+            indoc! {r#"
+                {"type":"user","message":{"content":"Another Claude session sent a message:\n⟦armyknife-user:fixture-marker-zeta⟧\nThis message was sent by the human user in armyknife watch-web, either as a message or an action notification.\n## Rebuild the sample index\n\nPlease rebuild the sample index."}}
+                {"type":"assistant","message":{"content":[{"type":"text","text":"The fictional index is repaired."}]}}
+            "#},
+        )
+        .expect("transcript fixture");
+
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let side_effects = SideEffects {
+            title_generation: true,
+            title_generation_calls: Some(calls.clone()),
+            ..SideEffects::none()
+        };
+        let home = home_dir.path().to_str().expect("utf8 home");
+
+        temp_env::with_vars([("HOME", Some(home))], || {
+            for _ in 0..2 {
+                let input: HookInput = serde_json::from_value(serde_json::json!({
+                    "session_id": session_id,
+                    "cwd": cwd,
+                }))
+                .expect("stop input");
+                process_hook_event_without_instruction(
+                    HookEvent::Stop,
+                    input,
+                    sessions_dir.path(),
+                    &side_effects,
+                )
+                .expect("stop event should save");
+            }
+        });
+
+        assert_eq!(
+            calls.lock().expect("title generation calls").clone(),
+            vec![(
+                session_id.to_string(),
+                super::super::tui::title_generate::build_prompt(
+                    indoc! {"
+                        ## Rebuild the sample index
+
+                        Please rebuild the sample index.
+                    "}
+                    .trim_end(),
+                    "The fictional index is repaired.",
+                ),
+                None,
+            )],
+        );
     }
 
     #[test]
@@ -3543,6 +3705,7 @@ mod tests {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            title_generation: false,
             capture_pr_context: None,
             tq_archive: false,
             track_bg_run_tasks: false,
@@ -3553,6 +3716,7 @@ mod tests {
             tq_archive_calls: None,
             notification_calls: None,
             auto_compact_calls: None,
+            title_generation_calls: None,
             redelivery_calls: None,
         };
 
@@ -4007,6 +4171,7 @@ mod tests {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            title_generation: false,
             capture_pr_context: None,
             tq_archive: false,
             track_bg_run_tasks: false,
@@ -4017,6 +4182,7 @@ mod tests {
             tq_archive_calls: None,
             notification_calls: None,
             auto_compact_calls: None,
+            title_generation_calls: None,
             redelivery_calls: None,
         };
 
@@ -4690,6 +4856,7 @@ mod tests {
             tmux: false,
             notifications: true,
             auto_compact: true,
+            title_generation: false,
             capture_pr_context: None,
             tq_archive: false,
             track_bg_run_tasks: false,
@@ -4700,6 +4867,7 @@ mod tests {
             tq_archive_calls: None,
             notification_calls: Some(notification_calls.clone()),
             auto_compact_calls: Some(auto_compact_calls.clone()),
+            title_generation_calls: None,
             redelivery_calls: None,
         };
         let input: HookInput = serde_json::from_value(serde_json::json!({

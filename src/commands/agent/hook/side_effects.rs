@@ -14,6 +14,11 @@ use crate::{infra::tmux, infra::tmux::PaneInfo};
 
 pub(super) type PrContextCapture = Arc<dyn Fn(&Path) -> Option<SessionPrContext> + Send + Sync>;
 
+#[cfg(test)]
+type TitleGenerationCall = (String, String, Option<String>);
+#[cfg(test)]
+type TitleGenerationCallSink = std::sync::Arc<std::sync::Mutex<Vec<TitleGenerationCall>>>;
+
 pub(super) trait PaneBindingOperations: Send + Sync {
     fn resolve(&self, input: &HookInput) -> Option<PaneInfo>;
     fn set_session_id(&self, pane_id: &str, session_id: &str);
@@ -48,6 +53,8 @@ pub(super) struct SideEffects {
     /// Spawn the detached `a agent auto-compact schedule` worker on Stop events.
     /// Off in tests (would fork a real process and survive past the test).
     pub(super) auto_compact: bool,
+    /// Spawn one detached session-title generation after an eligible Stop.
+    pub(super) title_generation: bool,
     pub(super) capture_pr_context: Option<PrContextCapture>,
     /// Spawn the detached `a agent archive-tq-session-detached` worker on a
     /// genuine Ended transition. Off in tests (would fork a real process).
@@ -77,6 +84,9 @@ pub(super) struct SideEffects {
     /// Test-only sink that records sessions passed to the auto-compact worker.
     #[cfg(test)]
     pub(super) auto_compact_calls: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
+    /// Test-only sink that records detached title-generation requests.
+    #[cfg(test)]
+    pub(super) title_generation_calls: Option<TitleGenerationCallSink>,
     /// Test-only sink that records sessions passed to the redelivery worker.
     #[cfg(test)]
     pub(super) redelivery_calls: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
@@ -97,6 +107,7 @@ impl SideEffects {
             tmux: true,
             notifications: true,
             auto_compact: true,
+            title_generation: true,
             capture_pr_context: Some(Arc::new(super::super::session_pr_context::capture)),
             tq_archive: true,
             track_bg_run_tasks: true,
@@ -113,6 +124,8 @@ impl SideEffects {
             #[cfg(test)]
             auto_compact_calls: None,
             #[cfg(test)]
+            title_generation_calls: None,
+            #[cfg(test)]
             redelivery_calls: None,
         }
     }
@@ -123,6 +136,7 @@ impl SideEffects {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            title_generation: false,
             capture_pr_context: None,
             tq_archive: false,
             track_bg_run_tasks: false,
@@ -133,6 +147,7 @@ impl SideEffects {
             tq_archive_calls: None,
             notification_calls: None,
             auto_compact_calls: None,
+            title_generation_calls: None,
             redelivery_calls: None,
         }
     }
@@ -175,6 +190,38 @@ impl SideEffects {
         }
         #[cfg(not(test))]
         super::super::auto_compact::spawn_in_background(session_id);
+    }
+
+    pub(super) fn generate_title(
+        &self,
+        session_id: &str,
+        prompt: &str,
+        previous_label: Option<String>,
+    ) {
+        if !self.title_generation {
+            return;
+        }
+        #[cfg(test)]
+        if let Some(calls) = &self.title_generation_calls {
+            calls
+                .lock()
+                .expect("title_generation_calls mutex poisoned")
+                .push((session_id.to_string(), prompt.to_string(), previous_label));
+        }
+        #[cfg(not(test))]
+        if let Err(error) = super::super::tui::title_generate::spawn_detached_title_generation(
+            super::super::tui::title_generate::SpawnTitleGenerationRequest {
+                session_id: session_id.to_string(),
+                prompt: prompt.to_string(),
+                previous_label,
+            },
+        ) {
+            tracing::warn!(
+                event = "agent.generate_title.spawn_failed",
+                session = %session_id,
+                error = %error,
+            );
+        }
     }
 
     pub(super) fn redeliver_bg_notifications(&self, session_id: &str) {

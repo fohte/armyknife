@@ -19,7 +19,7 @@ use super::app::{App, AppMode};
 /// Everything needed to spawn the detached title-generation process for
 /// one Ctrl+g press.
 #[derive(Debug, PartialEq, Eq)]
-pub struct SpawnTitleGenerationRequest {
+pub(in crate::commands::agent) struct SpawnTitleGenerationRequest {
     pub session_id: String,
     pub prompt: String,
     /// The session's `label` at the moment Ctrl+g was pressed. Passed
@@ -68,7 +68,10 @@ pub(super) fn request_generate_title(app: &mut App) -> Option<SpawnTitleGenerati
 }
 
 /// Builds the LLM prompt for generating a session title from its transcript.
-pub fn build_prompt(first_user_message: &str, last_assistant_message: &str) -> String {
+pub(in crate::commands::agent) fn build_prompt(
+    first_user_message: &str,
+    last_assistant_message: &str,
+) -> String {
     formatdoc! {r#"
         Task: Generate a short session title in Japanese describing what the user is working on in this Claude Code session.
 
@@ -95,7 +98,9 @@ pub fn build_prompt(first_user_message: &str, last_assistant_message: &str) -> S
 /// `agent watch` exiting. The prompt is written to a persisted temp file
 /// (never unlinked -- relies on OS `/tmp` GC, same policy as the
 /// clean-detached paths file) since it can exceed a comfortable argv size.
-pub(super) fn spawn_detached_title_generation(request: SpawnTitleGenerationRequest) -> Result<()> {
+pub(in crate::commands::agent) fn spawn_detached_title_generation(
+    request: SpawnTitleGenerationRequest,
+) -> Result<()> {
     use std::ffi::OsString;
     use std::io::Write;
     use std::path::Path;

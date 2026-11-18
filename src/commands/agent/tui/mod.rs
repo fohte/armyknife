@@ -13,7 +13,7 @@ mod session_key;
 mod session_preview;
 mod session_rows;
 mod title_edit;
-mod title_generate;
+pub(in crate::commands::agent) mod title_generate;
 mod tq_cache;
 mod tq_fetch;
 mod tq_pane_options;
