@@ -109,11 +109,9 @@ export function useAppSessionProjection({
   ).length
 
   return {
-    elapsedOffsetSeconds,
     sessionsWithElapsedTime,
     todaySessions,
     orderedSessions,
-    filteredOrderedSessions,
     navigableSessions,
     savedViews,
     projects,
