@@ -68,40 +68,12 @@ pub(super) fn classify_inbound(
         return message;
     }
 
-    if let Some((tag, body)) = tagged {
-        if let Some(message) = marked_user_message(text, user_marker) {
-            return message;
-        }
-        if let Some(peer_message) = extract_peer_message(text, user_marker)
-            && let Some(session_id) = peer_message.sender_id
-        {
-            return MessageKind::PeerIn {
-                session_id,
-                text: if peer_message.has_user_marker {
-                    peer_message.cleaned_body
-                } else {
-                    peer_message.body
-                },
-            };
-        }
-        return event(tag, body, record);
-    }
-
-    if let Some(message) = marked_user_message(text, user_marker) {
+    if let Some(message) = marked_or_peer_message(text, user_marker) {
         return message;
     }
 
-    if let Some(peer_message) = extract_peer_message(text, user_marker)
-        && let Some(session_id) = peer_message.sender_id
-    {
-        return MessageKind::PeerIn {
-            session_id,
-            text: if peer_message.has_user_marker {
-                peer_message.cleaned_body
-            } else {
-                peer_message.body
-            },
-        };
+    if let Some((tag, body)) = tagged {
+        return event(tag, body, record);
     }
 
     if record.get("type").and_then(Value::as_str) == Some("system") {
@@ -196,7 +168,12 @@ fn origin(record: &Value) -> Option<&Value> {
 }
 
 fn peer_transport_body(text: &str) -> String {
-    extract_peer_message(text, None).map_or_else(|| text.to_owned(), |message| message.cleaned_body)
+    extract_peer_message(text, None).map_or_else(
+        || text.to_owned(),
+        |message| {
+            crate::commands::agent::peer_message::without_transport_notice(&message.body).to_owned()
+        },
+    )
 }
 
 fn event(tag: &str, body: &str, record: &Value) -> MessageKind {
@@ -365,19 +342,35 @@ fn is_hidden_legacy_row(record: &Value, text: &str) -> bool {
 }
 
 pub(super) fn marked_user_body(text: &str, marker: Option<&str>) -> Option<String> {
-    extract_peer_message(text, marker)
-        .and_then(|message| message.has_user_marker.then_some(message.cleaned_body))
+    let message = extract_peer_message(text, marker)?;
+    message.has_user_marker.then(|| {
+        crate::commands::agent::peer_message::without_transport_notice(&message.body).to_owned()
+    })
 }
 
-fn marked_user_message(text: &str, marker: Option<&str>) -> Option<MessageKind> {
-    let body = marked_user_body(text, marker)?;
+fn marked_or_peer_message(text: &str, marker: Option<&str>) -> Option<MessageKind> {
+    let message = extract_peer_message(text, marker)?;
+    if message.has_user_marker {
+        return Some(marked_user_message_body(
+            crate::commands::agent::peer_message::without_transport_notice(&message.body)
+                .to_owned(),
+        ));
+    }
+    let session_id = message.sender_id?;
+    Some(MessageKind::PeerIn {
+        session_id,
+        text: message.body,
+    })
+}
+
+fn marked_user_message_body(body: String) -> MessageKind {
     match tagged_body(&body) {
-        Some((tag, event_body)) if is_watch_web_action_tag(tag) => Some(MessageKind::Event {
+        Some((tag, event_body)) if is_watch_web_action_tag(tag) => MessageKind::Event {
             kind: EventKind::Armyknife,
             text: one_line(event_body),
             failed: false,
-        }),
-        _ => Some(MessageKind::User { text: body }),
+        },
+        _ => MessageKind::User { text: body },
     }
 }
 

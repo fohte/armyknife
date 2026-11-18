@@ -28,7 +28,7 @@ pub(in crate::commands::agent) fn has_transcript_title_entry(
 }
 
 /// Produces a compact title from the first prompt, removing peer transport
-/// details before choosing its first heading or sentence.
+/// details before choosing the first paragraph's heading or sentence.
 pub(super) fn title_from_first_user_message(message: &str) -> String {
     let clean_message = without_session_context(&clean_peer_message(message));
     let first_paragraph = clean_message

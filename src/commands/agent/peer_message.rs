@@ -19,7 +19,6 @@ pub(super) fn is_peer_message(prompt: Option<&str>) -> bool {
 pub(super) struct ExtractedPeerMessage {
     pub(super) sender_id: Option<String>,
     pub(super) body: String,
-    pub(super) cleaned_body: String,
     pub(super) has_user_marker: bool,
 }
 
@@ -27,6 +26,14 @@ pub(super) struct ExtractedPeerMessage {
 pub(super) fn extract_peer_message(
     message: &str,
     marker: Option<&str>,
+) -> Option<ExtractedPeerMessage> {
+    extract_peer_message_with_marker_policy(message, marker, false)
+}
+
+fn extract_peer_message_with_marker_policy(
+    message: &str,
+    marker: Option<&str>,
+    allow_unverified_marker: bool,
 ) -> Option<ExtractedPeerMessage> {
     let mut body = message;
     let mut is_peer_message = false;
@@ -49,21 +56,24 @@ pub(super) fn extract_peer_message(
         is_peer_message = true;
     }
 
-    let (body, has_user_marker) = strip_watch_web_marker(body, marker);
+    let (body, has_user_marker) = strip_watch_web_marker(body, marker, allow_unverified_marker);
     let without_notice = without_transport_notice(body);
     let had_transport_notice = without_notice != body;
-    let cleaned_body = without_notice.to_owned();
-    (is_peer_message || has_user_marker || had_transport_notice).then_some(ExtractedPeerMessage {
+    if !(is_peer_message || has_user_marker || had_transport_notice) {
+        return None;
+    }
+    Some(ExtractedPeerMessage {
         sender_id,
         body: body.to_owned(),
-        cleaned_body,
         has_user_marker,
     })
 }
 
 pub(super) fn clean_peer_message(message: &str) -> String {
-    extract_peer_message(message, None)
-        .map_or_else(|| message.trim().to_owned(), |message| message.cleaned_body)
+    extract_peer_message_with_marker_policy(message, None, true).map_or_else(
+        || message.trim().to_owned(),
+        |message| without_transport_notice(&message.body).trim().to_owned(),
+    )
 }
 
 pub(super) fn without_session_context(body: &str) -> String {
@@ -90,21 +100,25 @@ pub(super) fn without_session_context(body: &str) -> String {
     }
 }
 
-fn strip_watch_web_marker<'a>(body: &'a str, marker: Option<&str>) -> (&'a str, bool) {
-    let marker_offset = marker
-        .and_then(|marker| {
-            body.match_indices(marker).find_map(|(offset, _)| {
-                (offset == 0 || body[..offset].ends_with('\n')).then_some((offset, marker))
-            })
-        })
-        .or_else(|| {
+fn strip_watch_web_marker<'a>(
+    body: &'a str,
+    marker: Option<&str>,
+    allow_unverified_marker: bool,
+) -> (&'a str, bool) {
+    let marker_offset = match marker {
+        Some(marker) => body.match_indices(marker).find_map(|(offset, _)| {
+            (offset == 0 || body[..offset].ends_with('\n')).then_some((offset, marker))
+        }),
+        None if allow_unverified_marker => {
             body.lines().enumerate().find_map(|(line_number, line)| {
                 (line.starts_with("⟦armyknife-user:") && line.ends_with('⟧')).then_some((
                     body.lines().take(line_number).map(str::len).sum::<usize>() + line_number,
                     line,
                 ))
             })
-        });
+        }
+        None => None,
+    };
     let Some((offset, marker)) = marker_offset else {
         return (body, false);
     };
@@ -124,7 +138,7 @@ fn strip_watch_web_marker<'a>(body: &'a str, marker: Option<&str>) -> (&'a str, 
         )
 }
 
-fn without_transport_notice(body: &str) -> &str {
+pub(super) fn without_transport_notice(body: &str) -> &str {
     body.rsplit_once(concat!("\n", "\n", "This came from another Claude session"))
         .map_or(body, |(body, _)| body)
 }
