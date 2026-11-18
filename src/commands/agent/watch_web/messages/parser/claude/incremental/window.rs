@@ -75,7 +75,12 @@ pub(super) fn new_tail_window_bounded(
     let needs_skill_baseline = !selected_records
         .iter()
         .any(tail_window::resets_skill_listing_state);
-    let selected_uuids = selected_records
+    let pending_record = parse_record(&pending_line);
+    let mut graph_records = selected_records.clone();
+    if let Some(record) = pending_record {
+        graph_records.push(record);
+    }
+    let selected_uuids = graph_records
         .iter()
         .filter_map(|record| {
             record
@@ -84,9 +89,9 @@ pub(super) fn new_tail_window_bounded(
                 .map(str::to_owned)
         })
         .collect::<HashSet<_>>();
-    let active_ancestor_uuid = active_ancestor_uuid(&selected_records);
+    let active_ancestor_uuid = active_ancestor_uuid(&graph_records);
     let branch_ancestor_uuids =
-        branch_ancestor_uuids(&selected_records, active_ancestor_uuid.as_deref());
+        branch_ancestor_uuids(&graph_records, active_ancestor_uuid.as_deref());
     if missing_task_ids.len() > 4096 {
         log_tail_window_fallback(started, "pending_task_search_limit_exceeded");
         return Ok(None);

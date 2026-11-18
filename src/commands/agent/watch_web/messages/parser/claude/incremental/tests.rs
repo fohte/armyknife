@@ -704,6 +704,72 @@ fn tail_window_preserves_an_initial_incomplete_jsonl_row_after_append() {
 }
 
 #[test]
+fn tail_window_uses_an_unterminated_record_to_select_the_active_branch() {
+    let padding = serde_json::json!({
+        "type": "system",
+        "padding": "x".repeat(5 * 1024 * 1024),
+    });
+    let mut records = vec![
+        serde_json::json!({
+            "type": "user",
+            "uuid": "fixture-root",
+            "parentUuid": null,
+            "timestamp": "2026-01-01T00:00:00Z",
+            "message": {"content": "Fixture root."},
+        }),
+        padding,
+    ];
+    let mut parent_uuid = "fixture-root".to_owned();
+    for index in 0..120 {
+        let uuid = format!("fixture-old-branch-{index}");
+        records.push(serde_json::json!({
+            "type": "user",
+            "uuid": uuid,
+            "parentUuid": parent_uuid,
+            "timestamp": format!("2026-01-01T00:00:{:02}Z", index % 60),
+            "message": {"content": format!("Abandoned fixture message {index}.")},
+        }));
+        parent_uuid = uuid;
+    }
+    let transcript = records
+        .iter()
+        .map(serde_json::Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let pending_branch_switch = serde_json::json!({
+        "type": "user",
+        "uuid": "fixture-current-branch",
+        "parentUuid": "fixture-root",
+        "timestamp": "2026-01-01T00:01:00Z",
+        "message": {"content": "Current fixture branch."},
+    })
+    .to_string();
+    let initial_transcript = format!("{transcript}\n{pending_branch_switch}");
+    let additions = empty_additions();
+    let actual = tail_window_parser(Cursor::new(initial_transcript.as_bytes()), 100, &[])
+        .unwrap()
+        .unwrap()
+        .render_with(fixed_time(), additions)
+        .unwrap();
+
+    assert_eq!(
+        actual,
+        (
+            vec![ChatItem::User {
+                text: "Current fixture branch.".to_owned(),
+                rewind_id: Some("fixture-current-branch".to_owned()),
+                queued_prompt_id: None,
+                timestamp: Some("2026-01-01T00:01:00+00:00".to_owned()),
+                from: None,
+            }],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ),
+    );
+}
+
+#[test]
 fn tail_window_excludes_an_abandoned_branch_whose_parent_is_outside_the_window() {
     let padding = "x".repeat(5 * 1024 * 1024);
     let transcript = [

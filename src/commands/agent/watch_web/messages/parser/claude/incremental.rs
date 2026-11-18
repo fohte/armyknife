@@ -159,6 +159,29 @@ impl IncrementalClaudeParser {
                 );
             }
         }
+        let pending_record = parse_record(&pending_line);
+        let pending_uuid = pending_record
+            .as_ref()
+            .and_then(|record| record.get("uuid").and_then(Value::as_str))
+            .map(str::to_owned);
+        let pending_node_inserted = if let (Some(record), Some(uuid)) =
+            (pending_record.as_ref(), pending_uuid.as_deref())
+        {
+            if state.transcript_nodes.contains_key(uuid) {
+                false
+            } else {
+                state.transcript_nodes.insert(
+                    uuid.to_owned(),
+                    TranscriptNode {
+                        parent_uuid: record_parent_uuid(record),
+                        membership: BranchMembership::Unknown,
+                    },
+                );
+                true
+            }
+        } else {
+            false
+        };
         for uuid in active_ancestor_uuids {
             state
                 .transcript_nodes
@@ -169,14 +192,26 @@ impl IncrementalClaudeParser {
                     membership: BranchMembership::Active,
                 });
         }
-        state.latest_record_uuid = graph_latest_uuid.clone();
         mark_active_branch(
             &mut state.transcript_nodes,
-            graph_latest_uuid
+            pending_uuid
                 .as_deref()
+                .or(graph_latest_uuid.as_deref())
                 .or(latest_complete_uuid.as_deref()),
         );
-        state.latest_uuid = latest_complete_uuid;
+        if pending_node_inserted && let Some(uuid) = pending_uuid.as_deref() {
+            state.transcript_nodes.remove(uuid);
+        }
+        state.latest_record_uuid = if pending_uuid.is_some() {
+            pending_record.as_ref().and_then(record_parent_uuid)
+        } else {
+            graph_latest_uuid.clone()
+        };
+        state.latest_uuid = if pending_uuid.is_some() {
+            pending_record.as_ref().and_then(record_parent_uuid)
+        } else {
+            latest_complete_uuid
+        };
         for record in records {
             ingest_record(&mut state, record, Utc::now(), RecordOrigin::Initial);
         }

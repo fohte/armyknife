@@ -3,11 +3,12 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::{ChatItem, ConversationResponse};
+use super::{ChatItem, ConversationResponse, UserContentPart};
 
 const RECENT_TAIL_MESSAGE_COUNT: usize = 20;
 const INITIAL_EPOCH_MESSAGE_COUNT: usize = 100;
 const MAX_EPOCH_TOKEN_BYTES: usize = 4096;
+const EPOCH_CURSOR_VERSION: u8 = 3;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,10 +29,11 @@ impl MessageRange {
     }
 
     pub(super) fn requires_full_history(&self) -> bool {
-        self.older_cursor.is_some()
-            && self.limit.is_some()
-            && self.before.is_none()
-            && self.from.is_none()
+        self.initial_tail_window_limit().is_none()
+            && !(self.epoch.is_some()
+                && self.from.is_some()
+                && self.limit.is_none()
+                && self.before.is_none())
     }
 
     pub(super) fn initial_tail_window_limit(&self) -> Option<usize> {
@@ -115,15 +117,21 @@ struct MessageEpochCursor {
 
 impl MessageEpochCursor {
     fn from_messages(messages: &[ChatItem]) -> Option<Self> {
-        let stable_prefix_count = messages.len().saturating_sub(RECENT_TAIL_MESSAGE_COUNT);
+        let anchor_messages = epoch_identity_digests(messages)?;
+        let stable_prefix_count = anchor_messages
+            .len()
+            .saturating_sub(RECENT_TAIL_MESSAGE_COUNT);
         let anchor_count = stable_prefix_count.min(RECENT_TAIL_MESSAGE_COUNT);
         if anchor_count == 0 {
             return None;
         }
         Some(Self {
-            version: 2,
+            version: EPOCH_CURSOR_VERSION,
             anchor_count,
-            anchor_digests: message_digests(&messages[..anchor_count])?,
+            anchor_digests: anchor_messages[..anchor_count]
+                .iter()
+                .map(|(_, digest)| digest.clone())
+                .collect(),
         })
     }
 
@@ -134,7 +142,7 @@ impl MessageEpochCursor {
     fn decode(value: &str) -> Option<Self> {
         let decoded = URL_SAFE_NO_PAD.decode(value).ok()?;
         let cursor = serde_json::from_slice::<Self>(&decoded).ok()?;
-        (cursor.version == 2
+        (matches!(cursor.version, 2 | EPOCH_CURSOR_VERSION)
             && cursor.anchor_count > 0
             && cursor.anchor_count <= RECENT_TAIL_MESSAGE_COUNT
             && cursor.anchor_count == cursor.anchor_digests.len()
@@ -145,18 +153,29 @@ impl MessageEpochCursor {
     }
 
     fn find_start(&self, messages: &[ChatItem]) -> Option<usize> {
-        let message_digests = message_digests(messages)?;
+        let message_digests = if self.version == 2 {
+            message_digests(messages)?
+                .into_iter()
+                .enumerate()
+                .collect::<Vec<_>>()
+        } else {
+            epoch_identity_digests(messages)?
+        };
         let last_start = message_digests.len().checked_sub(self.anchor_count)?;
         let mut matched_start = None;
         for start in 0..=last_start {
-            if message_digests[start] != self.anchor_digests[0] {
+            if message_digests[start].1 != self.anchor_digests[0] {
                 continue;
             }
             let end = start + self.anchor_count;
-            if message_digests[start..end] != self.anchor_digests {
+            if !message_digests[start..end]
+                .iter()
+                .map(|(_, digest)| digest)
+                .eq(self.anchor_digests.iter())
+            {
                 continue;
             }
-            if matched_start.replace(start).is_some() {
+            if matched_start.replace(message_digests[start].0).is_some() {
                 return None;
             }
         }
@@ -387,11 +406,54 @@ fn message_digests(messages: &[ChatItem]) -> Option<Vec<String>> {
         .collect()
 }
 
+fn epoch_identity_digests(messages: &[ChatItem]) -> Option<Vec<(usize, String)>> {
+    let mut digests = Vec::new();
+    for (index, message) in messages.iter().enumerate() {
+        let Some(identity) = epoch_identity_message(message) else {
+            continue;
+        };
+        digests.push((index, message_digest(std::slice::from_ref(&identity))?));
+    }
+    Some(digests)
+}
+
+fn epoch_identity_message(message: &ChatItem) -> Option<ChatItem> {
+    let mut identity = match message {
+        // Stored files are merged after parsing and cannot anchor transcript epochs.
+        ChatItem::FileAttachment { .. } => return None,
+        message => message.clone(),
+    };
+    match &mut identity {
+        ChatItem::Peer {
+            session_title,
+            content,
+            ..
+        } => {
+            // Peer titles are resolved after parsing and can change independently.
+            *session_title = None;
+            normalize_image_availability(content);
+        }
+        ChatItem::QueuedUser { content, .. } | ChatItem::UserWithContent { content, .. } => {
+            normalize_image_availability(content);
+        }
+        _ => {}
+    }
+    Some(identity)
+}
+
+fn normalize_image_availability(content: &mut [UserContentPart]) {
+    for part in content {
+        if let UserContentPart::Image { available, .. } = part {
+            *available = false;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
 
-    use super::{MessageEpochCursor, MessageRange, active_question_index};
+    use super::{MessageEpochCursor, MessageRange, active_question_index, message_digests};
     use crate::commands::agent::watch_web::messages::{ChatItem, ConversationResponse};
 
     #[rstest]
@@ -404,6 +466,27 @@ mod tests {
         #[case] expected: Option<usize>,
     ) {
         assert_eq!(range.initial_tail_window_limit(), expected);
+    }
+
+    #[rstest]
+    #[case::initial_tail_page(
+        MessageRange { limit: Some(100), ..MessageRange::default() },
+        false,
+    )]
+    #[case::epoch_refresh(
+        MessageRange { from: Some(0), epoch: Some("fixture-epoch".to_owned()), ..MessageRange::default() },
+        false,
+    )]
+    #[case::unbounded_history(MessageRange::default(), true)]
+    #[case::numeric_page(
+        MessageRange { limit: Some(100), before: Some(100), ..MessageRange::default() },
+        true,
+    )]
+    fn full_history_is_required_for_requests_other_than_tail_pages_and_epoch_refreshes(
+        #[case] range: MessageRange,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(range.requires_full_history(), expected);
     }
 
     #[test]
@@ -440,6 +523,60 @@ mod tests {
                 ..ConversationResponse::default()
             },
         );
+    }
+
+    #[test]
+    fn epoch_anchor_matches_messages_after_display_enrichment() {
+        let mut transcript_messages = vec![ChatItem::Peer {
+            direction: crate::commands::agent::watch_web::messages::PeerDirection::From,
+            session_id: "fixture-peer-session".to_owned(),
+            session_title: None,
+            content: vec![
+                crate::commands::agent::watch_web::messages::UserContentPart::Text {
+                    text: "Fixture peer message.".to_owned(),
+                },
+            ],
+            timestamp: Some("2026-01-01T00:00:00+00:00".to_owned()),
+            failed: false,
+        }];
+        transcript_messages.extend((0..30).map(|index| ChatItem::Assistant {
+            text: format!("Fixture message {index}."),
+        }));
+        let mut enriched_messages = transcript_messages.clone();
+        if let ChatItem::Peer { session_title, .. } = &mut enriched_messages[0] {
+            *session_title = Some("Fixture peer title".to_owned());
+        }
+        enriched_messages.insert(
+            1,
+            ChatItem::FileAttachment {
+                files: Vec::new(),
+                caption: Some("Fixture stored file".to_owned()),
+                timestamp: Some("2026-01-01T00:00:01+00:00".to_owned()),
+            },
+        );
+        let cursor = MessageEpochCursor::from_messages(&enriched_messages).unwrap();
+
+        assert_eq!(cursor.find_start(&transcript_messages), Some(0));
+    }
+
+    #[test]
+    fn version_two_epoch_cursors_keep_exact_matching() {
+        let messages = (0..30)
+            .map(|index| ChatItem::Assistant {
+                text: format!("Fixture message {index}."),
+            })
+            .collect::<Vec<_>>();
+        let cursor = MessageEpochCursor {
+            version: 2,
+            anchor_count: 10,
+            anchor_digests: message_digests(&messages[..10]).unwrap(),
+        };
+        let decoded = cursor
+            .encode()
+            .and_then(|encoded| MessageEpochCursor::decode(&encoded))
+            .unwrap();
+
+        assert_eq!(decoded.find_start(&messages), Some(0));
     }
 
     #[test]

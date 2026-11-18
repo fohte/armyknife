@@ -69,7 +69,7 @@ pub(super) fn parse_session_transcript_incrementally_for_range(
         && parser_matches_engine(&entry.parser, input.engine)
     {
         if entry.tail_window.is_some() && range.require_full_history {
-            restart_reason = Some("older_page_requires_full_history");
+            restart_reason = Some("request_requires_full_history");
             false
         } else {
             match advance_cached_parser(entry, &fingerprint) {
