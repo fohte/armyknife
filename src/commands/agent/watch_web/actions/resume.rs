@@ -9,53 +9,26 @@ use tokio::sync::Mutex;
 
 use super::super::super::types::{Session, SessionStatus};
 use super::{ActionState, ApiError, Success, load_session};
+use crate::infra::tmux::layout::ResumeLayoutSpec;
+use crate::shared::config::LayoutNode;
 
 const RESUME_START_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub(super) trait EndedSessionHost {
-    fn new_window(
-        &self,
-        socket_path: Option<&str>,
-        session_name: &str,
-        cwd: &std::path::Path,
-        window_name: &str,
-    ) -> anyhow::Result<String>;
-
-    fn send_keys(
-        &self,
-        socket_path: Option<&str>,
-        pane_id: &str,
-        keys: &[&str],
-    ) -> anyhow::Result<()>;
+    fn open_layout(&self, spec: ResumeLayoutSpec<'_>) -> anyhow::Result<()>;
 }
 
 pub(super) struct TmuxEndedSessionHost;
 
 impl EndedSessionHost for TmuxEndedSessionHost {
-    fn new_window(
-        &self,
-        socket_path: Option<&str>,
-        session_name: &str,
-        cwd: &std::path::Path,
-        window_name: &str,
-    ) -> anyhow::Result<String> {
-        crate::infra::tmux::new_window_for_socket(socket_path, session_name, cwd, window_name)
-            .map_err(Into::into)
-    }
-
-    fn send_keys(
-        &self,
-        socket_path: Option<&str>,
-        pane_id: &str,
-        keys: &[&str],
-    ) -> anyhow::Result<()> {
-        crate::infra::tmux::send_keys_sequence_for_socket(socket_path, pane_id, keys)
-            .map_err(Into::into)
+    fn open_layout(&self, spec: ResumeLayoutSpec<'_>) -> anyhow::Result<()> {
+        crate::infra::tmux::layout::build_resume_layout(spec).map(|_| ())
     }
 }
 
 pub(super) fn resume_ended_session(
     session: &Session,
+    layout: &LayoutNode,
     host: &impl EndedSessionHost,
 ) -> anyhow::Result<()> {
     let tmux_info = session
@@ -63,17 +36,16 @@ pub(super) fn resume_ended_session(
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("session has no tmux location"))?;
     let command = crate::commands::agent::resurrect::resume_command_for_session(session);
-    let pane_id = host.new_window(
-        tmux_info.socket_path.as_deref(),
-        &tmux_info.session_name,
-        &session.cwd,
-        &tmux_info.window_name,
-    )?;
-    host.send_keys(
-        tmux_info.socket_path.as_deref(),
-        &pane_id,
-        &[&command, "Enter"],
-    )
+    let cwd = session.cwd.to_string_lossy();
+    host.open_layout(ResumeLayoutSpec {
+        session: &tmux_info.session_name,
+        cwd: cwd.as_ref(),
+        window_name: &tmux_info.window_name,
+        layout,
+        engine: session.engine,
+        agent_command: &command,
+        socket_path: tmux_info.socket_path.as_deref(),
+    })
 }
 
 #[derive(Clone, Default)]
@@ -149,6 +121,8 @@ mod tests {
 
     use super::{EndedSessionHost, resume_ended_session};
     use crate::commands::agent::types::{Engine, Session, TmuxInfo};
+    use crate::infra::tmux::layout::ResumeLayoutSpec;
+    use crate::shared::config::LayoutNode;
 
     #[derive(Default)]
     struct FakeEndedSessionHost {
@@ -156,36 +130,23 @@ mod tests {
     }
 
     impl EndedSessionHost for FakeEndedSessionHost {
-        fn new_window(
-            &self,
-            socket_path: Option<&str>,
-            session_name: &str,
-            cwd: &std::path::Path,
-            window_name: &str,
-        ) -> Result<String> {
+        fn open_layout(&self, spec: ResumeLayoutSpec<'_>) -> Result<()> {
             self.calls.lock().unwrap().push(json!({
-                "kind": "new-window",
-                "socketPath": socket_path,
-                "sessionName": session_name,
-                "cwd": cwd.to_string_lossy(),
-                "windowName": window_name,
-            }));
-            Ok("fixture-pane".to_string())
-        }
-
-        fn send_keys(&self, socket_path: Option<&str>, pane_id: &str, keys: &[&str]) -> Result<()> {
-            self.calls.lock().unwrap().push(json!({
-                "kind": "send-keys",
-                "socketPath": socket_path,
-                "paneId": pane_id,
-                "keys": keys,
+                "kind": "layout",
+                "socketPath": spec.socket_path,
+                "sessionName": spec.session,
+                "cwd": spec.cwd,
+                "windowName": spec.window_name,
+                "engine": spec.engine,
+                "agentCommand": spec.agent_command,
+                "layout": serde_json::to_value(spec.layout).unwrap(),
             }));
             Ok(())
         }
     }
 
     #[test]
-    fn resume_ended_session_starts_in_a_new_window_and_sends_command() {
+    fn resume_ended_session_passes_the_saved_context_to_the_layout() {
         let mut session: Session = serde_json::from_value(json!({
             "session_id": "fixture-session",
             "cwd": "/fixture/worktree",
@@ -209,29 +170,26 @@ mod tests {
             socket_path: Some("/fixture/tmux.sock".to_string()),
         });
         let host = FakeEndedSessionHost::default();
+        let layout = LayoutNode::default();
 
-        resume_ended_session(&session, &host).unwrap();
+        resume_ended_session(&session, &layout, &host).unwrap();
 
         assert_eq!(
             *host.calls.lock().unwrap(),
-            vec![
-                json!({
-                    "kind": "new-window",
-                    "socketPath": "/fixture/tmux.sock",
-                    "sessionName": "fixture-session-window",
-                    "cwd": "/fixture/worktree",
-                    "windowName": "fixture-agent",
-                }),
-                json!({
-                    "kind": "send-keys",
-                    "socketPath": "/fixture/tmux.sock",
-                    "paneId": "fixture-pane",
-                    "keys": [
-                        "a agent resume fixture-session --engine codex --ancestor-session-ids fixture-parent --launched-with-vibe",
-                        "Enter",
-                    ],
-                }),
-            ],
+            vec![json!({
+                "kind": "layout",
+                "socketPath": "/fixture/tmux.sock",
+                "sessionName": "fixture-session-window",
+                "cwd": "/fixture/worktree",
+                "windowName": "fixture-agent",
+                "engine": "codex",
+                "agentCommand": "a agent resume fixture-session --engine codex --ancestor-session-ids fixture-parent --launched-with-vibe",
+                "layout": {
+                    "direction": "horizontal",
+                    "first": { "command": "nvim", "focus": true },
+                    "second": { "command": "claude", "focus": false },
+                },
+            }),],
         );
     }
 }

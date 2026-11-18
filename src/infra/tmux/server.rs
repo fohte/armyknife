@@ -52,7 +52,10 @@ fn socket_command_args<S: AsRef<OsStr>>(socket_path: Option<&str>, args: &[S]) -
     full_args
 }
 
-fn run_tmux_for_socket<S: AsRef<OsStr>>(socket_path: Option<&str>, args: &[S]) -> Result<()> {
+pub(crate) fn run_tmux_for_socket<S: AsRef<OsStr>>(
+    socket_path: Option<&str>,
+    args: &[S],
+) -> Result<()> {
     run_tmux_output_for_socket(socket_path, args).map(|_| ())
 }
 
@@ -215,35 +218,6 @@ pub fn capture_pane_with_escapes_for_socket(
 /// Sends keys to a pane on its recorded server.
 pub fn send_keys_for_socket(socket_path: Option<&str>, pane_id: &str, keys: &str) -> Result<()> {
     send_keys_sequence_for_socket(socket_path, pane_id, &[keys])
-}
-
-/// Creates a detached window and returns its first pane ID.
-pub fn new_window_for_socket(
-    socket_path: Option<&str>,
-    session_name: &str,
-    cwd: &std::path::Path,
-    window_name: &str,
-) -> Result<String> {
-    let args = vec![
-        OsString::from("new-window"),
-        OsString::from("-d"),
-        OsString::from("-P"),
-        OsString::from("-F"),
-        OsString::from("#{pane_id}"),
-        OsString::from("-t"),
-        OsString::from(session_name),
-        OsString::from("-c"),
-        cwd.as_os_str().to_os_string(),
-        OsString::from("-n"),
-        OsString::from(window_name),
-    ];
-    let pane_id = run_tmux_output_for_socket(socket_path, &args)?;
-    if pane_id.is_empty() {
-        return Err(TmuxError::Internal(
-            "tmux returned no pane ID for the new window".to_string(),
-        ));
-    }
-    Ok(pane_id)
 }
 
 /// Sends a sequence of tmux keys in one command so concurrent actions cannot interleave it.

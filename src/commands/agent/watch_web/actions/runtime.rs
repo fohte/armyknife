@@ -15,7 +15,12 @@ impl ActionRuntime for LiveActionRuntime {
                 crate::commands::agent::resume::respawn_paused_session(session)?;
             }
             crate::commands::agent::types::SessionStatus::Ended => {
-                super::resume::resume_ended_session(session, &super::resume::TmuxEndedSessionHost)?;
+                let config = crate::shared::config::load_config_or_default();
+                super::resume::resume_ended_session(
+                    session,
+                    &config.agent.worktree.layout,
+                    &super::resume::TmuxEndedSessionHost,
+                )?;
             }
             _ => anyhow::bail!("session is not ended or paused"),
         }
