@@ -282,7 +282,10 @@ function isChatItem(value: unknown): value is ChatItem {
         typeof value['inputSummary'] === 'string' &&
         (value['reason'] === null || typeof value['reason'] === 'string') &&
         typeof value['retryable'] === 'boolean' &&
-        typeof value['resolved'] === 'boolean'
+        typeof value['resolved'] === 'boolean' &&
+        (value['resolution'] === null ||
+          value['resolution'] === 'approved' ||
+          value['resolution'] === 'dismissed')
       )
     case 'decision':
       return (

@@ -89,6 +89,7 @@ const deniedMessage: Extract<ChatItem, { type: 'permission_denied' }> = {
   reason: null,
   retryable: true,
   resolved: false,
+  resolution: null,
 }
 const conversation: ConversationResponse = {
   messages: [
@@ -394,6 +395,15 @@ const requests: {
     path: 'permission-denials/5/retry',
   },
   {
+    name: 'dismiss denied permission',
+    operation: {
+      type: 'permission_dismiss',
+      sessionId: 'test-session',
+      seq: 5,
+    },
+    path: 'permission-denials/5/dismiss',
+  },
+  {
     name: 'change primary task',
     operation: {
       type: 'primary_task',
@@ -658,6 +668,12 @@ const operationFactories: [
     'permission-denials/5/retry',
     {},
     { type: 'permission_retry', sessionId: session.id, seq: 5 },
+  ],
+  [
+    'denied action dismissal',
+    'permission-denials/5/dismiss',
+    {},
+    { type: 'permission_dismiss', sessionId: session.id, seq: 5 },
   ],
   [
     'primary task change',
@@ -1145,7 +1161,22 @@ const conversationReducerCases: [
         decisionMessage,
         proposalMessage,
         todoMessage,
-        { ...deniedMessage, resolved: true },
+        { ...deniedMessage, resolved: true, resolution: 'approved' },
+      ],
+      decisions: decisionList,
+    },
+  ],
+  [
+    'dismisses a denied action',
+    { type: 'permission_dismiss', sessionId: session.id, seq: 5 },
+    {
+      ...conversation,
+      messages: [
+        questionMessage,
+        decisionMessage,
+        proposalMessage,
+        todoMessage,
+        { ...deniedMessage, resolved: true, resolution: 'dismissed' },
       ],
       decisions: decisionList,
     },
@@ -1748,6 +1779,23 @@ const conversationConfirmationCases: [
     {
       ...conversation,
       messages: [...conversation.messages.slice(0, 4), retriedPermission],
+    },
+    allowedActions,
+    true,
+  ],
+  [
+    'confirms a denied action dismissal from the resolved item',
+    {
+      type: 'permission_dismiss',
+      sessionId: session.id,
+      seq: deniedMessage.seq,
+    },
+    {
+      ...conversation,
+      messages: [
+        ...conversation.messages.slice(0, 4),
+        { ...deniedMessage, resolved: true, resolution: 'dismissed' },
+      ],
     },
     allowedActions,
     true,

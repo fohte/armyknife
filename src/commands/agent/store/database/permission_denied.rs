@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
+use serde::Serialize;
 use serde_json::Value;
 
 use super::{increment_revision, open_connection, validate_session_id};
@@ -17,6 +18,33 @@ pub(crate) struct PermissionDeniedOperation {
     pub(crate) reason: Option<String>,
     pub(crate) created_at: DateTime<Utc>,
     pub(crate) resolved_at: Option<DateTime<Utc>>,
+    pub(crate) resolution: Option<PermissionDeniedResolution>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PermissionDeniedResolution {
+    Approved,
+    Dismissed,
+}
+
+impl PermissionDeniedResolution {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Approved => "approved",
+            Self::Dismissed => "dismissed",
+        }
+    }
+
+    fn parse(value: Option<String>, resolved_at: Option<&str>) -> Result<Option<Self>> {
+        match value.as_deref() {
+            Some("approved") => Ok(Some(Self::Approved)),
+            Some("dismissed") => Ok(Some(Self::Dismissed)),
+            Some(value) => anyhow::bail!("unknown permission-denied resolution: {value}"),
+            None if resolved_at.is_some() => Ok(Some(Self::Approved)),
+            None => Ok(None),
+        }
+    }
 }
 
 impl PermissionDeniedOperation {
@@ -90,7 +118,7 @@ pub(crate) fn permission_denied_operations(
     }
     let connection = open_connection(sessions_dir)?;
     let mut statement = connection.prepare(
-        "SELECT session_id, seq, tool_use_id, tool_name, tool_input, reason, created_at, resolved_at
+        "SELECT session_id, seq, tool_use_id, tool_name, tool_input, reason, created_at, resolved_at, resolution
          FROM agent_permission_denied WHERE session_id = ?1 ORDER BY seq",
     )?;
     let rows = statement.query_map([session_id], |row| {
@@ -103,11 +131,22 @@ pub(crate) fn permission_denied_operations(
             row.get::<_, Option<String>>(5)?,
             row.get::<_, String>(6)?,
             row.get::<_, Option<String>>(7)?,
+            row.get::<_, Option<String>>(8)?,
         ))
     })?;
     rows.map(|row| {
-        let (session_id, seq, tool_use_id, tool_name, tool_input, reason, created_at, resolved_at) =
-            row?;
+        let (
+            session_id,
+            seq,
+            tool_use_id,
+            tool_name,
+            tool_input,
+            reason,
+            created_at,
+            resolved_at,
+            resolution,
+        ) = row?;
+        let resolution = PermissionDeniedResolution::parse(resolution, resolved_at.as_deref())?;
         Ok(PermissionDeniedOperation {
             session_id,
             seq,
@@ -125,6 +164,7 @@ pub(crate) fn permission_denied_operations(
                         .map(|parsed| parsed.with_timezone(&Utc))
                 })
                 .transpose()?,
+            resolution,
         })
     })
     .collect()
@@ -134,14 +174,20 @@ pub(crate) fn resolve_permission_denied(
     sessions_dir: &Path,
     session_id: &str,
     seq: i64,
+    resolution: PermissionDeniedResolution,
 ) -> Result<bool> {
     validate_session_id(session_id)?;
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let changed = transaction.execute(
-        "UPDATE agent_permission_denied SET resolved_at = ?1
-         WHERE session_id = ?2 AND seq = ?3 AND resolved_at IS NULL",
-        params![Utc::now().to_rfc3339(), session_id, seq],
+        "UPDATE agent_permission_denied SET resolved_at = ?1, resolution = ?2
+         WHERE session_id = ?3 AND seq = ?4 AND resolved_at IS NULL",
+        params![
+            Utc::now().to_rfc3339(),
+            resolution.as_str(),
+            session_id,
+            seq
+        ],
     )?;
     if changed > 0 {
         increment_revision(&transaction)?;

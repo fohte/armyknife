@@ -19,6 +19,7 @@ const operation: Extract<ChatItem, { type: 'permission_denied' }> = {
   reason: '[Sensitive Operation]',
   retryable: true,
   resolved: false,
+  resolution: null,
 }
 
 function renderCard(
@@ -32,7 +33,9 @@ function renderCard(
         canRetry
         actionsReady
         pendingAction={null}
+        canDismiss
         onRetry={() => undefined}
+        onDismiss={() => undefined}
         {...overrides}
       />,
     )
@@ -108,7 +111,10 @@ it('renders the denied operation and offers a one-time retry', () => {
       overflowWrap: 'anywhere',
     },
     reason: '[Sensitive Operation]',
-    button: [{ text: 'Allow and retry', disabled: false }],
+    button: [
+      { text: 'Allow and retry', disabled: false },
+      { text: 'Dismiss', disabled: false },
+    ],
   })
 })
 
@@ -151,15 +157,60 @@ it('sends no retry action for denials without a classifier verdict', () => {
   })
 
   const snapshot = () => ({
-    buttonCount: container.querySelectorAll('button').length,
+    buttons: Array.from(
+      container.querySelectorAll('button'),
+      (button) => button.textContent,
+    ),
     unavailable: container.querySelector('.permission-denied-unavailable')
       ?.textContent,
   })
 
   expect(snapshot()).toEqual({
-    buttonCount: 0,
+    buttons: ['Dismiss'],
     unavailable:
       'This denial has no classifier verdict and cannot be approved here.',
+  })
+})
+
+it('calls the dismissal action when Dismiss is pressed', () => {
+  const onDismiss = vi.fn()
+  renderCard({ onDismiss })
+  act(() => {
+    requireElement(
+      Array.from(container.querySelectorAll('button')).find(
+        (button) => button.textContent === 'Dismiss',
+      ) ?? null,
+    ).click()
+  })
+
+  expect(onDismiss.mock.calls).toEqual([[]])
+})
+
+it('shows dismissed denials as a collapsed command row that can expand', () => {
+  renderCard({
+    message: { ...operation, resolved: true, resolution: 'dismissed' },
+  })
+
+  const details = requireElement(container.querySelector('details'))
+  const snapshot = () => ({
+    summary: container.querySelector('summary')?.textContent,
+    expanded: details.open,
+    heading: container.querySelector('h2')?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    summary: 'Operation denied · Dismissed Bash ▸',
+    expanded: false,
+    heading: 'Operation denied',
+  })
+
+  act(() => {
+    requireElement(container.querySelector('summary')).click()
+  })
+
+  expect(snapshot()).toEqual({
+    summary: 'Operation denied · Dismissed Bash ▸',
+    expanded: true,
+    heading: 'Operation denied',
   })
 })
 

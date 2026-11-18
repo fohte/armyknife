@@ -9,7 +9,7 @@ import { summarizeToolGroupItems, ToolSummary } from '#components/tool-summary'
 import type { ChatItem, OpenInTerminalStatus, SessionActions } from '#types'
 
 type PendingPermissionAction = {
-  action: 'approve' | 'reject' | 'retry'
+  action: 'approve' | 'reject' | 'retry' | 'dismiss'
   status: 'sending' | 'sent'
   requestId: string
 }

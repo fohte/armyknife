@@ -9,3 +9,46 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+.chat-permission-denied-card--dismissed {
+  border-color: var(--aw-border-control);
+  color: var(--aw-text-muted);
+}
+
+.chat-permission-denied-card--dismissed details > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  cursor: pointer;
+  list-style: none;
+  white-space: nowrap;
+}
+
+.chat-permission-denied-card--dismissed
+  details
+  > summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-permission-denied-card--dismissed details > summary code {
+  overflow: hidden;
+  color: inherit;
+  text-overflow: ellipsis;
+}
+
+.chat-permission-denied-card--dismissed
+  details[open]
+  .permission-denied-chevron {
+  transform: rotate(90deg);
+}
+
+.permission-denied-details {
+  padding: 12px 16px 4px;
+}
+
+.permission-denied-details h2 {
+  padding: 0;
+  color: var(--aw-text-muted);
+}

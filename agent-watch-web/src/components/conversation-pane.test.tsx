@@ -233,6 +233,7 @@ const permissionDenied: ChatItem = {
   reason: 'The operation is not allowed.',
   retryable: false,
   resolved: false,
+  resolution: null,
 }
 let container: HTMLDivElement
 let root: Root | null = null

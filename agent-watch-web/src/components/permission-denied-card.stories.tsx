@@ -1,3 +1,5 @@
+import '#components/mobile-layout.css'
+
 import type { Meta, StoryObj } from '@storybook/react-vite'
 
 import { PermissionDeniedCard } from '#components/permission-denied-card'
@@ -14,6 +16,7 @@ git status --short`,
   reason: '[Sensitive Operation]',
   retryable: true,
   resolved: false,
+  resolution: null,
 }
 
 const meta = {
@@ -23,7 +26,9 @@ const meta = {
     canRetry: true,
     actionsReady: true,
     pendingAction: null,
+    canDismiss: true,
     onRetry: () => undefined,
+    onDismiss: () => undefined,
   },
 } satisfies Meta<typeof PermissionDeniedCard>
 
@@ -48,7 +53,7 @@ export const RetryIsSending: Story = {
 export const RetryWasSent: Story = {
   name: 'The card confirms that the retry instruction was sent',
   args: {
-    message: { ...deniedOperation, resolved: true },
+    message: { ...deniedOperation, resolved: true, resolution: 'approved' },
     pendingAction: {
       action: 'retry',
       status: 'sent',
@@ -58,7 +63,7 @@ export const RetryWasSent: Story = {
 }
 
 export const NoClassifierVerdict: Story = {
-  name: 'A denial without a classifier verdict has no retry action',
+  name: 'A denial without a classifier verdict can still be dismissed',
   args: {
     message: {
       ...deniedOperation,
@@ -67,4 +72,43 @@ export const NoClassifierVerdict: Story = {
       retryable: false,
     },
   },
+}
+
+export const Dismissed: Story = {
+  name: 'A dismissed denial stays collapsed at its original time',
+  args: {
+    message: { ...deniedOperation, resolved: true, resolution: 'dismissed' },
+  },
+}
+
+export const DismissedExpanded: Story = {
+  name: 'A dismissed denial shows its details when expanded',
+  args: {
+    message: { ...deniedOperation, resolved: true, resolution: 'dismissed' },
+    defaultOpen: true,
+  },
+}
+
+export const DismissIsSending: Story = {
+  name: 'The dismiss action shows while the request is sending',
+  args: {
+    pendingAction: {
+      action: 'dismiss',
+      status: 'sending',
+      requestId: 'permission-denied-1',
+    },
+  },
+}
+
+export const MobileActions: Story = {
+  name: 'The retry and dismiss actions fit a mobile row',
+  render: (args) => (
+    <div
+      className="conversation-pane"
+      data-mobile="true"
+      style={{ width: 390 }}
+    >
+      <PermissionDeniedCard {...args} />
+    </div>
+  ),
 }

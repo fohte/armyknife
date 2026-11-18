@@ -252,6 +252,25 @@ it('accepts a permission denial card from the conversation API', () => {
         reason: '[Sensitive Operation]',
         retryable: true,
         resolved: false,
+        resolution: null,
+      }),
+    ),
+  ).toBe(true)
+})
+
+it('accepts a dismissed permission denial from the conversation API', () => {
+  expect(
+    isConversationResponse(
+      response({
+        type: 'permission_denied',
+        seq: 1,
+        toolUseId: 'tool-call-example',
+        tool: 'Bash',
+        inputSummary: 'printf example',
+        reason: '[Sensitive Operation]',
+        retryable: true,
+        resolved: true,
+        resolution: 'dismissed',
       }),
     ),
   ).toBe(true)
@@ -269,6 +288,7 @@ it('rejects permission denial cards with an invalid retry state', () => {
         reason: null,
         retryable: 'yes',
         resolved: false,
+        resolution: null,
       }),
     ),
   ).toBe(false)
