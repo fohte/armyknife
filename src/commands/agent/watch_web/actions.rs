@@ -47,7 +47,8 @@ use permission_denied_locks::PermissionDeniedRetryLocks;
 use proposal_answer_locks::ProposalAnswerLocks;
 use runtime::LiveActionRuntime;
 use support::{
-    Success, load_session, require_tmux, resolve_sessions_dir, run_blocking, send_claude_escape,
+    Success, load_session, require_tmux, resolve_current_session_id, resolve_sessions_dir,
+    run_blocking, send_claude_escape,
 };
 
 pub(super) fn router(message_loaders: RouteLoaders) -> Router {
@@ -215,10 +216,11 @@ async fn actions(
     State(state): State<ActionState>,
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<ActionCapabilities>, ApiError> {
-    let session = load_session(state.clone(), id.clone()).await?;
+    let current_id = resolve_current_session_id(&state, &id).await?;
+    let session = load_session(state.clone(), current_id.clone()).await?;
     state
         .resume_pending
-        .clear_if_not_resumable(&id, session.status)
+        .clear_if_not_resumable(&current_id, session.status)
         .await;
     let has_tmux = session.tmux_info.is_some();
     let has_live_session = session.status != SessionStatus::Ended;

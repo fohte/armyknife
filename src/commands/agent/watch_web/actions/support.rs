@@ -55,6 +55,16 @@ pub(super) fn resolve_sessions_dir(override_dir: Option<PathBuf>) -> Result<Path
     }
 }
 
+pub(super) async fn resolve_current_session_id(
+    state: &ActionState,
+    session_id: &str,
+) -> Result<String, ApiError> {
+    let sessions_dir =
+        resolve_sessions_dir(state.sessions_dir.clone()).map_err(ApiError::internal)?;
+    let session_id = session_id.to_string();
+    run_blocking(move || store::resolve_current_session_id_from(&sessions_dir, &session_id)).await
+}
+
 pub(super) async fn send_claude_escape(
     runtime: Arc<dyn ActionRuntime>,
     tmux_info: &TmuxInfo,

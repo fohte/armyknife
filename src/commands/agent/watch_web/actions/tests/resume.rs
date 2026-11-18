@@ -1,13 +1,31 @@
 use axum::body::Body;
 use axum::http::Request;
 use axum::http::StatusCode;
-use rstest::rstest;
+use rstest::{fixture, rstest};
 use serde_json::json;
 use tower::ServiceExt;
 
 use super::{ActionContext, action_context, post_empty, response_snapshot, session};
 use crate::commands::agent::store;
 use crate::commands::agent::types::SessionStatus;
+
+#[fixture]
+fn rewind_action_context(
+    #[default(SessionStatus::Ended)] successor_status: SessionStatus,
+    action_context: ActionContext,
+) -> ActionContext {
+    let mut replaced = session("fixture-replaced");
+    replaced.status = SessionStatus::Ended;
+    let mut successor = session("fixture-successor");
+    successor.status = successor_status;
+    store::save_rewind_sessions(
+        &action_context.temp_dir.path().join("sessions"),
+        &replaced,
+        &successor,
+    )
+    .unwrap();
+    action_context
+}
 
 #[rstest]
 #[case::ended(SessionStatus::Ended)]
@@ -67,32 +85,96 @@ async fn resume_endpoint_rejects_sessions_that_are_not_ended_or_paused(
 #[rstest]
 #[tokio::test]
 async fn resume_endpoint_rejects_a_replaced_id_when_its_successor_is_active(
-    action_context: ActionContext,
+    #[with(SessionStatus::Running)] rewind_action_context: ActionContext,
 ) {
-    let mut replaced = session("fixture-replaced");
-    replaced.status = SessionStatus::Ended;
-    let mut successor = session("fixture-successor");
-    successor.status = SessionStatus::Running;
-    store::save_rewind_sessions(
-        &action_context.temp_dir.path().join("sessions"),
-        &replaced,
-        &successor,
-    )
-    .unwrap();
-
-    let response = action_context
+    let response = rewind_action_context
         .router()
         .oneshot(post_empty("/sessions/fixture-replaced/resume"))
         .await
         .unwrap();
 
     assert_eq!(
-        response_snapshot(response, &action_context).await,
+        response_snapshot(response, &rewind_action_context).await,
         json!({
             "status": StatusCode::CONFLICT.as_u16(),
             "body": { "error": "session is not ended or paused" },
             "calls": [],
         }),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn actions_endpoint_uses_the_successor_status_for_a_replaced_id(
+    #[with(SessionStatus::Running)] rewind_action_context: ActionContext,
+) {
+    let response = rewind_action_context
+        .router()
+        .oneshot(
+            Request::builder()
+                .uri("/sessions/fixture-replaced/actions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response_snapshot(response, &rewind_action_context).await,
+        json!({
+            "status": StatusCode::OK.as_u16(),
+            "body": {
+                "message": true,
+                "answerQuestion": false,
+                "resume": false,
+                "interrupt": true,
+                "openInTerminal": true,
+                "rewind": false,
+            },
+            "calls": [],
+        }),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn repeated_resume_requests_for_a_replaced_id_share_the_successor_lock(
+    #[with(SessionStatus::Ended)] rewind_action_context: ActionContext,
+) {
+    let app = rewind_action_context.router();
+
+    let first = app
+        .clone()
+        .oneshot(post_empty("/sessions/fixture-replaced/resume"))
+        .await
+        .unwrap();
+    let second = app
+        .oneshot(post_empty("/sessions/fixture-replaced/resume"))
+        .await
+        .unwrap();
+
+    let calls = json!([{
+        "kind": "resume",
+        "sessionId": "fixture-successor",
+        "status": SessionStatus::Ended,
+    }]);
+    assert_eq!(
+        (
+            response_snapshot(first, &rewind_action_context).await,
+            response_snapshot(second, &rewind_action_context).await,
+        ),
+        (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": calls.clone(),
+            }),
+            json!({
+                "status": StatusCode::CONFLICT.as_u16(),
+                "body": { "error": "session resume is already in progress" },
+                "calls": calls,
+            }),
+        ),
     );
 }
 

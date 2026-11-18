@@ -7,11 +7,8 @@ use axum::Json;
 use axum::extract::{Path as RoutePath, State};
 use tokio::sync::Mutex;
 
-use super::super::super::{
-    store,
-    types::{Session, SessionStatus},
-};
-use super::{ActionState, ApiError, Success, load_session, resolve_sessions_dir, run_blocking};
+use super::super::super::types::{Session, SessionStatus};
+use super::{ActionState, ApiError, Success, load_session, resolve_current_session_id};
 use crate::infra::tmux::layout::ResumeLayoutSpec;
 use crate::shared::config::LayoutNode;
 
@@ -93,22 +90,13 @@ pub(super) async fn resume_session(
     State(state): State<ActionState>,
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Success>, ApiError> {
-    let requested_session = load_session(state.clone(), id.clone()).await?;
-    let sessions_dir =
-        resolve_sessions_dir(state.sessions_dir.clone()).map_err(ApiError::internal)?;
-    let requested_id = id.clone();
-    let current_id =
-        run_blocking(move || store::resolve_current_session_id_from(&sessions_dir, &requested_id))
-            .await?;
+    load_session(state.clone(), id.clone()).await?;
+    let current_id = resolve_current_session_id(&state, &id).await?;
     let lock = state.resume_locks.get_or_create(current_id.clone()).await;
     let _guard = lock
         .try_lock_owned()
         .map_err(|_| ApiError::conflict("session resume is already in progress"))?;
-    let session = if current_id == id {
-        requested_session
-    } else {
-        load_session(state.clone(), current_id.clone()).await?
-    };
+    let session = load_session(state.clone(), current_id.clone()).await?;
     if state
         .resume_pending
         .is_pending(&current_id, session.status)
