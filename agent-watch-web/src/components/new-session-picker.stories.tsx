@@ -34,6 +34,24 @@ export const EngineAndWorktreeCanBeSelected: Story = {
   },
 }
 
+export const ModelEffortOptionsAreOpen: Story = {
+  name: 'The command palette exposes the selected model and effort controls',
+  args: {
+    initialModelPickerOpen: true,
+    state: createNewSessionStoryState({
+      selectedDirectory: exampleSessionDirectories[0] ?? null,
+      selectedModel: 'fixture-model-comet',
+      selectedEffort: 'high',
+      activeModelOption: {
+        id: 'fixture-model-comet',
+        label: 'Comet',
+        defaultEffort: 'high',
+        efforts: ['low', 'high'],
+      },
+    }),
+  },
+}
+
 export const IPhoneShowsAStartButton: Story = {
   name: 'The picker adds a full-width start button on an iPhone',
   args: {

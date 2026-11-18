@@ -124,13 +124,17 @@ impl Client {
         Self::connect_to(&socket_path)
     }
 
-    fn connect_to(socket_path: &Path) -> anyhow::Result<Self> {
+    pub(crate) fn connect_to(socket_path: &Path) -> anyhow::Result<Self> {
         let stream = UnixStream::connect(socket_path).with_context(|| {
             format!(
                 "failed to connect to Codex app-server control socket {}",
                 socket_path.display()
             )
         })?;
+        Self::connect_stream(stream)
+    }
+
+    pub(crate) fn connect_stream(stream: UnixStream) -> anyhow::Result<Self> {
         stream
             .set_read_timeout(Some(RESPONSE_TIMEOUT))
             .context("failed to set Codex app-server read timeout")?;
@@ -195,6 +199,27 @@ impl Client {
         )
     }
 
+    /// Lists the models available from the app-server's configured provider.
+    pub fn list_models(&mut self) -> anyhow::Result<Value> {
+        collect_model_pages(|cursor| {
+            let id = self.next_request_id()?;
+            let params = match cursor {
+                Some(cursor) => json!({ "includeHidden": false, "cursor": cursor }),
+                None => json!({ "includeHidden": false }),
+            };
+            let request = RpcRequest {
+                id,
+                method: "model/list",
+                payload: json!({
+                    "id": id,
+                    "method": "model/list",
+                    "params": params,
+                }),
+            };
+            send_request_response(&mut self.socket, &request).map_err(request_error_to_anyhow)
+        })
+    }
+
     /// Reads the status of the latest turn recorded for `thread_id`.
     pub(crate) fn latest_turn_status(&mut self, thread_id: &str) -> anyhow::Result<Option<String>> {
         let request_id = self.next_request_id()?;
@@ -257,6 +282,29 @@ fn initialize_request() -> RpcRequest {
                 },
             },
         }),
+    }
+}
+
+fn collect_model_pages(
+    mut fetch_page: impl FnMut(Option<&str>) -> anyhow::Result<Value>,
+) -> anyhow::Result<Value> {
+    let mut cursor = None;
+    let mut models = Vec::new();
+    loop {
+        let mut page = fetch_page(cursor.as_deref())?;
+        let mut page_models = page
+            .get_mut("data")
+            .and_then(Value::as_array_mut)
+            .cloned()
+            .ok_or_else(|| anyhow!("Codex app-server `model/list` response has no model data"))?;
+        models.append(&mut page_models);
+        cursor = page
+            .get("nextCursor")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        if cursor.is_none() {
+            return Ok(json!({ "data": models }));
+        }
     }
 }
 
@@ -500,6 +548,112 @@ mod tests {
             },
             server,
         ))
+    }
+
+    #[test]
+    fn collects_all_model_list_pages() {
+        let mut cursors = Vec::new();
+        let models = collect_model_pages(|cursor| {
+            cursors.push(cursor.map(str::to_string));
+            Ok(match cursor {
+                None => json!({
+                    "data": [{"model": "fixture-model-first"}],
+                    "nextCursor": "fixture-cursor-next",
+                }),
+                Some("fixture-cursor-next") => json!({
+                    "data": [{"model": "fixture-model-second"}],
+                    "nextCursor": null,
+                }),
+                Some(_) => json!({"data": [], "nextCursor": null}),
+            })
+        })
+        .expect("model pages");
+
+        assert_eq!(
+            (models, cursors),
+            (
+                json!({
+                    "data": [
+                        {"model": "fixture-model-first"},
+                        {"model": "fixture-model-second"},
+                    ],
+                }),
+                vec![None, Some("fixture-cursor-next".to_string())],
+            ),
+        );
+    }
+
+    #[test]
+    fn sends_model_list_requests_and_collects_their_pages() {
+        let (mut client, mut server) = connected_client_and_server().expect("connected sockets");
+        let server_thread = std::thread::spawn(move || {
+            let first_request = server.read().expect("first model/list request");
+            let first_request: Value =
+                serde_json::from_str(first_request.to_text().expect("text request"))
+                    .expect("request JSON");
+            server
+                .send(Message::Text(
+                    json!({
+                        "id": TURN_STATUS_READ_REQUEST_ID_START,
+                        "result": {
+                            "data": [{"model": "fixture-model-first"}],
+                            "nextCursor": "fixture-cursor-next",
+                        },
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .expect("first model/list response");
+
+            let next_request = server.read().expect("next model/list request");
+            let next_request: Value =
+                serde_json::from_str(next_request.to_text().expect("text request"))
+                    .expect("request JSON");
+            server
+                .send(Message::Text(
+                    json!({
+                        "id": TURN_STATUS_READ_REQUEST_ID_START + 1,
+                        "result": {
+                            "data": [{"model": "fixture-model-second"}],
+                            "nextCursor": null,
+                        },
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .expect("next model/list response");
+            (first_request, next_request)
+        });
+
+        let models = client.list_models().expect("models");
+        let requests = server_thread.join().expect("server thread");
+
+        assert_eq!(
+            (models, requests),
+            (
+                json!({
+                    "data": [
+                        {"model": "fixture-model-first"},
+                        {"model": "fixture-model-second"},
+                    ],
+                }),
+                (
+                    json!({
+                        "id": TURN_STATUS_READ_REQUEST_ID_START,
+                        "method": "model/list",
+                        "params": {"includeHidden": false},
+                    }),
+                    json!({
+                        "id": TURN_STATUS_READ_REQUEST_ID_START + 1,
+                        "method": "model/list",
+                        "params": {
+                            "includeHidden": false,
+                            "cursor": "fixture-cursor-next",
+                        },
+                    }),
+                ),
+            ),
+        );
     }
 
     #[test]

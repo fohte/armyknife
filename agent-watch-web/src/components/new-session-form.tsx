@@ -3,6 +3,7 @@ import '#components/new-session.css'
 import { ArrowLeft, ChevronDown, Folder, GitBranch, X } from 'lucide-react'
 import { useState } from 'react'
 
+import { NewSessionModelPicker } from '#components/new-session-model-picker'
 import { SessionDirectoryOptions } from '#components/session-directory-options'
 import {
   skillCompletionTextareaAttributes,
@@ -15,6 +16,7 @@ type NewSessionFormProps = {
   state: NewSessionState
   isMobile?: boolean
   initialDirectoryPickerOpen?: boolean
+  initialModelPickerOpen?: boolean
   launchPending?: boolean
   onClose: () => void
   onLaunched: (launchId: string) => void
@@ -24,6 +26,7 @@ export function NewSessionForm({
   state,
   isMobile = false,
   initialDirectoryPickerOpen = false,
+  initialModelPickerOpen = false,
   launchPending = false,
   onClose,
   onLaunched,
@@ -32,6 +35,7 @@ export function NewSessionForm({
     initialDirectoryPickerOpen,
   )
   const [engineMenuOpen, setEngineMenuOpen] = useState(false)
+  const [modelPickerOpen, setModelPickerOpen] = useState(initialModelPickerOpen)
   const selectedDirectory = state.selectedDirectory
   const skillCompletion = useSkillCompletion({
     draft: state.initialMessage,
@@ -128,6 +132,14 @@ export function NewSessionForm({
               onSelect={skillCompletion.selectSkill}
             />
           ) : null}
+          {state.modelChangeNotice !== null ? (
+            <div className="new-session-model-change" role="status">
+              <span>{state.modelChangeNotice}</span>
+              <button onClick={state.undoEngineChange} type="button">
+                Undo
+              </button>
+            </div>
+          ) : null}
           <div className="new-session-composer-actions">
             <div className="new-session-engine-control">
               <button
@@ -165,6 +177,20 @@ export function NewSessionForm({
                 </div>
               ) : null}
             </div>
+            <NewSessionModelPicker
+              activeModelOption={state.activeModelOption}
+              engine={state.engine}
+              error={state.modelOptionsError}
+              isLoading={state.isLoadingModelOptions}
+              isOpen={modelPickerOpen}
+              onEffortChange={state.setSelectedEffort}
+              onModelChange={state.chooseModel}
+              onOpenChange={setModelPickerOpen}
+              options={state.modelOptions}
+              selectedEffort={state.selectedEffort}
+              selectedModel={state.selectedModel}
+              variant="control"
+            />
             <button
               aria-pressed={state.worktree}
               className={`new-session-control-button new-session-worktree${state.worktree ? ' is-enabled' : ''}`}
