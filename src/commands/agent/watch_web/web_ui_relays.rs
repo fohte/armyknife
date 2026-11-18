@@ -52,6 +52,7 @@ struct Relay {
     port: u16,
     exposed_url: Option<String>,
     exposed: bool,
+    registration_saved: bool,
     server: JoinHandle<()>,
 }
 
@@ -233,8 +234,27 @@ impl WebUiRelays {
         }
 
         for (key, registration) in desired {
-            if self.active.contains_key(&key) {
+            if self.active.get(&key).is_some_and(|relay| relay.exposed) {
+                if let Some(relay) = self
+                    .active
+                    .get_mut(&key)
+                    .filter(|relay| !relay.registration_saved)
+                {
+                    let exposed_registration = RelayRegistration::from_relay(&key, relay);
+                    match add_relay_registration(&self.sessions_dir, &exposed_registration) {
+                        Ok(()) => relay.registration_saved = true,
+                        Err(error) => tracing::warn!(
+                            session = %key.session_id,
+                            web_ui = %key.name,
+                            %error,
+                            "failed to retry saving web UI relay registration"
+                        ),
+                    }
+                }
                 continue;
+            }
+            if let Some(relay) = self.active.remove(&key) {
+                self.stop_relay(&key, relay, false).await;
             }
             match self.start_relay(&key, &registration).await {
                 Ok(mut relay) => {
@@ -261,9 +281,12 @@ impl WebUiRelays {
                                     %error,
                                     "failed to undo unrecorded web UI relay registration"
                                 );
+                            } else {
+                                relay.exposed = false;
+                                relay.exposed_url = None;
                             }
-                            relay.exposed = false;
-                            relay.exposed_url = None;
+                        } else {
+                            relay.registration_saved = true;
                         }
                     }
                     let exposed_url = relay.exposed_url.clone();
@@ -343,6 +366,7 @@ impl WebUiRelays {
             port,
             exposed_url,
             exposed,
+            registration_saved: false,
             server,
         })
     }
@@ -525,6 +549,16 @@ mod tests {
         let mut session = session();
         session.web_uis.truncate(1);
         session
+    }
+
+    #[fixture]
+    fn state_write_failure_directory() -> TempDir {
+        let directory = TempDir::new().expect("temporary sessions directory should be created");
+        store::save_session_to(directory.path(), &session_with_one_web_ui())
+            .expect("fixture session should be saved");
+        fs::create_dir(directory.path().join("web_ui_relays.tmp"))
+            .expect("relay state temp path should block writes");
+        directory
     }
 
     fn hook_runner(
@@ -827,6 +861,161 @@ mod tests {
                     "web-ui-unexpose".to_owned(),
                     "web-ui-expose".to_owned(),
                     "web-ui-unexpose".to_owned(),
+                ],
+            ),
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn failed_relay_state_write_retries_exposure_on_next_sync(
+        state_write_failure_directory: TempDir,
+    ) -> anyhow::Result<()> {
+        let directory = state_write_failure_directory;
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut relays = WebUiRelays::with_hook_runner(
+            directory.path().to_path_buf(),
+            hook_runner(calls.clone()),
+        );
+
+        relays.sync().await?;
+        let first_sync = (
+            relays.active.values().next().map(|relay| relay.exposed),
+            calls
+                .lock()
+                .expect("hook call lock should succeed")
+                .iter()
+                .map(|(hook, _)| hook.clone())
+                .collect::<Vec<_>>(),
+        );
+        fs::remove_dir(directory.path().join("web_ui_relays.tmp"))?;
+        relays.sync().await?;
+        let active_registration = relays
+            .active
+            .iter()
+            .map(|(key, relay)| RelayRegistration::from_relay(key, relay))
+            .next()
+            .context("relay should remain active")?;
+        let second_sync = (
+            relays.active.values().next().map(|relay| relay.exposed),
+            load_relay_registrations(directory.path())? == vec![active_registration],
+            calls
+                .lock()
+                .expect("hook call lock should succeed")
+                .iter()
+                .map(|(hook, _)| hook.clone())
+                .collect::<Vec<_>>(),
+        );
+        relays.stop_all().await;
+
+        assert_eq!(
+            (first_sync, second_sync),
+            (
+                (
+                    Some(false),
+                    vec!["web-ui-expose".to_owned(), "web-ui-unexpose".to_owned()],
+                ),
+                (
+                    Some(true),
+                    true,
+                    vec![
+                        "web-ui-expose".to_owned(),
+                        "web-ui-unexpose".to_owned(),
+                        "web-ui-unexpose".to_owned(),
+                        "web-ui-expose".to_owned(),
+                    ],
+                ),
+            ),
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn failed_registration_rollback_preserves_exposed_url_for_shutdown(
+        state_write_failure_directory: TempDir,
+    ) -> anyhow::Result<()> {
+        let directory = state_write_failure_directory;
+        let fail_first_unexpose = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut relays = WebUiRelays::with_hook_runner(directory.path().to_path_buf(), {
+            let fail_first_unexpose = fail_first_unexpose.clone();
+            let calls = calls.clone();
+            move |hook, variables| {
+                calls.lock().expect("hook call lock should succeed").push((
+                    hook.to_owned(),
+                    variables
+                        .iter()
+                        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                        .collect::<Vec<_>>(),
+                ));
+                if hook == "web-ui-unexpose"
+                    && fail_first_unexpose.swap(false, std::sync::atomic::Ordering::SeqCst)
+                {
+                    anyhow::bail!("fixture hook failed");
+                }
+                Ok((hook == "web-ui-expose")
+                    .then(|| "https://public.example.invalid/relay/".to_owned()))
+            }
+        });
+
+        relays.sync().await?;
+        let preserved_exposure = relays.active.values().next().is_some_and(|relay| {
+            relay.exposed
+                && relay.exposed_url.as_deref() == Some("https://public.example.invalid/relay/")
+        });
+        fs::remove_dir(directory.path().join("web_ui_relays.tmp"))?;
+        relays.sync().await?;
+        let active_registration = relays
+            .active
+            .iter()
+            .map(|(key, relay)| RelayRegistration::from_relay(key, relay))
+            .next()
+            .context("relay should remain active")?;
+        let saved_after_retry =
+            load_relay_registrations(directory.path())? == vec![active_registration];
+        store::update_session_in(directory.path(), "fixture-session", |session| {
+            session.status = crate::commands::agent::types::SessionStatus::Ended;
+            true
+        })?;
+        relays.sync().await?;
+        let actual = (
+            preserved_exposure,
+            saved_after_retry,
+            relays.active.len(),
+            calls
+                .lock()
+                .expect("hook call lock should succeed")
+                .iter()
+                .map(|(hook, variables)| {
+                    (
+                        hook.clone(),
+                        variables
+                            .iter()
+                            .find(|(name, _)| name == "ARMYKNIFE_WEB_UI_EXPOSED_URL")
+                            .map(|(_, value)| value.clone()),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
+
+        assert_eq!(
+            actual,
+            (
+                true,
+                true,
+                0,
+                vec![
+                    ("web-ui-expose".to_owned(), None),
+                    (
+                        "web-ui-unexpose".to_owned(),
+                        Some("https://public.example.invalid/relay/".to_owned()),
+                    ),
+                    (
+                        "web-ui-unexpose".to_owned(),
+                        Some("https://public.example.invalid/relay/".to_owned()),
+                    ),
                 ],
             ),
         );
