@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.790](https://github.com/fohte/armyknife/compare/v0.1.789...v0.1.790) (2026-11-18)
+
+
+### Features
+
+* **agent-watch-web:** compact PR controls ([#1966](https://github.com/fohte/armyknife/issues/1966)) ([967fd5f](https://github.com/fohte/armyknife/commit/967fd5ffda5f7ffb012429a45a619a99bf27d8ae))
+
 ## [0.1.789](https://github.com/fohte/armyknife/compare/v0.1.788...v0.1.789) (2026-11-18)
 
 
