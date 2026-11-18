@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.787](https://github.com/fohte/armyknife/compare/v0.1.786...v0.1.787) (2026-11-18)
+
+
+### Features
+
+* **agent-watch-web:** resume ended sessions ([#1959](https://github.com/fohte/armyknife/issues/1959)) ([a967ed3](https://github.com/fohte/armyknife/commit/a967ed3db5ee89d1b7651b6cbe17837c546aa5bd))
+
 ## [0.1.786](https://github.com/fohte/armyknife/compare/v0.1.785...v0.1.786) (2026-11-18)
 
 
