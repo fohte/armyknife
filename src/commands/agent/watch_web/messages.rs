@@ -681,6 +681,7 @@ mod tests {
             reason: reason.map(str::to_string),
             created_at: chrono::Utc::now(),
             resolved_at: None,
+            resolution: None,
         };
         let loaders = RouteLoaders::new(
             |_| Ok(Vec::new()),
@@ -705,6 +706,7 @@ mod tests {
             "reason": expected_reason,
             "retryable": retryable,
             "resolved": false,
+            "resolution": null,
         });
         if !oversized_command {
             expected_message["command"] = json!(command);
@@ -756,6 +758,7 @@ mod tests {
                 reason: Some("Fixture denial".to_string()),
                 created_at,
                 resolved_at: Some(created_at),
+                resolution: None,
             },
             PermissionDeniedOperation {
                 session_id: "fixture-session".to_string(),
@@ -766,6 +769,20 @@ mod tests {
                 reason: Some("Classifier unavailable".to_string()),
                 created_at: unclassified_created_at,
                 resolved_at: None,
+                resolution: None,
+            },
+            PermissionDeniedOperation {
+                session_id: "fixture-session".to_string(),
+                seq: 4,
+                tool_use_id: Some("fixture-dismissed-denial".to_string()),
+                tool_name: "Bash".to_string(),
+                tool_input: json!({"command": "echo fixture"}),
+                reason: Some("Fixture denial".to_string()),
+                created_at: created_at + chrono::Duration::seconds(2),
+                resolved_at: Some(created_at + chrono::Duration::seconds(3)),
+                resolution: Some(
+                    crate::commands::agent::store::PermissionDeniedResolution::Dismissed,
+                ),
             },
             PermissionDeniedOperation {
                 session_id: "fixture-session".to_string(),
@@ -776,6 +793,7 @@ mod tests {
                 reason: Some("Fixture denial".to_string()),
                 created_at: created_at + chrono::Duration::seconds(1),
                 resolved_at: None,
+                resolution: None,
             },
         ];
         let loaders = RouteLoaders::new(
@@ -810,6 +828,19 @@ mod tests {
                             "reason": "Fixture denial",
                             "retryable": true,
                             "resolved": true,
+                            "resolution": "approved",
+                        },
+                        {
+                            "type": "permission_denied",
+                            "seq": 4,
+                            "toolUseId": "fixture-dismissed-denial",
+                            "tool": "Bash",
+                            "inputSummary": "echo fixture",
+                            "command": "echo fixture",
+                            "reason": "Fixture denial",
+                            "retryable": true,
+                            "resolved": true,
+                            "resolution": "dismissed",
                         },
                         {
                             "type": "permission_denied",
@@ -821,6 +852,7 @@ mod tests {
                             "reason": "Classifier unavailable",
                             "retryable": false,
                             "resolved": false,
+                            "resolution": null,
                         },
                         {"type": "assistant", "text": "After the denials."},
                         {
@@ -833,11 +865,12 @@ mod tests {
                             "reason": "Fixture denial",
                             "retryable": true,
                             "resolved": false,
+                            "resolution": null,
                         },
                     ],
                     "backgroundTasks": [],
                     "start": 0,
-                    "total": 5,
+                    "total": 6,
                     "decisions": [],
                     "hasUnansweredProposal": false,
                     "activeQuestionIndex": null,
@@ -3909,6 +3942,7 @@ mod tests {
             reason: Some("Fixture denial".to_string()),
             created_at: old_created_at,
             resolved_at: None,
+            resolution: None,
         };
         let full_marked_ids = Arc::new(Mutex::new(Vec::new()));
         let tail_marked_ids = Arc::new(Mutex::new(Vec::new()));

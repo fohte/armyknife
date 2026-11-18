@@ -43,7 +43,7 @@ mod vibe;
 pub(super) use api_error::ApiError;
 use interrupt_locks::InterruptLocks;
 use keyed_mutex_registry::KeyedMutexRegistry;
-use permission_denied_locks::PermissionDeniedRetryLocks;
+use permission_denied_locks::PermissionDeniedLocks;
 use proposal_answer_locks::ProposalAnswerLocks;
 use runtime::LiveActionRuntime;
 use support::{
@@ -59,7 +59,7 @@ pub(super) fn router(message_loaders: RouteLoaders) -> Router {
         vibe_config: Arc::new(config::load_config_or_default),
         repo_identity: Arc::new(crate::commands::agent::vibe::repo_identity_for_path),
         proposal_answer_locks: ProposalAnswerLocks::default(),
-        permission_denied_retry_locks: PermissionDeniedRetryLocks::default(),
+        permission_denied_locks: PermissionDeniedLocks::default(),
         bang_command_locks: KeyedMutexRegistry::default(),
         interrupt_locks: InterruptLocks::default(),
         resume_locks: KeyedMutexRegistry::default(),
@@ -105,6 +105,10 @@ fn router_with_state(state: ActionState) -> Router {
             post(permission_denied::retry_permission_denied),
         )
         .route(
+            "/sessions/{id}/permission-denials/{seq}/dismiss",
+            post(permission_denied::dismiss_permission_denied),
+        )
+        .route(
             "/sessions/{id}/todos/{seq}/resolve",
             post(todos::resolve_todo)
                 .layer(DefaultBodyLimit::max(messages::MAX_MESSAGE_BODY_BYTES)),
@@ -142,7 +146,7 @@ struct ActionState {
     message_loaders: RouteLoaders,
     // Delivery precedes persistence, so repeated answers for one proposal must serialize.
     proposal_answer_locks: ProposalAnswerLocks,
-    permission_denied_retry_locks: PermissionDeniedRetryLocks,
+    permission_denied_locks: PermissionDeniedLocks,
     bang_command_locks: KeyedMutexRegistry<(String, String, Vec<String>)>,
     interrupt_locks: InterruptLocks,
     resume_locks: KeyedMutexRegistry<String>,
@@ -745,7 +749,7 @@ mod tests {
                 vibe_config: Arc::new(vibe_config),
                 repo_identity: Arc::new(repo_identity),
                 proposal_answer_locks: ProposalAnswerLocks::default(),
-                permission_denied_retry_locks: PermissionDeniedRetryLocks::default(),
+                permission_denied_locks: PermissionDeniedLocks::default(),
                 bang_command_locks: KeyedMutexRegistry::default(),
                 interrupt_locks: InterruptLocks::default(),
                 resume_locks: KeyedMutexRegistry::default(),
@@ -754,10 +758,8 @@ mod tests {
             })
         }
 
-        fn router_with_permission_denied_retry_locks(
-            &self,
-        ) -> (Router, PermissionDeniedRetryLocks) {
-            let permission_denied_retry_locks = PermissionDeniedRetryLocks::default();
+        fn router_with_permission_denied_locks(&self) -> (Router, PermissionDeniedLocks) {
+            let permission_denied_locks = PermissionDeniedLocks::default();
             let router = router_with_state(ActionState {
                 sessions_dir: Some(self.temp_dir.path().join("sessions")),
                 attachment_dir: Some(self.temp_dir.path().join("attachments")),
@@ -765,14 +767,14 @@ mod tests {
                 vibe_config: Arc::new(Config::default),
                 repo_identity: Arc::new(|_| None),
                 proposal_answer_locks: ProposalAnswerLocks::default(),
-                permission_denied_retry_locks: permission_denied_retry_locks.clone(),
+                permission_denied_locks: permission_denied_locks.clone(),
                 bang_command_locks: KeyedMutexRegistry::default(),
                 interrupt_locks: InterruptLocks::default(),
                 resume_locks: KeyedMutexRegistry::default(),
                 resume_pending: super::resume::PendingSessionResumes::default(),
                 message_loaders: empty_message_loaders(),
             });
-            (router, permission_denied_retry_locks)
+            (router, permission_denied_locks)
         }
 
         fn router_with_loaders_and_proposal_answer_locks(
@@ -787,7 +789,7 @@ mod tests {
                 vibe_config: Arc::new(Config::default),
                 repo_identity: Arc::new(|_| None),
                 proposal_answer_locks: proposal_answer_locks.clone(),
-                permission_denied_retry_locks: PermissionDeniedRetryLocks::default(),
+                permission_denied_locks: PermissionDeniedLocks::default(),
                 bang_command_locks: KeyedMutexRegistry::default(),
                 interrupt_locks: InterruptLocks::default(),
                 resume_locks: KeyedMutexRegistry::default(),

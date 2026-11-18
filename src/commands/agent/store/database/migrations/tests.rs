@@ -215,6 +215,48 @@ fn adds_proposal_resolution_and_comment_to_version_nineteen_database(
 }
 
 #[rstest]
+fn treats_resolved_denials_in_version_twenty_four_database_as_approved(
+    database_fixture: DatabaseFixture,
+) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
+    Migrations::from_slice(&MIGRATION_ENTRIES[..24])
+        .to_latest(&mut connection)
+        .expect("version twenty four schema should be created");
+    connection
+        .execute(
+            "INSERT INTO agent_permission_denied (
+                session_id, seq, tool_name, tool_input, created_at, resolved_at
+             ) VALUES (
+                'fixture-session', 1, 'Bash', '{}',
+                '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z'
+             )",
+            [],
+        )
+        .expect("legacy resolved denial should be inserted");
+    drop(connection);
+
+    let operations = super::super::open_connection(temp_dir.path())
+        .and_then(|_| {
+            super::super::permission_denied_operations(temp_dir.path(), "fixture-session")
+        })
+        .expect("legacy denial should be readable after migration");
+
+    assert_eq!(
+        operations
+            .iter()
+            .map(|operation| (operation.resolved_at.is_some(), operation.resolution))
+            .collect::<Vec<_>>(),
+        vec![(
+            true,
+            Some(super::super::PermissionDeniedResolution::Approved)
+        )],
+    );
+}
+
+#[rstest]
 fn resolves_legacy_queued_prompts_without_message_ids(database_fixture: DatabaseFixture) {
     let DatabaseFixture {
         temp_dir,

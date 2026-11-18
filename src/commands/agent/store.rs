@@ -26,11 +26,11 @@ pub(crate) use database::ProposalResolution;
 pub(crate) use database::set_watch_web_compacting;
 pub(crate) use database::{
     AgentDecision, AgentDecisionCounts, AgentProposal, PermissionDeniedOperation,
-    PermissionRequestData, PermissionRequestDecision, PermissionRequestResolution,
-    PermissionRequestWait, PermissionRequestWaiter, SessionLock, SessionStoreChanges, WakeLock,
-    WatchWebPeerOutMessage, WatchWebQueuedAttachment, WatchWebQueuedPrompt, WatchWebSessionState,
-    permission_request_data, resolve_permission_request, resolve_permission_request_with_answers,
-    serialize_session,
+    PermissionDeniedResolution, PermissionRequestData, PermissionRequestDecision,
+    PermissionRequestResolution, PermissionRequestWait, PermissionRequestWaiter, SessionLock,
+    SessionStoreChanges, WakeLock, WatchWebPeerOutMessage, WatchWebQueuedAttachment,
+    WatchWebQueuedPrompt, WatchWebSessionState, permission_request_data,
+    resolve_permission_request, resolve_permission_request_with_answers, serialize_session,
 };
 pub(crate) use database::{AgentTodo, TodoResolution};
 pub(crate) use peer_out_messages::{
@@ -524,8 +524,9 @@ pub(crate) fn resolve_permission_denied_from(
     sessions_dir: &Path,
     session_id: &str,
     seq: i64,
+    resolution: PermissionDeniedResolution,
 ) -> Result<bool> {
-    database::resolve_permission_denied(sessions_dir, session_id, seq)
+    database::resolve_permission_denied(sessions_dir, session_id, seq, resolution)
 }
 
 pub(crate) fn add_agent_proposal_in(

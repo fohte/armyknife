@@ -5,6 +5,7 @@ use tower::ServiceExt;
 
 use super::{ActionContext, action_context, post, response_snapshot, session};
 use crate::commands::agent::store;
+use crate::commands::agent::store::PermissionDeniedResolution;
 use crate::commands::agent::types::SessionStatus;
 
 fn add_denied_operation(context: &ActionContext, reason: &str) {
@@ -57,7 +58,13 @@ async fn retry_sends_one_time_user_message_and_completes_the_card(action_context
             snapshot,
             operations
                 .iter()
-                .map(|operation| (operation.seq, operation.resolved_at.is_some()))
+                .map(|operation| {
+                    (
+                        operation.seq,
+                        operation.resolved_at.is_some(),
+                        operation.resolution,
+                    )
+                })
                 .collect::<Vec<_>>(),
             store::load_session_from(
                 &action_context.temp_dir.path().join("sessions"),
@@ -77,8 +84,53 @@ async fn retry_sends_one_time_user_message_and_completes_the_card(action_context
                     "content": expected_message,
                 }],
             }),
-            vec![(1, true)],
+            vec![(1, true, Some(PermissionDeniedResolution::Approved))],
             SessionStatus::WaitingInput,
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn dismissal_resolves_an_unclassified_denial_without_sending_a_message(
+    action_context: ActionContext,
+) {
+    action_context.save_session(&session("sample-session"));
+    add_denied_operation(
+        &action_context,
+        "Auto mode could not evaluate this action and is blocking it for safety.",
+    );
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            "/sessions/sample-session/permission-denials/1/dismiss",
+            json!({}),
+        ))
+        .await
+        .unwrap();
+    let snapshot = response_snapshot(response, &action_context).await;
+    let operations = store::permission_denied_operations_from(
+        &action_context.temp_dir.path().join("sessions"),
+        "sample-session",
+    )
+    .unwrap();
+
+    assert_eq!(
+        (
+            snapshot,
+            operations
+                .iter()
+                .map(|operation| (operation.resolved_at.is_some(), operation.resolution))
+                .collect::<Vec<_>>(),
+        ),
+        (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [],
+            }),
+            vec![(true, Some(PermissionDeniedResolution::Dismissed))],
         ),
     );
 }
@@ -151,7 +203,7 @@ async fn concurrent_retries_send_the_operation_only_once(action_context: ActionC
         {expected_operation}
         This approval applies only to the operation shown above.
     "};
-    let (router, retry_locks) = action_context.router_with_permission_denied_retry_locks();
+    let (router, retry_locks) = action_context.router_with_permission_denied_locks();
     let (message_started, release_message) = action_context.block_next_message();
     let first_router = router.clone();
     let first = tokio::spawn(async move {

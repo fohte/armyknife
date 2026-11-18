@@ -241,6 +241,7 @@ export type ChatItem =
       reason: string | null
       retryable: boolean
       resolved: boolean
+      resolution: 'approved' | 'dismissed' | null
     }
   | {
       type: 'decision'

@@ -284,9 +284,17 @@ export function renderConversationMessage({
         canRetry={actions?.message === true}
         actionsReady={actionsReady}
         pendingAction={pendingAction}
+        canDismiss={actionsReady}
         onRetry={() => {
           void onAction(
             `permission-denials/${String(message.seq)}/retry`,
+            undefined,
+            identity,
+          )
+        }}
+        onDismiss={() => {
+          void onAction(
+            `permission-denials/${String(message.seq)}/dismiss`,
             undefined,
             identity,
           )

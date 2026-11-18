@@ -305,6 +305,13 @@ export function ConversationPane({
             [requestId]: { action: 'retry', status, requestId },
           }
         }
+        if (operation.type === 'permission_dismiss') {
+          const requestId = `permission-denied-${String(operation.seq)}`
+          return {
+            ...pending,
+            [requestId]: { action: 'dismiss', status, requestId },
+          }
+        }
         return pending
       },
       {},

@@ -177,7 +177,14 @@ export function applyConversationOperation(
     case 'permission_retry':
       messages = updateChatItems(messages, (message) =>
         message.type === 'permission_denied' && message.seq === operation.seq
-          ? { ...message, resolved: true }
+          ? { ...message, resolved: true, resolution: 'approved' }
+          : message,
+      )
+      break
+    case 'permission_dismiss':
+      messages = updateChatItems(messages, (message) =>
+        message.type === 'permission_denied' && message.seq === operation.seq
+          ? { ...message, resolved: true, resolution: 'dismissed' }
           : message,
       )
       break
@@ -284,6 +291,7 @@ export function isConversationOperationConfirmed(
           : actions?.permission?.reject !== true)
       )
     case 'permission_retry':
+    case 'permission_dismiss':
       return conversation.messages.some(
         (message) =>
           message.type === 'permission_denied' &&
@@ -392,6 +400,7 @@ export function requiresStateConfirmation(operation: SessionOperation) {
     operation.type === 'proposal_answer' ||
     operation.type === 'todo_resolve' ||
     operation.type === 'permission' ||
-    operation.type === 'permission_retry'
+    operation.type === 'permission_retry' ||
+    operation.type === 'permission_dismiss'
   )
 }

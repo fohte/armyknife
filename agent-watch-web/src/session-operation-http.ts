@@ -147,6 +147,11 @@ function requestFor(operation: SessionOperation) {
         path: `permission-denials/${String(operation.seq)}/retry`,
         body: undefined,
       }
+    case 'permission_dismiss':
+      return {
+        path: `permission-denials/${String(operation.seq)}/dismiss`,
+        body: undefined,
+      }
     case 'primary_task':
       return { path: 'primary-task', body: { taskId: operation.taskId } }
     case 'merge':
@@ -414,6 +419,14 @@ export function createSessionOperation(
           type: 'permission_retry',
           sessionId,
           seq: retry,
+        })
+      }
+      const dismiss = sequenceFromPath('permission-denials', 'dismiss')
+      if (dismiss !== null) {
+        return ok<SessionOperation, Error>({
+          type: 'permission_dismiss',
+          sessionId,
+          seq: dismiss,
         })
       }
       return errOperation(`Unsupported session operation: ${action}`)

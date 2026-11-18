@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use serde::Serialize;
 
 use crate::commands::agent::proposal::{ProposalAnswer, ProposalOption};
-use crate::commands::agent::store::{AgentDecision, ProposalResolution, TodoResolution};
+use crate::commands::agent::store::{
+    AgentDecision, PermissionDeniedResolution, ProposalResolution, TodoResolution,
+};
 
 use super::questions::QuestionPrompt;
 
@@ -169,6 +171,7 @@ pub(super) enum ChatItem {
         reason: Option<String>,
         retryable: bool,
         resolved: bool,
+        resolution: Option<PermissionDeniedResolution>,
     },
     Decision {
         seq: i64,

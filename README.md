@@ -1236,6 +1236,7 @@ Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` on
 - `POST /api/sessions/{id}/permission/approve` with `{"requestId":"..."}`
 - `POST /api/sessions/{id}/permission/reject` with `{"requestId":"..."}`
 - `POST /api/sessions/{id}/permission-denials/{seq}/retry` sends a one-time approval message for a classifier denial; denials without a classifier verdict cannot be retried
+- `POST /api/sessions/{id}/permission-denials/{seq}/dismiss` marks a denied operation as dismissed without sending a retry message
 - `POST /api/sessions/{id}/resume` resumes an ended session in a new tmux window or respawns a paused session in its existing pane
 - `POST /api/sessions/{id}/interrupt`
 - `POST /api/sessions/{id}/focus`

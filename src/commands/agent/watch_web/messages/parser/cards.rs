@@ -263,6 +263,7 @@ mod tests {
                         reason: None,
                         retryable: true,
                         resolved: true,
+                        resolution: None,
                     },
                 ),
                 TimedCard::new(
@@ -279,6 +280,7 @@ mod tests {
                         reason: Some("Classifier unavailable".to_string()),
                         retryable: false,
                         resolved: false,
+                        resolution: None,
                     },
                 ),
                 TimedCard::new(
@@ -295,6 +297,7 @@ mod tests {
                         reason: None,
                         retryable: true,
                         resolved: false,
+                        resolution: None,
                     },
                 ),
                 TimedCard::new(
@@ -311,6 +314,7 @@ mod tests {
                         reason: None,
                         retryable: true,
                         resolved: true,
+                        resolution: None,
                     },
                 ),
                 TimedCard::new(
@@ -357,6 +361,7 @@ mod tests {
                         reason: None,
                         retryable: true,
                         resolved: false,
+                        resolution: None,
                     },
                 ),
                 (
@@ -373,6 +378,7 @@ mod tests {
                         reason: None,
                         retryable: true,
                         resolved: true,
+                        resolution: None,
                     },
                 ),
                 (
@@ -514,6 +520,7 @@ mod tests {
                     reason: Some("A resolved denial".to_string()),
                     retryable: true,
                     resolved: true,
+                    resolution: None,
                 },
             ),
             TimedCard::new(
@@ -530,6 +537,7 @@ mod tests {
                     reason: Some("A pending denial".to_string()),
                     retryable: true,
                     resolved: false,
+                    resolution: None,
                 },
             ),
             TimedCard::new(

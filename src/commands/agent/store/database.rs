@@ -39,7 +39,7 @@ pub(crate) use peer_out_messages::{
     insert_watch_web_peer_out_message, mark_watch_web_peer_out_message_delivered,
     watch_web_peer_out_messages,
 };
-pub(crate) use permission_denied::PermissionDeniedOperation;
+pub(crate) use permission_denied::{PermissionDeniedOperation, PermissionDeniedResolution};
 pub(crate) use permission_denied::{
     add_permission_denied, permission_denied_operations, resolve_permission_denied,
 };

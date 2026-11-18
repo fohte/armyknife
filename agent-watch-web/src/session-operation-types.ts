@@ -1,7 +1,7 @@
 import type { LaterPreset } from '#session-navigation'
 import type { JsonValue, RewindMode } from '#types'
 
-type PermissionAction = 'approve' | 'reject' | 'retry'
+type PermissionAction = 'approve' | 'reject' | 'retry' | 'dismiss'
 
 export type SessionOperation =
   | { type: 'today'; sessionId: string; isToday: boolean }
@@ -69,6 +69,7 @@ export type SessionOperation =
       requestId: string
     }
   | { type: 'permission_retry'; sessionId: string; seq: number }
+  | { type: 'permission_dismiss'; sessionId: string; seq: number }
   | { type: 'primary_task'; sessionId: string; taskId: string }
   | {
       type: 'merge'
@@ -99,6 +100,9 @@ function operationKey(operation: SessionOperation) {
   }
   if (operation.type === 'permission_retry') {
     return `${operation.sessionId}:permission_retry:${String(operation.seq)}`
+  }
+  if (operation.type === 'permission_dismiss') {
+    return `${operation.sessionId}:permission_dismiss:${String(operation.seq)}`
   }
   if (
     operation.type === 'decision_ok' ||

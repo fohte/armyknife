@@ -45,6 +45,11 @@ pub(super) fn permission_denied_cards(operations: &[PermissionDeniedOperation]) 
                     reason: operation.reason.clone(),
                     retryable: operation.has_classifier_verdict(),
                     resolved: operation.resolved_at.is_some(),
+                    resolution: operation.resolution.or_else(|| {
+                        operation.resolved_at.is_some().then_some(
+                            crate::commands::agent::store::PermissionDeniedResolution::Approved,
+                        )
+                    }),
                 },
             )
         })

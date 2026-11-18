@@ -5,11 +5,11 @@ use tokio::sync::Mutex;
 use super::keyed_mutex_registry::KeyedMutexRegistry;
 
 #[derive(Clone, Default)]
-pub(super) struct PermissionDeniedRetryLocks {
+pub(super) struct PermissionDeniedLocks {
     locks: KeyedMutexRegistry<(String, i64)>,
 }
 
-impl PermissionDeniedRetryLocks {
+impl PermissionDeniedLocks {
     pub(super) async fn get_or_create(&self, session_id: &str, seq: i64) -> Arc<Mutex<()>> {
         self.locks.get_or_create((session_id.to_owned(), seq)).await
     }
