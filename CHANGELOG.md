@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.784](https://github.com/fohte/armyknife/compare/v0.1.783...v0.1.784) (2026-11-18)
+
+
+### Bug Fixes
+
+* **agent:** shorten peer session titles ([#1954](https://github.com/fohte/armyknife/issues/1954)) ([6f96488](https://github.com/fohte/armyknife/commit/6f96488f57d7789daa631c79e5523380bd0ec8b2))
+
 ## [0.1.783](https://github.com/fohte/armyknife/compare/v0.1.782...v0.1.783) (2026-11-18)
 
 
