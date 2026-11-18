@@ -112,10 +112,15 @@
   flex: 0 0 auto;
 }
 
-.vibe-control-popover {
-  position: fixed;
+.vibe-control-positioner {
   z-index: 30;
-  display: block;
+}
+
+.vibe-control-popover {
+  width: min(360px, calc(100vw - 32px));
+  max-width: var(--available-width);
+  max-height: var(--available-height);
+  overflow-y: auto;
 }
 
 .vibe-control-popover > .vibe-panel {

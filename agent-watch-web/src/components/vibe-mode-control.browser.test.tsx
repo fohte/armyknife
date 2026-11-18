@@ -5,6 +5,7 @@ import '#components/resizable-columns.css'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { userEvent } from 'vitest/browser'
 
 import { SessionHeading } from '#components/session-heading'
 import { VibeModeControl } from '#components/vibe-mode-control'
@@ -26,14 +27,14 @@ function controlState() {
   return {
     requests: fetchMock.mock.calls,
     status: container.querySelector('button')?.getAttribute('aria-label'),
-    panel: document.querySelector('[role="dialog"]') !== null,
+    panel: document.querySelector('.vibe-control-popover[data-open]') !== null,
   }
 }
 
 function errorState() {
   return {
     error: document.querySelector('[role="alert"]')?.textContent,
-    panel: document.querySelector('[role="dialog"]') !== null,
+    panel: document.querySelector('.vibe-control-popover[data-open]') !== null,
   }
 }
 
@@ -128,14 +129,14 @@ it.each(modeChangeCases)('$name', async (testCase) => {
   )
   renderControl(testCase.mode)
 
-  act(() => {
-    requireButton(testCase.triggerLabel).click()
+  await act(async () => {
+    await userEvent.click(requireButton(testCase.triggerLabel))
   })
   expect(document.querySelector('blockquote')?.textContent).toBe(
     testCase.message,
   )
   await act(async () => {
-    requireButton(testCase.actionLabel).click()
+    await userEvent.click(requireButton(testCase.actionLabel))
     await finishRequest()
   })
 
@@ -167,11 +168,11 @@ it('shows the API reason when the server rejects a change', async () => {
   )
   renderControl()
 
-  act(() => {
-    requireButton('Vibe off').click()
+  await act(async () => {
+    await userEvent.click(requireButton('Vibe off'))
   })
   await act(async () => {
-    requireButton('Turn on and send').click()
+    await userEvent.click(requireButton('Turn on and send'))
     await finishRequest()
   })
 
@@ -182,45 +183,78 @@ it('shows the API reason when the server rejects a change', async () => {
 })
 
 it.each([
+  {
+    name: 'Escape',
+    dismiss: () => userEvent.keyboard('{Escape}'),
+  },
+  {
+    name: 'an outside click',
+    dismiss: () => userEvent.click(document.body),
+  },
+])('closes the desktop popover on $name', async ({ dismiss }) => {
+  renderControl()
+
+  await act(async () => {
+    await userEvent.click(requireButton('Vibe off'))
+  })
+  expect(document.querySelector('.vibe-control-popover')).not.toBeNull()
+
+  await act(async () => {
+    await dismiss()
+  })
+
+  expect(document.querySelector('.vibe-control-popover')).toBeNull()
+})
+
+it.each([
   { name: 'short title', title: 'Fixture title' },
   {
     name: 'long title',
     title:
       'A fictional conversation title long enough to reach the right edge of the pane',
   },
-])('keeps the desktop popover inside its pane for a $name', ({ title }) => {
-  container.className = 'resizable-columns-pane'
-  container.style.cssText =
-    'box-sizing: border-box; height: 260px; overflow: hidden; position: relative; width: 520px;'
-  root = createRoot(container)
-  act(() => {
-    root?.render(
-      <div className="conversation-pane">
-        <header className="conversation-header">
-          <div className="conversation-header-copy">
-            <div className="session-title-heading">
-              <SessionHeading title={title} sessionId="fixture-session" />
-              <VibeModeControl
-                sessionId="fixture-session"
-                repo="example/service"
-                mode={{ mode: 'disabled' }}
-                open
-              />
-              <span className="session-title-edit" />
+])(
+  'keeps the desktop popover inside its pane for a $name',
+  async ({ title }) => {
+    container.className = 'resizable-columns-pane'
+    container.style.cssText =
+      'box-sizing: border-box; height: 260px; overflow: hidden; position: relative; width: 520px;'
+    root = createRoot(container)
+    act(() => {
+      root?.render(
+        <div className="conversation-pane">
+          <header className="conversation-header">
+            <div className="conversation-header-copy">
+              <div className="session-title-heading">
+                <SessionHeading title={title} sessionId="fixture-session" />
+                <VibeModeControl
+                  sessionId="fixture-session"
+                  repo="example/service"
+                  mode={{ mode: 'disabled' }}
+                  open
+                />
+                <span className="session-title-edit" />
+              </div>
             </div>
-          </div>
-          <div className="conversation-header-actions" />
-        </header>
-      </div>,
-    )
-  })
+            <div className="conversation-header-actions" />
+          </header>
+        </div>,
+      )
+    })
 
-  const popover = document.querySelector<HTMLElement>('.vibe-control-popover')
-  if (popover === null) throw new Error('Expected vibe mode popover')
-  const paneRect = container.getBoundingClientRect()
-  const popoverRect = popover.getBoundingClientRect()
-
-  expect(
-    popoverRect.left >= paneRect.left && popoverRect.right <= paneRect.right,
-  ).toEqual(true)
-})
+    await vi.waitFor(() => {
+      const popover = document.querySelector<HTMLElement>(
+        '.vibe-control-popover',
+      )
+      if (popover === null) throw new Error('Expected vibe mode popover')
+      const paneRect = container.getBoundingClientRect()
+      const popoverRect = popover.getBoundingClientRect()
+      expect(
+        popoverRect.top >= paneRect.top &&
+          popoverRect.right <= paneRect.right &&
+          popoverRect.bottom <= paneRect.bottom &&
+          popoverRect.left >= paneRect.left,
+      ).toEqual(true)
+    })
+  },
+)

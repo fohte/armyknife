@@ -1,13 +1,7 @@
 import '#components/vibe-panel.css'
 
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from 'react'
-import { createPortal } from 'react-dom'
+import { Popover } from '@base-ui/react/popover'
+import { useCallback, useEffect, useState } from 'react'
 
 import { VibeIndicator } from '#components/vibe-indicator'
 import { VibePanel } from '#components/vibe-panel'
@@ -27,12 +21,6 @@ type VibeModeControlProps = {
 
 const DISABLED_MODE: VibeMode = { mode: 'disabled' }
 
-type PopoverPosition = {
-  left: number
-  top: number
-  width: number
-}
-
 export function VibeModeControl({
   sessionId,
   repo,
@@ -46,10 +34,14 @@ export function VibeModeControl({
   const [localOpen, setLocalOpen] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [popoverPosition, setPopoverPosition] =
-    useState<PopoverPosition | null>(null)
-  const controlRef = useRef<HTMLSpanElement>(null)
+  const [collisionBoundary, setCollisionBoundary] = useState<Element | null>(
+    null,
+  )
   const isOpen = open ?? localOpen
+
+  const setTriggerRef = useCallback((node: HTMLElement | null) => {
+    setCollisionBoundary(node?.closest('.resizable-columns-pane') ?? null)
+  }, [])
 
   const setOpen = useCallback(
     (nextOpen: boolean) => {
@@ -66,7 +58,7 @@ export function VibeModeControl({
   }, [mode])
 
   useEffect(() => {
-    if (!isOpen) return
+    if (!isOpen || !isMobile) return
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setOpen(false)
     }
@@ -74,60 +66,7 @@ export function VibeModeControl({
     return () => {
       window.removeEventListener('keydown', closeOnEscape)
     }
-  }, [isOpen, setOpen])
-
-  useLayoutEffect(() => {
-    if (!isOpen || isMobile) return
-
-    const updatePosition = () => {
-      const control = controlRef.current
-      if (control === null) return
-
-      const paneRect = control
-        .closest('.resizable-columns-pane')
-        ?.getBoundingClientRect()
-      const leftBoundary = Math.max(16, paneRect?.left ?? 0)
-      const rightBoundary = Math.min(
-        window.innerWidth - 16,
-        paneRect?.right ?? window.innerWidth,
-      )
-      const availableWidth = Math.max(0, rightBoundary - leftBoundary)
-      const width = Math.min(360, availableWidth)
-      const controlRect = control.getBoundingClientRect()
-
-      const nextPosition = {
-        left: Math.max(
-          leftBoundary,
-          Math.min(controlRect.left, rightBoundary - width),
-        ),
-        top: controlRect.bottom + 8,
-        width,
-      }
-      setPopoverPosition((current) =>
-        current?.left === nextPosition.left &&
-        current.top === nextPosition.top &&
-        current.width === nextPosition.width
-          ? current
-          : nextPosition,
-      )
-    }
-
-    updatePosition()
-    const resizeObserver = new ResizeObserver(updatePosition)
-    const control = controlRef.current
-    if (control !== null) {
-      resizeObserver.observe(control)
-      const pane = control.closest('.resizable-columns-pane')
-      if (pane !== null) resizeObserver.observe(pane)
-    }
-    window.addEventListener('resize', updatePosition)
-    window.addEventListener('scroll', updatePosition, true)
-    return () => {
-      resizeObserver.disconnect()
-      window.removeEventListener('resize', updatePosition)
-      window.removeEventListener('scroll', updatePosition, true)
-    }
-  }, [isMobile, isOpen])
+  }, [isMobile, isOpen, setOpen])
 
   const changeMode = async () => {
     if (pending || currentMode.mode === 'repo_disabled') return
@@ -178,41 +117,37 @@ export function VibeModeControl({
   }
 
   return (
-    <>
-      <span ref={controlRef} className="vibe-control">
+    <Popover.Root open={isOpen} onOpenChange={setOpen} modal={false}>
+      <span className="vibe-control">
         {showTrigger ? (
-          <button
+          <Popover.Trigger
+            ref={setTriggerRef}
             className={`vibe-control-trigger${vibeModeIsOn(currentMode) ? ' is-on' : ''}${isOpen ? ' is-open' : ''}`}
             type="button"
             aria-haspopup="dialog"
             aria-expanded={isOpen}
             aria-label={vibeModeLabel(currentMode)}
             title={vibeModeLabel(currentMode)}
-            onClick={() => {
-              setOpen(!isOpen)
-            }}
           >
             <VibeIndicator mode={currentMode} size={12} />
             {vibeModeLabel(currentMode)}
-          </button>
+          </Popover.Trigger>
         ) : null}
       </span>
-      {isOpen
-        ? createPortal(
-            <span
-              className="vibe-control-popover"
-              style={{
-                left: `${String(popoverPosition?.left ?? 0)}px`,
-                top: `${String(popoverPosition?.top ?? 0)}px`,
-                visibility: popoverPosition === null ? 'hidden' : 'visible',
-                width: `${String(popoverPosition?.width ?? 360)}px`,
-              }}
-            >
-              {panel}
-            </span>,
-            document.body,
-          )
-        : null}
-    </>
+      <Popover.Portal>
+        <Popover.Positioner
+          className="vibe-control-positioner"
+          side="bottom"
+          align="start"
+          sideOffset={8}
+          collisionBoundary={collisionBoundary ?? 'clipping-ancestors'}
+          collisionPadding={16}
+        >
+          <Popover.Popup className="vibe-control-popover" role="presentation">
+            {panel}
+          </Popover.Popup>
+        </Popover.Positioner>
+      </Popover.Portal>
+    </Popover.Root>
   )
 }
