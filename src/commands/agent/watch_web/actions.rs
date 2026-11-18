@@ -55,6 +55,7 @@ pub(super) fn router(message_loaders: RouteLoaders) -> Router {
         permission_denied_retry_locks: PermissionDeniedRetryLocks::default(),
         bang_command_locks: KeyedMutexRegistry::default(),
         interrupt_locks: InterruptLocks::default(),
+        resume_locks: KeyedMutexRegistry::default(),
         message_loaders,
     })
 }
@@ -62,6 +63,7 @@ pub(super) fn router(message_loaders: RouteLoaders) -> Router {
 fn router_with_state(state: ActionState) -> Router {
     Router::new()
         .route("/sessions/{id}/actions", get(actions))
+        .route("/sessions/{id}/resume", post(resume_session))
         .route("/sessions/{id}/vibe", post(vibe::set_vibe))
         .route(
             "/sessions/{id}/messages",
@@ -135,6 +137,7 @@ struct ActionState {
     permission_denied_retry_locks: PermissionDeniedRetryLocks,
     bang_command_locks: KeyedMutexRegistry<(String, String, Vec<String>)>,
     interrupt_locks: InterruptLocks,
+    resume_locks: KeyedMutexRegistry<String>,
 }
 
 type RepoIdentityResolver = Arc<dyn Fn(&Path) -> Option<(String, String)> + Send + Sync>;
@@ -149,6 +152,7 @@ struct CommandResult {
 }
 
 trait ActionRuntime: Send + Sync {
+    fn resume_session(&self, session: &Session) -> Result<()>;
     fn send_message(&self, session: &Session, content: &str) -> Result<()>;
     fn execute_command(&self, cwd: &std::path::Path, command: &str) -> Result<CommandResult>;
     fn rewind_session(
@@ -221,6 +225,28 @@ async fn actions(
         open_in_terminal: has_tmux,
         rewind: super::rewind::can_rewind(&session),
     }))
+}
+
+async fn resume_session(
+    State(state): State<ActionState>,
+    RoutePath(id): RoutePath<String>,
+) -> Result<Json<Success>, ApiError> {
+    let lock = state.resume_locks.get_or_create(id.clone()).await;
+    let _guard = lock
+        .try_lock_owned()
+        .map_err(|_| ApiError::conflict("session resume is already in progress"))?;
+    let session = load_session(state.clone(), id).await?;
+    if !matches!(session.status, SessionStatus::Ended | SessionStatus::Paused) {
+        return Err(ApiError::conflict("session is not ended or paused"));
+    }
+
+    let runtime = state.runtime;
+    tokio::task::spawn_blocking(move || runtime.resume_session(&session))
+        .await
+        .map_err(ApiError::internal)?
+        .map_err(ApiError::operation)?;
+
+    Ok(Json(Success::new()))
 }
 
 async fn approve_permission(
@@ -522,6 +548,9 @@ mod tests {
     #[path = "permission_denied.rs"]
     mod permission_denied;
 
+    #[path = "resume.rs"]
+    mod resume;
+
     #[path = "todos.rs"]
     mod todos;
 
@@ -587,6 +616,15 @@ mod tests {
     }
 
     impl ActionRuntime for FakeRuntime {
+        fn resume_session(&self, session: &Session) -> Result<()> {
+            self.calls.lock().unwrap().push(json!({
+                "kind": "resume",
+                "sessionId": session.session_id,
+                "status": session.status,
+            }));
+            Ok(())
+        }
+
         fn send_message(&self, session: &Session, content: &str) -> Result<()> {
             self.calls.lock().unwrap().push(json!({
                 "kind": "message",
@@ -804,6 +842,7 @@ mod tests {
                 permission_denied_retry_locks: PermissionDeniedRetryLocks::default(),
                 bang_command_locks: KeyedMutexRegistry::default(),
                 interrupt_locks: InterruptLocks::default(),
+                resume_locks: KeyedMutexRegistry::default(),
                 message_loaders: empty_message_loaders(),
             })
         }
@@ -822,6 +861,7 @@ mod tests {
                 permission_denied_retry_locks: permission_denied_retry_locks.clone(),
                 bang_command_locks: KeyedMutexRegistry::default(),
                 interrupt_locks: InterruptLocks::default(),
+                resume_locks: KeyedMutexRegistry::default(),
                 message_loaders: empty_message_loaders(),
             });
             (router, permission_denied_retry_locks)
@@ -842,6 +882,7 @@ mod tests {
                 permission_denied_retry_locks: PermissionDeniedRetryLocks::default(),
                 bang_command_locks: KeyedMutexRegistry::default(),
                 interrupt_locks: InterruptLocks::default(),
+                resume_locks: KeyedMutexRegistry::default(),
                 message_loaders,
             });
             (router, proposal_answer_locks)

@@ -56,6 +56,7 @@ export type Session = {
   kind: SessionKind | null
   title: string
   preview: string | null
+  updatedAt?: string
   elapsedSeconds: number
   lastPromptedAt?: string | null
   unread: boolean

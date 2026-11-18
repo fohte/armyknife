@@ -367,7 +367,7 @@ fn restore_commands_for_pane(
 /// `ARMYKNIFE_ANCESTOR_SESSION_IDS` on the `claude` process it execs.
 /// The saved launch metadata is used because the store record may have been
 /// removed before restore runs.
-pub(super) fn resume_command_for(
+pub(in crate::commands::agent) fn resume_command_for(
     pane_session: &RestoredPaneSession,
     engine: Engine,
     pane_has_agent: bool,
@@ -375,6 +375,20 @@ pub(super) fn resume_command_for(
     if pane_has_agent {
         return None;
     }
+    Some(build_resume_command(pane_session, engine))
+}
+
+pub(in crate::commands::agent) fn resume_command_for_session(session: &Session) -> String {
+    let pane_session = RestoredPaneSession {
+        session_id: session.session_id.clone(),
+        ancestor_session_ids: session.ancestor_session_ids.clone(),
+        engine: Some(session.engine),
+        launched_with_vibe: session.launched_with_vibe,
+    };
+    build_resume_command(&pane_session, session.engine)
+}
+
+fn build_resume_command(pane_session: &RestoredPaneSession, engine: Engine) -> String {
     // Quoted because `send-keys` types into an interactive shell where
     // metacharacters (spaces, `;`, backticks) would otherwise be parsed.
     let quoted_id = shlex::try_quote(&pane_session.session_id)
@@ -394,7 +408,7 @@ pub(super) fn resume_command_for(
     if pane_session.launched_with_vibe {
         command.push_str(" --launched-with-vibe");
     }
-    Some(command)
+    command
 }
 
 #[cfg(test)]
@@ -674,6 +688,30 @@ mod tests {
             assert_eq!(
                 resume_command_for(&pane_session, engine, pane_has_agent),
                 expected
+            );
+        }
+
+        #[test]
+        fn resume_command_for_session_preserves_engine_ancestry_and_vibe() {
+            let mut session: Session = serde_json::from_value(serde_json::json!({
+                "session_id": "fixture-session",
+                "cwd": "/fixture/worktree",
+                "transcript_path": null,
+                "tmux_info": null,
+                "status": "ended",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "last_message": null,
+            }))
+            .unwrap();
+            session.engine = Engine::Codex;
+            session.ancestor_session_ids =
+                vec!["fixture-root".to_string(), "fixture-parent".to_string()];
+            session.launched_with_vibe = true;
+
+            assert_eq!(
+                resume_command_for_session(&session),
+                "a agent resume fixture-session --engine codex --ancestor-session-ids 'fixture-root,fixture-parent' --launched-with-vibe",
             );
         }
     }

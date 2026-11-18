@@ -9,6 +9,35 @@ use super::{ActionRuntime, CommandResult};
 pub(super) struct LiveActionRuntime;
 
 impl ActionRuntime for LiveActionRuntime {
+    fn resume_session(&self, session: &Session) -> Result<()> {
+        match session.status {
+            crate::commands::agent::types::SessionStatus::Paused => {
+                crate::commands::agent::resume::respawn_paused_session(session)?;
+            }
+            crate::commands::agent::types::SessionStatus::Ended => {
+                let tmux_info = session
+                    .tmux_info
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("session has no tmux location"))?;
+                let command =
+                    crate::commands::agent::resurrect::resume_command_for_session(session);
+                let pane_id = crate::infra::tmux::new_window_for_socket(
+                    tmux_info.socket_path.as_deref(),
+                    &tmux_info.session_name,
+                    &session.cwd,
+                    &tmux_info.window_name,
+                )?;
+                crate::infra::tmux::send_keys_sequence_for_socket(
+                    tmux_info.socket_path.as_deref(),
+                    &pane_id,
+                    &[&command, "Enter"],
+                )?;
+            }
+            _ => anyhow::bail!("session is not ended or paused"),
+        }
+        Ok(())
+    }
+
     fn execute_command(&self, cwd: &std::path::Path, command: &str) -> Result<CommandResult> {
         super::bang_commands::execute_command(cwd, command)
     }

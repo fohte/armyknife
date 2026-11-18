@@ -36,6 +36,18 @@ const actions: SessionActions = {
   rewind: false,
 }
 
+const endedSession: Session = {
+  ...session,
+  updatedAt: '2026-01-01T05:32:00.000Z',
+}
+
+const endedActions: SessionActions = {
+  ...actions,
+  message: false,
+  answerQuestion: false,
+  interrupt: false,
+}
+
 const callbacks = {
   onAction: () => Promise.resolve(true),
   onSelectSession: () => undefined,
@@ -950,4 +962,42 @@ export const CompactBoundarySeparatesConversation: Story = {
       },
     ],
   },
+}
+
+export const EndedSessionCanBeResumed: Story = {
+  name: 'An ended session offers a resume action',
+  args: {
+    session: endedSession,
+    actions: endedActions,
+  },
+}
+
+export const EndedSessionIsResuming: Story = {
+  name: 'An ended session shows that it is resuming',
+  args: {
+    session: endedSession,
+    actions: endedActions,
+    isResuming: true,
+  },
+}
+
+export const EndedMobileSessionCanBeResumed: Story = {
+  name: 'The phone layout puts the resume action below the ended status',
+  args: {
+    session: endedSession,
+    actions: endedActions,
+    isMobile: true,
+  },
+  decorators: [iPhoneViewportDecorator],
+}
+
+export const EndedMobileSessionIsResuming: Story = {
+  name: 'The phone layout disables resume while the session is resuming',
+  args: {
+    session: endedSession,
+    actions: endedActions,
+    isMobile: true,
+    isResuming: true,
+  },
+  decorators: [iPhoneViewportDecorator],
 }

@@ -167,6 +167,11 @@ const requests: {
     path: 'focus',
   },
   {
+    name: 'resume session',
+    operation: { type: 'resume', sessionId: 'test-session' },
+    path: 'resume',
+  },
+  {
     name: 'interrupt session',
     operation: { type: 'interrupt', sessionId: 'test-session' },
     path: 'interrupt',
@@ -502,6 +507,7 @@ const operationFactories: [
     { type: 'close', sessionId: session.id, keepWorktree: false },
   ],
   ['terminal focus', 'focus', {}, { type: 'focus', sessionId: session.id }],
+  ['resume', 'resume', {}, { type: 'resume', sessionId: session.id }],
   ['interrupt', 'interrupt', {}, { type: 'interrupt', sessionId: session.id }],
   [
     'title change',

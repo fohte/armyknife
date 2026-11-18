@@ -80,6 +80,18 @@ const codexTerminalActions: SessionActions = {
   rewind: false,
 }
 
+const endedSession: Session = {
+  ...session,
+  updatedAt: '2026-01-01T05:32:00.000Z',
+}
+
+const endedActions: SessionActions = {
+  ...actions,
+  message: false,
+  answerQuestion: false,
+  interrupt: false,
+}
+
 const questionPrompt = {
   header: 'Cache policy',
   question: 'Which cache window should be used?',
@@ -353,6 +365,75 @@ function renderView(
     )
   })
 }
+
+it('resumes an ended session and restores the composer after it becomes active', async () => {
+  let resolveResume: ((success: boolean) => void) | undefined
+  const resumeRequest = new Promise<boolean>((resolve) => {
+    resolveResume = resolve
+  })
+  const calls: string[] = []
+  const onAction: ActionHandler = (action) => {
+    calls.push(action)
+    return resumeRequest
+  }
+  renderView(onAction, endedSession, () => undefined, [], endedActions)
+
+  const resumeButton = requireElement(
+    container.querySelector<HTMLButtonElement>('.conversation-ended-resume'),
+  )
+  await act(async () => {
+    await userEvent.click(resumeButton)
+  })
+  const pending = {
+    label: resumeButton.textContent,
+    disabled: resumeButton.disabled,
+    composerVisible:
+      container.querySelector('.conversation-composer textarea') !== null,
+    title: container.querySelector('.conversation-ended-title')?.textContent,
+    endedAt: container
+      .querySelector('.conversation-ended time')
+      ?.getAttribute('datetime'),
+    hint: container.querySelector('.conversation-ended-hint')?.textContent,
+  }
+
+  await act(async () => {
+    resolveResume?.(true)
+    await resumeRequest
+  })
+  const afterRequest = {
+    label: container.querySelector('.conversation-ended-resume')?.textContent,
+    composerVisible:
+      container.querySelector('.conversation-composer textarea') !== null,
+  }
+
+  renderView(onAction, endedSession, () => undefined, [], actions)
+  const afterSessionResumes = {
+    endedBannerVisible: container.querySelector('.conversation-ended') !== null,
+    composerVisible:
+      container.querySelector('.conversation-composer textarea') !== null,
+  }
+
+  const getActual = () => ({
+    calls,
+    pending,
+    afterRequest,
+    afterSessionResumes,
+  })
+  const expected = {
+    calls: ['resume'],
+    pending: {
+      label: 'Resuming…',
+      disabled: true,
+      composerVisible: false,
+      title: 'This session has ended',
+      endedAt: '2026-01-01T05:32:00.000Z',
+      hint: ' · Resume it to keep talking',
+    },
+    afterRequest: { label: 'Resuming…', composerVisible: false },
+    afterSessionResumes: { endedBannerVisible: false, composerVisible: true },
+  }
+  expect(getActual()).toEqual(expected)
+})
 
 function SessionLinkContextHarness({
   children,
@@ -4096,7 +4177,7 @@ it('accepts classified messages and the active tool from messages endpoint', asy
     )
     .mockResolvedValueOnce(
       jsonResponse({
-        message: false,
+        message: true,
         answerQuestion: false,
         interrupt: false,
         openInTerminal: false,
@@ -6690,7 +6771,7 @@ it.each([
 it('shows an HTTP status when the initial messages response has no body', async () => {
   const actionsResponse = new Response(
     JSON.stringify({
-      message: false,
+      message: true,
       answerQuestion: false,
       interrupt: false,
       openInTerminal: true,

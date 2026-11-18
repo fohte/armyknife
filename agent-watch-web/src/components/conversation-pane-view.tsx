@@ -6,6 +6,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -60,6 +61,7 @@ type ConversationPaneViewProps = {
   skills?: readonly SkillSuggestion[]
   actions: SessionActions | null
   actionsReady?: boolean
+  isResuming?: boolean
   pendingPermissionActions?: PendingPermissionActions | undefined
   openInTerminalStatus?: OpenInTerminalStatus
   loading: boolean
@@ -112,6 +114,7 @@ export function ConversationPaneView({
   skills = [],
   actions,
   actionsReady = true,
+  isResuming = false,
   pendingPermissionActions = {},
   openInTerminalStatus = null,
   loading,
@@ -139,10 +142,17 @@ export function ConversationPaneView({
   onToggleToday,
 }: ConversationPaneViewProps) {
   const { usage } = useAgentUsageContext()
+  const endedTime = formatEndedTime(session.updatedAt)
   const sessionUsage =
     usage?.sessions.find((entry) => entry.sessionId === session.id) ?? null
   const interruptInFlight = useRef(false)
   const [isInterrupting, setIsInterrupting] = useState(false)
+  const [resumeRequested, setResumeRequested] = useState(false)
+  const isEnded = actions?.message === false
+  const isResumePending = isEnded && (isResuming || resumeRequested)
+  useEffect(() => {
+    if (!isEnded) setResumeRequested(false)
+  }, [isEnded, session.id])
   const currentDate = new Date()
   const currentYear = currentDate.getFullYear()
   const currentMonth = currentDate.getMonth()
@@ -283,6 +293,18 @@ export function ConversationPaneView({
     }
     void onAction('interrupt').then(finish, finish)
   }, [actions?.interrupt, onAction])
+  const resume = useCallback(() => {
+    if (isResumePending) return
+    setResumeRequested(true)
+    void onAction('resume').then(
+      (success) => {
+        if (!success) setResumeRequested(false)
+      },
+      () => {
+        setResumeRequested(false)
+      },
+    )
+  }, [isResumePending, onAction])
   const {
     isFileDragActive,
     handleDragEnter,
@@ -406,60 +428,97 @@ export function ConversationPaneView({
         </MarkdownCommandContextProvider>
       </div>
 
-      <ConversationStatusBand
-        state={statusBandState}
-        elapsedSeconds={session.elapsedSeconds}
-        activeTool={activeTool}
-        backgroundTasks={backgroundTasks}
-        isMobile={isMobile}
-        {...(onReviewInCrit === undefined ? {} : { onReviewInCrit })}
-        {...(statusBandState?.kind === 'question' ||
-        statusBandState?.kind === 'permission'
-          ? { onReturnToCard: returnToRequestCard }
-          : {})}
-      />
+      {isEnded ? (
+        <div className="conversation-ended" role="status">
+          <span className="conversation-ended-dot" aria-hidden="true" />
+          <span className="conversation-ended-copy">
+            <span className="conversation-ended-title">
+              This session has ended
+            </span>
+            {endedTime === null ? null : (
+              <span className="conversation-ended-time">
+                {' · '}
+                <time dateTime={session.updatedAt}>{endedTime}</time>
+              </span>
+            )}
+            {isMobile ? null : (
+              <span className="conversation-ended-hint">
+                {' · Resume it to keep talking'}
+              </span>
+            )}
+          </span>
+          <Button
+            className="conversation-ended-resume"
+            type="button"
+            disabled={isResumePending}
+            onClick={resume}
+          >
+            {isResumePending
+              ? 'Resuming…'
+              : isMobile
+                ? 'Resume session'
+                : 'Resume'}
+          </Button>
+        </div>
+      ) : (
+        <>
+          <ConversationStatusBand
+            state={statusBandState}
+            elapsedSeconds={session.elapsedSeconds}
+            activeTool={activeTool}
+            backgroundTasks={backgroundTasks}
+            isMobile={isMobile}
+            {...(onReviewInCrit === undefined ? {} : { onReviewInCrit })}
+            {...(statusBandState?.kind === 'question' ||
+            statusBandState?.kind === 'permission'
+              ? { onReturnToCard: returnToRequestCard }
+              : {})}
+          />
 
+          {!storageAvailable ? (
+            <p className="conversation-error" role="status">
+              Browser storage is unavailable. Drafts may not survive a page
+              reload.
+            </p>
+          ) : null}
+          <MessageComposer
+            draft={draft}
+            focusDraft={focusDraft}
+            engine={session.engine}
+            skills={skills}
+            placeholder={
+              hasUnansweredProposal
+                ? 'Choose an option above, or message the session'
+                : session.pullRequest
+                  ? `Message PR ${String(session.pullRequest.number)}`
+                  : 'Message session'
+            }
+            disabled={actions?.message === false}
+            isSending={isSending}
+            isProcessingAttachments={isProcessingAttachments}
+            isMobile={isMobile}
+            canInterrupt={actions?.interrupt === true}
+            isInterrupting={isInterrupting || interruptPending}
+            attachments={attachments}
+            onDraftChange={updateDraft}
+            onKeyDown={onComposerKeyDown}
+            onPasteFiles={handlePasteFiles}
+            onRemoveAttachment={removeAttachment}
+            onSend={() => {
+              void sendMessage()
+            }}
+            onInterrupt={() => {
+              interrupt()
+            }}
+          />
+        </>
+      )}
       {(error ?? attachmentError) != null &&
       (error ?? attachmentError) !== '' ? (
         <p className="conversation-error" role="alert">
           {error ?? attachmentError}
         </p>
       ) : null}
-      {!storageAvailable ? (
-        <p className="conversation-error" role="status">
-          Browser storage is unavailable. Drafts may not survive a page reload.
-        </p>
-      ) : null}
-      <MessageComposer
-        draft={draft}
-        focusDraft={focusDraft}
-        engine={session.engine}
-        skills={skills}
-        placeholder={
-          hasUnansweredProposal
-            ? 'Choose an option above, or message the session'
-            : session.pullRequest
-              ? `Message PR ${String(session.pullRequest.number)}`
-              : 'Message session'
-        }
-        disabled={actions?.message === false}
-        isSending={isSending}
-        isProcessingAttachments={isProcessingAttachments}
-        isMobile={isMobile}
-        canInterrupt={actions?.interrupt === true}
-        isInterrupting={isInterrupting || interruptPending}
-        attachments={attachments}
-        onDraftChange={updateDraft}
-        onKeyDown={onComposerKeyDown}
-        onPasteFiles={handlePasteFiles}
-        onRemoveAttachment={removeAttachment}
-        onSend={() => {
-          void sendMessage()
-        }}
-        onInterrupt={() => {
-          interrupt()
-        }}
-      />
       <SessionUsageRow isMobile={isMobile} usage={sessionUsage} />
       <ConversationSelectionReply
         position={selectionReplyPosition}
@@ -478,4 +537,15 @@ export function ConversationPaneView({
       {conversationPane}
     </SessionLinkElapsedSecondsContext.Provider>
   )
+}
+
+function formatEndedTime(updatedAt?: string) {
+  if (updatedAt === undefined) return null
+  const date = new Date(updatedAt)
+  if (Number.isNaN(date.getTime())) return null
+  return new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(date)
 }
