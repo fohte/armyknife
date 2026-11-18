@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.791](https://github.com/fohte/armyknife/compare/v0.1.790...v0.1.791) (2026-11-18)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** clear stale exposures ([#1968](https://github.com/fohte/armyknife/issues/1968)) ([3126fbe](https://github.com/fohte/armyknife/commit/3126fbe83233ddd575427c6efb630eea5972c8df))
+
 ## [0.1.790](https://github.com/fohte/armyknife/compare/v0.1.789...v0.1.790) (2026-11-18)
 
 
