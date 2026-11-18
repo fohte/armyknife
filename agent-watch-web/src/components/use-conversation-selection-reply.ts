@@ -66,8 +66,8 @@ export function useConversationSelectionReply({
     }
 
     const text = selectionEndsAtMessageBoundary
-      ? messageRange.toString().replace(/\n+$/, '')
-      : messageRange.toString()
+      ? selection.toString().replace(/\n+$/, '')
+      : selection.toString()
     if (text.trim() === '') {
       setSelectionReply(null)
       return

@@ -237,6 +237,35 @@ it('does not offer replies when selected text crosses assistant messages', () =>
   ).toBe(false)
 })
 
+it('preserves paragraph breaks when quoting across paragraphs', () => {
+  render([{ type: 'assistant', text: 'First paragraph\n\nSecond paragraph' }])
+  const paragraphs = container.querySelectorAll('.chat-assistant-message p')
+  const firstText = requireElement(paragraphs.item(0)).firstChild
+  const secondText = requireElement(paragraphs.item(1)).firstChild
+  if (
+    firstText === null ||
+    firstText.nodeType !== Node.TEXT_NODE ||
+    secondText === null ||
+    secondText.nodeType !== Node.TEXT_NODE
+  ) {
+    throw new Error('Expected paragraphs to contain text nodes')
+  }
+  selectRange(firstText, 0, secondText, secondText.textContent?.length ?? 0)
+
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.conversation-selection-reply button',
+      ),
+    ).click()
+  })
+
+  expect(
+    requireElement(container.querySelector<HTMLTextAreaElement>('textarea'))
+      .value,
+  ).toBe('> First paragraph\n> \n> Second paragraph\n\n')
+})
+
 it('does not offer replies when selected text crosses an intervening message', () => {
   render([
     { type: 'assistant', text: 'First assistant message' },
