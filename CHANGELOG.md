@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.783](https://github.com/fohte/armyknife/compare/v0.1.782...v0.1.783) (2026-11-18)
+
+
+### Features
+
+* **agent-watch-web:** support model/effort choice ([#1951](https://github.com/fohte/armyknife/issues/1951)) ([44f94c2](https://github.com/fohte/armyknife/commit/44f94c215ac162685609ffbf4103a5c6e6464eba))
+
 ## [0.1.782](https://github.com/fohte/armyknife/compare/v0.1.781...v0.1.782) (2026-11-17)
 
 
