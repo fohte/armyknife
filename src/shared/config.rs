@@ -244,7 +244,7 @@ impl Default for WorktreeConfig {
 
 /// Layout tree node: either a single pane (leaf) or a split (internal node).
 #[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(untagged)]
 pub enum LayoutNode {
     /// Split node with two children.
@@ -271,7 +271,7 @@ impl Default for LayoutNode {
 
 /// Split configuration with direction and two child nodes.
 #[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SplitConfig {
     /// Split direction ("horizontal" or "vertical").
@@ -284,7 +284,7 @@ pub struct SplitConfig {
 
 /// Split direction.
 #[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum SplitDirection {
     /// Horizontal split (tmux split-window -h).
@@ -295,7 +295,7 @@ pub enum SplitDirection {
 
 /// Configuration for a single tmux pane.
 #[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct PaneConfig {
     /// Command to run in the pane.

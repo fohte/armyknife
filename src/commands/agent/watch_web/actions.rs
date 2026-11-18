@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use super::super::store;
 use super::super::types::{Engine, Session, SessionStatus, TmuxInfo};
 use super::messages::RouteLoaders;
+#[cfg(test)]
 use crate::infra::process::SHELL_COMMANDS;
 use crate::shared::config::{self, Config};
 
@@ -31,8 +32,10 @@ mod permission_denied;
 mod permission_denied_locks;
 mod proposal_answer_locks;
 mod proposals;
+mod resume;
 mod rewind;
 mod runtime;
+mod support;
 mod title;
 mod todos;
 mod vibe;
@@ -43,6 +46,10 @@ use keyed_mutex_registry::KeyedMutexRegistry;
 use permission_denied_locks::PermissionDeniedRetryLocks;
 use proposal_answer_locks::ProposalAnswerLocks;
 use runtime::LiveActionRuntime;
+use support::{
+    Success, load_session, require_tmux, resolve_current_session_id, resolve_sessions_dir,
+    run_blocking, send_claude_escape,
+};
 
 pub(super) fn router(message_loaders: RouteLoaders) -> Router {
     router_with_state(ActionState {
@@ -55,6 +62,8 @@ pub(super) fn router(message_loaders: RouteLoaders) -> Router {
         permission_denied_retry_locks: PermissionDeniedRetryLocks::default(),
         bang_command_locks: KeyedMutexRegistry::default(),
         interrupt_locks: InterruptLocks::default(),
+        resume_locks: KeyedMutexRegistry::default(),
+        resume_pending: resume::PendingSessionResumes::default(),
         message_loaders,
     })
 }
@@ -62,6 +71,7 @@ pub(super) fn router(message_loaders: RouteLoaders) -> Router {
 fn router_with_state(state: ActionState) -> Router {
     Router::new()
         .route("/sessions/{id}/actions", get(actions))
+        .route("/sessions/{id}/resume", post(resume::resume_session))
         .route("/sessions/{id}/vibe", post(vibe::set_vibe))
         .route(
             "/sessions/{id}/messages",
@@ -135,6 +145,8 @@ struct ActionState {
     permission_denied_retry_locks: PermissionDeniedRetryLocks,
     bang_command_locks: KeyedMutexRegistry<(String, String, Vec<String>)>,
     interrupt_locks: InterruptLocks,
+    resume_locks: KeyedMutexRegistry<String>,
+    resume_pending: resume::PendingSessionResumes,
 }
 
 type RepoIdentityResolver = Arc<dyn Fn(&Path) -> Option<(String, String)> + Send + Sync>;
@@ -149,6 +161,7 @@ struct CommandResult {
 }
 
 trait ActionRuntime: Send + Sync {
+    fn resume_session(&self, session: &Session) -> Result<()>;
     fn send_message(&self, session: &Session, content: &str) -> Result<()>;
     fn execute_command(&self, cwd: &std::path::Path, command: &str) -> Result<CommandResult>;
     fn rewind_session(
@@ -185,6 +198,7 @@ trait ActionRuntime: Send + Sync {
 struct ActionCapabilities {
     message: bool,
     answer_question: bool,
+    resume: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     permission: Option<PermissionCapabilities>,
     interrupt: bool,
@@ -202,7 +216,12 @@ async fn actions(
     State(state): State<ActionState>,
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<ActionCapabilities>, ApiError> {
-    let session = load_session(state, id).await?;
+    let current_id = resolve_current_session_id(&state, &id).await?;
+    let session = load_session(state.clone(), current_id.clone()).await?;
+    state
+        .resume_pending
+        .clear_if_not_resumable(&current_id, session.status)
+        .await;
     let has_tmux = session.tmux_info.is_some();
     let has_live_session = session.status != SessionStatus::Ended;
     Ok(Json(ActionCapabilities {
@@ -210,6 +229,7 @@ async fn actions(
         answer_question: has_live_session
             && session.engine == Engine::Claude
             && session.has_pending_permission_requests(),
+        resume: matches!(session.status, SessionStatus::Ended | SessionStatus::Paused) && has_tmux,
         permission: (has_live_session
             && matches!(session.engine, Engine::Claude | Engine::Codex)
             && session.has_pending_permission_requests())
@@ -399,94 +419,6 @@ async fn set_primary_task(
     Ok(Json(Success::new()))
 }
 
-#[derive(Serialize)]
-struct Success {
-    ok: bool,
-}
-
-impl Success {
-    fn new() -> Self {
-        Self { ok: true }
-    }
-}
-
-fn require_tmux(session: &Session) -> Result<&TmuxInfo, ApiError> {
-    session
-        .tmux_info
-        .as_ref()
-        .ok_or_else(|| ApiError::conflict("session has no tmux pane"))
-}
-
-async fn load_session(state: ActionState, id: String) -> Result<Session, ApiError> {
-    let session = tokio::task::spawn_blocking(move || {
-        let session = match state.sessions_dir {
-            Some(dir) => store::load_session_from(&dir, &id),
-            None => crate::commands::agent::session_status::load_session_with_bg_run_status(&id),
-        }
-        .map_err(|error| {
-            if super::is_invalid_session_id_error(&error) {
-                ApiError::not_found()
-            } else {
-                ApiError::internal(error)
-            }
-        })?;
-        Ok::<_, ApiError>(session)
-    })
-    .await
-    .map_err(ApiError::internal)??;
-    session
-        .filter(|session| session.archived_at.is_none())
-        .ok_or_else(ApiError::not_found)
-}
-
-fn resolve_sessions_dir(override_dir: Option<PathBuf>) -> Result<PathBuf> {
-    match override_dir {
-        Some(dir) => Ok(dir),
-        None => store::sessions_dir(),
-    }
-}
-
-async fn send_claude_escape(
-    runtime: Arc<dyn ActionRuntime>,
-    tmux_info: &TmuxInfo,
-) -> Result<(), ApiError> {
-    let tmux_info = tmux_info.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        let Some(current_command) = runtime.pane_current_command(&tmux_info) else {
-            return Ok(false);
-        };
-        if SHELL_COMMANDS.contains(&current_command.as_str()) {
-            return Ok(false);
-        }
-        runtime.send_claude_escape_if_agent_is_running(&tmux_info, &current_command)
-    })
-    .await
-    .map_err(ApiError::internal)?;
-    match result {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(ApiError::conflict("session pane is idle or unavailable")),
-        Err(error) => Err(ApiError::operation(error)),
-    }
-}
-
-async fn run_blocking<T>(
-    operation: impl FnOnce() -> Result<T> + Send + 'static,
-) -> Result<T, ApiError>
-where
-    T: Send + 'static,
-{
-    tokio::task::spawn_blocking(operation)
-        .await
-        .map_err(ApiError::internal)?
-        .map_err(ApiError::operation)
-}
-
-impl From<anyhow::Error> for ApiError {
-    fn from(error: anyhow::Error) -> Self {
-        Self::operation(error)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
@@ -521,6 +453,9 @@ mod tests {
 
     #[path = "permission_denied.rs"]
     mod permission_denied;
+
+    #[path = "resume.rs"]
+    mod resume;
 
     #[path = "todos.rs"]
     mod todos;
@@ -587,6 +522,15 @@ mod tests {
     }
 
     impl ActionRuntime for FakeRuntime {
+        fn resume_session(&self, session: &Session) -> Result<()> {
+            self.calls.lock().unwrap().push(json!({
+                "kind": "resume",
+                "sessionId": session.session_id,
+                "status": session.status,
+            }));
+            Ok(())
+        }
+
         fn send_message(&self, session: &Session, content: &str) -> Result<()> {
             self.calls.lock().unwrap().push(json!({
                 "kind": "message",
@@ -804,6 +748,8 @@ mod tests {
                 permission_denied_retry_locks: PermissionDeniedRetryLocks::default(),
                 bang_command_locks: KeyedMutexRegistry::default(),
                 interrupt_locks: InterruptLocks::default(),
+                resume_locks: KeyedMutexRegistry::default(),
+                resume_pending: super::resume::PendingSessionResumes::default(),
                 message_loaders: empty_message_loaders(),
             })
         }
@@ -822,6 +768,8 @@ mod tests {
                 permission_denied_retry_locks: permission_denied_retry_locks.clone(),
                 bang_command_locks: KeyedMutexRegistry::default(),
                 interrupt_locks: InterruptLocks::default(),
+                resume_locks: KeyedMutexRegistry::default(),
+                resume_pending: super::resume::PendingSessionResumes::default(),
                 message_loaders: empty_message_loaders(),
             });
             (router, permission_denied_retry_locks)
@@ -842,6 +790,8 @@ mod tests {
                 permission_denied_retry_locks: PermissionDeniedRetryLocks::default(),
                 bang_command_locks: KeyedMutexRegistry::default(),
                 interrupt_locks: InterruptLocks::default(),
+                resume_locks: KeyedMutexRegistry::default(),
+                resume_pending: super::resume::PendingSessionResumes::default(),
                 message_loaders,
             });
             (router, proposal_answer_locks)
@@ -1785,6 +1735,7 @@ mod tests {
                 "body": {
                     "message": true,
                     "answerQuestion": true,
+                    "resume": false,
                     "permission": { "approve": true, "reject": true },
                     "interrupt": false,
                     "openInTerminal": false,
@@ -1983,6 +1934,7 @@ mod tests {
                     "body": {
                         "message": true,
                         "answerQuestion": false,
+                        "resume": false,
                         "permission": { "approve": true, "reject": true },
                         "interrupt": false,
                         "openInTerminal": true,
@@ -2036,6 +1988,7 @@ mod tests {
                 "body": {
                     "message": true,
                     "answerQuestion": false,
+                    "resume": false,
                     "interrupt": enabled,
                     "openInTerminal": true,
                     "rewind": matches!(status, SessionStatus::Stopped | SessionStatus::Paused),
@@ -2096,6 +2049,8 @@ mod tests {
                 "body": {
                     "message": status != SessionStatus::Ended,
                     "answerQuestion": false,
+                    "resume": matches!(status, SessionStatus::Ended | SessionStatus::Paused)
+                        && has_pane,
                     "interrupt": status == SessionStatus::Running,
                     "openInTerminal": has_pane,
                     "rewind": rewind_available,
@@ -2543,6 +2498,7 @@ mod tests {
                     "body": {
                         "message": false,
                         "answerQuestion": false,
+                        "resume": true,
                         "interrupt": false,
                         "openInTerminal": true,
                         "rewind": false,

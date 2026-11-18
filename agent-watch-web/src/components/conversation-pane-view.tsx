@@ -2,20 +2,14 @@ import '#components/conversation-pane.css'
 import '#components/conversation-pane-view.css'
 
 import { Button } from '@fohte/ui/button'
-import {
-  type KeyboardEvent as ReactKeyboardEvent,
-  type ReactNode,
-  useCallback,
-  useMemo,
-  useRef,
-  useState,
-} from 'react'
+import { type ReactNode, useCallback, useMemo, useRef, useState } from 'react'
 
 import { useAgentUsageContext } from '#components/agent-usage-context'
 import { ConversationPaneHeader } from '#components/conversation-pane-header'
 import { ConversationSelectionReply } from '#components/conversation-selection-reply'
 import { ConversationStatusBand } from '#components/conversation-status-band'
 import { getConversationStatusBandState } from '#components/conversation-status-band-state'
+import { EndedSessionBanner } from '#components/ended-session-banner'
 import { MarkdownCommandContextProvider } from '#components/markdown-command-context'
 import { MessageComposer } from '#components/message-composer'
 import type {
@@ -28,9 +22,11 @@ import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
 import { useConversationFileDrop } from '#components/use-conversation-file-drop'
 import { useConversationMessageElements } from '#components/use-conversation-message-elements'
+import { useConversationPaneKeyboard } from '#components/use-conversation-pane-keyboard'
 import { useConversationScroll } from '#components/use-conversation-scroll'
 import { useConversationSelectionReply } from '#components/use-conversation-selection-reply'
 import { useOwnMessageKeyboardNavigation } from '#components/use-own-message-keyboard-navigation'
+import { useSessionResume } from '#components/use-session-resume'
 import { useSessionLinkTargets } from '#session-link-targets'
 import type {
   BackgroundTask,
@@ -60,6 +56,7 @@ type ConversationPaneViewProps = {
   skills?: readonly SkillSuggestion[]
   actions: SessionActions | null
   actionsReady?: boolean
+  isResuming?: boolean
   pendingPermissionActions?: PendingPermissionActions | undefined
   openInTerminalStatus?: OpenInTerminalStatus
   loading: boolean
@@ -112,6 +109,7 @@ export function ConversationPaneView({
   skills = [],
   actions,
   actionsReady = true,
+  isResuming = false,
   pendingPermissionActions = {},
   openInTerminalStatus = null,
   loading,
@@ -143,6 +141,13 @@ export function ConversationPaneView({
     usage?.sessions.find((entry) => entry.sessionId === session.id) ?? null
   const interruptInFlight = useRef(false)
   const [isInterrupting, setIsInterrupting] = useState(false)
+  const isEnded = actions?.message === false
+  const { isPending: isResumePending, resume } = useSessionResume(
+    session.id,
+    isEnded,
+    isResuming,
+    onAction,
+  )
   const currentDate = new Date()
   const currentYear = currentDate.getFullYear()
   const currentMonth = currentDate.getMonth()
@@ -291,46 +296,14 @@ export function ConversationPaneView({
     handleDrop,
   } = useConversationFileDrop(handlePasteFiles)
 
-  const onComposerKeyDown = (
-    event: ReactKeyboardEvent<HTMLTextAreaElement>,
-  ) => {
-    if (
-      event.nativeEvent.isComposing ||
-      Reflect.get(event.nativeEvent, 'keyCode') === 229
-    ) {
-      return
-    }
-    if (
-      event.key === 'Escape' &&
-      actions?.interrupt === true &&
-      !interruptPending
-    ) {
-      event.preventDefault()
-      interrupt()
-      return
-    }
-    if (event.key === 'Enter' && !isMobile && event.altKey && !event.shiftKey) {
-      event.preventDefault()
-      const textarea = event.currentTarget
-      textarea.setRangeText(
-        '\n',
-        textarea.selectionStart,
-        textarea.selectionEnd,
-        'end',
-      )
-      updateDraft(textarea.value)
-      return
-    }
-    if (
-      event.key === 'Enter' &&
-      !isMobile &&
-      !event.shiftKey &&
-      !event.altKey
-    ) {
-      event.preventDefault()
-      void sendMessage()
-    }
-  }
+  const onComposerKeyDown = useConversationPaneKeyboard({
+    isMobile,
+    canInterrupt: actions?.interrupt === true,
+    interruptPending,
+    interrupt,
+    updateDraft,
+    sendMessage,
+  })
 
   const conversationPane = (
     <section
@@ -406,60 +379,73 @@ export function ConversationPaneView({
         </MarkdownCommandContextProvider>
       </div>
 
-      <ConversationStatusBand
-        state={statusBandState}
-        elapsedSeconds={session.elapsedSeconds}
-        activeTool={activeTool}
-        backgroundTasks={backgroundTasks}
-        isMobile={isMobile}
-        {...(onReviewInCrit === undefined ? {} : { onReviewInCrit })}
-        {...(statusBandState?.kind === 'question' ||
-        statusBandState?.kind === 'permission'
-          ? { onReturnToCard: returnToRequestCard }
-          : {})}
-      />
+      {isEnded ? (
+        <EndedSessionBanner
+          endedAt={session.updatedAt}
+          isMobile={isMobile}
+          isResuming={isResumePending}
+          canResume={actions.resume !== false}
+          onResume={resume}
+        />
+      ) : (
+        <>
+          <ConversationStatusBand
+            state={statusBandState}
+            elapsedSeconds={session.elapsedSeconds}
+            activeTool={activeTool}
+            backgroundTasks={backgroundTasks}
+            isMobile={isMobile}
+            {...(onReviewInCrit === undefined ? {} : { onReviewInCrit })}
+            {...(statusBandState?.kind === 'question' ||
+            statusBandState?.kind === 'permission'
+              ? { onReturnToCard: returnToRequestCard }
+              : {})}
+          />
 
+          {!storageAvailable ? (
+            <p className="conversation-error" role="status">
+              Browser storage is unavailable. Drafts may not survive a page
+              reload.
+            </p>
+          ) : null}
+          <MessageComposer
+            draft={draft}
+            focusDraft={focusDraft}
+            engine={session.engine}
+            skills={skills}
+            placeholder={
+              hasUnansweredProposal
+                ? 'Choose an option above, or message the session'
+                : session.pullRequest
+                  ? `Message PR ${String(session.pullRequest.number)}`
+                  : 'Message session'
+            }
+            disabled={actions?.message === false}
+            isSending={isSending}
+            isProcessingAttachments={isProcessingAttachments}
+            isMobile={isMobile}
+            canInterrupt={actions?.interrupt === true}
+            isInterrupting={isInterrupting || interruptPending}
+            attachments={attachments}
+            onDraftChange={updateDraft}
+            onKeyDown={onComposerKeyDown}
+            onPasteFiles={handlePasteFiles}
+            onRemoveAttachment={removeAttachment}
+            onSend={() => {
+              void sendMessage()
+            }}
+            onInterrupt={() => {
+              interrupt()
+            }}
+          />
+        </>
+      )}
       {(error ?? attachmentError) != null &&
       (error ?? attachmentError) !== '' ? (
         <p className="conversation-error" role="alert">
           {error ?? attachmentError}
         </p>
       ) : null}
-      {!storageAvailable ? (
-        <p className="conversation-error" role="status">
-          Browser storage is unavailable. Drafts may not survive a page reload.
-        </p>
-      ) : null}
-      <MessageComposer
-        draft={draft}
-        focusDraft={focusDraft}
-        engine={session.engine}
-        skills={skills}
-        placeholder={
-          hasUnansweredProposal
-            ? 'Choose an option above, or message the session'
-            : session.pullRequest
-              ? `Message PR ${String(session.pullRequest.number)}`
-              : 'Message session'
-        }
-        disabled={actions?.message === false}
-        isSending={isSending}
-        isProcessingAttachments={isProcessingAttachments}
-        isMobile={isMobile}
-        canInterrupt={actions?.interrupt === true}
-        isInterrupting={isInterrupting || interruptPending}
-        attachments={attachments}
-        onDraftChange={updateDraft}
-        onKeyDown={onComposerKeyDown}
-        onPasteFiles={handlePasteFiles}
-        onRemoveAttachment={removeAttachment}
-        onSend={() => {
-          void sendMessage()
-        }}
-        onInterrupt={() => {
-          interrupt()
-        }}
-      />
       <SessionUsageRow isMobile={isMobile} usage={sessionUsage} />
       <ConversationSelectionReply
         position={selectionReplyPosition}
