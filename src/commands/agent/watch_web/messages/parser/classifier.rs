@@ -350,7 +350,7 @@ pub(super) fn marked_user_body(text: &str, marker: Option<&str>) -> Option<Strin
 
 fn marked_or_peer_message(text: &str, marker: Option<&str>) -> Option<MessageKind> {
     let message = extract_peer_message(text, marker)?;
-    if message.has_user_marker {
+    if message.has_user_marker_in_body || (message.sender_id.is_none() && message.has_user_marker) {
         return Some(marked_user_message_body(
             crate::commands::agent::peer_message::without_transport_notice(&message.body)
                 .to_owned(),

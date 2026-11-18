@@ -19,7 +19,9 @@ pub(super) fn is_peer_message(prompt: Option<&str>) -> bool {
 pub(super) struct ExtractedPeerMessage {
     pub(super) sender_id: Option<String>,
     pub(super) body: String,
+    pub(super) trailing_text: String,
     pub(super) has_user_marker: bool,
+    pub(super) has_user_marker_in_body: bool,
 }
 
 /// Removes transport details shared by provisional titles and watch-web messages.
@@ -50,13 +52,27 @@ fn extract_peer_message_with_marker_policy(
     }
 
     let mut sender_id = None;
-    if let Some((id, envelope_body)) = peer_message_parts(body) {
-        sender_id = Some(id.to_owned());
-        body = envelope_body;
-        is_peer_message = true;
-    }
-
-    let (body, has_user_marker) = strip_watch_web_marker(body, marker, allow_unverified_marker);
+    let mut trailing_text = "";
+    let (body, has_user_marker, has_user_marker_in_body) =
+        if let Some((id, envelope_body, envelope_trailing_text)) = peer_message_parts(body) {
+            let envelope_start = body.find(PEER_MESSAGE_START_TAG)?;
+            let (_, has_user_marker_before_envelope) =
+                strip_watch_web_marker(&body[..envelope_start], marker, allow_unverified_marker);
+            let (body, has_user_marker_in_body) =
+                strip_watch_web_marker(envelope_body, marker, allow_unverified_marker);
+            sender_id = Some(id.to_owned());
+            trailing_text = envelope_trailing_text;
+            is_peer_message = true;
+            (
+                body,
+                has_user_marker_before_envelope || has_user_marker_in_body,
+                has_user_marker_in_body,
+            )
+        } else {
+            let (body, has_user_marker) =
+                strip_watch_web_marker(body, marker, allow_unverified_marker);
+            (body, has_user_marker, has_user_marker)
+        };
     let without_notice = without_transport_notice(body);
     let had_transport_notice = without_notice != body;
     if !(is_peer_message || has_user_marker || had_transport_notice) {
@@ -65,7 +81,9 @@ fn extract_peer_message_with_marker_policy(
     Some(ExtractedPeerMessage {
         sender_id,
         body: body.to_owned(),
+        trailing_text: trailing_text.to_owned(),
         has_user_marker,
+        has_user_marker_in_body,
     })
 }
 
@@ -143,10 +161,10 @@ pub(super) fn without_transport_notice(body: &str) -> &str {
         .map_or(body, |(body, _)| body)
 }
 
-fn peer_message_parts(message: &str) -> Option<(&str, &str)> {
-    let envelope = message.split_once(PEER_MESSAGE_START_TAG)?.1;
-    let end = envelope.rfind(PEER_MESSAGE_END_MARKER)?;
-    let envelope = envelope[..end].strip_prefix('\n')?;
+fn peer_message_parts(message: &str) -> Option<(&str, &str, &str)> {
+    let (_, full_envelope) = message.split_once(PEER_MESSAGE_START_TAG)?;
+    let end = full_envelope.rfind(PEER_MESSAGE_END_MARKER)?;
+    let envelope = full_envelope[..end].strip_prefix('\n')?;
     let (header, body) = envelope.split_once(concat!("\n", "\n"))?;
     let mut header_lines = header.lines();
     let sender_id = header_lines.next()?.strip_prefix("- From session_id: ")?;
@@ -158,7 +176,8 @@ fn peer_message_parts(message: &str) -> Option<(&str, &str)> {
     {
         return None;
     }
-    Some((sender_id, body))
+    let trailing_text = &full_envelope[end + PEER_MESSAGE_END_MARKER.len()..];
+    Some((sender_id, body, trailing_text))
 }
 
 #[derive(Debug, PartialEq, Eq)]
