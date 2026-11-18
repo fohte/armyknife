@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.796](https://github.com/fohte/armyknife/compare/v0.1.795...v0.1.796) (2026-11-18)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** avoid full parse on refresh ([#1979](https://github.com/fohte/armyknife/issues/1979)) ([a954478](https://github.com/fohte/armyknife/commit/a954478af2888b8d9986f2f5b49b0aa7aa53d3b8))
+
 ## [0.1.795](https://github.com/fohte/armyknife/compare/v0.1.794...v0.1.795) (2026-11-18)
 
 
