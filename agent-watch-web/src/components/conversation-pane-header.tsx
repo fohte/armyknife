@@ -21,6 +21,7 @@ import {
 import { SessionHeading } from '#components/session-heading'
 import {
   getRepresentativePullRequest,
+  isPullRequestMergeable,
   SessionPullRequests,
 } from '#components/session-pull-requests'
 import { SessionTaskLinks } from '#components/session-task-links'
@@ -28,10 +29,12 @@ import { StarredSessionToggle } from '#components/starred-session-toggle'
 import { VibeIndicator } from '#components/vibe-indicator'
 import { VibeModeControl } from '#components/vibe-mode-control'
 import { useSessionOperations } from '#session-operation-context'
+import type { SessionOperation } from '#session-operations'
 import { getSessionTasks } from '#session-task-utils'
 import type {
   BackgroundTask,
   OpenInTerminalStatus,
+  PullRequest,
   Session,
   SessionActions,
   VibeMode,
@@ -53,6 +56,8 @@ type MergeFeedback = {
   kind: PullRequestMergeFeedbackKind
   message: string
 }
+
+type PullRequestMergeOperation = Extract<SessionOperation, { type: 'merge' }>
 
 function isMergeResponse(value: unknown): value is MergeResponse {
   if (!isRecord(value)) return false
@@ -116,6 +121,8 @@ export function ConversationPaneHeader({
   const [titleDraft, setTitleDraft] = useState(session.title)
   const [isSavingTitle, setIsSavingTitle] = useState(false)
   const [mergeConfirmationOpen, setMergeConfirmationOpen] = useState(false)
+  const [mergeTarget, setMergeTarget] =
+    useState<PullRequestMergeOperation | null>(null)
   const [internalPullRequestListOpen, setInternalPullRequestListOpen] =
     useState(false)
   const pullRequestListOpen = pullRequestsOpen ?? internalPullRequestListOpen
@@ -133,66 +140,114 @@ export function ConversationPaneHeader({
         ? []
         : [session.pullRequest]
   const pullRequest = getRepresentativePullRequest(pullRequests) ?? null
-  const mergeOperation =
-    pullRequest?.state === 'Open' &&
-    pullRequest.owner !== undefined &&
-    pullRequest.repo !== undefined &&
-    pullRequest.headSha !== null &&
-    pullRequest.headSha !== undefined
-      ? {
-          type: 'merge' as const,
-          sessionId: session.id,
-          number: pullRequest.number,
-          owner: pullRequest.owner,
-          repo: pullRequest.repo,
-          expectedHeadSha: pullRequest.headSha,
-        }
+  const sessionRepoParts = session.repo.split('/')
+  const mergeIdentity = (target: {
+    number: number
+    owner?: string
+    repo?: string
+  }) => ({
+    number: target.number,
+    owner: target.owner ?? sessionRepoParts[0],
+    repo: target.repo ?? sessionRepoParts.at(-1),
+  })
+  const mergeOperationFor = (
+    target: PullRequest,
+  ): PullRequestMergeOperation | null => {
+    if (!isPullRequestMergeable(target)) return null
+    const identity = mergeIdentity(target)
+    if (identity.owner === undefined || identity.repo === undefined) return null
+    return {
+      type: 'merge',
+      sessionId: session.id,
+      number: identity.number,
+      owner: identity.owner,
+      repo: identity.repo,
+      expectedHeadSha: target.headSha,
+    }
+  }
+  const headerMergeOperation =
+    pullRequest?.isCurrentBranch === true
+      ? mergeOperationFor(pullRequest)
       : null
-  const merging =
-    mergeOperation !== null &&
-    pendingOperations.some(
+  const isMerging = (target: {
+    number: number
+    owner?: string
+    repo?: string
+  }) => {
+    const identity = mergeIdentity(target)
+    if (identity.owner === undefined || identity.repo === undefined)
+      return false
+    return pendingOperations.some(
       ({ operation }) =>
         operation.type === 'merge' &&
         operation.sessionId === session.id &&
-        operation.number === mergeOperation.number &&
-        operation.owner === mergeOperation.owner &&
-        operation.repo === mergeOperation.repo,
+        operation.number === identity.number &&
+        operation.owner === identity.owner &&
+        operation.repo === identity.repo,
     )
+  }
+  const sameMergeIdentity = (
+    left: { number: number; owner?: string; repo?: string },
+    right: { number: number; owner?: string; repo?: string },
+  ) => {
+    const leftIdentity = mergeIdentity(left)
+    const rightIdentity = mergeIdentity(right)
+    return (
+      leftIdentity.owner !== undefined &&
+      leftIdentity.repo !== undefined &&
+      rightIdentity.owner !== undefined &&
+      rightIdentity.repo !== undefined &&
+      leftIdentity.number === rightIdentity.number &&
+      leftIdentity.owner === rightIdentity.owner &&
+      leftIdentity.repo === rightIdentity.repo
+    )
+  }
+  const isMergeSuccessful = (target: PullRequest) =>
+    mergeFeedback?.kind === 'success' &&
+    sameMergeIdentity(mergeFeedback, target)
+  const openMergeConfirmation = (target: PullRequest) => {
+    const operation = mergeOperationFor(target)
+    if (operation === null) return
+    setMergeTarget(operation)
+    setPullRequestListOpen(false)
+    setMergeFeedback(null)
+    setMergeConfirmationOpen(true)
+  }
   const mergeAction =
-    mergeOperation === null ||
+    headerMergeOperation === null ||
     (mergeFeedback?.kind === 'success' &&
-      mergeFeedback.number === mergeOperation.number &&
-      mergeFeedback.owner === mergeOperation.owner &&
-      mergeFeedback.repo === mergeOperation.repo) ? null : (
+      sameMergeIdentity(mergeFeedback, headerMergeOperation)) ? null : (
       <PullRequestMergeAction
-        merging={merging}
+        merging={isMerging(headerMergeOperation)}
         onClick={() => {
-          setPullRequestListOpen(false)
-          setMergeFeedback(null)
-          setMergeConfirmationOpen(true)
+          if (pullRequest === null) return
+          openMergeConfirmation(pullRequest)
         }}
       />
     )
   const visibleMergeFeedback =
     mergeFeedback !== null &&
-    mergeFeedback.number === pullRequest?.number &&
-    mergeFeedback.owner === pullRequest.owner &&
-    mergeFeedback.repo === pullRequest.repo
+    pullRequests.some(
+      (candidate) =>
+        candidate.owner !== undefined &&
+        candidate.repo !== undefined &&
+        sameMergeIdentity(mergeFeedback, candidate),
+    )
       ? mergeFeedback
       : null
   const linkedTasks = getSessionTasks(session)
   const mobileRepoName = session.repo.split('/').at(-1) ?? session.repo
 
   const confirmMerge = async () => {
-    if (mergeOperation === null || merging) return
+    if (mergeTarget === null || isMerging(mergeTarget)) return
     const mergeIdentity = {
-      number: mergeOperation.number,
-      owner: mergeOperation.owner,
-      repo: mergeOperation.repo,
+      number: mergeTarget.number,
+      owner: mergeTarget.owner,
+      repo: mergeTarget.repo,
     }
     setMergeFeedback(null)
     setMergeConfirmationOpen(false)
-    const result = await run(mergeOperation)
+    const result = await run(mergeTarget)
     result.match(
       (response) => {
         if (!isMergeResponse(response)) {
@@ -205,10 +260,10 @@ export function ConversationPaneHeader({
         }
         const message =
           response.result === 'merged'
-            ? `PR #${String(mergeOperation.number)} merged.`
+            ? `PR #${String(mergeTarget.number)} merged.`
             : response.result === 'alreadyMerged'
-              ? `PR #${String(mergeOperation.number)} was already merged.`
-              : `PR #${String(mergeOperation.number)} was added to the merge queue: ${response.message}`
+              ? `PR #${String(mergeTarget.number)} was already merged.`
+              : `PR #${String(mergeTarget.number)} was added to the merge queue: ${response.message}`
         setMergeFeedback({
           ...mergeIdentity,
           kind: response.result === 'enqueued' ? 'queued' : 'success',
@@ -363,7 +418,9 @@ export function ConversationPaneHeader({
               repo={session.repo}
               isMobile
               open={pullRequestListOpen}
-              {...(mergeAction === null ? {} : { mobileAction: mergeAction })}
+              onMerge={openMergeConfirmation}
+              isMerging={isMerging}
+              isMergeSuccessful={isMergeSuccessful}
               onOpenChange={setPullRequestListOpen}
             />
             <MobileConversationActionsMenu
@@ -487,6 +544,9 @@ export function ConversationPaneHeader({
                   repo={session.repo}
                   isMobile={false}
                   open={pullRequestListOpen}
+                  onMerge={openMergeConfirmation}
+                  isMerging={isMerging}
+                  isMergeSuccessful={isMergeSuccessful}
                   onOpenChange={setPullRequestListOpen}
                 />
                 {mergeAction}
@@ -518,11 +578,11 @@ export function ConversationPaneHeader({
           </div>
         </>
       )}
-      {mergeConfirmationOpen && mergeOperation !== null ? (
+      {mergeConfirmationOpen && mergeTarget !== null ? (
         <PullRequestMergeConfirmation
-          number={mergeOperation.number}
-          headSha={mergeOperation.expectedHeadSha}
-          merging={merging}
+          number={mergeTarget.number}
+          headSha={mergeTarget.expectedHeadSha}
+          merging={isMerging(mergeTarget)}
           onCancel={() => {
             setMergeConfirmationOpen(false)
           }}

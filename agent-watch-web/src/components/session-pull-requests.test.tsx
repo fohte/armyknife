@@ -24,6 +24,7 @@ const pullRequests: PullRequest[] = [
     title: 'Add delivery retry settings',
     url: 'https://github.com/example-org/example-infra/pull/43',
     ciState: 'Successful',
+    headSha: 'fixture-head-sha',
     isCurrentBranch: false,
   },
   {
@@ -55,6 +56,9 @@ function PullRequestHarness({
       repo="example-org/example-repo"
       isMobile={isMobile}
       open={open}
+      onMerge={() => undefined}
+      isMerging={() => false}
+      isMergeSuccessful={() => false}
       onOpenChange={setOpen}
     />
   )
@@ -121,22 +125,23 @@ it.each([
       (heading) => heading.textContent,
     ),
     pullRequests: Array.from(
-      container.querySelectorAll<HTMLAnchorElement>('.session-pr-row'),
-      (link) => ({
-        number: link.querySelector('.session-pr-number')?.textContent ?? null,
-        title: (link.querySelector('.session-pr-row-title')?.textContent ?? '')
+      container.querySelectorAll<HTMLElement>('.session-pr-row'),
+      (row) => ({
+        number: row.querySelector('.session-pr-number')?.textContent ?? null,
+        title: (row.querySelector('.session-pr-row-title')?.textContent ?? '')
           .replace(/^#\d+\s*/, '')
           .trim(),
-        repo: link.querySelector('.session-pr-row-repo')?.textContent ?? null,
-        state:
-          link.querySelector(
-            isMobile ? '.session-pr-row-mobile-state' : '.session-pr-row-state',
-          )?.textContent ?? null,
+        repo: row.querySelector('.session-pr-row-repo')?.textContent ?? null,
+        reason: row.querySelector('.session-pr-row-state')?.textContent ?? null,
+        mergeLabel:
+          row
+            .querySelector('button[aria-label^="Merge PR"]')
+            ?.getAttribute('aria-label') ?? null,
         ciState:
-          link
+          row
             .querySelector('.session-pr-ci-dot[role="img"]')
             ?.getAttribute('aria-label') ?? null,
-        href: link.getAttribute('href'),
+        href: row.querySelector('a')?.getAttribute('href') ?? null,
       }),
     ),
   })
@@ -178,7 +183,8 @@ it.each([
           number: '#42',
           title: 'Show delivery status in the session header',
           repo: 'example-org/example-repo',
-          state: 'Open',
+          reason: 'CI running',
+          mergeLabel: null,
           ciState: 'CI running',
           href: 'https://github.com/example-org/example-repo/pull/42',
         },
@@ -186,7 +192,8 @@ it.each([
           number: '#43',
           title: 'Add delivery retry settings',
           repo: 'example-org/example-infra',
-          state: 'Open',
+          reason: null,
+          mergeLabel: 'Merge PR #43',
           ciState: 'CI passed',
           href: 'https://github.com/example-org/example-infra/pull/43',
         },
@@ -194,7 +201,8 @@ it.each([
           number: '#41',
           title: 'Record delivery attempts',
           repo: 'example-org/example-repo',
-          state: '✓ Merged',
+          reason: '✓ Merged',
+          mergeLabel: null,
           ciState: 'CI status unknown',
           href: 'https://github.com/example-org/example-repo/pull/41',
         },
@@ -242,12 +250,12 @@ it('lists a merged current-branch pull request only in Merged', () => {
       (heading) => heading.textContent,
     ),
     pullRequests: Array.from(
-      container.querySelectorAll<HTMLAnchorElement>('.session-pr-row'),
-      (link) => ({
+      container.querySelectorAll<HTMLElement>('.session-pr-row'),
+      (row) => ({
         group:
-          link.closest('.session-pr-group')?.querySelector('h3')?.textContent ??
+          row.closest('.session-pr-group')?.querySelector('h3')?.textContent ??
           null,
-        number: link.querySelector('.session-pr-number')?.textContent ?? null,
+        number: row.querySelector('.session-pr-number')?.textContent ?? null,
       }),
     ),
   })
@@ -258,6 +266,37 @@ it('lists a merged current-branch pull request only in Merged', () => {
       { group: 'Merged', number: '#42' },
     ],
   })
+})
+
+it('shows the CI failure reason without a merge action', () => {
+  render(false, [
+    {
+      number: 44,
+      state: 'Open',
+      owner: 'example-org',
+      repo: 'example-repository',
+      title: 'Update the release checks',
+      url: 'https://github.com/example-org/example-repository/pull/44',
+      headSha: 'fixture-head-sha',
+      ciState: 'Failed',
+      isCurrentBranch: true,
+    },
+  ])
+
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.session-pr-trigger')?.click()
+  })
+
+  const row = container.querySelector<HTMLElement>('.session-pr-row')
+  expect(
+    row === null
+      ? null
+      : {
+          reason: row.querySelector('.session-pr-row-state')?.textContent,
+          mergeButton:
+            row.querySelector('button[aria-label^="Merge PR"]') !== null,
+        },
+  ).toEqual({ reason: 'CI failed', mergeButton: false })
 })
 
 it('dims the pull request icon when every pull request is merged', () => {

@@ -126,17 +126,23 @@
   column-gap: 10px;
   padding: 6px 14px;
   color: var(--aw-text-primary);
-  text-decoration: none;
-}
-
-.session-pr-row:hover,
-.session-pr-row:focus-visible {
-  background: var(--aw-bg-pressed);
 }
 
 .session-pr-row-copy {
   display: grid;
   min-width: 0;
+  color: var(--aw-text-primary);
+  text-decoration: none;
+}
+
+.session-pr-row:hover,
+.session-pr-row:focus-within {
+  background: var(--aw-bg-pressed);
+}
+
+.session-pr-row-copy:hover .session-pr-row-title,
+.session-pr-row-copy:focus-visible .session-pr-row-title {
+  text-decoration: underline;
 }
 
 .session-pr-row-title {
@@ -154,10 +160,6 @@
   white-space: nowrap;
 }
 
-.session-pr-row-mobile-state {
-  display: none;
-}
-
 .session-pr-row-meta {
   display: flex;
   min-width: 0;
@@ -173,6 +175,29 @@
 
 .session-pr-row-state.is-merged {
   color: var(--aw-text-muted);
+}
+
+.session-pr-row-state.is-running {
+  color: var(--aw-color-warning);
+}
+
+.session-pr-row-state.is-failed {
+  color: var(--aw-color-error);
+}
+
+.session-pr-row-state.is-passed {
+  color: var(--aw-color-success);
+}
+
+.session-pr-row .conversation-pr-merge-button {
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--aw-text-primary);
+  background: var(--aw-text-primary);
+  color: var(--aw-bg-app);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .session-pr-ci-dot.is-merged {
@@ -240,7 +265,7 @@
 .session-pr-list--mobile .session-pr-row {
   min-height: 56px;
   box-sizing: border-box;
-  grid-template-columns: 7px minmax(0, 1fr);
+  grid-template-columns: 7px minmax(0, 1fr) auto;
   column-gap: 12px;
   padding: 6px 16px;
 }
@@ -251,15 +276,8 @@
   font-size: 12.5px;
 }
 
-.session-pr-list--mobile .session-pr-row-mobile-state {
-  display: inline;
-  flex: 0 0 auto;
-  color: var(--aw-text-muted);
-  font-size: 12.5px;
-}
-
 .session-pr-list--mobile .session-pr-row-state {
-  display: none;
+  font-size: 12px;
 }
 
 .session-pr-list-actions {
@@ -281,14 +299,4 @@
   cursor: pointer;
   font: inherit;
   font-size: 12px;
-}
-
-.session-pr-list-actions .conversation-pr-merge-button {
-  height: auto;
-  min-height: 44px;
-  border: 1px solid var(--aw-text-primary);
-  background: var(--aw-text-primary);
-  color: var(--aw-bg-app);
-  font-size: 12px;
-  font-weight: 700;
 }
