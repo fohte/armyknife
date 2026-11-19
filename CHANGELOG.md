@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.803](https://github.com/fohte/armyknife/compare/v0.1.802...v0.1.803) (2026-11-19)
+
+
+### Features
+
+* **agent-watch-web:** confirm non-Done closure ([#1994](https://github.com/fohte/armyknife/issues/1994)) ([b9389a4](https://github.com/fohte/armyknife/commit/b9389a449a0bba1de5d0d517b409457b5f924869))
+
 ## [0.1.802](https://github.com/fohte/armyknife/compare/v0.1.801...v0.1.802) (2026-11-19)
 
 
