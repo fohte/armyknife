@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
 import { ImageLightbox } from '#components/image-lightbox'
+import { getImageLightboxState } from '#image-lightbox-state.test'
 
 const imageSource = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='
 
@@ -53,13 +54,16 @@ it('returns focus to the image trigger after closing with Escape', async () => {
   )
   if (trigger === null) throw new Error('Expected the image trigger')
   await openLightbox()
+  const openBeforeEscape = getImageLightboxState().open
   await act(async () => userEvent.keyboard('{Escape}'))
 
   const getLightboxState = () => ({
+    openBeforeEscape,
     dialogOpen: document.body.querySelector('dialog') !== null,
     triggerFocused: document.activeElement === trigger,
   })
   expect(getLightboxState()).toEqual({
+    openBeforeEscape: true,
     dialogOpen: false,
     triggerFocused: true,
   })
