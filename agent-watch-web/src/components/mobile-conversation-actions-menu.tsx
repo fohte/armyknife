@@ -125,6 +125,15 @@ export function MobileConversationActionsMenu({
                 <Pencil aria-hidden="true" size={16} />
                 <span>Edit title</span>
               </Menu.Item>
+              {!isDone && onClose !== undefined ? (
+                <Menu.Item
+                  className="mobile-conversation-actions-menu-item mobile-conversation-actions-menu-close"
+                  onClick={onClose}
+                >
+                  <X aria-hidden="true" size={16} />
+                  <span>Close session…</span>
+                </Menu.Item>
+              ) : null}
             </Menu.Popup>
           </Menu.Positioner>
         </Menu.Portal>

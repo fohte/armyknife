@@ -67,7 +67,13 @@ function requestFor(operation: SessionOperation) {
     case 'back_now':
       return { path: 'later', body: { preset: 'back_now' } }
     case 'close':
-      return { path: 'close', body: { keepWorktree: operation.keepWorktree } }
+      return {
+        path: 'close',
+        body: {
+          keepWorktree: operation.keepWorktree,
+          ...(operation.stopAndClose === true ? { stopAndClose: true } : {}),
+        },
+      }
     case 'focus':
       return { path: 'focus', body: undefined }
     case 'resume':

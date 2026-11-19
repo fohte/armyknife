@@ -1,11 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useOptimistic,
-  useRef,
-  useState,
-} from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import { AppWorkspace } from '#app-workspace'
 import { useCommandPaletteController } from '#command-palette-controller'
@@ -17,22 +10,15 @@ import { findLaunchedSession } from '#new-session-navigation'
 import { startSessionFeed } from '#session-feed'
 import { useSessionHistory } from '#session-history'
 import { useSessionKeyboardNavigation } from '#session-keyboard-navigation'
-import {
-  SessionOperationProvider,
-  useSessionOperations,
-} from '#session-operation-context'
-import {
-  applySessionOperation,
-  isSessionListOperation,
-  isSessionOperationConfirmed,
-  type SessionOperation,
-} from '#session-operations'
+import { SessionOperationProvider } from '#session-operation-context'
 import type { Session } from '#types'
+import { useAppSessionOperations } from '#use-app-session-operations'
 import { useAppSessionProjection } from '#use-app-session-projection'
 import { useComposerFocus } from '#use-composer-focus'
 import { useLaterSessionActions } from '#use-later-session-actions'
 import { useNewSession } from '#use-new-session'
 import { useNewSessionNavigation } from '#use-new-session-navigation'
+import { useSessionClose } from '#use-session-close'
 import { useSessionRefreshRevisions } from '#use-session-refresh-revisions'
 
 export function App() {
@@ -72,24 +58,13 @@ function AppContent() {
     setDoneExpanded,
   } = useMobileLayout()
   const [sessions, setSessions] = useState<Session[]>([])
-  const sessionSnapshot = useRef<readonly Session[]>([])
-  const { pendingOperations, run, confirm } = useSessionOperations()
-  const pendingOperationsRef = useRef(pendingOperations)
-  pendingOperationsRef.current = pendingOperations
-  const sessionBaseWithPendingOperations = useMemo(
-    () =>
-      pendingOperations
-        .filter(({ operation }) => isSessionListOperation(operation))
-        .reduce(
-          (current, { operation }) => applySessionOperation(current, operation),
-          sessions,
-        ),
-    [pendingOperations, sessions],
-  )
-  const [optimisticSessions, dispatchSessionOperation] = useOptimistic(
-    sessionBaseWithPendingOperations,
-    applySessionOperation,
-  )
+  const {
+    pendingOperations,
+    optimisticSessions,
+    dispatchSessionOperation,
+    runSessionOperation,
+    recordSessionSnapshot,
+  } = useAppSessionOperations(sessions)
   const [workTypeNavLabels, setWorkTypeNavLabels] = useState<
     Record<string, string>
   >({})
@@ -140,28 +115,6 @@ function AppContent() {
     setStatusPanelOpen((open) => !open)
   }, [])
 
-  const runSessionOperation = useCallback(
-    (operation: SessionOperation) =>
-      run(operation, {
-        optimisticDispatchers: [dispatchSessionOperation],
-        ...(isSessionListOperation(operation)
-          ? {
-              refresh: () => {
-                if (
-                  isSessionOperationConfirmed(
-                    operation,
-                    sessionSnapshot.current,
-                  )
-                ) {
-                  confirm(operation)
-                }
-                return Promise.resolve()
-              },
-            }
-          : {}),
-      }),
-    [confirm, dispatchSessionOperation, run],
-  )
   const {
     sessionsWithElapsedTime,
     todaySessions,
@@ -243,21 +196,25 @@ function AppContent() {
     },
     [closeDoneSessions, sessionsWithElapsedTime],
   )
+  const {
+    confirmationSession: closeConfirmationSession,
+    requestCloseSession,
+    cancelCloseConfirmation,
+    confirmCloseSession,
+    closeSessionKeepWorktree,
+  } = useSessionClose({
+    sessions: sessionsWithElapsedTime,
+    runSessionOperation,
+    closeDoneSession,
+    setCloseRetrySessionId,
+    setError,
+  })
 
   useEffect(
     () =>
       startSessionFeed((response, changedSessionIds) => {
         const receivedAt = Date.now()
-        sessionSnapshot.current = response.sessions
-        for (const pending of pendingOperationsRef.current) {
-          if (
-            pending.status === 'sent' &&
-            isSessionListOperation(pending.operation) &&
-            isSessionOperationConfirmed(pending.operation, response.sessions)
-          ) {
-            confirm(pending.operation)
-          }
-        }
+        recordSessionSnapshot(response.sessions)
         setWorkTypeNavLabels(response.workTypeNavLabels ?? {})
         setSessions(
           response.sessions.filter(
@@ -273,7 +230,7 @@ function AppContent() {
         setNowMs(receivedAt)
         setLoaded(true)
       }, setError),
-    [confirm],
+    [recordSessionSnapshot],
   )
 
   useEffect(() => {
@@ -311,7 +268,7 @@ function AppContent() {
     laterSessionId,
     laterSubmissionInFlight,
     closeLater,
-    closeSession: closeDoneSession,
+    closeSession: requestCloseSession,
     submitLater,
     navigableSessions,
     openLater,
@@ -443,6 +400,7 @@ function AppContent() {
         recentSessionIds,
         workTypeNavLabels,
         pendingFocusSessionId,
+        closeConfirmationSession,
       }}
       actions={{
         setInboxFilterQuery,
@@ -473,6 +431,10 @@ function AppContent() {
           void closeDoneSessions(doneSessions)
         },
         closeDoneSession,
+        requestCloseSession,
+        cancelCloseConfirmation,
+        confirmCloseSession,
+        closeSessionKeepWorktree,
         onLater: openLater,
         closeLater,
         laterSubmissionInFlight,

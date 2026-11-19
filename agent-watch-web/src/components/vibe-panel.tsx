@@ -1,7 +1,6 @@
 import '#components/vibe-panel.css'
 
-import { Button } from '@fohte/ui/button'
-
+import { ConfirmDialog } from '#components/confirm-dialog'
 import type { VibeMode } from '#types'
 import { vibeModeChange, vibeModeLabel, vibeModeReason } from '#vibe-mode'
 
@@ -28,17 +27,25 @@ export function VibePanel({
   const unavailable = mode.mode === 'repo_disabled'
 
   return (
-    <section
+    <ConfirmDialog
       className={`vibe-panel${isMobile ? ' vibe-panel--mobile' : ''}`}
-      role="dialog"
-      aria-label="Vibe mode"
-      aria-modal={isMobile || undefined}
-      onClick={(event) => {
-        event.stopPropagation()
-      }}
+      title={vibeModeLabel(mode)}
+      titleClassName="vibe-panel-title"
+      description={vibeModeReason(mode, repo)}
+      confirmLabel={change.actionLabel}
+      pendingLabel="Sending…"
+      pending={pending}
+      confirmDisabled={unavailable}
+      hideConfirm={unavailable}
+      cancelLabel="Close"
+      cancelButtonClassName="vibe-panel-close"
+      confirmButtonClassName="vibe-panel-change"
+      dialogRole="dialog"
+      presentation="inline"
+      mobile={isMobile}
+      onCancel={onClose}
+      onConfirm={onChange}
     >
-      <h2 className="vibe-panel-title">{vibeModeLabel(mode)}</h2>
-      <p className="vibe-panel-reason">{vibeModeReason(mode, repo)}</p>
       {unavailable ? null : (
         <div className="vibe-panel-message">
           <span className="vibe-panel-message-label">Message to send</span>
@@ -50,28 +57,6 @@ export function VibePanel({
           {error}
         </p>
       )}
-      <div className="vibe-panel-actions">
-        <Button
-          className="vibe-panel-close cursor-pointer"
-          type="button"
-          variant="plain"
-          disabled={pending}
-          onClick={onClose}
-        >
-          Close
-        </Button>
-        {unavailable ? null : (
-          <Button
-            className="vibe-panel-change cursor-pointer"
-            type="button"
-            variant="plain"
-            disabled={pending}
-            onClick={onChange}
-          >
-            {pending ? 'Sending…' : change.actionLabel}
-          </Button>
-        )}
-      </div>
-    </section>
+    </ConfirmDialog>
   )
 }

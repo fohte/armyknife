@@ -19,9 +19,10 @@ where
 }
 
 #[derive(Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub(super) struct CloseRequest {
     keep_worktree: bool,
+    stop_and_close: bool,
 }
 
 pub(super) async fn close(
@@ -30,14 +31,10 @@ pub(super) async fn close(
     request: Option<Json<CloseRequest>>,
 ) -> Result<Json<Success>, ApiError> {
     let session = load_session(state.clone(), id).await?;
+    let request = request.map(|Json(request)| request).unwrap_or_default();
     state
         .runtime
-        .close_session(
-            &session,
-            request
-                .map(|Json(request)| request.keep_worktree)
-                .unwrap_or(false),
-        )
+        .close_session(&session, request.keep_worktree, request.stop_and_close)
         .await
         .map_err(ApiError::close)?;
     Ok(Json(Success::new()))

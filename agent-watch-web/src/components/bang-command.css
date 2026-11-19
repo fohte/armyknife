@@ -17,7 +17,7 @@
 }
 
 .bang-command-button,
-.bang-command-dialog-actions button {
+.bang-command-dialog .confirm-dialog-actions button {
   min-height: 2rem;
   padding: 0.25rem 0.65rem;
   border: 1px solid var(--aw-border-control);
@@ -46,16 +46,6 @@
 
 .bang-command-status[data-state='failed'] {
   color: var(--aw-color-error);
-}
-
-.bang-command-dialog-backdrop {
-  position: fixed;
-  z-index: 1000;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 1rem;
-  background: rgb(0 0 0 / 55%);
 }
 
 .bang-command-dialog {
@@ -99,10 +89,4 @@
   background: var(--aw-bg-palette-muted);
   font-family: var(--font-mono);
   white-space: pre-wrap;
-}
-
-.bang-command-dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.5rem;
 }

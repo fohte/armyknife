@@ -12,7 +12,12 @@ export type SessionOperation =
       expectedDeadline: string | null
     }
   | { type: 'back_now'; sessionId: string }
-  | { type: 'close'; sessionId: string; keepWorktree: boolean }
+  | {
+      type: 'close'
+      sessionId: string
+      keepWorktree: boolean
+      stopAndClose?: boolean
+    }
   | { type: 'focus'; sessionId: string }
   | { type: 'resume'; sessionId: string }
   | { type: 'interrupt'; sessionId: string }

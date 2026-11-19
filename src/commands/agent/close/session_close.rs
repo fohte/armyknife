@@ -24,15 +24,18 @@ pub(super) async fn close_session_value(
 pub(crate) async fn close_session_value_from_watch_web(
     session: &Session,
     keep_worktree: bool,
+    stop_and_close: bool,
 ) -> Result<()> {
     let linked_worktree_root = super::worktree::linked_worktree_root(&session.cwd);
     let runtime = super::LiveCloseRuntime;
+    let runtime_ref = &runtime;
 
     close_session_value_from_watch_web_with_dependencies(
         session,
         keep_worktree,
+        stop_and_close,
         linked_worktree_root,
-        &runtime,
+        runtime_ref,
         |worktree_root, unmerged_policy| async move {
             close_session_value_with_worktree(
                 SessionWorktreeContext {
@@ -43,8 +46,22 @@ pub(crate) async fn close_session_value_from_watch_web(
                 },
                 find_shared_worktree_session_ids,
                 crate::shared::worktree_delete::prepare(&worktree_root, false, unmerged_policy),
-                super::close_tracked_session,
-                || super::worktree::close_worktree_session(session, false, None),
+                |session, force| {
+                    super::close_tracked_session_with_runtime_and_stop(
+                        session,
+                        force,
+                        stop_and_close,
+                        runtime_ref,
+                    )
+                },
+                || {
+                    super::worktree::close_worktree_session_with_stop(
+                        session,
+                        false,
+                        None,
+                        stop_and_close,
+                    )
+                },
                 |plan| crate::shared::worktree_delete::execute(plan, false),
                 &mut io::stderr(),
             )
@@ -57,6 +74,7 @@ pub(crate) async fn close_session_value_from_watch_web(
 async fn close_session_value_from_watch_web_with_dependencies<R, Fut>(
     session: &Session,
     keep_worktree: bool,
+    stop_and_close: bool,
     linked_worktree_root: Option<PathBuf>,
     runtime: &R,
     close_with_worktree: impl FnOnce(
@@ -79,6 +97,7 @@ where
         None,
         linked_worktree_root,
         runtime,
+        stop_and_close,
         |worktree_root| {
             close_with_worktree(
                 worktree_root,
@@ -104,6 +123,7 @@ async fn close_session_value_with_policy(
         child_parent_session_id,
         linked_worktree_root,
         &runtime,
+        false,
         |worktree_root| async move {
             close_session_value_with_worktree(
                 SessionWorktreeContext {
@@ -142,6 +162,7 @@ async fn close_session_value_with_dependencies<R, Fut>(
     child_parent_session_id: Option<&str>,
     linked_worktree_root: Option<PathBuf>,
     runtime: &R,
+    stop_and_close: bool,
     close_with_worktree: impl FnOnce(PathBuf) -> Fut,
 ) -> Result<()>
 where
@@ -156,7 +177,14 @@ where
                 session,
                 args,
                 child_parent_session_id,
-                |session, force| super::close_tracked_session_with_runtime(session, force, runtime),
+                |session, force| {
+                    super::close_tracked_session_with_runtime_and_stop(
+                        session,
+                        force,
+                        stop_and_close,
+                        runtime,
+                    )
+                },
             )
         },
         close_with_worktree,
@@ -436,6 +464,7 @@ mod tests {
             None,
             Some(PathBuf::from("/tmp/worktrees/feature")),
             &runtime,
+            false,
             |_| async {
                 calls.borrow_mut().push("prepare or delete worktree");
                 Ok(())
@@ -486,6 +515,7 @@ mod tests {
             None,
             Some(PathBuf::from("/tmp/worktrees/feature")),
             &runtime,
+            false,
             |_| async {
                 calls.borrow_mut().push("prepare or delete worktree");
                 Ok(())
@@ -511,7 +541,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn watch_web_close_rejects_unmerged_worktrees_without_prompting() {
+    async fn watch_web_stop_and_close_still_rejects_unmerged_worktrees() {
         let session = session();
         let runtime = FakeRuntime::default();
         let policy_rejected = RefCell::new(Vec::new());
@@ -519,6 +549,7 @@ mod tests {
         let result = close_session_value_from_watch_web_with_dependencies(
             &session,
             false,
+            true,
             Some(PathBuf::from("/tmp/worktrees/feature")),
             &runtime,
             |_, policy| {

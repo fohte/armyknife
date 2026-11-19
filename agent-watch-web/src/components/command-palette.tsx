@@ -12,6 +12,10 @@ import {
   getCommandPaletteShortcut,
 } from '#command-palette-shortcut'
 import {
+  getCommandPaletteActions,
+  type PaletteAction,
+} from '#components/command-palette-actions'
+import {
   itemColor,
   itemDetail,
   itemIcon,
@@ -32,6 +36,7 @@ type CommandPaletteProps = {
   initialActionItemId?: string
   pendingFocusSessionId?: string | null
   onClose: () => void
+  onCloseSession: (id: string) => void
   onOpenSession: (id: string) => void
   onOpenSessionBeside: (id: string) => void
   onLater: (id: string) => void
@@ -57,6 +62,7 @@ export function CommandPalette({
   initialActionItemId,
   pendingFocusSessionId = null,
   onClose,
+  onCloseSession,
   onOpenSession,
   onOpenSessionBeside,
   onLater,
@@ -93,22 +99,7 @@ export function CommandPalette({
   const items = groups.flatMap((group) => group.items)
   const openBesideShortcut = getCommandPaletteShortcut(navigator.platform)
   const openBesideModifier = getCommandPaletteModifierLabel(openBesideShortcut)
-  const actions =
-    actionsFor?.type === 'session'
-      ? [
-          { id: 'open', label: 'Open session' },
-          { id: 'open-beside', label: 'Open beside' },
-          { id: 'later', label: 'Later' },
-          { id: 'copy', label: 'Copy session ID' },
-          ...(actionsFor.session.canOpenInTerminal === true
-            ? [{ id: 'terminal', label: 'Open in terminal' }]
-            : []),
-        ]
-      : actionsFor?.type === 'command'
-        ? [{ id: 'command', label: 'Run command' }]
-        : actionsFor === null
-          ? []
-          : [{ id: 'destination', label: 'Show in Board' }]
+  const actions = getCommandPaletteActions(actionsFor)
   const action = actions[activeActionIndex]
   const { status: copyStatus, copySessionId } = useCopySessionId(
     actionsFor?.type === 'session' ? actionsFor.session.id : '',
@@ -162,7 +153,7 @@ export function CommandPalette({
     onRunCommand(item)
   }
 
-  function activateAction(action: (typeof actions)[number] | undefined) {
+  function activateAction(action: PaletteAction | undefined) {
     if (action === undefined || actionsFor === null) return
     switch (action.id) {
       case 'open':
@@ -186,6 +177,12 @@ export function CommandPalette({
         if (actionsFor.type === 'session') {
           onOpenInTerminal(actionsFor.session.id)
         }
+        return
+      case 'close':
+        if (actionsFor.type === 'session') {
+          onCloseSession(actionsFor.session.id)
+        }
+        setActionsFor(null)
         return
       case 'destination':
         activate(actionsFor)

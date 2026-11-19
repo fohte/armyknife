@@ -5,10 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 
 use super::child;
-use super::{
-    CloseArgs, CloseRuntime, EnvVars, LiveCloseRuntime, Session, SessionStatus,
-    close_tracked_session,
-};
+use super::{CloseArgs, CloseRuntime, EnvVars, LiveCloseRuntime, Session, SessionStatus};
 use super::{prepare_close_session, worktree_delete};
 use crate::infra::git::GitRepo;
 
@@ -240,10 +237,39 @@ pub(super) fn close_worktree_session(
     force: bool,
     current_pane_id: Option<&str>,
 ) -> Result<()> {
+    close_worktree_session_with_runtime(session, force, current_pane_id, false, &LiveCloseRuntime)
+}
+
+pub(super) fn close_worktree_session_with_stop(
+    session: &Session,
+    force: bool,
+    current_pane_id: Option<&str>,
+    stop_and_close: bool,
+) -> Result<()> {
+    close_worktree_session_with_runtime(
+        session,
+        force,
+        current_pane_id,
+        stop_and_close,
+        &LiveCloseRuntime,
+    )
+}
+
+fn close_worktree_session_with_runtime<R: CloseRuntime>(
+    session: &Session,
+    force: bool,
+    current_pane_id: Option<&str>,
+    stop_and_close: bool,
+    runtime: &R,
+) -> Result<()> {
     if !should_gracefully_close_worktree_session(session, current_pane_id) {
         return Ok(());
     }
-    close_tracked_session(session, force)
+    if stop_and_close {
+        super::close_tracked_session_with_runtime_and_stop(session, force, true, runtime)
+    } else {
+        super::close_tracked_session_with_runtime(session, force, runtime)
+    }
 }
 
 fn validate_worktree_session(
@@ -264,7 +290,7 @@ fn validate_worktree_session(
     }
     let mut session = session.clone();
     super::super::session_status::include_pending_status(&mut session);
-    prepare_close_session(&session, force, runtime).map(|_| ())
+    prepare_close_session(&session, force, false, runtime).map(|_| ())
 }
 
 fn should_validate_worktree_session(
@@ -330,7 +356,10 @@ mod tests {
 
     use rstest::rstest;
 
-    use super::super::test_support::session;
+    use super::super::test_support::{
+        FakeRuntime, draft_call, graceful_quit_call, kill_pane_call, pane_exists_call,
+        pane_session_call, resolve_pid_call, session,
+    };
     use super::*;
 
     fn load_candidate_session(sessions: &[&Session], session_id: &str) -> Result<Option<Session>> {
@@ -387,6 +416,37 @@ mod tests {
         assert_eq!(
             should_gracefully_close_worktree_session(&session, current_pane_id),
             expected
+        );
+    }
+
+    #[test]
+    fn confirmed_stop_and_close_shuts_down_an_active_worktree_session() {
+        let mut session = session();
+        session.status = SessionStatus::Running;
+        let runtime = FakeRuntime::default();
+
+        let result = close_worktree_session_with_runtime(&session, false, None, true, &runtime);
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                runtime.calls.into_inner(),
+                runtime.ended_sessions.into_inner(),
+            ),
+            (
+                Ok(()),
+                vec![
+                    pane_exists_call(),
+                    pane_session_call(),
+                    resolve_pid_call(session.engine),
+                    draft_call(session.engine),
+                    graceful_quit_call(42),
+                    pane_exists_call(),
+                    pane_session_call(),
+                    kill_pane_call(),
+                ],
+                vec![session.session_id],
+            ),
         );
     }
 

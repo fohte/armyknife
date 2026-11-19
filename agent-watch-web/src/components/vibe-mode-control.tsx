@@ -108,8 +108,8 @@ export function VibeModeControl({
     return isOpen ? (
       <div
         className="vibe-panel-backdrop"
-        onClick={() => {
-          setOpen(false)
+        onClick={(event) => {
+          if (event.target === event.currentTarget) setOpen(false)
         }}
         role="presentation"
       >

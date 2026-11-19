@@ -2,7 +2,10 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
-import { useComposerMessage } from '#components/use-composer-message'
+import {
+  clearSessionAttachments,
+  useComposerMessage,
+} from '#components/use-composer-message'
 
 const { optimizeImageAttachmentMock } = vi.hoisted(() => ({
   optimizeImageAttachmentMock: vi.fn<(file: File) => Promise<File>>(),
@@ -155,6 +158,23 @@ it('keeps each session attachments separate', async () => {
     secondSessionAttachmentsBeforePaste: [],
     secondSessionAttachmentNames: ['second.png'],
     restoredFirstSessionAttachmentNames: ['first.png'],
+  })
+})
+
+it('clears pending attachments and revokes preview URLs when a session closes', async () => {
+  const sessionId = crypto.randomUUID()
+  renderSession(sessionId)
+  await pasteImage('close-me.png')
+  const previewUrl = attachmentSnapshot()[0]?.previewUrl
+
+  act(() => {
+    clearSessionAttachments(sessionId)
+  })
+
+  const snapshot = () => ({ attachments: attachmentSnapshot(), revokedUrls })
+  expect(snapshot()).toEqual({
+    attachments: [],
+    revokedUrls: [previewUrl],
   })
 })
 

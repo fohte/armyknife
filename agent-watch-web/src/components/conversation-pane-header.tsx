@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { type SubmitEvent, useState } from 'react'
 
+import { DesktopConversationActionsMenu } from '#components/desktop-conversation-actions-menu'
 import { MobileConversationActionsMenu } from '#components/mobile-conversation-actions-menu'
 import { OpenInTerminalAction } from '#components/open-in-terminal-action'
 import { PullRequestMergeAction } from '#components/pull-request-merge-action'
@@ -404,6 +405,8 @@ export function ConversationPaneHeader({
                   >
                     Close
                   </Button>
+                ) : session.category !== 'done' && onClose !== undefined ? (
+                  <DesktopConversationActionsMenu onClose={onClose} />
                 ) : null}
                 {actions?.openInTerminal === true ? (
                   <OpenInTerminalAction

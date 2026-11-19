@@ -603,6 +603,16 @@ html[data-mobile-layout='true'] {
   background: var(--aw-bg-pressed);
 }
 
+.mobile-conversation-actions-menu-close {
+  margin-top: 6px;
+  border-top: 1px solid var(--aw-border-emphasis);
+  color: var(--aw-color-error);
+}
+
+.mobile-conversation-actions-menu-close svg {
+  color: var(--aw-color-error);
+}
+
 .mobile-conversation-copy-status {
   position: absolute;
   z-index: 8;

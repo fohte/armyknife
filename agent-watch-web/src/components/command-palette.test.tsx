@@ -47,6 +47,7 @@ function renderPalette(
         sessions={[session]}
         recentSessionIds={[]}
         onClose={() => undefined}
+        onCloseSession={() => undefined}
         onOpenSession={() => undefined}
         onOpenSessionBeside={() => undefined}
         onLater={() => undefined}
@@ -701,6 +702,7 @@ it('opens the highlighted actions when the query caret is at the end', async () 
     'Later',
     'Copy session ID',
     'Open in terminal',
+    'Close this session',
   ])
 })
 
@@ -713,6 +715,19 @@ it('opens the highlighted session actions with ArrowRight and runs Later', async
   })
 
   expect(onLater.mock.calls).toEqual([['session-alerts']])
+})
+
+it('requests closing the highlighted session from its actions submenu', async () => {
+  const onCloseSession = vi.fn<(id: string) => void>()
+  renderPalette({ onCloseSession })
+
+  await act(async () => {
+    await userEvent.keyboard(
+      '{ArrowRight}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{Enter}',
+    )
+  })
+
+  expect(onCloseSession.mock.calls).toEqual([['session-alerts']])
 })
 
 it('opens the highlighted session beside from the actions submenu', async () => {
@@ -810,5 +825,11 @@ it('hides terminal action when the session has no terminal capability', () => {
     Array.from(container.querySelectorAll('[role="menuitem"]')).map(
       (item) => item.textContent,
     ),
-  ).toEqual(['Open session', 'Open beside', 'Later', 'Copy session ID'])
+  ).toEqual([
+    'Open session',
+    'Open beside',
+    'Later',
+    'Copy session ID',
+    'Close this session',
+  ])
 })

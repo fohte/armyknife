@@ -3318,7 +3318,67 @@ it.each([
   },
 )
 
-it('closes the selected Done session with E and leaves other categories alone', async () => {
+it('offers a keep-worktree retry after a non-Done session close fails', async () => {
+  const message =
+    'Branch `sample-branch` is not merged (pull request is open); close the session while keeping its worktree to continue'
+  const closeBodies: unknown[] = []
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation((input, init) => {
+    if (!requestUrl(input).endsWith('/close')) {
+      return mockSessionActionFetch(input)
+    }
+    closeBodies.push(
+      typeof init?.body === 'string' ? JSON.parse(init.body) : null,
+    )
+    return Promise.resolve(
+      closeBodies.length === 1
+        ? new Response(
+            JSON.stringify({ error: message, code: 'unmerged_worktree' }),
+            {
+              status: 409,
+            },
+          )
+        : new Response(null, { status: 204 }),
+    )
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-question', 'Answer a question')],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+    dispatchKey(window, 'e')
+  })
+  await act(async () => {
+    document
+      .querySelector<HTMLButtonElement>('.confirm-dialog-confirm')
+      ?.click()
+    await flushAsyncState()
+  })
+  const initialFailure = {
+    error: container.querySelector('.load-message.is-error p')?.textContent,
+    choice: container.querySelector('.load-message.is-error button')
+      ?.textContent,
+  }
+  await act(async () => {
+    container
+      .querySelector<HTMLButtonElement>('.load-message.is-error button')
+      ?.click()
+    await flushAsyncState()
+  })
+
+  const snapshot = () => ({ initialFailure, closeBodies })
+  expect(snapshot()).toEqual({
+    initialFailure: { error: message, choice: 'Close and keep worktree' },
+    closeBodies: [
+      { keepWorktree: false, stopAndClose: true },
+      { keepWorktree: true, stopAndClose: true },
+    ],
+  })
+})
+
+it('closes the selected Done session with E without confirmation', async () => {
   const fetchMock = vi
     .fn<typeof fetch>()
     .mockImplementation(mockSessionActionFetch)
@@ -3326,22 +3386,13 @@ it('closes the selected Done session with E and leaves other categories alone', 
   renderApp()
   publishSessions({
     revision: 1,
-    sessions: [
-      session('session-active', 'Active session', 'needs_action'),
-      session('session-done', 'Finished session', 'done'),
-    ],
+    sessions: [session('session-done', 'Finished session', 'done')],
   })
 
   const rows =
     container.querySelectorAll<HTMLButtonElement>('[data-session-row]')
   act(() => {
     rows[0]?.click()
-  })
-  act(() => {
-    dispatchKey(window, 'e')
-  })
-  act(() => {
-    rows[1]?.click()
   })
   act(() => {
     dispatchKey(window, 'e')
@@ -3354,6 +3405,241 @@ it('closes the selected Done session with E and leaves other categories alone', 
     .map(([request]) => requestUrl(request))
     .filter((url) => url.endsWith('/close'))
   expect(closeUrls).toEqual(['/api/sessions/session-done/close'])
+})
+
+it('dismisses non-Done close confirmation from the backdrop', () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-question', 'Answer a question')],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+    dispatchKey(window, 'e')
+  })
+
+  const backdrop = document.querySelector<HTMLDivElement>(
+    '.confirm-dialog-backdrop',
+  )
+  act(() => {
+    backdrop?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+  })
+
+  const snapshot = () => ({
+    confirmationOpen:
+      document.querySelector('.session-close-confirmation') !== null,
+    closeRequests: fetchMock.mock.calls.filter(([request]) =>
+      requestUrl(request).endsWith('/close'),
+    ).length,
+  })
+  expect(snapshot()).toEqual({ confirmationOpen: false, closeRequests: 0 })
+})
+
+it('keeps session shortcuts from acting behind close confirmation', () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-question', 'Answer a question')],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+    dispatchKey(window, 'e')
+  })
+  const dialog = document.querySelector('.session-close-confirmation')
+
+  act(() => {
+    if (dialog !== null) dispatchKey(dialog, 'l')
+  })
+  const laterMenuOpen = document.querySelector('.later-menu') !== null
+  act(() => {
+    if (dialog !== null) dispatchKey(dialog, 'Escape')
+  })
+
+  const snapshot = () => ({
+    laterMenuOpen,
+    laterMenuAfterCancel: document.querySelector('.later-menu') !== null,
+    confirmationOpen:
+      document.querySelector('.session-close-confirmation') !== null,
+    closeRequests: fetchMock.mock.calls.filter(([request]) =>
+      requestUrl(request).endsWith('/close'),
+    ).length,
+  })
+  expect(snapshot()).toEqual({
+    laterMenuOpen: false,
+    laterMenuAfterCancel: false,
+    confirmationOpen: false,
+    closeRequests: 0,
+  })
+})
+
+it('confirms closing a non-Done session from the Inbox shortcut', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-question', 'Answer a question', 'needs_action'),
+    ],
+  })
+
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+    dispatchKey(window, 'e')
+  })
+
+  const dialog = document.querySelector('.session-close-confirmation')
+  const getDialogSnapshot = () => ({
+    title: dialog?.querySelector('h2')?.textContent,
+    description: dialog?.querySelector('.confirm-dialog > p')?.textContent,
+    stateAndSession: dialog?.querySelector(
+      '.session-close-confirmation-session',
+    )?.textContent,
+    confirmLabel: dialog?.querySelector('.confirm-dialog-confirm')?.textContent,
+  })
+  expect(getDialogSnapshot()).toEqual({
+    title: 'Close without answering?',
+    description:
+      'It is waiting for your answer to a question. Closing ends the session, and the question stays unanswered.',
+    stateAndSession: 'QuestionAnswer a question',
+    confirmLabel: 'Close session',
+  })
+  expect(
+    fetchMock.mock.calls
+      .map(([request]) => requestUrl(request))
+      .filter((url) => url.endsWith('/close')),
+  ).toEqual([])
+
+  act(() => {
+    if (dialog !== null) dispatchKey(dialog, 'Enter')
+  })
+  await act(async () => {
+    await flushAsyncState()
+  })
+
+  expect(
+    fetchMock.mock.calls
+      .map(([request]) => requestUrl(request))
+      .filter((url) => url.endsWith('/close')),
+  ).toEqual(['/api/sessions/session-question/close'])
+  expect(
+    fetchMock.mock.calls
+      .filter(([request]) => requestUrl(request).endsWith('/close'))
+      .map(([, init]) =>
+        typeof init?.body === 'string'
+          ? (JSON.parse(init.body) as unknown)
+          : null,
+      ),
+  ).toEqual([{ keepWorktree: false, stopAndClose: true }])
+})
+
+it('cancels closing a non-Done session with Escape', () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-proposal', 'Choose a proposal', 'needs_action'),
+    ],
+  })
+
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+    dispatchKey(window, 'e')
+  })
+  const dialog = document.querySelector('.session-close-confirmation')
+  act(() => {
+    if (dialog !== null) dispatchKey(dialog, 'Escape')
+  })
+
+  const getSnapshot = () => ({
+    dialogOpen: document.querySelector('.session-close-confirmation') !== null,
+    closeUrls: fetchMock.mock.calls
+      .map(([request]) => requestUrl(request))
+      .filter((url) => url.endsWith('/close')),
+  })
+  expect(getSnapshot()).toEqual({ dialogOpen: false, closeUrls: [] })
+})
+
+it('offers a guarded close action for a non-Done desktop session', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-review', 'Review a request', 'needs_action')],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  await act(async () => {
+    await flushAsyncState()
+  })
+
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.conversation-more')?.click()
+  })
+  act(() => {
+    document
+      .querySelector<HTMLDivElement>('.conversation-actions-menu-close')
+      ?.click()
+  })
+
+  expect(
+    document.querySelector('.session-close-confirmation') !== null,
+  ).toEqual(true)
+  expect(
+    fetchMock.mock.calls
+      .map(([request]) => requestUrl(request))
+      .filter((url) => url.endsWith('/close')),
+  ).toEqual([])
+})
+
+it('offers a guarded close action at the bottom of the mobile menu', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
+  vi.stubGlobal('fetch', fetchMock)
+  renderMobileApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-mobile', 'Answer a question', 'needs_action')],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  await act(async () => {
+    await flushAsyncState()
+  })
+
+  await clickMobileSessionAction('Close session…')
+
+  const getSnapshot = () => ({
+    title: document.querySelector('.session-close-confirmation h2')
+      ?.textContent,
+    closeUrls: fetchMock.mock.calls
+      .map(([request]) => requestUrl(request))
+      .filter((url) => url.endsWith('/close')),
+  })
+  expect(getSnapshot()).toEqual({
+    title: 'Close without answering?',
+    closeUrls: [],
+  })
 })
 
 it('shows and runs Close in a Done conversation header', async () => {

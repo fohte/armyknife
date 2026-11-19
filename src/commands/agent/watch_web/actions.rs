@@ -187,6 +187,7 @@ trait ActionRuntime: Send + Sync {
         &'a self,
         session: &'a Session,
         keep_worktree: bool,
+        stop_and_close: bool,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
     fn merge_pull_request<'a>(
         &'a self,
@@ -658,6 +659,7 @@ mod tests {
             &'a self,
             session: &'a Session,
             keep_worktree: bool,
+            stop_and_close: bool,
         ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
             let fail_for_unmerged_worktree = *self.close_unmerged_worktree.lock().unwrap();
             let sessions_dir = self.sessions_dir.lock().unwrap().clone();
@@ -666,6 +668,7 @@ mod tests {
                 "kind": "close",
                 "sessionId": session.session_id,
                 "keepWorktree": keep_worktree,
+                "stopAndClose": stop_and_close,
             }));
             Box::pin(async move {
                 if fail_for_unmerged_worktree {
@@ -2274,9 +2277,40 @@ mod tests {
                     "kind": "close",
                     "sessionId": "sample-session",
                     "keepWorktree": false,
+                    "stopAndClose": false,
                 }] }),
                 normalize_session(session),
             ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn close_forwards_the_confirmed_stop_and_close_choice(action_context: ActionContext) {
+        let mut session = session("sample-session");
+        session.status = SessionStatus::Running;
+        action_context.save_session(&session);
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/close",
+                json!({ "stopAndClose": true }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "close",
+                    "sessionId": "sample-session",
+                    "keepWorktree": false,
+                    "stopAndClose": true,
+                }],
+            }),
         );
     }
 
@@ -2561,6 +2595,7 @@ mod tests {
                         "kind": "close",
                         "sessionId": "sample-session",
                         "keepWorktree": true,
+                        "stopAndClose": false,
                     }],
                 },
                 "session": normalize_session(session),
@@ -2592,6 +2627,7 @@ mod tests {
                     "kind": "close",
                     "sessionId": "sample-session",
                     "keepWorktree": false,
+                    "stopAndClose": false,
                 }],
             }),
         );
