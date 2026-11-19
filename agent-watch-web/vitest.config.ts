@@ -41,6 +41,8 @@ const appTestFiles = [
   'src/components/session-pull-requests.test.tsx',
   'src/components/conversation-selection-reply.test.tsx',
   'src/components/user-with-content.browser.test.tsx',
+  'src/components/image-lightbox.browser.test.tsx',
+  'src/components/attachment-preview-list.browser.test.tsx',
   'src/components/question-card.test.tsx',
   'src/components/proposal-card.test.tsx',
   'src/components/todo-card.test.tsx',

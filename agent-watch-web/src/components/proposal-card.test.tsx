@@ -319,7 +319,7 @@ it('shows a saved image in an answered proposal comment', () => {
   expect(snapshot()).toEqual({
     status: 'Proposal · chose A',
     comment:
-      '<p><img class="chat-user-image" alt="Sample screenshot" loading="lazy" decoding="async" src="/api/images/fixture-image.png"></p>',
+      '<p><button class="image-lightbox-trigger" type="button" aria-label="Enlarge Sample screenshot"><img class="chat-user-image" alt="Sample screenshot" loading="lazy" decoding="async" src="/api/images/fixture-image.png"></button></p>',
     commentInput: false,
     attachmentPreview: false,
   })

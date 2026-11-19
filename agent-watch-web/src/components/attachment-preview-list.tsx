@@ -3,6 +3,8 @@ import '#components/attachment-preview-list.css'
 import { Button } from '@fohte/ui/button'
 import type { ClipboardEvent } from 'react'
 
+import { ImageLightbox } from '#components/image-lightbox'
+
 export type AttachmentPreview = {
   id: string
   name: string
@@ -50,7 +52,7 @@ export function AttachmentPreviewList({
       {attachments.map((attachment) => (
         <li className="attachment-preview-item" key={attachment.id}>
           {attachment.previewUrl === null ? null : (
-            <img src={attachment.previewUrl} alt="" />
+            <ImageLightbox src={attachment.previewUrl} alt={attachment.name} />
           )}
           <span>{attachment.name}</span>
           {attachment.previewUrl === null ? (

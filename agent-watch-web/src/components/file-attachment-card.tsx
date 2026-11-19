@@ -70,10 +70,10 @@ function TextFilePreview({ file }: { file: AttachmentPreviewFile }) {
 
 function AttachmentPreview({
   file,
-  onEnlargeImage,
+  defaultImagePreviewOpen,
 }: {
   file: AttachmentPreviewFile
-  onEnlargeImage: (source: string) => void
+  defaultImagePreviewOpen: boolean
 }) {
   if (!file.available) {
     return <FileContentPreview file={file} />
@@ -83,7 +83,12 @@ function AttachmentPreview({
     return <TextFilePreview file={file} />
   }
 
-  return <FileContentPreview file={file} onEnlargeImage={onEnlargeImage} />
+  return (
+    <FileContentPreview
+      file={file}
+      defaultImagePreviewOpen={defaultImagePreviewOpen}
+    />
+  )
 }
 
 export function FileAttachmentCard({
@@ -95,13 +100,11 @@ export function FileAttachmentCard({
   now?: Date
   previewOpen?: boolean
 }) {
-  const [expandedImage, setExpandedImage] = useState<string | null>(() =>
-    previewOpen
-      ? (message.files.find(
-          (file) => file.previewType === 'image' && file.available,
-        )?.source ?? null)
-      : null,
-  )
+  const defaultImageSource = previewOpen
+    ? message.files.find(
+        (file) => file.previewType === 'image' && file.available,
+      )?.source
+    : undefined
   const time = formatMessageTime(message.timestamp, now)
 
   return (
@@ -116,30 +119,13 @@ export function FileAttachmentCard({
       <ul className="chat-file-attachment-list">
         {message.files.map((file) => (
           <li className="chat-file-attachment-item" key={file.source}>
-            <AttachmentPreview file={file} onEnlargeImage={setExpandedImage} />
+            <AttachmentPreview
+              file={file}
+              defaultImagePreviewOpen={file.source === defaultImageSource}
+            />
           </li>
         ))}
       </ul>
-      {expandedImage !== null && (
-        <dialog
-          className="chat-file-image-dialog"
-          open
-          aria-label="Image preview"
-          onClick={() => {
-            setExpandedImage(null)
-          }}
-        >
-          <button
-            type="button"
-            aria-label="Close image preview"
-            onClick={() => {
-              setExpandedImage(null)
-            }}
-          >
-            <img src={expandedImage} alt="Expanded attachment" />
-          </button>
-        </dialog>
-      )}
     </article>
   )
 }

@@ -209,7 +209,7 @@ it('shows a saved image in the completed comment', () => {
   expect(
     container.querySelector('.chat-todo-completed-comment')?.innerHTML,
   ).toBe(
-    '<p><img class="chat-user-image" alt="Sample screenshot" loading="lazy" decoding="async" src="/api/images/fixture-image.png"></p>',
+    '<p><button class="image-lightbox-trigger" type="button" aria-label="Enlarge Sample screenshot"><img class="chat-user-image" alt="Sample screenshot" loading="lazy" decoding="async" src="/api/images/fixture-image.png"></button></p>',
   )
 })
 

@@ -2,6 +2,7 @@ import '#components/file-attachment-card.css'
 
 import { useState } from 'react'
 
+import { ImageLightbox } from '#components/image-lightbox'
 import { MarkdownMessage } from '#components/markdown-message'
 import { SyntaxCodeBlock } from '#components/syntax-code-block'
 import type { ChatItem } from '#types'
@@ -98,7 +99,7 @@ export function FileContentPreview({
   deferred = false,
   onPreviewOpen = () => undefined,
   previewUnavailable = false,
-  onEnlargeImage = () => undefined,
+  defaultImagePreviewOpen = false,
 }: {
   file: AttachmentPreviewFile
   textContent?: string
@@ -106,7 +107,7 @@ export function FileContentPreview({
   deferred?: boolean
   onPreviewOpen?: () => void
   previewUnavailable?: boolean
-  onEnlargeImage?: (source: string) => void
+  defaultImagePreviewOpen?: boolean
 }) {
   const [imageFailed, setImageFailed] = useState(false)
 
@@ -120,23 +121,16 @@ export function FileContentPreview({
     switch (file.previewType) {
       case 'image':
         return imageFailed ? null : (
-          <button
-            className="chat-file-image-button"
-            type="button"
-            aria-label={`Enlarge ${file.name}`}
-            onClick={() => {
-              onEnlargeImage(file.source)
+          <ImageLightbox
+            src={file.source}
+            alt={file.name}
+            triggerClassName="chat-file-image-button"
+            loading="lazy"
+            onError={() => {
+              setImageFailed(true)
             }}
-          >
-            <img
-              src={file.source}
-              alt={file.name}
-              loading="lazy"
-              onError={() => {
-                setImageFailed(true)
-              }}
-            />
-          </button>
+            defaultOpen={defaultImagePreviewOpen}
+          />
         )
       case 'markdown':
       case 'text':

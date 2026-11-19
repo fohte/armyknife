@@ -12,6 +12,7 @@ import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 import { BangCommandActions } from '#components/bang-command'
+import { ImageLightbox } from '#components/image-lightbox'
 import { useMarkdownCommandContext } from '#components/markdown-command-context'
 import { useMarkdownSessionLinks } from '#components/markdown-session-links'
 import { SessionLink } from '#components/session-link'
@@ -422,13 +423,13 @@ const MarkdownParagraph: NonNullable<Components['p']> = ({ children }) => (
 
 const MarkdownImage: NonNullable<Components['img']> = ({ src, alt, title }) =>
   src === undefined || src === '' ? null : (
-    <img
-      className="chat-user-image"
+    <ImageLightbox
       src={src}
       alt={alt ?? ''}
-      title={title}
+      {...(title === undefined ? {} : { title })}
       loading="lazy"
       decoding="async"
+      imageClassName="chat-user-image"
     />
   )
 

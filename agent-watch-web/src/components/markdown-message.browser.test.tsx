@@ -508,6 +508,35 @@ it('confirms the cwd before execution and shows the returned status', async () =
   })
 })
 
+it('opens a Markdown image in the modal lightbox', async () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <MarkdownMessage>
+        {'![Fixture illustration](/fixture-illustration.png)'}
+      </MarkdownMessage>,
+    )
+  })
+
+  const enlarge = container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Enlarge Fixture illustration"]',
+  )
+  if (enlarge === null) throw new Error('Expected the Markdown image button')
+  await act(async () => userEvent.click(enlarge))
+
+  const dialog = document.body.querySelector('dialog')
+  const getLightboxState = () => ({
+    open: dialog?.open ?? false,
+    isModal: dialog?.matches(':modal') ?? false,
+    imageAlt: dialog?.querySelector('img')?.alt ?? null,
+  })
+  expect(getLightboxState()).toEqual({
+    open: true,
+    isModal: true,
+    imageAlt: 'Fixture illustration',
+  })
+})
+
 it('shows a preview error and allows the command to be retried', async () => {
   runSessionOperationMock.mockImplementationOnce(() =>
     Promise.resolve(err(new Error('Preview failed'))),

@@ -32,12 +32,19 @@ function snapshot() {
   const group = container.querySelector('.chat-user-group')
   return group === null
     ? null
-    : Array.from(group.children, (child) => ({
-        className: child.className,
-        text: child.textContent,
-        source:
-          child instanceof HTMLImageElement ? child.getAttribute('src') : null,
-      }))
+    : Array.from(group.children)
+        .filter((child) => child.tagName !== 'DIALOG')
+        .map((child) => {
+          const image = child.querySelector('img')
+          return {
+            className: image?.className ?? child.className,
+            text: child.textContent,
+            source:
+              child instanceof HTMLImageElement
+                ? child.getAttribute('src')
+                : (image?.getAttribute('src') ?? null),
+          }
+        })
 }
 
 function imageAttributes() {
@@ -161,6 +168,31 @@ it('loads user images lazily and decodes them asynchronously', () => {
   })
 
   expect(imageAttributes()).toEqual({ loading: 'lazy', decoding: 'async' })
+})
+
+it('opens a prompt image in the modal lightbox', async () => {
+  render({
+    type: 'user_with_content',
+    content: [{ type: 'image', source: imageSource, available: true }],
+  })
+
+  const enlarge = container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Enlarge Attached image"]',
+  )
+  if (enlarge === null) throw new Error('Expected the prompt image button')
+  await act(async () => userEvent.click(enlarge))
+
+  const dialog = document.body.querySelector('dialog')
+  const getLightboxState = () => ({
+    open: dialog?.open ?? false,
+    isModal: dialog?.matches(':modal') ?? false,
+    imageAlt: dialog?.querySelector('img')?.alt ?? null,
+  })
+  expect(getLightboxState()).toEqual({
+    open: true,
+    isModal: true,
+    imageAlt: 'Attached image',
+  })
 })
 
 it('explains when an image is already unavailable', () => {

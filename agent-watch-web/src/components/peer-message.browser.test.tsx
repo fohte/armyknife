@@ -1,6 +1,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { userEvent } from 'vitest/browser'
 
 import { formatMessageTime } from '#components/message-time'
 import { PeerMessage } from '#components/peer-message'
@@ -121,6 +122,48 @@ it('loads peer images lazily and decodes them asynchronously', () => {
   })
 
   expect(imageAttributes()).toEqual({ loading: 'lazy', decoding: 'async' })
+})
+
+it('opens a peer image in the modal lightbox', async () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <PeerMessage
+        message={{
+          type: 'peer',
+          direction: 'from',
+          session_id: 'unknown',
+          content: [
+            {
+              type: 'image',
+              source: 'data:image/png;base64,AA==',
+              available: true,
+            },
+          ],
+        }}
+        onSelectSession={() => undefined}
+        sessions={[]}
+      />,
+    )
+  })
+
+  const enlarge = container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Enlarge Attached image"]',
+  )
+  if (enlarge === null) throw new Error('Expected the peer image button')
+  await act(async () => userEvent.click(enlarge))
+
+  const dialog = document.body.querySelector('dialog')
+  const getLightboxState = () => ({
+    open: dialog?.open ?? false,
+    isModal: dialog?.matches(':modal') ?? false,
+    imageAlt: dialog?.querySelector('img')?.alt ?? null,
+  })
+  expect(getLightboxState()).toEqual({
+    open: true,
+    isModal: true,
+    imageAlt: 'Attached image',
+  })
 })
 
 it.each([

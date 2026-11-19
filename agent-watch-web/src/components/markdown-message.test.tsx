@@ -52,7 +52,7 @@ it('renders markdown images with the shared conversation image treatment', () =>
   expect(
     renderMessage('![Sample screenshot](/api/images/fixture-image.png)'),
   ).toBe(
-    '<div class="markdown-message"><p><img class="chat-user-image" src="/api/images/fixture-image.png" alt="Sample screenshot" loading="lazy" decoding="async"/></p></div>',
+    '<div class="markdown-message"><p><button class="image-lightbox-trigger" type="button" aria-label="Enlarge Sample screenshot"><img class="chat-user-image" src="/api/images/fixture-image.png" alt="Sample screenshot" loading="lazy" decoding="async"/></button></p></div>',
   )
 })
 
