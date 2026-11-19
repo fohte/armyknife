@@ -149,6 +149,35 @@ it('opens directory suggestions and selects the clicked directory', async () => 
   expect(chooseDirectory.mock.calls).toEqual([[exampleSessionDirectories[0]]])
 })
 
+it('closes directory suggestions when clicking the open trigger', async () => {
+  renderForm(makeState())
+  const directoryButton = requireButton('.new-session-directory-button')
+
+  await act(async () => {
+    await userEvent.click(directoryButton)
+  })
+  const opened = {
+    expanded: directoryButton.getAttribute('aria-expanded'),
+    dialogCount: container.querySelectorAll('[aria-label="Choose a directory"]')
+      .length,
+  }
+
+  await act(async () => {
+    await userEvent.click(directoryButton)
+  })
+  const closed = {
+    expanded: directoryButton.getAttribute('aria-expanded'),
+    dialogCount: container.querySelectorAll('[aria-label="Choose a directory"]')
+      .length,
+  }
+
+  const snapshot = () => ({ opened, closed })
+  expect(snapshot()).toEqual({
+    opened: { expanded: 'true', dialogCount: 1 },
+    closed: { expanded: 'false', dialogCount: 0 },
+  })
+})
+
 it('closes directory suggestions when clicking the header outside its control', () => {
   renderForm(makeState())
   const directoryButton = requireButton('.new-session-directory-button')
