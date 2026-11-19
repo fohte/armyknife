@@ -229,6 +229,35 @@ it('closes the mobile sheet on Escape', async () => {
   expect(onOpenChange.mock.calls).toEqual([[false]])
 })
 
+it('keeps the mobile sheet open when its contents are clicked', async () => {
+  const onOpenChange = vi.fn()
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <VibeModeControl
+        sessionId="fixture-session"
+        repo="example/service"
+        mode={{ mode: 'disabled' }}
+        isMobile
+        open
+        onOpenChange={onOpenChange}
+      />,
+    )
+  })
+  const content = document.querySelector('.vibe-panel-message')
+  if (content === null) throw new Error('Expected the vibe panel content')
+
+  await act(async () => {
+    await userEvent.click(content)
+  })
+
+  const snapshot = () => ({
+    panelOpen: document.querySelector('.vibe-panel-backdrop') !== null,
+    openChanges: onOpenChange.mock.calls,
+  })
+  expect(snapshot()).toEqual({ panelOpen: true, openChanges: [] })
+})
+
 it.each([
   { name: 'short title', title: 'Fixture title' },
   {

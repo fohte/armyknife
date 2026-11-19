@@ -32,8 +32,12 @@ const MAX_DESCENDANT_NODES: usize = 64;
 const SIGTERM_GRACE_PERIOD: Duration = Duration::from_secs(5);
 const DEFAULT_AUTO_PAUSE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
-pub(crate) async fn close_from_watch_web(session: &Session, keep_worktree: bool) -> Result<()> {
-    session_close::close_session_value_from_watch_web(session, keep_worktree).await
+pub(crate) async fn close_from_watch_web(
+    session: &Session,
+    keep_worktree: bool,
+    stop_and_close: bool,
+) -> Result<()> {
+    session_close::close_session_value_from_watch_web(session, keep_worktree, stop_and_close).await
 }
 
 #[derive(Args, Clone, Default, PartialEq, Eq)]
@@ -87,9 +91,22 @@ fn close_tracked_session_with_runtime<R: CloseRuntime>(
     force: bool,
     runtime: &R,
 ) -> Result<()> {
+    close_tracked_session_with_runtime_and_stop(session, force, false, runtime)
+}
+
+fn close_tracked_session_with_runtime_and_stop<R: CloseRuntime>(
+    session: &Session,
+    force: bool,
+    stop_and_close: bool,
+    runtime: &R,
+) -> Result<()> {
     let mut session = session.clone();
     super::session_status::include_pending_status(&mut session);
-    close_session(&session, force, runtime)?;
+    if stop_and_close {
+        close_session_with_stop_and_close(&session, force, true, runtime)?;
+    } else {
+        close_session(&session, force, runtime)?;
+    }
     runtime
         .mark_session_ended(&session.session_id)
         .map_err(SessionLifecyclePersistenceError::new)?;
@@ -233,6 +250,7 @@ enum DraftInspection {
 fn prepare_close_session<'a, R: CloseRuntime>(
     session: &'a Session,
     force: bool,
+    stop_and_close: bool,
     runtime: &R,
 ) -> Result<Option<SessionClosePlan<'a>>> {
     let tmux_info = session
@@ -244,7 +262,7 @@ fn prepare_close_session<'a, R: CloseRuntime>(
     }
     ensure_pane_session(runtime, tmux_info, &session.session_id)?;
 
-    if !force {
+    if !force && !stop_and_close {
         let effective_status = if session.engine == Engine::Codex
             && session.status == SessionStatus::Running
             && match runtime.latest_codex_turn_status(&session.session_id) {
@@ -300,13 +318,39 @@ fn close_session<R: CloseRuntime>(session: &Session, force: bool, runtime: &R) -
     close_session_with_warning_writer(session, force, runtime, &mut stderr.lock())
 }
 
+fn close_session_with_stop_and_close<R: CloseRuntime>(
+    session: &Session,
+    force: bool,
+    stop_and_close: bool,
+    runtime: &R,
+) -> Result<()> {
+    let stderr = io::stderr();
+    close_session_with_stop_and_close_warning_writer(
+        session,
+        force,
+        stop_and_close,
+        runtime,
+        &mut stderr.lock(),
+    )
+}
+
 fn close_session_with_warning_writer<R: CloseRuntime>(
     session: &Session,
     force: bool,
     runtime: &R,
     warning_writer: &mut impl io::Write,
 ) -> Result<()> {
-    let Some(plan) = prepare_close_session(session, force, runtime)? else {
+    close_session_with_stop_and_close_warning_writer(session, force, false, runtime, warning_writer)
+}
+
+fn close_session_with_stop_and_close_warning_writer<R: CloseRuntime>(
+    session: &Session,
+    force: bool,
+    stop_and_close: bool,
+    runtime: &R,
+    warning_writer: &mut impl io::Write,
+) -> Result<()> {
+    let Some(plan) = prepare_close_session(session, force, stop_and_close, runtime)? else {
         return Ok(());
     };
     let tmux_info = plan.tmux_info;
@@ -550,6 +594,74 @@ mod tests {
                     pane_exists_call(),
                     pane_session_call(),
                 ],
+            ),
+        );
+    }
+
+    #[test]
+    fn confirmed_stop_and_close_shuts_down_active_session() {
+        let mut session = session();
+        session.status = SessionStatus::Running;
+        session.pending_bg_task_ids.insert("task-1".to_string());
+        session
+            .pending_permission_agent_ids
+            .insert("fixture-agent-id".to_string());
+        let runtime = FakeRuntime::default();
+
+        let result = close_tracked_session_with_runtime_and_stop(&session, false, true, &runtime);
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                runtime.calls.into_inner(),
+                runtime.ended_sessions.into_inner(),
+            ),
+            (
+                Ok(()),
+                vec![
+                    pane_exists_call(),
+                    pane_session_call(),
+                    resolve_pid_call(Engine::Claude),
+                    draft_call(Engine::Claude),
+                    graceful_quit_call(42),
+                    pane_exists_call(),
+                    pane_session_call(),
+                    kill_pane_call(),
+                ],
+                vec!["session-1".to_string()],
+            ),
+        );
+    }
+
+    #[test]
+    fn confirmed_stop_and_close_still_protects_an_unsent_draft() {
+        let mut session = session();
+        session.status = SessionStatus::Running;
+        let runtime = FakeRuntime {
+            draft: Some(true),
+            ..FakeRuntime::default()
+        };
+
+        let result = close_tracked_session_with_runtime_and_stop(&session, false, true, &runtime);
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                runtime.calls.into_inner(),
+                runtime.ended_sessions.into_inner(),
+            ),
+            (
+                Err(
+                    "Agent session `session-1` has an unsent draft; pass --force to close it"
+                        .to_string()
+                ),
+                vec![
+                    pane_exists_call(),
+                    pane_session_call(),
+                    resolve_pid_call(Engine::Claude),
+                    draft_call(Engine::Claude),
+                ],
+                vec![],
             ),
         );
     }

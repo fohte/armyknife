@@ -59,9 +59,10 @@ export function ConfirmDialog({
       role={dialogRole}
       onKeyDown={(event) => {
         if (presentation === 'inline') return
+        event.stopPropagation()
         if (event.key === 'Escape') {
           event.preventDefault()
-          onCancel()
+          if (!pending) onCancel()
         } else if (event.key === 'Enter' && !pending && !confirmDisabled) {
           event.preventDefault()
           onConfirm()

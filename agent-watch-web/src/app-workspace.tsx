@@ -87,6 +87,7 @@ type AppWorkspaceActions = {
   openSessionInInbox: (id: string) => void
   closeDoneSessions: (sessions: readonly Session[]) => void
   closeDoneSession: (id: string, keepWorktree?: boolean) => void
+  closeSessionKeepWorktree: (id: string) => void
   requestCloseSession: (id: string) => void
   cancelCloseConfirmation: () => void
   confirmCloseSession: (id: string) => void
@@ -179,7 +180,7 @@ export function AppWorkspace({
       actions.openNewSession('form')
     },
     onCloseKeepWorktree: (sessionId: string) => {
-      actions.closeDoneSession(sessionId, true)
+      actions.closeSessionKeepWorktree(sessionId)
     },
   }
   const navigation = (

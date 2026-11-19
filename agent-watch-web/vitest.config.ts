@@ -33,6 +33,7 @@ const appTestFiles = [
   'src/components/mobile-navigation-actions.browser.test.tsx',
   'src/components/agent-watch-nav.test.tsx',
   'src/components/command-palette.test.tsx',
+  'src/components/confirm-dialog.browser.test.tsx',
   'src/components/board-view.test.tsx',
   'src/components/conversation-pane.test.tsx',
   'src/components/conversation-status-band.browser.test.tsx',

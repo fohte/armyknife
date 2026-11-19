@@ -109,10 +109,12 @@ impl ActionRuntime for LiveActionRuntime {
         &'a self,
         session: &'a Session,
         keep_worktree: bool,
+        stop_and_close: bool,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         let session = session.clone();
         Box::pin(super::close::run_on_blocking_worker(move || async move {
-            crate::commands::agent::close_from_watch_web(&session, keep_worktree).await
+            crate::commands::agent::close_from_watch_web(&session, keep_worktree, stop_and_close)
+                .await
         }))
     }
 
