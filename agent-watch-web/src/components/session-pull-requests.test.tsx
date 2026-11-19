@@ -299,6 +299,37 @@ it('shows the CI failure reason without a merge action', () => {
   ).toEqual({ reason: 'CI failed', mergeButton: false })
 })
 
+it('shows the missing head SHA reason without a merge action', () => {
+  render(false, [
+    {
+      number: 45,
+      state: 'Open',
+      owner: 'example-org',
+      repo: 'example-repository',
+      title: 'Verify the release checks',
+      url: 'https://github.com/example-org/example-repository/pull/45',
+      headSha: null,
+      ciState: 'Successful',
+      isCurrentBranch: true,
+    },
+  ])
+
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.session-pr-trigger')?.click()
+  })
+
+  const row = container.querySelector<HTMLElement>('.session-pr-row')
+  expect(
+    row === null
+      ? null
+      : {
+          reason: row.querySelector('.session-pr-row-state')?.textContent,
+          mergeButton:
+            row.querySelector('button[aria-label^="Merge PR"]') !== null,
+        },
+  ).toEqual({ reason: 'Head SHA unavailable', mergeButton: false })
+})
+
 it('dims the pull request icon when every pull request is merged', () => {
   render(false, [
     {

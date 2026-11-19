@@ -227,11 +227,8 @@ export function ConversationPaneHeader({
     )
   const visibleMergeFeedback =
     mergeFeedback !== null &&
-    pullRequests.some(
-      (candidate) =>
-        candidate.owner !== undefined &&
-        candidate.repo !== undefined &&
-        sameMergeIdentity(mergeFeedback, candidate),
+    pullRequests.some((candidate) =>
+      sameMergeIdentity(mergeFeedback, candidate),
     )
       ? mergeFeedback
       : null

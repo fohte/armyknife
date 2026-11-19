@@ -877,6 +877,85 @@ it('merges a ready pull request from its desktop list row', async () => {
   })
 })
 
+it('shows merge feedback when a PR uses the session repository fallback', async () => {
+  const fetchMock = vi.fn<typeof fetch>(() =>
+    Promise.resolve(
+      Response.json(
+        { error: 'The pull request head changed.' },
+        { status: 409 },
+      ),
+    ),
+  )
+  vi.stubGlobal('fetch', fetchMock)
+  renderHeader(
+    false,
+    vi.fn(() => Promise.resolve(true)),
+    {
+      ...session,
+      pullRequests: [
+        {
+          number: 46,
+          state: 'Open',
+          title: 'Update repository metadata',
+          headSha: 'fixture-fallback-head',
+          ciState: 'Successful',
+          isCurrentBranch: false,
+        },
+      ],
+    },
+  )
+
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>('.session-pr-trigger'),
+    ).click()
+  })
+  const mergeButton = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Merge PR #46"]',
+    ),
+  )
+  act(() => {
+    mergeButton.click()
+  })
+
+  const confirmation = requireElement(
+    container.querySelector<HTMLElement>('[role="alertdialog"]'),
+  )
+  await act(async () => {
+    requireElement(
+      [...confirmation.querySelectorAll<HTMLButtonElement>('button')].find(
+        (button) => button.textContent === 'Confirm merge',
+      ) ?? null,
+    ).click()
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (container.querySelector('[role="alert"]') !== null) return
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    }
+  })
+
+  const mergeState = () => ({
+    request: fetchMock.mock.calls.map(([url, init]) => ({
+      url,
+      body: init?.body,
+    })),
+    feedback: container.querySelector('[role="alert"]')?.textContent,
+  })
+  expect(mergeState()).toEqual({
+    request: [
+      {
+        url: '/api/sessions/fixture-session/pull-requests/46/merge',
+        body: JSON.stringify({
+          owner: 'example',
+          repo: 'project',
+          expectedHeadSha: 'fixture-fallback-head',
+        }),
+      },
+    ],
+    feedback: 'The pull request head changed.',
+  })
+})
+
 it('keeps merge feedback scoped to the repository when PR numbers match', async () => {
   const fetchMock = vi.fn<typeof fetch>(() =>
     Promise.resolve(Response.json({ result: 'merged' })),
