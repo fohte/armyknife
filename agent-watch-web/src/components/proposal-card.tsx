@@ -1,3 +1,4 @@
+import '#components/card-comment.css'
 import '#components/proposal-card.css'
 
 import { Button } from '@fohte/ui/button'
@@ -311,7 +312,7 @@ export function ProposalCard({
           </label>
           <textarea
             id={`proposal-comment-${String(seq)}`}
-            className="chat-proposal-comment"
+            className="chat-card-comment chat-proposal-comment"
             rows={2}
             value={comment}
             disabled={isAnswered || isSubmitting}

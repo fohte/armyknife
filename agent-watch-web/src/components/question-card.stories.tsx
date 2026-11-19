@@ -76,6 +76,15 @@ export const WaitingForAllAnswers: Story = {
   ],
 }
 
+export const EnteringACustomAnswer: Story = {
+  name: 'A question shows a custom answer in its text field',
+  args: {
+    defaultAnswers: {
+      'Which formats should be included?': 'Please include a printable guide.',
+    },
+  },
+}
+
 export const WaitingOnAMobileScreen: Story = {
   name: 'A mobile question group shows its prompts in one card',
   args: {

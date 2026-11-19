@@ -1,0 +1,17 @@
+.chat-card-comment {
+  display: block;
+  width: 100%;
+  min-height: 46px;
+  padding: 8px 10px;
+  border: 1px solid var(--aw-border-control);
+  border-radius: var(--aw-radius);
+  background: var(--aw-bg-surface);
+  color: var(--aw-text-primary);
+  font: inherit;
+  resize: vertical;
+}
+
+.chat-card-comment:focus-visible {
+  outline: 2px solid var(--aw-text-primary);
+  outline-offset: 1px;
+}
