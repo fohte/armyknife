@@ -1,6 +1,6 @@
 import '#components/skill-completion.css'
 
-import type { ChangeEvent, KeyboardEvent, SyntheticEvent } from 'react'
+import type { ChangeEvent, KeyboardEvent, Ref, SyntheticEvent } from 'react'
 import { useId, useLayoutEffect, useRef, useState } from 'react'
 
 import type { SkillSuggestion } from '#types'
@@ -30,6 +30,7 @@ export function useSkillCompletion({
   onKeyDown,
 }: SkillCompletionProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const suggestionsRef = useRef<HTMLUListElement>(null)
   const pendingCursorPosition = useRef<number | null>(null)
   const suggestionsId = useId()
   const [activeSkillIndex, setActiveSkillIndex] = useState(0)
@@ -131,17 +132,17 @@ export function useSkillCompletion({
           return
         }
       }
-      if (event.key === 'Escape' && completionKey !== null) {
-        event.preventDefault()
-        setDismissedCompletion(completionKey)
-        return
-      }
     }
     onKeyDown?.(event)
   }
 
+  const dismiss = () => {
+    if (completionKey !== null) setDismissedCompletion(completionKey)
+  }
+
   return {
     textareaRef,
+    suggestionsRef,
     handleChange,
     handleSelect,
     handleKeyDown,
@@ -151,16 +152,19 @@ export function useSkillCompletion({
     suggestionsId,
     isOpen,
     selectSkill,
+    dismiss,
   }
 }
 
 export function SkillSuggestionList({
+  ref,
   id,
   completion,
   skills,
   selectedIndex,
   onSelect,
 }: {
+  ref?: Ref<HTMLUListElement>
   id: string
   completion: CompletionToken | null
   skills: readonly SkillSuggestion[]
@@ -171,6 +175,7 @@ export function SkillSuggestionList({
 
   return (
     <ul
+      ref={ref}
       id={id}
       className="composer-skill-suggestions"
       role="listbox"

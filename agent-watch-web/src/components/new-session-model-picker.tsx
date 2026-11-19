@@ -4,6 +4,7 @@ import '#components/new-session-model.css'
 import { Cpu, X } from 'lucide-react'
 import { type CSSProperties, useRef, useState } from 'react'
 
+import { useDismissableLayer } from '#components/use-dismissable-layer'
 import type {
   SessionEngine,
   SessionModelOption,
@@ -165,7 +166,11 @@ export function NewSessionModelPicker(props: NewSessionModelPickerProps) {
     options?.defaultEffort ??
     'default'
   const triggerRef = useRef<HTMLButtonElement>(null)
+  const controlRef = useRef<HTMLDivElement>(null)
   const [popoverPosition, setPopoverPosition] = useState<CSSProperties>({})
+  useDismissableLayer(variant === 'control' && isOpen, onOpenChange, [
+    controlRef,
+  ])
 
   if (variant === 'palette') {
     return (
@@ -213,7 +218,7 @@ export function NewSessionModelPicker(props: NewSessionModelPickerProps) {
   }
 
   return (
-    <div className="new-session-model-control">
+    <div ref={controlRef} className="new-session-model-control">
       <button
         aria-expanded={isOpen}
         aria-haspopup="dialog"

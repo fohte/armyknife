@@ -15,6 +15,7 @@ import {
   SkillSuggestionList,
   useSkillCompletion,
 } from '#components/skill-completion'
+import { useDismissableLayer } from '#components/use-dismissable-layer'
 import type { Session, SkillSuggestion } from '#types'
 
 type MessageComposerProps = {
@@ -73,6 +74,10 @@ export function MessageComposer({
     onDraftChange,
     onKeyDown,
   })
+  useDismissableLayer(skillCompletion.isOpen, skillCompletion.dismiss, [
+    skillCompletion.textareaRef,
+    skillCompletion.suggestionsRef,
+  ])
 
   useLayoutEffect(() => {
     const textarea = skillCompletion.textareaRef.current
@@ -144,6 +149,7 @@ export function MessageComposer({
       />
       {skillCompletion.isOpen ? (
         <SkillSuggestionList
+          ref={skillCompletion.suggestionsRef}
           id={skillCompletion.suggestionsId}
           completion={skillCompletion.completion}
           skills={skillCompletion.matchingSkills}
