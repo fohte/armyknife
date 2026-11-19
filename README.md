@@ -1221,7 +1221,7 @@ Files sent by an agent are served by `GET /api/sessions/{id}/files/{file_id}` on
 
 - `GET /api/sessions/{id}/actions`
 - `GET /api/sessions/{id}/tree` returns the ancestor-rooted session tree, excluding ended sessions.
-- `POST /api/sessions/{id}/pull-requests/{number}/merge` with `{"owner":"sample-owner","repo":"sample-repo","expectedHeadSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}` merges the PR in that session's `pullRequest` field only if its head SHA still matches. It returns `merged`, `alreadyMerged`, or `enqueued`; the merge flow runs `pre-pr-merge` and closes the head worktree after a completed merge.
+- `POST /api/sessions/{id}/pull-requests/{number}/merge` with `{"owner":"sample-owner","repo":"sample-repo","expectedHeadSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}` merges the PR identified by the route number and request repository when its head SHA still matches. The watch-web header and PR list use this route for a selected PR. It returns `merged`, `alreadyMerged`, or `enqueued`; the merge flow runs `pre-pr-merge` and closes the head worktree after a completed merge.
 - `GET /api/sessions/{id}/background-tasks/{task_id}/output` for the running task's output tail
 - `GET /api/images/{name}` for saved conversation images
 - `GET /api/sessions/later-options` for server-calculated return times

@@ -47,6 +47,9 @@ const meta = {
     repo: 'example-org/example-repo',
     isMobile: false,
     open: false,
+    onMerge: () => undefined,
+    isMerging: () => false,
+    isMergeSuccessful: () => false,
     onOpenChange: () => undefined,
   },
   decorators: [
@@ -125,7 +128,7 @@ export const CheckStatusIsUnknown: Story = {
 }
 
 export const DesktopPullRequestListIsOpen: Story = {
-  name: 'The desktop header shows the existing pull request list',
+  name: 'The desktop list shows a reason beside an unmergeable pull request and Merge beside a ready pull request',
   args: {
     pullRequests: [currentBranchPullRequest, ...otherPullRequests],
     open: true,
@@ -147,16 +150,11 @@ export const DesktopPullRequestListIsOpen: Story = {
 }
 
 export const MobilePullRequestSheetIsOpen: Story = {
-  name: 'The mobile header opens the pull request list as a bottom sheet',
+  name: 'The mobile sheet shows Merge on a ready pull request and Close at the bottom',
   args: {
     pullRequests: [currentBranchPullRequest, ...otherPullRequests],
     isMobile: true,
     open: true,
-    mobileAction: (
-      <button className="conversation-pr-merge-button" type="button">
-        Merge
-      </button>
-    ),
   },
   decorators: [
     (Story) => (
@@ -174,6 +172,14 @@ export const MobilePullRequestSheetIsOpen: Story = {
       </div>
     ),
   ],
+}
+
+export const AFailingPullRequestCannotBeMerged: Story = {
+  name: 'The desktop list explains that a pull request with failing checks cannot be merged',
+  args: {
+    pullRequests: [{ ...currentBranchPullRequest, ciState: 'Failed' }],
+    open: true,
+  },
 }
 
 export const MobileCompactHeaderButton: Story = {

@@ -144,6 +144,26 @@ export const SessionPullRequestCanBeMerged: Story = {
         owner: 'example',
         repo: 'service',
         url: 'https://github.com/example/service/pull/42',
+        ciState: 'Successful',
+        isCurrentBranch: true,
+        headSha: 'sample-head-sha',
+      },
+    },
+  },
+}
+
+export const SessionPullRequestWaitsForChecks: Story = {
+  name: 'The header keeps Merge unavailable while checks are running',
+  args: {
+    session: {
+      ...session,
+      pullRequest: {
+        number: 42,
+        state: 'Open',
+        owner: 'example',
+        repo: 'service',
+        ciState: 'InProgress',
+        isCurrentBranch: true,
         headSha: 'sample-head-sha',
       },
     },

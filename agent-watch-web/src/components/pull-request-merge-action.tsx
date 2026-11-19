@@ -1,11 +1,13 @@
 import { Button } from '@fohte/ui/button'
 
 type PullRequestMergeActionProps = {
+  ariaLabel?: string
   merging: boolean
   onClick: () => void
 }
 
 export function PullRequestMergeAction({
+  ariaLabel,
   merging,
   onClick,
 }: PullRequestMergeActionProps) {
@@ -15,6 +17,7 @@ export function PullRequestMergeAction({
       type="button"
       variant="plain"
       disabled={merging}
+      aria-label={ariaLabel}
       onClick={onClick}
     >
       {merging ? 'Merging…' : 'Merge'}

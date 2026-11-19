@@ -1,8 +1,9 @@
 import '#components/session-pull-requests.css'
 
 import { GitPullRequest } from 'lucide-react'
-import { type ReactNode, useEffect } from 'react'
+import { useEffect } from 'react'
 
+import { PullRequestMergeAction } from '#components/pull-request-merge-action'
 import type { PullRequest } from '#types'
 
 type SessionPullRequestsProps = {
@@ -10,7 +11,9 @@ type SessionPullRequestsProps = {
   repo: string
   isMobile: boolean
   open: boolean
-  mobileAction?: ReactNode
+  onMerge: (pullRequest: PullRequest) => void
+  isMerging: (pullRequest: PullRequest) => boolean
+  isMergeSuccessful: (pullRequest: PullRequest) => boolean
   onOpenChange: (open: boolean) => void
 }
 
@@ -46,6 +49,29 @@ function ciStateClass(ciState: PullRequest['ciState']) {
     default:
       return 'is-unknown'
   }
+}
+
+export function isPullRequestMergeable(
+  pullRequest: PullRequest,
+): pullRequest is PullRequest & {
+  state: 'Open'
+  ciState: 'Successful'
+  headSha: string
+} {
+  return (
+    pullRequest.state === 'Open' &&
+    pullRequest.ciState === 'Successful' &&
+    pullRequest.headSha !== null &&
+    pullRequest.headSha !== undefined
+  )
+}
+
+function pullRequestMergeReason(pullRequest: PullRequest) {
+  if (pullRequest.state !== 'Open') return pullRequest.state
+  if (pullRequest.ciState !== 'Successful') {
+    return ciStateLabel(pullRequest.ciState)
+  }
+  return 'Head SHA unavailable'
 }
 
 function pullRequestGroups(pullRequests: readonly PullRequest[]) {
@@ -108,7 +134,9 @@ export function SessionPullRequests({
   repo,
   isMobile,
   open,
-  mobileAction,
+  onMerge,
+  isMerging,
+  isMergeSuccessful,
   onOpenChange,
 }: SessionPullRequestsProps) {
   const currentPullRequest = getRepresentativePullRequest(pullRequests)
@@ -155,12 +183,9 @@ export function SessionPullRequests({
         <div className="session-pr-group" key={group.name}>
           <h3>{group.name}</h3>
           {group.pullRequests.map((pullRequest) => (
-            <a
+            <div
               className="session-pr-row"
-              href={pullRequestUrl(pullRequest, repo)}
               key={`${pullRequest.owner ?? repo}/${pullRequest.repo ?? ''}/${String(pullRequest.number)}`}
-              target="_blank"
-              rel="noreferrer"
             >
               <span
                 className={`session-pr-ci-dot ${ciStateClass(pullRequest.ciState)}${pullRequest.state === 'Merged' ? ' is-merged' : ''}`}
@@ -168,7 +193,12 @@ export function SessionPullRequests({
                 aria-label={ciStateLabel(pullRequest.ciState)}
                 title={ciStateLabel(pullRequest.ciState)}
               />
-              <span className="session-pr-row-copy">
+              <a
+                className="session-pr-row-copy"
+                href={pullRequestUrl(pullRequest, repo)}
+                target="_blank"
+                rel="noreferrer"
+              >
                 <span className="session-pr-row-title">
                   <span className="session-pr-number">
                     #{String(pullRequest.number)}
@@ -179,35 +209,37 @@ export function SessionPullRequests({
                   <span className="session-pr-row-repo">
                     {pullRequestRepo(pullRequest, repo)}
                   </span>
-                  {isMobile ? (
-                    <>
-                      <span aria-hidden="true">·</span>
-                      <span className="session-pr-row-mobile-state">
-                        {pullRequest.state === 'Merged'
-                          ? '✓ Merged'
-                          : pullRequest.state}
-                      </span>
-                    </>
-                  ) : null}
                 </span>
-              </span>
-              {isMobile ? null : (
+              </a>
+              {isPullRequestMergeable(pullRequest) ? (
+                isMergeSuccessful(pullRequest) ? (
+                  <span className="session-pr-row-state is-merged">
+                    ✓ Merged
+                  </span>
+                ) : (
+                  <PullRequestMergeAction
+                    ariaLabel={`Merge PR #${String(pullRequest.number)}`}
+                    merging={isMerging(pullRequest)}
+                    onClick={() => {
+                      onMerge(pullRequest)
+                    }}
+                  />
+                )
+              ) : (
                 <span
-                  className={`session-pr-row-state${pullRequest.state === 'Merged' ? ' is-merged' : ''}`}
+                  className={`session-pr-row-state${pullRequest.state === 'Open' ? ` ${ciStateClass(pullRequest.ciState)}` : ''}${pullRequest.state === 'Merged' ? ' is-merged' : ''}`}
                 >
                   {pullRequest.state === 'Merged'
                     ? '✓ Merged'
-                    : pullRequest.state}
+                    : pullRequestMergeReason(pullRequest)}
                 </span>
               )}
-            </a>
+            </div>
           ))}
         </div>
       ))}
       {isMobile ? (
-        <div
-          className={`session-pr-list-actions${mobileAction == null ? ' is-single' : ''}`}
-        >
+        <div className="session-pr-list-actions is-single">
           <button
             className="session-pr-close"
             type="button"
@@ -217,7 +249,6 @@ export function SessionPullRequests({
           >
             Close
           </button>
-          {mobileAction}
         </div>
       ) : null}
     </section>
