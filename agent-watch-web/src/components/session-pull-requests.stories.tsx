@@ -1,4 +1,4 @@
-import type { Meta, StoryObj } from '@storybook/react-vite'
+import type { Decorator, Meta, StoryObj } from '@storybook/react-vite'
 
 import { SessionPullRequests } from '#components/session-pull-requests'
 import type { PullRequest } from '#types'
@@ -26,6 +26,19 @@ const mergeablePullRequest: PullRequest = {
   ciState: 'Successful',
   isCurrentBranch: true,
 }
+
+const desktopMergeButtonDecorator: Decorator = (Story) => (
+  <div
+    style={{
+      minHeight: 200,
+      padding: 16,
+      background: 'var(--aw-bg-app)',
+      color: 'var(--aw-text-primary)',
+    }}
+  >
+    <Story />
+  </div>
+)
 
 const otherPullRequests: PullRequest[] = [
   {
@@ -167,20 +180,7 @@ export const DesktopMergeButtonIsOutlined: Story = {
     pullRequests: [mergeablePullRequest],
     open: true,
   },
-  decorators: [
-    (Story) => (
-      <div
-        style={{
-          minHeight: 200,
-          padding: 16,
-          background: 'var(--aw-bg-app)',
-          color: 'var(--aw-text-primary)',
-        }}
-      >
-        <Story />
-      </div>
-    ),
-  ],
+  decorators: [desktopMergeButtonDecorator],
 }
 
 export const MobileMergeButtonIsOutlined: Story = {
@@ -215,20 +215,7 @@ export const MergeButtonIsDisabledWhileMerging: Story = {
     open: true,
     isMerging: () => true,
   },
-  decorators: [
-    (Story) => (
-      <div
-        style={{
-          minHeight: 200,
-          padding: 16,
-          background: 'var(--aw-bg-app)',
-          color: 'var(--aw-text-primary)',
-        }}
-      >
-        <Story />
-      </div>
-    ),
-  ],
+  decorators: [desktopMergeButtonDecorator],
 }
 
 export const MobilePullRequestSheetIsOpen: Story = {
