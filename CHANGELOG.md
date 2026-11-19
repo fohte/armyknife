@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.804](https://github.com/fohte/armyknife/compare/v0.1.803...v0.1.804) (2026-11-19)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** enlarge all chat images ([#1993](https://github.com/fohte/armyknife/issues/1993)) ([5422d0d](https://github.com/fohte/armyknife/commit/5422d0d143c397b50039bbc4c2067cd3fe5fe8d8))
+
 ## [0.1.803](https://github.com/fohte/armyknife/compare/v0.1.802...v0.1.803) (2026-11-19)
 
 
