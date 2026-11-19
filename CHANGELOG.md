@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.799](https://github.com/fohte/armyknife/compare/v0.1.798...v0.1.799) (2026-11-19)
+
+
+### Bug Fixes
+
+* **agent:** allow one-time approval on retry ([#1985](https://github.com/fohte/armyknife/issues/1985)) ([be3c037](https://github.com/fohte/armyknife/commit/be3c03723f7bb2762b018ba17e4bc643006504bc))
+
 ## [0.1.798](https://github.com/fohte/armyknife/compare/v0.1.797...v0.1.798) (2026-11-19)
 
 
