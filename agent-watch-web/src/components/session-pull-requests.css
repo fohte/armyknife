@@ -190,14 +190,30 @@
 }
 
 .session-pr-row .conversation-pr-merge-button {
-  min-height: 30px;
-  padding: 0 9px;
-  border: 1px solid var(--aw-text-primary);
-  background: var(--aw-text-primary);
-  color: var(--aw-bg-app);
-  font-size: 11px;
-  font-weight: 700;
+  height: 26px;
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--aw-border-control);
+  border-radius: var(--aw-radius);
+  background: transparent;
+  color: var(--aw-text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 500;
   white-space: nowrap;
+}
+
+.session-pr-row .conversation-pr-merge-button:hover {
+  border-color: var(--aw-border-control);
+  background: var(--aw-bg-pressed);
+  color: var(--aw-text-primary);
+}
+
+.session-pr-row .conversation-pr-merge-button:disabled {
+  border-color: var(--aw-border-control);
+  background: transparent;
+  color: var(--aw-text-disabled);
+  opacity: 1;
 }
 
 .session-pr-ci-dot.is-merged {
@@ -268,6 +284,14 @@
   grid-template-columns: 7px minmax(0, 1fr) auto;
   column-gap: 12px;
   padding: 6px 16px;
+}
+
+.session-pr-list--mobile .session-pr-row .conversation-pr-merge-button {
+  min-width: 72px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0 14px;
+  font-size: 13px;
 }
 
 .session-pr-list--mobile .session-pr-row-repo {
