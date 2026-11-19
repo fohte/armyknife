@@ -37,7 +37,8 @@ export function NewSessionForm({
   )
   const [engineMenuOpen, setEngineMenuOpen] = useState(false)
   const [modelPickerOpen, setModelPickerOpen] = useState(initialModelPickerOpen)
-  const directoryControlRef = useRef<HTMLElement>(null)
+  const directoryTriggerRef = useRef<HTMLButtonElement>(null)
+  const directoryPopoverRef = useRef<HTMLDivElement>(null)
   const engineControlRef = useRef<HTMLDivElement>(null)
   const selectedDirectory = state.selectedDirectory
   const skillCompletion = useSkillCompletion({
@@ -47,7 +48,8 @@ export function NewSessionForm({
     onDraftChange: state.setInitialMessage,
   })
   useDismissableLayer(directoryPickerOpen, setDirectoryPickerOpen, [
-    directoryControlRef,
+    directoryTriggerRef,
+    directoryPopoverRef,
   ])
   useDismissableLayer(engineMenuOpen, setEngineMenuOpen, [engineControlRef])
   useDismissableLayer(skillCompletion.isOpen, skillCompletion.dismiss, [
@@ -57,7 +59,7 @@ export function NewSessionForm({
 
   return (
     <section aria-label="New session" className="new-session-view">
-      <header ref={directoryControlRef} className="new-session-header">
+      <header className="new-session-header">
         {isMobile ? (
           <button
             aria-label="Back to Inbox"
@@ -73,6 +75,7 @@ export function NewSessionForm({
           aria-expanded={directoryPickerOpen}
           aria-haspopup="dialog"
           className={`new-session-directory-button${selectedDirectory === null ? ' is-empty' : ''}`}
+          ref={directoryTriggerRef}
           onClick={() => {
             setDirectoryPickerOpen((open) => !open)
           }}
@@ -96,6 +99,7 @@ export function NewSessionForm({
           <div
             aria-label="Choose a directory"
             className="new-session-directory-popover"
+            ref={directoryPopoverRef}
             role="dialog"
           >
             <SessionDirectoryOptions
