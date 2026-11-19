@@ -81,8 +81,9 @@ const appTestFiles = [
 const unitTestExcludedFiles = [
   ...configDefaults.exclude,
   ...appTestFiles,
-  // This shared fixture matches Vitest's test-file pattern but has no test suite.
+  // These shared fixtures match Vitest's test-file pattern but have no test suites.
   'src/new-session-story-fixtures.test.ts',
+  'src/image-lightbox-state.test.ts',
 ]
 
 export default mergeConfig(

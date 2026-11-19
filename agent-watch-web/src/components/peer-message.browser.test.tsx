@@ -5,6 +5,7 @@ import { userEvent } from 'vitest/browser'
 
 import { formatMessageTime } from '#components/message-time'
 import { PeerMessage } from '#components/peer-message'
+import { getImageLightboxState } from '#image-lightbox-state.test'
 import type { ChatItem } from '#types'
 
 let container: HTMLDivElement
@@ -153,18 +154,63 @@ it('opens a peer image in the modal lightbox', async () => {
   if (enlarge === null) throw new Error('Expected the peer image button')
   await act(async () => userEvent.click(enlarge))
 
-  const dialog = document.body.querySelector('dialog')
-  const getLightboxState = () => ({
-    open: dialog?.open ?? false,
-    isModal: dialog?.matches(':modal') ?? false,
-    imageAlt: dialog?.querySelector('img')?.alt ?? null,
-  })
-  expect(getLightboxState()).toEqual({
+  expect(getImageLightboxState()).toEqual({
     open: true,
     isModal: true,
     imageAlt: 'Attached image',
   })
 })
+
+it.each([
+  { key: 'Enter', input: '{Enter}' },
+  { key: 'Space', input: '{Space}' },
+])(
+  'opens a peer image with $key without selecting its session',
+  async ({ input }) => {
+    root = createRoot(container)
+    const onSelectSession = vi.fn<(id: string) => void>()
+    act(() => {
+      root?.render(
+        <PeerMessage
+          message={{
+            type: 'peer',
+            direction: 'from',
+            session_id: 'fixture-peer-session',
+            content: [
+              {
+                type: 'image',
+                source: 'data:image/png;base64,AA==',
+                available: true,
+              },
+            ],
+          }}
+          onSelectSession={onSelectSession}
+          sessions={[{ id: 'fixture-peer-session', repo: '', task: null }]}
+        />,
+      )
+    })
+
+    const enlarge = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Enlarge Attached image"]',
+    )
+    if (enlarge === null) throw new Error('Expected the peer image button')
+    enlarge.focus()
+    await act(async () => userEvent.keyboard(input))
+
+    const getActual = () => ({
+      lightbox: getImageLightboxState(),
+      selectedIds: onSelectSession.mock.calls.map(([id]) => id),
+    })
+    expect(getActual()).toEqual({
+      lightbox: {
+        open: true,
+        isModal: true,
+        imageAlt: 'Attached image',
+      },
+      selectedIds: [],
+    })
+  },
+)
 
 it.each([
   {

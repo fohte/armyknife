@@ -30,6 +30,7 @@ type MarkdownNode = {
     start: { offset?: number }
     end: { offset?: number }
   }
+  tagName?: string
   type: string
   url?: string
   value?: string
@@ -278,6 +279,19 @@ function renderSessionLink(
   )
 }
 
+type MarkdownImageNode = {
+  children?: MarkdownImageNode[]
+  tagName?: string
+  type?: string
+}
+
+function containsMarkdownImage(node: MarkdownImageNode): boolean {
+  return (
+    node.tagName === 'img' ||
+    (node.children?.some(containsMarkdownImage) ?? false)
+  )
+}
+
 const MarkdownAnchor: NonNullable<Components['a']> = ({
   node,
   href,
@@ -292,6 +306,25 @@ const MarkdownAnchor: NonNullable<Components['a']> = ({
     sessionsById,
     onSelectSession,
   )
+  if (
+    sessionLink === null &&
+    href !== '' &&
+    node.children.some(containsMarkdownImage)
+  ) {
+    return (
+      <span className="markdown-linked-image">
+        {children}
+        <a
+          className="markdown-image-link"
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Open link
+        </a>
+      </span>
+    )
+  }
   return (
     sessionLink ?? (
       <a {...props} href={href} target="_blank" rel="noopener noreferrer">

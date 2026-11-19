@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
 import { AttachmentPreviewList } from '#components/attachment-preview-list'
+import { getImageLightboxState } from '#image-lightbox-state.test'
 
 let container: HTMLDivElement
 let root: Root | null = null
@@ -45,13 +46,7 @@ it('opens a selected attachment image in the modal lightbox', async () => {
   if (enlarge === null) throw new Error('Expected the attachment image button')
   await act(async () => userEvent.click(enlarge))
 
-  const dialog = document.body.querySelector('dialog')
-  const getLightboxState = () => ({
-    open: dialog?.open ?? false,
-    isModal: dialog?.matches(':modal') ?? false,
-    imageAlt: dialog?.querySelector('img')?.alt ?? null,
-  })
-  expect(getLightboxState()).toEqual({
+  expect(getImageLightboxState()).toEqual({
     open: true,
     isModal: true,
     imageAlt: 'fixture-image.png',

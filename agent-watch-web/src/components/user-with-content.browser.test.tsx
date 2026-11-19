@@ -7,6 +7,7 @@ import { userEvent } from 'vitest/browser'
 
 import { formatMessageTime } from '#components/message-time'
 import { UserWithContent } from '#components/user-with-content'
+import { getImageLightboxState } from '#image-lightbox-state.test'
 import type { ChatItem, RewindMode } from '#types'
 
 const imageSource = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='
@@ -182,13 +183,7 @@ it('opens a prompt image in the modal lightbox', async () => {
   if (enlarge === null) throw new Error('Expected the prompt image button')
   await act(async () => userEvent.click(enlarge))
 
-  const dialog = document.body.querySelector('dialog')
-  const getLightboxState = () => ({
-    open: dialog?.open ?? false,
-    isModal: dialog?.matches(':modal') ?? false,
-    imageAlt: dialog?.querySelector('img')?.alt ?? null,
-  })
-  expect(getLightboxState()).toEqual({
+  expect(getImageLightboxState()).toEqual({
     open: true,
     isModal: true,
     imageAlt: 'Attached image',

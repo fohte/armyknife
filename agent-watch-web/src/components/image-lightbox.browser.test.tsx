@@ -46,29 +46,32 @@ it('closes the modal lightbox with Escape', async () => {
   expect(document.body.querySelector('dialog')).toBeNull()
 })
 
-it('closes on a backdrop click but keeps open when the image is clicked', async () => {
+it('closes when the image or its backdrop is clicked', async () => {
   render()
   await openLightbox()
-  const dialog = document.body.querySelector('dialog')
-  const image = dialog?.querySelector('img')
-  if (dialog === null || image === null || image === undefined) {
-    throw new Error('Expected an open image lightbox')
-  }
+  const image = document.body.querySelector<HTMLImageElement>(
+    '.image-lightbox-dialog img',
+  )
+  if (image === null) throw new Error('Expected the expanded image')
 
   act(() => {
     image.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
-  const remainsOpenAfterImageClick = dialog.open
+  const closesOnImageClick = document.body.querySelector('dialog') === null
+
+  await openLightbox()
+  const dialog = document.body.querySelector('dialog')
+  if (dialog === null) throw new Error('Expected the reopened image lightbox')
   act(() => {
     dialog.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
 
   const getLightboxState = () => ({
-    remainsOpenAfterImageClick,
+    closesOnImageClick,
     closesOnBackdrop: document.body.querySelector('dialog') === null,
   })
   expect(getLightboxState()).toEqual({
-    remainsOpenAfterImageClick: true,
+    closesOnImageClick: true,
     closesOnBackdrop: true,
   })
 })
