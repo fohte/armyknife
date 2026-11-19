@@ -15,6 +15,7 @@ mod decisions;
 mod initial_prompt;
 mod migration;
 mod migrations;
+mod one_time_permissions;
 mod peer_out_messages;
 mod permission_denied;
 mod permission_requests;
@@ -34,6 +35,10 @@ pub(crate) use decisions::{
     insert_agent_decision, set_agent_decision_review,
 };
 pub(crate) use initial_prompt::{clear_pending_initial_prompt, mark_pending_initial_prompt};
+pub(crate) use one_time_permissions::{
+    consume_permission_retry_approval, insert_permission_retry_approval,
+    revoke_permission_retry_approval,
+};
 pub(crate) use peer_out_messages::WatchWebPeerOutMessage;
 pub(crate) use peer_out_messages::{
     insert_watch_web_peer_out_message, mark_watch_web_peer_out_message_delivered,

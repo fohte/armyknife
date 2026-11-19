@@ -1,5 +1,6 @@
 use axum::Json;
 use axum::extract::{Path as RoutePath, State};
+use chrono::{Duration, Utc};
 use serde_json::json;
 use std::path::PathBuf;
 use tokio::sync::OwnedMutexGuard;
@@ -17,6 +18,8 @@ struct UnresolvedPermissionDenial {
     sessions_dir: PathBuf,
     operation: store::PermissionDeniedOperation,
 }
+
+const PERMISSION_RETRY_APPROVAL_TTL: Duration = Duration::minutes(5);
 
 pub(super) async fn retry_permission_denied(
     State(state): State<ActionState>,
@@ -70,7 +73,24 @@ pub(super) async fn retry_permission_denied(
         move || store::ensure_watch_web_user_marker_from(&sessions_dir, &session_id)
     })
     .await?;
-    super::messages::send_queued_prompt(super::messages::QueuedPromptDelivery {
+    let approval_id = run_blocking({
+        let sessions_dir = sessions_dir.clone();
+        let session_id = session_id.clone();
+        let tool_name = denied.tool_name.clone();
+        let tool_input = denied.tool_input.clone();
+        let expires_at = (Utc::now() + PERMISSION_RETRY_APPROVAL_TTL).timestamp();
+        move || {
+            store::insert_permission_retry_approval_from(
+                &sessions_dir,
+                &session_id,
+                &tool_name,
+                &tool_input,
+                expires_at,
+            )
+        }
+    })
+    .await?;
+    let delivery = super::messages::send_queued_prompt(super::messages::QueuedPromptDelivery {
         runtime: state.runtime,
         sessions_dir: sessions_dir.clone(),
         session,
@@ -80,7 +100,21 @@ pub(super) async fn retry_permission_denied(
         queued_attachments: Vec::new(),
         attachment_paths: Vec::new(),
     })
-    .await?;
+    .await;
+    if let Err(error) = delivery {
+        let revoke_result = run_blocking({
+            let sessions_dir = sessions_dir.clone();
+            move || store::revoke_permission_retry_approval_from(&sessions_dir, approval_id)
+        })
+        .await;
+        if let Err(revoke_error) = revoke_result {
+            tracing::error!(
+                error = %revoke_error.message,
+                "failed to revoke unsent permission-retry approval",
+            );
+        }
+        return Err(error);
+    }
 
     let saved = run_blocking({
         let sessions_dir = sessions_dir.clone();

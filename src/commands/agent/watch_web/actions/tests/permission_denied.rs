@@ -52,6 +52,14 @@ async fn retry_sends_one_time_user_message_and_completes_the_card(action_context
         "sample-session",
     )
     .unwrap();
+    let approval_consumed = store::consume_permission_retry_approval_from(
+        &action_context.temp_dir.path().join("sessions"),
+        "sample-session",
+        "Bash",
+        &json!({ "command": "printf fixture" }),
+        chrono::Utc::now().timestamp(),
+    )
+    .unwrap();
 
     assert_eq!(
         (
@@ -66,6 +74,7 @@ async fn retry_sends_one_time_user_message_and_completes_the_card(action_context
                     )
                 })
                 .collect::<Vec<_>>(),
+            approval_consumed,
             store::load_session_from(
                 &action_context.temp_dir.path().join("sessions"),
                 "sample-session",
@@ -85,6 +94,7 @@ async fn retry_sends_one_time_user_message_and_completes_the_card(action_context
                 }],
             }),
             vec![(1, true, Some(PermissionDeniedResolution::Approved))],
+            true,
             SessionStatus::WaitingInput,
         ),
     );
@@ -168,9 +178,17 @@ async fn retry_removes_queued_prompt_when_message_delivery_fails(action_context:
         "sample-session",
     )
     .unwrap();
+    let approval_consumed = store::consume_permission_retry_approval_from(
+        &action_context.temp_dir.path().join("sessions"),
+        "sample-session",
+        "Bash",
+        &json!({ "command": "printf fixture" }),
+        chrono::Utc::now().timestamp(),
+    )
+    .unwrap();
 
     assert_eq!(
-        (snapshot, queued_prompts),
+        (snapshot, queued_prompts, approval_consumed),
         (
             json!({
                 "status": StatusCode::BAD_GATEWAY.as_u16(),
@@ -182,6 +200,7 @@ async fn retry_removes_queued_prompt_when_message_delivery_fails(action_context:
                 }],
             }),
             Vec::<store::WatchWebQueuedPrompt>::new(),
+            false,
         ),
     );
 }

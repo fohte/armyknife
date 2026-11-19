@@ -41,6 +41,41 @@ fn accepts_database_too_far_ahead_only_for_a_newer_version(
 }
 
 #[rstest]
+fn adds_one_time_permission_approvals_to_version_twenty_five_database(
+    database_fixture: DatabaseFixture,
+) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
+    Migrations::from_slice(&MIGRATION_ENTRIES[..25])
+        .to_latest(&mut connection)
+        .expect("version twenty five schema should be created");
+    drop(connection);
+
+    let connection = super::super::open_connection(temp_dir.path())
+        .expect("version twenty five database should migrate to one-time permission approvals");
+    let actual = connection
+        .query_row(
+            "SELECT
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_permission_retry_approval'),
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'agent_permission_retry_approval_match'),
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'agent_permission_retry_approval_delete_session')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("one-time permission schema should be queryable");
+    let actual_user_version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("database migration version should be readable");
+
+    assert_eq!(
+        (actual, actual_user_version),
+        ((true, true, true), current_version()),
+    );
+}
+
+#[rstest]
 fn adds_permission_request_mailbox_to_version_nine_database(database_fixture: DatabaseFixture) {
     let DatabaseFixture {
         temp_dir,
