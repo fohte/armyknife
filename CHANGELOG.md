@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.800](https://github.com/fohte/armyknife/compare/v0.1.799...v0.1.800) (2026-11-19)
+
+
+### Features
+
+* **agent-watch-web:** show Merge on PR rows ([#1987](https://github.com/fohte/armyknife/issues/1987)) ([0770b43](https://github.com/fohte/armyknife/commit/0770b43e8652fc87b2bc1c741d41ba1029ae56f4))
+
 ## [0.1.799](https://github.com/fohte/armyknife/compare/v0.1.798...v0.1.799) (2026-11-19)
 
 
