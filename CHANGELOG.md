@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.798](https://github.com/fohte/armyknife/compare/v0.1.797...v0.1.798) (2026-11-19)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** match question input style ([#1983](https://github.com/fohte/armyknife/issues/1983)) ([14eef16](https://github.com/fohte/armyknife/commit/14eef16cf9412efb820ff017d04c6dc681bd9f88))
+
 ## [0.1.797](https://github.com/fohte/armyknife/compare/v0.1.796...v0.1.797) (2026-11-18)
 
 
