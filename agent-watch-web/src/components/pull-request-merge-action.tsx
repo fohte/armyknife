@@ -15,7 +15,7 @@ export function PullRequestMergeAction({
     <Button
       className="conversation-pr-merge-button"
       type="button"
-      variant="plain"
+      variant="outline"
       disabled={merging}
       aria-label={ariaLabel}
       onClick={onClick}
