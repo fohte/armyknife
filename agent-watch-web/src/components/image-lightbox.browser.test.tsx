@@ -46,6 +46,25 @@ it('closes the modal lightbox with Escape', async () => {
   expect(document.body.querySelector('dialog')).toBeNull()
 })
 
+it('returns focus to the image trigger after closing with Escape', async () => {
+  render()
+  const trigger = container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Enlarge Fixture image"]',
+  )
+  if (trigger === null) throw new Error('Expected the image trigger')
+  await openLightbox()
+  await act(async () => userEvent.keyboard('{Escape}'))
+
+  const getLightboxState = () => ({
+    dialogOpen: document.body.querySelector('dialog') !== null,
+    triggerFocused: document.activeElement === trigger,
+  })
+  expect(getLightboxState()).toEqual({
+    dialogOpen: false,
+    triggerFocused: true,
+  })
+})
+
 it('closes when the image or its backdrop is clicked', async () => {
   render()
   await openLightbox()

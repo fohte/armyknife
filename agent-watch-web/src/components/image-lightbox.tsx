@@ -35,6 +35,7 @@ export function ImageLightbox({
   }, [open])
 
   const close = () => {
+    dialogRef.current?.close()
     setOpen(false)
   }
 

@@ -775,6 +775,49 @@ it('skips all questions with one request', async () => {
   expect(snapshot()).toEqual({ skipCalls: [[]], skipButtonPresent: false })
 })
 
+it('closes a question image lightbox with Escape without skipping the question', async () => {
+  const onSkip = vi.fn(() => Promise.resolve(true))
+  renderQuestion(
+    props({
+      onSkip,
+      questions: [
+        {
+          header: 'Review the image',
+          question:
+            '![Fixture chart](https://example.invalid/fixture-chart.png)',
+          choices: [{ label: 'Continue' }, { label: 'Stop' }],
+          multi_select: false,
+          answer: null,
+        },
+      ],
+    }),
+  )
+
+  const imageTrigger = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Enlarge Fixture chart"]',
+    ),
+  )
+  await act(async () => userEvent.click(imageTrigger))
+  if (document.body.querySelector('.image-lightbox-dialog') === null) {
+    throw new Error('Expected the question image lightbox')
+  }
+
+  await act(async () => userEvent.keyboard('{Escape}'))
+
+  const getQuestionImageEscapeState = () => ({
+    skipCalls: onSkip.mock.calls,
+    lightboxOpen:
+      document.body.querySelector('.image-lightbox-dialog') !== null,
+    questionPresent: container.querySelector('.chat-question-card') !== null,
+  })
+  expect(getQuestionImageEscapeState()).toEqual({
+    skipCalls: [],
+    lightboxOpen: false,
+    questionPresent: true,
+  })
+})
+
 it('shows the terminal fallback for questions without a watch-web request', () => {
   renderQuestion(
     props({
