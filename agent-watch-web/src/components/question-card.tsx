@@ -1,4 +1,5 @@
 import '#components/conversation-card.css'
+import '#components/card-comment.css'
 import '#components/question-card.css'
 
 import { Button } from '@fohte/ui/button'
@@ -15,6 +16,7 @@ type QuestionCardProps = {
   sessionId?: string
   requestId?: string
   questions: QuestionPrompt[]
+  defaultAnswers?: Record<string, string>
   cancelled?: boolean
   canAnswer: boolean
   isMobile: boolean
@@ -46,6 +48,7 @@ export function QuestionCard({
   sessionId,
   requestId,
   questions,
+  defaultAnswers = {},
   cancelled = false,
   canAnswer,
   isMobile,
@@ -63,6 +66,9 @@ export function QuestionCard({
     requestId ?? questions.map((question) => question.question).join('\u0000')
   const answerDraft = useDraft(
     cardDraftStorageKey('question', draftSessionId, questionCardId, 'answers'),
+    new URLSearchParams(
+      Object.entries(defaultAnswers).filter(([, value]) => value !== ''),
+    ).toString(),
   )
   const selectionDraft = useDraft(
     cardDraftStorageKey(
@@ -388,6 +394,7 @@ export function QuestionCard({
                 <label htmlFor={draftId}>Or enter your own answer</label>
                 <textarea
                   id={draftId}
+                  className="chat-card-comment"
                   value={drafts[question.question] ?? ''}
                   disabled={resolved || isSending}
                   rows={2}
