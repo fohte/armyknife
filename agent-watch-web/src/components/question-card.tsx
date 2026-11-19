@@ -257,6 +257,8 @@ export function QuestionCard({
     if (
       event.key !== 'Escape' ||
       event.target instanceof HTMLTextAreaElement ||
+      (event.target instanceof Element &&
+        event.target.closest('dialog[open]') !== null) ||
       !canAnswer ||
       resolved ||
       isSending

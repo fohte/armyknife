@@ -42,6 +42,8 @@ const appTestFiles = [
   'src/components/session-pull-requests.test.tsx',
   'src/components/conversation-selection-reply.test.tsx',
   'src/components/user-with-content.browser.test.tsx',
+  'src/components/image-lightbox.browser.test.tsx',
+  'src/components/attachment-preview-list.browser.test.tsx',
   'src/components/question-card.test.tsx',
   'src/components/proposal-card.test.tsx',
   'src/components/todo-card.test.tsx',
@@ -80,8 +82,9 @@ const appTestFiles = [
 const unitTestExcludedFiles = [
   ...configDefaults.exclude,
   ...appTestFiles,
-  // This shared fixture matches Vitest's test-file pattern but has no test suite.
+  // These shared fixtures match Vitest's test-file pattern but have no test suites.
   'src/new-session-story-fixtures.test.ts',
+  'src/image-lightbox-state.test.ts',
 ]
 
 export default mergeConfig(

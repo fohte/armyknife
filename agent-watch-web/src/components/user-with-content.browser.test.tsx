@@ -7,6 +7,7 @@ import { userEvent } from 'vitest/browser'
 
 import { formatMessageTime } from '#components/message-time'
 import { UserWithContent } from '#components/user-with-content'
+import { getImageLightboxState } from '#image-lightbox-state.test'
 import type { ChatItem, RewindMode } from '#types'
 
 const imageSource = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs='
@@ -32,12 +33,19 @@ function snapshot() {
   const group = container.querySelector('.chat-user-group')
   return group === null
     ? null
-    : Array.from(group.children, (child) => ({
-        className: child.className,
-        text: child.textContent,
-        source:
-          child instanceof HTMLImageElement ? child.getAttribute('src') : null,
-      }))
+    : Array.from(group.children)
+        .filter((child) => child.tagName !== 'DIALOG')
+        .map((child) => {
+          const image = child.querySelector('img')
+          return {
+            className: image?.className ?? child.className,
+            text: child.textContent,
+            source:
+              child instanceof HTMLImageElement
+                ? child.getAttribute('src')
+                : (image?.getAttribute('src') ?? null),
+          }
+        })
 }
 
 function imageAttributes() {
@@ -161,6 +169,25 @@ it('loads user images lazily and decodes them asynchronously', () => {
   })
 
   expect(imageAttributes()).toEqual({ loading: 'lazy', decoding: 'async' })
+})
+
+it('opens a prompt image in the modal lightbox', async () => {
+  render({
+    type: 'user_with_content',
+    content: [{ type: 'image', source: imageSource, available: true }],
+  })
+
+  const enlarge = container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Enlarge Attached image"]',
+  )
+  if (enlarge === null) throw new Error('Expected the prompt image button')
+  await act(async () => userEvent.click(enlarge))
+
+  expect(getImageLightboxState()).toEqual({
+    open: true,
+    isModal: true,
+    imageAlt: 'Attached image',
+  })
 })
 
 it('explains when an image is already unavailable', () => {

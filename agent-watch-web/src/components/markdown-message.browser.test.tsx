@@ -9,6 +9,7 @@ import {
   MarkdownSessionLinksProvider,
 } from '#components/markdown-message'
 import { PeerMessage } from '#components/peer-message'
+import { getImageLightboxState } from '#image-lightbox-state.test'
 import type {
   SessionOperation,
   SessionOperationError,
@@ -505,6 +506,66 @@ it('confirms the cwd before execution and shows the returned status', async () =
         commands: ['printf safe'],
       },
     ],
+  })
+})
+
+it('opens a Markdown image in the modal lightbox', async () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <MarkdownMessage>
+        {'![Fixture illustration](/fixture-illustration.png)'}
+      </MarkdownMessage>,
+    )
+  })
+
+  const enlarge = container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Enlarge Fixture illustration"]',
+  )
+  if (enlarge === null) throw new Error('Expected the Markdown image button')
+  await act(async () => userEvent.click(enlarge))
+
+  expect(getImageLightboxState()).toEqual({
+    open: true,
+    isModal: true,
+    imageAlt: 'Fixture illustration',
+  })
+})
+
+it('keeps the link next to an expandable linked Markdown image', async () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <MarkdownMessage>
+        {
+          '[![Fixture illustration](/fixture-illustration.png)](https://example.test/article)'
+        }
+      </MarkdownMessage>,
+    )
+  })
+
+  const enlarge = container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Enlarge Fixture illustration"]',
+  )
+  if (enlarge === null) throw new Error('Expected the linked image button')
+  await act(async () => userEvent.click(enlarge))
+
+  const getActual = () => ({
+    lightbox: getImageLightboxState(),
+    linkHref:
+      container
+        .querySelector<HTMLAnchorElement>('.markdown-image-link')
+        ?.getAttribute('href') ?? null,
+    imageHasNoLinkAncestor: enlarge.closest('a') === null,
+  })
+  expect(getActual()).toEqual({
+    lightbox: {
+      open: true,
+      isModal: true,
+      imageAlt: 'Fixture illustration',
+    },
+    linkHref: 'https://example.test/article',
+    imageHasNoLinkAncestor: true,
   })
 })
 

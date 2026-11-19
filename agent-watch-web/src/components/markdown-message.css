@@ -124,6 +124,17 @@
   object-fit: contain;
 }
 
+.markdown-linked-image {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.markdown-image-link {
+  font-size: 0.85em;
+}
+
 .markdown-message :is(th, td) {
   padding: 0.35rem 0.6rem;
   border: 1px solid var(--aw-border-control);

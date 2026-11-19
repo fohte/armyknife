@@ -2,6 +2,7 @@ import '#components/user-with-content.css'
 
 import { useEffect, useState } from 'react'
 
+import { ImageLightbox } from '#components/image-lightbox'
 import { MarkdownMessage } from '#components/markdown-message'
 import { formatMessageTime } from '#components/message-time'
 import type { ChatItem, RewindMode, Session, UserContentPart } from '#types'
@@ -29,12 +30,12 @@ function UserImage({
   }
 
   return (
-    <img
-      className="chat-user-image"
+    <ImageLightbox
       src={source}
       alt="Attached image"
       loading="lazy"
       decoding="async"
+      imageClassName="chat-user-image"
       onError={() => {
         setIsAvailable(false)
       }}

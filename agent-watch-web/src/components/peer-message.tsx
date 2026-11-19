@@ -1,5 +1,6 @@
 import '#components/peer-message.css'
 
+import { ImageLightbox } from '#components/image-lightbox'
 import { MarkdownMessage } from '#components/markdown-message'
 import { formatMessageTime } from '#components/message-time'
 import { SessionLink } from '#components/session-link'
@@ -65,7 +66,7 @@ export function PeerMessage({
         onClick={(event) => {
           if (
             event.target instanceof Element &&
-            event.target.closest('a') !== null
+            event.target.closest('a, button') !== null
           ) {
             return
           }
@@ -74,7 +75,7 @@ export function PeerMessage({
         onKeyDown={(event) => {
           if (
             event.target instanceof Element &&
-            event.target.closest('a') !== null
+            event.target.closest('a, button') !== null
           ) {
             return
           }
@@ -93,13 +94,13 @@ export function PeerMessage({
               {part.text}
             </MarkdownMessage>
           ) : part.type === 'image' && part.available ? (
-            <img
-              className="chat-peer-image"
+            <ImageLightbox
               key={`image-${String(index)}`}
               src={part.source}
               alt="Attached image"
               loading="lazy"
               decoding="async"
+              imageClassName="chat-peer-image"
             />
           ) : part.type === 'image' ? (
             <p

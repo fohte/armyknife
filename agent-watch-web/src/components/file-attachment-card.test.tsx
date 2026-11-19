@@ -163,13 +163,14 @@ it('shows an inline image, a download link, and an enlarged preview', () => {
   const snapshot = () => ({
     caption: container.querySelector('.chat-file-attachment-caption')
       ?.textContent,
-    images: Array.from(container.querySelectorAll('img'), (image) => ({
+    images: Array.from(document.body.querySelectorAll('img'), (image) => ({
       alt: image.alt,
       src: image.getAttribute('src'),
     })),
     downloads: downloadSnapshot(),
     dialog:
-      container.querySelector('dialog')?.getAttribute('aria-label') ?? null,
+      document.body.querySelector('dialog')?.getAttribute('aria-label') ?? null,
+    isModal: document.body.querySelector('dialog')?.matches(':modal') ?? false,
   })
 
   expect(snapshot()).toEqual({
@@ -189,6 +190,7 @@ it('shows an inline image, a download link, and an enlarged preview', () => {
       },
     ],
     dialog: null,
+    isModal: false,
   })
 
   const enlarge = container.querySelector<HTMLButtonElement>(
@@ -207,7 +209,7 @@ it('shows an inline image, a download link, and an enlarged preview', () => {
         src: 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=',
       },
       {
-        alt: 'Expanded attachment',
+        alt: 'sample-dashboard.png',
         src: 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=',
       },
     ],
@@ -220,6 +222,7 @@ it('shows an inline image, a download link, and an enlarged preview', () => {
       },
     ],
     dialog: 'Image preview',
+    isModal: true,
   })
 })
 
