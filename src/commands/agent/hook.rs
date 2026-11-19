@@ -33,6 +33,7 @@ mod background_tasks;
 mod pane_binding;
 pub(super) mod permission_notification;
 mod permission_request;
+mod permission_retry;
 mod prompt_skill;
 mod session_lifecycle;
 mod session_metadata;
@@ -111,6 +112,11 @@ pub fn run(args: &HookArgs) -> Result<()> {
     input.engine = args.engine;
     let session_id = input.session_id.clone();
     let agent_id = input.agent_id.clone();
+    let tool_name = input.tool_name.clone();
+    let tool_input = input
+        .tool_input
+        .as_ref()
+        .map(|tool_input| tool_input.raw.clone());
     let result = process_hook_event(event, input)?;
     if event == HookEvent::PermissionRequest {
         let sessions_dir = store::sessions_dir()?;
@@ -121,6 +127,17 @@ pub fn run(args: &HookArgs) -> Result<()> {
             &session_id,
             io::stdout().lock(),
         )?;
+        return Ok(());
+    }
+    if permission_retry::write_allow_if_approved(
+        event,
+        args.engine,
+        &store::sessions_dir()?,
+        &session_id,
+        tool_name.as_deref(),
+        tool_input.as_ref(),
+        io::stdout().lock(),
+    )? {
         return Ok(());
     }
     let block_reason = match result {

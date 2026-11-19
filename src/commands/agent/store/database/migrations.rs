@@ -24,7 +24,7 @@ CREATE TRIGGER agent_file_delete_session
         DELETE FROM agent_file WHERE session_id = OLD.session_id;
     END;";
 
-static MIGRATION_ENTRIES: [M<'static>; 25] = [
+static MIGRATION_ENTRIES: [M<'static>; 26] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -248,6 +248,22 @@ static MIGRATION_ENTRIES: [M<'static>; 25] = [
             END;",
     ),
     M::up("ALTER TABLE agent_permission_denied ADD COLUMN resolution TEXT;"),
+    M::up(
+        "CREATE TABLE agent_permission_retry_approval (
+            id INTEGER PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            tool_name TEXT NOT NULL,
+            tool_input TEXT NOT NULL,
+            expires_at INTEGER NOT NULL
+        );
+        CREATE INDEX agent_permission_retry_approval_match
+            ON agent_permission_retry_approval (session_id, tool_name, expires_at);
+        CREATE TRIGGER agent_permission_retry_approval_delete_session
+            AFTER DELETE ON sessions
+            BEGIN
+                DELETE FROM agent_permission_retry_approval WHERE session_id = OLD.session_id;
+            END;",
+    ),
 ];
 
 static MIGRATIONS: LazyLock<Migrations<'static>> =

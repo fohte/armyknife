@@ -529,6 +529,45 @@ pub(crate) fn resolve_permission_denied_from(
     database::resolve_permission_denied(sessions_dir, session_id, seq, resolution)
 }
 
+pub(crate) fn insert_permission_retry_approval_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+    expires_at: i64,
+) -> Result<i64> {
+    database::insert_permission_retry_approval(
+        sessions_dir,
+        session_id,
+        tool_name,
+        tool_input,
+        expires_at,
+    )
+}
+
+pub(crate) fn revoke_permission_retry_approval_from(
+    sessions_dir: &Path,
+    approval_id: i64,
+) -> Result<bool> {
+    database::revoke_permission_retry_approval(sessions_dir, approval_id)
+}
+
+pub(crate) fn consume_permission_retry_approval_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+    now: i64,
+) -> Result<bool> {
+    database::consume_permission_retry_approval(
+        sessions_dir,
+        session_id,
+        tool_name,
+        tool_input,
+        now,
+    )
+}
+
 pub(crate) fn add_agent_proposal_in(
     sessions_dir: &Path,
     session_id: &str,
