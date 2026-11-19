@@ -1,7 +1,7 @@
 import '#components/new-session.css'
 
 import { ArrowLeft, ChevronDown, Folder, GitBranch, X } from 'lucide-react'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 
 import { NewSessionModelPicker } from '#components/new-session-model-picker'
 import { SessionDirectoryOptions } from '#components/session-directory-options'
@@ -10,6 +10,7 @@ import {
   SkillSuggestionList,
   useSkillCompletion,
 } from '#components/skill-completion'
+import { useDismissableLayer } from '#components/use-dismissable-layer'
 import type { NewSessionState } from '#use-new-session'
 
 type NewSessionFormProps = {
@@ -36,6 +37,9 @@ export function NewSessionForm({
   )
   const [engineMenuOpen, setEngineMenuOpen] = useState(false)
   const [modelPickerOpen, setModelPickerOpen] = useState(initialModelPickerOpen)
+  const directoryTriggerRef = useRef<HTMLButtonElement>(null)
+  const directoryPopoverRef = useRef<HTMLDivElement>(null)
+  const engineControlRef = useRef<HTMLDivElement>(null)
   const selectedDirectory = state.selectedDirectory
   const skillCompletion = useSkillCompletion({
     draft: state.initialMessage,
@@ -43,6 +47,15 @@ export function NewSessionForm({
     skills: state.skillSuggestions,
     onDraftChange: state.setInitialMessage,
   })
+  useDismissableLayer(directoryPickerOpen, setDirectoryPickerOpen, [
+    directoryTriggerRef,
+    directoryPopoverRef,
+  ])
+  useDismissableLayer(engineMenuOpen, setEngineMenuOpen, [engineControlRef])
+  useDismissableLayer(skillCompletion.isOpen, skillCompletion.dismiss, [
+    skillCompletion.textareaRef,
+    skillCompletion.suggestionsRef,
+  ])
 
   return (
     <section aria-label="New session" className="new-session-view">
@@ -62,6 +75,7 @@ export function NewSessionForm({
           aria-expanded={directoryPickerOpen}
           aria-haspopup="dialog"
           className={`new-session-directory-button${selectedDirectory === null ? ' is-empty' : ''}`}
+          ref={directoryTriggerRef}
           onClick={() => {
             setDirectoryPickerOpen((open) => !open)
           }}
@@ -85,6 +99,7 @@ export function NewSessionForm({
           <div
             aria-label="Choose a directory"
             className="new-session-directory-popover"
+            ref={directoryPopoverRef}
             role="dialog"
           >
             <SessionDirectoryOptions
@@ -125,6 +140,7 @@ export function NewSessionForm({
           />
           {skillCompletion.isOpen ? (
             <SkillSuggestionList
+              ref={skillCompletion.suggestionsRef}
               id={skillCompletion.suggestionsId}
               completion={skillCompletion.completion}
               skills={skillCompletion.matchingSkills}
@@ -141,7 +157,7 @@ export function NewSessionForm({
             </div>
           ) : null}
           <div className="new-session-composer-actions">
-            <div className="new-session-engine-control">
+            <div ref={engineControlRef} className="new-session-engine-control">
               <button
                 aria-expanded={engineMenuOpen}
                 aria-haspopup="menu"

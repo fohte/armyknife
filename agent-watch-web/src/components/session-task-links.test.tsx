@@ -311,17 +311,84 @@ it('makes a linked task primary from the menu', async () => {
         task={task}
         tasks={[task, secondaryTask]}
         onMakePrimary={onMakePrimary}
-        taskListOpen
       />,
     )
   })
 
   await act(async () => {
-    document.body
-      .querySelector<HTMLButtonElement>('.session-task-links-make-primary')
-      ?.click()
+    container.querySelector('summary')?.click()
     await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
   })
 
-  expect(onMakePrimary.mock.calls).toEqual([['secondary-task']])
+  const makePrimaryButton = document.body.querySelector<HTMLButtonElement>(
+    '.session-task-links-make-primary',
+  )
+  if (makePrimaryButton === null)
+    throw new Error('Expected make-primary action')
+  await act(async () => {
+    makePrimaryButton.dispatchEvent(
+      new PointerEvent('pointerdown', { bubbles: true }),
+    )
+    makePrimaryButton.click()
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+  })
+
+  const snapshot = () => ({
+    calls: onMakePrimary.mock.calls,
+    menuOpen:
+      document.body.querySelector<HTMLElement>('.session-task-links-menu')
+        ?.hidden === false,
+  })
+  expect(snapshot()).toEqual({
+    calls: [['secondary-task']],
+    menuOpen: true,
+  })
+})
+
+it.each([
+  { description: 'an outside pointer press', key: false },
+  { description: 'Escape', key: true },
+])('closes the linked task menu on $description', async ({ key }) => {
+  const task = {
+    id: 'primary-task',
+    number: 2048,
+    title: 'Improve request reliability',
+    priority: 1,
+  }
+  const secondaryTask = {
+    id: 'secondary-task',
+    number: 2046,
+    title: 'Add request tracing',
+    priority: 4,
+  }
+  root = createRoot(container)
+  act(() => {
+    root?.render(<SessionTaskLinks task={task} tasks={[task, secondaryTask]} />)
+  })
+  const summary = container.querySelector('summary')
+  await act(async () => {
+    summary?.click()
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+  })
+
+  act(() => {
+    if (key) {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    } else {
+      document.body.dispatchEvent(
+        new PointerEvent('pointerdown', { bubbles: true }),
+      )
+    }
+  })
+  await act(async () => {
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+  })
+
+  const snapshot = () => ({
+    expanded: container.querySelector('details')?.open,
+    menuHidden: document.body.querySelector<HTMLElement>(
+      '.session-task-links-menu',
+    )?.hidden,
+  })
+  expect(snapshot()).toEqual({ expanded: false, menuHidden: true })
 })

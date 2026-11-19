@@ -1,9 +1,10 @@
 import '#components/session-pull-requests.css'
 
 import { GitPullRequest } from 'lucide-react'
-import { useEffect } from 'react'
+import { useRef } from 'react'
 
 import { PullRequestMergeAction } from '#components/pull-request-merge-action'
+import { useDismissableLayer } from '#components/use-dismissable-layer'
 import type { PullRequest } from '#types'
 
 type SessionPullRequestsProps = {
@@ -139,6 +140,8 @@ export function SessionPullRequests({
   isMergeSuccessful,
   onOpenChange,
 }: SessionPullRequestsProps) {
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const contentRef = useRef<HTMLElement>(null)
   const currentPullRequest = getRepresentativePullRequest(pullRequests)
   const allMerged = pullRequests.every(
     (pullRequest) => pullRequest.state === 'Merged',
@@ -149,30 +152,19 @@ export function SessionPullRequests({
       ? ''
       : `${allMerged ? `All ${String(pullRequests.length)} pull requests are merged. ` : ''}PR #${String(currentPullRequest.number)}: ${currentPullRequest.title ?? 'Untitled pull request'}, ${currentPullRequest.state.toLowerCase()}, ${ciStateLabel(currentPullRequest.ciState)}${additionalCount > 0 ? `. ${String(additionalCount)} more PR${additionalCount === 1 ? '' : 's'} from this session` : ''}`
 
-  useEffect(() => {
-    if (!open) return
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onOpenChange(false)
-    }
-    window.addEventListener('keydown', closeOnEscape)
-    return () => {
-      window.removeEventListener('keydown', closeOnEscape)
-    }
-  }, [onOpenChange, open])
+  useDismissableLayer(open, onOpenChange, [triggerRef, contentRef])
 
   if (pullRequests.length === 0 || currentPullRequest === undefined) return null
 
   const groups = pullRequestGroups(pullRequests)
   const content = (
     <section
+      ref={contentRef}
       className={`session-pr-list${isMobile ? ' session-pr-list--mobile' : ''}`}
       role="dialog"
       aria-label="Pull requests from this session"
       aria-modal={isMobile || undefined}
       tabIndex={-1}
-      onClick={(event) => {
-        event.stopPropagation()
-      }}
     >
       {isMobile ? (
         <h2 className="session-pr-list-title">
@@ -259,6 +251,7 @@ export function SessionPullRequests({
       className={`session-pr-menu${isMobile ? ' session-pr-menu--mobile' : ''}`}
     >
       <button
+        ref={triggerRef}
         className={`session-pr-trigger${isMobile ? ' session-pr-trigger--mobile' : ''}${open ? ' is-open' : ''}${allMerged ? ' is-all-merged' : ''}`}
         type="button"
         aria-haspopup="dialog"
@@ -285,14 +278,7 @@ export function SessionPullRequests({
       </button>
       {open ? (
         isMobile ? (
-          <div
-            className="session-pr-backdrop"
-            onClick={() => {
-              onOpenChange(false)
-            }}
-          >
-            {content}
-          </div>
+          <div className="session-pr-backdrop">{content}</div>
         ) : (
           <div className="session-pr-popover">{content}</div>
         )
