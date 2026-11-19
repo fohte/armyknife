@@ -47,7 +47,21 @@ pub(crate) fn consume_permission_retry_approval(
     validate_session_id(session_id)?;
     let input = serde_json::to_string(tool_input).context("serializing attempted tool input")?;
     let mut connection = open_connection(sessions_dir)?;
-    let approval_id = connection
+    let candidate_exists = connection.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM agent_permission_retry_approval
+            WHERE session_id = ?1 AND tool_name = ?2 AND tool_input = ?3
+              AND expires_at > ?4
+        )",
+        params![session_id, tool_name, input, now],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if !candidate_exists {
+        return Ok(false);
+    }
+
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let approval_id = transaction
         .query_row(
             "SELECT id FROM agent_permission_retry_approval
              WHERE session_id = ?1 AND tool_name = ?2 AND tool_input = ?3
@@ -58,10 +72,10 @@ pub(crate) fn consume_permission_retry_approval(
         )
         .optional()?;
     let Some(approval_id) = approval_id else {
+        transaction.commit()?;
         return Ok(false);
     };
 
-    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let consumed = transaction.execute(
         "DELETE FROM agent_permission_retry_approval
          WHERE id = ?1 AND session_id = ?2 AND tool_name = ?3
@@ -75,6 +89,8 @@ pub(crate) fn consume_permission_retry_approval(
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
 
     use rstest::{fixture, rstest};
     use serde_json::json;
@@ -98,32 +114,67 @@ mod tests {
         .expect("approval should be saved");
     }
 
-    #[test]
-    fn exact_approval_is_consumed_once() {
-        let sessions_dir = TempDir::new().expect("temporary sessions directory should be created");
+    #[rstest]
+    fn exact_approval_is_consumed_once(sessions_dir: TempDir) {
         save_approval(sessions_dir.path(), 1200);
+        let barrier = Arc::new(Barrier::new(3));
+        let consumers = (0..2)
+            .map(|_| {
+                let sessions_dir = sessions_dir.path().to_path_buf();
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    consume_permission_retry_approval(
+                        &sessions_dir,
+                        "fixture-session-cedar",
+                        "Bash",
+                        &json!({ "command": "printf fixture" }),
+                        1000,
+                    )
+                    .expect("matching approval should be checked")
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+        let mut results = consumers
+            .into_iter()
+            .map(|consumer| consumer.join().expect("consumer thread should finish"))
+            .collect::<Vec<_>>();
+        results.sort_unstable();
 
-        assert_eq!(
-            (
-                consume_permission_retry_approval(
-                    sessions_dir.path(),
-                    "fixture-session-cedar",
-                    "Bash",
-                    &json!({ "command": "printf fixture" }),
-                    1000,
-                )
-                .expect("matching approval should be consumed"),
-                consume_permission_retry_approval(
-                    sessions_dir.path(),
-                    "fixture-session-cedar",
-                    "Bash",
-                    &json!({ "command": "printf fixture" }),
-                    1001,
-                )
-                .expect("second matching attempt should be checked"),
-            ),
-            (true, false),
-        );
+        assert_eq!(results, vec![false, true]);
+    }
+
+    #[rstest]
+    fn concurrent_consumers_use_distinct_matching_approvals(sessions_dir: TempDir) {
+        save_approval(sessions_dir.path(), 1200);
+        save_approval(sessions_dir.path(), 1200);
+        let barrier = Arc::new(Barrier::new(3));
+        let consumers = (0..2)
+            .map(|_| {
+                let sessions_dir = sessions_dir.path().to_path_buf();
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    consume_permission_retry_approval(
+                        &sessions_dir,
+                        "fixture-session-cedar",
+                        "Bash",
+                        &json!({ "command": "printf fixture" }),
+                        1000,
+                    )
+                    .expect("matching approval should be checked")
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+        let mut results = consumers
+            .into_iter()
+            .map(|consumer| consumer.join().expect("consumer thread should finish"))
+            .collect::<Vec<_>>();
+        results.sort_unstable();
+
+        assert_eq!(results, vec![true, true]);
     }
 
     #[rstest]

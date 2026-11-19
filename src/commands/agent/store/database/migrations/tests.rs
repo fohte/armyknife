@@ -55,14 +55,38 @@ fn adds_one_time_permission_approvals_to_version_twenty_five_database(
 
     let connection = super::super::open_connection(temp_dir.path())
         .expect("version twenty five database should migrate to one-time permission approvals");
+    connection
+        .execute(
+            "INSERT INTO sessions (session_id, data, rev)
+             VALUES ('fixture-session-spruce', '{}', 1)",
+            [],
+        )
+        .expect("fixture session should be inserted");
+    connection
+        .execute(
+            "INSERT INTO agent_permission_retry_approval (
+                session_id, tool_name, tool_input, expires_at
+             ) VALUES ('fixture-session-spruce', 'Bash', '{}', 1800000000)",
+            [],
+        )
+        .expect("fixture approval should be inserted");
+    connection
+        .execute(
+            "DELETE FROM sessions WHERE session_id = 'fixture-session-spruce'",
+            [],
+        )
+        .expect("fixture session should be deleted");
     let actual = connection
         .query_row(
-            "SELECT
+            indoc! {"
+                SELECT
                 EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_permission_retry_approval'),
                 EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'agent_permission_retry_approval_match'),
-                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'agent_permission_retry_approval_delete_session')",
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'agent_permission_retry_approval_delete_session'),
+                (SELECT COUNT(*) FROM agent_permission_retry_approval WHERE session_id = 'fixture-session-spruce')
+            "},
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .expect("one-time permission schema should be queryable");
     let actual_user_version: i64 = connection
@@ -71,7 +95,7 @@ fn adds_one_time_permission_approvals_to_version_twenty_five_database(
 
     assert_eq!(
         (actual, actual_user_version),
-        ((true, true, true), current_version()),
+        ((true, true, true, 0), current_version()),
     );
 }
 

@@ -129,18 +129,15 @@ pub fn run(args: &HookArgs) -> Result<()> {
         )?;
         return Ok(());
     }
-    if event == HookEvent::PreToolUse
-        && args.engine == Engine::Claude
-        && permission_retry::write_allow_if_approved(
-            event,
-            args.engine,
-            &store::sessions_dir()?,
-            &session_id,
-            tool_name.as_deref(),
-            tool_input.as_ref(),
-            io::stdout().lock(),
-        )?
-    {
+    if permission_retry::write_allow_if_approved(
+        event,
+        args.engine,
+        &store::sessions_dir()?,
+        &session_id,
+        tool_name.as_deref(),
+        tool_input.as_ref(),
+        io::stdout().lock(),
+    )? {
         return Ok(());
     }
     let block_reason = match result {

@@ -52,11 +52,16 @@ pub(super) fn write_allow_if_approved(
 mod tests {
     use std::path::Path;
 
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use serde_json::json;
     use tempfile::TempDir;
 
     use super::*;
+
+    #[fixture]
+    fn sessions_dir() -> TempDir {
+        TempDir::new().expect("temporary sessions directory should be created")
+    }
 
     fn save_approval(sessions_dir: &Path, expires_at: i64) {
         store::insert_permission_retry_approval_from(
@@ -69,9 +74,8 @@ mod tests {
         .expect("approval should be saved");
     }
 
-    #[test]
-    fn matching_pre_tool_use_returns_allow_once() {
-        let sessions_dir = TempDir::new().expect("temporary sessions directory should be created");
+    #[rstest]
+    fn matching_pre_tool_use_returns_allow_once(sessions_dir: TempDir) {
         save_approval(sessions_dir.path(), Utc::now().timestamp() + 60);
         let mut first_output = Vec::new();
         let first_approved = write_allow_if_approved(
@@ -119,25 +123,29 @@ mod tests {
     }
 
     #[rstest]
-    #[case::other_session("fixture-session-maple", "Bash", json!({ "command": "printf fixture" }), Utc::now().timestamp() + 60)]
-    #[case::other_tool("fixture-session-cedar", "Read", json!({ "command": "printf fixture" }), Utc::now().timestamp() + 60)]
-    #[case::different_input("fixture-session-cedar", "Bash", json!({ "command": "printf changed" }), Utc::now().timestamp() + 60)]
-    #[case::expired("fixture-session-cedar", "Bash", json!({ "command": "printf fixture" }), 0)]
+    #[case::other_session(HookEvent::PreToolUse, Engine::Claude, "fixture-session-maple", "Bash", json!({ "command": "printf fixture" }), Utc::now().timestamp() + 60)]
+    #[case::other_tool(HookEvent::PreToolUse, Engine::Claude, "fixture-session-cedar", "Read", json!({ "command": "printf fixture" }), Utc::now().timestamp() + 60)]
+    #[case::different_input(HookEvent::PreToolUse, Engine::Claude, "fixture-session-cedar", "Bash", json!({ "command": "printf changed" }), Utc::now().timestamp() + 60)]
+    #[case::expired(HookEvent::PreToolUse, Engine::Claude, "fixture-session-cedar", "Bash", json!({ "command": "printf fixture" }), 0)]
+    #[case::other_event(HookEvent::PostToolUse, Engine::Claude, "fixture-session-cedar", "Bash", json!({ "command": "printf fixture" }), Utc::now().timestamp() + 60)]
+    #[case::codex(HookEvent::PreToolUse, Engine::Codex, "fixture-session-cedar", "Bash", json!({ "command": "printf fixture" }), Utc::now().timestamp() + 60)]
     fn nonmatching_hook_does_not_return_allow(
+        sessions_dir: TempDir,
+        #[case] event: HookEvent,
+        #[case] engine: Engine,
         #[case] session_id: &str,
         #[case] tool_name: &str,
         #[case] tool_input: Value,
         #[case] expires_at: i64,
     ) {
-        let sessions_dir = TempDir::new().expect("temporary sessions directory should be created");
         save_approval(sessions_dir.path(), expires_at);
         let mut output = Vec::new();
 
         assert_eq!(
             (
                 write_allow_if_approved(
-                    HookEvent::PreToolUse,
-                    Engine::Claude,
+                    event,
+                    engine,
                     sessions_dir.path(),
                     session_id,
                     Some(tool_name),
