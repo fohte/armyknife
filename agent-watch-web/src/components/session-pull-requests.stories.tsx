@@ -1,4 +1,4 @@
-import type { Meta, StoryObj } from '@storybook/react-vite'
+import type { Decorator, Meta, StoryObj } from '@storybook/react-vite'
 
 import { SessionPullRequests } from '#components/session-pull-requests'
 import type { PullRequest } from '#types'
@@ -14,6 +14,31 @@ const currentBranchPullRequest: PullRequest = {
   ciState: 'InProgress',
   isCurrentBranch: true,
 }
+
+const mergeablePullRequest: PullRequest = {
+  number: 44,
+  state: 'Open',
+  owner: 'example-org',
+  repo: 'example-repo',
+  title: 'Prepare the release summary',
+  url: 'https://github.com/example-org/example-repo/pull/44',
+  headSha: 'fixture-mergeable-sha',
+  ciState: 'Successful',
+  isCurrentBranch: true,
+}
+
+const desktopMergeButtonDecorator: Decorator = (Story) => (
+  <div
+    style={{
+      minHeight: 200,
+      padding: 16,
+      background: 'var(--aw-bg-app)',
+      color: 'var(--aw-text-primary)',
+    }}
+  >
+    <Story />
+  </div>
+)
 
 const otherPullRequests: PullRequest[] = [
   {
@@ -48,8 +73,8 @@ const meta = {
     isMobile: false,
     open: false,
     onMerge: () => undefined,
-    isMerging: () => false,
-    isMergeSuccessful: () => false,
+    isMerging: (): boolean => false,
+    isMergeSuccessful: (): boolean => false,
     onOpenChange: () => undefined,
   },
   decorators: [
@@ -147,6 +172,50 @@ export const DesktopPullRequestListIsOpen: Story = {
       </div>
     ),
   ],
+}
+
+export const DesktopMergeButtonIsOutlined: Story = {
+  name: 'The desktop list shows an outlined Merge button for a ready pull request.',
+  args: {
+    pullRequests: [mergeablePullRequest],
+    open: true,
+  },
+  decorators: [desktopMergeButtonDecorator],
+}
+
+export const MobileMergeButtonIsOutlined: Story = {
+  name: 'The mobile sheet shows a full-height outlined Merge button for a ready pull request.',
+  args: {
+    pullRequests: [mergeablePullRequest],
+    isMobile: true,
+    open: true,
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="conversation-pane"
+        data-mobile="true"
+        style={{
+          position: 'relative',
+          height: 500,
+          background: 'var(--aw-bg-app)',
+          color: 'var(--aw-text-primary)',
+        }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
+export const MergeButtonIsDisabledWhileMerging: Story = {
+  name: 'The desktop list keeps the outlined button while a merge is in progress.',
+  args: {
+    pullRequests: [mergeablePullRequest],
+    open: true,
+    isMerging: () => true,
+  },
+  decorators: [desktopMergeButtonDecorator],
 }
 
 export const MobilePullRequestSheetIsOpen: Story = {

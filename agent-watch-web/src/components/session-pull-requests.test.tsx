@@ -45,9 +45,11 @@ let root: Root | null = null
 function PullRequestHarness({
   isMobile,
   pullRequests: sessionPullRequests = pullRequests,
+  merging = false,
 }: {
   isMobile: boolean
   pullRequests?: PullRequest[]
+  merging?: boolean
 }) {
   const [open, setOpen] = useState(false)
   return (
@@ -57,7 +59,7 @@ function PullRequestHarness({
       isMobile={isMobile}
       open={open}
       onMerge={() => undefined}
-      isMerging={() => false}
+      isMerging={() => merging}
       isMergeSuccessful={() => false}
       onOpenChange={setOpen}
     />
@@ -67,20 +69,55 @@ function PullRequestHarness({
 function render(
   isMobile: boolean,
   sessionPullRequests: PullRequest[] = pullRequests,
+  merging = false,
 ) {
   act(() => {
     root?.render(
       <PullRequestHarness
         isMobile={isMobile}
         pullRequests={sessionPullRequests}
+        merging={merging}
       />,
     )
   })
 }
 
+function mergeButtonStyle(button: HTMLButtonElement, isMobile: boolean) {
+  const style = getComputedStyle(button)
+  return {
+    height: style.height,
+    minHeight: style.minHeight,
+    ...(isMobile ? { minWidth: style.minWidth } : {}),
+    paddingLeft: style.paddingLeft,
+    fontSize: style.fontSize,
+    borderTopColor: style.borderTopColor,
+    borderTopWidth: style.borderTopWidth,
+    backgroundColor: style.backgroundColor,
+    color: style.color,
+  }
+}
+
+function mergingButtonState(button: HTMLButtonElement) {
+  const style = getComputedStyle(button)
+  return {
+    label: button.textContent,
+    disabled: button.disabled,
+    borderTopColor: style.borderTopColor,
+    borderTopWidth: style.borderTopWidth,
+    backgroundColor: style.backgroundColor,
+    color: style.color,
+    opacity: style.opacity,
+  }
+}
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
+  container.style.setProperty('--aw-border-control', '#3f3f46')
+  container.style.setProperty('--aw-bg-pressed', '#262626')
+  container.style.setProperty('--aw-text-primary', '#fafafa')
+  container.style.setProperty('--aw-text-disabled', '#71717a')
+  container.style.setProperty('--aw-radius', '0')
   document.body.append(container)
   root = createRoot(container)
 })
@@ -209,6 +246,81 @@ it.each([
       ],
     },
     closed: { expanded: 'false', dialogVisible: false },
+  })
+})
+
+it.each([
+  {
+    viewport: 'desktop',
+    isMobile: false,
+    expected: {
+      height: '26px',
+      minHeight: '26px',
+      paddingLeft: '10px',
+      fontSize: '12px',
+      borderTopColor: 'rgb(63, 63, 70)',
+      borderTopWidth: '1px',
+      backgroundColor: 'rgba(0, 0, 0, 0)',
+      color: 'rgb(250, 250, 250)',
+    },
+  },
+  {
+    viewport: 'mobile',
+    isMobile: true,
+    expected: {
+      height: '44px',
+      minHeight: '44px',
+      minWidth: '72px',
+      paddingLeft: '14px',
+      fontSize: '13px',
+      borderTopColor: 'rgb(63, 63, 70)',
+      borderTopWidth: '1px',
+      backgroundColor: 'rgba(0, 0, 0, 0)',
+      color: 'rgb(250, 250, 250)',
+    },
+  },
+])(
+  'uses the designed dimensions for the $viewport Merge button',
+  ({ isMobile, expected }) => {
+    render(isMobile)
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '.session-pr-trigger',
+    )
+    if (trigger === null) throw new Error('Expected pull request trigger')
+    act(() => {
+      trigger.click()
+    })
+
+    const button = container.querySelector<HTMLButtonElement>(
+      '.session-pr-row .conversation-pr-merge-button',
+    )
+    if (button === null) throw new Error('Expected a mergeable pull request')
+    expect(mergeButtonStyle(button, isMobile)).toEqual(expected)
+  },
+)
+
+it('keeps the Merge button outlined and readable while merging', () => {
+  render(false, pullRequests, true)
+  const trigger = container.querySelector<HTMLButtonElement>(
+    '.session-pr-trigger',
+  )
+  if (trigger === null) throw new Error('Expected pull request trigger')
+  act(() => {
+    trigger.click()
+  })
+
+  const button = container.querySelector<HTMLButtonElement>(
+    '.session-pr-row .conversation-pr-merge-button',
+  )
+  if (button === null) throw new Error('Expected a mergeable pull request')
+  expect(mergingButtonState(button)).toEqual({
+    label: 'Merging…',
+    disabled: true,
+    borderTopColor: 'rgb(63, 63, 70)',
+    borderTopWidth: '1px',
+    backgroundColor: 'rgba(0, 0, 0, 0)',
+    color: 'rgb(113, 113, 122)',
+    opacity: '1',
   })
 })
 
