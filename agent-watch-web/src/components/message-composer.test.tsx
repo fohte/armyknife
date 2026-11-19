@@ -451,11 +451,13 @@ it('inserts the selected skill while preserving surrounding text', () => {
     container.querySelector<HTMLTextAreaElement>('textarea'),
   )
   setTextareaValue(textarea, 'Explain /des today', 'Explain /des'.length)
+  const option = requireElement(
+    container.querySelector<HTMLButtonElement>('[role="option"]'),
+  )
 
   act(() => {
-    requireElement(
-      container.querySelector<HTMLButtonElement>('[role="option"]'),
-    ).click()
+    option.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    option.click()
   })
 
   const snapshot = () => ({
@@ -573,17 +575,17 @@ it.each([
 })
 
 it('dismisses an open skill list with Escape', () => {
+  const onKeyDown = vi.fn<(event: KeyboardEvent<HTMLTextAreaElement>) => void>()
   renderFreshComposer({
     engine: 'claude',
     skills: skillSuggestions,
+    canInterrupt: true,
+    onKeyDown,
   })
-  setTextareaValue(
-    requireElement(container.querySelector<HTMLTextAreaElement>('textarea')),
-    'Run /de',
-  )
   const textarea = requireElement(
     container.querySelector<HTMLTextAreaElement>('textarea'),
   )
+  setTextareaValue(textarea, 'Run /de')
   act(() => {
     textarea.dispatchEvent(
       new KeyboardEvent('keydown', {
@@ -596,8 +598,9 @@ it('dismisses an open skill list with Escape', () => {
 
   const snapshot = () => ({
     visibleOptions: container.querySelectorAll('[role="option"]').length,
+    forwardedKeys: onKeyDown.mock.calls.map(([event]) => event.key),
   })
-  expect(snapshot()).toEqual({ visibleOptions: 0 })
+  expect(snapshot()).toEqual({ visibleOptions: 0, forwardedKeys: [] })
 })
 
 it('does not restore an old cursor after selecting an unchanged skill', () => {
@@ -610,10 +613,12 @@ it('does not restore an old cursor after selecting an unchanged skill', () => {
   )
   setTextareaValue(textarea, '/design-flow today', '/design-flow'.length)
 
+  const option = requireElement(
+    container.querySelector<HTMLButtonElement>('[role="option"]'),
+  )
   act(() => {
-    requireElement(
-      container.querySelector<HTMLButtonElement>('[role="option"]'),
-    ).click()
+    option.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    option.click()
   })
   setTextareaValue(textarea, '/design-flow! today', '/design-flow!'.length)
 

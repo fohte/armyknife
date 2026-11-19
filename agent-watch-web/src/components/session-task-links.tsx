@@ -3,6 +3,7 @@ import '#components/session-task-links.css'
 import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
+import { useDismissableLayer } from '#components/use-dismissable-layer'
 import { getSessionTasks } from '#session-task-utils'
 import type { Session, SessionTask } from '#types'
 
@@ -65,6 +66,7 @@ export function SessionTaskLinks({
 }) {
   const taskMenuId = useId()
   const summaryRef = useRef<HTMLElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false)
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null)
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null)
@@ -75,6 +77,14 @@ export function SessionTaskLinks({
       (linkedTask) => linkedTask.id !== task.id && linkedTask.isClosed !== true,
     ) &&
     (taskListOpen ?? uncontrolledOpen)
+
+  useDismissableLayer(
+    menuOpen,
+    (open) => {
+      if (taskListOpen === undefined) setUncontrolledOpen(open)
+    },
+    [summaryRef, menuRef],
+  )
 
   useLayoutEffect(() => {
     if (!menuOpen) return
@@ -196,6 +206,7 @@ export function SessionTaskLinks({
       {showTaskMenu && selectableTasks.length > 1
         ? createPortal(
             <div
+              ref={menuRef}
               id={taskMenuId}
               className="session-task-links-menu"
               role="region"

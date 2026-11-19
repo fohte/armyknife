@@ -149,6 +149,143 @@ it('opens directory suggestions and selects the clicked directory', async () => 
   expect(chooseDirectory.mock.calls).toEqual([[exampleSessionDirectories[0]]])
 })
 
+it('closes directory suggestions when clicking the open trigger', async () => {
+  renderForm(makeState())
+  const directoryButton = requireButton('.new-session-directory-button')
+
+  await act(async () => {
+    await userEvent.click(directoryButton)
+  })
+  const opened = {
+    expanded: directoryButton.getAttribute('aria-expanded'),
+    dialogCount: container.querySelectorAll('[aria-label="Choose a directory"]')
+      .length,
+  }
+
+  await act(async () => {
+    await userEvent.click(directoryButton)
+  })
+  const closed = {
+    expanded: directoryButton.getAttribute('aria-expanded'),
+    dialogCount: container.querySelectorAll('[aria-label="Choose a directory"]')
+      .length,
+  }
+
+  const snapshot = () => ({ opened, closed })
+  expect(snapshot()).toEqual({
+    opened: { expanded: 'true', dialogCount: 1 },
+    closed: { expanded: 'false', dialogCount: 0 },
+  })
+})
+
+it('closes directory suggestions when clicking the header outside its control', () => {
+  renderForm(makeState())
+  const directoryButton = requireButton('.new-session-directory-button')
+  const heading = container.querySelector('h1')
+  if (heading === null) throw new Error('Expected new session heading')
+
+  act(() => {
+    directoryButton.click()
+  })
+  const opened = {
+    expanded: directoryButton.getAttribute('aria-expanded'),
+    dialogCount: container.querySelectorAll('[aria-label="Choose a directory"]')
+      .length,
+  }
+
+  act(() => {
+    heading.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+  })
+  const closed = {
+    expanded: directoryButton.getAttribute('aria-expanded'),
+    dialogCount: container.querySelectorAll('[aria-label="Choose a directory"]')
+      .length,
+  }
+
+  const snapshot = () => ({ opened, closed })
+  expect(snapshot()).toEqual({
+    opened: { expanded: 'true', dialogCount: 1 },
+    closed: { expanded: 'false', dialogCount: 0 },
+  })
+})
+
+it('closes new session popovers after a click outside each control', () => {
+  renderForm(makeState())
+  const outside = container.querySelector<HTMLTextAreaElement>(
+    '[aria-label="First message"]',
+  )
+  if (outside === null) throw new Error('Expected first message field')
+
+  act(() => {
+    requireButton('.new-session-directory-button').click()
+  })
+  act(() => {
+    outside.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+  })
+  const directoryClosed = requireButton(
+    '.new-session-directory-button',
+  ).getAttribute('aria-expanded')
+
+  act(() => {
+    requireButton('.new-session-engine-control button').click()
+  })
+  act(() => {
+    outside.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+  })
+  const engineClosed = container
+    .querySelector('[aria-haspopup="menu"]')
+    ?.getAttribute('aria-expanded')
+
+  act(() => {
+    requireButton('.new-session-model-trigger').click()
+  })
+  act(() => {
+    outside.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+  })
+
+  const snapshot = () => ({
+    directoryClosed,
+    engineClosed,
+    modelClosed: requireButton('.new-session-model-trigger').getAttribute(
+      'aria-expanded',
+    ),
+  })
+  expect(snapshot()).toEqual({
+    directoryClosed: 'false',
+    engineClosed: 'false',
+    modelClosed: 'false',
+  })
+})
+
+it('closes skill suggestions after a click outside the composer', async () => {
+  root = createRoot(container)
+  act(() => root?.render(<StatefulSkillForm />))
+  const heading = container.querySelector('h1')
+  if (heading === null) throw new Error('Expected new session heading')
+  const opened = {
+    optionCount: container.querySelectorAll('[role="option"]').length,
+    expanded: container
+      .querySelector('[aria-label="First message"]')
+      ?.getAttribute('aria-expanded'),
+  }
+
+  await act(async () => {
+    await userEvent.click(heading)
+  })
+
+  const closed = () => ({
+    optionCount: container.querySelectorAll('[role="option"]').length,
+    expanded: container
+      .querySelector('[aria-label="First message"]')
+      ?.getAttribute('aria-expanded'),
+  })
+  const snapshot = () => ({ opened, closed: closed() })
+  expect(snapshot()).toEqual({
+    opened: { optionCount: 2, expanded: 'true' },
+    closed: { optionCount: 0, expanded: 'false' },
+  })
+})
+
 it('selects a model and supported effort from the model chip', async () => {
   const chooseModel = vi.fn()
   const setSelectedEffort = vi.fn()

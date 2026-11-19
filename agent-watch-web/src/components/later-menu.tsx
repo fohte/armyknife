@@ -1,7 +1,9 @@
 import '#components/later-today.css'
 
 import { Button } from '@fohte/ui/button'
+import { useRef } from 'react'
 
+import { useDismissableLayer } from '#components/use-dismissable-layer'
 import {
   LATER_PRESET_OPTIONS,
   type LaterPreset,
@@ -29,22 +31,22 @@ export function LaterMenu({
   onBackNow,
   onClose,
 }: LaterMenuProps) {
+  const menuRef = useRef<HTMLElement>(null)
+  useDismissableLayer(
+    true,
+    (open) => {
+      if (!open && !isSubmitting) onClose()
+    },
+    [menuRef],
+  )
+
   return (
-    <div
-      className="later-menu-overlay"
-      onClick={() => {
-        if (!isSubmitting) {
-          onClose()
-        }
-      }}
-    >
+    <div className="later-menu-overlay">
       <section
         aria-label={`Later: ${sessionTitle}`}
         className="later-menu"
         role="menu"
-        onClick={(event) => {
-          event.stopPropagation()
-        }}
+        ref={menuRef}
       >
         <p className="later-menu-title">
           Later:{' '}

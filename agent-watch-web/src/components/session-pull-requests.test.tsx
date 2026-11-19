@@ -46,10 +46,12 @@ function PullRequestHarness({
   isMobile,
   pullRequests: sessionPullRequests = pullRequests,
   merging = false,
+  onMerge = () => undefined,
 }: {
   isMobile: boolean
   pullRequests?: PullRequest[]
   merging?: boolean
+  onMerge?: (pullRequest: PullRequest) => void
 }) {
   const [open, setOpen] = useState(false)
   return (
@@ -58,7 +60,7 @@ function PullRequestHarness({
       repo="example-org/example-repo"
       isMobile={isMobile}
       open={open}
-      onMerge={() => undefined}
+      onMerge={onMerge}
       isMerging={() => merging}
       isMergeSuccessful={() => false}
       onOpenChange={setOpen}
@@ -70,6 +72,7 @@ function render(
   isMobile: boolean,
   sessionPullRequests: PullRequest[] = pullRequests,
   merging = false,
+  onMerge: (pullRequest: PullRequest) => void = () => undefined,
 ) {
   act(() => {
     root?.render(
@@ -77,6 +80,7 @@ function render(
         isMobile={isMobile}
         pullRequests={sessionPullRequests}
         merging={merging}
+        onMerge={onMerge}
       />,
     )
   })
@@ -246,6 +250,71 @@ it.each([
       ],
     },
     closed: { expanded: 'false', dialogVisible: false },
+  })
+})
+
+it.each([
+  { description: 'desktop outside pointer press', isMobile: false, key: false },
+  { description: 'desktop Escape', isMobile: false, key: true },
+  { description: 'mobile backdrop press', isMobile: true, key: false },
+  { description: 'mobile Escape', isMobile: true, key: true },
+])('closes the pull request list on $description', ({ isMobile, key }) => {
+  render(isMobile)
+  const trigger = container.querySelector<HTMLButtonElement>(
+    '.session-pr-trigger',
+  )
+  if (trigger === null) throw new Error('Expected pull request trigger')
+  act(() => {
+    trigger.click()
+  })
+
+  act(() => {
+    if (key) {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    } else if (isMobile) {
+      const backdrop = container.querySelector('.session-pr-backdrop')
+      if (backdrop === null) throw new Error('Expected mobile PR backdrop')
+      backdrop.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    } else {
+      document.body.dispatchEvent(
+        new PointerEvent('pointerdown', { bubbles: true }),
+      )
+    }
+  })
+
+  const snapshot = () => ({
+    expanded: trigger.getAttribute('aria-expanded'),
+    popoverVisible: container.querySelector('.session-pr-popover') !== null,
+  })
+  expect(snapshot()).toEqual({ expanded: 'false', popoverVisible: false })
+})
+
+it('keeps the pull request list open when merging a row', () => {
+  const onMerge = vi.fn()
+  render(false, pullRequests, false, onMerge)
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.session-pr-trigger')?.click()
+  })
+  const mergeButton = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Merge PR #43"]',
+  )
+  if (mergeButton === null) throw new Error('Expected merge action')
+  act(() => {
+    mergeButton.dispatchEvent(
+      new PointerEvent('pointerdown', { bubbles: true }),
+    )
+    mergeButton.click()
+  })
+
+  const snapshot = () => ({
+    calls: onMerge.mock.calls,
+    expanded: container
+      .querySelector('.session-pr-trigger')
+      ?.getAttribute('aria-expanded'),
+  })
+  expect(snapshot()).toEqual({
+    calls: [[pullRequests[1]]],
+    expanded: 'true',
   })
 })
 
