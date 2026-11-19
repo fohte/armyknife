@@ -14,6 +14,7 @@ const meta = {
     onToggleStarred: () => undefined,
     onEditTitle: () => undefined,
     onOpenVibe: () => undefined,
+    onClose: () => undefined,
   },
 } satisfies Meta<typeof MobileConversationActionsMenu>
 

@@ -46,6 +46,7 @@ const meta = {
     onSelectSession: () => undefined,
     onToggleStatusPanel: () => undefined,
     onToggleToday: () => undefined,
+    onClose: () => undefined,
   },
   decorators: [
     (Story, context) => (

@@ -12,6 +12,7 @@ import { MobileNavDrawer } from '#components/mobile-nav-drawer'
 import { NewSessionForm } from '#components/new-session-form'
 import { NewSessionPicker } from '#components/new-session-picker'
 import { ResizableColumns } from '#components/resizable-columns'
+import { SessionCloseConfirmation } from '#components/session-close-confirmation'
 import type { useSessionHistory } from '#session-history'
 import type { LaterPreset, LaterPresetTimes } from '#session-navigation'
 import type { SessionOperation } from '#session-operations'
@@ -56,6 +57,7 @@ type AppWorkspaceState = {
   recentSessionIds: readonly string[]
   workTypeNavLabels: Readonly<Record<string, string>>
   pendingFocusSessionId: string | null
+  closeConfirmationSession: Session | undefined
 }
 
 type AppWorkspaceActions = {
@@ -85,6 +87,9 @@ type AppWorkspaceActions = {
   openSessionInInbox: (id: string) => void
   closeDoneSessions: (sessions: readonly Session[]) => void
   closeDoneSession: (id: string, keepWorktree?: boolean) => void
+  requestCloseSession: (id: string) => void
+  cancelCloseConfirmation: () => void
+  confirmCloseSession: (id: string) => void
   onLater: (id: string) => void
   closeLater: () => void
   laterSubmissionInFlight: { current: boolean }
@@ -119,6 +124,7 @@ export function AppWorkspace({
   paletteShortcut,
 }: AppWorkspaceProps) {
   const laterSession = state.laterSession
+  const closeConfirmationSession = state.closeConfirmationSession
   const inboxProps = {
     error: state.error ?? savedViews.storageError,
     connectionError: state.error,
@@ -233,7 +239,7 @@ export function AppWorkspace({
           }
           showMobileNewSession={state.newSessionMode === 'form'}
           onLater={actions.onLater}
-          onCloseSession={actions.closeDoneSession}
+          onCloseSession={actions.requestCloseSession}
           onOptimisticSessionOperation={actions.dispatchSessionOperation}
           onSelectSession={(id) => {
             if (!actions.orderedSessions.some((session) => session.id === id)) {
@@ -330,6 +336,10 @@ export function AppWorkspace({
             actions.setCommandPaletteOpen(false)
             actions.onLater(id)
           }}
+          onCloseSession={(id) => {
+            actions.setCommandPaletteOpen(false)
+            actions.requestCloseSession(id)
+          }}
           onOpenInTerminal={(id) => {
             void actions.focusSession(id)
           }}
@@ -375,6 +385,16 @@ export function AppWorkspace({
           state={newSession}
         />
       ) : null}
+      {closeConfirmationSession === undefined ? null : (
+        <SessionCloseConfirmation
+          session={closeConfirmationSession}
+          mobile={state.isMobile}
+          onCancel={actions.cancelCloseConfirmation}
+          onConfirm={() => {
+            actions.confirmCloseSession(closeConfirmationSession.id)
+          }}
+        />
+      )}
     </div>
   )
 }

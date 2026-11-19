@@ -386,7 +386,7 @@ it('opens the mobile status panel without opening the actions menu', () => {
   })
 })
 
-it('hides Close for an active mobile session even when a callback is provided', () => {
+it('shows Close session as the final mobile action for an active session', () => {
   renderHeader(
     true,
     vi.fn(() => Promise.resolve(true)),
@@ -403,6 +403,7 @@ it('hides Close for an active mobile session even when a callback is provided', 
     'Add to Starred',
     'Copy session ID',
     'Edit title',
+    'Close session…',
   ])
 })
 

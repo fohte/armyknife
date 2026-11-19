@@ -11,7 +11,10 @@ import { AppWorkspace } from '#app-workspace'
 import { useCommandPaletteController } from '#command-palette-controller'
 import { getCommandPaletteShortcut } from '#command-palette-shortcut'
 import { AgentUsageProvider } from '#components/agent-usage-context'
-import { SessionConversationCacheProvider } from '#components/session-conversation-cache'
+import {
+  SessionConversationCacheProvider,
+  useSessionConversationCache,
+} from '#components/session-conversation-cache'
 import { useMobileLayout, useSessionMobileNavigation } from '#mobile-layout'
 import { findLaunchedSession } from '#new-session-navigation'
 import { startSessionFeed } from '#session-feed'
@@ -130,6 +133,10 @@ function AppContent() {
   const [closeRetrySessionId, setCloseRetrySessionId] = useState<string | null>(
     null,
   )
+  const [closeConfirmationSessionId, setCloseConfirmationSessionId] = useState<
+    string | null
+  >(null)
+  const sessionConversationCache = useSessionConversationCache()
   const [loaded, setLoaded] = useState(false)
   const newSession = useNewSession(newSessionMode !== null)
   const inboxCollapsed = manualInboxCollapsed ?? statusPanelOpen
@@ -243,6 +250,20 @@ function AppContent() {
     },
     [closeDoneSessions, sessionsWithElapsedTime],
   )
+  const requestCloseSession = useCallback(
+    (sessionId: string) => {
+      const session = sessionsWithElapsedTime.find(
+        (candidate) => candidate.id === sessionId,
+      )
+      if (session === undefined) return
+      if (session.category === 'done') {
+        closeDoneSession(sessionId)
+      } else {
+        setCloseConfirmationSessionId(sessionId)
+      }
+    },
+    [closeDoneSession, sessionsWithElapsedTime],
+  )
 
   useEffect(
     () =>
@@ -311,7 +332,7 @@ function AppContent() {
     laterSessionId,
     laterSubmissionInFlight,
     closeLater,
-    closeSession: closeDoneSession,
+    closeSession: requestCloseSession,
     submitLater,
     navigableSessions,
     openLater,
@@ -404,6 +425,32 @@ function AppContent() {
     sessionsWithElapsedTime,
     setCommandPaletteOpen,
   ])
+  const closeConfirmationSession = sessionsWithElapsedTime.find(
+    (session) => session.id === closeConfirmationSessionId,
+  )
+  const cancelCloseConfirmation = useCallback(() => {
+    setCloseConfirmationSessionId(null)
+  }, [])
+  const confirmCloseSession = useCallback(
+    (sessionId: string) => {
+      setCloseConfirmationSessionId(null)
+      sessionConversationCache?.clearCachedConversation(sessionId)
+      void runSessionOperation({
+        type: 'close',
+        sessionId,
+        keepWorktree: false,
+      }).then((result) => {
+        result.match(
+          () => undefined,
+          (operationError) => {
+            setError(operationError.message)
+          },
+        )
+      })
+    },
+    [runSessionOperation, sessionConversationCache],
+  )
+
   return (
     <AppWorkspace
       state={{
@@ -443,6 +490,7 @@ function AppContent() {
         recentSessionIds,
         workTypeNavLabels,
         pendingFocusSessionId,
+        closeConfirmationSession,
       }}
       actions={{
         setInboxFilterQuery,
@@ -473,6 +521,9 @@ function AppContent() {
           void closeDoneSessions(doneSessions)
         },
         closeDoneSession,
+        requestCloseSession,
+        cancelCloseConfirmation,
+        confirmCloseSession,
         onLater: openLater,
         closeLater,
         laterSubmissionInFlight,

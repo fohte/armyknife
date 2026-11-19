@@ -32,6 +32,7 @@ type CommandPaletteProps = {
   initialActionItemId?: string
   pendingFocusSessionId?: string | null
   onClose: () => void
+  onCloseSession: (id: string) => void
   onOpenSession: (id: string) => void
   onOpenSessionBeside: (id: string) => void
   onLater: (id: string) => void
@@ -57,6 +58,7 @@ export function CommandPalette({
   initialActionItemId,
   pendingFocusSessionId = null,
   onClose,
+  onCloseSession,
   onOpenSession,
   onOpenSessionBeside,
   onLater,
@@ -103,6 +105,7 @@ export function CommandPalette({
           ...(actionsFor.session.canOpenInTerminal === true
             ? [{ id: 'terminal', label: 'Open in terminal' }]
             : []),
+          { id: 'close', label: 'Close this session' },
         ]
       : actionsFor?.type === 'command'
         ? [{ id: 'command', label: 'Run command' }]
@@ -186,6 +189,12 @@ export function CommandPalette({
         if (actionsFor.type === 'session') {
           onOpenInTerminal(actionsFor.session.id)
         }
+        return
+      case 'close':
+        if (actionsFor.type === 'session') {
+          onCloseSession(actionsFor.session.id)
+        }
+        setActionsFor(null)
         return
       case 'destination':
         activate(actionsFor)

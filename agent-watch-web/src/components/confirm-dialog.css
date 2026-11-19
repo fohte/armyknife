@@ -1,0 +1,107 @@
+.confirm-dialog-backdrop {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 55%);
+}
+
+.confirm-dialog {
+  display: flex;
+  width: min(100%, 360px);
+  max-height: min(90dvh, 48rem);
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  padding: 16px;
+  border: 1px solid var(--aw-border-control, var(--aw-border-row));
+  border-radius: var(--aw-radius, 8px);
+  background: var(--aw-bg-popover, var(--aw-bg-nav));
+  color: var(--aw-text-primary);
+  box-shadow: 0 12px 36px rgb(0 0 0 / 24%);
+  font-size: 12px;
+}
+
+.confirm-dialog h2,
+.confirm-dialog p {
+  margin: 0;
+}
+
+.confirm-dialog h2 {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.confirm-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.confirm-dialog-actions button {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--aw-border-control, var(--aw-border-row));
+  border-radius: var(--aw-radius, 4px);
+  background: var(--aw-bg-surface, var(--aw-bg-nav));
+  color: var(--aw-text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.confirm-dialog-actions button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.confirm-dialog-actions .confirm-dialog-confirm--danger {
+  border-color: var(--aw-color-error, #f87171);
+  background: var(--aw-color-error, #f87171);
+  color: var(--aw-bg-app, #fff);
+}
+
+.confirm-dialog--inline {
+  width: 100%;
+  max-height: none;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.confirm-dialog--inline > p {
+  line-height: 1.5;
+}
+
+.confirm-dialog--mobile {
+  width: min(520px, 100%);
+}
+
+.confirm-dialog-backdrop--mobile {
+  align-items: end;
+  padding: 0 16px;
+}
+
+.confirm-dialog-backdrop--mobile .confirm-dialog {
+  width: min(520px, 100%);
+  gap: 12px;
+  padding: 18px 16px max(20px, env(safe-area-inset-bottom));
+  border-radius: 12px 12px 0 0;
+  font-size: 14px;
+}
+
+.confirm-dialog-backdrop--mobile .confirm-dialog h2 {
+  font-size: 15px;
+}
+
+.confirm-dialog-backdrop--mobile .confirm-dialog-actions button {
+  min-height: 44px;
+  font-size: 13px;
+}
+
+.confirm-dialog--inline.confirm-dialog--mobile {
+  border-radius: 12px 12px 0 0;
+}

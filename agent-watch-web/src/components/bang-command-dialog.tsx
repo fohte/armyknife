@@ -1,6 +1,6 @@
 import '#components/bang-command.css'
 
-import { createPortal } from 'react-dom'
+import { ConfirmDialog } from '#components/confirm-dialog'
 
 type BangCommandDialogProps = {
   open: boolean
@@ -21,42 +21,28 @@ export function BangCommandDialog({
 }: BangCommandDialogProps) {
   if (!open) return null
 
-  const dialog = (
-    <div
-      aria-labelledby="bang-command-dialog-title"
-      className="bang-command-dialog-backdrop"
+  return (
+    <ConfirmDialog
+      title="Run agent command?"
+      description="Review the command and working directory before it runs."
+      confirmLabel="Run command"
+      pendingLabel="Running command…"
+      pending={running}
+      className="bang-command-dialog"
+      dialogRole="dialog"
+      onCancel={onCancel}
+      onConfirm={onConfirm}
     >
-      <section aria-modal="true" className="bang-command-dialog" role="dialog">
-        <h2 id="bang-command-dialog-title">Run agent command?</h2>
-        <p>Review the command and working directory before it runs.</p>
-        <dl>
-          <dt>Working directory</dt>
-          <dd>
-            <code>{cwd}</code>
-          </dd>
-          <dt>Command</dt>
-          <dd>
-            <pre>{commands.join('\n')}</pre>
-          </dd>
-        </dl>
-        {running ? (
-          <p aria-live="polite" role="status">
-            Running command…
-          </p>
-        ) : (
-          <div className="bang-command-dialog-actions">
-            <button onClick={onCancel} type="button">
-              Cancel
-            </button>
-            <button onClick={onConfirm} type="button">
-              Run command
-            </button>
-          </div>
-        )}
-      </section>
-    </div>
+      <dl className="bang-command-dialog-details">
+        <dt>Working directory</dt>
+        <dd>
+          <code>{cwd}</code>
+        </dd>
+        <dt>Command</dt>
+        <dd>
+          <pre>{commands.join('\n')}</pre>
+        </dd>
+      </dl>
+    </ConfirmDialog>
   )
-  return typeof document === 'undefined'
-    ? dialog
-    : createPortal(dialog, document.body)
 }

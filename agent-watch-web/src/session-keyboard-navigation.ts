@@ -130,9 +130,7 @@ export function useSessionKeyboardNavigation({
         action?.type === 'close' &&
         selectedId !== null &&
         view === 'inbox' &&
-        navigableSessions.some(
-          (session) => session.id === selectedId && session.category === 'done',
-        )
+        navigableSessions.some((session) => session.id === selectedId)
       ) {
         event.preventDefault()
         closeSession(selectedId)
