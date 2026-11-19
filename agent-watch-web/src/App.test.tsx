@@ -3620,7 +3620,7 @@ it('ignores modified number shortcuts in the Later menu', async () => {
   })
 })
 
-it('ignores further Later shortcuts while a preset request is pending', async () => {
+it('keeps Later open when a preset request is pending and outside is pressed', async () => {
   const fetchMock = vi
     .fn<typeof fetch>()
     .mockImplementation((input) =>
@@ -3642,6 +3642,11 @@ it('ignores further Later shortcuts while a preset request is pending', async ()
   act(() => {
     dispatchKey(window, '1')
     dispatchKey(window, '2')
+  })
+  act(() => {
+    document.body.dispatchEvent(
+      new PointerEvent('pointerdown', { bubbles: true }),
+    )
   })
 
   const snapshot = () => ({

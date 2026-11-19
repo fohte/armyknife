@@ -132,6 +132,12 @@ export function useSkillCompletion({
           return
         }
       }
+      if (event.key === 'Escape' && completionKey !== null) {
+        event.preventDefault()
+        event.stopPropagation()
+        dismiss()
+        return
+      }
     }
     onKeyDown?.(event)
   }

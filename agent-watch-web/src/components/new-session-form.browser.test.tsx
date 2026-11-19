@@ -202,18 +202,28 @@ it('closes skill suggestions after a click outside the composer', async () => {
   act(() => root?.render(<StatefulSkillForm />))
   const heading = container.querySelector('h1')
   if (heading === null) throw new Error('Expected new session heading')
+  const opened = {
+    optionCount: container.querySelectorAll('[role="option"]').length,
+    expanded: container
+      .querySelector('[aria-label="First message"]')
+      ?.getAttribute('aria-expanded'),
+  }
 
   await act(async () => {
     await userEvent.click(heading)
   })
 
-  const snapshot = () => ({
+  const closed = () => ({
     optionCount: container.querySelectorAll('[role="option"]').length,
     expanded: container
       .querySelector('[aria-label="First message"]')
       ?.getAttribute('aria-expanded'),
   })
-  expect(snapshot()).toEqual({ optionCount: 0, expanded: 'false' })
+  const snapshot = () => ({ opened, closed: closed() })
+  expect(snapshot()).toEqual({
+    opened: { optionCount: 2, expanded: 'true' },
+    closed: { optionCount: 0, expanded: 'false' },
+  })
 })
 
 it('selects a model and supported effort from the model chip', async () => {
