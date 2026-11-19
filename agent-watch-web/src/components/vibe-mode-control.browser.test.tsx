@@ -203,7 +203,11 @@ it.each([
     await dismiss()
   })
 
-  expect(document.querySelector('.vibe-control-popover')).toBeNull()
+  expect(controlState()).toEqual({
+    requests: [],
+    status: 'Vibe off',
+    panel: false,
+  })
 })
 
 it('closes the mobile sheet on Escape', async () => {
