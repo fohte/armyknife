@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.801](https://github.com/fohte/armyknife/compare/v0.1.800...v0.1.801) (2026-11-19)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** outline PR row merge buttons ([#1989](https://github.com/fohte/armyknife/issues/1989)) ([96bda27](https://github.com/fohte/armyknife/commit/96bda27d9f1217b5adc0b388897b8d4c0ec5838e))
+
 ## [0.1.800](https://github.com/fohte/armyknife/compare/v0.1.799...v0.1.800) (2026-11-19)
 
 
