@@ -1,6 +1,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { userEvent } from 'vitest/browser'
 
 import { ConfirmDialog } from '#components/confirm-dialog'
 
@@ -60,5 +61,39 @@ it('keeps a pending dialog open and stops Escape from reaching global shortcuts'
     cancelCalls: 0,
     confirmCalls: 0,
     globalKeyDownCalls: 0,
+  })
+})
+
+it('activates the cancel action when Enter is pressed on the cancel button', async () => {
+  const onCancel = vi.fn()
+  const onConfirm = vi.fn()
+  act(() => {
+    root?.render(
+      <ConfirmDialog
+        title="Confirm action?"
+        confirmLabel="Confirm"
+        onCancel={onCancel}
+        onConfirm={onConfirm}
+      />,
+    )
+  })
+
+  const cancelButton = Array.from(document.querySelectorAll('button')).find(
+    (button) => button.textContent === 'Cancel',
+  )
+  if (cancelButton === undefined) throw new Error('Expected Cancel button')
+
+  await act(async () => {
+    cancelButton.focus()
+    await userEvent.keyboard('{Enter}')
+  })
+
+  const snapshot = () => ({
+    cancelCalls: onCancel.mock.calls.length,
+    confirmCalls: onConfirm.mock.calls.length,
+  })
+  expect(snapshot()).toEqual({
+    cancelCalls: 1,
+    confirmCalls: 0,
   })
 })

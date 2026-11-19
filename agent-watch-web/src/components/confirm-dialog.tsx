@@ -63,7 +63,12 @@ export function ConfirmDialog({
         if (event.key === 'Escape') {
           event.preventDefault()
           if (!pending) onCancel()
-        } else if (event.key === 'Enter' && !pending && !confirmDisabled) {
+        } else if (
+          event.key === 'Enter' &&
+          event.target === event.currentTarget &&
+          !pending &&
+          !confirmDisabled
+        ) {
           event.preventDefault()
           onConfirm()
         }
