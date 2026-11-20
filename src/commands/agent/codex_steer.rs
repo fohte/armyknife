@@ -32,7 +32,8 @@ mod subagent;
 
 use rpc::{
     ignore_interrupted_read, send_request, send_request_and_collect_notifications,
-    send_request_response, send_request_response_until,
+    send_request_and_collect_notifications_until, send_request_response,
+    send_request_response_until,
 };
 
 pub(crate) use archive::archive_thread;

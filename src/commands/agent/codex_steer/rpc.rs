@@ -55,6 +55,18 @@ pub(super) fn send_request_response_until(
     request: &RpcRequest,
     deadline: Instant,
 ) -> std::result::Result<Value, RequestError> {
+    send_request_and_collect_notifications_until(socket, request, deadline)
+        .map(|(response, _)| response)
+}
+
+pub(super) fn send_request_and_collect_notifications_until(
+    socket: &mut WebSocket<UnixStream>,
+    request: &RpcRequest,
+    deadline: Instant,
+) -> std::result::Result<(Value, Vec<Value>), RequestError> {
+    if Instant::now() >= deadline {
+        return Err(rpc_request_timeout(request.method));
+    }
     send_rpc_request(socket, request)?;
     // Per-read timeouts reset for notifications and partial frames.
     // The deadline loop must regain control between reads.
@@ -65,11 +77,12 @@ pub(super) fn send_request_response_until(
         .map_err(RequestError::Transport)?;
 
     let mut time_left = || deadline.saturating_duration_since(Instant::now());
+    let mut notifications = Vec::new();
     let result = wait_for_response_with_notifications_until(
         || socket.read(),
         request.id,
         request.method,
-        |_| {},
+        |notification| notifications.push(notification),
         &mut time_left,
         std::thread::sleep,
     );
@@ -80,7 +93,7 @@ pub(super) fn send_request_response_until(
         .map_err(RequestError::Transport);
 
     match (result, restore_mode) {
-        (Ok(response), Ok(())) => Ok(response),
+        (Ok(response), Ok(())) => Ok((response, notifications)),
         (Err(error), Ok(())) => Err(error),
         (Ok(_), Err(error)) => Err(error),
         (Err(error), Err(restore_error)) => Err(RequestError::Transport(anyhow!(

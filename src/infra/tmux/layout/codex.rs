@@ -186,7 +186,7 @@ impl Launch {
                     Err(codex_steer::DeliveryError::Unconfirmed(error)) => {
                         Ok(AgentLaunchRoute::CodexDaemonTurnUnconfirmed {
                             thread_id,
-                            reason: error.to_string(),
+                            reason: format!("{error:#}"),
                         })
                     }
                     Err(codex_steer::DeliveryError::NotDelivered(error)) => {
@@ -490,11 +490,13 @@ mod tests {
     #[case::turn_unconfirmed(
         StubClient {
             thread: Ok("thread-example".to_string()),
-            turn: Some(Err(codex_steer::DeliveryError::Unconfirmed(anyhow::anyhow!("response unavailable")))),
+            turn: Some(Err(codex_steer::DeliveryError::Unconfirmed(
+                anyhow::anyhow!("root cause").context("resume confirmation failed"),
+            ))),
         },
         Ok(AgentLaunchRoute::CodexDaemonTurnUnconfirmed {
             thread_id: "thread-example".to_string(),
-            reason: "response unavailable".to_string(),
+            reason: "resume confirmation failed: root cause".to_string(),
         })
     )]
     fn connected_routes(
