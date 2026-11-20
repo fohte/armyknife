@@ -18,7 +18,8 @@ use history::{
     turn_status,
 };
 use resume::{
-    THREAD_RESUME_RETRY_INTERVAL, is_unloaded_thread_rejection, resume_thread_with_retry,
+    ResumeRetryTiming, THREAD_RESUME_RETRY_INTERVAL, is_unloaded_thread_rejection,
+    resume_thread_with_retry,
 };
 pub(super) use turn_status::{
     latest_turn_details, latest_turn_status, latest_turn_status_and_error_message,
@@ -54,12 +55,6 @@ struct DeliveryContext<'a> {
     client_user_message_id: &'a str,
     content: &'a str,
     snapshot: &'a MatchingItemSnapshot,
-}
-
-#[derive(Clone, Copy)]
-struct ResumeRetryTiming {
-    timeout: Duration,
-    interval: Duration,
 }
 
 pub(super) fn send_and_confirm(
@@ -963,6 +958,9 @@ mod tests {
                 json!({"turn": {"id": TURN_ID, "status": "inProgress"}}),
             )?;
             let first_resume_request = read_request(&mut socket)?;
+            socket.send(Message::Text(
+                user_message_notification().to_string().into(),
+            ))?;
             send_error(
                 &mut socket,
                 THREAD_RESUME_REQUEST_ID,
@@ -970,9 +968,6 @@ mod tests {
                 "no rollout found for thread id thread-a",
             )?;
             let retry_resume_request = read_request(&mut socket)?;
-            socket.send(Message::Text(
-                user_message_notification().to_string().into(),
-            ))?;
             send_response(&mut socket, THREAD_RESUME_REQUEST_ID, resume_response())?;
             Ok(vec![
                 snapshot_request,
@@ -1001,6 +996,53 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!((result, requests), (Ok(()), expected_requests));
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::wrong_code(-32601, "no rollout found for thread id thread-a")]
+    #[case::extra_message_text(-32600, "no rollout found for thread id thread-a; retry")]
+    fn does_not_retry_other_resume_rejections(
+        connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
+        #[case] code: i64,
+        #[case] message: &'static str,
+    ) -> anyhow::Result<()> {
+        let (mut client_socket, server_socket) = connected_sockets?;
+        let server = std::thread::spawn(move || -> anyhow::Result<Vec<Value>> {
+            let mut socket = server_socket;
+            let snapshot_request = read_empty_snapshot(&mut socket)?;
+            let turn_request = read_request(&mut socket)?;
+            send_response(
+                &mut socket,
+                TURN_START_REQUEST_ID,
+                json!({"turn": {"id": TURN_ID, "status": "inProgress"}}),
+            )?;
+            let resume_request = read_request(&mut socket)?;
+            send_error(&mut socket, THREAD_RESUME_REQUEST_ID, code, message)?;
+            Ok(vec![snapshot_request, turn_request, resume_request])
+        });
+
+        let result = result_text(send_and_confirm_with_retry_timing(
+            &mut client_socket,
+            THREAD_ID,
+            "hello there",
+            None,
+            CLIENT_USER_MESSAGE_ID,
+            ResumeRetryTiming {
+                timeout: Duration::from_millis(60),
+                interval: Duration::from_millis(2),
+            },
+            |socket| socket.read(),
+        ));
+        let requests = join_server(&client_socket, &result, server)?;
+        let expected_error = format!(
+            "Codex app-server delivery is unconfirmed: could not confirm Codex delivery using thread/resume: Codex app-server `thread/resume` failed: {message} (code {code})"
+        );
+
+        assert_eq!(
+            (result, requests),
+            (Err(expected_error), start_and_subscribe_requests()),
+        );
         Ok(())
     }
 
