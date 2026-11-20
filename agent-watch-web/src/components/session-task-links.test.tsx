@@ -22,6 +22,14 @@ const secondaryTask: SessionTask = {
   priority: 4,
 }
 
+const completedSecondaryTask: SessionTask = {
+  id: 'fixture-completed-task',
+  number: 2047,
+  title: 'Document retry behavior',
+  priority: null,
+  isClosed: true,
+}
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
@@ -46,6 +54,11 @@ it.each([
     description: 'multiple linked tasks',
     tasks: [primaryTask, secondaryTask],
     expectedCount: '+1',
+  },
+  {
+    description: 'a primary task and a completed secondary task',
+    tasks: [primaryTask, completedSecondaryTask],
+    expectedCount: null,
   },
 ])(
   'shows the primary task and count for $description',
