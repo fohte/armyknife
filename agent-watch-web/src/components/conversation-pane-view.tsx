@@ -86,6 +86,7 @@ type ConversationPaneViewProps = {
   mobileStatusPanel?: ReactNode
   selectedDecisionSeq?: number | null
   onToggleStatusPanel?: () => void
+  onOpenTasks?: () => void
   onSelectDecision?: (seq: number) => void
   fileDropActive?: boolean
   onBack?: () => void
@@ -135,6 +136,7 @@ export function ConversationPaneView({
   mobileStatusPanel = null,
   selectedDecisionSeq = null,
   onToggleStatusPanel = () => undefined,
+  onOpenTasks = () => undefined,
   onSelectDecision = () => undefined,
   fileDropActive = false,
   onBack,
@@ -333,7 +335,6 @@ export function ConversationPaneView({
         key={session.id}
         session={session}
         vibeMode={vibeMode}
-        sessions={sessions}
         actions={actions}
         isMobile={isMobile}
         statusPanelOpen={statusPanelOpen}
@@ -344,6 +345,7 @@ export function ConversationPaneView({
         onOpenInTerminal={openInTerminal}
         onSelectSession={selectLinkedSession}
         onToggleStatusPanel={onToggleStatusPanel}
+        onOpenTasks={onOpenTasks}
         {...(onToggleToday === undefined ? {} : { onToggleToday })}
         {...(onBack === undefined ? {} : { onBack })}
         {...(onLater === undefined ? {} : { onLater })}
