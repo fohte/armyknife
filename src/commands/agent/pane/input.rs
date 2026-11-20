@@ -117,10 +117,18 @@ fn parse_codex_composer_line(line: &str) -> Option<bool> {
         return None;
     }
 
-    let body = styled_line.characters[prompt_index + 1..]
-        .iter()
-        .find(|character| !character.value.is_whitespace())?;
-    Some(!body.dim)
+    // External terminal output can overwrite the composer row without Codex
+    // repainting it, so require Codex's visible prompt spacing before reading it.
+    let body = &styled_line.characters[prompt_index + 1..];
+    if body.first()?.value != ' ' {
+        return None;
+    }
+    let first_content = body.get(1)?;
+    if first_content.value.is_whitespace() {
+        return None;
+    }
+
+    Some(!first_content.dim)
 }
 
 struct StyledCharacter {
@@ -360,6 +368,14 @@ mod tests {
     #[case::normal_text_is_a_draft(
         format!("{ESC}[1m›{ESC}[0m draft text"),
         Some(true),
+    )]
+    #[case::overwritten_from_first_column_is_unknown(
+        format!("{ESC}[1m›{ESC}[0mfixture diagnostic text"),
+        None,
+    )]
+    #[case::overwritten_after_prompt_space_is_unknown(
+        format!("{ESC}[1m›{ESC}[0m        fixture diagnostic text"),
+        None,
     )]
     #[case::indexed_colour_argument_is_not_dim(
         format!("{ESC}[1m›{ESC}[0m {ESC}[38;5;2mdraft text{ESC}[0m"),
