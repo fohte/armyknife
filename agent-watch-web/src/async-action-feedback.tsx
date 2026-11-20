@@ -47,6 +47,7 @@ export type StartAsyncActionOptions = {
   pullRequestOwner?: string
   pullRequestRepo?: string
   run: () => Promise<AsyncActionOutcome>
+  onRetry?: (retry: () => void) => void
 }
 
 type AsyncActionFeedbackValue = {
@@ -77,6 +78,7 @@ export function AsyncActionFeedbackProvider({
   const [selectedActionId, setSelectedActionId] = useState<number | null>(null)
   const nextId = useRef(0)
   const runs = useRef(new Map<number, () => Promise<AsyncActionOutcome>>())
+  const retryHandlers = useRef(new Map<number, (retry: () => void) => void>())
   const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>())
 
   const dismissToast = useCallback((id: number) => {
@@ -136,6 +138,9 @@ export function AsyncActionFeedbackProvider({
     (options: StartAsyncActionOptions) => {
       const id = nextId.current++
       runs.current.set(id, options.run)
+      if (options.onRetry !== undefined) {
+        retryHandlers.current.set(id, options.onRetry)
+      }
       setActions((current) => [
         {
           id,
@@ -166,7 +171,13 @@ export function AsyncActionFeedbackProvider({
   const retry = useCallback(
     (id: number) => {
       const run = runs.current.get(id)
-      if (run !== undefined) void runAction(id, run)
+      if (run === undefined) return
+      const retryAction = () => {
+        void runAction(id, run)
+      }
+      const handler = retryHandlers.current.get(id)
+      if (handler === undefined) retryAction()
+      else handler(retryAction)
     },
     [runAction],
   )
@@ -189,6 +200,7 @@ export function AsyncActionFeedbackProvider({
       const timer = timers.current.get(id)
       if (timer !== undefined) clearTimeout(timer)
       timers.current.delete(id)
+      retryHandlers.current.delete(id)
     }
   }, [actions])
 

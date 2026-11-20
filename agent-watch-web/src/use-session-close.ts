@@ -4,17 +4,12 @@ import { useCallback, useState } from 'react'
 import { useAsyncActionFeedback } from '#async-action-feedback'
 import { useSessionConversationCache } from '#components/session-conversation-cache'
 import { clearSessionAttachments } from '#components/use-composer-message'
-import type {
-  SessionOperation,
-  SessionOperationError,
+import {
+  type SessionOperation,
+  type SessionOperationError,
+  shouldOfferKeepWorktreeRetry,
 } from '#session-operations'
 import type { Session } from '#types'
-
-const KEEP_WORKTREE_ERROR_CODES = new Set([
-  'unmerged_worktree',
-  'dirty_worktree',
-  'worktree_process_guard',
-])
 
 type UseSessionCloseOptions = {
   sessions: readonly Session[]
@@ -68,7 +63,7 @@ export function useSessionClose({
               (operationError) => {
                 setError(operationError.message)
                 setCloseRetrySessionId(
-                  KEEP_WORKTREE_ERROR_CODES.has(operationError.code ?? '')
+                  shouldOfferKeepWorktreeRetry(operationError)
                     ? sessionId
                     : null,
                 )

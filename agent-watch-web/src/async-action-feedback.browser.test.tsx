@@ -68,6 +68,7 @@ afterEach(() => {
 })
 
 it('records a merge while it runs, then keeps its result in Activity', async () => {
+  vi.useFakeTimers()
   let completeMerge: (() => void) | undefined
   const run = vi.fn(
     () =>
@@ -120,6 +121,84 @@ it('records a merge while it runs, then keeps its result in Activity', async () 
     state: '{"actions":["merged"],"toastIds":[0]}',
     toast: 'Merged PR #42Sample session',
     activity: 'ActivityClear finishedMerged PR #42Sample session14:13Close',
+  })
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(4_999)
+  })
+  const beforeExpirySnapshot = () => ({
+    toast: textContent('.async-action-toast-stack'),
+    activity: textContent('.async-action-activity-list'),
+  })
+  expect(beforeExpirySnapshot()).toEqual({
+    toast: 'Merged PR #42Sample session',
+    activity: 'Merged PR #42Sample session14:13',
+  })
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1)
+  })
+  const expiredSnapshot = () => ({
+    state: textContent('output'),
+    toast:
+      textContent('.async-action-toast-stack') === ''
+        ? null
+        : textContent('.async-action-toast-stack'),
+    activity: textContent('.async-action-activity-list'),
+  })
+  expect(expiredSnapshot()).toEqual({
+    state: '{"actions":["merged"],"toastIds":[]}',
+    toast: null,
+    activity: 'Merged PR #42Sample session14:13',
+  })
+})
+
+it('clears finished Activity entries while a pending action remains', async () => {
+  const completions: Array<() => void> = []
+  const run = vi.fn(
+    () =>
+      new Promise<AsyncActionOutcome>((resolve) => {
+        completions.push(() => {
+          resolve({ status: 'merged' })
+        })
+      }),
+  )
+  act(() => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <FeedbackHarness run={run} />
+      </AsyncActionFeedbackProvider>,
+    )
+  })
+
+  act(() => {
+    container.querySelector<HTMLButtonElement>('button')?.click()
+    container.querySelector<HTMLButtonElement>('button')?.click()
+  })
+  await act(async () => {
+    completions[0]?.()
+    await Promise.resolve()
+  })
+  act(() => {
+    Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent === 'Show activity')
+      ?.click()
+  })
+  act(() => {
+    Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent === 'Clear finished')
+      ?.click()
+  })
+
+  const clearSnapshot = () => ({
+    state: textContent('output'),
+    toast: textContent('.async-action-toast-stack'),
+    activity: textContent('.async-action-activity-list'),
+  })
+  expect(clearSnapshot()).toEqual({
+    state: '{"actions":["merging"],"toastIds":[1]}',
+    toast: 'Merging PR #42Sample session',
+    activity: 'Merging PR #42Sample session14:13',
   })
 })
 

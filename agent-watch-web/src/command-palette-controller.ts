@@ -13,9 +13,10 @@ import { useSessionConversationCache } from '#components/session-conversation-ca
 import { clearSessionAttachments } from '#components/use-composer-message'
 import type { HistoryMode, SessionHistoryState } from '#session-history'
 import { createSessionNavigationActions } from '#session-navigation-actions'
-import type {
-  SessionOperation,
-  SessionOperationError,
+import {
+  type SessionOperation,
+  type SessionOperationError,
+  shouldOfferKeepWorktreeRetry,
 } from '#session-operations'
 import type { Session } from '#types'
 
@@ -149,11 +150,7 @@ export function useCommandPaletteController({
                     if (!isInitialAttempt) {
                       setError(message)
                       setCloseRetrySessionId(
-                        error.code === 'unmerged_worktree' ||
-                          error.code === 'dirty_worktree' ||
-                          error.code === 'worktree_process_guard'
-                          ? session.id
-                          : null,
+                        shouldOfferKeepWorktreeRetry(error) ? session.id : null,
                       )
                     }
                     return { status: 'closeFailed' as const, error: message }
@@ -165,11 +162,7 @@ export function useCommandPaletteController({
             if (result.isErr()) {
               failure =
                 result.error.message || `Could not close ${session.title}.`
-              if (
-                result.error.code === 'unmerged_worktree' ||
-                result.error.code === 'dirty_worktree' ||
-                result.error.code === 'worktree_process_guard'
-              ) {
+              if (shouldOfferKeepWorktreeRetry(result.error)) {
                 keepWorktreeSessionId = session.id
               }
               break

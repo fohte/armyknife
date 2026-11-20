@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 
 import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
 import {
@@ -19,6 +19,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 type PullRequestMergeOperation = Extract<SessionOperation, { type: 'merge' }>
+
+function isStaleHeadFailure(message: string) {
+  return /head changed(?: since confirmation)?/i.test(message)
+}
 
 function isMergeResponse(value: unknown): value is MergeResponse {
   if (!isRecord(value)) return false
@@ -46,6 +50,8 @@ export function useConversationPaneHeaderMerge({
     useState<PullRequestMergeOperation | null>(null)
   const { pendingOperations, run } = useSessionOperations()
   const actionFeedback = useOptionalAsyncActionFeedback()
+  const latestPullRequests = useRef(pullRequests)
+  latestPullRequests.current = pullRequests
   const sessionRepoParts = session.repo.split('/')
   const mergeIdentity = (target: {
     number: number
@@ -139,6 +145,7 @@ export function useConversationPaneHeaderMerge({
       void run(target)
       return
     }
+    let staleHeadFailure = false
     actionFeedback.start({
       kind: 'merge',
       sessionId: session.id,
@@ -161,8 +168,31 @@ export function useConversationPaneHeaderMerge({
             }
             return { status: response.result }
           },
-          (error) => ({ status: 'mergeFailed' as const, error: error.message }),
+          (error) => {
+            staleHeadFailure = isStaleHeadFailure(error.message)
+            return { status: 'mergeFailed' as const, error: error.message }
+          },
         )
+      },
+      onRetry: (retry) => {
+        if (!staleHeadFailure) {
+          retry()
+          return
+        }
+        const identity = mergeIdentity(target)
+        const latestPullRequest = latestPullRequests.current.find(
+          (candidate) => {
+            const candidateIdentity = mergeIdentity(candidate)
+            return (
+              candidate.number === identity.number &&
+              candidateIdentity.owner === identity.owner &&
+              candidateIdentity.repo === identity.repo
+            )
+          },
+        )
+        if (latestPullRequest !== undefined) {
+          openMergeConfirmation(latestPullRequest)
+        }
       },
     })
   }
