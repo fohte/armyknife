@@ -19,19 +19,19 @@
 .session-task-links {
   display: inline-flex;
   flex: 0 0 auto;
-  height: 22px;
+  height: 20px;
   align-items: center;
-  padding: 0 7px;
-  border: 1px solid var(--aw-border-control);
+  padding: 0 6px;
+  border: 0;
   background: transparent;
   color: var(--aw-text-muted);
   cursor: pointer;
+  font-family: var(--font-mono);
   font-size: 12px;
-  font: inherit;
   white-space: nowrap;
 }
 
-.session-task-links:hover {
-  border-color: var(--aw-border-emphasis);
-  background: var(--aw-bg-pressed);
+.session-task-links:focus-visible {
+  outline: 2px solid var(--aw-border-emphasis);
+  outline-offset: 2px;
 }
