@@ -186,6 +186,11 @@ impl Launch {
                 let connection = client
                     .wait_for_connection(tmux_location)
                     .context("Failed to wait for Claude messaging connection")?;
+                let prompt = initial_prompt_marker
+                    .and_then(|marker| marker.prefix_watch_web_message)
+                    .map(|prefix| prefix(&connection.session_id, &prompt))
+                    .transpose()?
+                    .unwrap_or(prompt);
                 let before_send = || {
                     if let Some(marker) = initial_prompt_marker
                         && let Err(error) = (marker.mark_pending)(&connection.session_id)
@@ -360,6 +365,7 @@ mod tests {
                 initial_prompt_marker: Some(super::super::InitialPromptMarker {
                     mark_pending: &mark_pending,
                     clear_pending: &clear_pending,
+                    prefix_watch_web_message: None,
                 }),
             },
             |_| Some("example/repo:@1.%2".to_string()),
@@ -376,6 +382,60 @@ mod tests {
                     Call::Wait("example/repo:@1.%2".to_string()),
                     Call::Mark("session-example".to_string()),
                     Call::Send(connection(), "prompt".to_string()),
+                ],
+            ),
+        );
+    }
+
+    #[test]
+    fn prefixes_watch_web_initial_prompt_with_the_connected_session_marker() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let prefix_watch_web_message = |session_id: &str, content: &str| {
+            let marker = format!("⟦armyknife-user:fixture-{session_id}⟧");
+            Ok([marker.as_str(), "This message was sent by the human user in armyknife watch-web, either as a message or an action notification.", content].join("\n"))
+        };
+        let mark_pending = |_session_id: &str| Ok(());
+        let clear_pending = |_session_id: &str| Ok(());
+        let launch = Launch::prepare_with(Engine::Claude, Some("Inspect the example."), 1, || {
+            Box::new(StubClient {
+                connection: Ok(connection()),
+                delivery: Some(Ok(())),
+                calls: calls.clone(),
+            })
+        })
+        .expect("messaging client should be created");
+
+        let route = launch.finish_and_recover_with(
+            RecoverySpec {
+                prompt_file: None,
+                pane_id: Some("%2"),
+                initial_prompt_marker: Some(super::super::InitialPromptMarker {
+                    mark_pending: &mark_pending,
+                    clear_pending: &clear_pending,
+                    prefix_watch_web_message: Some(&prefix_watch_web_message),
+                }),
+            },
+            |_| Some("example/repo:@1.%2".to_string()),
+        );
+
+        assert_eq!(
+            (
+                route.map_err(|error| error.to_string()),
+                calls.lock().unwrap().clone(),
+            ),
+            (
+                Ok(AgentLaunchRoute::ClaudeMessaging),
+                vec![
+                    Call::Wait("example/repo:@1.%2".to_string()),
+                    Call::Send(
+                        connection(),
+                        [
+                            "⟦armyknife-user:fixture-session-example⟧",
+                            "This message was sent by the human user in armyknife watch-web, either as a message or an action notification.",
+                            "Inspect the example.",
+                        ]
+                        .join("\n"),
+                    ),
                 ],
             ),
         );
@@ -402,6 +462,7 @@ mod tests {
                 initial_prompt_marker: Some(super::super::InitialPromptMarker {
                     mark_pending: &mark_pending,
                     clear_pending: &clear_pending,
+                    prefix_watch_web_message: None,
                 }),
             },
             |_| Some("example/repo:@1.%2".to_string()),
@@ -447,6 +508,7 @@ mod tests {
                 initial_prompt_marker: Some(super::super::InitialPromptMarker {
                     mark_pending: &mark_pending,
                     clear_pending: &clear_pending,
+                    prefix_watch_web_message: None,
                 }),
             },
             |_| Some("example/repo:@1.%2".to_string()),

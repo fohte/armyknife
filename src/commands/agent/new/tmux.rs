@@ -23,6 +23,7 @@ pub(super) struct TmuxWindowSpec<'a> {
     pub engine: Engine,
     pub env_vars: &'a [(&'a str, &'a str)],
     pub background: bool,
+    pub watch_web_launch: bool,
     /// Turns `automatic-rename` back on right after window creation, undoing
     /// tmux's default of disabling it whenever a window is created with an
     /// explicit name (`-n`). Set for the no-worktree window, whose PID-based
@@ -43,6 +44,9 @@ pub(super) fn setup_tmux_window(spec: TmuxWindowSpec, config: &Config) -> Result
     let initial_prompt_marker = spec.prompt.map(|_| InitialPromptMarker {
         mark_pending: &mark_pending,
         clear_pending: &clear_pending,
+        prefix_watch_web_message: spec
+            .watch_web_launch
+            .then_some(&prefix_watch_web_initial_message),
     });
     let route = tmux::layout::build_layout_with_initial_prompt_marker(
         tmux::layout::LayoutSpec {
@@ -82,6 +86,7 @@ pub(super) struct TmuxSplitPaneSpec<'a> {
     pub prompt: Option<&'a str>,
     pub env_vars: &'a [(&'a str, &'a str)],
     pub background: bool,
+    pub watch_web_launch: bool,
     /// Agent CLI to launch in the new pane.
     pub engine: Engine,
 }
@@ -101,6 +106,9 @@ pub(super) fn setup_split_pane(spec: TmuxSplitPaneSpec) -> Result<AgentLaunchRou
     let initial_prompt_marker = spec.prompt.map(|_| InitialPromptMarker {
         mark_pending: &mark_pending,
         clear_pending: &clear_pending,
+        prefix_watch_web_message: spec
+            .watch_web_launch
+            .then_some(&prefix_watch_web_initial_message),
     });
     let result = tmux::layout::split_pane_with_initial_prompt_marker(
         tmux::layout::SplitSpec {
@@ -128,4 +136,13 @@ pub(super) fn setup_split_pane(spec: TmuxSplitPaneSpec) -> Result<AgentLaunchRou
     }
 
     Ok(result.route)
+}
+
+fn prefix_watch_web_initial_message(session_id: &str, content: &str) -> Result<String> {
+    let sessions_dir = crate::commands::agent::store::sessions_dir()?;
+    let marker = crate::commands::agent::store::ensure_watch_web_user_marker_from(
+        &sessions_dir,
+        session_id,
+    )?;
+    Ok(crate::commands::agent::watch_web_user_marker::prefix_message(&marker, content))
 }

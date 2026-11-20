@@ -306,6 +306,7 @@ mod tests {
                 initial_prompt_marker: Some(super::super::InitialPromptMarker {
                     mark_pending: &mark_pending,
                     clear_pending: &clear_pending,
+                    prefix_watch_web_message: None,
                 }),
             },
             |_, _| Ok(()),
@@ -353,6 +354,7 @@ mod tests {
                 initial_prompt_marker: Some(super::super::InitialPromptMarker {
                     mark_pending: &mark_pending,
                     clear_pending: &clear_pending,
+                    prefix_watch_web_message: None,
                 }),
             },
             |_, _| Ok(()),
@@ -406,6 +408,7 @@ mod tests {
                 initial_prompt_marker: Some(super::super::InitialPromptMarker {
                     mark_pending: &mark_pending,
                     clear_pending: &clear_pending,
+                    prefix_watch_web_message: None,
                 }),
             },
             |_, _| panic!("a rejected turn must not bind the pane"),

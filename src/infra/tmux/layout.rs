@@ -424,7 +424,10 @@ pub struct TmuxSessionSpec<'a> {
 pub(crate) struct InitialPromptMarker<'a> {
     pub(crate) mark_pending: &'a dyn Fn(&str) -> anyhow::Result<()>,
     pub(crate) clear_pending: &'a dyn Fn(&str) -> anyhow::Result<()>,
+    pub(crate) prefix_watch_web_message: Option<&'a WatchWebMessagePrefix<'a>>,
 }
+
+type WatchWebMessagePrefix<'a> = dyn Fn(&str, &str) -> anyhow::Result<String> + 'a;
 
 /// Inputs for `build_layout`, grouped to keep its argument count in check.
 pub struct LayoutSpec<'a> {

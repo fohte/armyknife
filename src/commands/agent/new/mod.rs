@@ -423,6 +423,7 @@ fn run_session_only_inner_with_launchers(
                 engine: launch_options.engine,
                 env_vars: &env_refs,
                 background,
+                watch_web_launch: args.common.watch_web_launch_id.is_some(),
             })?;
             println!("Split tmux pane in '{cwd}'{background_suffix}{route_suffix}");
         }
@@ -453,6 +454,7 @@ fn run_session_only_inner_with_launchers(
                     engine: launch_options.engine,
                     env_vars: &env_refs,
                     background,
+                    watch_web_launch: args.common.watch_web_launch_id.is_some(),
                     restore_automatic_rename: true,
                 },
                 context.config,

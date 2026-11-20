@@ -308,6 +308,7 @@ pub(super) fn run_worktree_creation(
             prompt: final_prompt.as_deref(),
             env_vars: &env_refs,
             background,
+            watch_web_launch: args.common.watch_web_launch_id.is_some(),
         }),
         config,
     )?;
@@ -333,6 +334,7 @@ struct WorktreeWindowContext<'a> {
     prompt: Option<&'a str>,
     env_vars: &'a [(&'a str, &'a str)],
     background: bool,
+    watch_web_launch: bool,
 }
 
 fn worktree_window_spec(context: WorktreeWindowContext<'_>) -> TmuxWindowSpec<'_> {
@@ -350,6 +352,7 @@ fn worktree_window_spec(context: WorktreeWindowContext<'_>) -> TmuxWindowSpec<'_
         engine: context.launch_options.engine,
         env_vars: context.env_vars,
         background: context.background,
+        watch_web_launch: context.watch_web_launch,
         restore_automatic_rename: false,
     }
 }
@@ -466,6 +469,7 @@ mod tests {
             prompt: None,
             env_vars: &[],
             background: false,
+            watch_web_launch: false,
         });
         let expected_path = linked_worktree.path.clone();
         let expected_path_str = expected_path.to_string_lossy().to_string();
@@ -651,6 +655,7 @@ mod tests {
             prompt: None,
             env_vars,
             background: false,
+            watch_web_launch: false,
         });
 
         assert_eq!(
