@@ -1,6 +1,7 @@
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
+use anyhow::anyhow;
 use serde_json::Value;
 use tungstenite::WebSocket;
 
@@ -31,49 +32,40 @@ pub(super) fn resume_thread_with_retry(
     timeout: Duration,
     retry_interval: Duration,
 ) -> std::result::Result<(Value, Vec<Value>), RequestError> {
-    let deadline = Instant::now() + timeout;
     let started_at = Instant::now();
+    let Some(deadline) = started_at.checked_add(timeout) else {
+        return Err(RequestError::Transport(anyhow!(
+            "Codex app-server thread/resume deadline overflowed"
+        )));
+    };
     let request = thread_resume_request(thread_id);
-    let mut notifications = Vec::new();
-    let mut last_rollout_rejection = None;
     let mut retry_count = 0;
 
     loop {
         match super::super::send_request_and_collect_notifications_until(socket, &request, deadline)
         {
             Ok((response, response_notifications)) => {
-                notifications.extend(response_notifications);
                 if retry_count > 0 {
                     log_retry_summary(thread_id, retry_count, started_at, "resumed");
                 }
-                return Ok((response, notifications));
+                return Ok((response, response_notifications));
             }
-            Err((error, attempt_notifications)) => {
-                notifications.extend(attempt_notifications);
-                if is_rollout_not_found_rejection(&error, thread_id) {
-                    retry_count += 1;
-                    let time_left = deadline.saturating_duration_since(Instant::now());
-                    if time_left.is_zero() {
-                        log_retry_summary(thread_id, retry_count, started_at, "deadline");
-                        return Err(error);
-                    }
-                    last_rollout_rejection = Some(error);
-                    std::thread::sleep(retry_interval.min(time_left));
-                    if Instant::now() >= deadline
-                        && let Some(error) = last_rollout_rejection.take()
-                    {
-                        log_retry_summary(thread_id, retry_count, started_at, "deadline");
-                        return Err(error);
-                    }
-                } else if Instant::now() >= deadline {
-                    log_retry_summary(thread_id, retry_count, started_at, "deadline");
-                    return Err(last_rollout_rejection.take().unwrap_or(error));
-                } else {
+            Err(error) => {
+                if !is_rollout_not_found_rejection(&error, thread_id) {
                     if retry_count > 0 {
                         log_retry_summary(thread_id, retry_count, started_at, "stopped");
                     }
                     return Err(error);
                 }
+
+                retry_count += 1;
+                let time_left = deadline.saturating_duration_since(Instant::now());
+                if time_left <= retry_interval {
+                    std::thread::sleep(time_left);
+                    log_retry_summary(thread_id, retry_count, started_at, "deadline");
+                    return Err(error);
+                }
+                std::thread::sleep(retry_interval);
             }
         }
     }

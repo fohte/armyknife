@@ -958,9 +958,6 @@ mod tests {
                 json!({"turn": {"id": TURN_ID, "status": "inProgress"}}),
             )?;
             let first_resume_request = read_request(&mut socket)?;
-            socket.send(Message::Text(
-                user_message_notification().to_string().into(),
-            ))?;
             send_error(
                 &mut socket,
                 THREAD_RESUME_REQUEST_ID,
@@ -969,11 +966,21 @@ mod tests {
             )?;
             let retry_resume_request = read_request(&mut socket)?;
             send_response(&mut socket, THREAD_RESUME_REQUEST_ID, resume_response())?;
+            socket.send(Message::Text(
+                user_message_notification().to_string().into(),
+            ))?;
+            let history_request = read_request(&mut socket)?;
+            send_response(
+                &mut socket,
+                THREAD_TURNS_LIST_REQUEST_ID,
+                thread_response("inProgress", None, None),
+            )?;
             Ok(vec![
                 snapshot_request,
                 turn_request,
                 first_resume_request,
                 retry_resume_request,
+                history_request,
             ])
         });
 
@@ -984,15 +991,18 @@ mod tests {
             None,
             CLIENT_USER_MESSAGE_ID,
             ResumeRetryTiming {
-                timeout: Duration::from_millis(200),
-                interval: Duration::from_millis(1),
+                timeout: Duration::from_secs(3),
+                interval: Duration::from_millis(5),
             },
             |socket| socket.read(),
         ));
         let requests = join_server(&client_socket, &result, server)?;
         let expected_requests = start_and_subscribe_requests()
             .into_iter()
-            .chain(std::iter::once(thread_resume_request(THREAD_ID).payload))
+            .chain([
+                thread_resume_request(THREAD_ID).payload,
+                thread_turns_list_request_payload(THREAD_TURNS_LIST_REQUEST_ID),
+            ])
             .collect::<Vec<_>>();
 
         assert_eq!((result, requests), (Ok(()), expected_requests));
@@ -1029,7 +1039,7 @@ mod tests {
             None,
             CLIENT_USER_MESSAGE_ID,
             ResumeRetryTiming {
-                timeout: Duration::from_millis(60),
+                timeout: Duration::from_secs(3),
                 interval: Duration::from_millis(2),
             },
             |socket| socket.read(),
@@ -1051,33 +1061,38 @@ mod tests {
         connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
     ) -> anyhow::Result<()> {
         let (mut client_socket, server_socket) = connected_sockets?;
-        let server = std::thread::spawn(move || -> anyhow::Result<usize> {
+        let server = std::thread::spawn(move || -> anyhow::Result<Vec<Value>> {
             let mut socket = server_socket;
-            read_empty_snapshot(&mut socket)?;
-            read_request(&mut socket)?;
+            let snapshot_request = read_empty_snapshot(&mut socket)?;
+            let turn_request = read_request(&mut socket)?;
             send_response(
                 &mut socket,
                 TURN_START_REQUEST_ID,
                 json!({"turn": {"id": TURN_ID, "status": "inProgress"}}),
             )?;
-
-            let mut retry_count = 0;
-            loop {
-                if read_request(&mut socket).is_err() {
-                    return Ok(retry_count);
-                }
-                retry_count += 1;
-                if send_error(
-                    &mut socket,
-                    THREAD_RESUME_REQUEST_ID,
-                    -32600,
-                    "no rollout found for thread id thread-a",
-                )
-                .is_err()
-                {
-                    return Ok(retry_count);
-                }
-            }
+            let first_resume_request = read_request(&mut socket)?;
+            send_error(
+                &mut socket,
+                THREAD_RESUME_REQUEST_ID,
+                -32600,
+                "no rollout found for thread id thread-a",
+            )?;
+            let second_resume_request = read_request(&mut socket)?;
+            send_error(
+                &mut socket,
+                THREAD_RESUME_REQUEST_ID,
+                -32600,
+                "no rollout found for thread id thread-a",
+            )?;
+            let final_resume_request = read_request(&mut socket)?;
+            let _ = socket.read();
+            Ok(vec![
+                snapshot_request,
+                turn_request,
+                first_resume_request,
+                second_resume_request,
+                final_resume_request,
+            ])
         });
 
         let result = result_text(send_and_confirm_with_retry_timing(
@@ -1087,18 +1102,25 @@ mod tests {
             None,
             CLIENT_USER_MESSAGE_ID,
             ResumeRetryTiming {
-                timeout: Duration::from_millis(60),
-                interval: Duration::from_millis(2),
+                timeout: Duration::from_secs(2),
+                interval: Duration::from_millis(5),
             },
             |socket| socket.read(),
         ));
-        let retry_count = join_server(&client_socket, &result, server)?;
+        let requests = join_server(&client_socket, &result, server)?;
+        let expected_requests = start_and_subscribe_requests()
+            .into_iter()
+            .chain([
+                thread_resume_request(THREAD_ID).payload,
+                thread_resume_request(THREAD_ID).payload,
+            ])
+            .collect::<Vec<_>>();
 
         assert_eq!(
-            (result, retry_count >= 2),
+            (result, requests),
             (
-                Err("Codex app-server delivery is unconfirmed: could not confirm Codex delivery using thread/resume: Codex app-server `thread/resume` failed: no rollout found for thread id thread-a (code -32600)".to_string()),
-                true,
+                Err("Codex app-server delivery is unconfirmed: could not confirm Codex delivery using thread/resume: Codex app-server `thread/resume` request timed out".to_string()),
+                expected_requests,
             ),
         );
         Ok(())

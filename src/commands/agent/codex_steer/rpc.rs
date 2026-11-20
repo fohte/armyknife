@@ -57,23 +57,24 @@ pub(super) fn send_request_response_until(
 ) -> std::result::Result<Value, RequestError> {
     send_request_and_collect_notifications_until(socket, request, deadline)
         .map(|(response, _)| response)
-        .map_err(|(error, _)| error)
 }
 
 pub(super) fn send_request_and_collect_notifications_until(
     socket: &mut WebSocket<UnixStream>,
     request: &RpcRequest,
     deadline: Instant,
-) -> std::result::Result<(Value, Vec<Value>), (RequestError, Vec<Value>)> {
-    send_rpc_request(socket, request).map_err(|error| (error, Vec::new()))?;
+) -> std::result::Result<(Value, Vec<Value>), RequestError> {
+    if Instant::now() >= deadline {
+        return Err(rpc_request_timeout(request.method));
+    }
+    send_rpc_request(socket, request)?;
     // Per-read timeouts reset for notifications and partial frames.
     // The deadline loop must regain control between reads.
     socket
         .get_ref()
         .set_nonblocking(true)
         .context("failed to enable nonblocking Codex app-server reads")
-        .map_err(RequestError::Transport)
-        .map_err(|error| (error, Vec::new()))?;
+        .map_err(RequestError::Transport)?;
 
     let mut time_left = || deadline.saturating_duration_since(Instant::now());
     let mut notifications = Vec::new();
@@ -93,12 +94,11 @@ pub(super) fn send_request_and_collect_notifications_until(
 
     match (result, restore_mode) {
         (Ok(response), Ok(())) => Ok((response, notifications)),
-        (Err(error), Ok(())) => Err((error, notifications)),
-        (Ok(_), Err(error)) => Err((error, notifications)),
-        (Err(error), Err(restore_error)) => Err((
-            RequestError::Transport(anyhow!("{error:#}; additionally, {restore_error:#}")),
-            notifications,
-        )),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+        (Err(error), Err(restore_error)) => Err(RequestError::Transport(anyhow!(
+            "{error:#}; additionally, {restore_error:#}"
+        ))),
     }
 }
 
