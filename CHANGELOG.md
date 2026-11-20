@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.808](https://github.com/fohte/armyknife/compare/v0.1.807...v0.1.808) (2026-11-20)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** run actions asynchronously ([#2000](https://github.com/fohte/armyknife/issues/2000)) ([1e7f24f](https://github.com/fohte/armyknife/commit/1e7f24ff5a8ad0440eb1cf8eadec1f27e6188ac9))
+
 ## [0.1.807](https://github.com/fohte/armyknife/compare/v0.1.806...v0.1.807) (2026-11-20)
 
 
