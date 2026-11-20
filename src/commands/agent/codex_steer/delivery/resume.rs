@@ -39,30 +39,35 @@ pub(super) fn resume_thread_with_retry(
         )));
     };
     let request = thread_resume_request(thread_id);
-    let mut retry_count = 0;
+    let mut rollout_rejection_count = 0;
 
     loop {
         match super::super::send_request_and_collect_notifications_until(socket, &request, deadline)
         {
             Ok((response, response_notifications)) => {
-                if retry_count > 0 {
-                    log_retry_summary(thread_id, retry_count, started_at, "resumed");
+                if rollout_rejection_count > 0 {
+                    log_retry_summary(thread_id, rollout_rejection_count, started_at, "resumed");
                 }
                 return Ok((response, response_notifications));
             }
             Err(error) => {
                 if !is_rollout_not_found_rejection(&error, thread_id) {
-                    if retry_count > 0 {
-                        log_retry_summary(thread_id, retry_count, started_at, "stopped");
+                    if rollout_rejection_count > 0 {
+                        log_retry_summary(
+                            thread_id,
+                            rollout_rejection_count,
+                            started_at,
+                            "stopped",
+                        );
                     }
                     return Err(error);
                 }
 
-                retry_count += 1;
+                rollout_rejection_count += 1;
                 let time_left = deadline.saturating_duration_since(Instant::now());
                 if time_left <= retry_interval {
                     std::thread::sleep(time_left);
-                    log_retry_summary(thread_id, retry_count, started_at, "deadline");
+                    log_retry_summary(thread_id, rollout_rejection_count, started_at, "deadline");
                     return Err(error);
                 }
                 std::thread::sleep(retry_interval);
@@ -83,14 +88,14 @@ fn is_rollout_not_found_rejection(error: &RequestError, thread_id: &str) -> bool
 
 fn log_retry_summary(
     thread_id: &str,
-    retry_count: usize,
+    rollout_rejection_count: usize,
     started_at: Instant,
     outcome: &'static str,
 ) {
     tracing::debug!(
         event = "agent.codex_steer.thread_resume_retry_completed",
         session = %thread_id,
-        retries = retry_count,
+        rollout_rejections = rollout_rejection_count,
         elapsed_ms = started_at.elapsed().as_millis() as u64,
         outcome,
     );
