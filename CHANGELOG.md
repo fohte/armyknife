@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.809](https://github.com/fohte/armyknife/compare/v0.1.808...v0.1.809) (2026-11-20)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** tag initial prompts as user ([#2006](https://github.com/fohte/armyknife/issues/2006)) ([178297e](https://github.com/fohte/armyknife/commit/178297e86a3ebb16648d2e7a5041d838a5dbf2f5))
+
 ## [0.1.808](https://github.com/fohte/armyknife/compare/v0.1.807...v0.1.808) (2026-11-20)
 
 
