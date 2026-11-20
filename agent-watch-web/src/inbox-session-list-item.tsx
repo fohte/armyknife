@@ -1,5 +1,7 @@
 import { Button } from '@fohte/ui/button'
 
+import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
+import { AsyncActionItem } from '#components/async-action-item'
 import { SessionRow } from '#components/session-row'
 import type { Session } from '#types'
 
@@ -14,6 +16,10 @@ export function InboxSessionListItem({
   onSelect: (id: string) => void
   isMobile: boolean
 }) {
+  const feedback = useOptionalAsyncActionFeedback()
+  const closeAction = feedback?.actions.find(
+    (action) => action.kind === 'close' && action.sessionId === session.id,
+  )
   return (
     <li className="session-list-item">
       <Button
@@ -28,6 +34,13 @@ export function InboxSessionListItem({
       >
         <SessionRow session={session} density="full" isMobile={isMobile} />
       </Button>
+      {closeAction === undefined ? null : (
+        <AsyncActionItem
+          action={closeAction}
+          form="line"
+          onRetry={() => feedback?.retry(closeAction.id)}
+        />
+      )}
     </li>
   )
 }

@@ -1,0 +1,49 @@
+.async-action-activity-button {
+  display: flex;
+  width: 100%;
+  height: 32px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--aw-border);
+  padding: 0 8px;
+  background: transparent;
+  color: var(--aw-text-body);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+.async-action-activity-button:hover,
+.async-action-activity-button.is-open {
+  background: var(--aw-bg-pressed);
+  border-color: var(--aw-text-muted);
+}
+.async-action-activity-state {
+  margin-left: auto;
+  color: var(--aw-text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.async-action-activity-state.is-running {
+  color: var(--aw-color-working);
+}
+.async-action-activity-state.is-error {
+  color: var(--aw-color-error);
+}
+.async-action-activity-button.is-mobile {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  justify-content: center;
+  border-color: var(--aw-border-control);
+  padding: 0;
+}
+.async-action-activity-count {
+  position: absolute;
+  right: 3px;
+  bottom: 1px;
+  color: var(--aw-text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+}

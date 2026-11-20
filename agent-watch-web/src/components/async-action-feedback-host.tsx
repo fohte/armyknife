@@ -1,0 +1,121 @@
+import '#components/async-action-feedback-host.css'
+
+import type { AsyncAction } from '#async-action-feedback'
+import { AsyncActionItem } from '#components/async-action-item'
+
+type AsyncActionFeedbackHostProps = {
+  actions: readonly AsyncAction[]
+  toastIds: readonly number[]
+  activityOpen: boolean
+  selectedActionId: number | null
+  retry: (id: number) => void
+  dismissToast: (id: number) => void
+  clearFinished: () => void
+  openActivity: (id?: number) => void
+  closeActivity: () => void
+}
+
+function timeLabel(timestamp: number) {
+  const date = new Date(timestamp)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
+export function AsyncActionFeedbackHost({
+  actions,
+  toastIds,
+  activityOpen,
+  selectedActionId,
+  retry,
+  dismissToast,
+  clearFinished,
+  openActivity,
+  closeActivity,
+}: AsyncActionFeedbackHostProps) {
+  const ordered = [...actions].sort(
+    (left, right) => right.createdAt - left.createdAt,
+  )
+  const selectedAction =
+    selectedActionId === null
+      ? null
+      : (actions.find((action) => action.id === selectedActionId) ?? null)
+  return (
+    <>
+      <div className="async-action-toast-stack" aria-live="polite">
+        {toastIds.map((id) => {
+          const action = actions.find((candidate) => candidate.id === id)
+          return action === undefined ? null : (
+            <AsyncActionItem
+              action={action}
+              form="toast"
+              key={id}
+              onRetry={() => {
+                retry(id)
+              }}
+              onDetails={() => {
+                openActivity(id)
+              }}
+              onDismiss={() => {
+                dismissToast(id)
+              }}
+            />
+          )
+        })}
+      </div>
+      {activityOpen ? (
+        <div
+          className="async-action-activity-backdrop"
+          onMouseDown={closeActivity}
+        >
+          <section
+            aria-label="Activity"
+            aria-modal="true"
+            className="async-action-activity"
+            role="dialog"
+            onMouseDown={(event) => {
+              event.stopPropagation()
+            }}
+          >
+            <header>
+              <h2>Activity</h2>
+              <button type="button" onClick={clearFinished}>
+                Clear finished
+              </button>
+            </header>
+            {ordered.length === 0 ? (
+              <p className="async-action-empty">No recent activity.</p>
+            ) : null}
+            <div className="async-action-activity-list">
+              {ordered.map((action) => (
+                <div
+                  className={
+                    selectedAction?.id === action.id ? 'is-selected' : undefined
+                  }
+                  key={action.id}
+                >
+                  <AsyncActionItem
+                    action={action}
+                    form="row"
+                    onRetry={() => {
+                      retry(action.id)
+                    }}
+                    onDetails={() => {
+                      openActivity(action.id)
+                    }}
+                  />
+                  <time>{timeLabel(action.createdAt)}</time>
+                </div>
+              ))}
+            </div>
+            <button
+              className="async-action-activity-close"
+              type="button"
+              onClick={closeActivity}
+            >
+              Close
+            </button>
+          </section>
+        </div>
+      ) : null}
+    </>
+  )
+}

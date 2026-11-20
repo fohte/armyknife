@@ -2,6 +2,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
+import { AsyncActionFeedbackProvider } from '#async-action-feedback'
 import { ConversationPaneHeader } from '#components/conversation-pane-header'
 import type { Session, SessionActions } from '#types'
 
@@ -73,29 +74,35 @@ function renderHeader(
 ) {
   act(() => {
     root?.render(
-      <ConversationPaneHeader
-        key={currentSession.id}
-        session={currentSession}
-        sessions={[]}
-        actions={actions}
-        isMobile={isMobile}
-        statusPanelOpen={false}
-        backgroundTasks={[]}
-        openInTerminalStatus={null}
-        isToday={options.isToday ?? false}
-        {...(options.mobileActionsMenuOpen === undefined
-          ? {}
-          : { mobileActionsMenuOpen: options.mobileActionsMenuOpen })}
-        onAction={onAction}
-        onOpenInTerminal={() => undefined}
-        onSelectSession={() => undefined}
-        onToggleStatusPanel={options.onToggleStatusPanel ?? (() => undefined)}
-        {...(options.onLater === undefined ? {} : { onLater: options.onLater })}
-        {...(options.onClose === undefined ? {} : { onClose: options.onClose })}
-        {...(options.onToggleToday === undefined
-          ? {}
-          : { onToggleToday: options.onToggleToday })}
-      />,
+      <AsyncActionFeedbackProvider>
+        <ConversationPaneHeader
+          key={currentSession.id}
+          session={currentSession}
+          sessions={[]}
+          actions={actions}
+          isMobile={isMobile}
+          statusPanelOpen={false}
+          backgroundTasks={[]}
+          openInTerminalStatus={null}
+          isToday={options.isToday ?? false}
+          {...(options.mobileActionsMenuOpen === undefined
+            ? {}
+            : { mobileActionsMenuOpen: options.mobileActionsMenuOpen })}
+          onAction={onAction}
+          onOpenInTerminal={() => undefined}
+          onSelectSession={() => undefined}
+          onToggleStatusPanel={options.onToggleStatusPanel ?? (() => undefined)}
+          {...(options.onLater === undefined
+            ? {}
+            : { onLater: options.onLater })}
+          {...(options.onClose === undefined
+            ? {}
+            : { onClose: options.onClose })}
+          {...(options.onToggleToday === undefined
+            ? {}
+            : { onToggleToday: options.onToggleToday })}
+        />
+      </AsyncActionFeedbackProvider>,
     )
   })
 }
@@ -762,7 +769,8 @@ it('merges an open pull request when an earlier session PR is closed', async () 
       ) ?? null,
     ).click()
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      if (container.querySelector('[role="status"]') !== null) return
+      if (container.querySelector('.async-action-item--success') !== null)
+        return
       await new Promise((resolve) => window.setTimeout(resolve, 0))
     }
   })
@@ -776,7 +784,7 @@ it('merges an open pull request when an earlier session PR is closed', async () 
     summary:
       'PR #42: Untitled pull request, open, CI passed. 1 more PR from this session',
     request: ['/api/sessions/fixture-session/pull-requests/42/merge'],
-    feedback: 'PR #42 merged.',
+    feedback: 'Merged PR #42A fixture title',
   })
 })
 
@@ -847,7 +855,8 @@ it('merges a ready pull request from its desktop list row', async () => {
       ) ?? null,
     ).click()
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      if (container.querySelector('[role="status"]') !== null) return
+      if (container.querySelector('.async-action-item--success') !== null)
+        return
       await new Promise((resolve) => window.setTimeout(resolve, 0))
     }
   })
@@ -874,7 +883,7 @@ it('merges a ready pull request from its desktop list row', async () => {
         }),
       },
     ],
-    feedback: 'PR #43 merged.',
+    feedback: 'Merged PR #43A fixture title',
   })
 })
 
@@ -930,7 +939,8 @@ it('shows merge feedback when a PR uses the session repository fallback', async 
       ) ?? null,
     ).click()
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      if (container.querySelector('[role="alert"]') !== null) return
+      if (container.querySelector('.async-action-item--failure') !== null)
+        return
       await new Promise((resolve) => window.setTimeout(resolve, 0))
     }
   })
@@ -953,7 +963,8 @@ it('shows merge feedback when a PR uses the session repository fallback', async 
         }),
       },
     ],
-    feedback: 'The pull request head changed.',
+    feedback:
+      'Merge failed · PR #46A fixture titleThe pull request head changed.RetryDetails',
   })
 })
 
@@ -1008,7 +1019,8 @@ it('keeps merge feedback scoped to the repository when PR numbers match', async 
       ) ?? null,
     ).click()
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      if (container.querySelector('[role="status"]') !== null) return
+      if (container.querySelector('.async-action-item--success') !== null)
+        return
       await new Promise((resolve) => window.setTimeout(resolve, 0))
     }
   })
@@ -1032,14 +1044,13 @@ it('keeps merge feedback scoped to the repository when PR numbers match', async 
     mergeButton:
       container.querySelector('.conversation-pr-merge-button') !== null,
     feedback:
-      container.querySelector('.conversation-pr-merge-feedback')?.textContent ??
-      null,
+      container.querySelector('.async-action-toast-stack')?.textContent ?? null,
   })
   expect(mergeState()).toEqual({
     summary:
       'PR #42: Untitled pull request, merged, CI passed. 1 more PR from this session',
     mergeButton: false,
-    feedback: 'PR #42 merged.',
+    feedback: 'Merged PR #42A fixture title',
   })
 })
 
@@ -1283,7 +1294,7 @@ it('shows mobile merge feedback after confirming from the pull request sheet', a
       ) ?? null,
     ).click()
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      if (container.querySelector('.conversation-pr-merge-feedback') !== null) {
+      if (container.querySelector('.async-action-item--success') !== null) {
         return
       }
       await new Promise((resolve) => window.setTimeout(resolve, 0))
@@ -1293,10 +1304,11 @@ it('shows mobile merge feedback after confirming from the pull request sheet', a
   const mergeState = () => ({
     request: fetchMock.mock.calls.map(([url]) => url),
     confirmationOpen: container.querySelector('[role="alertdialog"]') !== null,
-    feedback: container.querySelector('.conversation-pr-merge-feedback')
-      ?.textContent,
+    feedback: container.querySelector(
+      '.async-action-toast-stack .async-action-item',
+    )?.textContent,
     feedbackRole: container
-      .querySelector('.conversation-pr-merge-feedback')
+      .querySelector('.async-action-toast-stack .async-action-item')
       ?.getAttribute('role'),
     headerHasFeedback: container
       .querySelector('.conversation-header')
@@ -1305,9 +1317,9 @@ it('shows mobile merge feedback after confirming from the pull request sheet', a
   expect(mergeState()).toEqual({
     request: ['/api/sessions/fixture-session/pull-requests/42/merge'],
     confirmationOpen: false,
-    feedback: 'PR #42 merged.',
+    feedback: 'Merged PR #42A fixture title',
     feedbackRole: 'status',
-    headerHasFeedback: true,
+    headerHasFeedback: false,
   })
 })
 
@@ -1373,7 +1385,8 @@ it('merges the session pull request after confirming its head SHA', async () => 
   await act(async () => {
     resolveMerge(Response.json({ result: 'merged' }))
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      if (container.querySelector('[role="status"]') !== null) return
+      if (container.querySelector('.async-action-item--success') !== null)
+        return
       await new Promise((resolve) => window.setTimeout(resolve, 0))
     }
   })
@@ -1389,14 +1402,16 @@ it('merges the session pull request after confirming its head SHA', async () => 
     confirmationOpen: container.querySelector('[role="alertdialog"]') !== null,
     mergeButton:
       container.querySelector('.conversation-pr-merge-button') !== null,
-    feedback: container.querySelector('[role="status"]')?.textContent,
+    feedback: container.querySelector(
+      '.async-action-toast-stack .async-action-item',
+    )?.textContent,
   })
   expect(mergeState()).toEqual({
     confirmedSha: 'sample-head-sha',
     pendingState: {
       confirmationOpen: false,
       mergeButton: { text: 'Merging…', disabled: true },
-      feedback: null,
+      feedback: 'Merging PR #42A fixture title',
     },
     request: [
       {
@@ -1410,8 +1425,8 @@ it('merges the session pull request after confirming its head SHA', async () => 
       },
     ],
     confirmationOpen: false,
-    mergeButton: false,
-    feedback: 'PR #42 merged.',
+    mergeButton: true,
+    feedback: 'Merged PR #42A fixture title',
   })
 })
 
@@ -1457,7 +1472,7 @@ it('keeps the merge action available when the session pull request is queued', a
       ) ?? null,
     ).click()
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      if (container.querySelector('[role="status"]') !== null) return
+      if (container.querySelector('.async-action-item--queued') !== null) return
       await new Promise((resolve) => window.setTimeout(resolve, 0))
     }
   })
@@ -1487,7 +1502,8 @@ it('keeps the merge action available when the session pull request is queued', a
     ],
     confirmationOpen: false,
     mergeButton: true,
-    feedback: 'PR #42 was added to the merge queue: Waiting for checks.',
+    feedback:
+      'Added PR #42 to the merge queueA fixture titleWaiting for checks.',
   })
 })
 
@@ -1536,7 +1552,8 @@ it('keeps the merge action available after a stale-head merge failure', async ()
       ) ?? null,
     ).click()
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      if (container.querySelector('[role="alert"]') !== null) return
+      if (container.querySelector('.async-action-item--failure') !== null)
+        return
       await new Promise((resolve) => window.setTimeout(resolve, 0))
     }
   })
@@ -1566,7 +1583,8 @@ it('keeps the merge action available after a stale-head merge failure', async ()
     ],
     confirmationOpen: false,
     mergeButton: true,
-    feedback: 'The pull request head changed.',
+    feedback:
+      'Merge failed · PR #42A fixture titleThe pull request head changed.RetryDetails',
   })
 })
 

@@ -1,6 +1,7 @@
 import type { Result } from 'neverthrow'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import type { StartAsyncActionOptions } from '#async-action-feedback'
 import {
   getRecentSessionStorage,
   type PaletteItem,
@@ -45,6 +46,7 @@ type CommandPaletteControllerOptions = {
   runOperation: (
     operation: SessionOperation,
   ) => Promise<Result<unknown, SessionOperationError>>
+  startAsyncAction?: (options: StartAsyncActionOptions) => number
 }
 
 export function useCommandPaletteController({
@@ -61,6 +63,7 @@ export function useCommandPaletteController({
   isMobile,
   conversationOpen,
   runOperation,
+  startAsyncAction,
 }: CommandPaletteControllerOptions) {
   const sessionConversationCache = useSessionConversationCache()
   const [isOpen, setIsOpen] = useState(false)
@@ -114,11 +117,51 @@ export function useCommandPaletteController({
           let failure: string | null = null
           let keepWorktreeSessionId: string | null = null
           for (const session of batch.sessions) {
-            const result = await runOperation({
+            const operation = {
               type: 'close',
               sessionId: session.id,
               keepWorktree: batch.keepWorktree,
+            } as const
+            const resultPromise = runOperation(operation)
+            let firstAttempt = true
+            startAsyncAction?.({
+              kind: 'close',
+              sessionId: session.id,
+              sessionTitle: session.title,
+              run: async () => {
+                const isInitialAttempt = firstAttempt
+                firstAttempt = false
+                const actionResult = await (isInitialAttempt
+                  ? resultPromise
+                  : runOperation(operation))
+                return actionResult.match(
+                  () => {
+                    if (!isInitialAttempt) {
+                      clearSessionAttachments(session.id)
+                      setError(null)
+                      setCloseRetrySessionId(null)
+                    }
+                    return { status: 'closed' as const }
+                  },
+                  (error) => {
+                    const message =
+                      error.message || `Could not close ${session.title}.`
+                    if (!isInitialAttempt) {
+                      setError(message)
+                      setCloseRetrySessionId(
+                        error.code === 'unmerged_worktree' ||
+                          error.code === 'dirty_worktree' ||
+                          error.code === 'worktree_process_guard'
+                          ? session.id
+                          : null,
+                      )
+                    }
+                    return { status: 'closeFailed' as const, error: message }
+                  },
+                )
+              },
             })
+            const result = await resultPromise
             if (result.isErr()) {
               failure =
                 result.error.message || `Could not close ${session.title}.`
@@ -159,6 +202,7 @@ export function useCommandPaletteController({
     [
       sessionConversationCache?.clearCachedConversation,
       runOperation,
+      startAsyncAction,
       setCloseRetrySessionId,
       setError,
     ],

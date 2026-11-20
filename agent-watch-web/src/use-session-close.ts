@@ -1,6 +1,7 @@
 import type { Result } from 'neverthrow'
 import { useCallback, useState } from 'react'
 
+import { useAsyncActionFeedback } from '#async-action-feedback'
 import { useSessionConversationCache } from '#components/session-conversation-cache'
 import { clearSessionAttachments } from '#components/use-composer-message'
 import type {
@@ -36,39 +37,55 @@ export function useSessionClose({
     string | null
   >(null)
   const sessionConversationCache = useSessionConversationCache()
+  const { start: startAsyncAction } = useAsyncActionFeedback()
   const confirmationSession = sessions.find(
     (session) => session.id === confirmationSessionId,
   )
 
   const closeNonDoneSession = useCallback(
     (sessionId: string, keepWorktree: boolean) => {
-      void runSessionOperation({
-        type: 'close',
+      const session = sessions.find((candidate) => candidate.id === sessionId)
+      if (session === undefined) return
+      startAsyncAction({
+        kind: 'close',
         sessionId,
-        keepWorktree,
-        stopAndClose: true,
-      }).then((result) => {
-        result.match(
-          () => {
-            sessionConversationCache?.clearCachedConversation(sessionId)
-            clearSessionAttachments(sessionId)
-            setError(null)
-            setCloseRetrySessionId(null)
-          },
-          (operationError) => {
-            setError(operationError.message)
-            setCloseRetrySessionId(
-              KEEP_WORKTREE_ERROR_CODES.has(operationError.code ?? '')
-                ? sessionId
-                : null,
-            )
-          },
-        )
+        sessionTitle: session.title,
+        run: async () =>
+          runSessionOperation({
+            type: 'close',
+            sessionId,
+            keepWorktree,
+            stopAndClose: true,
+          }).then((result) =>
+            result.match(
+              () => {
+                sessionConversationCache?.clearCachedConversation(sessionId)
+                clearSessionAttachments(sessionId)
+                setError(null)
+                setCloseRetrySessionId(null)
+                return { status: 'closed' as const }
+              },
+              (operationError) => {
+                setError(operationError.message)
+                setCloseRetrySessionId(
+                  KEEP_WORKTREE_ERROR_CODES.has(operationError.code ?? '')
+                    ? sessionId
+                    : null,
+                )
+                return {
+                  status: 'closeFailed' as const,
+                  error: operationError.message,
+                }
+              },
+            ),
+          ),
       })
     },
     [
+      startAsyncAction,
       runSessionOperation,
       sessionConversationCache,
+      sessions,
       setCloseRetrySessionId,
       setError,
     ],

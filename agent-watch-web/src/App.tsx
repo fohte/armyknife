@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { AppWorkspace } from '#app-workspace'
+import {
+  AsyncActionFeedbackProvider,
+  useAsyncActionFeedback,
+} from '#async-action-feedback'
 import { useCommandPaletteController } from '#command-palette-controller'
 import { getCommandPaletteShortcut } from '#command-palette-shortcut'
 import { AgentUsageProvider } from '#components/agent-usage-context'
@@ -23,17 +27,20 @@ import { useSessionRefreshRevisions } from '#use-session-refresh-revisions'
 
 export function App() {
   return (
-    <SessionOperationProvider>
-      <SessionConversationCacheProvider>
-        <AgentUsageProvider>
-          <AppContent />
-        </AgentUsageProvider>
-      </SessionConversationCacheProvider>
-    </SessionOperationProvider>
+    <AsyncActionFeedbackProvider>
+      <SessionOperationProvider>
+        <SessionConversationCacheProvider>
+          <AgentUsageProvider>
+            <AppContent />
+          </AgentUsageProvider>
+        </SessionConversationCacheProvider>
+      </SessionOperationProvider>
+    </AsyncActionFeedbackProvider>
   )
 }
 
 function AppContent() {
+  const { start: startAsyncAction } = useAsyncActionFeedback()
   useEffect(() => {
     const preventFileNavigation = (event: DragEvent) => {
       if (!Array.from(event.dataTransfer?.types ?? []).includes('Files')) {
@@ -183,6 +190,7 @@ function AppContent() {
     isMobile,
     conversationOpen: mobileConversationOpen,
     runOperation: runSessionOperation,
+    startAsyncAction,
   })
 
   const closeDoneSession = useCallback(
