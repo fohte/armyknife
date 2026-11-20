@@ -118,15 +118,18 @@ fn parse_codex_composer_line(line: &str) -> Option<bool> {
     }
 
     // External terminal output can overwrite the composer row without Codex
-    // repainting it, so require Codex's visible prompt spacing before reading it.
+    // repainting it, so require the prompt separator and allow only one typed leading space.
     let body = &styled_line.characters[prompt_index + 1..];
     if body.first()?.value != ' ' {
         return None;
     }
-    let first_content = body.get(1)?;
-    if first_content.value.is_whitespace() {
+    let first_content_index = body
+        .iter()
+        .position(|character| !character.value.is_whitespace())?;
+    if first_content_index > 2 {
         return None;
     }
+    let first_content = &body[first_content_index];
 
     Some(!first_content.dim)
 }
@@ -367,6 +370,10 @@ mod tests {
     )]
     #[case::normal_text_is_a_draft(
         format!("{ESC}[1m›{ESC}[0m draft text"),
+        Some(true),
+    )]
+    #[case::leading_space_is_a_draft(
+        format!("{ESC}[1m›{ESC}[0m  draft text"),
         Some(true),
     )]
     #[case::overwritten_from_first_column_is_unknown(
