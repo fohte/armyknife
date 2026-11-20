@@ -856,13 +856,16 @@ mod tests {
     }
 
     #[rstest]
-    #[case::stopped(SessionStatus::Stopped)]
-    #[case::paused(SessionStatus::Paused)]
-    #[case::ended(SessionStatus::Ended)]
+    #[case::claude_stopped(Engine::Claude, SessionStatus::Stopped)]
+    #[case::claude_paused(Engine::Claude, SessionStatus::Paused)]
+    #[case::claude_ended(Engine::Claude, SessionStatus::Ended)]
+    #[case::codex_stopped(Engine::Codex, SessionStatus::Stopped)]
     fn close_allows_unknown_draft_when_session_update_is_stale(
         mut session: Session,
+        #[case] engine: Engine,
         #[case] status: SessionStatus,
     ) {
+        session.engine = engine;
         session.status = status;
         session.updated_at = Utc::now() - chrono::TimeDelta::hours(1);
         let runtime = FakeRuntime {
@@ -871,22 +874,23 @@ mod tests {
         };
 
         let result = close_session(&session, false, &runtime);
+        let mut expected_calls = vec![
+            pane_exists_call(),
+            pane_session_call(),
+            resolve_pid_call(engine),
+            draft_call(engine),
+            graceful_quit_call(42),
+            pane_exists_call(),
+            pane_session_call(),
+        ];
+        if engine == Engine::Codex {
+            expected_calls.push(Call::EndCodexSession("session-1".to_string()));
+        }
+        expected_calls.push(kill_pane_call());
 
         assert_eq!(
             (result.is_ok(), runtime.calls.into_inner()),
-            (
-                true,
-                vec![
-                    pane_exists_call(),
-                    pane_session_call(),
-                    resolve_pid_call(Engine::Claude),
-                    draft_call(Engine::Claude),
-                    graceful_quit_call(42),
-                    pane_exists_call(),
-                    pane_session_call(),
-                    kill_pane_call(),
-                ],
-            ),
+            (true, expected_calls),
         );
     }
 
