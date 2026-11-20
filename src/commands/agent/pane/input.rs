@@ -98,6 +98,8 @@ fn extract_codex_composer_has_draft(raw: &str) -> Option<bool> {
     parse_codex_composer_line(line)
 }
 
+const MAX_CODEX_COMPOSER_LEADING_WHITESPACE: usize = 64;
+
 fn parse_codex_composer_line(line: &str) -> Option<bool> {
     let styled_line = parse_codex_sgr(line)?;
     if !styled_line.has_sgr {
@@ -118,7 +120,7 @@ fn parse_codex_composer_line(line: &str) -> Option<bool> {
     }
 
     // External terminal output can overwrite the composer row without Codex
-    // repainting it, so require the prompt separator and allow only one typed leading space.
+    // repainting it, so long blank prefixes are uninspectable.
     let body = &styled_line.characters[prompt_index + 1..];
     if body.first()?.value != ' ' {
         return None;
@@ -126,7 +128,7 @@ fn parse_codex_composer_line(line: &str) -> Option<bool> {
     let first_content_index = body
         .iter()
         .position(|character| !character.value.is_whitespace())?;
-    if first_content_index > 2 {
+    if first_content_index > MAX_CODEX_COMPOSER_LEADING_WHITESPACE + 1 {
         return None;
     }
     let first_content = &body[first_content_index];
@@ -376,12 +378,16 @@ mod tests {
         format!("{ESC}[1m›{ESC}[0m  draft text"),
         Some(true),
     )]
+    #[case::multiple_leading_spaces_are_a_draft(
+        format!("{ESC}[1m›{ESC}[0m   draft text"),
+        Some(true),
+    )]
     #[case::overwritten_from_first_column_is_unknown(
         format!("{ESC}[1m›{ESC}[0mfixture diagnostic text"),
         None,
     )]
-    #[case::overwritten_after_prompt_space_is_unknown(
-        format!("{ESC}[1m›{ESC}[0m        fixture diagnostic text"),
+    #[case::overwritten_after_long_prompt_spacing_is_unknown(
+        format!("{ESC}[1m›{ESC}[0m{}fixture diagnostic text", " ".repeat(80)),
         None,
     )]
     #[case::indexed_colour_argument_is_not_dim(
