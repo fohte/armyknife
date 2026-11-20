@@ -423,6 +423,7 @@ fn run_session_only_inner_with_launchers(
                 engine: launch_options.engine,
                 env_vars: &env_refs,
                 background,
+                watch_web_launch: args.common.watch_web_launch_id.is_some(),
             })?;
             println!("Split tmux pane in '{cwd}'{background_suffix}{route_suffix}");
         }
@@ -453,6 +454,7 @@ fn run_session_only_inner_with_launchers(
                     engine: launch_options.engine,
                     env_vars: &env_refs,
                     background,
+                    watch_web_launch: args.common.watch_web_launch_id.is_some(),
                     restore_automatic_rename: true,
                 },
                 context.config,
@@ -1538,6 +1540,45 @@ mod tests {
                 ],
                 true,
             ),
+        );
+    }
+
+    #[rstest]
+    #[case::watch_web_split(Some("%caller-pane"), Some("launch-fixture"), true)]
+    #[case::ordinary_split(Some("%caller-pane"), None, false)]
+    #[case::watch_web_window(None, Some("launch-fixture"), true)]
+    #[case::ordinary_window(None, None, false)]
+    fn session_only_launch_specs_preserve_watch_web_launch_state(
+        #[case] caller_pane: Option<&str>,
+        #[case] launch_id: Option<&str>,
+        #[case] expected_watch_web_launch: bool,
+        session_only_root: SessionOnlyRootFixture,
+    ) {
+        let mut args =
+            TestCli::try_parse_from(["a", "--skip-hooks", "--prompt", "Inspect the example."])
+                .unwrap()
+                .args;
+        args.common.watch_web_launch_id = launch_id.map(str::to_string);
+        let captured_watch_web_launch = Cell::new(None);
+
+        let result = run_session_only_inner_with_launchers(
+            &args,
+            session_only_root.context(),
+            || caller_pane.map(str::to_string),
+            |spec| {
+                captured_watch_web_launch.set(Some(spec.watch_web_launch));
+                Ok(String::new())
+            },
+            |spec, _| {
+                captured_watch_web_launch.set(Some(spec.watch_web_launch));
+                Ok(String::new())
+            },
+            |_, _| Ok(()),
+        );
+
+        assert_eq!(
+            (result.is_ok(), captured_watch_web_launch.get()),
+            (true, Some(expected_watch_web_launch)),
         );
     }
 

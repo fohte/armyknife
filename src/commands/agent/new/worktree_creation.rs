@@ -308,6 +308,7 @@ pub(super) fn run_worktree_creation(
             prompt: final_prompt.as_deref(),
             env_vars: &env_refs,
             background,
+            watch_web_launch_id: args.common.watch_web_launch_id.as_deref(),
         }),
         config,
     )?;
@@ -333,6 +334,7 @@ struct WorktreeWindowContext<'a> {
     prompt: Option<&'a str>,
     env_vars: &'a [(&'a str, &'a str)],
     background: bool,
+    watch_web_launch_id: Option<&'a str>,
 }
 
 fn worktree_window_spec(context: WorktreeWindowContext<'_>) -> TmuxWindowSpec<'_> {
@@ -350,6 +352,7 @@ fn worktree_window_spec(context: WorktreeWindowContext<'_>) -> TmuxWindowSpec<'_
         engine: context.launch_options.engine,
         env_vars: context.env_vars,
         background: context.background,
+        watch_web_launch: context.watch_web_launch_id.is_some(),
         restore_automatic_rename: false,
     }
 }
@@ -466,6 +469,7 @@ mod tests {
             prompt: None,
             env_vars: &[],
             background: false,
+            watch_web_launch_id: None,
         });
         let expected_path = linked_worktree.path.clone();
         let expected_path_str = expected_path.to_string_lossy().to_string();
@@ -651,6 +655,7 @@ mod tests {
             prompt: None,
             env_vars,
             background: false,
+            watch_web_launch_id: None,
         });
 
         assert_eq!(
@@ -660,6 +665,30 @@ mod tests {
                 Some("model-ember"),
                 Some(ReasoningEffort::High)
             ),
+        );
+    }
+
+    #[rstest]
+    fn worktree_window_spec_enables_watch_web_launch_for_launch_id(
+        worktree_dir: tempfile::TempDir,
+        launch_setup: (Config, ResolvedLaunchOptions),
+    ) {
+        let (config, launch_options) = launch_setup;
+        let spec = worktree_window_spec(WorktreeWindowContext {
+            repo_root: "/example/repo",
+            worktree_name: "topic",
+            worktree_dir: worktree_dir.path(),
+            config: &config,
+            launch_options: &launch_options,
+            prompt: Some("Inspect the example."),
+            env_vars: &[],
+            background: true,
+            watch_web_launch_id: Some("launch-fixture"),
+        });
+
+        assert_eq!(
+            (spec.watch_web_launch, spec.prompt),
+            (true, Some("Inspect the example.")),
         );
     }
 
