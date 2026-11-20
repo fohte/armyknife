@@ -1,28 +1,26 @@
-import { act, Component, type ReactNode } from 'react'
+import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import {
   AsyncActionFeedbackProvider,
   type AsyncActionOutcome,
-  useAsyncActionFeedback,
+  useAsyncActionStarter,
+  useOptionalAsyncActionFeedback,
 } from '#async-action-feedback'
 
 let container: HTMLDivElement
 let root: Root | null = null
 
 function FeedbackHarness({ run }: { run: () => Promise<AsyncActionOutcome> }) {
-  const feedbackResult = useAsyncActionFeedback()
-  const feedback = feedbackResult.match(
-    (value) => value,
-    () => null,
-  )
+  const feedback = useOptionalAsyncActionFeedback()
+  const startAsyncAction = useAsyncActionStarter(() => {})
   return (
     <>
       <button
         type="button"
         onClick={() => {
-          feedback?.start({
+          startAsyncAction({
             kind: 'merge',
             sessionId: 'sample-session',
             sessionTitle: 'Sample session',
@@ -42,49 +40,42 @@ function FeedbackHarness({ run }: { run: () => Promise<AsyncActionOutcome> }) {
         Show activity
       </button>
       <output>
-        {feedbackResult.match(
-          ({ actions, toastIds }) =>
-            JSON.stringify({
-              actions: actions.map(({ status }) => status),
-              toastIds,
-            }),
-          (error) => `provider error: ${error.message}`,
-        )}
+        {JSON.stringify({
+          actions: feedback?.actions.map(({ status }) => status),
+          toastIds: feedback?.toastIds,
+        })}
       </output>
     </>
   )
 }
 
-function MissingProviderHarness() {
-  const feedback = useAsyncActionFeedback()
+function MissingProviderHarness({
+  run,
+}: {
+  run: () => Promise<AsyncActionOutcome>
+}) {
+  const [error, setError] = useState<string | null>(null)
+  const startAsyncAction = useAsyncActionStarter((feedbackError) => {
+    setError(feedbackError.message)
+  })
   return (
-    <output>
-      {feedback.match(
-        () => 'provider available',
-        (error) => `provider error: ${error.message}`,
-      )}
-    </output>
+    <>
+      <button
+        type="button"
+        onClick={() => {
+          startAsyncAction({
+            kind: 'merge',
+            sessionId: 'sample-session',
+            sessionTitle: 'Sample session',
+            run,
+          })
+        }}
+      >
+        Start action
+      </button>
+      <output>{error}</output>
+    </>
   )
-}
-
-class TestErrorBoundary extends Component<
-  { children: ReactNode },
-  { message: string | null }
-> {
-  override state: { message: string | null } = { message: null }
-
-  static getDerivedStateFromError(error: unknown) {
-    return {
-      message: error instanceof Error ? error.message : String(error),
-    }
-  }
-
-  override render() {
-    if (this.state.message !== null) {
-      return <output>thrown error: {this.state.message}</output>
-    }
-    return this.props.children
-  }
 }
 
 function textContent(selector: string) {
@@ -107,18 +98,24 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-it('returns a failure result when used outside its provider', () => {
+it('runs the action and reports a provider error when used outside its provider', () => {
+  const run = vi.fn(() => Promise.resolve({ status: 'merged' as const }))
   act(() => {
-    root?.render(
-      <TestErrorBoundary>
-        <MissingProviderHarness />
-      </TestErrorBoundary>,
-    )
+    root?.render(<MissingProviderHarness run={run} />)
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('button')?.click()
   })
 
-  expect(textContent('output')).toEqual(
-    'provider error: useAsyncActionFeedback must be used inside AsyncActionFeedbackProvider',
-  )
+  const snapshot = () => ({
+    providerError: textContent('output'),
+    runCalls: run.mock.calls.length,
+  })
+  expect(snapshot()).toEqual({
+    providerError:
+      'useAsyncActionFeedback must be used inside AsyncActionFeedbackProvider',
+    runCalls: 1,
+  })
 })
 
 it('records a merge while it runs, then keeps its result in Activity', async () => {

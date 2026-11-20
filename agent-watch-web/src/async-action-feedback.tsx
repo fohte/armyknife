@@ -309,10 +309,7 @@ export function AsyncActionFeedbackProvider({
   )
 }
 
-export function useAsyncActionFeedback(): Result<
-  AsyncActionFeedbackValue,
-  Error
-> {
+function useAsyncActionFeedback(): Result<AsyncActionFeedbackValue, Error> {
   const context = useContext(AsyncActionFeedbackContext)
   return context === null
     ? err(
