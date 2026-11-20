@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.806](https://github.com/fohte/armyknife/compare/v0.1.805...v0.1.806) (2026-11-20)
+
+
+### Bug Fixes
+
+* **agent:** ignore Codex output as a draft ([#1997](https://github.com/fohte/armyknife/issues/1997)) ([a37bff9](https://github.com/fohte/armyknife/commit/a37bff95c932c391572533fe337a65c0b318d58a))
+
 ## [0.1.805](https://github.com/fohte/armyknife/compare/v0.1.804...v0.1.805) (2026-11-20)
 
 
