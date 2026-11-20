@@ -2,9 +2,8 @@
 //!
 //! Claude Code text is extracted from between its `─` rules by
 //! [`get_pane_input_text`], which is also used by `auto_compact`. Codex is
-//! detected from the pane's cursor row when it is the `›` line in an ANSI-styled
-//! capture; its dim placeholder marks an empty composer without depending on
-//! placeholder wording.
+//! detected from the `›` line in an ANSI-styled capture; its dim placeholder
+//! marks an empty composer without depending on placeholder wording.
 //! [`pane_has_draft_for_socket`] returns `None` when capture or layout cannot be parsed.
 //! The active-session probe and `agent close` fall back to `session.updated_at`;
 //! close protects recent activity for the configured auto-pause timeout.
@@ -26,28 +25,23 @@ pub fn pane_has_draft_for_socket(
     pane_id: &str,
     engine: Engine,
 ) -> Option<bool> {
-    pane_has_draft_with_capture(
-        engine,
-        |with_escapes| {
-            if with_escapes {
-                tmux::capture_pane_with_escapes_for_socket(socket_path, pane_id)
-            } else {
-                tmux::capture_pane_for_socket(socket_path, pane_id)
-            }
-        },
-        || tmux::get_pane_cursor_y_for_socket(socket_path, pane_id),
-    )
+    pane_has_draft_with_capture(engine, |with_escapes| {
+        if with_escapes {
+            tmux::capture_pane_with_escapes_for_socket(socket_path, pane_id)
+        } else {
+            tmux::capture_pane_for_socket(socket_path, pane_id)
+        }
+    })
 }
 
 fn pane_has_draft_with_capture(
     engine: Engine,
     capture: impl FnOnce(bool) -> Option<String>,
-    cursor_y: impl FnOnce() -> Option<usize>,
 ) -> Option<bool> {
     let raw = capture(engine == Engine::Codex)?;
     match engine {
         Engine::Claude => extract_input_text(&raw).map(|text| !text.is_empty()),
-        Engine::Codex => extract_codex_composer_has_draft(&raw, cursor_y()?),
+        Engine::Codex => extract_codex_composer_has_draft(&raw),
     }
 }
 
@@ -99,11 +93,8 @@ fn strip_decoration(line: &str) -> &str {
         .unwrap_or(line)
 }
 
-fn extract_codex_composer_has_draft(raw: &str, cursor_y: usize) -> Option<bool> {
-    let line = raw.lines().nth(cursor_y)?;
-    if !line.contains('›') {
-        return None;
-    }
+fn extract_codex_composer_has_draft(raw: &str) -> Option<bool> {
+    let line = raw.lines().rev().find(|line| line.contains('›'))?;
     parse_codex_composer_line(line)
 }
 
@@ -126,6 +117,8 @@ fn parse_codex_composer_line(line: &str) -> Option<bool> {
         return None;
     }
 
+    // External terminal output can overwrite the composer row without Codex
+    // repainting it, so require the prompt separator and allow only one typed leading space.
     let body = &styled_line.characters[prompt_index + 1..];
     if body.first()?.value != ' ' {
         return None;
@@ -133,6 +126,9 @@ fn parse_codex_composer_line(line: &str) -> Option<bool> {
     let first_content_index = body
         .iter()
         .position(|character| !character.value.is_whitespace())?;
+    if first_content_index > 2 {
+        return None;
+    }
     let first_content = &body[first_content_index];
 
     Some(!first_content.dim)
@@ -380,9 +376,13 @@ mod tests {
         format!("{ESC}[1m›{ESC}[0m  draft text"),
         Some(true),
     )]
-    #[case::multiple_leading_spaces_are_a_draft(
-        format!("{ESC}[1m›{ESC}[0m   draft text"),
-        Some(true),
+    #[case::overwritten_from_first_column_is_unknown(
+        format!("{ESC}[1m›{ESC}[0mfixture diagnostic text"),
+        None,
+    )]
+    #[case::overwritten_after_prompt_space_is_unknown(
+        format!("{ESC}[1m›{ESC}[0m        fixture diagnostic text"),
+        None,
     )]
     #[case::indexed_colour_argument_is_not_dim(
         format!("{ESC}[1m›{ESC}[0m {ESC}[38;5;2mdraft text{ESC}[0m"),
@@ -400,57 +400,16 @@ mod tests {
         format!("{ESC}[1m›{ESC}[0m {ESC}[2;38;2;40;0;22mplaceholder{ESC}[0m"),
         Some(false),
     )]
+    #[case::last_composer_is_used(
+        format!("{ESC}[1m›{ESC}[0m stale text\n{ESC}[1m›{ESC}[0m {ESC}[2mplaceholder{ESC}[0m"),
+        Some(false),
+    )]
     #[case::no_prompt_is_unknown("ordinary output".to_string(), None)]
     #[case::missing_body_is_unknown(format!("{ESC}[1m›{ESC}[0m"), None)]
     #[case::unstyled_prompt_is_unknown("› placeholder text".to_string(), None)]
     #[case::malformed_escape_is_unknown(format!("{ESC}[1m›{ESC}[2"), None)]
     fn detects_codex_composer_draft(#[case] raw: String, #[case] expected: Option<bool>) {
-        assert_eq!(parse_codex_composer_line(&raw), expected);
-    }
-
-    #[rstest]
-    #[case::overwritten_from_first_column(
-        format!("{ESC}[1m›{ESC}[0mfixture diagnostic text\nnext fixture line"),
-        1,
-        None,
-    )]
-    #[case::overwritten_after_long_prompt_spacing(
-        format!(
-            "{ESC}[1m›{ESC}[0m{}fixture diagnostic text\nnext fixture line",
-            " ".repeat(80),
-        ),
-        1,
-        None,
-    )]
-    #[case::composer_is_read_at_cursor_row(
-        format!("{ESC}[1m›{ESC}[0m stale text\n{ESC}[1m›{ESC}[0m {ESC}[2mplaceholder{ESC}[0m"),
-        1,
-        Some(false),
-    )]
-    #[case::short_overwrite_is_not_a_draft(
-        format!("{ESC}[1m›{ESC}[0m        fixture output\nnext fixture line"),
-        1,
-        None,
-    )]
-    #[case::long_overwrite_is_not_a_draft(
-        format!(
-            "{ESC}[1m›{ESC}[0m{}fixture output\nnext fixture line",
-            " ".repeat(80),
-        ),
-        1,
-        None,
-    )]
-    #[case::long_user_draft_remains_inspectable(
-        format!("{ESC}[1m›{ESC}[0m {}draft text", " ".repeat(80)),
-        0,
-        Some(true),
-    )]
-    fn detects_codex_composer_on_cursor_row(
-        #[case] raw: String,
-        #[case] cursor_y: usize,
-        #[case] expected: Option<bool>,
-    ) {
-        assert_eq!(extract_codex_composer_has_draft(&raw, cursor_y), expected);
+        assert_eq!(extract_codex_composer_has_draft(&raw), expected);
     }
 
     #[rstest]
@@ -469,14 +428,10 @@ mod tests {
             Engine::Codex => format!("{ESC}[1m›{ESC}[0m draft text"),
         };
         let mut capture_mode = None;
-        let result = pane_has_draft_with_capture(
-            engine,
-            |with_escapes| {
-                capture_mode = Some(with_escapes);
-                Some(raw)
-            },
-            || Some(0),
-        );
+        let result = pane_has_draft_with_capture(engine, |with_escapes| {
+            capture_mode = Some(with_escapes);
+            Some(raw)
+        });
 
         assert_eq!(
             (capture_mode, result),
