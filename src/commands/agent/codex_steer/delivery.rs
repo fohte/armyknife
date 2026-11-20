@@ -1057,7 +1057,55 @@ mod tests {
     }
 
     #[rstest]
-    fn remains_unconfirmed_when_missing_rollout_rejections_reach_deadline(
+    fn returns_last_rollout_rejection_when_retry_would_exceed_deadline(
+        connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
+    ) -> anyhow::Result<()> {
+        let (mut client_socket, server_socket) = connected_sockets?;
+        let server = std::thread::spawn(move || -> anyhow::Result<Vec<Value>> {
+            let mut socket = server_socket;
+            let snapshot_request = read_empty_snapshot(&mut socket)?;
+            let turn_request = read_request(&mut socket)?;
+            send_response(
+                &mut socket,
+                TURN_START_REQUEST_ID,
+                json!({"turn": {"id": TURN_ID, "status": "inProgress"}}),
+            )?;
+            let resume_request = read_request(&mut socket)?;
+            send_error(
+                &mut socket,
+                THREAD_RESUME_REQUEST_ID,
+                -32600,
+                "no rollout found for thread id thread-a",
+            )?;
+            Ok(vec![snapshot_request, turn_request, resume_request])
+        });
+
+        let result = result_text(send_and_confirm_with_retry_timing(
+            &mut client_socket,
+            THREAD_ID,
+            "hello there",
+            None,
+            CLIENT_USER_MESSAGE_ID,
+            ResumeRetryTiming {
+                timeout: Duration::from_secs(3),
+                interval: Duration::from_secs(10),
+            },
+            |socket| socket.read(),
+        ));
+        let requests = join_server(&client_socket, &result, server)?;
+
+        assert_eq!(
+            (result, requests),
+            (
+                Err("Codex app-server delivery is unconfirmed: could not confirm Codex delivery using thread/resume: Codex app-server `thread/resume` failed: no rollout found for thread id thread-a (code -32600)".to_string()),
+                start_and_subscribe_requests(),
+            ),
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    fn remains_unconfirmed_when_final_resume_request_gets_no_response(
         connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
     ) -> anyhow::Result<()> {
         let (mut client_socket, server_socket) = connected_sockets?;

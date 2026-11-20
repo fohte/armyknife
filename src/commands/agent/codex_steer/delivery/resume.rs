@@ -66,7 +66,6 @@ pub(super) fn resume_thread_with_retry(
                 rollout_rejection_count += 1;
                 let time_left = deadline.saturating_duration_since(Instant::now());
                 if time_left <= retry_interval {
-                    std::thread::sleep(time_left);
                     log_retry_summary(thread_id, rollout_rejection_count, started_at, "deadline");
                     return Err(error);
                 }
