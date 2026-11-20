@@ -21,6 +21,7 @@ import type {
   RewindMode,
   Session,
   SessionActions,
+  SessionTask,
   SessionTreeNode,
 } from '#types'
 
@@ -1025,52 +1026,6 @@ it('labels a Starred mobile session for removal', async () => {
   })
 })
 
-it('sets the primary linked task from the desktop header', async () => {
-  const primaryTask = {
-    id: 'sample-primary-task',
-    number: 2048,
-    title: 'Improve request reliability',
-    priority: 1,
-  }
-  const secondaryTask = {
-    id: 'sample-secondary-task',
-    number: 2046,
-    title: 'Add request tracing',
-    priority: 4,
-  }
-  const sessionWithLinkedTasks = {
-    ...session,
-    task: primaryTask,
-    tasks: [primaryTask, secondaryTask],
-  }
-  const onAction = vi.fn(() => Promise.resolve(true))
-
-  renderView(
-    onAction,
-    sessionWithLinkedTasks,
-    undefined,
-    [],
-    actions,
-    false,
-    [],
-    [sessionWithLinkedTasks],
-  )
-  await act(async () => {
-    container.querySelector('summary')?.click()
-    await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
-  })
-  await act(async () => {
-    document.body
-      .querySelector<HTMLButtonElement>('.session-task-links-make-primary')
-      ?.click()
-    await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
-  })
-
-  expect(onAction.mock.calls).toEqual([
-    ['primary-task', { taskId: 'sample-secondary-task' }],
-  ])
-})
-
 it('places the session ID copy action in the mobile menu', async () => {
   renderView(() => Promise.resolve(true), session, undefined, [], actions, true)
 
@@ -1093,6 +1048,109 @@ it('places the session ID copy action in the mobile menu', async () => {
     copyControlBesideTitle: false,
   })
 })
+
+it.each([
+  { description: 'desktop', isMobile: false },
+  { description: 'mobile', isMobile: true },
+])(
+  'opens the Tasks tab from the header count on $description',
+  async ({ isMobile }) => {
+    const primaryTask: SessionTask = {
+      id: 'fixture-primary-task',
+      number: 2048,
+      title: 'Improve request reliability',
+      priority: 1,
+    }
+    const secondaryTask: SessionTask = {
+      id: 'fixture-secondary-task',
+      number: 2046,
+      title: 'Add request tracing',
+      priority: 4,
+    }
+    const backgroundTask: BackgroundTask = {
+      id: 'fixture-background-task',
+      description: 'Review request reliability',
+      elapsedSeconds: 12,
+      kind: 'subagent',
+    }
+    const sessionWithLinkedTasks: Session = {
+      ...session,
+      task: primaryTask,
+      tasks: [primaryTask, secondaryTask],
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>((input) => {
+        const url = requestUrl(input)
+        if (url.endsWith('/messages?limit=100')) {
+          return Promise.resolve(
+            jsonResponse(messagesResponse([], [backgroundTask])),
+          )
+        }
+        if (url.endsWith('/actions')) {
+          return Promise.resolve(jsonResponse(actions))
+        }
+        return Promise.resolve(jsonResponse({}))
+      }),
+    )
+    function TaskPanelHarness() {
+      const [statusPanelOpen, setStatusPanelOpen] = useState(false)
+      return (
+        <ConversationPane
+          session={sessionWithLinkedTasks}
+          shouldSkipSessionTreeFetch
+          initialSessionTree={[]}
+          refreshKey={0}
+          sessionTreeRefreshKey={0}
+          onSelectSession={() => undefined}
+          isMobile={isMobile}
+          statusPanelOpen={statusPanelOpen}
+          onToggleStatusPanel={() => {
+            setStatusPanelOpen((open) => !open)
+          }}
+          onCloseStatusPanel={() => {
+            setStatusPanelOpen(false)
+          }}
+        />
+      )
+    }
+
+    root = createRoot(container)
+    act(() => root?.render(<TaskPanelHarness />))
+    const headerCount = await waitForState(
+      () =>
+        container.querySelector<HTMLButtonElement>('.session-task-links') !==
+        null,
+    )
+    if (!headerCount) throw new Error('Expected the linked-task count')
+    await act(async () => {
+      for (let index = 0; index < 12; index += 1) await Promise.resolve()
+    })
+    await act(async () => {
+      requireElement(
+        container.querySelector<HTMLButtonElement>('.session-task-links'),
+      ).click()
+      await Promise.resolve()
+    })
+
+    const snapshot = () => ({
+      count: container.querySelector('.session-task-links')?.textContent,
+      statusPanel: container.querySelector('.session-status-panel') !== null,
+      activeTab: container.querySelector('[role="tab"][aria-selected="true"]')
+        ?.textContent,
+      taskCount: container.querySelectorAll('.session-tasks-panel-list li')
+        .length,
+      headerPopover: document.body.querySelector('.session-task-links-menu'),
+    })
+    expect(snapshot()).toEqual({
+      count: '+1',
+      statusPanel: true,
+      activeTab: 'Tasks2',
+      taskCount: 2,
+      headerPopover: null,
+    })
+  },
+)
 
 function dispatchKey(
   target: EventTarget,

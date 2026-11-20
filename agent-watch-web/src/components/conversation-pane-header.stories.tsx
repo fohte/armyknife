@@ -34,7 +34,6 @@ const meta = {
   component: ConversationPaneHeader,
   args: {
     session,
-    sessions: [],
     actions,
     isMobile: false,
     statusPanelOpen: false,
