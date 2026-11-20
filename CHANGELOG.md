@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.807](https://github.com/fohte/armyknife/compare/v0.1.806...v0.1.807) (2026-11-20)
+
+
+### Bug Fixes
+
+* **codex-steer:** retry initial delivery check ([#2002](https://github.com/fohte/armyknife/issues/2002)) ([e62b36b](https://github.com/fohte/armyknife/commit/e62b36b7819f9669e2d56cf73c3aa8d67c7c6596))
+
 ## [0.1.806](https://github.com/fohte/armyknife/compare/v0.1.805...v0.1.806) (2026-11-20)
 
 
