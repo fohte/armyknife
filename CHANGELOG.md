@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.810](https://github.com/fohte/armyknife/compare/v0.1.809...v0.1.810) (2026-11-20)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** remove the task count border ([#2005](https://github.com/fohte/armyknife/issues/2005)) ([aa97a5d](https://github.com/fohte/armyknife/commit/aa97a5d7b4f536f6e04eeea7dee25a6eb7db9760))
+
 ## [0.1.809](https://github.com/fohte/armyknife/compare/v0.1.808...v0.1.809) (2026-11-20)
 
 
