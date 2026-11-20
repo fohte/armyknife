@@ -3568,6 +3568,73 @@ it('keeps session shortcuts from acting behind close confirmation', () => {
   })
 })
 
+it('keeps the Done close shortcut inactive while Activity is open', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-done-a', 'First finished session', 'done'),
+      session('session-done-b', 'Second finished session', 'done'),
+    ],
+  })
+
+  const firstRow = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('[data-session-row]'),
+  ).find((row) => row.textContent.includes('First finished session'))
+  if (firstRow === undefined) {
+    throw new Error('First Done session was not rendered')
+  }
+  act(() => {
+    firstRow.click()
+    dispatchKey(window, 'e')
+  })
+  await act(async () => {
+    await flushAsyncState()
+  })
+
+  const secondRow = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('[data-session-row]'),
+  ).find((row) => row.textContent.includes('Second finished session'))
+  if (secondRow === undefined) {
+    throw new Error('Second Done session was not rendered')
+  }
+  act(() => {
+    secondRow.click()
+  })
+  const activityButton = container.querySelector<HTMLButtonElement>(
+    '.async-action-activity-button',
+  )
+  if (activityButton === null) {
+    throw new Error('Activity button was not rendered')
+  }
+  act(() => {
+    activityButton.click()
+  })
+  act(() => {
+    dispatchKey(window, 'e')
+  })
+
+  const snapshot = () => ({
+    activityOpen: document.querySelector('.async-action-activity') !== null,
+    selectedSession:
+      container.querySelector<HTMLElement>(
+        '[data-session-row][aria-current="true"] .session-title',
+      )?.textContent ?? null,
+    closeUrls: fetchMock.mock.calls
+      .map(([request]) => requestUrl(request))
+      .filter((url) => url.endsWith('/close')),
+  })
+  expect(snapshot()).toEqual({
+    activityOpen: true,
+    selectedSession: 'Second finished session',
+    closeUrls: ['/api/sessions/session-done-a/close'],
+  })
+})
+
 it('confirms closing a non-Done session from the Inbox shortcut', async () => {
   const fetchMock = vi
     .fn<typeof fetch>()

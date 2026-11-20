@@ -96,6 +96,7 @@ export function AsyncActionFeedbackHost({
                     action={action}
                     form="row"
                     onRetry={() => {
+                      closeActivity()
                       retry(action.id)
                     }}
                     onDetails={() => {

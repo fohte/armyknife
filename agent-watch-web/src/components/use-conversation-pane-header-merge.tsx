@@ -1,5 +1,6 @@
-import { useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 
+import type { StartAsyncActionOptions } from '#async-action-feedback'
 import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
 import {
   getRepresentativePullRequest,
@@ -19,6 +20,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 type PullRequestMergeOperation = Extract<SessionOperation, { type: 'merge' }>
+type MergeFeedbackTarget = {
+  number: number
+  owner?: string
+  repo?: string
+  headSha?: string | null
+  expectedHeadSha?: string
+}
 
 function isStaleHeadFailure(message: string) {
   return /head changed(?: since confirmation)?/i.test(message)
@@ -48,10 +56,9 @@ export function useConversationPaneHeaderMerge({
   const [mergeConfirmationOpen, setMergeConfirmationOpen] = useState(false)
   const [mergeTarget, setMergeTarget] =
     useState<PullRequestMergeOperation | null>(null)
+  const [retryingActionId, setRetryingActionId] = useState<number | null>(null)
   const { pendingOperations, run } = useSessionOperations()
   const actionFeedback = useOptionalAsyncActionFeedback()
-  const latestPullRequests = useRef(pullRequests)
-  latestPullRequests.current = pullRequests
   const sessionRepoParts = session.repo.split('/')
   const mergeIdentity = (target: {
     number: number
@@ -82,11 +89,7 @@ export function useConversationPaneHeaderMerge({
     pullRequest?.isCurrentBranch === true
       ? mergeOperationFor(pullRequest)
       : null
-  const isMerging = (target: {
-    number: number
-    owner?: string
-    repo?: string
-  }) => {
+  const isMerging = (target: MergeFeedbackTarget) => {
     const identity = mergeIdentity(target)
     if (identity.owner === undefined || identity.repo === undefined)
       return false
@@ -102,57 +105,92 @@ export function useConversationPaneHeaderMerge({
       )
     )
   }
-  const mergeFeedbackFor = (target: {
-    number: number
-    owner?: string
-    repo?: string
-  }) => {
+  const mergeFeedbackFor = (target: MergeFeedbackTarget) => {
     const identity = mergeIdentity(target)
+    const targetHeadSha = target.expectedHeadSha ?? target.headSha
     return actionFeedback?.actions.find(
       (action) =>
         action.kind === 'merge' &&
         action.sessionId === session.id &&
         action.pullRequestNumber === identity.number &&
         action.pullRequestOwner === identity.owner &&
-        action.pullRequestRepo === identity.repo,
+        action.pullRequestRepo === identity.repo &&
+        (action.status === 'merging' ||
+          targetHeadSha == null ||
+          action.pullRequestHeadSha === undefined ||
+          action.pullRequestHeadSha === targetHeadSha),
     )
   }
-  const isMergeSuccessful = (target: {
-    number: number
-    owner?: string
-    repo?: string
-  }) => {
+  const isMergeSuccessful = (target: MergeFeedbackTarget) => {
     const action = mergeFeedbackFor(target)
     return action?.status === 'merged' || action?.status === 'alreadyMerged'
   }
-  const mergeActionFor = (target: {
-    number: number
-    owner?: string
-    repo?: string
-  }) => mergeFeedbackFor(target)
+  const mergeActionFor = (target: MergeFeedbackTarget) =>
+    mergeFeedbackFor(target)
   const openMergeConfirmation = (target: PullRequest) => {
     const operation = mergeOperationFor(target)
     if (operation === null) return
+    setRetryingActionId(null)
     setMergeTarget(operation)
     setPullRequestListOpen(false)
     setMergeConfirmationOpen(true)
   }
-  const confirmMerge = () => {
-    if (mergeTarget === null || isMerging(mergeTarget)) return
-    const target = mergeTarget
-    setMergeConfirmationOpen(false)
-    if (actionFeedback === null) {
-      void run(target)
+
+  useEffect(() => {
+    if (
+      actionFeedback === null ||
+      actionFeedback.pendingMergeRetryActionId === null
+    ) {
       return
     }
+    const action = actionFeedback.actions.find(
+      (candidate) => candidate.id === actionFeedback.pendingMergeRetryActionId,
+    )
+    if (
+      action === undefined ||
+      action.kind !== 'merge' ||
+      action.sessionId !== session.id ||
+      action.status !== 'mergeFailed'
+    ) {
+      return
+    }
+    const latestPullRequest = pullRequests.find((candidate) => {
+      const identity = mergeIdentity(candidate)
+      return (
+        candidate.number === action.pullRequestNumber &&
+        identity.owner === action.pullRequestOwner &&
+        identity.repo === action.pullRequestRepo
+      )
+    })
+    if (
+      latestPullRequest === undefined ||
+      mergeOperationFor(latestPullRequest) === null
+    ) {
+      return
+    }
+    openMergeConfirmation(latestPullRequest)
+    setRetryingActionId(action.id)
+    actionFeedback.consumeMergeRetryConfirmation(action.id)
+  }, [
+    actionFeedback,
+    mergeOperationFor,
+    openMergeConfirmation,
+    pullRequests,
+    session.id,
+  ])
+
+  const mergeActionOptionsFor = (
+    target: PullRequestMergeOperation,
+  ): StartAsyncActionOptions => {
     let staleHeadFailure = false
-    actionFeedback.start({
+    return {
       kind: 'merge',
       sessionId: session.id,
       sessionTitle: session.title,
       pullRequestNumber: target.number,
       pullRequestOwner: target.owner,
       pullRequestRepo: target.repo,
+      pullRequestHeadSha: target.expectedHeadSha,
       run: async () => {
         const result = await run(target)
         return result.match(
@@ -174,27 +212,28 @@ export function useConversationPaneHeaderMerge({
           },
         )
       },
-      onRetry: (retry) => {
+      onRetry: (retry, actionId) => {
         if (!staleHeadFailure) {
           retry()
           return
         }
-        const identity = mergeIdentity(target)
-        const latestPullRequest = latestPullRequests.current.find(
-          (candidate) => {
-            const candidateIdentity = mergeIdentity(candidate)
-            return (
-              candidate.number === identity.number &&
-              candidateIdentity.owner === identity.owner &&
-              candidateIdentity.repo === identity.repo
-            )
-          },
-        )
-        if (latestPullRequest !== undefined) {
-          openMergeConfirmation(latestPullRequest)
-        }
+        actionFeedback?.requestMergeRetryConfirmation(actionId)
       },
-    })
+    }
+  }
+
+  const confirmMerge = () => {
+    if (mergeTarget === null || isMerging(mergeTarget)) return
+    const target = mergeTarget
+    setMergeConfirmationOpen(false)
+    if (actionFeedback === null) {
+      void run(target)
+      return
+    }
+    const options = mergeActionOptionsFor(target)
+    if (retryingActionId === null) actionFeedback.start(options)
+    else actionFeedback.retryWith(retryingActionId, options)
+    setRetryingActionId(null)
   }
 
   return {
@@ -208,6 +247,7 @@ export function useConversationPaneHeaderMerge({
     showHeaderMergeAction: headerMergeOperation !== null,
     closeMergeConfirmation: () => {
       setMergeConfirmationOpen(false)
+      setRetryingActionId(null)
     },
     mergeFeedbackFor,
     mergeActionFor,

@@ -1,4 +1,4 @@
-import { act } from 'react'
+import { act, Component, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
@@ -12,13 +12,17 @@ let container: HTMLDivElement
 let root: Root | null = null
 
 function FeedbackHarness({ run }: { run: () => Promise<AsyncActionOutcome> }) {
-  const feedback = useAsyncActionFeedback()
+  const feedbackResult = useAsyncActionFeedback()
+  const feedback = feedbackResult.match(
+    (value) => value,
+    () => null,
+  )
   return (
     <>
       <button
         type="button"
         onClick={() => {
-          feedback.start({
+          feedback?.start({
             kind: 'merge',
             sessionId: 'sample-session',
             sessionTitle: 'Sample session',
@@ -32,19 +36,55 @@ function FeedbackHarness({ run }: { run: () => Promise<AsyncActionOutcome> }) {
       <button
         type="button"
         onClick={() => {
-          feedback.openActivity()
+          feedback?.openActivity()
         }}
       >
         Show activity
       </button>
       <output>
-        {JSON.stringify({
-          actions: feedback.actions.map(({ status }) => status),
-          toastIds: feedback.toastIds,
-        })}
+        {feedbackResult.match(
+          ({ actions, toastIds }) =>
+            JSON.stringify({
+              actions: actions.map(({ status }) => status),
+              toastIds,
+            }),
+          (error) => `provider error: ${error.message}`,
+        )}
       </output>
     </>
   )
+}
+
+function MissingProviderHarness() {
+  const feedback = useAsyncActionFeedback()
+  return (
+    <output>
+      {feedback.match(
+        () => 'provider available',
+        (error) => `provider error: ${error.message}`,
+      )}
+    </output>
+  )
+}
+
+class TestErrorBoundary extends Component<
+  { children: ReactNode },
+  { message: string | null }
+> {
+  override state: { message: string | null } = { message: null }
+
+  static getDerivedStateFromError(error: unknown) {
+    return {
+      message: error instanceof Error ? error.message : String(error),
+    }
+  }
+
+  override render() {
+    if (this.state.message !== null) {
+      return <output>thrown error: {this.state.message}</output>
+    }
+    return this.props.children
+  }
 }
 
 function textContent(selector: string) {
@@ -65,6 +105,20 @@ afterEach(() => {
   container.remove()
   vi.unstubAllGlobals()
   vi.useRealTimers()
+})
+
+it('returns a failure result when used outside its provider', () => {
+  act(() => {
+    root?.render(
+      <TestErrorBoundary>
+        <MissingProviderHarness />
+      </TestErrorBoundary>,
+    )
+  })
+
+  expect(textContent('output')).toEqual(
+    'provider error: useAsyncActionFeedback must be used inside AsyncActionFeedbackProvider',
+  )
 })
 
 it('records a merge while it runs, then keeps its result in Activity', async () => {

@@ -1506,6 +1506,78 @@ it('keeps the merge action available when the session pull request is queued', a
   })
 })
 
+it('re-enables merge after a queued pull request receives a new head', async () => {
+  const fetchMock = vi.fn<typeof fetch>(() =>
+    Promise.resolve(
+      Response.json({ result: 'enqueued', message: 'Waiting for checks.' }),
+    ),
+  )
+  vi.stubGlobal('fetch', fetchMock)
+  const onAction = vi.fn(() => Promise.resolve(true))
+  const queuedPullRequest: NonNullable<Session['pullRequest']> = {
+    number: 42,
+    state: 'Open',
+    owner: 'example-org',
+    repo: 'example-repo',
+    url: 'https://github.com/example-org/example-repo/pull/42',
+    headSha: 'queued-fixture-head',
+    ciState: 'Successful',
+    isCurrentBranch: true,
+  }
+  const queuedSession = { ...session, pullRequest: queuedPullRequest }
+  renderHeader(false, onAction, queuedSession)
+
+  act(() => {
+    requireElement(
+      [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+        (button) => button.textContent === 'Merge',
+      ) ?? null,
+    ).click()
+  })
+  const confirmation = requireElement(
+    container.querySelector<HTMLElement>('[role="alertdialog"]'),
+  )
+  await act(async () => {
+    requireElement(
+      [...confirmation.querySelectorAll<HTMLButtonElement>('button')].find(
+        (button) => button.textContent === 'Confirm merge',
+      ) ?? null,
+    ).click()
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (container.querySelector('.async-action-item--queued') !== null) return
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    }
+  })
+
+  renderHeader(false, onAction, {
+    ...queuedSession,
+    pullRequest: {
+      ...queuedPullRequest,
+      headSha: 'new-fixture-head',
+    },
+  })
+
+  const mergeButton = container.querySelector<HTMLButtonElement>(
+    '.conversation-pr-merge-button',
+  )
+  const mergeState = () => ({
+    requestCount: fetchMock.mock.calls.length,
+    mergeButton:
+      mergeButton === null
+        ? null
+        : { label: mergeButton.textContent, disabled: mergeButton.disabled },
+    queuedFeedback:
+      container.querySelector('.async-action-item--queued')?.textContent ??
+      null,
+  })
+  expect(mergeState()).toEqual({
+    requestCount: 1,
+    mergeButton: { label: 'Merge', disabled: false },
+    queuedFeedback:
+      'Added PR #42 to the merge queueA fixture titleWaiting for checks.',
+  })
+})
+
 it('keeps the merge action available after a stale-head merge failure', async () => {
   const fetchMock = vi.fn<typeof fetch>(() =>
     Promise.resolve(
@@ -1587,7 +1659,7 @@ it('keeps the merge action available after a stale-head merge failure', async ()
   })
 })
 
-it('asks for confirmation with the current head before retrying a stale merge', async () => {
+async function startStaleMergeFailure() {
   let fetchAttempts = 0
   const fetchMock = vi.fn<typeof fetch>(() => {
     fetchAttempts += 1
@@ -1635,9 +1707,14 @@ it('asks for confirmation with the current head before retrying a stale merge', 
     }
   })
 
+  return { fetchMock, onAction, pullRequest }
+}
+
+it('keeps a stale merge retry pending until its session returns', async () => {
+  const { fetchMock, onAction, pullRequest } = await startStaleMergeFailure()
   renderHeader(false, onAction, {
     ...session,
-    pullRequest: { ...pullRequest, headSha: 'current-fixture-head' },
+    id: 'other-fixture-session',
   })
   await act(async () => {
     requireElement(
@@ -1646,6 +1723,37 @@ it('asks for confirmation with the current head before retrying a stale merge', 
       ),
     ).click()
     await Promise.resolve()
+  })
+  const pendingSnapshot = () => ({
+    confirmationOpen: container.querySelector('[role="alertdialog"]') !== null,
+    failureToast:
+      container.querySelector(
+        '.async-action-toast-stack .async-action-item--failure',
+      )?.textContent ?? null,
+    requestBodies: fetchMock.mock.calls.map(([, init]) => init?.body),
+  })
+  expect(pendingSnapshot()).toEqual({
+    confirmationOpen: false,
+    failureToast:
+      'Merge failed · PR #42A fixture titlePR #42 head changed since confirmation.RetryDetails',
+    requestBodies: [
+      JSON.stringify({
+        owner: 'example-org',
+        repo: 'example-repo',
+        expectedHeadSha: 'old-fixture-head',
+      }),
+    ],
+  })
+
+  renderHeader(false, onAction, {
+    ...session,
+    pullRequest: { ...pullRequest, headSha: 'current-fixture-head' },
+  })
+  await act(async () => {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (container.querySelector('[role="alertdialog"]') !== null) return
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    }
   })
   const confirmationSnapshot = () => ({
     confirmationOpen: container.querySelector('[role="alertdialog"]') !== null,
@@ -1686,6 +1794,82 @@ it('asks for confirmation with the current head before retrying a stale merge', 
   })
   expect(retrySnapshot()).toEqual({
     confirmationOpen: false,
+    requestBodies: [
+      JSON.stringify({
+        owner: 'example-org',
+        repo: 'example-repo',
+        expectedHeadSha: 'old-fixture-head',
+      }),
+      JSON.stringify({
+        owner: 'example-org',
+        repo: 'example-repo',
+        expectedHeadSha: 'current-fixture-head',
+      }),
+    ],
+    successToast: 'Merged PR #42A fixture title',
+  })
+})
+
+it('opens a latest-head confirmation when retry is clicked after the header remounts', async () => {
+  const { fetchMock, onAction, pullRequest } = await startStaleMergeFailure()
+  renderHeader(false, onAction, {
+    ...session,
+    id: 'other-fixture-session',
+  })
+  renderHeader(false, onAction, {
+    ...session,
+    pullRequest: { ...pullRequest, headSha: 'current-fixture-head' },
+  })
+
+  await act(async () => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.async-action-toast-stack .async-action-controls button',
+      ),
+    ).click()
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (container.querySelector('[role="alertdialog"]') !== null) return
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    }
+  })
+
+  const confirmationSnapshot = () => ({
+    confirmationOpen: container.querySelector('[role="alertdialog"]') !== null,
+    headSha: container.querySelector('.pull-request-merge-head-sha')
+      ?.textContent,
+    requestBodies: fetchMock.mock.calls.map(([, init]) => init?.body),
+  })
+  expect(confirmationSnapshot()).toEqual({
+    confirmationOpen: true,
+    headSha: 'current-fixture-head',
+    requestBodies: [
+      JSON.stringify({
+        owner: 'example-org',
+        repo: 'example-repo',
+        expectedHeadSha: 'old-fixture-head',
+      }),
+    ],
+  })
+
+  await act(async () => {
+    requireElement(
+      [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+        (button) => button.textContent === 'Confirm merge',
+      ) ?? null,
+    ).click()
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (container.querySelector('.async-action-item--success') !== null)
+        return
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    }
+  })
+  const retrySnapshot = () => ({
+    requestBodies: fetchMock.mock.calls.map(([, init]) => init?.body),
+    successToast: container.querySelector(
+      '.async-action-toast-stack .async-action-item--success',
+    )?.textContent,
+  })
+  expect(retrySnapshot()).toEqual({
     requestBodies: [
       JSON.stringify({
         owner: 'example-org',

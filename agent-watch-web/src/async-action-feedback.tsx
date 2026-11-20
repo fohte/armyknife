@@ -1,3 +1,4 @@
+import { err, ok, type Result } from 'neverthrow'
 import type { ReactNode } from 'react'
 import {
   createContext,
@@ -29,6 +30,7 @@ export type AsyncAction = {
   pullRequestNumber?: number
   pullRequestOwner?: string
   pullRequestRepo?: string
+  pullRequestHeadSha?: string
   message?: string
   error?: string
   createdAt: number
@@ -46,16 +48,26 @@ export type StartAsyncActionOptions = {
   pullRequestNumber?: number
   pullRequestOwner?: string
   pullRequestRepo?: string
+  pullRequestHeadSha?: string
   run: () => Promise<AsyncActionOutcome>
-  onRetry?: (retry: () => void) => void
+  onRetry?: (retry: () => void, actionId: number) => void
 }
+
+type AsyncActionRetryUpdate = Pick<
+  StartAsyncActionOptions,
+  'run' | 'onRetry' | 'pullRequestHeadSha'
+>
 
 type AsyncActionFeedbackValue = {
   actions: readonly AsyncAction[]
   toastIds: readonly number[]
   activityOpen: boolean
+  pendingMergeRetryActionId: number | null
   start: (options: StartAsyncActionOptions) => number
   retry: (id: number) => void
+  retryWith: (id: number, update: AsyncActionRetryUpdate) => void
+  requestMergeRetryConfirmation: (id: number) => void
+  consumeMergeRetryConfirmation: (id: number) => void
   dismissToast: (id: number) => void
   clearFinished: () => void
   openActivity: (actionId?: number) => void
@@ -75,10 +87,15 @@ export function AsyncActionFeedbackProvider({
   const [actions, setActions] = useState<AsyncAction[]>([])
   const [toastIds, setToastIds] = useState<number[]>([])
   const [activityOpen, setActivityOpen] = useState(false)
+  const [pendingMergeRetryActionId, setPendingMergeRetryActionId] = useState<
+    number | null
+  >(null)
   const [selectedActionId, setSelectedActionId] = useState<number | null>(null)
   const nextId = useRef(0)
   const runs = useRef(new Map<number, () => Promise<AsyncActionOutcome>>())
-  const retryHandlers = useRef(new Map<number, (retry: () => void) => void>())
+  const retryHandlers = useRef(
+    new Map<number, (retry: () => void, actionId: number) => void>(),
+  )
   const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>())
 
   const dismissToast = useCallback((id: number) => {
@@ -157,6 +174,9 @@ export function AsyncActionFeedbackProvider({
           ...(options.pullRequestRepo === undefined
             ? {}
             : { pullRequestRepo: options.pullRequestRepo }),
+          ...(options.pullRequestHeadSha === undefined
+            ? {}
+            : { pullRequestHeadSha: options.pullRequestHeadSha }),
           createdAt: Date.now(),
         },
         ...current,
@@ -177,10 +197,36 @@ export function AsyncActionFeedbackProvider({
       }
       const handler = retryHandlers.current.get(id)
       if (handler === undefined) retryAction()
-      else handler(retryAction)
+      else handler(retryAction, id)
     },
     [runAction],
   )
+
+  const retryWith = useCallback(
+    (id: number, update: AsyncActionRetryUpdate) => {
+      if (!runs.current.has(id)) return
+      runs.current.set(id, update.run)
+      if (update.onRetry === undefined) retryHandlers.current.delete(id)
+      else retryHandlers.current.set(id, update.onRetry)
+      setActions((current) =>
+        current.map((action) =>
+          action.id !== id || update.pullRequestHeadSha === undefined
+            ? action
+            : { ...action, pullRequestHeadSha: update.pullRequestHeadSha },
+        ),
+      )
+      void runAction(id, update.run)
+    },
+    [runAction],
+  )
+
+  const requestMergeRetryConfirmation = useCallback((id: number) => {
+    setPendingMergeRetryActionId(id)
+  }, [])
+
+  const consumeMergeRetryConfirmation = useCallback((id: number) => {
+    setPendingMergeRetryActionId((current) => (current === id ? null : current))
+  }, [])
 
   const clearFinished = useCallback(() => {
     const finished = new Set(
@@ -195,6 +241,9 @@ export function AsyncActionFeedbackProvider({
       current.filter((action) => !finished.has(action.id)),
     )
     setToastIds((current) => current.filter((id) => !finished.has(id)))
+    setPendingMergeRetryActionId((current) =>
+      current !== null && finished.has(current) ? null : current,
+    )
     for (const id of finished) {
       runs.current.delete(id)
       const timer = timers.current.get(id)
@@ -228,8 +277,12 @@ export function AsyncActionFeedbackProvider({
         actions,
         toastIds,
         activityOpen,
+        pendingMergeRetryActionId,
         start,
         retry,
+        retryWith,
+        requestMergeRetryConfirmation,
+        consumeMergeRetryConfirmation,
         dismissToast,
         clearFinished,
         openActivity,
@@ -252,13 +305,18 @@ export function AsyncActionFeedbackProvider({
   )
 }
 
-export function useAsyncActionFeedback() {
+export function useAsyncActionFeedback(): Result<
+  AsyncActionFeedbackValue,
+  Error
+> {
   const context = useContext(AsyncActionFeedbackContext)
-  if (context === null)
-    throw new Error(
-      'useAsyncActionFeedback must be used inside AsyncActionFeedbackProvider',
-    )
-  return context
+  return context === null
+    ? err(
+        new Error(
+          'useAsyncActionFeedback must be used inside AsyncActionFeedbackProvider',
+        ),
+      )
+    : ok(context)
 }
 
 export function useOptionalAsyncActionFeedback() {

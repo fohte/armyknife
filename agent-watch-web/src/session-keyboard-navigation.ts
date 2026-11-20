@@ -50,6 +50,7 @@ export function useSessionKeyboardNavigation({
     const onKeyDown = (event: KeyboardEvent) => {
       if (
         event.defaultPrevented ||
+        document.querySelector('[aria-modal="true"]') !== null ||
         event.altKey ||
         (event.target instanceof HTMLElement &&
           (event.target.isContentEditable ||

@@ -1,7 +1,10 @@
 import type { Result } from 'neverthrow'
 import { useCallback, useState } from 'react'
 
-import { useAsyncActionFeedback } from '#async-action-feedback'
+import {
+  type StartAsyncActionOptions,
+  useAsyncActionFeedback,
+} from '#async-action-feedback'
 import { useSessionConversationCache } from '#components/session-conversation-cache'
 import { clearSessionAttachments } from '#components/use-composer-message'
 import {
@@ -32,7 +35,15 @@ export function useSessionClose({
     string | null
   >(null)
   const sessionConversationCache = useSessionConversationCache()
-  const { start: startAsyncAction } = useAsyncActionFeedback()
+  const asyncActionFeedback = useAsyncActionFeedback()
+  const startAsyncAction = asyncActionFeedback.match(
+    ({ start }) => start,
+    (feedbackError) => (options: StartAsyncActionOptions) => {
+      setError(feedbackError.message)
+      void options.run()
+      return -1
+    },
+  )
   const confirmationSession = sessions.find(
     (session) => session.id === confirmationSessionId,
   )
