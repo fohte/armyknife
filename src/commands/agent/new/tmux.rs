@@ -39,15 +39,7 @@ pub(super) fn setup_tmux_window(spec: TmuxWindowSpec, config: &Config) -> Result
     tmux::ensure_session(&target_session, spec.repo_root)
         .context("Failed to ensure tmux session")?;
 
-    let mark_pending = crate::commands::agent::store::mark_pending_initial_prompt;
-    let clear_pending = crate::commands::agent::store::clear_pending_initial_prompt;
-    let initial_prompt_marker = spec.prompt.map(|_| InitialPromptMarker {
-        mark_pending: &mark_pending,
-        clear_pending: &clear_pending,
-        prefix_watch_web_message: spec
-            .watch_web_launch
-            .then_some(&prefix_watch_web_initial_message),
-    });
+    let initial_prompt_marker = initial_prompt_marker(spec.prompt, spec.watch_web_launch);
     let route = tmux::layout::build_layout_with_initial_prompt_marker(
         tmux::layout::LayoutSpec {
             common: tmux::layout::TmuxSessionSpec {
@@ -101,15 +93,7 @@ pub(super) fn setup_split_pane(spec: TmuxSplitPaneSpec) -> Result<AgentLaunchRou
         )
     })?;
 
-    let mark_pending = crate::commands::agent::store::mark_pending_initial_prompt;
-    let clear_pending = crate::commands::agent::store::clear_pending_initial_prompt;
-    let initial_prompt_marker = spec.prompt.map(|_| InitialPromptMarker {
-        mark_pending: &mark_pending,
-        clear_pending: &clear_pending,
-        prefix_watch_web_message: spec
-            .watch_web_launch
-            .then_some(&prefix_watch_web_initial_message),
-    });
+    let initial_prompt_marker = initial_prompt_marker(spec.prompt, spec.watch_web_launch);
     let result = tmux::layout::split_pane_with_initial_prompt_marker(
         tmux::layout::SplitSpec {
             common: tmux::layout::TmuxSessionSpec {
@@ -145,4 +129,38 @@ fn prefix_watch_web_initial_message(session_id: &str, content: &str) -> Result<S
         session_id,
     )?;
     Ok(crate::commands::agent::watch_web_user_marker::prefix_message(&marker, content))
+}
+
+fn initial_prompt_marker(
+    prompt: Option<&str>,
+    watch_web_launch: bool,
+) -> Option<InitialPromptMarker<'static>> {
+    prompt.map(|_| InitialPromptMarker {
+        mark_pending: &crate::commands::agent::store::mark_pending_initial_prompt,
+        clear_pending: &crate::commands::agent::store::clear_pending_initial_prompt,
+        prefix_watch_web_message: watch_web_launch.then_some(&prefix_watch_web_initial_message),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case::watch_web_prompt(Some("Inspect the example."), true, true)]
+    #[case::other_launch_prompt(Some("Inspect the example."), false, false)]
+    #[case::watch_web_without_prompt(None, true, false)]
+    fn watch_web_prefix_is_enabled_only_for_watch_web_prompts(
+        #[case] prompt: Option<&str>,
+        #[case] watch_web_launch: bool,
+        #[case] expected: bool,
+    ) {
+        let actual = initial_prompt_marker(prompt, watch_web_launch)
+            .and_then(|marker| marker.prefix_watch_web_message)
+            .is_some();
+
+        assert_eq!(actual, expected);
+    }
 }
