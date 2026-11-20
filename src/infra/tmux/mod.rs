@@ -41,7 +41,9 @@ pub use server::{
     send_keys_if_pane_command_matches_for_socket, send_keys_sequence_for_socket,
     send_sigterm_to_pane_for_socket, set_pane_option_for_socket,
 };
-pub(crate) use server::{run_tmux_for_socket, run_tmux_output_for_socket};
+pub(crate) use server::{
+    get_pane_cursor_y_for_socket, run_tmux_for_socket, run_tmux_output_for_socket,
+};
 
 #[derive(Error, Debug)]
 pub enum TmuxError {

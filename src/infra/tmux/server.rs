@@ -215,6 +215,20 @@ pub fn capture_pane_with_escapes_for_socket(
     run_tmux_output_for_socket(socket_path, &["capture-pane", "-p", "-e", "-t", pane_id]).ok()
 }
 
+/// Returns the cursor row for a pane on its recorded server.
+pub(crate) fn get_pane_cursor_y_for_socket(
+    socket_path: Option<&str>,
+    pane_id: &str,
+) -> Option<usize> {
+    run_tmux_output_for_socket(
+        socket_path,
+        &["display-message", "-p", "-t", pane_id, "#{cursor_y}"],
+    )
+    .ok()?
+    .parse()
+    .ok()
+}
+
 /// Sends keys to a pane on its recorded server.
 pub fn send_keys_for_socket(socket_path: Option<&str>, pane_id: &str, keys: &str) -> Result<()> {
     send_keys_sequence_for_socket(socket_path, pane_id, &[keys])
