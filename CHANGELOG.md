@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.805](https://github.com/fohte/armyknife/compare/v0.1.804...v0.1.805) (2026-11-20)
+
+
+### Features
+
+* **agent-watch-web:** open Tasks from header ([#1998](https://github.com/fohte/armyknife/issues/1998)) ([c7eab24](https://github.com/fohte/armyknife/commit/c7eab24334853718342ac53926c5fbed0f9dd13a))
+
 ## [0.1.804](https://github.com/fohte/armyknife/compare/v0.1.803...v0.1.804) (2026-11-19)
 
 

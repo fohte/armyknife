@@ -38,7 +38,6 @@ import type {
 type ConversationPaneHeaderProps = {
   session: Session
   vibeMode?: VibeMode | undefined
-  sessions: readonly Session[]
   actions: SessionActions | null
   isMobile: boolean
   statusPanelOpen: boolean
@@ -55,6 +54,7 @@ type ConversationPaneHeaderProps = {
   onOpenInTerminal: () => void
   onSelectSession: (id: string) => void
   onToggleStatusPanel: () => void
+  onOpenTasks?: () => void
   onToggleToday?: (isToday: boolean) => void
   onBack?: () => void
   onLater?: () => void
@@ -64,7 +64,6 @@ type ConversationPaneHeaderProps = {
 export function ConversationPaneHeader({
   session,
   vibeMode = session.vibeMode,
-  sessions,
   actions,
   isMobile,
   statusPanelOpen,
@@ -78,6 +77,7 @@ export function ConversationPaneHeader({
   onOpenInTerminal,
   onSelectSession,
   onToggleStatusPanel,
+  onOpenTasks = () => undefined,
   onToggleToday,
   onBack,
   onLater,
@@ -323,9 +323,7 @@ export function ConversationPaneHeader({
             <SessionTaskLinks
               task={session.task}
               tasks={linkedTasks}
-              sessions={sessions}
-              showTaskMenu={false}
-              onMakePrimary={(taskId) => onAction('primary-task', { taskId })}
+              onOpenTasks={onOpenTasks}
             />
             {session.task ? <span aria-hidden="true">·</span> : null}
             <span className="mobile-conversation-repo">{mobileRepoName}</span>
@@ -338,8 +336,7 @@ export function ConversationPaneHeader({
               <SessionTaskLinks
                 task={session.task}
                 tasks={linkedTasks}
-                sessions={sessions}
-                onMakePrimary={(taskId) => onAction('primary-task', { taskId })}
+                onOpenTasks={onOpenTasks}
               />
               <a
                 className="conversation-repo"

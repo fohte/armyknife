@@ -78,7 +78,6 @@ function renderHeader(
         <ConversationPaneHeader
           key={currentSession.id}
           session={currentSession}
-          sessions={[]}
           actions={actions}
           isMobile={isMobile}
           statusPanelOpen={false}

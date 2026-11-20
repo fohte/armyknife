@@ -405,6 +405,10 @@ export function ConversationPane({
         onOpenCritInFullscreen()
         if (!statusPanelOpen) onToggleStatusPanel()
       }}
+      onOpenTasks={() => {
+        onTabChange('tasks')
+        if (!statusPanelOpen) onToggleStatusPanel()
+      }}
       isMobile={isMobile}
       statusPanelOpen={statusPanelOpen}
       selectedDecisionSeq={selectedDecisionSeq}
