@@ -10,11 +10,15 @@ use crate::commands::agent::types::ReasoningEffort;
 
 use super::{DeliveryError, RequestError, RpcRequest};
 mod history;
+mod resume;
 mod turn_status;
 use history::{
     MatchingItemSnapshot, has_completed_turn_notification, has_recorded_message,
     has_user_message_notification, is_terminal_turn_status, matching_user_message_snapshot,
     turn_status,
+};
+use resume::{
+    THREAD_RESUME_RETRY_INTERVAL, is_unloaded_thread_rejection, resume_thread_with_retry,
 };
 pub(super) use turn_status::{
     latest_turn_details, latest_turn_status, latest_turn_status_and_error_message,
@@ -52,6 +56,12 @@ struct DeliveryContext<'a> {
     snapshot: &'a MatchingItemSnapshot,
 }
 
+#[derive(Clone, Copy)]
+struct ResumeRetryTiming {
+    timeout: Duration,
+    interval: Duration,
+}
+
 pub(super) fn send_and_confirm(
     socket: &mut WebSocket<UnixStream>,
     thread_id: &str,
@@ -75,6 +85,32 @@ fn send_and_confirm_with_reader<R>(
     content: &str,
     effort: Option<ReasoningEffort>,
     client_user_message_id: &str,
+    read: R,
+) -> super::Result<()>
+where
+    R: FnMut(&mut WebSocket<UnixStream>) -> tungstenite::Result<Message>,
+{
+    send_and_confirm_with_retry_timing(
+        socket,
+        thread_id,
+        content,
+        effort,
+        client_user_message_id,
+        ResumeRetryTiming {
+            timeout: super::RESPONSE_TIMEOUT,
+            interval: THREAD_RESUME_RETRY_INTERVAL,
+        },
+        read,
+    )
+}
+
+fn send_and_confirm_with_retry_timing<R>(
+    socket: &mut WebSocket<UnixStream>,
+    thread_id: &str,
+    content: &str,
+    effort: Option<ReasoningEffort>,
+    client_user_message_id: &str,
+    retry_timing: ResumeRetryTiming,
     mut read: R,
 ) -> super::Result<()>
 where
@@ -128,9 +164,13 @@ where
     };
 
     // `turn/start` only acknowledges queueing, so resume to observe the userMessage item event.
-    let (resume_response, resume_notifications) =
-        super::send_request_and_collect_notifications(socket, &thread_resume_request(thread_id))
-            .map_err(|error| uncertain_request_error(error, "thread/resume"))?;
+    let (resume_response, resume_notifications) = resume_thread_with_retry(
+        socket,
+        thread_id,
+        retry_timing.timeout,
+        retry_timing.interval,
+    )
+    .map_err(|error| uncertain_request_error(error, "thread/resume"))?;
     resume_response.get("thread").ok_or_else(|| {
         DeliveryError::Unconfirmed(anyhow!(
             "Codex app-server thread/resume response did not contain a thread"
@@ -229,16 +269,6 @@ fn start_turn_with_recovery(
         }
         Err(error) => Err(start_request_error(error)),
     }
-}
-
-fn is_unloaded_thread_rejection(error: &RequestError, thread_id: &str) -> bool {
-    let expected_message = format!("thread not found: {thread_id}");
-    matches!(
-        error,
-        RequestError::Rejected(rejection)
-            if rejection.code == Some(-32600)
-                && rejection.message.as_deref() == Some(expected_message.as_str())
-    )
 }
 
 fn wait_for_delivery_with_reader<R>(
@@ -916,6 +946,120 @@ mod tests {
         ));
 
         assert_eq!(is_unloaded_thread_rejection(&error, THREAD_ID), expected);
+    }
+
+    #[rstest]
+    fn retries_resume_after_missing_rollout_and_confirms_delivery(
+        connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
+    ) -> anyhow::Result<()> {
+        let (mut client_socket, server_socket) = connected_sockets?;
+        let server = std::thread::spawn(move || -> anyhow::Result<Vec<Value>> {
+            let mut socket = server_socket;
+            let snapshot_request = read_empty_snapshot(&mut socket)?;
+            let turn_request = read_request(&mut socket)?;
+            send_response(
+                &mut socket,
+                TURN_START_REQUEST_ID,
+                json!({"turn": {"id": TURN_ID, "status": "inProgress"}}),
+            )?;
+            let first_resume_request = read_request(&mut socket)?;
+            send_error(
+                &mut socket,
+                THREAD_RESUME_REQUEST_ID,
+                -32600,
+                "no rollout found for thread id thread-a",
+            )?;
+            let retry_resume_request = read_request(&mut socket)?;
+            socket.send(Message::Text(
+                user_message_notification().to_string().into(),
+            ))?;
+            send_response(&mut socket, THREAD_RESUME_REQUEST_ID, resume_response())?;
+            Ok(vec![
+                snapshot_request,
+                turn_request,
+                first_resume_request,
+                retry_resume_request,
+            ])
+        });
+
+        let result = result_text(send_and_confirm_with_retry_timing(
+            &mut client_socket,
+            THREAD_ID,
+            "hello there",
+            None,
+            CLIENT_USER_MESSAGE_ID,
+            ResumeRetryTiming {
+                timeout: Duration::from_millis(200),
+                interval: Duration::from_millis(1),
+            },
+            |socket| socket.read(),
+        ));
+        let requests = join_server(&client_socket, &result, server)?;
+        let expected_requests = start_and_subscribe_requests()
+            .into_iter()
+            .chain(std::iter::once(thread_resume_request(THREAD_ID).payload))
+            .collect::<Vec<_>>();
+
+        assert_eq!((result, requests), (Ok(()), expected_requests));
+        Ok(())
+    }
+
+    #[rstest]
+    fn remains_unconfirmed_when_missing_rollout_rejections_reach_deadline(
+        connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
+    ) -> anyhow::Result<()> {
+        let (mut client_socket, server_socket) = connected_sockets?;
+        let server = std::thread::spawn(move || -> anyhow::Result<usize> {
+            let mut socket = server_socket;
+            read_empty_snapshot(&mut socket)?;
+            read_request(&mut socket)?;
+            send_response(
+                &mut socket,
+                TURN_START_REQUEST_ID,
+                json!({"turn": {"id": TURN_ID, "status": "inProgress"}}),
+            )?;
+
+            let mut retry_count = 0;
+            loop {
+                if read_request(&mut socket).is_err() {
+                    return Ok(retry_count);
+                }
+                retry_count += 1;
+                if send_error(
+                    &mut socket,
+                    THREAD_RESUME_REQUEST_ID,
+                    -32600,
+                    "no rollout found for thread id thread-a",
+                )
+                .is_err()
+                {
+                    return Ok(retry_count);
+                }
+            }
+        });
+
+        let result = result_text(send_and_confirm_with_retry_timing(
+            &mut client_socket,
+            THREAD_ID,
+            "hello there",
+            None,
+            CLIENT_USER_MESSAGE_ID,
+            ResumeRetryTiming {
+                timeout: Duration::from_millis(60),
+                interval: Duration::from_millis(2),
+            },
+            |socket| socket.read(),
+        ));
+        let retry_count = join_server(&client_socket, &result, server)?;
+
+        assert_eq!(
+            (result, retry_count >= 2),
+            (
+                Err("Codex app-server delivery is unconfirmed: could not confirm Codex delivery using thread/resume: Codex app-server `thread/resume` failed: no rollout found for thread id thread-a (code -32600)".to_string()),
+                true,
+            ),
+        );
+        Ok(())
     }
 
     #[rstest]

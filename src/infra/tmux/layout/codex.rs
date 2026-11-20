@@ -186,7 +186,7 @@ impl Launch {
                     Err(codex_steer::DeliveryError::Unconfirmed(error)) => {
                         Ok(AgentLaunchRoute::CodexDaemonTurnUnconfirmed {
                             thread_id,
-                            reason: error.to_string(),
+                            reason: format!("{error:#}"),
                         })
                     }
                     Err(codex_steer::DeliveryError::NotDelivered(error)) => {
