@@ -1732,18 +1732,7 @@ it('keeps a stale merge retry pending until its session returns', async () => {
       )?.textContent ?? null,
     requestBodies: fetchMock.mock.calls.map(([, init]) => init?.body),
   })
-  expect(pendingSnapshot()).toEqual({
-    confirmationOpen: false,
-    failureToast:
-      'Merge failed · PR #42A fixture titlePR #42 head changed since confirmation.RetryDetails',
-    requestBodies: [
-      JSON.stringify({
-        owner: 'example-org',
-        repo: 'example-repo',
-        expectedHeadSha: 'old-fixture-head',
-      }),
-    ],
-  })
+  const pending = pendingSnapshot()
 
   renderHeader(false, onAction, {
     ...session,
@@ -1761,17 +1750,7 @@ it('keeps a stale merge retry pending until its session returns', async () => {
       ?.textContent,
     requestBodies: fetchMock.mock.calls.map(([, init]) => init?.body),
   })
-  expect(confirmationSnapshot()).toEqual({
-    confirmationOpen: true,
-    headSha: 'current-fixture-head',
-    requestBodies: [
-      JSON.stringify({
-        owner: 'example-org',
-        repo: 'example-repo',
-        expectedHeadSha: 'old-fixture-head',
-      }),
-    ],
-  })
+  const confirmation = confirmationSnapshot()
 
   await act(async () => {
     requireElement(
@@ -1792,21 +1771,241 @@ it('keeps a stale merge retry pending until its session returns', async () => {
       '.async-action-toast-stack .async-action-item--success',
     )?.textContent,
   })
+  const retry = retrySnapshot()
+  const snapshot = () => ({ pending, confirmation, retry })
+  expect(snapshot()).toEqual({
+    pending: {
+      confirmationOpen: false,
+      failureToast:
+        'Merge failed · PR #42A fixture titlePR #42 head changed since confirmation.RetryDetails',
+      requestBodies: [
+        JSON.stringify({
+          owner: 'example-org',
+          repo: 'example-repo',
+          expectedHeadSha: 'old-fixture-head',
+        }),
+      ],
+    },
+    confirmation: {
+      confirmationOpen: true,
+      headSha: 'current-fixture-head',
+      requestBodies: [
+        JSON.stringify({
+          owner: 'example-org',
+          repo: 'example-repo',
+          expectedHeadSha: 'old-fixture-head',
+        }),
+      ],
+    },
+    retry: {
+      confirmationOpen: false,
+      requestBodies: [
+        JSON.stringify({
+          owner: 'example-org',
+          repo: 'example-repo',
+          expectedHeadSha: 'old-fixture-head',
+        }),
+        JSON.stringify({
+          owner: 'example-org',
+          repo: 'example-repo',
+          expectedHeadSha: 'current-fixture-head',
+        }),
+      ],
+      successToast: 'Merged PR #42A fixture title',
+    },
+  })
+})
+
+it('preserves stale merge retries requested for different sessions', async () => {
+  let requestCount = 0
+  const fetchMock = vi.fn<typeof fetch>(() => {
+    requestCount += 1
+    const response =
+      requestCount === 1
+        ? Response.json(
+            { error: 'PR #42 head changed since confirmation.' },
+            { status: 409 },
+          )
+        : requestCount === 2
+          ? Response.json(
+              { error: 'PR #43 head changed since confirmation.' },
+              { status: 409 },
+            )
+          : Response.json({ result: 'merged' })
+    return Promise.resolve(response)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  const onAction = vi.fn(() => Promise.resolve(true))
+  const pullRequestA: NonNullable<Session['pullRequest']> = {
+    number: 42,
+    state: 'Open',
+    owner: 'example-org',
+    repo: 'example-repo',
+    url: 'https://github.com/example-org/example-repo/pull/42',
+    headSha: 'old-first-head',
+    ciState: 'Successful',
+    isCurrentBranch: true,
+  }
+  const pullRequestB: NonNullable<Session['pullRequest']> = {
+    ...pullRequestA,
+    number: 43,
+    url: 'https://github.com/example-org/example-repo/pull/43',
+    headSha: 'old-second-head',
+  }
+  const sessionA = { ...session, pullRequest: pullRequestA }
+  const sessionB = {
+    ...session,
+    id: 'second-fixture-session',
+    title: 'Second fixture title',
+    pullRequest: pullRequestB,
+  }
+
+  const submitMerge = async (currentSession: Session, number: number) => {
+    renderHeader(false, onAction, currentSession)
+    act(() => {
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.conversation-pr-merge-button',
+        ),
+      ).click()
+    })
+    await act(async () => {
+      requireElement(
+        [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+          (button) => button.textContent === 'Confirm merge',
+        ) ?? null,
+      ).click()
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const failures = Array.from(
+          container.querySelectorAll(
+            '.async-action-toast-stack .async-action-item--failure',
+          ),
+        )
+        if (
+          failures.some((failure) =>
+            failure.textContent.includes(`PR #${String(number)}`),
+          )
+        )
+          return
+        await new Promise((resolve) => window.setTimeout(resolve, 0))
+      }
+    })
+  }
+
+  await submitMerge(sessionA, 42)
+  await submitMerge(sessionB, 43)
+  renderHeader(false, onAction, { ...session, id: 'away-fixture-session' })
+  const retryButtonFor = (number: number) => {
+    const failedAction = Array.from(
+      container.querySelectorAll(
+        '.async-action-toast-stack .async-action-item--failure',
+      ),
+    ).find((item) => item.textContent.includes(`PR #${String(number)}`))
+    return requireElement(
+      failedAction?.querySelector<HTMLButtonElement>(
+        '.async-action-controls button',
+      ) ?? null,
+    )
+  }
+  act(() => {
+    retryButtonFor(42).click()
+    retryButtonFor(43).click()
+  })
+
+  renderHeader(false, onAction, {
+    ...sessionA,
+    pullRequest: { ...pullRequestA, headSha: 'new-first-head' },
+  })
+  await act(async () => {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (container.querySelector('[role="alertdialog"]') !== null) return
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    }
+  })
+  await act(async () => {
+    requireElement(
+      [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+        (button) => button.textContent === 'Confirm merge',
+      ) ?? null,
+    ).click()
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (
+        Array.from(
+          container.querySelectorAll(
+            '.async-action-toast-stack .async-action-item--success',
+          ),
+        ).some((item) => item.textContent.includes('PR #42'))
+      )
+        return
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    }
+  })
+
+  renderHeader(false, onAction, {
+    ...sessionB,
+    pullRequest: { ...pullRequestB, headSha: 'new-second-head' },
+  })
+  await act(async () => {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (container.querySelector('[role="alertdialog"]') !== null) return
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    }
+  })
+  await act(async () => {
+    requireElement(
+      [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+        (button) => button.textContent === 'Confirm merge',
+      ) ?? null,
+    ).click()
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (
+        Array.from(
+          container.querySelectorAll(
+            '.async-action-toast-stack .async-action-item--success',
+          ),
+        ).some((item) => item.textContent.includes('PR #43'))
+      )
+        return
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    }
+  })
+
+  const retrySnapshot = () => ({
+    requestBodies: fetchMock.mock.calls.map(([, init]) => init?.body),
+    successToasts: Array.from(
+      container.querySelectorAll(
+        '.async-action-toast-stack .async-action-item--success',
+      ),
+      (item) => item.textContent,
+    ),
+  })
   expect(retrySnapshot()).toEqual({
-    confirmationOpen: false,
     requestBodies: [
       JSON.stringify({
         owner: 'example-org',
         repo: 'example-repo',
-        expectedHeadSha: 'old-fixture-head',
+        expectedHeadSha: 'old-first-head',
       }),
       JSON.stringify({
         owner: 'example-org',
         repo: 'example-repo',
-        expectedHeadSha: 'current-fixture-head',
+        expectedHeadSha: 'old-second-head',
+      }),
+      JSON.stringify({
+        owner: 'example-org',
+        repo: 'example-repo',
+        expectedHeadSha: 'new-first-head',
+      }),
+      JSON.stringify({
+        owner: 'example-org',
+        repo: 'example-repo',
+        expectedHeadSha: 'new-second-head',
       }),
     ],
-    successToast: 'Merged PR #42A fixture title',
+    successToasts: [
+      'Merged PR #43Second fixture title',
+      'Merged PR #42A fixture title',
+    ],
   })
 })
 
@@ -1839,17 +2038,7 @@ it('opens a latest-head confirmation when retry is clicked after the header remo
       ?.textContent,
     requestBodies: fetchMock.mock.calls.map(([, init]) => init?.body),
   })
-  expect(confirmationSnapshot()).toEqual({
-    confirmationOpen: true,
-    headSha: 'current-fixture-head',
-    requestBodies: [
-      JSON.stringify({
-        owner: 'example-org',
-        repo: 'example-repo',
-        expectedHeadSha: 'old-fixture-head',
-      }),
-    ],
-  })
+  const confirmation = confirmationSnapshot()
 
   await act(async () => {
     requireElement(
@@ -1869,20 +2058,35 @@ it('opens a latest-head confirmation when retry is clicked after the header remo
       '.async-action-toast-stack .async-action-item--success',
     )?.textContent,
   })
-  expect(retrySnapshot()).toEqual({
-    requestBodies: [
-      JSON.stringify({
-        owner: 'example-org',
-        repo: 'example-repo',
-        expectedHeadSha: 'old-fixture-head',
-      }),
-      JSON.stringify({
-        owner: 'example-org',
-        repo: 'example-repo',
-        expectedHeadSha: 'current-fixture-head',
-      }),
-    ],
-    successToast: 'Merged PR #42A fixture title',
+  const retry = retrySnapshot()
+  const snapshot = () => ({ confirmation, retry })
+  expect(snapshot()).toEqual({
+    confirmation: {
+      confirmationOpen: true,
+      headSha: 'current-fixture-head',
+      requestBodies: [
+        JSON.stringify({
+          owner: 'example-org',
+          repo: 'example-repo',
+          expectedHeadSha: 'old-fixture-head',
+        }),
+      ],
+    },
+    retry: {
+      requestBodies: [
+        JSON.stringify({
+          owner: 'example-org',
+          repo: 'example-repo',
+          expectedHeadSha: 'old-fixture-head',
+        }),
+        JSON.stringify({
+          owner: 'example-org',
+          repo: 'example-repo',
+          expectedHeadSha: 'current-fixture-head',
+        }),
+      ],
+      successToast: 'Merged PR #42A fixture title',
+    },
   })
 })
 

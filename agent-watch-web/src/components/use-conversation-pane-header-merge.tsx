@@ -139,21 +139,28 @@ export function useConversationPaneHeaderMerge({
   useEffect(() => {
     if (
       actionFeedback === null ||
-      actionFeedback.pendingMergeRetryActionId === null
+      actionFeedback.pendingMergeRetryActionIds.length === 0 ||
+      mergeConfirmationOpen
     ) {
       return
     }
     const action = actionFeedback.actions.find(
-      (candidate) => candidate.id === actionFeedback.pendingMergeRetryActionId,
+      (candidate) =>
+        actionFeedback.pendingMergeRetryActionIds.includes(candidate.id) &&
+        candidate.kind === 'merge' &&
+        candidate.sessionId === session.id &&
+        candidate.status === 'mergeFailed' &&
+        pullRequests.some((pullRequest) => {
+          const identity = mergeIdentity(pullRequest)
+          return (
+            pullRequest.number === candidate.pullRequestNumber &&
+            identity.owner === candidate.pullRequestOwner &&
+            identity.repo === candidate.pullRequestRepo &&
+            mergeOperationFor(pullRequest) !== null
+          )
+        }),
     )
-    if (
-      action === undefined ||
-      action.kind !== 'merge' ||
-      action.sessionId !== session.id ||
-      action.status !== 'mergeFailed'
-    ) {
-      return
-    }
+    if (action === undefined) return
     const latestPullRequest = pullRequests.find((candidate) => {
       const identity = mergeIdentity(candidate)
       return (
@@ -173,6 +180,7 @@ export function useConversationPaneHeaderMerge({
     actionFeedback.consumeMergeRetryConfirmation(action.id)
   }, [
     actionFeedback,
+    mergeConfirmationOpen,
     mergeOperationFor,
     openMergeConfirmation,
     pullRequests,

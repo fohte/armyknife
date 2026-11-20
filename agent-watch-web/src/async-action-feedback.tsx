@@ -62,7 +62,7 @@ type AsyncActionFeedbackValue = {
   actions: readonly AsyncAction[]
   toastIds: readonly number[]
   activityOpen: boolean
-  pendingMergeRetryActionId: number | null
+  pendingMergeRetryActionIds: readonly number[]
   start: (options: StartAsyncActionOptions) => number
   retry: (id: number) => void
   retryWith: (id: number, update: AsyncActionRetryUpdate) => void
@@ -87,9 +87,9 @@ export function AsyncActionFeedbackProvider({
   const [actions, setActions] = useState<AsyncAction[]>([])
   const [toastIds, setToastIds] = useState<number[]>([])
   const [activityOpen, setActivityOpen] = useState(false)
-  const [pendingMergeRetryActionId, setPendingMergeRetryActionId] = useState<
-    number | null
-  >(null)
+  const [pendingMergeRetryActionIds, setPendingMergeRetryActionIds] = useState<
+    number[]
+  >([])
   const [selectedActionId, setSelectedActionId] = useState<number | null>(null)
   const nextId = useRef(0)
   const runs = useRef(new Map<number, () => Promise<AsyncActionOutcome>>())
@@ -221,11 +221,15 @@ export function AsyncActionFeedbackProvider({
   )
 
   const requestMergeRetryConfirmation = useCallback((id: number) => {
-    setPendingMergeRetryActionId(id)
+    setPendingMergeRetryActionIds((current) =>
+      current.includes(id) ? current : [...current, id],
+    )
   }, [])
 
   const consumeMergeRetryConfirmation = useCallback((id: number) => {
-    setPendingMergeRetryActionId((current) => (current === id ? null : current))
+    setPendingMergeRetryActionIds((current) =>
+      current.filter((actionId) => actionId !== id),
+    )
   }, [])
 
   const clearFinished = useCallback(() => {
@@ -241,8 +245,8 @@ export function AsyncActionFeedbackProvider({
       current.filter((action) => !finished.has(action.id)),
     )
     setToastIds((current) => current.filter((id) => !finished.has(id)))
-    setPendingMergeRetryActionId((current) =>
-      current !== null && finished.has(current) ? null : current,
+    setPendingMergeRetryActionIds((current) =>
+      current.filter((id) => !finished.has(id)),
     )
     for (const id of finished) {
       runs.current.delete(id)
@@ -277,7 +281,7 @@ export function AsyncActionFeedbackProvider({
         actions,
         toastIds,
         activityOpen,
-        pendingMergeRetryActionId,
+        pendingMergeRetryActionIds,
         start,
         retry,
         retryWith,
@@ -317,6 +321,18 @@ export function useAsyncActionFeedback(): Result<
         ),
       )
     : ok(context)
+}
+
+export function useAsyncActionStarter(onProviderError: (error: Error) => void) {
+  const feedback = useAsyncActionFeedback()
+  return feedback.match(
+    ({ start }) => start,
+    (error) => (options: StartAsyncActionOptions) => {
+      onProviderError(error)
+      void options.run()
+      return -1
+    },
+  )
 }
 
 export function useOptionalAsyncActionFeedback() {

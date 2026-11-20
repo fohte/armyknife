@@ -3,8 +3,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { AppWorkspace } from '#app-workspace'
 import {
   AsyncActionFeedbackProvider,
-  type StartAsyncActionOptions,
-  useAsyncActionFeedback,
+  useAsyncActionStarter,
 } from '#async-action-feedback'
 import { useCommandPaletteController } from '#command-palette-controller'
 import { getCommandPaletteShortcut } from '#command-palette-shortcut'
@@ -41,7 +40,6 @@ export function App() {
 }
 
 function AppContent() {
-  const asyncActionFeedback = useAsyncActionFeedback()
   useEffect(() => {
     const preventFileNavigation = (event: DragEvent) => {
       if (!Array.from(event.dataTransfer?.types ?? []).includes('Files')) {
@@ -110,14 +108,9 @@ function AppContent() {
   const [showAllInProgress, setShowAllInProgress] = useState(false)
   const [laterExpanded, setLaterExpanded] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const startAsyncAction = asyncActionFeedback.match(
-    ({ start }) => start,
-    (feedbackError) => (options: StartAsyncActionOptions) => {
-      setError(feedbackError.message)
-      void options.run()
-      return -1
-    },
-  )
+  const startAsyncAction = useAsyncActionStarter((feedbackError) => {
+    setError(feedbackError.message)
+  })
   const [closeRetrySessionId, setCloseRetrySessionId] = useState<string | null>(
     null,
   )
