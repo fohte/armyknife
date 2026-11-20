@@ -17,7 +17,10 @@ export function useAppSessionOperations(sessions: readonly Session[]) {
   const sessionBaseWithPendingOperations = useMemo(
     () =>
       pendingOperations
-        .filter(({ operation }) => isSessionListOperation(operation))
+        .filter(
+          ({ operation }) =>
+            isSessionListOperation(operation) && operation.type !== 'close',
+        )
         .reduce(
           (current, { operation }) => applySessionOperation(current, operation),
           sessions,
@@ -31,7 +34,8 @@ export function useAppSessionOperations(sessions: readonly Session[]) {
   const runSessionOperation = useCallback(
     (operation: SessionOperation) =>
       run(operation, {
-        optimisticDispatchers: [dispatchSessionOperation],
+        optimisticDispatchers:
+          operation.type === 'close' ? [] : [dispatchSessionOperation],
         ...(isSessionListOperation(operation)
           ? {
               refresh: () => {

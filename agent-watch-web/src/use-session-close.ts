@@ -1,19 +1,15 @@
 import type { Result } from 'neverthrow'
 import { useCallback, useState } from 'react'
 
+import { useAsyncActionStarter } from '#async-action-feedback'
 import { useSessionConversationCache } from '#components/session-conversation-cache'
 import { clearSessionAttachments } from '#components/use-composer-message'
-import type {
-  SessionOperation,
-  SessionOperationError,
+import {
+  type SessionOperation,
+  type SessionOperationError,
+  shouldOfferKeepWorktreeRetry,
 } from '#session-operations'
 import type { Session } from '#types'
-
-const KEEP_WORKTREE_ERROR_CODES = new Set([
-  'unmerged_worktree',
-  'dirty_worktree',
-  'worktree_process_guard',
-])
 
 type UseSessionCloseOptions = {
   sessions: readonly Session[]
@@ -36,39 +32,57 @@ export function useSessionClose({
     string | null
   >(null)
   const sessionConversationCache = useSessionConversationCache()
+  const startAsyncAction = useAsyncActionStarter((feedbackError) => {
+    setError(feedbackError.message)
+  })
   const confirmationSession = sessions.find(
     (session) => session.id === confirmationSessionId,
   )
 
   const closeNonDoneSession = useCallback(
     (sessionId: string, keepWorktree: boolean) => {
-      void runSessionOperation({
-        type: 'close',
+      const session = sessions.find((candidate) => candidate.id === sessionId)
+      if (session === undefined) return
+      startAsyncAction({
+        kind: 'close',
         sessionId,
-        keepWorktree,
-        stopAndClose: true,
-      }).then((result) => {
-        result.match(
-          () => {
-            sessionConversationCache?.clearCachedConversation(sessionId)
-            clearSessionAttachments(sessionId)
-            setError(null)
-            setCloseRetrySessionId(null)
-          },
-          (operationError) => {
-            setError(operationError.message)
-            setCloseRetrySessionId(
-              KEEP_WORKTREE_ERROR_CODES.has(operationError.code ?? '')
-                ? sessionId
-                : null,
-            )
-          },
-        )
+        sessionTitle: session.title,
+        run: async () =>
+          runSessionOperation({
+            type: 'close',
+            sessionId,
+            keepWorktree,
+            stopAndClose: true,
+          }).then((result) =>
+            result.match(
+              () => {
+                sessionConversationCache?.clearCachedConversation(sessionId)
+                clearSessionAttachments(sessionId)
+                setError(null)
+                setCloseRetrySessionId(null)
+                return { status: 'closed' as const }
+              },
+              (operationError) => {
+                setError(operationError.message)
+                setCloseRetrySessionId(
+                  shouldOfferKeepWorktreeRetry(operationError)
+                    ? sessionId
+                    : null,
+                )
+                return {
+                  status: 'closeFailed' as const,
+                  error: operationError.message,
+                }
+              },
+            ),
+          ),
       })
     },
     [
+      startAsyncAction,
       runSessionOperation,
       sessionConversationCache,
+      sessions,
       setCloseRetrySessionId,
       setError,
     ],

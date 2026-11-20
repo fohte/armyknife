@@ -434,21 +434,6 @@ html[data-mobile-layout='true'] {
   border-bottom-color: var(--aw-border);
 }
 
-.conversation-pane[data-mobile='true']
-  .conversation-header.has-session-pr-feedback {
-  min-height: calc(98px + max(8px, env(safe-area-inset-top)));
-  flex-basis: auto;
-  grid-template-rows: 44px 24px auto;
-}
-
-.conversation-pane[data-mobile='true'] .conversation-pr-merge-feedback--mobile {
-  grid-column: 1 / -1;
-  grid-row: 3;
-  min-width: 0;
-  padding-left: 14px;
-  overflow-wrap: anywhere;
-}
-
 .mobile-conversation-back {
   min-width: 44px;
   min-height: 44px;

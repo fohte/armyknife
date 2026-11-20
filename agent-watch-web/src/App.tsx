@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { AppWorkspace } from '#app-workspace'
+import {
+  AsyncActionFeedbackProvider,
+  useAsyncActionStarter,
+} from '#async-action-feedback'
 import { useCommandPaletteController } from '#command-palette-controller'
 import { getCommandPaletteShortcut } from '#command-palette-shortcut'
 import { AgentUsageProvider } from '#components/agent-usage-context'
@@ -23,13 +27,15 @@ import { useSessionRefreshRevisions } from '#use-session-refresh-revisions'
 
 export function App() {
   return (
-    <SessionOperationProvider>
-      <SessionConversationCacheProvider>
-        <AgentUsageProvider>
-          <AppContent />
-        </AgentUsageProvider>
-      </SessionConversationCacheProvider>
-    </SessionOperationProvider>
+    <AsyncActionFeedbackProvider>
+      <SessionOperationProvider>
+        <SessionConversationCacheProvider>
+          <AgentUsageProvider>
+            <AppContent />
+          </AgentUsageProvider>
+        </SessionConversationCacheProvider>
+      </SessionOperationProvider>
+    </AsyncActionFeedbackProvider>
   )
 }
 
@@ -102,6 +108,9 @@ function AppContent() {
   const [showAllInProgress, setShowAllInProgress] = useState(false)
   const [laterExpanded, setLaterExpanded] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const startAsyncAction = useAsyncActionStarter((feedbackError) => {
+    setError(feedbackError.message)
+  })
   const [closeRetrySessionId, setCloseRetrySessionId] = useState<string | null>(
     null,
   )
@@ -183,6 +192,7 @@ function AppContent() {
     isMobile,
     conversationOpen: mobileConversationOpen,
     runOperation: runSessionOperation,
+    startAsyncAction,
   })
 
   const closeDoneSession = useCallback(

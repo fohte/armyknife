@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
-import type { PullRequestMergeFeedbackKind } from '#components/pull-request-merge-feedback'
+import type { StartAsyncActionOptions } from '#async-action-feedback'
+import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
 import {
   getRepresentativePullRequest,
   isPullRequestMergeable,
@@ -18,15 +19,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
-type MergeFeedback = {
+type PullRequestMergeOperation = Extract<SessionOperation, { type: 'merge' }>
+type MergeFeedbackTarget = {
   number: number
-  owner: string
-  repo: string
-  kind: PullRequestMergeFeedbackKind
-  message: string
+  owner?: string
+  repo?: string
+  headSha?: string | null
+  expectedHeadSha?: string
 }
 
-type PullRequestMergeOperation = Extract<SessionOperation, { type: 'merge' }>
+function isStaleHeadFailure(message: string) {
+  return /head changed(?: since confirmation)?/i.test(message)
+}
 
 function isMergeResponse(value: unknown): value is MergeResponse {
   if (!isRecord(value)) return false
@@ -52,8 +56,9 @@ export function useConversationPaneHeaderMerge({
   const [mergeConfirmationOpen, setMergeConfirmationOpen] = useState(false)
   const [mergeTarget, setMergeTarget] =
     useState<PullRequestMergeOperation | null>(null)
-  const [mergeFeedback, setMergeFeedback] = useState<MergeFeedback | null>(null)
+  const [retryingActionId, setRetryingActionId] = useState<number | null>(null)
   const { pendingOperations, run } = useSessionOperations()
+  const actionFeedback = useOptionalAsyncActionFeedback()
   const sessionRepoParts = session.repo.split('/')
   const mergeIdentity = (target: {
     number: number
@@ -84,104 +89,159 @@ export function useConversationPaneHeaderMerge({
     pullRequest?.isCurrentBranch === true
       ? mergeOperationFor(pullRequest)
       : null
-  const isMerging = (target: {
-    number: number
-    owner?: string
-    repo?: string
-  }) => {
+  const isMerging = (target: MergeFeedbackTarget) => {
     const identity = mergeIdentity(target)
     if (identity.owner === undefined || identity.repo === undefined)
       return false
-    return pendingOperations.some(
-      ({ operation }) =>
-        operation.type === 'merge' &&
-        operation.sessionId === session.id &&
-        operation.number === identity.number &&
-        operation.owner === identity.owner &&
-        operation.repo === identity.repo,
-    )
-  }
-  const sameMergeIdentity = (
-    left: { number: number; owner?: string; repo?: string },
-    right: { number: number; owner?: string; repo?: string },
-  ) => {
-    const leftIdentity = mergeIdentity(left)
-    const rightIdentity = mergeIdentity(right)
     return (
-      leftIdentity.owner !== undefined &&
-      leftIdentity.repo !== undefined &&
-      rightIdentity.owner !== undefined &&
-      rightIdentity.repo !== undefined &&
-      leftIdentity.number === rightIdentity.number &&
-      leftIdentity.owner === rightIdentity.owner &&
-      leftIdentity.repo === rightIdentity.repo
+      mergeFeedbackFor(target)?.status === 'merging' ||
+      pendingOperations.some(
+        ({ operation }) =>
+          operation.type === 'merge' &&
+          operation.sessionId === session.id &&
+          operation.number === identity.number &&
+          operation.owner === identity.owner &&
+          operation.repo === identity.repo,
+      )
     )
   }
-  const isMergeSuccessful = (target: {
-    number: number
-    owner?: string
-    repo?: string
-  }) =>
-    mergeFeedback?.kind === 'success' &&
-    sameMergeIdentity(mergeFeedback, target)
+  const mergeFeedbackFor = (target: MergeFeedbackTarget) => {
+    const identity = mergeIdentity(target)
+    const targetHeadSha = target.expectedHeadSha ?? target.headSha
+    return actionFeedback?.actions.find(
+      (action) =>
+        action.kind === 'merge' &&
+        action.sessionId === session.id &&
+        action.pullRequestNumber === identity.number &&
+        action.pullRequestOwner === identity.owner &&
+        action.pullRequestRepo === identity.repo &&
+        (action.status === 'merging' ||
+          targetHeadSha == null ||
+          action.pullRequestHeadSha === undefined ||
+          action.pullRequestHeadSha === targetHeadSha),
+    )
+  }
+  const isMergeSuccessful = (target: MergeFeedbackTarget) => {
+    const action = mergeFeedbackFor(target)
+    return action?.status === 'merged' || action?.status === 'alreadyMerged'
+  }
+  const mergeActionFor = (target: MergeFeedbackTarget) =>
+    mergeFeedbackFor(target)
   const openMergeConfirmation = (target: PullRequest) => {
     const operation = mergeOperationFor(target)
     if (operation === null) return
+    setRetryingActionId(null)
     setMergeTarget(operation)
     setPullRequestListOpen(false)
-    setMergeFeedback(null)
     setMergeConfirmationOpen(true)
   }
-  const showHeaderMergeAction =
-    headerMergeOperation !== null && !isMergeSuccessful(headerMergeOperation)
-  const visibleMergeFeedback =
-    mergeFeedback !== null &&
-    pullRequests.some((candidate) =>
-      sameMergeIdentity(mergeFeedback, candidate),
-    )
-      ? mergeFeedback
-      : null
 
-  const confirmMerge = async () => {
-    if (mergeTarget === null || isMerging(mergeTarget)) return
-    const identity = {
-      number: mergeTarget.number,
-      owner: mergeTarget.owner,
-      repo: mergeTarget.repo,
+  useEffect(() => {
+    if (
+      actionFeedback === null ||
+      actionFeedback.pendingMergeRetryActionIds.length === 0 ||
+      mergeConfirmationOpen
+    ) {
+      return
     }
-    setMergeFeedback(null)
-    setMergeConfirmationOpen(false)
-    const result = await run(mergeTarget)
-    result.match(
-      (response) => {
-        if (!isMergeResponse(response)) {
-          setMergeFeedback({
-            ...identity,
-            kind: 'error',
-            message: 'The server returned an invalid merge response.',
-          })
+    const action = actionFeedback.actions.find(
+      (candidate) =>
+        actionFeedback.pendingMergeRetryActionIds.includes(candidate.id) &&
+        candidate.kind === 'merge' &&
+        candidate.sessionId === session.id &&
+        candidate.status === 'mergeFailed' &&
+        pullRequests.some((pullRequest) => {
+          const identity = mergeIdentity(pullRequest)
+          return (
+            pullRequest.number === candidate.pullRequestNumber &&
+            identity.owner === candidate.pullRequestOwner &&
+            identity.repo === candidate.pullRequestRepo &&
+            mergeOperationFor(pullRequest) !== null
+          )
+        }),
+    )
+    if (action === undefined) return
+    const latestPullRequest = pullRequests.find((candidate) => {
+      const identity = mergeIdentity(candidate)
+      return (
+        candidate.number === action.pullRequestNumber &&
+        identity.owner === action.pullRequestOwner &&
+        identity.repo === action.pullRequestRepo
+      )
+    })
+    if (
+      latestPullRequest === undefined ||
+      mergeOperationFor(latestPullRequest) === null
+    ) {
+      return
+    }
+    openMergeConfirmation(latestPullRequest)
+    setRetryingActionId(action.id)
+    actionFeedback.consumeMergeRetryConfirmation(action.id)
+  }, [
+    actionFeedback,
+    mergeConfirmationOpen,
+    mergeOperationFor,
+    openMergeConfirmation,
+    pullRequests,
+    session.id,
+  ])
+
+  const mergeActionOptionsFor = (
+    target: PullRequestMergeOperation,
+  ): StartAsyncActionOptions => {
+    let staleHeadFailure = false
+    return {
+      kind: 'merge',
+      sessionId: session.id,
+      sessionTitle: session.title,
+      pullRequestNumber: target.number,
+      pullRequestOwner: target.owner,
+      pullRequestRepo: target.repo,
+      pullRequestHeadSha: target.expectedHeadSha,
+      run: async () => {
+        const result = await run(target)
+        return result.match(
+          (response) => {
+            if (!isMergeResponse(response)) {
+              return {
+                status: 'mergeFailed' as const,
+                error: 'The server returned an invalid merge response.',
+              }
+            }
+            if (response.result === 'enqueued') {
+              return { status: 'queued' as const, message: response.message }
+            }
+            return { status: response.result }
+          },
+          (error) => {
+            staleHeadFailure = isStaleHeadFailure(error.message)
+            return { status: 'mergeFailed' as const, error: error.message }
+          },
+        )
+      },
+      onRetry: (retry, actionId) => {
+        if (!staleHeadFailure) {
+          retry()
           return
         }
-        const message =
-          response.result === 'merged'
-            ? `PR #${String(mergeTarget.number)} merged.`
-            : response.result === 'alreadyMerged'
-              ? `PR #${String(mergeTarget.number)} was already merged.`
-              : `PR #${String(mergeTarget.number)} was added to the merge queue: ${response.message}`
-        setMergeFeedback({
-          ...identity,
-          kind: response.result === 'enqueued' ? 'queued' : 'success',
-          message,
-        })
+        actionFeedback?.requestMergeRetryConfirmation(actionId)
       },
-      (error) => {
-        setMergeFeedback({
-          ...identity,
-          kind: 'error',
-          message: error.message,
-        })
-      },
-    )
+    }
+  }
+
+  const confirmMerge = () => {
+    if (mergeTarget === null || isMerging(mergeTarget)) return
+    const target = mergeTarget
+    setMergeConfirmationOpen(false)
+    if (actionFeedback === null) {
+      void run(target)
+      return
+    }
+    const options = mergeActionOptionsFor(target)
+    if (retryingActionId === null) actionFeedback.start(options)
+    else actionFeedback.retryWith(retryingActionId, options)
+    setRetryingActionId(null)
   }
 
   return {
@@ -192,10 +252,13 @@ export function useConversationPaneHeaderMerge({
     mergeConfirmationOpen,
     mergeTarget,
     openMergeConfirmation,
-    showHeaderMergeAction,
+    showHeaderMergeAction: headerMergeOperation !== null,
     closeMergeConfirmation: () => {
       setMergeConfirmationOpen(false)
+      setRetryingActionId(null)
     },
-    visibleMergeFeedback,
+    mergeFeedbackFor,
+    mergeActionFor,
+    retryMerge: (id: number) => actionFeedback?.retry(id),
   }
 }

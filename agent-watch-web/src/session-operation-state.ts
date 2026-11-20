@@ -1,10 +1,23 @@
-import type { SessionOperation } from '#session-operation-types'
+import type {
+  SessionOperation,
+  SessionOperationError,
+} from '#session-operation-types'
 import type {
   ChatItem,
   ConversationResponse,
   Session,
   SessionActions,
 } from '#types'
+
+const KEEP_WORKTREE_RETRY_ERROR_CODES = new Set([
+  'unmerged_worktree',
+  'dirty_worktree',
+  'worktree_process_guard',
+])
+
+export function shouldOfferKeepWorktreeRetry(error: SessionOperationError) {
+  return KEEP_WORKTREE_RETRY_ERROR_CODES.has(error.code ?? '')
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null

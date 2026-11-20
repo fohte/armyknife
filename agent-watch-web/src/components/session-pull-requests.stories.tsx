@@ -1,5 +1,6 @@
 import type { Decorator, Meta, StoryObj } from '@storybook/react-vite'
 
+import type { AsyncActionStatus } from '#async-action-feedback'
 import { SessionPullRequests } from '#components/session-pull-requests'
 import type { PullRequest } from '#types'
 
@@ -275,4 +276,45 @@ export const MobileCompactHeaderButton: Story = {
       </div>
     ),
   ],
+}
+
+export const MergeSucceededInTheList: Story = {
+  name: 'The pull request row reports a successful merge.',
+  args: {
+    pullRequests: [mergeablePullRequest],
+    open: true,
+    mergeStatus: (): AsyncActionStatus => 'merged',
+  },
+  decorators: [desktopMergeButtonDecorator],
+}
+
+export const PullRequestWasAlreadyMergedInTheList: Story = {
+  name: 'The pull request row reports that it was already merged.',
+  args: {
+    pullRequests: [mergeablePullRequest],
+    open: true,
+    mergeStatus: (): AsyncActionStatus => 'alreadyMerged',
+  },
+  decorators: [desktopMergeButtonDecorator],
+}
+
+export const MergeIsQueuedInTheList: Story = {
+  name: 'The pull request row reports that the merge is queued.',
+  args: {
+    pullRequests: [mergeablePullRequest],
+    open: true,
+    mergeStatus: (): AsyncActionStatus => 'queued',
+  },
+  decorators: [desktopMergeButtonDecorator],
+}
+
+export const MergeCanBeRetriedInTheList: Story = {
+  name: 'The pull request row offers retry after a merge failure.',
+  args: {
+    pullRequests: [mergeablePullRequest],
+    open: true,
+    mergeStatus: (): AsyncActionStatus => 'mergeFailed',
+    onRetryMerge: () => undefined,
+  },
+  decorators: [desktopMergeButtonDecorator],
 }

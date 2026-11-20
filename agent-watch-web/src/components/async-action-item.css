@@ -1,0 +1,156 @@
+.async-action-item {
+  position: relative;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 10px;
+  color: var(--aw-text-body);
+}
+
+.async-action-item > svg {
+  margin-top: 2px;
+  color: var(--aw-text-muted);
+}
+.async-action-item--running > svg {
+  color: var(--aw-text-secondary);
+}
+.async-action-item--success > svg {
+  color: var(--aw-color-success, #4ade80);
+}
+.async-action-item--queued > svg {
+  color: var(--aw-color-working);
+}
+.async-action-item--failure > svg {
+  color: var(--aw-color-error);
+}
+.async-action-spinner {
+  animation: async-action-spin 1s linear infinite;
+}
+@keyframes async-action-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.async-action-item-content {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.async-action-item-content strong {
+  color: var(--aw-text-primary);
+  font-size: 13px;
+}
+.async-action-session,
+.async-action-item-content > span {
+  color: var(--aw-text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.async-action-error {
+  color: var(--aw-color-error) !important;
+}
+.async-action-controls {
+  display: flex;
+  gap: 8px;
+  margin-top: 7px;
+}
+.async-action-controls button,
+.async-action-retry,
+.async-action-line-retry {
+  min-height: 26px;
+  border: 1px solid var(--aw-border-control);
+  padding: 0 12px;
+  background: transparent;
+  color: var(--aw-text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.async-action-controls button:first-child {
+  background: var(--aw-text-primary);
+  color: var(--aw-bg-app);
+}
+.async-action-retry {
+  align-self: flex-start;
+  margin-top: 6px;
+}
+.async-action-line-retry {
+  margin-top: 2px;
+}
+.async-action-dismiss {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--aw-text-muted);
+  cursor: pointer;
+}
+.async-action-timer {
+  position: absolute;
+  right: 0;
+  bottom: -12px;
+  left: 0;
+  height: 2px;
+  background: var(--aw-border-control);
+}
+
+.async-action-item--toast {
+  min-height: 58px;
+  padding: 12px 10px 12px 14px;
+  border: 1px solid var(--aw-border-control);
+  background: var(--aw-bg-popover);
+  box-shadow: 0 12px 36px rgb(0 0 0 / 30%);
+}
+.async-action-item--row {
+  grid-template-columns: 16px minmax(0, 1fr);
+  padding: 10px 14px;
+  border-top: 1px solid var(--aw-border-row);
+}
+.async-action-item--line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  font-size: 12px;
+}
+.async-action-item--line > svg {
+  flex: none;
+  margin: 0;
+}
+.async-action-item--line .async-action-item-content {
+  align-items: center;
+}
+.async-action-item--line .async-action-item-content strong {
+  color: var(--aw-text-secondary);
+  font-size: 12px;
+  font-weight: 400;
+}
+.async-action-item--line.async-action-item--failure
+  .async-action-item-content
+  strong {
+  color: var(--aw-color-error);
+}
+
+@media (max-width: 700px) {
+  .async-action-item--toast {
+    padding-right: 0;
+  }
+  .async-action-controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+  .async-action-controls button,
+  .async-action-retry,
+  .async-action-line-retry {
+    min-height: 44px;
+  }
+  .async-action-item--row {
+    padding: 12px 16px;
+  }
+}

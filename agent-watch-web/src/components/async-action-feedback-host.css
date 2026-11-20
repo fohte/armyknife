@@ -1,0 +1,114 @@
+.async-action-toast-stack {
+  position: fixed;
+  z-index: 1000;
+  right: 24px;
+  bottom: 128px;
+  display: flex;
+  width: min(360px, calc(100vw - 32px));
+  max-height: calc(100dvh - 160px);
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  pointer-events: none;
+}
+.async-action-toast-stack > * {
+  pointer-events: auto;
+}
+.async-action-activity-backdrop {
+  position: fixed;
+  z-index: 1100;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 64px 24px 24px;
+  background: rgb(0 0 0 / 25%);
+}
+.async-action-activity {
+  box-sizing: border-box;
+  display: flex;
+  width: min(400px, 100%);
+  max-height: min(600px, 100%);
+  flex-direction: column;
+  border: 1px solid var(--aw-border-control);
+  background: var(--aw-bg-app);
+  box-shadow: 0 12px 36px rgb(0 0 0 / 30%);
+  color: var(--aw-text-body);
+}
+.async-action-activity > header {
+  display: flex;
+  align-items: center;
+  padding: 8px 14px;
+}
+.async-action-activity h2 {
+  margin: 0;
+  color: var(--aw-text-primary);
+  font-size: 13px;
+}
+.async-action-activity > header button,
+.async-action-activity-close {
+  min-height: 28px;
+  border: 0;
+  padding: 0 8px;
+  background: transparent;
+  color: var(--aw-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+.async-action-activity > header button {
+  margin-left: auto;
+}
+.async-action-activity-list {
+  overflow: auto;
+}
+.async-action-activity-list > div {
+  position: relative;
+}
+.async-action-activity-list > div.is-selected {
+  background: var(--aw-bg-pressed);
+}
+.async-action-activity-list time {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  color: var(--aw-text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.async-action-activity-list .async-action-item {
+  padding-right: 62px;
+}
+.async-action-empty {
+  padding: 16px;
+  color: var(--aw-text-secondary);
+  font-size: 12px;
+}
+.async-action-activity-close {
+  display: none;
+}
+@media (max-width: 700px) {
+  .async-action-toast-stack {
+    right: 16px;
+    bottom: 112px;
+    max-height: calc(100dvh - 128px);
+  }
+  .async-action-activity-backdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+  .async-action-activity {
+    width: 100%;
+    max-height: 85dvh;
+    border-width: 1px 0 0;
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+  }
+  .async-action-activity > header {
+    padding: 8px 16px;
+  }
+  .async-action-activity-close {
+    display: block;
+    margin: 10px 16px 0;
+    border: 1px solid var(--aw-border-control);
+  }
+}

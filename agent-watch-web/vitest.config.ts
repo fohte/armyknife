@@ -24,6 +24,8 @@ function chromiumBrowser() {
 }
 
 const appTestFiles = [
+  'src/components/async-action-feedback-host.browser.test.tsx',
+  'src/async-action-feedback.browser.test.tsx',
   'src/components/collapsible-text.test.tsx',
   'src/App.test.tsx',
   'src/components/mobile-nav-drawer.test.tsx',

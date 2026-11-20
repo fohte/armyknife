@@ -4,7 +4,9 @@ import '#components/conversation-pane-view.css'
 import { Button } from '@fohte/ui/button'
 import { type ReactNode, useCallback, useMemo, useRef, useState } from 'react'
 
+import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
 import { useAgentUsageContext } from '#components/agent-usage-context'
+import { AsyncActionItem } from '#components/async-action-item'
 import { ConversationPaneHeader } from '#components/conversation-pane-header'
 import { ConversationSelectionReply } from '#components/conversation-selection-reply'
 import { ConversationStatusBand } from '#components/conversation-status-band'
@@ -147,6 +149,7 @@ export function ConversationPaneView({
   composerFocusRequestId = null,
   onComposerFocusRequestHandled = () => undefined,
 }: ConversationPaneViewProps) {
+  const actionFeedback = useOptionalAsyncActionFeedback()
   const { usage } = useAgentUsageContext()
   const sessionUsage =
     usage?.sessions.find((entry) => entry.sessionId === session.id) ?? null
@@ -389,6 +392,18 @@ export function ConversationPaneView({
         >
           {conversationMessageElements}
         </MarkdownCommandContextProvider>
+        {actionFeedback?.actions
+          .filter((action) => action.sessionId === session.id)
+          .map((action) => (
+            <AsyncActionItem
+              action={action}
+              form="line"
+              key={action.id}
+              onRetry={() => {
+                actionFeedback.retry(action.id)
+              }}
+            />
+          ))}
       </div>
 
       {isEnded ? (

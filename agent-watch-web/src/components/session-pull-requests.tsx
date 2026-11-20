@@ -3,6 +3,7 @@ import '#components/session-pull-requests.css'
 import { GitPullRequest } from 'lucide-react'
 import { useRef } from 'react'
 
+import type { AsyncActionStatus } from '#async-action-feedback'
 import { PullRequestMergeAction } from '#components/pull-request-merge-action'
 import { useDismissableLayer } from '#components/use-dismissable-layer'
 import type { PullRequest } from '#types'
@@ -15,6 +16,8 @@ type SessionPullRequestsProps = {
   onMerge: (pullRequest: PullRequest) => void
   isMerging: (pullRequest: PullRequest) => boolean
   isMergeSuccessful: (pullRequest: PullRequest) => boolean
+  mergeStatus?: (pullRequest: PullRequest) => AsyncActionStatus | null
+  onRetryMerge?: (pullRequest: PullRequest) => void
   onOpenChange: (open: boolean) => void
 }
 
@@ -138,6 +141,8 @@ export function SessionPullRequests({
   onMerge,
   isMerging,
   isMergeSuccessful,
+  mergeStatus,
+  onRetryMerge,
   onOpenChange,
 }: SessionPullRequestsProps) {
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -204,16 +209,33 @@ export function SessionPullRequests({
                 </span>
               </a>
               {isPullRequestMergeable(pullRequest) ? (
-                isMergeSuccessful(pullRequest) ? (
+                mergeStatus?.(pullRequest) === 'merged' ||
+                (mergeStatus?.(pullRequest) == null &&
+                  isMergeSuccessful(pullRequest)) ? (
                   <span className="session-pr-row-state is-merged">
                     ✓ Merged
+                  </span>
+                ) : mergeStatus?.(pullRequest) === 'alreadyMerged' ? (
+                  <span className="session-pr-row-state is-merged">
+                    Already merged
                   </span>
                 ) : (
                   <PullRequestMergeAction
                     ariaLabel={`Merge PR #${String(pullRequest.number)}`}
                     merging={isMerging(pullRequest)}
+                    result={
+                      mergeStatus?.(pullRequest) === 'queued'
+                        ? 'queued'
+                        : mergeStatus?.(pullRequest) === 'mergeFailed'
+                          ? 'failed'
+                          : null
+                    }
                     onClick={() => {
-                      onMerge(pullRequest)
+                      if (mergeStatus?.(pullRequest) === 'mergeFailed') {
+                        onRetryMerge?.(pullRequest)
+                      } else {
+                        onMerge(pullRequest)
+                      }
                     }}
                   />
                 )

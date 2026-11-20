@@ -14,6 +14,7 @@ import {
 
 import type { WorkTypeNavGroup } from '#board-model'
 import type { CommandPaletteShortcut } from '#command-palette-shortcut'
+import { ActivityButton } from '#components/activity-button'
 import { useAgentUsageContext } from '#components/agent-usage-context'
 import { QuotaPanel } from '#components/quota-panel'
 import { SessionRow } from '#components/session-row'
@@ -163,6 +164,7 @@ export function AgentWatchNav({
             Board
           </Button>
         </div>
+        {!isMobile ? <ActivityButton /> : null}
         {savedViews.length > 0 ? (
           <section
             className="saved-views-nav"

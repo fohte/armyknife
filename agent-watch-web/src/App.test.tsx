@@ -3126,10 +3126,23 @@ it('closes each done session from the palette command', async () => {
   const closeUrls = fetchMock.mock.calls
     .map(([request]) => requestUrl(request))
     .filter((url) => url.endsWith('/close'))
-  expect(closeUrls).toEqual([
-    '/api/sessions/session-done-a/close',
-    '/api/sessions/session-done-b/close',
-  ])
+  const closeActionToasts = Array.from(
+    document.querySelectorAll(
+      '.async-action-toast-stack .async-action-item--success',
+    ),
+    (item) => item.textContent,
+  )
+  const closeSnapshot = () => ({ closeUrls, closeActionToasts })
+  expect(closeSnapshot()).toEqual({
+    closeUrls: [
+      '/api/sessions/session-done-a/close',
+      '/api/sessions/session-done-b/close',
+    ],
+    closeActionToasts: [
+      'Closed sessionSecond finished session',
+      'Closed sessionFirst finished session',
+    ],
+  })
 })
 
 it('stops the close batch and reports the failed session', async () => {
@@ -3177,6 +3190,81 @@ it('stops the close batch and reports the failed session', async () => {
   expect(snapshot()).toEqual({
     error: 'Could not close Unarchivable session.',
     closeUrls: ['/api/sessions/session-failed-close/close'],
+  })
+})
+
+it('retries a failed Done close from the action toast', async () => {
+  let closeAttempts = 0
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+    if (!requestUrl(input).endsWith('/close')) {
+      return mockSessionActionFetch(input)
+    }
+    closeAttempts += 1
+    return Promise.resolve(
+      closeAttempts === 1
+        ? new Response(
+            JSON.stringify({ error: 'Could not close Unarchivable session.' }),
+            { status: 500 },
+          )
+        : new Response(null, { status: 204 }),
+    )
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-failed-close', 'Unarchivable session', 'done')],
+  })
+  act(() => {
+    dispatchKey(window, 'k', { ctrlKey: true })
+  })
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+  )
+  if (input === null) throw new Error('Palette input was not rendered')
+
+  await act(async () => {
+    await userEvent.type(input, '>Close all done')
+    await userEvent.keyboard('{Enter}')
+    await flushAsyncState()
+  })
+  const closeUrls = () =>
+    fetchMock.mock.calls
+      .map(([request]) => requestUrl(request))
+      .filter((url) => url.endsWith('/close'))
+  const initialSnapshot = () => ({
+    error: container.querySelector('.load-message.is-error')?.textContent,
+    toast: container.querySelector('.async-action-toast-stack')?.textContent,
+    closeUrls: closeUrls(),
+  })
+  expect(initialSnapshot()).toEqual({
+    error: 'Could not close Unarchivable session.',
+    toast:
+      'Close failedUnarchivable sessionCould not close Unarchivable session.RetryDetails',
+    closeUrls: ['/api/sessions/session-failed-close/close'],
+  })
+
+  await act(async () => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '.async-action-toast-stack .async-action-controls button',
+      )
+      ?.click()
+    await flushAsyncState()
+  })
+  const retrySnapshot = () => ({
+    error:
+      container.querySelector('.load-message.is-error')?.textContent ?? null,
+    toast: container.querySelector('.async-action-toast-stack')?.textContent,
+    closeUrls: closeUrls(),
+  })
+  expect(retrySnapshot()).toEqual({
+    error: null,
+    toast: 'Closed sessionUnarchivable session',
+    closeUrls: [
+      '/api/sessions/session-failed-close/close',
+      '/api/sessions/session-failed-close/close',
+    ],
   })
 })
 
@@ -3480,6 +3568,73 @@ it('keeps session shortcuts from acting behind close confirmation', () => {
   })
 })
 
+it('keeps the Done close shortcut inactive while Activity is open', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-done-a', 'First finished session', 'done'),
+      session('session-done-b', 'Second finished session', 'done'),
+    ],
+  })
+
+  const firstRow = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('[data-session-row]'),
+  ).find((row) => row.textContent.includes('First finished session'))
+  if (firstRow === undefined) {
+    throw new Error('First Done session was not rendered')
+  }
+  act(() => {
+    firstRow.click()
+    dispatchKey(window, 'e')
+  })
+  await act(async () => {
+    await flushAsyncState()
+  })
+
+  const secondRow = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('[data-session-row]'),
+  ).find((row) => row.textContent.includes('Second finished session'))
+  if (secondRow === undefined) {
+    throw new Error('Second Done session was not rendered')
+  }
+  act(() => {
+    secondRow.click()
+  })
+  const activityButton = container.querySelector<HTMLButtonElement>(
+    '.async-action-activity-button',
+  )
+  if (activityButton === null) {
+    throw new Error('Activity button was not rendered')
+  }
+  act(() => {
+    activityButton.click()
+  })
+  act(() => {
+    dispatchKey(window, 'e')
+  })
+
+  const snapshot = () => ({
+    activityOpen: document.querySelector('.async-action-activity') !== null,
+    selectedSession:
+      container.querySelector<HTMLElement>(
+        '[data-session-row][aria-current="true"] .session-title',
+      )?.textContent ?? null,
+    closeUrls: fetchMock.mock.calls
+      .map(([request]) => requestUrl(request))
+      .filter((url) => url.endsWith('/close')),
+  })
+  expect(snapshot()).toEqual({
+    activityOpen: true,
+    selectedSession: 'Second finished session',
+    closeUrls: ['/api/sessions/session-done-a/close'],
+  })
+})
+
 it('confirms closing a non-Done session from the Inbox shortcut', async () => {
   const fetchMock = vi
     .fn<typeof fetch>()
@@ -3522,6 +3677,21 @@ it('confirms closing a non-Done session from the Inbox shortcut', async () => {
 
   act(() => {
     if (dialog !== null) dispatchKey(dialog, 'Enter')
+  })
+  const closeConfirmationSnapshot = () => ({
+    confirmationOpen:
+      document.querySelector('.session-close-confirmation') !== null,
+    toast: (
+      document.querySelector('.async-action-toast-stack')?.textContent ?? ''
+    ).trim(),
+    rowStatus:
+      document.querySelector('.async-action-item--line strong')?.textContent ??
+      null,
+  })
+  expect(closeConfirmationSnapshot()).toEqual({
+    confirmationOpen: false,
+    toast: 'Closing sessionAnswer a question',
+    rowStatus: 'Closing session…',
   })
   await act(async () => {
     await flushAsyncState()
