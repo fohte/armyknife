@@ -30,6 +30,21 @@ export const InlineImage: Story = {
   name: 'The card displays an image inline with its caption',
 }
 
+export const InlineImageFillsTheIPhoneConversationWidth: Story = {
+  name: 'The iPhone file attachment fills the conversation width',
+  decorators: [
+    (Story) => (
+      <div
+        className="conversation-pane"
+        data-mobile="true"
+        style={{ width: 390, padding: 16 }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
 export const ExpandedImage: Story = {
   name: 'The image preview is expanded over the conversation',
   args: { previewOpen: true },

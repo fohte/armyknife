@@ -4,6 +4,7 @@ type PullRequestMergeConfirmationProps = {
   number: number
   headSha: string
   merging: boolean
+  mobile?: boolean
   onCancel: () => void
   onConfirm: () => void
 }
@@ -12,6 +13,7 @@ export function PullRequestMergeConfirmation({
   number,
   headSha,
   merging,
+  mobile = false,
   onCancel,
   onConfirm,
 }: PullRequestMergeConfirmationProps) {
@@ -22,6 +24,7 @@ export function PullRequestMergeConfirmation({
       confirmLabel="Confirm merge"
       pendingLabel="Merging…"
       pending={merging}
+      mobile={mobile}
       className="pull-request-merge-confirm"
       portal={false}
       onCancel={onCancel}

@@ -87,6 +87,7 @@
 
 .confirm-dialog-backdrop--mobile .confirm-dialog {
   width: min(520px, 100%);
+  max-height: calc(100dvh - 52px);
   gap: 12px;
   padding: 18px 16px max(20px, env(safe-area-inset-bottom));
   border-radius: 12px 12px 0 0;
@@ -100,6 +101,21 @@
 .confirm-dialog-backdrop--mobile .confirm-dialog-actions button {
   min-height: 44px;
   font-size: 13px;
+}
+
+.confirm-dialog-backdrop--mobile .confirm-dialog-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.confirm-dialog-backdrop--mobile .confirm-dialog-actions button {
+  width: 100%;
+}
+
+.confirm-dialog-backdrop--mobile .pull-request-merge-head-sha {
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
 }
 
 .confirm-dialog--inline.confirm-dialog--mobile {

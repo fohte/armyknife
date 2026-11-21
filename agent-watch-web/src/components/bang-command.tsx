@@ -12,6 +12,7 @@ type BangCommandActionsProps = {
   commands: readonly string[]
   messageText: string
   sessionId: string
+  mobile?: boolean
   onCommandExecuted?: () => void
 }
 
@@ -48,6 +49,7 @@ export function BangCommandActions({
   commands,
   messageText,
   sessionId,
+  mobile = false,
   onCommandExecuted,
 }: BangCommandActionsProps) {
   const { run } = useSessionOperations()
@@ -196,6 +198,7 @@ export function BangCommandActions({
       <BangCommandDialog
         commands={selectedCommands}
         cwd={cwd}
+        mobile={mobile}
         onCancel={() => {
           setActiveKey(null)
         }}
