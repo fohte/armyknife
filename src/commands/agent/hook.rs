@@ -205,6 +205,12 @@ pub(super) fn mark_session_ended_after_close(session_id: &str) -> Result<()> {
     session_lifecycle::mark_session_ended_after_close(session_id)
 }
 
+pub(super) fn mark_session_ended_after_close_if_unchanged(
+    expected_session: &Session,
+) -> Result<bool> {
+    session_lifecycle::mark_session_ended_after_close_if_unchanged(expected_session)
+}
+
 /// Ends prior sessions attached to `pane_id` when another session takes it.
 /// Claude sessions are evicted only when Paused; a new Codex thread confirms
 /// that the previous Codex thread no longer owns the pane.

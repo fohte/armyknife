@@ -76,10 +76,9 @@ pub(super) fn check_unknown_draft_state(
 pub(super) fn validate_session_without_tmux_info(
     session: &Session,
     unknown_draft_timeout: Duration,
-) -> Result<()> {
+) -> Result<DraftInspection> {
     ensure_session_is_idle(session, session.status)?;
-    check_unknown_draft_state(session, unknown_draft_timeout)?;
-    Ok(())
+    check_unknown_draft_state(session, unknown_draft_timeout)
 }
 
 pub(super) fn write_draft_unavailable_warning(

@@ -109,9 +109,21 @@ fn close_tracked_session_with_runtime_and_stop<R: CloseRuntime>(
     } else {
         close_session(&session, force, runtime)?;
     }
-    runtime
-        .mark_session_ended(&session.session_id)
-        .map_err(SessionLifecyclePersistenceError::new)?;
+    if session.tmux_info.is_none() {
+        let ended = runtime
+            .mark_session_ended_if_unchanged(&session)
+            .map_err(SessionLifecyclePersistenceError::new)?;
+        if !ended {
+            bail!(
+                "Agent session `{}` changed while it was being closed; retry this command",
+                session.session_id
+            );
+        }
+    } else {
+        runtime
+            .mark_session_ended(&session.session_id)
+            .map_err(SessionLifecyclePersistenceError::new)?;
+    }
     Ok(())
 }
 
@@ -159,6 +171,7 @@ trait CloseRuntime {
     fn wait_for_exit(&self, pid: u32) -> bool;
     fn end_codex_session(&self, session_id: &str) -> Result<()>;
     fn mark_session_ended(&self, session_id: &str) -> Result<()>;
+    fn mark_session_ended_if_unchanged(&self, expected_session: &Session) -> Result<bool>;
     fn kill_pane(&self, tmux_info: &TmuxInfo) -> Result<()>;
 
     fn unknown_draft_timeout(&self) -> Duration {
@@ -223,6 +236,10 @@ impl CloseRuntime for LiveCloseRuntime {
         super::hook::mark_session_ended_after_close(session_id)
     }
 
+    fn mark_session_ended_if_unchanged(&self, expected_session: &Session) -> Result<bool> {
+        super::hook::mark_session_ended_after_close_if_unchanged(expected_session)
+    }
+
     fn kill_pane(&self, tmux_info: &TmuxInfo) -> Result<()> {
         Ok(tmux::kill_pane_for_socket(
             tmux_info.socket_path.as_deref(),
@@ -247,7 +264,7 @@ impl CloseRuntime for LiveCloseRuntime {
 }
 
 struct SessionClosePlan<'a> {
-    tmux_info: &'a TmuxInfo,
+    tmux_info: Option<&'a TmuxInfo>,
     agent_pid: Option<u32>,
     should_end_codex_session: bool,
     draft_inspection: DraftInspection,
@@ -267,10 +284,17 @@ fn prepare_close_session<'a, R: CloseRuntime>(
     runtime: &R,
 ) -> Result<Option<SessionClosePlan<'a>>> {
     let Some(tmux_info) = session.tmux_info.as_ref() else {
-        if !force && session.status != SessionStatus::Paused {
-            safety::validate_session_without_tmux_info(session, runtime.unknown_draft_timeout())?;
-        }
-        return Ok(None);
+        let draft_inspection = if !force && session.status != SessionStatus::Paused {
+            safety::validate_session_without_tmux_info(session, runtime.unknown_draft_timeout())?
+        } else {
+            DraftInspection::NotChecked
+        };
+        return Ok(Some(SessionClosePlan {
+            tmux_info: None,
+            agent_pid: None,
+            should_end_codex_session: false,
+            draft_inspection,
+        }));
     };
     if !runtime.pane_exists(tmux_info)? {
         return Ok(None);
@@ -321,7 +345,7 @@ fn prepare_close_session<'a, R: CloseRuntime>(
     };
 
     Ok(Some(SessionClosePlan {
-        tmux_info,
+        tmux_info: Some(tmux_info),
         agent_pid,
         should_end_codex_session,
         draft_inspection,
@@ -368,9 +392,6 @@ fn close_session_with_stop_and_close_warning_writer<R: CloseRuntime>(
     let Some(plan) = prepare_close_session(session, force, stop_and_close, runtime)? else {
         return Ok(());
     };
-    let tmux_info = plan.tmux_info;
-    let pane_id = tmux_info.pane_id.as_str();
-
     if plan.draft_inspection == DraftInspection::Unavailable
         && let Err(error) = write_draft_unavailable_warning(warning_writer, &session.session_id)
     {
@@ -380,6 +401,11 @@ fn close_session_with_stop_and_close_warning_writer<R: CloseRuntime>(
             error = %error,
         );
     }
+
+    let Some(tmux_info) = plan.tmux_info else {
+        return Ok(());
+    };
+    let pane_id = tmux_info.pane_id.as_str();
 
     if let Some(pid) = plan.agent_pid {
         let exited = match runtime.request_graceful_quit(tmux_info, pid) {
@@ -1028,6 +1054,27 @@ mod tests {
                     pane_session_call(),
                     kill_pane_call(),
                 ],
+            ),
+        );
+    }
+
+    #[test]
+    fn paneless_close_warns_when_draft_state_is_unavailable() {
+        let mut session = session();
+        session.tmux_info = None;
+        session.updated_at = Utc::now() - chrono::TimeDelta::hours(1);
+        let runtime = FakeRuntime::default();
+        let mut stderr = Vec::new();
+
+        let result = close_session_with_warning_writer(&session, false, &runtime, &mut stderr);
+
+        assert_eq!(
+            (result.map_err(|error| error.to_string()), stderr, runtime.calls.into_inner()),
+            (
+                Ok(()),
+                b"Warning: could not inspect the unsent draft for session `session-1`; using its last update time for the close safety check\n"
+                    .to_vec(),
+                vec![],
             ),
         );
     }

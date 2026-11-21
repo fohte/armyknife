@@ -196,6 +196,13 @@ impl CloseRuntime for FakeRuntime {
         Ok(())
     }
 
+    fn mark_session_ended_if_unchanged(&self, expected_session: &Session) -> Result<bool> {
+        self.ended_sessions
+            .borrow_mut()
+            .push(expected_session.session_id.clone());
+        Ok(true)
+    }
+
     fn kill_pane(&self, tmux_info: &TmuxInfo) -> Result<()> {
         self.calls.borrow_mut().push(Call::KillPane(
             tmux_info.socket_path.clone(),

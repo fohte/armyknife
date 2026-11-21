@@ -25,6 +25,63 @@ pub(super) fn mark_session_ended_after_close(session_id: &str) -> Result<()> {
     mark_session_ended_after_close_in(session_id, &sessions_dir, &SideEffects::all())
 }
 
+pub(super) fn mark_session_ended_after_close_if_unchanged(
+    expected_session: &Session,
+) -> Result<bool> {
+    let sessions_dir = store::sessions_dir()?;
+    mark_session_ended_after_close_if_unchanged_in(
+        expected_session,
+        &sessions_dir,
+        &SideEffects::all(),
+    )
+}
+
+fn mark_session_ended_after_close_if_unchanged_in(
+    expected_session: &Session,
+    sessions_dir: &Path,
+    side_effects: &SideEffects,
+) -> Result<bool> {
+    let Some(current_session) =
+        store::load_session_from(sessions_dir, &expected_session.session_id)?
+    else {
+        return Ok(false);
+    };
+    if current_session.status != expected_session.status
+        || current_session.updated_at != expected_session.updated_at
+    {
+        return Ok(false);
+    }
+    if current_session.engine == Engine::Claude {
+        store::set_watch_web_compacting(sessions_dir, &expected_session.session_id, false)?;
+    }
+
+    let mut matched = false;
+    let mut ended_session = None;
+    store::update_session_in(sessions_dir, &expected_session.session_id, |session| {
+        if session.status != expected_session.status
+            || session.updated_at != expected_session.updated_at
+        {
+            return false;
+        }
+        matched = true;
+        if session.status == SessionStatus::Ended {
+            return false;
+        }
+
+        session.status = SessionStatus::Ended;
+        session.sweep_signaled = false;
+        session.updated_at = Utc::now();
+        ended_session = Some(session.clone());
+        true
+    })?;
+
+    if let Some(session) = ended_session {
+        finish_ended_session(&session.session_id, &session, sessions_dir, side_effects);
+    }
+
+    Ok(matched)
+}
+
 pub(super) fn mark_session_ended_after_close_in(
     session_id: &str,
     sessions_dir: &Path,
@@ -485,6 +542,75 @@ mod tests {
                     Some("thread-one".to_string()),
                     temp_dir.path().to_path_buf(),
                 )],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::unchanged_snapshot(SessionStatus::Stopped, false, true)]
+    #[case::newer_status(SessionStatus::Running, false, false)]
+    #[case::newer_activity(SessionStatus::Stopped, true, false)]
+    fn paneless_close_ends_only_the_snapshot_that_was_validated(
+        lifecycle_test_context: LifecycleTestContext,
+        #[case] current_status: SessionStatus,
+        #[case] newer_activity: bool,
+        #[case] expected_transition: bool,
+    ) {
+        let LifecycleTestContext { temp_dir, sinks } = lifecycle_test_context;
+        let expected_session = session(Engine::Claude, SessionStatus::Stopped, true);
+        let mut current_session = expected_session.clone();
+        current_session.status = current_status;
+        if newer_activity {
+            current_session.updated_at += chrono::TimeDelta::seconds(1);
+        }
+        store::save_session_to(temp_dir.path(), &current_session).expect("save session");
+
+        let result = mark_session_ended_after_close_if_unchanged_in(
+            &expected_session,
+            temp_dir.path(),
+            &sinks.side_effects,
+        );
+        let updated = store::load_session_from(temp_dir.path(), "thread-one")
+            .expect("load session")
+            .expect("session exists");
+        let expected_status = if expected_transition {
+            SessionStatus::Ended
+        } else {
+            current_status
+        };
+        let expected_sweep_signaled = !expected_transition;
+        let expected_ids = if expected_transition {
+            vec!["thread-one".to_string()]
+        } else {
+            vec![]
+        };
+        let expected_syncs = if expected_transition {
+            vec![(
+                Some("%42".to_string()),
+                Some(SessionStatus::Ended),
+                Some("thread-one".to_string()),
+                temp_dir.path().to_path_buf(),
+            )]
+        } else {
+            vec![]
+        };
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                updated.status,
+                updated.sweep_signaled,
+                sinks.removed.lock().expect("removed lock").clone(),
+                sinks.archived.lock().expect("archive lock").clone(),
+                sinks.synced.lock().expect("sync lock").clone(),
+            ),
+            (
+                Ok(expected_transition),
+                expected_status,
+                expected_sweep_signaled,
+                expected_ids.clone(),
+                expected_ids,
+                expected_syncs,
             ),
         );
     }

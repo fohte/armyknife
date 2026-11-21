@@ -285,7 +285,8 @@ fn validate_worktree_session(
     if needs_validation_without_tmux_info(session, force) {
         let mut session = session.clone();
         super::super::session_status::include_pending_status(&mut session);
-        return validate_session_without_tmux_info(&session, runtime.unknown_draft_timeout());
+        return validate_session_without_tmux_info(&session, runtime.unknown_draft_timeout())
+            .map(|_| ());
     }
     if !should_gracefully_close_worktree_session(session, current_pane_id) {
         return Ok(());
@@ -561,6 +562,7 @@ mod tests {
         }
 
         let actual = validate_session_without_tmux_info(&session, Duration::from_secs(30 * 60))
+            .map(|_| ())
             .map_err(|error| error.to_string());
         let expected = expected_error.map_or_else(|| Ok(()), |error| Err(error.to_string()));
 
@@ -882,6 +884,7 @@ mod tests {
                     .borrow_mut()
                     .push(format!("validate {}", session.session_id));
                 validate_session_without_tmux_info(session, Duration::from_secs(30 * 60))
+                    .map(|_| ())
             },
             |session_id| {
                 calls.borrow_mut().push(format!("load {session_id}"));
@@ -943,6 +946,7 @@ mod tests {
             },
             |session, _, _| {
                 validate_session_without_tmux_info(session, Duration::from_secs(30 * 60))
+                    .map(|_| ())
             },
             |_| Ok(None),
             |_, _, _| {
