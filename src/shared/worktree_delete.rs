@@ -621,18 +621,25 @@ mod tests {
             },
         )
         .await;
-        let (worker_thread, ancestor, descendant) =
-            receiver.recv().expect("receive ancestry inputs");
+        let observed_ancestry =
+            receiver
+                .try_recv()
+                .ok()
+                .map(|(worker_thread, ancestor, descendant)| {
+                    (worker_thread != caller_thread, ancestor, descendant)
+                });
 
         assert_eq!(
-            (status, worker_thread != caller_thread, ancestor, descendant,),
+            (status, observed_ancestry),
             (
                 MergeStatus::NoUniqueCommits {
                     reason: "No commits unique to branch".to_string(),
                 },
-                true,
-                "refs/heads/agent-branch".to_string(),
-                "refs/remotes/origin/main".to_string(),
+                Some((
+                    true,
+                    "refs/heads/agent-branch".to_string(),
+                    "refs/remotes/origin/main".to_string(),
+                )),
             ),
         );
     }
