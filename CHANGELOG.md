@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.817](https://github.com/fohte/armyknife/compare/v0.1.816...v0.1.817) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** name proposal choices ([#2023](https://github.com/fohte/armyknife/issues/2023)) ([401a991](https://github.com/fohte/armyknife/commit/401a991f3ee6d11b592aa208737e84c0901caefb))
+
 ## [0.1.816](https://github.com/fohte/armyknife/compare/v0.1.815...v0.1.816) (2026-11-21)
 
 
