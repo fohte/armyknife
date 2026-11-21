@@ -16,12 +16,15 @@ pub enum TodoCommands {
         long_about = r#"Record one task the user needs to do for the calling session.
 Use a proposal when the user should choose from options.
 
-Read a JSON object from stdin with a required title and optional detail:
+Read a JSON object from stdin with a required title and optional detail and folded marker:
 
 {
   "title": "Check the layout on an iPhone",
-  "detail": "Open the preview and confirm the header fits."
-}"#
+  "detail": "Open the preview and confirm the header fits.",
+  "folded": true
+}
+
+Set folded to true when the user needs to check the task later. It starts folded and is marked as added folded in watch-web."#
     )]
     Add(AddArgs),
     /// Withdraw one of this session's pending tasks
@@ -46,6 +49,8 @@ pub(crate) struct TodoBody {
     pub(crate) title: String,
     #[serde(default)]
     pub(crate) detail: Option<String>,
+    #[serde(default)]
+    pub(crate) folded: bool,
 }
 
 pub fn run(command: &TodoCommands) -> Result<()> {
@@ -117,6 +122,7 @@ fn record_todo(sessions_dir: &Path, session_id: &str, mut input: impl Read) -> R
         session_id,
         &body.title,
         body.detail.as_deref(),
+        body.folded,
     )
 }
 
@@ -142,18 +148,20 @@ mod tests {
         tempfile::tempdir().expect("temporary sessions directory should be created")
     }
 
-    fn stored_todos(sessions_dir: &Path) -> Vec<(String, Option<String>)> {
+    fn stored_todos(sessions_dir: &Path) -> Vec<(String, Option<String>, bool, bool)> {
         crate::commands::agent::store::session_store_revision_from(sessions_dir)
             .expect("session store should initialize");
         let connection = rusqlite::Connection::open(sessions_dir.join("sessions.db"))
             .expect("session database should open");
         let mut statement = connection
             .prepare(
-                "SELECT title, detail FROM agent_todo WHERE session_id = 'session-a' ORDER BY seq",
+                "SELECT title, detail, folded, added_folded FROM agent_todo WHERE session_id = 'session-a' ORDER BY seq",
             )
             .expect("todo query should prepare");
         statement
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
             .expect("todos should query")
             .collect::<rusqlite::Result<Vec<_>>>()
             .expect("todo bodies should load")
@@ -194,19 +202,44 @@ mod tests {
                 1,
                 vec![(
                     "Check the page".to_string(),
-                    Some("Use a phone.".to_string())
+                    Some("Use a phone.".to_string()),
+                    false,
+                    false,
                 )],
             ),
         );
     }
 
     #[rstest]
+    #[case::omitted_marker(r#"{"title":"Check the page"}"#, false)]
+    #[case::folded_marker(r#"{"title":"Check the page","folded":true}"#, true)]
+    fn records_the_initial_fold_state(
+        sessions_dir: TempDir,
+        #[case] body: &str,
+        #[case] folded: bool,
+    ) {
+        create_session(sessions_dir.path());
+        record_todo(sessions_dir.path(), "session-a", std::io::Cursor::new(body))
+            .expect("valid todo should save");
+
+        assert_eq!(
+            stored_todos(sessions_dir.path()),
+            vec![("Check the page".to_string(), None, folded, folded)],
+        );
+    }
+
+    #[rstest]
     fn withdraws_only_the_selected_session_todo_with_a_comment(sessions_dir: TempDir) {
         create_session(sessions_dir.path());
-        let session_a_seq =
-            store::add_agent_todo_in(sessions_dir.path(), "session-a", "Check the page", None)
-                .expect("todo should save");
-        store::add_agent_todo_in(sessions_dir.path(), "session-b", "Other task", None)
+        let session_a_seq = store::add_agent_todo_in(
+            sessions_dir.path(),
+            "session-a",
+            "Check the page",
+            None,
+            false,
+        )
+        .expect("todo should save");
+        store::add_agent_todo_in(sessions_dir.path(), "session-b", "Other task", None, false)
             .expect("other session todo should save");
         withdraw_todo(
             sessions_dir.path(),
@@ -259,7 +292,7 @@ mod tests {
     #[case::empty_title(r#"{"title":" "}"#, "todo title must not be empty")]
     #[case::unknown_field(
         r#"{"title":"Title","extra":true}"#,
-        "parsing todo JSON: unknown field `extra`, expected `title` or `detail` at line 1 column 24"
+        "parsing todo JSON: unknown field `extra`, expected one of `title`, `detail`, `folded` at line 1 column 24"
     )]
     fn rejects_invalid_todos_without_saving(
         sessions_dir: TempDir,

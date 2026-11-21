@@ -90,6 +90,8 @@ mod tests {
             is_today: false,
             is_compacting: false,
             unreviewed_decision_count: 0,
+            todo_later_count: 0,
+            todo_later_title: None,
             review_document_id: None,
         }
     }

@@ -84,6 +84,66 @@ pub(super) fn category_for_with_later(
     }
 }
 
+pub(super) struct TodoLaterCategoryContext<'a> {
+    pub(super) turn: Option<UserTurnKind>,
+    pub(super) needs_action: bool,
+    pub(super) has_unanswered_todo: bool,
+    pub(super) has_folded_todo: bool,
+    pub(super) has_running_background_task: bool,
+    pub(super) agent_status_state: Option<AgentStatusState>,
+    pub(super) state: Option<&'a store::WatchWebSessionState>,
+    pub(super) now: DateTime<Utc>,
+}
+
+pub(super) fn categories_for_with_todo_later(
+    session: &Session,
+    context: TodoLaterCategoryContext<'_>,
+) -> (SessionCategory, SessionCategory) {
+    let category_when_not_later = category_for_with_interruption(
+        session,
+        context.turn,
+        context.needs_action,
+        context.has_running_background_task,
+        context.agent_status_state,
+    );
+    let category = if context.has_unanswered_todo {
+        SessionCategory::NeedsAction
+    } else {
+        category_for_with_later(
+            session,
+            context.turn,
+            context.needs_action,
+            context.has_running_background_task,
+            context.agent_status_state,
+            context.state,
+            context.now,
+        )
+    };
+    let has_only_folded_todos = context.has_folded_todo
+        && !context.needs_action
+        && context.turn.is_none()
+        && session.status == SessionStatus::Stopped
+        && context.agent_status_state.is_none()
+        && !session.is_current_tool_named("ExitPlanMode");
+
+    if has_only_folded_todos {
+        (
+            without_default_stopped_needs_action(category),
+            without_default_stopped_needs_action(category_when_not_later),
+        )
+    } else {
+        (category, category_when_not_later)
+    }
+}
+
+fn without_default_stopped_needs_action(category: SessionCategory) -> SessionCategory {
+    if category == SessionCategory::NeedsAction {
+        SessionCategory::Done
+    } else {
+        category
+    }
+}
+
 pub(super) fn category_for_with_interruption(
     session: &Session,
     turn: Option<UserTurnKind>,
@@ -143,6 +203,7 @@ fn kind_for(
         turn,
         has_unanswered_proposal,
         false,
+        false,
         has_running_background_task,
     )
 }
@@ -152,6 +213,7 @@ pub(super) fn kind_for_with_todo(
     turn: Option<UserTurnKind>,
     has_unanswered_proposal: bool,
     has_unanswered_todo: bool,
+    has_folded_todo: bool,
     has_running_background_task: bool,
 ) -> Option<SessionKind> {
     if session.is_current_tool_named("ExitPlanMode") {
@@ -172,6 +234,9 @@ pub(super) fn kind_for_with_todo(
     }
 
     let Some(turn) = turn else {
+        if has_folded_todo {
+            return Some(SessionKind::Todo);
+        }
         return (session.status == SessionStatus::Stopped && !has_running_background_task)
             .then_some(SessionKind::Stopped);
     };
@@ -315,6 +380,7 @@ mod tests {
                 false,
                 true,
                 false,
+                false,
             ),
             Some(expected),
         );
@@ -424,7 +490,14 @@ mod tests {
             (
                 turn,
                 category_for(&session, turn, has_running_background_task, Some(state)),
-                kind_for_with_todo(&session, turn, false, false, has_running_background_task,),
+                kind_for_with_todo(
+                    &session,
+                    turn,
+                    false,
+                    false,
+                    false,
+                    has_running_background_task,
+                ),
             ),
             (expected_turn, expected_category, expected_kind),
         );

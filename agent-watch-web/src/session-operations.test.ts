@@ -375,6 +375,17 @@ const requests: {
     body: { resolution: 'rejected', comment: 'Not needed' },
   },
   {
+    name: 'fold todo',
+    operation: {
+      type: 'todo_fold',
+      sessionId: 'test-session',
+      seq: 4,
+      folded: true,
+    },
+    path: 'todos/4/fold',
+    body: { folded: true },
+  },
+  {
     name: 'approve permission',
     operation: {
       type: 'permission',
@@ -651,6 +662,17 @@ const operationFactories: [
     },
   ],
   [
+    'todo fold',
+    'todos/4/fold',
+    { folded: true },
+    {
+      type: 'todo_fold',
+      sessionId: session.id,
+      seq: 4,
+      folded: true,
+    },
+  ],
+  [
     'permission approval',
     'permission/approve',
     { requestId: 'permission-request' },
@@ -770,6 +792,13 @@ it('keeps confirmation waiters distinct for different target values', () => {
     ...completedTodo,
     resolution: 'rejected',
   }
+  const foldedTodo: SessionOperation = {
+    type: 'todo_fold',
+    sessionId: session.id,
+    seq: 4,
+    folded: true,
+  }
+  const unfoldedTodo: SessionOperation = { ...foldedTodo, folded: false }
   const previewA: SessionOperation = {
     type: 'command_preview',
     sessionId: session.id,
@@ -787,6 +816,8 @@ it('keeps confirmation waiters distinct for different target values', () => {
     sessionOperationKey(titleB),
     sessionOperationKey(completedTodo),
     sessionOperationKey(rejectedTodo),
+    sessionOperationKey(foldedTodo),
+    sessionOperationKey(unfoldedTodo),
     sessionOperationKey(previewA),
     sessionOperationKey(previewB),
   ]
@@ -798,6 +829,8 @@ it('keeps confirmation waiters distinct for different target values', () => {
     'test-session:title:Title B',
     'test-session:todo_resolve:4:completed:',
     'test-session:todo_resolve:4:rejected:',
+    'test-session:todo_fold:4:true',
+    'test-session:todo_fold:4:false',
     'test-session:command_preview:["Run `! printf a`.",["printf a"]]',
     'test-session:command_preview:["Run `! printf a`.",["printf b"]]',
   ])
@@ -1161,6 +1194,26 @@ const conversationReducerCases: [
     },
   ],
   [
+    'folds a todo',
+    {
+      type: 'todo_fold',
+      sessionId: session.id,
+      seq: 4,
+      folded: true,
+    },
+    {
+      ...conversation,
+      messages: [
+        questionMessage,
+        decisionMessage,
+        proposalMessage,
+        { ...todoMessage, folded: true },
+        deniedMessage,
+      ],
+      decisions: decisionList,
+    },
+  ],
+  [
     'resolves a denied action retry',
     { type: 'permission_retry', sessionId: session.id, seq: 5 },
     {
@@ -1200,6 +1253,43 @@ it.each(conversationReducerCases)(
     )
   },
 )
+
+it('confirms a todo fold after the server returns its saved state', () => {
+  const operation: SessionOperation = {
+    type: 'todo_fold',
+    sessionId: session.id,
+    seq: 4,
+    folded: true,
+  }
+  const serverConversation = {
+    ...conversation,
+    messages: conversation.messages.map((message) =>
+      message.type === 'todo' ? { ...message, folded: true } : message,
+    ),
+  }
+
+  expect(readTodoFoldConfirmationState(operation, serverConversation)).toEqual({
+    optimisticTodo: { ...todoMessage, folded: true },
+    confirmed: true,
+    requiresConfirmation: true,
+  })
+})
+
+function readTodoFoldConfirmationState(
+  operation: SessionOperation,
+  serverConversation: ConversationResponse,
+) {
+  return {
+    optimisticTodo: applyConversationOperation(conversation, operation)
+      .messages[3],
+    confirmed: isConversationOperationConfirmed(
+      serverConversation,
+      operation,
+      null,
+    ),
+    requiresConfirmation: requiresStateConfirmation(operation),
+  }
+}
 
 it('replaces an optimistic message when the server returns it', () => {
   const operation: SessionOperation = {

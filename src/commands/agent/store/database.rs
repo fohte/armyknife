@@ -71,7 +71,7 @@ pub(crate) use replacements::{
 pub(crate) use todos::{AgentTodo, TodoResolution};
 pub(crate) use todos::{
     add_agent_todo, agent_todos, incomplete_agent_todo_titles, lock_agent_todo_resolution,
-    resolve_agent_todo,
+    resolve_agent_todo, set_agent_todo_folded,
 };
 pub(crate) use unreported_stop_checks::check_unreported_stop;
 pub(crate) use web_state::WatchWebSessionState;

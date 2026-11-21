@@ -4451,8 +4451,14 @@ mod tests {
                     .expect("proposal should save");
             }
             StopReason::IncompleteTodo => {
-                store::add_agent_todo_in(sessions_dir, "test-123", "Check the deployment", None)
-                    .expect("todo should save");
+                store::add_agent_todo_in(
+                    sessions_dir,
+                    "test-123",
+                    "Check the deployment",
+                    None,
+                    false,
+                )
+                .expect("todo should save");
             }
             _ => {}
         }
@@ -4528,6 +4534,7 @@ mod tests {
                     request_session_id,
                     "fixture-todo-lilac",
                     None,
+                    false,
                 )
                 .expect("todo should save");
                 store::resolve_agent_todo_from(
@@ -4553,6 +4560,7 @@ mod tests {
                     request_session_id,
                     "fixture-todo-lilac",
                     None,
+                    false,
                 )
                 .expect("todo should save");
             }

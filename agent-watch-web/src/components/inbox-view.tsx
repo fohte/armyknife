@@ -5,6 +5,7 @@ import { Filter, X } from 'lucide-react'
 import { type ReactNode, useCallback, useState } from 'react'
 
 import { InboxFilterBar } from '#components/inbox-filter-bar'
+import { InboxTodoLaterSection } from '#components/inbox-todo-later-section'
 import { InboxViewDialogLayers } from '#components/inbox-view-dialog-layers'
 import { MobileNavigationActions } from '#components/mobile-navigation-actions'
 import { filterInboxSessions, parseInboxFilterQuery } from '#inbox-filter'
@@ -117,10 +118,17 @@ export function InboxView({
     (session) => session.category === 'needs_action',
   )
   const inProgress = filteredSessions.filter(
-    (session) => session.category === 'in_progress',
+    (session) =>
+      session.category === 'in_progress' && (session.todoLaterCount ?? 0) === 0,
   )
-  const done = filteredSessions.filter((session) => session.category === 'done')
-  const allDone = sessions.filter((session) => session.category === 'done')
+  const done = filteredSessions.filter(
+    (session) =>
+      session.category === 'done' && (session.todoLaterCount ?? 0) === 0,
+  )
+  const allDone = sessions.filter(
+    (session) =>
+      session.category === 'done' && (session.todoLaterCount ?? 0) === 0,
+  )
   const unreviewedDoneCount = done.reduce(
     (count, session) => count + (session.unreviewedDecisionCount ?? 0),
     0,
@@ -128,7 +136,8 @@ export function InboxView({
   const connected = connectionError === null
   const lastUpdatedTime = formatMobileConnectionTime(lastUpdatedAt)
   const later = filteredSessions.filter(
-    (session) => session.category === 'later',
+    (session) =>
+      session.category === 'later' && (session.todoLaterCount ?? 0) === 0,
   )
   const setFilterQuery = useCallback(
     (query: string) => {
@@ -303,6 +312,12 @@ export function InboxView({
           onCloseSession,
           onOpenActions: setActionSheetSession,
         })}
+        <InboxTodoLaterSection
+          sessions={filteredSessions}
+          selectedId={selectedId}
+          onSelect={onSelect}
+          isMobile={isMobile}
+        />
         <Button
           type="button"
           variant="plain"

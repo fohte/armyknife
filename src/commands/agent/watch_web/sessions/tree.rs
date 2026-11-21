@@ -196,6 +196,9 @@ pub(super) async fn session_tree<S: SessionSource>(
                 .unanswered_proposal_titles
                 .contains_key(&session.session_id);
             let todo_title = snapshot.unanswered_todo_titles.get(&session.session_id);
+            let has_folded_todo = snapshot
+                .folded_todo_summaries
+                .contains_key(&session.session_id);
             let needs_action = interrupted_session_ids.contains(&session.session_id)
                 || has_unanswered_proposal
                 || todo_title.is_some();
@@ -204,24 +207,25 @@ pub(super) async fn session_tree<S: SessionSource>(
                 .agent_status
                 .as_ref()
                 .map(|status| snapshot.agent_config.status_state(&status.kind));
-            let category = if todo_title.is_some() {
-                SessionCategory::NeedsAction
-            } else {
-                category_for_with_later(
-                    session,
+            let (category, _) = categories_for_with_todo_later(
+                session,
+                TodoLaterCategoryContext {
                     turn,
                     needs_action,
+                    has_unanswered_todo: todo_title.is_some(),
+                    has_folded_todo,
                     has_running_background_task,
                     agent_status_state,
-                    state_by_id.get(session.session_id.as_str()).copied(),
+                    state: state_by_id.get(session.session_id.as_str()).copied(),
                     now,
-                )
-            };
+                },
+            );
             let kind = kind_for_with_todo(
                 session,
                 turn,
                 has_unanswered_proposal,
                 todo_title.is_some(),
+                has_folded_todo,
                 has_running_background_task,
             );
             let title = snapshot
@@ -234,6 +238,12 @@ pub(super) async fn session_tree<S: SessionSource>(
                 .get(&session.session_id)
                 .cloned()
                 .or_else(|| todo_title.cloned())
+                .or_else(|| {
+                    snapshot
+                        .folded_todo_summaries
+                        .get(&session.session_id)
+                        .and_then(|summary| summary.first_title.clone())
+                })
                 .or_else(|| session.last_message.clone());
             let elapsed_seconds = now
                 .signed_duration_since(session.updated_at)
