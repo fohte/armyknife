@@ -3,6 +3,7 @@ import '#components/async-action-item.css'
 import { AlertCircle, Check, Clock3, LoaderCircle, X } from 'lucide-react'
 
 import type { AsyncAction } from '#async-action-feedback'
+import { CloseChecksList } from '#components/close-checks-list'
 import type { CloseWorktreeChecks } from '#session-operation-types'
 
 type AsyncActionItemProps = {
@@ -34,64 +35,8 @@ function closeFailureSummary(checks: CloseWorktreeChecks) {
     remaining.push('process inspection unavailable')
   }
   return remaining.length === 0
-    ? 'The worktree is clear.'
-    : `Left in the worktree: ${remaining.join(', ')}.`
-}
-
-function CloseChecksList({ checks }: { checks: CloseWorktreeChecks }) {
-  const branchState =
-    checks.merged === null
-      ? 'Not checked'
-      : checks.merged
-        ? 'Merged'
-        : 'Not merged'
-  const processState = checks.processInspectionUnavailable
-    ? 'Unavailable'
-    : checks.processes.length === 0
-      ? 'None'
-      : `${String(checks.processes.length)} running`
-  return (
-    <div
-      className="async-action-close-checks"
-      role="group"
-      aria-label="Close checks"
-    >
-      <div>
-        <span>Uncommitted changes</span>
-        <strong>
-          {checks.files.length === 0
-            ? 'None'
-            : `${String(checks.files.length)} ${checks.files.length === 1 ? 'file' : 'files'}`}
-        </strong>
-        {checks.files.length > 0 ? (
-          <code>{checks.files.join(' · ')}</code>
-        ) : null}
-      </div>
-      <div>
-        <span>
-          {checks.branch === null ? 'Branch' : `Branch ${checks.branch}`}
-        </span>
-        <strong>{branchState}</strong>
-        {checks.merged === false && checks.reason !== null ? (
-          <code>{checks.reason}</code>
-        ) : null}
-      </div>
-      <div>
-        <span>Running processes</span>
-        <strong>{processState}</strong>
-        {checks.processes.length > 0 ? (
-          <code>
-            {checks.processes
-              .map(({ pid, name }) => `${String(pid)} ${name}`)
-              .join(' · ')}
-          </code>
-        ) : checks.processInspectionUnavailable ? (
-          <code>Could not inspect processes in this worktree.</code>
-        ) : null}
-      </div>
-      <code className="async-action-worktree-path">{checks.path}</code>
-    </div>
-  )
+    ? 'The worktree is clear'
+    : `Left in the worktree: ${remaining.join(', ')}`
 }
 
 function copy(action: AsyncAction) {

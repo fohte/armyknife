@@ -102,45 +102,6 @@
   font-size: 12px;
   overflow-wrap: anywhere;
 }
-.async-action-close-checks {
-  display: flex;
-  flex-direction: column;
-  margin-top: 6px;
-  border: 1px solid var(--aw-border-row);
-  background: var(--aw-bg-popover);
-}
-.async-action-close-checks > div {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 2px 8px;
-  padding: 8px 10px;
-  border-top: 1px solid var(--aw-border-row);
-  font-size: 11px;
-}
-.async-action-close-checks > div:first-child {
-  border-top: 0;
-}
-.async-action-close-checks > div > span {
-  color: var(--aw-text-secondary);
-}
-.async-action-close-checks > div > strong {
-  color: var(--aw-text-primary);
-  font-size: 11px;
-  font-weight: 500;
-  white-space: nowrap;
-}
-.async-action-close-checks > div > code,
-.async-action-worktree-path {
-  grid-column: 1 / -1;
-  color: var(--aw-text-muted);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  overflow-wrap: anywhere;
-}
-.async-action-worktree-path {
-  padding: 8px 10px;
-  border-top: 1px solid var(--aw-border-row);
-}
 .async-action-retry {
   align-self: flex-start;
   margin-top: 6px;
@@ -237,10 +198,6 @@
     .async-action-controls
     button:first-child {
     flex-basis: 100%;
-  }
-  .async-action-close-checks > div {
-    padding: 10px 12px;
-    font-size: 12px;
   }
   .async-action-item--row {
     padding: 12px 16px;

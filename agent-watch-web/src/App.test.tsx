@@ -3335,7 +3335,7 @@ it.each([
       processes: [],
       processInspectionUnavailable: false,
     },
-    summary: 'Left in the worktree: branch not merged.',
+    summary: 'Left in the worktree: branch not merged',
   },
   {
     caseName: 'dirty worktree',
@@ -3352,7 +3352,7 @@ it.each([
       processes: [],
       processInspectionUnavailable: false,
     },
-    summary: 'Left in the worktree: 1 uncommitted file.',
+    summary: 'Left in the worktree: 1 uncommitted file',
   },
   {
     caseName: 'worktree with running processes',
@@ -3369,7 +3369,7 @@ it.each([
       processes: [{ pid: 12345, name: 'example-server' }],
       processInspectionUnavailable: false,
     },
-    summary: 'Left in the worktree: 1 running process.',
+    summary: 'Left in the worktree: 1 running process',
   },
   {
     caseName: 'worktree whose processes cannot be checked',
@@ -3386,7 +3386,7 @@ it.each([
       processes: [],
       processInspectionUnavailable: true,
     },
-    summary: 'Left in the worktree: process inspection unavailable.',
+    summary: 'Left in the worktree: process inspection unavailable',
   },
 ])(
   'offers to keep a $caseName and retries Close with that choice',
@@ -3539,10 +3539,10 @@ it('shows every close check in Activity and opens the failed worktree in a termi
     conversationLine: conversationLine?.textContent,
   })
   expect(activitySnapshot()).toEqual({
-    text: 'Close failedExample sessionUncommitted changes2 filessrc/example.ts · src/example.test.tsBranch feature/example-workNot mergedThe example pull request is still open.Running processes2 running12345 example-server · 23456 example-watcher/worktrees/example-projectClose and keep worktreeRetryOpen in terminal',
+    text: 'Close failedExample sessionUncommitted changessrc/example.ts · src/example.test.ts2 filesBranch feature/example-workThe example pull request is still open.Not mergedRunning processes12345 example-server · 23456 example-watcher2 running/worktrees/example-projectClose and keep worktreeRetryOpen in terminal',
     buttons: ['Close and keep worktree', 'Retry', 'Open in terminal'],
     conversationLine:
-      'Close failedLeft in the worktree: 2 uncommitted files, branch not merged, 2 running processes.Close and keep worktreeRetry',
+      'Close failedLeft in the worktree: 2 uncommitted files, branch not merged, 2 running processesClose and keep worktreeRetry',
   })
 
   await act(async () => {
@@ -3636,7 +3636,7 @@ it('offers a keep-worktree retry after a non-Done session close fails', async ()
   expect(initialFailure).toEqual({
     error: null,
     toast:
-      'Close failedAnswer a questionLeft in the worktree: branch not merged.Close and keep worktreeRetryDetails',
+      'Close failedAnswer a questionLeft in the worktree: branch not mergedClose and keep worktreeRetryDetails',
   })
   await act(async () => {
     container
@@ -3652,7 +3652,7 @@ it('offers a keep-worktree retry after a non-Done session close fails', async ()
     initialFailure: {
       error: null,
       toast:
-        'Close failedAnswer a questionLeft in the worktree: branch not merged.Close and keep worktreeRetryDetails',
+        'Close failedAnswer a questionLeft in the worktree: branch not mergedClose and keep worktreeRetryDetails',
     },
     closeBodies: [
       { keepWorktree: false, stopAndClose: true },
