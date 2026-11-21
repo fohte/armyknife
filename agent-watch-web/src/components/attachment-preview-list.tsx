@@ -23,41 +23,44 @@ export function handleAttachmentPaste(
   onPasteFiles(files)
 }
 
-export function handleAttachmentDrag(event: ReactDragEvent<HTMLElement>) {
+function handleAttachmentDrag(event: ReactDragEvent<HTMLElement>) {
   if (!containsFiles(event.dataTransfer)) return
   event.preventDefault()
   event.stopPropagation()
   event.dataTransfer.dropEffect = 'copy'
 }
 
-export function handleAttachmentDragLeave(event: ReactDragEvent<HTMLElement>) {
+function handleAttachmentDragLeave(event: ReactDragEvent<HTMLElement>) {
   if (!containsFiles(event.dataTransfer)) return
   event.stopPropagation()
 }
 
-export function handleAttachmentDrop(
+function handleAttachmentDrop(
   event: ReactDragEvent<HTMLElement>,
-  onPasteFiles: (files: File[]) => void,
+  onFiles: (files: File[]) => void,
 ) {
   if (!containsFiles(event.dataTransfer)) return
   event.preventDefault()
   event.stopPropagation()
   const files = getDroppedFiles(event.dataTransfer)
-  if (files.length > 0) onPasteFiles(files)
+  if (files.length > 0) onFiles(files)
 }
 
 export function createAttachmentInputHandlers(
-  onPasteFiles: (files: File[]) => void,
+  onFiles: (files: File[]) => void,
+  enabled = true,
 ) {
+  if (!enabled) return {}
+
   return {
     onPaste: (event: ClipboardEvent<HTMLElement>) => {
-      handleAttachmentPaste(event, onPasteFiles)
+      handleAttachmentPaste(event, onFiles)
     },
     onDragEnter: handleAttachmentDrag,
     onDragOver: handleAttachmentDrag,
     onDragLeave: handleAttachmentDragLeave,
     onDrop: (event: ReactDragEvent<HTMLElement>) => {
-      handleAttachmentDrop(event, onPasteFiles)
+      handleAttachmentDrop(event, onFiles)
     },
   }
 }

@@ -311,7 +311,10 @@ export function ProposalCard({
             rows={2}
             value={comment}
             disabled={isAnswered || isSubmitting}
-            {...createAttachmentInputHandlers(attachmentState.onPasteFiles)}
+            {...createAttachmentInputHandlers(
+              attachmentState.onPasteFiles,
+              !isAnswered && !isSubmitting,
+            )}
             onChange={(event) => {
               updateDraft(event.currentTarget.value)
             }}

@@ -846,6 +846,36 @@ it('attaches dropped images to the proposal comment without bubbling to the conv
   })
 })
 
+it('lets the conversation handle drops over a withdrawn proposal comment', async () => {
+  renderCard(
+    props({
+      resolved: true,
+      resolution: 'withdrawn',
+      withdrawalComment: 'This proposal is no longer active.',
+    }),
+  )
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+  )
+  const conversationDrops: string[] = []
+  const onConversationDrop = () => conversationDrops.push('drop')
+  document.body.addEventListener('drop', onConversationDrop)
+  const drop = await dropImage(
+    comment,
+    new File(['image'], 'dropped.png', { type: 'image/png' }),
+  )
+  document.body.removeEventListener('drop', onConversationDrop)
+
+  const snapshot = () => ({
+    dropPrevented: drop.defaultPrevented,
+    conversationDrops,
+  })
+  expect(snapshot()).toEqual({
+    dropPrevented: false,
+    conversationDrops: ['drop'],
+  })
+})
+
 it('disables choices when the proposal was answered elsewhere', () => {
   renderCard(props({ resolved: true }))
 

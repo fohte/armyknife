@@ -163,7 +163,10 @@ export function TodoCard({
         rows={2}
         value={comment}
         disabled={isSubmitting}
-        {...createAttachmentInputHandlers(attachmentState.onPasteFiles)}
+        {...createAttachmentInputHandlers(
+          attachmentState.onPasteFiles,
+          !isSubmitting,
+        )}
         onChange={(event) => {
           updateDraft(event.currentTarget.value)
         }}
