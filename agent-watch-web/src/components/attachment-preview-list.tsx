@@ -46,6 +46,22 @@ export function handleAttachmentDrop(
   if (files.length > 0) onPasteFiles(files)
 }
 
+export function createAttachmentInputHandlers(
+  onPasteFiles: (files: File[]) => void,
+) {
+  return {
+    onPaste: (event: ClipboardEvent<HTMLElement>) => {
+      handleAttachmentPaste(event, onPasteFiles)
+    },
+    onDragEnter: handleAttachmentDrag,
+    onDragOver: handleAttachmentDrag,
+    onDragLeave: handleAttachmentDragLeave,
+    onDrop: (event: ReactDragEvent<HTMLElement>) => {
+      handleAttachmentDrop(event, onPasteFiles)
+    },
+  }
+}
+
 type AttachmentPreviewListProps = {
   attachments: readonly AttachmentPreview[]
   onRemove?: (id: string) => void
