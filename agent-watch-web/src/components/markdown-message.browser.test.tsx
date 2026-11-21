@@ -2,12 +2,13 @@ import { err, type Result } from 'neverthrow'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { userEvent } from 'vitest/browser'
+import { page, userEvent } from 'vitest/browser'
 
 import {
   MarkdownMessage,
   MarkdownSessionLinksProvider,
 } from '#components/markdown-message'
+import type { WebUiLinkTarget } from '#components/markdown-session-links'
 import { PeerMessage } from '#components/peer-message'
 import { getImageLightboxState } from '#image-lightbox-state.test'
 import type {
@@ -56,6 +57,49 @@ afterEach(() => {
   root = null
   container.remove()
   vi.unstubAllGlobals()
+})
+
+it('opens a registered web UI link in its tab instead of navigating the browser', async () => {
+  const webUi: WebUiLinkTarget = {
+    name: 'Canvas editor',
+    url: 'http://localhost:43123/studio/',
+  }
+  const onOpenWebUi = vi.fn()
+  const currentUrl = window.location.href
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <MarkdownSessionLinksProvider
+        sessions={[]}
+        webUis={[webUi]}
+        onOpenWebUi={onOpenWebUi}
+      >
+        <MarkdownMessage>
+          {
+            'Open the [canvas page](http://localhost:43123/studio/page#page-fakehash).'
+          }
+        </MarkdownMessage>
+      </MarkdownSessionLinksProvider>,
+    )
+  })
+
+  const link = page.getByRole('link', { name: 'canvas page' })
+  await act(async () => userEvent.click(link))
+
+  const snapshot = () => ({
+    chip: container.querySelector('.markdown-web-ui-link-name')?.textContent,
+    linkHref: container.querySelector('a')?.getAttribute('href'),
+    target: container.querySelector('a')?.getAttribute('target') ?? null,
+    calls: onOpenWebUi.mock.calls,
+    currentUrl: window.location.href,
+  })
+  expect(snapshot()).toEqual({
+    chip: 'Canvas editor',
+    linkHref: 'http://localhost:43123/studio/page#page-fakehash',
+    target: null,
+    calls: [[webUi, 'http://localhost:43123/studio/page#page-fakehash']],
+    currentUrl,
+  })
 })
 
 function getMarkdownLayoutSnapshot() {

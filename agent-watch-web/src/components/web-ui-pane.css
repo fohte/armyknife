@@ -7,7 +7,8 @@
   border-left: 1px solid var(--aw-border-row);
   background: var(--aw-bg-nav);
 }
-.web-ui-pane.is-fullscreen {
+.web-ui-pane.is-fullscreen,
+.web-ui-pane.is-mobile-fullscreen {
   position: fixed;
   z-index: 100;
   inset: 0;
@@ -15,6 +16,10 @@
   height: 100vh;
   height: 100dvh;
   min-width: 0;
+}
+
+.web-ui-pane.is-mobile-fullscreen .web-ui-pane-header {
+  padding-top: env(safe-area-inset-top, 0px);
 }
 
 .web-ui-pane-header {

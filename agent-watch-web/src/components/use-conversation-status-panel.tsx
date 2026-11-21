@@ -13,6 +13,7 @@ import { RunningTasksPanel } from '#components/running-tasks-panel'
 import type { SessionStatusPanelTab } from '#components/session-status-panel'
 import { SessionTasksPanel } from '#components/session-tasks-panel'
 import { SessionTreePanel } from '#components/session-tree-panel'
+import { useWebUiFullscreen } from '#components/use-web-ui-fullscreen'
 import { WebUiPane } from '#components/web-ui-pane'
 import { useSessionOperations } from '#session-operation-context'
 import { createSessionOperation } from '#session-operations'
@@ -34,6 +35,7 @@ type UseConversationStatusPanelOptions = {
   onSessionTreeViewStateChange?: (state: SessionTreeViewState) => void
   onSelectSession?: (id: string) => void
   statusPanelOpen?: boolean
+  isMobile?: boolean
   onAction: (
     action: string,
     payload?: Record<string, unknown>,
@@ -120,12 +122,12 @@ export function useConversationStatusPanel({
   onSessionTreeViewStateChange,
   onSelectSession = () => undefined,
   statusPanelOpen = false,
+  isMobile = false,
   onAction,
   onCloseStatusPanel,
 }: UseConversationStatusPanelOptions) {
   const { run } = useSessionOperations()
   const [activePanelTabId, setActivePanelTabId] = useState<string | null>(null)
-  const [critFullscreenRequest, setCritFullscreenRequest] = useState(0)
   const [selectedDecisionSeq, setSelectedDecisionSeq] = useState<number | null>(
     null,
   )
@@ -157,6 +159,18 @@ export function useConversationStatusPanel({
   const webUiTabIds = webUis.map((webUi) =>
     webUi.name === 'crit' ? 'crit' : `web-ui-${encodeURIComponent(webUi.url)}`,
   )
+  const {
+    request: fullscreenRequest,
+    webUiRequest: fullscreenWebUi,
+    mobileWebUi,
+    openWebUi: onOpenWebUiInFullscreen,
+    closeWebUi: closeFullscreenWebUi,
+  } = useWebUiFullscreen({
+    isMobile,
+    statusPanelOpen,
+    onSelectTab: setActivePanelTabId,
+    onClose: onCloseStatusPanel,
+  })
   const treeCount =
     sessionTree === null
       ? 0
@@ -432,10 +446,19 @@ export function useConversationStatusPanel({
       content: (
         <WebUiPane
           name={webUi.name}
-          url={webUi.url}
+          url={
+            fullscreenWebUi?.webUi.name === webUi.name
+              ? fullscreenWebUi.url
+              : webUi.url
+          }
+          {...(fullscreenWebUi?.webUi.name === webUi.name
+            ? { targetUrlOverride: fullscreenWebUi.targetUrl }
+            : {})}
           exposedUrl={webUi.exposedUrl ?? null}
-          fullscreenRequest={webUi.name === 'crit' ? critFullscreenRequest : 0}
-          onClose={onCloseStatusPanel}
+          fullscreenRequest={
+            fullscreenWebUi?.webUi.name === webUi.name ? fullscreenRequest : 0
+          }
+          onClose={closeFullscreenWebUi}
         />
       ),
     })),
@@ -446,9 +469,13 @@ export function useConversationStatusPanel({
   return {
     activeTabId,
     onOpenCritInFullscreen: () => {
-      setActivePanelTabId('crit')
-      setCritFullscreenRequest((request) => request + 1)
+      const critWebUi = webUis.find((webUi) => webUi.name === 'crit')
+      if (critWebUi !== undefined)
+        onOpenWebUiInFullscreen(critWebUi, critWebUi.url)
     },
+    onOpenWebUiInFullscreen,
+    fullscreenWebUi,
+    mobileWebUi,
     onSelectDecision: setSelectedDecisionSeq,
     onTabChange: setActivePanelTabId,
     selectedDecisionSeq: selectedDecision?.seq ?? null,

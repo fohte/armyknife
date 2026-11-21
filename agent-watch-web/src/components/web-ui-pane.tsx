@@ -13,6 +13,8 @@ type WebUiPaneProps = {
   onClose: () => void
   defaultFullscreen?: boolean
   fullscreenRequest?: number
+  targetUrlOverride?: string | null
+  mobilePresentation?: boolean
 }
 
 export function WebUiPane({
@@ -23,15 +25,20 @@ export function WebUiPane({
   onClose,
   defaultFullscreen = false,
   fullscreenRequest = 0,
+  targetUrlOverride,
+  mobilePresentation = false,
 }: WebUiPaneProps) {
   const [isFullscreen, setIsFullscreen] = useState(
     defaultFullscreen || fullscreenRequest > 0,
   )
   const previousFullscreenRequest = useRef(fullscreenRequest)
-  const targetUrl = webUiTargetUrl(
-    { url, exposedUrl: exposedUrl ?? null },
-    hostname ?? location.hostname,
-  )
+  const targetUrl =
+    targetUrlOverride === undefined
+      ? webUiTargetUrl(
+          { url, exposedUrl: exposedUrl ?? null },
+          hostname ?? location.hostname,
+        )
+      : targetUrlOverride
 
   useEffect(() => {
     if (previousFullscreenRequest.current === fullscreenRequest) return
@@ -41,40 +48,64 @@ export function WebUiPane({
 
   return (
     <aside
-      className={`web-ui-pane${isFullscreen ? ' is-fullscreen' : ''}`}
+      className={`web-ui-pane${isFullscreen ? ' is-fullscreen' : ''}${mobilePresentation ? ' is-mobile-fullscreen' : ''}`}
       aria-label={name}
+      role={mobilePresentation ? 'dialog' : undefined}
+      aria-modal={mobilePresentation || undefined}
       id="web-ui-pane"
     >
       <header className="web-ui-pane-header">
-        <span className="web-ui-pane-title">{name}</span>
-        {targetUrl !== null ? (
-          <a href={targetUrl} target="_blank" rel="noreferrer">
-            {targetUrl}
-          </a>
+        {mobilePresentation ? (
+          <>
+            <Button
+              type="button"
+              variant="plain"
+              aria-label="Back to conversation"
+              onClick={onClose}
+            >
+              ←
+            </Button>
+            <span className="web-ui-pane-title">{name}</span>
+          </>
         ) : (
-          <span>{url}</span>
+          <>
+            <span className="web-ui-pane-title">{name}</span>
+            {targetUrl !== null ? (
+              <a href={targetUrl} target="_blank" rel="noreferrer">
+                {targetUrl}
+              </a>
+            ) : (
+              <span>{url}</span>
+            )}
+          </>
         )}
-        <Button
-          type="button"
-          variant="plain"
-          aria-label={
-            isFullscreen ? `Exit ${name} fullscreen` : `Show ${name} fullscreen`
-          }
-          aria-pressed={isFullscreen}
-          onClick={() => {
-            setIsFullscreen((current) => !current)
-          }}
-        >
-          {isFullscreen ? '↙' : '⛶'}
-        </Button>
-        <Button
-          type="button"
-          variant="plain"
-          aria-label={`Close ${name}`}
-          onClick={onClose}
-        >
-          ×
-        </Button>
+        {mobilePresentation ? null : (
+          <>
+            <Button
+              type="button"
+              variant="plain"
+              aria-label={
+                isFullscreen
+                  ? `Exit ${name} fullscreen`
+                  : `Show ${name} fullscreen`
+              }
+              aria-pressed={isFullscreen}
+              onClick={() => {
+                setIsFullscreen((current) => !current)
+              }}
+            >
+              {isFullscreen ? '↙' : '⛶'}
+            </Button>
+            <Button
+              type="button"
+              variant="plain"
+              aria-label={`Close ${name}`}
+              onClick={onClose}
+            >
+              ×
+            </Button>
+          </>
+        )}
       </header>
       {targetUrl !== null ? (
         <iframe title={`${name} web interface`} src={targetUrl} />

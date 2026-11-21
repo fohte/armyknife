@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { page } from 'vitest/browser'
 
+import type { WebUiLinkTarget } from '#components/markdown-session-links'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import type { Session } from '#types'
@@ -629,5 +630,168 @@ it('shows an alert when the review document request fails', async () => {
   expect(result()).toEqual({
     requests: ['/api/sessions/fixture-session/review-document'],
     alert: 'Could not load the review document: Fixture request failed',
+  })
+})
+
+it('opens a linked web UI URL in its fullscreen status tab', async () => {
+  const webUi: WebUiLinkTarget = {
+    name: 'Canvas editor',
+    url: 'http://localhost:43123/studio/',
+  }
+  const linkUrl = 'http://localhost:43123/studio/pages/sample#page-fakehash'
+  function LinkHarness() {
+    const panel = useConversationStatusPanel({
+      session: { ...session, webUis: [webUi] },
+      messages: [],
+      backgroundTasks: [],
+      statusPanelOpen: true,
+      onAction: () => Promise.resolve(true),
+      onCloseStatusPanel: () => undefined,
+    })
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => {
+            panel.onOpenWebUiInFullscreen(webUi, linkUrl)
+          }}
+        >
+          Open linked page
+        </button>
+        <SessionStatusPanel
+          tabs={panel.tabs}
+          activeTabId={panel.activeTabId}
+          onTabChange={panel.onTabChange}
+          onClose={() => undefined}
+        />
+      </>
+    )
+  }
+
+  act(() => root?.render(<LinkHarness />))
+  await act(async () => {
+    await page.getByRole('button', { name: 'Open linked page' }).click()
+  })
+
+  const snapshot = () => ({
+    activeTab: container.querySelector('[role="tab"][aria-selected="true"]')
+      ?.textContent,
+    fullscreen: container
+      .querySelector('.web-ui-pane')
+      ?.classList.contains('is-fullscreen'),
+    iframe: container.querySelector('iframe')?.getAttribute('src') ?? null,
+  })
+  expect(snapshot()).toEqual({
+    activeTab: 'Canvas editor',
+    fullscreen: true,
+    iframe: 'http://localhost:43123/studio/pages/sample#page-fakehash',
+  })
+})
+
+it('opens crit through the shared fullscreen web UI request', async () => {
+  const crit: WebUiLinkTarget = {
+    name: 'crit',
+    url: 'http://localhost:43123/review/sample',
+  }
+  function CritHarness() {
+    const panel = useConversationStatusPanel({
+      session: { ...session, webUis: [crit] },
+      messages: [],
+      backgroundTasks: [],
+      statusPanelOpen: true,
+      onAction: () => Promise.resolve(true),
+      onCloseStatusPanel: () => undefined,
+    })
+    return (
+      <>
+        <button type="button" onClick={panel.onOpenCritInFullscreen}>
+          Review in crit
+        </button>
+        <SessionStatusPanel
+          tabs={panel.tabs}
+          activeTabId={panel.activeTabId}
+          onTabChange={panel.onTabChange}
+          onClose={() => undefined}
+        />
+      </>
+    )
+  }
+
+  act(() => root?.render(<CritHarness />))
+  await act(async () => {
+    await page.getByRole('button', { name: 'Review in crit' }).click()
+  })
+
+  const snapshot = () => ({
+    activeTab: container.querySelector('[role="tab"][aria-selected="true"]')
+      ?.textContent,
+    fullscreen: container
+      .querySelector('.web-ui-pane')
+      ?.classList.contains('is-fullscreen'),
+    iframe: container.querySelector('iframe')?.getAttribute('src') ?? null,
+  })
+  expect(snapshot()).toEqual({
+    activeTab: 'crit',
+    fullscreen: true,
+    iframe: 'http://localhost:43123/review/sample',
+  })
+})
+
+it('opens a linked web UI as a tabless mobile page and returns to conversation', async () => {
+  const webUi: WebUiLinkTarget = {
+    name: 'Canvas editor',
+    url: 'http://localhost:43123/studio/',
+  }
+  const linkUrl = 'http://localhost:43123/studio/pages/sample#page-fakehash'
+  function MobileLinkHarness() {
+    const panel = useConversationStatusPanel({
+      session: { ...session, webUis: [webUi] },
+      messages: [],
+      backgroundTasks: [],
+      isMobile: true,
+      onAction: () => Promise.resolve(true),
+      onCloseStatusPanel: () => undefined,
+    })
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => {
+            panel.onOpenWebUiInFullscreen(webUi, linkUrl)
+          }}
+        >
+          Open linked page
+        </button>
+        {panel.mobileWebUi}
+      </>
+    )
+  }
+
+  act(() => root?.render(<MobileLinkHarness />))
+  await act(async () => {
+    await page.getByRole('button', { name: 'Open linked page' }).click()
+  })
+  const opened = {
+    dialog: container
+      .querySelector('[role="dialog"]')
+      ?.getAttribute('aria-label'),
+    tabCount: container.querySelectorAll('[role="tab"]').length,
+    iframe: container.querySelector('iframe')?.getAttribute('src') ?? null,
+  }
+  await act(async () => {
+    await page.getByRole('button', { name: 'Back to conversation' }).click()
+  })
+
+  const snapshot = () => ({
+    opened,
+    returned: container.querySelector('[role="dialog"]') === null,
+  })
+  expect(snapshot()).toEqual({
+    opened: {
+      dialog: 'Canvas editor',
+      tabCount: 0,
+      iframe: 'http://localhost:43123/studio/pages/sample#page-fakehash',
+    },
+    returned: true,
   })
 })

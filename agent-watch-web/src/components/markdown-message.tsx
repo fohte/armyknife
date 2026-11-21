@@ -13,7 +13,15 @@ import remarkGfm from 'remark-gfm'
 
 import { BangCommandActions } from '#components/bang-command'
 import { ImageLightbox } from '#components/image-lightbox'
+import {
+  InlineMarkdownAnchor,
+  MarkdownAnchor,
+} from '#components/markdown-anchor'
 import { useMarkdownCommandContext } from '#components/markdown-command-context'
+import {
+  MarkdownComponentContext,
+  type MarkdownComponentContextValue,
+} from '#components/markdown-component-context'
 import { useMarkdownSessionLinks } from '#components/markdown-session-links'
 import { SessionLink } from '#components/session-link'
 import {
@@ -45,20 +53,6 @@ type MarkdownFile = {
 }
 
 const CodeBlockContext = createContext(false)
-
-type MarkdownComponentContextValue = {
-  sessionsById: ReadonlyMap<string, SessionLinkTarget>
-  onSelectSession?: (id: string) => void
-  commandContext?: {
-    messageText: string
-    sessionId: string
-    onCommandExecuted?: () => void
-  }
-}
-
-const MarkdownComponentContext = createContext<MarkdownComponentContextValue>({
-  sessionsById: new Map(),
-})
 
 type SessionLinkTextPart = {
   session: SessionLinkTarget | null
@@ -259,95 +253,6 @@ function unwrapTaggedMessage(value: string): string {
     : `## ${tag}\n\n${body.trim()}`
 }
 
-function renderSessionLink(
-  href: string | undefined,
-  children: ReactNode,
-  sessionsById: ReadonlyMap<string, SessionLinkTarget>,
-  onSelectSession?: (id: string) => void,
-) {
-  const sessionId = href?.match(
-    /^https:\/\/watch-session\.invalid\/([0-9a-f-]+)$/i,
-  )?.[1]
-  if (sessionId === undefined) return null
-  const session = sessionsById.get(sessionId.toLowerCase())
-  return session === undefined ? (
-    children
-  ) : (
-    <SessionLink onSelectSession={onSelectSession} session={session}>
-      {children}
-    </SessionLink>
-  )
-}
-
-type MarkdownImageNode = {
-  children?: MarkdownImageNode[]
-  tagName?: string
-  type?: string
-}
-
-function containsMarkdownImage(node: MarkdownImageNode): boolean {
-  return (
-    node.tagName === 'img' ||
-    (node.children?.some(containsMarkdownImage) ?? false)
-  )
-}
-
-const MarkdownAnchor: NonNullable<Components['a']> = ({
-  node,
-  href,
-  children,
-  ...props
-}) => {
-  const { sessionsById, onSelectSession } = useContext(MarkdownComponentContext)
-  if (node?.tagName !== 'a') return null
-  const sessionLink = renderSessionLink(
-    href,
-    children,
-    sessionsById,
-    onSelectSession,
-  )
-  if (
-    sessionLink === null &&
-    href !== '' &&
-    node.children.some(containsMarkdownImage)
-  ) {
-    return (
-      <span className="markdown-linked-image">
-        {children}
-        <a
-          className="markdown-image-link"
-          href={href}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Open link
-        </a>
-      </span>
-    )
-  }
-  return (
-    sessionLink ?? (
-      <a {...props} href={href} target="_blank" rel="noopener noreferrer">
-        {children}
-      </a>
-    )
-  )
-}
-
-const InlineMarkdownAnchor: NonNullable<Components['a']> = ({
-  node,
-  href,
-  children,
-}) => {
-  const { sessionsById, onSelectSession } = useContext(MarkdownComponentContext)
-  if (node?.tagName !== 'a') return null
-  return (
-    renderSessionLink(href, children, sessionsById, onSelectSession) ?? (
-      <span className="markdown-link-text">{href ?? children}</span>
-    )
-  )
-}
-
 const MarkdownCode: NonNullable<Components['code']> = ({ node, ...props }) => {
   const isCodeBlock = useContext(CodeBlockContext)
   const { sessionsById, onSelectSession, commandContext } = useContext(
@@ -502,9 +407,13 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   const markdownSource = inline ? children : unwrapTaggedMessage(children)
   const componentContext: MarkdownComponentContextValue = {
     sessionsById,
+    webUis: sessionLinks.webUis ?? [],
     ...(sessionLinks.onSelectSession === undefined
       ? {}
       : { onSelectSession: sessionLinks.onSelectSession }),
+    ...(sessionLinks.onOpenWebUi === undefined
+      ? {}
+      : { onOpenWebUi: sessionLinks.onOpenWebUi }),
     ...(commandSessionId === undefined
       ? {}
       : {

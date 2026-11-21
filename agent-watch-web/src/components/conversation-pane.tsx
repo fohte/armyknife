@@ -338,6 +338,8 @@ export function ConversationPane({
   const {
     activeTabId,
     onOpenCritInFullscreen,
+    onOpenWebUiInFullscreen,
+    mobileWebUi,
     onSelectDecision,
     onTabChange,
     selectedDecisionSeq,
@@ -354,6 +356,7 @@ export function ConversationPane({
       onSessionTreeViewStateChange?.(session.id, state),
     onSelectSession,
     statusPanelOpen,
+    isMobile,
     onAction,
     onCloseStatusPanel,
   })
@@ -415,6 +418,7 @@ export function ConversationPane({
       onToggleStatusPanel={onToggleStatusPanel}
       onSelectDecision={onSelectDecision}
       mobileStatusPanel={statusPanel}
+      mobileWebUi={mobileWebUi}
       onBack={onBack}
       onLater={onLater}
       {...(onClose === undefined ? {} : { onClose })}
@@ -444,6 +448,11 @@ export function ConversationPane({
     <MarkdownSessionLinksProvider
       sessions={sessionLinkTargets}
       onSelectSession={selectLinkedSession}
+      webUis={session.webUis ?? []}
+      onOpenWebUi={(webUi, url) => {
+        onOpenWebUiInFullscreen(webUi, url)
+        if (!isMobile && !statusPanelOpen) onToggleStatusPanel()
+      }}
     >
       {conversationLayout}
     </MarkdownSessionLinksProvider>
