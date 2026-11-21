@@ -50,6 +50,27 @@ const otherSession: Session = {
   title: 'Other fixture session',
 }
 
+const retryDepartures = [
+  {
+    description: 'the Board',
+    button: 'Open board',
+    route: {
+      view: 'board' as const,
+      selectedId: otherSession.id,
+      conversationOpen: false,
+    },
+  },
+  {
+    description: 'the Inbox list with the same session selected',
+    button: 'Back to Inbox list',
+    route: {
+      view: 'inbox' as const,
+      selectedId: session.id,
+      conversationOpen: false,
+    },
+  },
+]
+
 const actions: SessionActions = {
   message: true,
   answerQuestion: false,
@@ -66,11 +87,13 @@ function requireElement<T extends Element>(element: T | null): T {
 
 function RetryNavigationHarness({
   onAction,
+  departure,
 }: {
   onAction: (
     action: string,
     payload?: Record<string, unknown>,
   ) => Promise<boolean>
+  departure: (typeof retryDepartures)[number]
 }) {
   const feedback = useOptionalAsyncActionFeedback()
   const [route, setRoute] = useState({
@@ -92,7 +115,7 @@ function RetryNavigationHarness({
   })
 
   const currentSession =
-    route.selectedId === session.id
+    route.selectedId === session.id && route.conversationOpen
       ? {
           ...session,
           pullRequest: {
@@ -117,14 +140,10 @@ function RetryNavigationHarness({
         type="button"
         onClick={() => {
           setLatestHead(true)
-          setRoute({
-            view: 'board',
-            selectedId: otherSession.id,
-            conversationOpen: false,
-          })
+          setRoute(departure.route)
         }}
       >
-        Open board
+        {departure.button}
       </button>
       <button
         type="button"
@@ -171,98 +190,105 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it('returns to the original conversation before confirming an Activity retry', async () => {
-  const fetchMock = vi.fn<typeof fetch>(() =>
-    Promise.resolve(
-      Response.json(
-        { error: 'PR #42 head changed since confirmation.' },
-        { status: 409 },
-      ),
-    ),
-  )
-  vi.stubGlobal('fetch', fetchMock)
-  act(() => {
-    root?.render(
-      <AsyncActionFeedbackProvider>
-        <SessionOperationProvider>
-          <RetryNavigationHarness onAction={() => Promise.resolve(true)} />
-        </SessionOperationProvider>
-      </AsyncActionFeedbackProvider>,
-    )
-  })
-
-  act(() => {
-    requireElement(
-      container.querySelector<HTMLButtonElement>('.session-pr-trigger'),
-    ).click()
-  })
-  act(() => {
-    requireElement(
-      container.querySelector<HTMLButtonElement>(
-        'button[aria-label="Merge PR #42"]',
-      ),
-    ).click()
-  })
-  await act(async () => {
-    const confirmation = requireElement(
-      container.querySelector<HTMLElement>('[role="alertdialog"]'),
-    )
-    requireElement(
-      [...confirmation.querySelectorAll<HTMLButtonElement>('button')].find(
-        (button) => button.textContent === 'Confirm merge',
-      ) ?? null,
-    ).click()
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      if (container.querySelector('.async-action-item--failure') !== null)
-        return
-      await new Promise((resolve) => window.setTimeout(resolve, 0))
-    }
-  })
-
-  act(() => {
-    requireElement(
-      [...container.querySelectorAll<HTMLButtonElement>('button')].find(
-        (button) => button.textContent === 'Open board',
-      ) ?? null,
-    ).click()
-  })
-  act(() => {
-    requireElement(
-      [...container.querySelectorAll<HTMLButtonElement>('button')].find(
-        (button) => button.textContent === 'Open Activity',
-      ) ?? null,
-    ).click()
-  })
-  await act(async () => {
-    requireElement(
-      [
-        ...container.querySelectorAll<HTMLButtonElement>(
-          '.async-action-activity-list button',
+it.each(retryDepartures)(
+  'returns to the original conversation before confirming an Activity retry from $description',
+  async (departure) => {
+    const fetchMock = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        Response.json(
+          { error: 'PR #42 head changed since confirmation.' },
+          { status: 409 },
         ),
-      ].find((button) => button.textContent === 'Retry') ?? null,
-    ).click()
-    await Promise.resolve()
-  })
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    act(() => {
+      root?.render(
+        <AsyncActionFeedbackProvider>
+          <SessionOperationProvider>
+            <RetryNavigationHarness
+              departure={departure}
+              onAction={() => Promise.resolve(true)}
+            />
+          </SessionOperationProvider>
+        </AsyncActionFeedbackProvider>,
+      )
+    })
 
-  const snapshot = () => ({
-    route: container.querySelector('[data-testid="route"]')?.textContent,
-    confirmationOpen: container.querySelector('[role="alertdialog"]') !== null,
-    headSha: container.querySelector('.pull-request-merge-head-sha')
-      ?.textContent,
-    requestBodies: fetchMock.mock.calls.map(([, init]) => init?.body),
-    activityOpen: container.querySelector('[aria-label="Activity"]') !== null,
-  })
-  expect(snapshot()).toEqual({
-    route: 'inbox:original-fixture-session:true',
-    confirmationOpen: true,
-    headSha: 'current-fixture-head',
-    requestBodies: [
-      JSON.stringify({
-        owner: 'example-org',
-        repo: 'example-repo',
-        expectedHeadSha: 'old-fixture-head',
-      }),
-    ],
-    activityOpen: false,
-  })
-})
+    act(() => {
+      requireElement(
+        container.querySelector<HTMLButtonElement>('.session-pr-trigger'),
+      ).click()
+    })
+    act(() => {
+      requireElement(
+        container.querySelector<HTMLButtonElement>(
+          'button[aria-label="Merge PR #42"]',
+        ),
+      ).click()
+    })
+    await act(async () => {
+      const confirmation = requireElement(
+        container.querySelector<HTMLElement>('[role="alertdialog"]'),
+      )
+      requireElement(
+        [...confirmation.querySelectorAll<HTMLButtonElement>('button')].find(
+          (button) => button.textContent === 'Confirm merge',
+        ) ?? null,
+      ).click()
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (container.querySelector('.async-action-item--failure') !== null)
+          return
+        await new Promise((resolve) => window.setTimeout(resolve, 0))
+      }
+    })
+
+    act(() => {
+      requireElement(
+        [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+          (button) => button.textContent === departure.button,
+        ) ?? null,
+      ).click()
+    })
+    act(() => {
+      requireElement(
+        [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+          (button) => button.textContent === 'Open Activity',
+        ) ?? null,
+      ).click()
+    })
+    await act(async () => {
+      requireElement(
+        [
+          ...container.querySelectorAll<HTMLButtonElement>(
+            '.async-action-activity-list button',
+          ),
+        ].find((button) => button.textContent === 'Retry') ?? null,
+      ).click()
+      await Promise.resolve()
+    })
+
+    const snapshot = () => ({
+      route: container.querySelector('[data-testid="route"]')?.textContent,
+      confirmationOpen:
+        container.querySelector('[role="alertdialog"]') !== null,
+      headSha: container.querySelector('.pull-request-merge-head-sha')
+        ?.textContent,
+      requestBodies: fetchMock.mock.calls.map(([, init]) => init?.body),
+      activityOpen: container.querySelector('[aria-label="Activity"]') !== null,
+    })
+    expect(snapshot()).toEqual({
+      route: 'inbox:original-fixture-session:true',
+      confirmationOpen: true,
+      headSha: 'current-fixture-head',
+      requestBodies: [
+        JSON.stringify({
+          owner: 'example-org',
+          repo: 'example-repo',
+          expectedHeadSha: 'old-fixture-head',
+        }),
+      ],
+      activityOpen: false,
+    })
+  },
+)
