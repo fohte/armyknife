@@ -154,6 +154,48 @@ fn crit_pid_for_port(port: u16) -> Result<Option<u32>> {
     Ok(pid_for_port(&status, port))
 }
 
+pub(super) fn registered_url(port: u16, url: &str) -> String {
+    registered_url_with_status(port, url, crit_status)
+}
+
+fn registered_url_with_status(
+    port: u16,
+    url: &str,
+    status: impl FnOnce() -> Result<serde_json::Value>,
+) -> String {
+    let Ok(mut parsed_url) = reqwest::Url::parse(url) else {
+        return url.to_string();
+    };
+    if !matches!(parsed_url.path(), "" | "/") {
+        return url.to_string();
+    }
+
+    let Ok(status) = status() else {
+        return url.to_string();
+    };
+    if !preview_mode_for_port(&status, port) {
+        return url.to_string();
+    }
+
+    parsed_url.set_path("/preview");
+    parsed_url.to_string()
+}
+
+fn preview_mode_for_port(status: &serde_json::Value, port: u16) -> bool {
+    status
+        .get("sessions")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|session| {
+            session.get("port").and_then(serde_json::Value::as_u64) == Some(port.into())
+        })
+        .and_then(|session| session.get("args").and_then(serde_json::Value::as_array))
+        .and_then(|args| args.first())
+        .and_then(serde_json::Value::as_str)
+        == Some("preview")
+}
+
 fn pid_for_port(status: &serde_json::Value, port: u16) -> Option<u32> {
     status
         .get("sessions")
@@ -499,8 +541,52 @@ fn unix_time_secs() -> u64 {
 mod tests {
     use std::cell::Cell;
 
+    use rstest::rstest;
+
     use super::*;
     use crate::commands::agent::types::WebUiRegistration;
+
+    #[rstest]
+    #[case::preview_root_url(
+        Ok(serde_json::json!({
+            "sessions": [{ "port": 43210, "args": ["preview", "sample.html"] }],
+        })),
+        "http://localhost:43210",
+        "http://localhost:43210/preview",
+    )]
+    #[case::preview_root_url_with_query(
+        Ok(serde_json::json!({
+            "sessions": [{ "port": 43210, "args": ["preview", "sample.html"] }],
+        })),
+        "http://localhost:43210/?token=fixture",
+        "http://localhost:43210/preview?token=fixture",
+    )]
+    #[case::non_preview_root_url(
+        Ok(serde_json::json!({
+            "sessions": [{ "port": 43210, "args": ["review", "sample.html"] }],
+        })),
+        "http://localhost:43210",
+        "http://localhost:43210",
+    )]
+    #[case::preview_pathful_url(
+        Ok(serde_json::json!({
+            "sessions": [{ "port": 43210, "args": ["preview", "sample.html"] }],
+        })),
+        "http://localhost:43210/review",
+        "http://localhost:43210/review",
+    )]
+    #[case::status_unavailable(
+        Err(anyhow::anyhow!("fixture status error")),
+        "http://localhost:43210",
+        "http://localhost:43210",
+    )]
+    fn registers_preview_path_only_for_preview_root_urls(
+        #[case] status: Result<serde_json::Value>,
+        #[case] url: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(registered_url_with_status(43210, url, || status), expected,);
+    }
 
     #[test]
     fn dropping_a_crit_port_only_removes_its_registration() {

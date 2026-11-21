@@ -141,7 +141,7 @@ fn add(args: &AddArgs) -> Result<()> {
         port,
     );
     let _guard = span.enter();
-    let session = match record_session_url(&session_id, &args.url) {
+    let session = match record_session_url(&session_id, port, &args.url) {
         Ok(session) => {
             tracing::info!(event = "agent.crit.add.registered");
             Some(session)
@@ -164,8 +164,9 @@ fn add(args: &AddArgs) -> Result<()> {
     Ok(())
 }
 
-fn record_session_url(session_id: &str, url: &str) -> Result<Session> {
-    super::web_ui::record_url(session_id, "crit", url, true)
+fn record_session_url(session_id: &str, port: u16, url: &str) -> Result<Session> {
+    let url = monitor::registered_url(port, url);
+    super::web_ui::record_url(session_id, "crit", &url, true)
 }
 
 fn continue_add(
