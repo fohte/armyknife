@@ -251,10 +251,11 @@ pub(super) struct SessionSnapshot {
 pub(super) async fn session_vibe_modes(
     snapshot: &SessionSnapshot,
     sessions: &[Session],
+    repo_by_id: &HashMap<String, String>,
 ) -> Result<Vec<VibeState>, StatusCode> {
     let sessions = sessions.to_vec();
     let all_sessions = snapshot.all_sessions.clone();
-    let repo_by_id = snapshot.repo_by_id.clone();
+    let repo_by_id = repo_by_id.clone();
     let config = snapshot.vibe_config.clone();
     let ancestor_loader = snapshot.vibe_ancestor_loader.clone();
     tokio::task::spawn_blocking(move || {
@@ -461,7 +462,8 @@ async fn list_sessions<S: SessionSource>(
         tracing::error!(%error, "failed to resolve review document state");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    let vibe_modes = session_vibe_modes(&snapshot, &response_sessions).await?;
+    let vibe_modes =
+        session_vibe_modes(&snapshot, &response_sessions, &snapshot.repo_by_id).await?;
     let now = source.now();
     let state_by_id = snapshot
         .web_states
@@ -1422,6 +1424,39 @@ mod tests {
         (status, value)
     }
 
+    fn expected_child_tree(vibe_mode: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "revision": 7,
+            "sessions": [{
+                "id": "child-session",
+                "parentId": null,
+                "engine": "claude",
+                "workType": null,
+                "category": "later",
+                "isActive": true,
+                "kind": "Stopped",
+                "title": "child title",
+                "preview": "last message",
+                "elapsedSeconds": 100,
+                "task": {
+                    "id": "task-id",
+                    "number": 17,
+                    "title": "task title",
+                    "priority": 1,
+                    "isClosed": false,
+                },
+                "repo": "example-org/example-repo",
+                "vibeMode": vibe_mode,
+                "decisionCount": 4,
+                "pullRequest": { "number": 42, "state": "Open" },
+                "pullRequests": [
+                    { "number": 42, "state": "Open" },
+                    { "number": 43, "state": "Open" },
+                ],
+            }],
+        })
+    }
+
     #[tokio::test]
     async fn session_tree_route_excludes_ended_ancestors_and_keeps_active_session_data() {
         let (status, tree) = session_tree_response(source(), "child-session").await;
@@ -1430,38 +1465,7 @@ mod tests {
             (status, tree),
             (
                 StatusCode::OK,
-                serde_json::json!({
-                "revision": 7,
-                "sessions": [
-                    {
-                        "id": "child-session",
-                        "parentId": null,
-                        "engine": "claude",
-                        "workType": null,
-                        "category": "later",
-                        "isActive": true,
-                        "kind": "Stopped",
-                        "title": "child title",
-                        "preview": "last message",
-                        "elapsedSeconds": 100,
-                        "task": {
-                            "id": "task-id",
-                            "number": 17,
-                            "title": "task title",
-                            "priority": 1,
-                            "isClosed": false,
-                        },
-                        "repo": "example-org/example-repo",
-                        "vibeMode": { "mode": "repo_disabled" },
-                        "decisionCount": 4,
-                        "pullRequest": { "number": 42, "state": "Open" },
-                        "pullRequests": [
-                            { "number": 42, "state": "Open" },
-                            { "number": 43, "state": "Open" },
-                        ],
-                    },
-                ],
-                }),
+                expected_child_tree(serde_json::json!({ "mode": "repo_disabled" })),
             ),
         );
     }
@@ -1497,8 +1501,8 @@ mod tests {
         }
 
         assert_eq!(
-            (status, tree["sessions"][0]["vibeMode"].clone()),
-            (StatusCode::OK, expected_vibe_mode),
+            (status, tree),
+            (StatusCode::OK, expected_child_tree(expected_vibe_mode)),
         );
     }
 

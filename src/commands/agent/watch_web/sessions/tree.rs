@@ -118,7 +118,6 @@ pub(super) async fn session_tree<S: SessionSource>(
         .filter(|session| session.status != SessionStatus::Ended)
         .cloned()
         .collect::<Vec<_>>();
-    let vibe_modes = super::session_vibe_modes(&snapshot, &tree_sessions).await?;
     let tree_session_ids = tree_sessions
         .iter()
         .map(|session| session.session_id.as_str())
@@ -160,6 +159,7 @@ pub(super) async fn session_tree<S: SessionSource>(
             .into_iter()
             .filter(|(session_id, _)| missing_repo_ids.contains(session_id)),
     );
+    let vibe_modes = super::session_vibe_modes(&snapshot, &tree_sessions, &repo_by_id).await?;
     let turns = user_turns(tree_sessions.iter(), &snapshot.agent_config)
         .into_iter()
         .map(|turn| (turn.session.session_id.as_str(), turn.kind))
