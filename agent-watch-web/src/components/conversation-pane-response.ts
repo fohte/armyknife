@@ -448,6 +448,7 @@ export function isSessionTreeResponse(
         Number.isInteger(session['elapsedSeconds']) &&
         (session['task'] === null || isSessionTask(session['task'])) &&
         typeof session['repo'] === 'string' &&
+        isVibeMode(session['vibeMode']) &&
         typeof session['decisionCount'] === 'number' &&
         Number.isInteger(session['decisionCount']) &&
         (session['pullRequest'] === null ||
