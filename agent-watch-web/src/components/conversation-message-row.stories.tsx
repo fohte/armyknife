@@ -131,3 +131,31 @@ export const PermissionIsSending: Story = {
     },
   },
 }
+
+export const VibeModeTurnedOn: Story = {
+  name: 'Turning on vibe mode appears as a centered event',
+  args: {
+    message: {
+      type: 'event',
+      kind: 'armyknife',
+      text: 'Vibe mode turned on',
+      failed: false,
+      timestamp: new Date(2026, 10, 21, 10, 20).toISOString(),
+    },
+    now: new Date(2026, 10, 21, 10, 30),
+  },
+}
+
+export const VibeModeTurnedOff: Story = {
+  name: 'Turning off vibe mode appears as a centered event',
+  args: {
+    message: {
+      type: 'event',
+      kind: 'armyknife',
+      text: 'Vibe mode turned off',
+      failed: false,
+      timestamp: new Date(2026, 10, 21, 10, 14).toISOString(),
+    },
+    now: new Date(2026, 10, 21, 10, 30),
+  },
+}

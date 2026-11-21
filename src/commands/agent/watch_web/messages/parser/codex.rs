@@ -66,6 +66,7 @@ enum CodexEffect {
     ArmyknifeEvent {
         text: CodexText,
         timestamp: Option<DateTime<Utc>>,
+        queued_prompt_id: Option<String>,
     },
     Thinking {
         text: CodexText,
@@ -339,12 +340,23 @@ impl CodexParserState {
                 match item.get("type").and_then(Value::as_str) {
                     Some("UserMessage") => {
                         if let Some(text) = item.get("content").and_then(value_text) {
-                            if let Some((tag, body)) = classifier::tagged_body(&text)
-                                && classifier::is_watch_web_action_tag(tag)
+                            let queued_prompt_id =
+                                super::super::queued_prompt::id_from_content(&text)
+                                    .map(str::to_owned);
+                            let content_without_id =
+                                super::super::queued_prompt::strip_id_marker(&text);
+                            if let Some((tag, body)) =
+                                super::super::tagged_message::tagged_body(&content_without_id)
+                                && let Some(event_text) = super::super::action_event::event_text(
+                                    tag,
+                                    body,
+                                    queued_prompt_id.as_deref(),
+                                )
                             {
                                 effects.push(CodexEffect::ArmyknifeEvent {
-                                    text: CodexText::new(body.to_owned())?,
+                                    text: CodexText::new(event_text)?,
                                     timestamp,
+                                    queued_prompt_id,
                                 });
                             } else {
                                 effects.push(CodexEffect::UserMessage {
@@ -413,19 +425,28 @@ impl CodexParserState {
                         rewind_id,
                     } => {
                         tools.flush_into(&mut items);
+                        let text = text.decode()?;
                         append_user_text_with_rewind_id(
                             &mut items,
-                            text.decode()?,
+                            text,
                             parent,
                             *timestamp,
                             rewind_id.clone(),
                         );
                     }
-                    CodexEffect::ArmyknifeEvent { text, timestamp } => {
+                    CodexEffect::ArmyknifeEvent {
+                        text,
+                        timestamp,
+                        queued_prompt_id,
+                    } => {
                         tools.flush_into(&mut items);
+                        let mut text = classifier::one_line(&text.decode()?);
+                        if let Some(message_id) = queued_prompt_id {
+                            text = super::super::queued_prompt::add_id_marker(&text, message_id);
+                        }
                         items.push(ChatItem::Event {
                             kind: EventKind::Armyknife,
-                            text: classifier::one_line(&text.decode()?),
+                            text,
                             failed: false,
                             timestamp: timestamp.map(|timestamp| timestamp.to_rfc3339()),
                         });
@@ -617,10 +638,13 @@ mod tests {
 
     use super::super::cards::cards_from_sources;
     use super::{CodexParserState, parse, parse_with_skills};
-    use crate::commands::agent::store::{AgentTodo, PermissionRequestData, TodoResolution};
+    use crate::commands::agent::store::{
+        AgentTodo, PermissionRequestData, TodoResolution, WatchWebQueuedAttachment,
+        WatchWebQueuedPrompt,
+    };
     use crate::commands::agent::watch_web::messages::{
         ChatItem, EventKind, ParentSession, PeerDirection, SkillSuggestion, ToolGroupItem,
-        ToolOperation, UserContentPart,
+        ToolOperation, UserContentPart, queued_prompt,
     };
 
     #[test]
@@ -1105,14 +1129,15 @@ mod tests {
     #[test]
     fn renders_marked_todo_completions_as_armyknife_events() {
         let transcript = indoc! {r#"
-            {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<armyknife-todo-completed>Fixture action text.</armyknife-todo-completed>"}}}
+            {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<armyknife-todo-completed>Fixture action text.</armyknife-todo-completed>\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-gold -->"}}}
         "#};
 
         assert_eq!(
             parse(Cursor::new(transcript), None).unwrap(),
             vec![ChatItem::Event {
                 kind: EventKind::Armyknife,
-                text: "Fixture action text.".to_string(),
+                text: "Fixture action text.\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-gold -->"
+                    .to_string(),
                 failed: false,
                 timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
             }],
@@ -1122,17 +1147,148 @@ mod tests {
     #[test]
     fn renders_marked_todo_rejections_as_armyknife_events() {
         let transcript = indoc! {r#"
-            {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<armyknife-todo-rejected>Fixture rejection text.</armyknife-todo-rejected>"}}}
+            {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<armyknife-todo-rejected>Fixture rejection text.</armyknife-todo-rejected>\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-gold -->"}}}
         "#};
 
         assert_eq!(
             parse(Cursor::new(transcript), None).unwrap(),
             vec![ChatItem::Event {
                 kind: EventKind::Armyknife,
-                text: "Fixture rejection text.".to_string(),
+                text: "Fixture rejection text.\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-gold -->"
+                    .to_string(),
                 failed: false,
                 timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
             }],
+        );
+    }
+
+    #[test]
+    fn keeps_user_text_with_a_vibe_tag_as_a_user_message() {
+        let transcript = indoc! {r#"
+            {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<armyknife-vibe-mode-on>Here is user-authored text.</armyknife-vibe-mode-on>"}}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None).unwrap(),
+            vec![ChatItem::User {
+                rewind_id: None,
+                text:
+                    "<armyknife-vibe-mode-on>Here is user-authored text.</armyknife-vibe-mode-on>"
+                        .to_owned(),
+                timestamp: Some("2026-06-01T12:05:00+00:00".to_owned()),
+                from: None,
+                queued_prompt_id: None,
+            }],
+        );
+    }
+
+    #[test]
+    fn keeps_an_unqueued_vibe_notice_as_a_user_message() {
+        let transcript = indoc! {r#"
+            {"type":"turn_context","payload":{"turn_id":"fixture-turn-id"}}
+            {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>"}}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None).unwrap(),
+            vec![ChatItem::User {
+                rewind_id: Some("fixture-turn-id".to_owned()),
+                text: "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>"
+                    .to_owned(),
+                timestamp: Some("2026-06-01T12:05:00+00:00".to_owned()),
+                from: None,
+                queued_prompt_id: None,
+            }],
+        );
+    }
+
+    #[rstest]
+    #[case::vibe_notice(
+        "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>"
+    )]
+    #[case::generic_tagged_prompt("<delegation-update>Review this syntax</delegation-update>")]
+    fn keeps_a_queued_tagged_prompt_as_user_content_without_action_id(#[case] content: &str) {
+        let message_id = "fixture-message-coral";
+        let delivered_content = queued_prompt::add_id_marker(content, message_id);
+        let turn_context = json!({"type":"turn_context","payload":{"turn_id":"fixture-turn-id"}});
+        let delivery = json!({"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":delivered_content}}});
+        let transcript = indoc::formatdoc! {r#"
+            {turn_context}
+            {delivery}
+        "#};
+        let queued_prompts = [WatchWebQueuedPrompt {
+            id: 9,
+            message_id: Some(message_id.to_owned()),
+            content: content.to_owned(),
+            attachments: Vec::<WatchWebQueuedAttachment>::new(),
+            resolved: false,
+            sent_at: Utc::now(),
+        }];
+        let mut messages = parse(Cursor::new(transcript), None).unwrap();
+        let resolved_ids =
+            queued_prompt::resolve_transcript_messages(&mut messages, &queued_prompts);
+
+        assert_eq!(
+            (messages, resolved_ids),
+            (
+                vec![ChatItem::User {
+                    rewind_id: Some("fixture-turn-id".to_owned()),
+                    text: content.to_owned(),
+                    timestamp: Some("2026-06-01T12:05:00+00:00".to_owned()),
+                    from: None,
+                    queued_prompt_id: Some(message_id.to_owned()),
+                }],
+                vec![9],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::enabled(
+        "armyknife-vibe-mode-on",
+        "watch-web からユーザーが vibe mode を on にしました。",
+        "Vibe mode turned on"
+    )]
+    #[case::disabled(
+        "armyknife-vibe-mode-off",
+        "watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。",
+        "Vibe mode turned off"
+    )]
+    fn renders_vibe_mode_changes_as_armyknife_events(
+        #[case] tag: &str,
+        #[case] body: &str,
+        #[case] expected_text: &str,
+    ) {
+        let message_id = "armyknife-action:fixture-message-cyan";
+        let user_message = format!("<{tag}>{body}</{tag}>");
+        let delivered_message = queued_prompt::add_id_marker(&user_message, message_id);
+        let transcript = format!(
+            "{{\"type\":\"event_msg\",\"timestamp\":\"2026-06-01T12:05:00Z\",\"payload\":{{\"type\":\"item_completed\",\"item\":{{\"type\":\"UserMessage\",\"content\":{}}}}}}}\n",
+            serde_json::to_string(&delivered_message).expect("fixture message serializes"),
+        );
+        let mut messages = parse(Cursor::new(transcript), None).unwrap();
+        let queued_prompts = [WatchWebQueuedPrompt {
+            id: 7,
+            message_id: Some(message_id.to_owned()),
+            content: user_message,
+            attachments: Vec::<WatchWebQueuedAttachment>::new(),
+            resolved: false,
+            sent_at: Utc::now(),
+        }];
+        let resolved_prompt_ids =
+            queued_prompt::resolve_transcript_messages(&mut messages, &queued_prompts);
+
+        assert_eq!(
+            (messages, resolved_prompt_ids),
+            (
+                vec![ChatItem::Event {
+                    kind: EventKind::Armyknife,
+                    text: expected_text.to_owned(),
+                    failed: false,
+                    timestamp: Some("2026-06-01T12:05:00+00:00".to_string()),
+                }],
+                vec![7],
+            ),
         );
     }
 

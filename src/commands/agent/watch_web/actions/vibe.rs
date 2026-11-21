@@ -3,6 +3,10 @@ use axum::extract::{Path as RoutePath, State};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::super::messages::action_event::{
+    VIBE_MODE_OFF_NOTICE, VIBE_MODE_OFF_TAG, VIBE_MODE_ON_NOTICE, VIBE_MODE_ON_TAG,
+    new_action_message_id,
+};
 use crate::commands::agent::types::{Engine, SessionStatus};
 use crate::commands::agent::{store, vibe};
 
@@ -84,18 +88,20 @@ pub(super) async fn set_vibe(
     })
     .await?;
 
-    let message = if request.enabled {
-        "watch-web からユーザーが vibe mode を on にしました。".to_string()
+    let (event_tag, message) = if request.enabled {
+        (VIBE_MODE_ON_TAG, VIBE_MODE_ON_NOTICE)
     } else {
-        "watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。".to_string()
+        (VIBE_MODE_OFF_TAG, VIBE_MODE_OFF_NOTICE)
     };
+    let event_message = format!("<{event_tag}>{message}</{event_tag}>");
     let delivery = send_queued_prompt(QueuedPromptDelivery {
         runtime: state.runtime,
         sessions_dir: sessions_dir.clone(),
         session,
         marker,
-        queued_content: message.clone(),
-        message_content: message,
+        message_id: Some(new_action_message_id()),
+        queued_content: event_message.clone(),
+        message_content: event_message,
         queued_attachments: Vec::<store::WatchWebQueuedAttachment>::new(),
         attachment_paths: Vec::new(),
     })

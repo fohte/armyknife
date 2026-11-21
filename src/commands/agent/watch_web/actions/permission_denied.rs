@@ -95,6 +95,7 @@ pub(super) async fn retry_permission_denied(
         sessions_dir: sessions_dir.clone(),
         session,
         marker: Some(marker),
+        message_id: None,
         queued_content: queue_content.clone(),
         message_content: queue_content,
         queued_attachments: Vec::new(),

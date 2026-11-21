@@ -33,10 +33,18 @@ async fn completing_a_todo_notifies_the_session_before_persisting(action_context
         "sample-session",
     )
     .unwrap();
+    let sent_content = action_context.runtime.calls.lock().unwrap()[0]["content"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let action_message_id =
+        crate::commands::agent::watch_web::messages::queued_prompt::id_from_content(&sent_content)
+            .is_some_and(|message_id| message_id.starts_with("armyknife-action:"));
 
     assert_eq!(
         (
             response_snapshot(response, &action_context).await,
+            action_message_id,
             todos
                 .iter()
                 .map(|todo| (
@@ -60,6 +68,7 @@ async fn completing_a_todo_notifies_the_session_before_persisting(action_context
                     "}.trim_end(),
                 }],
             }),
+            true,
             vec![(
                 "Check the page",
                 Some(store::TodoResolution::Completed),

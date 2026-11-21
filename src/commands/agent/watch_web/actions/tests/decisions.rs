@@ -248,6 +248,11 @@ async fn change_endpoint_notifies_the_selected_session_and_marks_the_decision(
         .unwrap();
     let call = action_context.runtime.calls.lock().unwrap()[0].clone();
     let sent_content = call["content"].as_str().unwrap();
+    let action_message_id =
+        crate::commands::agent::watch_web::messages::queued_prompt::id_from_content(sent_content)
+            .unwrap()
+            .to_owned();
+    let action_message_id_has_prefix = action_message_id.starts_with("armyknife-action:");
     let expected_content = if targets_parent {
         indoc! {"
             <armyknife-decision-change>Decision from session fixture-child-session: Choose the fixture path
@@ -263,8 +268,13 @@ async fn change_endpoint_notifies_the_selected_session_and_marks_the_decision(
         "}
         .trim_end()
     };
+    let expected_content_with_id =
+        crate::commands::agent::watch_web::messages::queued_prompt::add_id_marker(
+            expected_content,
+            &action_message_id,
+        );
     let marker_matches_target = watch_web_user_marker::strip_message(&marker, sent_content)
-        .is_some_and(|content| content == expected_content);
+        .is_some_and(|content| content == expected_content_with_id);
     let review = store::agent_decisions_from(&sessions_dir, &child.session_id).unwrap()[0]
         .review
         .clone();
@@ -272,6 +282,7 @@ async fn change_endpoint_notifies_the_selected_session_and_marks_the_decision(
     assert_eq!(
         (
             response_snapshot(response, &action_context).await,
+            action_message_id_has_prefix,
             marker_matches_target,
             review,
         ),
@@ -285,6 +296,7 @@ async fn change_endpoint_notifies_the_selected_session_and_marks_the_decision(
                     "content": expected_content,
                 }],
             }),
+            true,
             true,
             Some("change".to_string()),
         ),

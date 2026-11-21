@@ -54,13 +54,13 @@ async fn enabling_vibe_updates_session_and_sends_a_queued_prompt(action_context:
                 "calls": [{
                     "kind": "message",
                     "sessionId": "fixture-session",
-                    "content": "watch-web からユーザーが vibe mode を on にしました。",
+                    "content": "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>",
                 }],
             }),
             true,
             json!([{
                 "id": "<prompt-id>",
-                "content": "watch-web からユーザーが vibe mode を on にしました。",
+                "content": "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>",
                 "sentAt": "<sent-at>",
             }]),
         ),
@@ -72,13 +72,13 @@ async fn enabling_vibe_updates_session_and_sends_a_queued_prompt(action_context:
     false,
     true,
     false,
-    "watch-web からユーザーが vibe mode を on にしました。"
+    "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>"
 )]
 #[case::disabling(
     true,
     false,
     true,
-    "watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。"
+    "<armyknife-vibe-mode-off>watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。</armyknife-vibe-mode-off>"
 )]
 #[tokio::test]
 async fn failed_prompt_delivery_restores_the_previous_vibe_setting(
@@ -163,7 +163,7 @@ async fn failed_delivery_does_not_restore_over_a_concurrent_vibe_setting(
                 "calls": [{
                     "kind": "message",
                     "sessionId": "fixture-session",
-                    "content": "watch-web からユーザーが vibe mode を on にしました。",
+                    "content": "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>",
                 }],
             }),
             true,
@@ -205,7 +205,7 @@ async fn failed_delivery_restores_vibe_after_an_unrelated_session_touch(
                 "calls": [{
                     "kind": "message",
                     "sessionId": "fixture-session",
-                    "content": "watch-web からユーザーが vibe mode を on にしました。",
+                    "content": "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>",
                 }],
             }),
             false,
@@ -305,7 +305,7 @@ async fn enabling_vibe_uses_the_current_repo_policy(action_context: ActionContex
                 "calls": [{
                     "kind": "message",
                     "sessionId": "fixture-session",
-                    "content": "watch-web からユーザーが vibe mode を on にしました。",
+                    "content": "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>",
                 }],
             }),
             true,
@@ -440,13 +440,13 @@ async fn disabling_vibe_reports_inherited_ancestor_state(action_context: ActionC
                 "calls": [{
                     "kind": "message",
                     "sessionId": "fixture-session",
-                    "content": "watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。",
+                    "content": "<armyknife-vibe-mode-off>watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。</armyknife-vibe-mode-off>",
                 }],
             }),
             false,
             json!([{
                 "id": "<prompt-id>",
-                "content": "watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。",
+                "content": "<armyknife-vibe-mode-off>watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。</armyknife-vibe-mode-off>",
                 "sentAt": "<sent-at>",
             }]),
         ),

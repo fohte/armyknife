@@ -2,6 +2,9 @@ use serde_json::Value;
 
 use crate::commands::agent::peer_message::{extract_peer_message, task_notification_envelope};
 
+use super::super::action_event;
+use super::super::tagged_message::tagged_body;
+
 mod system_record;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,7 +50,11 @@ pub(super) fn classify_inbound(
         return MessageKind::Hidden;
     }
 
-    let tagged = tagged_body(text);
+    let content_without_id = super::super::queued_prompt::strip_id_marker(text);
+    let tagged = tagged_body(text).or_else(|| {
+        let (tag, body) = tagged_body(&content_without_id)?;
+        action_event::is_action_event_tag(tag).then_some((tag, body))
+    });
     if tagged.is_some_and(|(tag, _)| is_hidden_tag(tag)) {
         return MessageKind::Hidden;
     }
@@ -59,8 +66,11 @@ pub(super) fn classify_inbound(
         .and_then(Value::as_str)
         == Some("human")
     {
-        return MessageKind::User {
-            text: marked_user_body(text, user_marker).unwrap_or_else(|| text.to_owned()),
+        return match marked_user_body(text, user_marker) {
+            Some(body) => marked_user_message_body(body),
+            None => MessageKind::User {
+                text: text.to_owned(),
+            },
         };
     }
 
@@ -73,6 +83,23 @@ pub(super) fn classify_inbound(
     }
 
     if let Some((tag, body)) = tagged {
+        if action_event::is_action_event_tag(tag) {
+            return action_event::event_text(
+                tag,
+                body,
+                super::super::queued_prompt::id_from_content(text),
+            )
+            .map_or_else(
+                || MessageKind::User {
+                    text: text.to_owned(),
+                },
+                |text| MessageKind::Event {
+                    kind: EventKind::Armyknife,
+                    text,
+                    failed: false,
+                },
+            );
+        }
         return event(tag, body, record);
     }
 
@@ -286,32 +313,6 @@ fn nested_tag_value<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
         .map(|(value, _)| value)
 }
 
-pub(super) fn tagged_body(text: &str) -> Option<(&str, &str)> {
-    let tag = outer_tag(text)?;
-    let trimmed = text.trim();
-    let opening = format!("<{tag}>");
-    let closing = format!("</{tag}>");
-    let body = trimmed
-        .strip_prefix(&opening)?
-        .strip_suffix(&closing)?
-        .trim();
-    Some((tag, body))
-}
-
-fn outer_tag(text: &str) -> Option<&str> {
-    let trimmed = text.trim();
-    let tag = trimmed.strip_prefix('<')?.split_once('>')?.0;
-    if tag.is_empty()
-        || tag.starts_with('/')
-        || !tag
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
-    {
-        return None;
-    }
-    trimmed.ends_with(&format!("</{tag}>")).then_some(tag)
-}
-
 fn is_hidden_tag(tag: &str) -> bool {
     matches!(tag, "system-reminder" | "local-command-caveat")
 }
@@ -355,21 +356,24 @@ fn marked_or_peer_message(text: &str, marker: Option<&str>) -> Option<MessageKin
 }
 
 fn marked_user_message_body(body: String) -> MessageKind {
-    match tagged_body(&body) {
-        Some((tag, event_body)) if is_watch_web_action_tag(tag) => MessageKind::Event {
-            kind: EventKind::Armyknife,
-            text: one_line(event_body),
-            failed: false,
-        },
+    let queued_prompt_id = super::super::queued_prompt::id_from_content(&body).map(str::to_owned);
+    let body_without_id = super::super::queued_prompt::strip_id_marker(&body);
+    match tagged_body(&body_without_id).and_then(|(tag, event_body)| {
+        action_event::event_text(tag, event_body, queued_prompt_id.as_deref())
+    }) {
+        Some(text) => {
+            let text = match queued_prompt_id {
+                Some(message_id) => super::super::queued_prompt::add_id_marker(&text, &message_id),
+                None => text,
+            };
+            MessageKind::Event {
+                kind: EventKind::Armyknife,
+                text,
+                failed: false,
+            }
+        }
         _ => MessageKind::User { text: body },
     }
-}
-
-pub(super) fn is_watch_web_action_tag(tag: &str) -> bool {
-    matches!(
-        tag,
-        "armyknife-todo-completed" | "armyknife-todo-rejected" | "armyknife-decision-change"
-    )
 }
 
 #[cfg(test)]
@@ -399,6 +403,22 @@ mod tests {
 
     #[rstest]
     #[case::human_user(json!({"type":"user","origin":{"kind":"human"}}), "Please continue.", Some("fixture-marker"), MessageKind::User { text: "Please continue.".to_owned() })]
+    #[case::human_vibe_notice_is_an_event(
+        json!({"type":"user","origin":{"kind":"human"}}),
+        indoc! {"
+            ⟦armyknife-user:fixture-marker-violet⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            <armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>
+            <!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-teal -->
+        "},
+        Some("⟦armyknife-user:fixture-marker-violet⟧"),
+        MessageKind::Event {
+            kind: EventKind::Armyknife,
+            text: "Vibe mode turned on\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-teal -->"
+                .to_owned(),
+            failed: false,
+        },
+    )]
     #[case::human_tagged_text_stays_user(json!({"type":"user","origin":{"kind":"human"}}), "<task-notification>Human supplied text.</task-notification>", None, MessageKind::User { text: "<task-notification>Human supplied text.</task-notification>".to_owned() })]
     #[case::human_peer_envelope_stays_user(json!({"type":"user","origin":{"kind":"human"}}), HUMAN_PEER_ENVELOPE, None, MessageKind::User { text: HUMAN_PEER_ENVELOPE.to_owned() })]
     #[case::unrelated_peer(
@@ -461,9 +481,10 @@ mod tests {
             <armyknife-todo-completed>Investigate failed fixture tasks.
 
             A failed attempt is still informative.</armyknife-todo-completed>
+            <!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-gold -->
         "},
         Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
-        MessageKind::Event { kind: EventKind::Armyknife, text: "Investigate failed fixture tasks. A failed attempt is still informative.".to_owned(), failed: false },
+        MessageKind::Event { kind: EventKind::Armyknife, text: "Investigate failed fixture tasks. A failed attempt is still informative.\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-gold -->".to_owned(), failed: false },
     )]
     #[case::marked_decision_change_is_an_event(
         json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
@@ -473,9 +494,61 @@ mod tests {
             <armyknife-decision-change>Change requested for the fixture decision.
 
             Please use the second fictional option.</armyknife-decision-change>
+            <!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-lime -->
         "},
         Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
-        MessageKind::Event { kind: EventKind::Armyknife, text: "Change requested for the fixture decision. Please use the second fictional option.".to_owned(), failed: false },
+        MessageKind::Event { kind: EventKind::Armyknife, text: "Change requested for the fixture decision. Please use the second fictional option.\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-lime -->".to_owned(), failed: false },
+    )]
+    #[case::marked_vibe_mode_on_is_an_event(
+        json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
+        indoc! {"
+            ⟦armyknife-user:fixture-marker-cobalt⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            <armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>
+            <!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-cyan -->
+        "},
+        Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
+        MessageKind::Event { kind: EventKind::Armyknife, text: "Vibe mode turned on\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-cyan -->".to_owned(), failed: false },
+    )]
+    #[case::marked_vibe_mode_off_is_an_event(
+        json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
+        indoc! {"
+            ⟦armyknife-user:fixture-marker-cobalt⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            <armyknife-vibe-mode-off>watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。</armyknife-vibe-mode-off>
+            <!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-amber -->
+        "},
+        Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
+        MessageKind::Event { kind: EventKind::Armyknife, text: "Vibe mode turned off\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-amber -->".to_owned(), failed: false },
+    )]
+    #[case::marked_vibe_tag_with_user_text_stays_user(
+        json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
+        indoc! {"
+            ⟦armyknife-user:fixture-marker-cobalt⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            <armyknife-vibe-mode-on>Here is user-authored text.</armyknife-vibe-mode-on>
+        "},
+        Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
+        MessageKind::User {
+            text: "<armyknife-vibe-mode-on>Here is user-authored text.</armyknife-vibe-mode-on>\n".to_owned(),
+        },
+    )]
+    #[case::marked_action_tag_with_a_regular_id_stays_user(
+        json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
+        indoc! {"
+            ⟦armyknife-user:fixture-marker-cobalt⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            <armyknife-todo-completed>Here is user-authored text.</armyknife-todo-completed>
+            <!-- armyknife-queued-prompt-id:fixture-message-rose -->
+        "},
+        Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
+        MessageKind::User {
+            text: indoc! {"
+                <armyknife-todo-completed>Here is user-authored text.</armyknife-todo-completed>
+                <!-- armyknife-queued-prompt-id:fixture-message-rose -->
+            "}
+            .to_owned(),
+        },
     )]
     #[case::marked_unrecognized_armyknife_tag_stays_user_text(
         json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),

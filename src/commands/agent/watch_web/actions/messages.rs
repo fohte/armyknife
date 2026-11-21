@@ -16,6 +16,7 @@ use super::super::super::{
     types::{Engine, Session, SessionStatus},
 };
 use super::super::attachments;
+use super::super::messages::{action_event, queued_prompt};
 use super::keyed_mutex_registry::KeyedMutexRegistry;
 use super::{ActionState, ApiError, load_session, resolve_sessions_dir, run_blocking};
 
@@ -107,6 +108,7 @@ pub(super) async fn send_message(
         sessions_dir,
         session,
         marker,
+        message_id: None,
         queued_content,
         message_content: content,
         queued_attachments,
@@ -131,6 +133,7 @@ pub(super) struct QueuedPromptDelivery {
     pub(super) sessions_dir: PathBuf,
     pub(super) session: Session,
     pub(super) marker: Option<String>,
+    pub(super) message_id: Option<String>,
     pub(super) queued_content: String,
     pub(super) message_content: String,
     pub(super) queued_attachments: Vec<store::WatchWebQueuedAttachment>,
@@ -164,12 +167,13 @@ async fn send_queued_prompt_with_policy(
         sessions_dir,
         session,
         marker,
+        message_id,
         queued_content,
         message_content,
         queued_attachments,
         attachment_paths,
     } = delivery;
-    let message_id = uuid::Uuid::new_v4().to_string();
+    let message_id = message_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let sent_at = Utc::now();
     let queued_prompt_id = run_blocking({
         let sessions_dir = sessions_dir.clone();
@@ -315,6 +319,15 @@ pub(super) fn watch_web_message_content(
         }
         _ => content.to_string(),
     }
+}
+
+pub(super) fn watch_web_action_message_content(
+    session: &Session,
+    marker: Option<&str>,
+    content: &str,
+) -> String {
+    let content = watch_web_message_content(session, marker, content);
+    queued_prompt::add_id_marker(&content, &action_event::new_action_message_id())
 }
 fn send_via_peer_notify(
     session_id: &str,
