@@ -95,7 +95,6 @@ export type SessionOperation =
       type: 'review_document_save' | 'review_document_finish'
       sessionId: string
       id: string
-      revision: string
       frontmatter: JsonValue
       body: string
     }

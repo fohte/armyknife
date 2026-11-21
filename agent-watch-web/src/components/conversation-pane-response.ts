@@ -403,7 +403,6 @@ export function isRewindResponse(
 
 export type ReviewDocumentResponse = {
   id: string
-  revision: string
   frontmatter: JsonValue
   body: string
 }
@@ -414,7 +413,6 @@ export function isReviewDocumentResponse(
   return (
     isRecord(value) &&
     typeof value['id'] === 'string' &&
-    typeof value['revision'] === 'string' &&
     isJsonValue(value['frontmatter']) &&
     typeof value['body'] === 'string'
   )

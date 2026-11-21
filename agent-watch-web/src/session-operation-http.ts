@@ -182,7 +182,6 @@ function requestFor(operation: SessionOperation) {
         path: `review-document/${operation.type === 'review_document_save' ? 'save' : 'finish'}`,
         body: {
           id: operation.id,
-          revision: operation.revision,
           frontmatter: operation.frontmatter,
           body: operation.body,
         },
@@ -253,15 +252,9 @@ export function createSessionOperation(
     case 'review-document/save':
     case 'review-document/finish': {
       const id = requiredString('id')
-      const revision = requiredString('revision')
       const body = requiredString('body')
       const frontmatter = payload['frontmatter']
-      if (
-        id === null ||
-        revision === null ||
-        body === null ||
-        !isJsonValue(frontmatter)
-      ) {
+      if (id === null || body === null || !isJsonValue(frontmatter)) {
         return errOperation('Invalid review document operation')
       }
       return ok<SessionOperation, Error>({
@@ -271,7 +264,6 @@ export function createSessionOperation(
             : 'review_document_finish',
         sessionId,
         id,
-        revision,
         frontmatter,
         body,
       })
@@ -466,9 +458,7 @@ export function submitSessionOperation(operation: SessionOperation) {
         operation.type !== 'rewind' &&
         operation.type !== 'vibe' &&
         operation.type !== 'command_preview' &&
-        operation.type !== 'command_execute' &&
-        operation.type !== 'review_document_save' &&
-        operation.type !== 'review_document_finish'
+        operation.type !== 'command_execute'
       )
         return ok<unknown, SessionOperationError>(undefined)
       return ResultAsync.fromPromise<unknown, SessionOperationError>(
