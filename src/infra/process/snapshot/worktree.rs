@@ -189,6 +189,22 @@ mod tests {
         )
     }
 
+    fn caller_snapshot() -> ProcessSnapshot {
+        ProcessSnapshot::from_ps_output(indoc! {"
+            1 0 launchd
+            10 1 tmux
+            20 10 zsh
+            30 20 claude
+            35 30 zsh
+            40 35 a
+            50 30 python
+            51 50 python
+            60 10 zsh
+            80 1 zsh
+            81 80 node
+        "})
+    }
+
     #[rstest]
     #[case::only_shells(&[(20, WORKTREE), (50, WORKTREE)], &[], &[])]
     #[case::non_shell_processes(&[(30, WORKTREE), (40, WORKTREE)], &[(30, "claude"), (40, "node")], &[])]
@@ -236,21 +252,31 @@ mod tests {
     }
 
     #[rstest]
-    #[case::caller_descendant_is_ignored_when_caller_is_outside(&[(1, "/"), (10, "/repo"), (20, "/repo"), (30, WORKTREE)], &[])]
-    #[case::caller_descendant_is_kept_when_caller_is_inside(&[(20, WORKTREE), (30, WORKTREE)], &[(30, "claude")])]
-    #[case::unrelated_non_shell_process_is_still_detected(&[(1, "/"), (10, "/repo"), (20, "/repo"), (71, WORKTREE)], &[(71, "node")])]
-    #[case::missing_ancestor_cwd_keeps_caller_descendant(&[(1, "/"), (20, "/repo"), (30, WORKTREE)], &[(30, "claude")])]
+    #[case::caller_descendant_is_ignored_when_caller_is_outside(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (50, "/repo"), (51, WORKTREE)], &[], Some(20))]
+    #[case::missing_cwd_above_pane_does_not_block_exclusion(&[(20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (51, WORKTREE)], &[], Some(20))]
+    #[case::caller_descendant_is_kept_when_caller_is_inside(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, WORKTREE), (51, WORKTREE)], &[(51, "python")], Some(20))]
+    #[case::known_ancestor_above_pane_inside_keeps_caller_descendant(&[(10, WORKTREE), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (51, WORKTREE)], &[(51, "python")], Some(20))]
+    #[case::unrelated_non_shell_process_is_still_detected(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (81, WORKTREE)], &[(81, "node")], Some(20))]
+    #[case::missing_caller_to_pane_cwd_keeps_caller_descendant(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (40, "/repo"), (51, WORKTREE)], &[(51, "python")], Some(20))]
+    #[case::missing_pane_cwd_keeps_caller_descendant(&[(10, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (51, WORKTREE)], &[(51, "python")], Some(20))]
+    #[case::pane_pid_not_in_caller_ancestry_keeps_caller_descendant(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (51, WORKTREE)], &[(51, "python")], Some(60))]
     fn caller_pane_scope_preserves_worktree_process_guard(
         #[case] cwd_entries: &[(u32, &str)],
         #[case] expected_processes: &[(u32, &str)],
+        #[case] caller_pane_pid: Option<u32>,
     ) {
         let cwds = cwd_entries
             .iter()
             .map(|&(pid, cwd)| (pid, PathBuf::from(cwd)))
             .collect();
 
-        let actual =
-            inspect_processes_in_path(&snapshot(), &cwds, 20, Some(20), Path::new(WORKTREE));
+        let actual = inspect_processes_in_path(
+            &caller_snapshot(),
+            &cwds,
+            40,
+            caller_pane_pid,
+            Path::new(WORKTREE),
+        );
 
         assert_eq!(
             actual,

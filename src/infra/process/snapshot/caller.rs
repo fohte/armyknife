@@ -7,8 +7,8 @@ use super::{ProcessSnapshot, list_process_cwds};
 ///
 /// The caller's processes are this process and its ancestors, plus descendants
 /// of `roots` (e.g. panes of the caller's tmux window). Descendants of the
-/// caller's pane are ignored when every caller ancestor has a known cwd outside
-/// `path`.
+/// caller's pane are ignored when every process from the caller to that pane
+/// has a known cwd outside `path` and no caller ancestor has a known cwd inside.
 ///
 /// Returns `None` if `lsof` or `ps` is unavailable, so callers can refuse to
 /// act instead of assuming the caller is elsewhere.
@@ -82,15 +82,19 @@ mod tests {
     }
 
     #[rstest]
-    #[case::caller_itself_inside(&[(40, WORKTREE)], &[20, 60], Some(20), &[40])]
-    #[case::agent_inside_subdirectory(&[(30, "/repo/.worktrees/feature/src")], &[20, 60], Some(20), &[30])]
-    #[case::background_job_inside_is_ignored_when_caller_is_outside(&[(1, "/repo"), (10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (50, "/repo"), (51, WORKTREE)], &[20, 60], Some(20), &[])]
-    #[case::missing_ancestor_cwd_keeps_background_job(&[(20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (51, WORKTREE)], &[20, 60], Some(20), &[51])]
-    #[case::background_job_inside_is_kept_when_caller_is_inside(&[(30, WORKTREE), (51, WORKTREE)], &[20, 60], Some(20), &[30, 51])]
-    #[case::other_pane_in_caller_window_inside(&[(60, WORKTREE)], &[20, 60], Some(20), &[60])]
-    #[case::other_window_inside(&[(80, WORKTREE), (81, WORKTREE)], &[20, 60], Some(20), &[])]
-    #[case::sibling_worktree(&[(40, "/repo/.worktrees/feature-extra")], &[20, 60], Some(20), &[])]
-    #[case::background_job_without_roots(&[(51, WORKTREE)], &[], None, &[])]
+    #[case::caller_itself_inside(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, WORKTREE)], &[20, 60], Some(20), &[40])]
+    #[case::agent_inside_subdirectory(&[(10, "/repo"), (20, "/repo"), (30, "/repo/.worktrees/feature/src"), (35, "/repo"), (40, "/repo")], &[20, 60], Some(20), &[30])]
+    #[case::background_job_inside_is_ignored_when_caller_is_outside(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (50, "/repo"), (51, WORKTREE)], &[20, 60], Some(20), &[])]
+    #[case::missing_cwd_above_pane_does_not_block_exclusion(&[(20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (51, WORKTREE)], &[20, 60], Some(20), &[])]
+    #[case::missing_caller_to_pane_cwd_keeps_background_job(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (40, "/repo"), (51, WORKTREE)], &[20, 60], Some(20), &[51])]
+    #[case::missing_pane_cwd_keeps_background_job(&[(10, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (51, WORKTREE)], &[20, 60], Some(20), &[51])]
+    #[case::known_ancestor_above_pane_inside_keeps_background_job(&[(10, WORKTREE), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (51, WORKTREE)], &[20, 60], Some(20), &[10, 51])]
+    #[case::background_job_inside_is_kept_when_caller_is_inside(&[(10, "/repo"), (20, "/repo"), (30, WORKTREE), (35, "/repo"), (40, "/repo"), (51, WORKTREE)], &[20, 60], Some(20), &[30, 51])]
+    #[case::other_pane_in_caller_window_inside(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (60, WORKTREE)], &[20, 60], Some(20), &[60])]
+    #[case::pane_pid_not_in_caller_ancestry_keeps_other_pane(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (60, WORKTREE)], &[20, 60], Some(60), &[60])]
+    #[case::other_window_inside(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (80, WORKTREE), (81, WORKTREE)], &[20, 60], Some(20), &[])]
+    #[case::sibling_worktree(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo/.worktrees/feature-extra")], &[20, 60], Some(20), &[])]
+    #[case::background_job_without_roots(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (51, WORKTREE)], &[], None, &[])]
     #[case::ancestor_without_roots(&[(20, WORKTREE)], &[], None, &[20])]
     fn finds_caller_processes_inside_the_path(
         snapshot: ProcessSnapshot,
