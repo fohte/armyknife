@@ -2,17 +2,18 @@ import '#components/later-today.css'
 
 import { Button } from '@fohte/ui/button'
 import { Filter, X } from 'lucide-react'
-import { type ReactNode, useCallback, useEffect, useState } from 'react'
+import { type ReactNode, useCallback, useState } from 'react'
 
 import { InboxFilterBar } from '#components/inbox-filter-bar'
-import { InboxFilterDialog } from '#components/inbox-filter-dialog'
+import { InboxViewDialogLayers } from '#components/inbox-view-dialog-layers'
 import { MobileNavigationActions } from '#components/mobile-navigation-actions'
 import { filterInboxSessions, parseInboxFilterQuery } from '#inbox-filter'
 import { InboxSessionListItem } from '#inbox-session-list-item'
 import { renderInboxSessionSection } from '#inbox-session-section'
-import { nextReturnLabel } from '#inbox-view-utils'
+import { formatMobileConnectionTime, nextReturnLabel } from '#inbox-view-utils'
 import type { SavedInboxView } from '#saved-inbox-views'
 import type { Session } from '#types'
+import { useInboxFilterShortcut } from '#use-inbox-filter-shortcut'
 
 type InboxViewProps = {
   sessions: readonly Session[]
@@ -24,6 +25,8 @@ type InboxViewProps = {
   showAllInProgress: boolean
   onShowMore: () => void
   onSelect: (id: string) => void
+  onLater?: (id: string) => void
+  onCloseSession?: (id: string) => void
   laterExpanded: boolean
   onToggleLater: () => void
   onToggleToday: (id: string, isToday: boolean) => void
@@ -67,6 +70,8 @@ export function InboxView({
   showAllInProgress,
   onShowMore,
   onSelect,
+  onLater,
+  onCloseSession,
   laterExpanded,
   onToggleLater,
   todaySessions,
@@ -98,6 +103,9 @@ export function InboxView({
   const [localFilterQuery, setLocalFilterQuery] = useState('')
   const [localDialogOpen, setLocalDialogOpen] = useState(false)
   const [draftQuery, setDraftQuery] = useState(controlledFilterQuery ?? '')
+  const [actionSheetSession, setActionSheetSession] = useState<Session | null>(
+    null,
+  )
   const filterQuery = controlledFilterQuery ?? localFilterQuery
   const filterDialogOpen = controlledFilterDialogOpen ?? localDialogOpen
   const filters = parseInboxFilterQuery(filterQuery)
@@ -147,30 +155,7 @@ export function InboxView({
     setFilterDialogOpen(true)
   }, [filterQuery, setFilterDialogOpen])
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== '/' || event.defaultPrevented) return
-      const target = event.target
-      if (
-        target instanceof HTMLElement &&
-        (target.isContentEditable ||
-          target instanceof HTMLInputElement ||
-          target instanceof HTMLTextAreaElement ||
-          target instanceof HTMLSelectElement)
-      ) {
-        return
-      }
-      if (!filterDialogOpen) {
-        event.preventDefault()
-        openFilterDialog()
-      }
-    }
-
-    window.addEventListener('keydown', onKeyDown)
-    return () => {
-      window.removeEventListener('keydown', onKeyDown)
-    }
-  }, [filterDialogOpen, openFilterDialog])
+  useInboxFilterShortcut(filterDialogOpen, openFilterDialog)
 
   const visibleInProgress = isMobile
     ? inProgressExpanded
@@ -221,6 +206,8 @@ export function InboxView({
         onSaveViewOpenChange={onSaveViewOpenChange}
         onSaveViewNameChange={onSaveViewNameChange}
         onSaveView={onSaveView}
+        isMobile={isMobile}
+        query={filterQuery}
       />
       {isMobile && savedViews.length > 0 ? (
         <section
@@ -312,6 +299,9 @@ export function InboxView({
           selectedId,
           onSelect,
           isMobile,
+          onLater,
+          onCloseSession,
+          onOpenActions: setActionSheetSession,
         })}
         <Button
           type="button"
@@ -347,6 +337,9 @@ export function InboxView({
                 selectedId={selectedId}
                 onSelect={onSelect}
                 isMobile={isMobile}
+                onLater={onLater}
+                onCloseSession={onCloseSession}
+                onOpenActions={setActionSheetSession}
               />
             ))}
           </ul>
@@ -372,6 +365,9 @@ export function InboxView({
           selectedId,
           onSelect,
           isMobile,
+          onLater,
+          onCloseSession,
+          onOpenActions: setActionSheetSession,
         })}
         {hiddenInProgressCount > 0 && !isMobile ? (
           <Button
@@ -426,6 +422,9 @@ export function InboxView({
           selectedId,
           onSelect,
           isMobile,
+          onLater,
+          onCloseSession,
+          onOpenActions: setActionSheetSession,
           onCloseAll: () => {
             onCloseDone(allDone)
           },
@@ -455,25 +454,26 @@ export function InboxView({
           <kbd>⌘.</kbd> Panel
         </span>
       </footer>
-      {filterDialogOpen ? (
-        <InboxFilterDialog
-          sessions={sessions}
-          query={draftQuery}
-          onQueryChange={setDraftQuery}
-          onApply={() => {
-            setFilterQuery(draftQuery)
-            setFilterDialogOpen(false)
-          }}
-          onClose={() => {
-            setFilterDialogOpen(false)
-          }}
-        />
-      ) : null}
+      <InboxViewDialogLayers
+        sessions={sessions}
+        mobile={isMobile}
+        filterDialogOpen={filterDialogOpen}
+        draftQuery={draftQuery}
+        onDraftQueryChange={setDraftQuery}
+        onApplyFilter={() => {
+          setFilterQuery(draftQuery)
+          setFilterDialogOpen(false)
+        }}
+        onCloseFilter={() => {
+          setFilterDialogOpen(false)
+        }}
+        actionSheetSession={actionSheetSession}
+        onLater={onLater}
+        onCloseSession={onCloseSession}
+        onDismissActions={() => {
+          setActionSheetSession(null)
+        }}
+      />
     </section>
   )
-}
-
-function formatMobileConnectionTime(timestamp: number) {
-  const date = new Date(timestamp)
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }

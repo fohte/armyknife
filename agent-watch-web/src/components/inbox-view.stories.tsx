@@ -1,4 +1,4 @@
-import type { Meta, StoryObj } from '@storybook/react-vite'
+import type { Decorator, Meta, StoryObj } from '@storybook/react-vite'
 
 import { InboxView } from '#components/inbox-view'
 import type { Session } from '#types'
@@ -190,6 +190,21 @@ const sessions: Session[] = [
   ),
 ]
 
+const iPhoneViewportDecorator: Decorator = (Story) => (
+  <div
+    className="story-mobile-layout"
+    data-layout="mobile"
+    style={{
+      width: '390px',
+      height: '844px',
+      display: 'flex',
+      position: 'relative',
+    }}
+  >
+    <Story />
+  </div>
+)
+
 const meta = {
   component: InboxView,
   args: {
@@ -265,6 +280,41 @@ export const InboxNamesASavedView: Story = {
 export const InboxFilterDialogIsOpen: Story = {
   name: 'The filter dialog shows available session values and counts',
   args: { filterQuery: 'project:sample project', filterDialogOpen: true },
+}
+
+export const IPhoneFilterIsOpen: Story = {
+  name: 'The iPhone shows the full-screen filter with the available values',
+  parameters: {
+    overflowCheck: { ignoreSelectors: ['.inbox-filter-fields'] },
+  },
+  args: {
+    isMobile: true,
+    filterQuery: 'kind:question,review',
+    filterDialogOpen: true,
+  },
+  decorators: [iPhoneViewportDecorator],
+}
+
+export const IPhoneInboxShowsFilteredSessions: Story = {
+  name: 'The iPhone shows matching sessions with removable filter chips',
+  args: {
+    isMobile: true,
+    filterQuery: 'project:sample project kind:question,review',
+    selectedId: null,
+  },
+  decorators: [iPhoneViewportDecorator],
+}
+
+export const IPhoneInboxSavesTheFilteredView: Story = {
+  name: 'The iPhone shows the Save view sheet for its active filters',
+  args: {
+    isMobile: true,
+    filterQuery: 'project:sample project kind:question,review',
+    saveViewOpen: true,
+    saveViewName: 'Sample service reviews',
+    selectedId: null,
+  },
+  decorators: [iPhoneViewportDecorator],
 }
 
 export const InboxIsLoading: Story = {

@@ -1,5 +1,10 @@
 import type { Session } from '#types'
 
+export function formatMobileConnectionTime(timestamp: number) {
+  const date = new Date(timestamp)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
 export function nextReturnLabel(sessions: readonly Session[]) {
   const timed = sessions
     .map((session) => session.laterUntil)
