@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.824](https://github.com/fohte/armyknife/compare/v0.1.823...v0.1.824) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** parse attached action events ([#2038](https://github.com/fohte/armyknife/issues/2038)) ([d2c0a8d](https://github.com/fohte/armyknife/commit/d2c0a8d0c68b3fe74da65f7e31eccf8988db74cf))
+
 ## [0.1.823](https://github.com/fohte/armyknife/compare/v0.1.822...v0.1.823) (2026-11-21)
 
 
