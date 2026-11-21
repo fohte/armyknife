@@ -6,14 +6,18 @@ import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
 
 type ActivityButtonProps = {
   mobile?: boolean
+  drawer?: boolean
   activityCount?: number
+  failed?: boolean
   active?: boolean
   onOpenActivity?: () => void
 }
 
 export function ActivityButton({
   mobile = false,
+  drawer = false,
   activityCount,
+  failed: failedOverride,
   active,
   onOpenActivity,
 }: ActivityButtonProps) {
@@ -26,10 +30,12 @@ export function ActivityButton({
   const running = actions.filter(
     (action) => action.status === 'merging' || action.status === 'closing',
   ).length
-  const failed = actions.some(
-    (action) =>
-      action.status === 'mergeFailed' || action.status === 'closeFailed',
-  )
+  const failed =
+    failedOverride ??
+    actions.some(
+      (action) =>
+        action.status === 'mergeFailed' || action.status === 'closeFailed',
+    )
   const label =
     running > 0
       ? `${String(running)} running`
@@ -41,13 +47,13 @@ export function ActivityButton({
       aria-expanded={activityOpen}
       aria-haspopup="dialog"
       aria-label={`Activity, ${label}`}
-      className={`async-action-activity-button${mobile ? ' is-mobile' : ''}${activityOpen ? ' is-open' : ''}`}
+      className={`async-action-activity-button${mobile ? ' is-mobile' : ''}${drawer ? ' is-drawer' : ''}${activityOpen ? ' is-open' : ''}`}
       type="button"
       onClick={() => {
         openActivity()
       }}
     >
-      <Activity aria-hidden="true" size={mobile ? 18 : 14} />
+      <Activity aria-hidden="true" size={mobile ? 18 : drawer ? 16 : 14} />
       {mobile ? (
         <span className="async-action-activity-count">{String(count)}</span>
       ) : (

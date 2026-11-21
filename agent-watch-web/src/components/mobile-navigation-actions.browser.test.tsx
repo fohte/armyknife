@@ -45,5 +45,13 @@ it('opens the new session form from the Inbox header', async () => {
     await userEvent.click(newSessionButton)
   })
 
-  expect(onNewSession.mock.calls).toEqual([[]])
+  const snapshot = () => ({
+    newSessionCalls: onNewSession.mock.calls,
+    activityButtonVisible:
+      container.querySelector('.async-action-activity-button') !== null,
+  })
+  expect(snapshot()).toEqual({
+    newSessionCalls: [[]],
+    activityButtonVisible: false,
+  })
 })

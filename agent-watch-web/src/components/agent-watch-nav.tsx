@@ -12,6 +12,7 @@ import {
   X,
 } from 'lucide-react'
 
+import { useOptionalAsyncActionFeedback } from '#async-action-feedback'
 import type { WorkTypeNavGroup } from '#board-model'
 import type { CommandPaletteShortcut } from '#command-palette-shortcut'
 import { ActivityButton } from '#components/activity-button'
@@ -46,6 +47,8 @@ type AgentWatchNavProps = {
   isMobile?: boolean
   inboxCollapsed?: boolean
   onToggleInbox?: () => void
+  activityCount?: number
+  activityFailed?: boolean
 }
 
 export function AgentWatchNav({
@@ -67,8 +70,16 @@ export function AgentWatchNav({
   isMobile = false,
   inboxCollapsed = false,
   onToggleInbox = () => undefined,
+  activityCount,
+  activityFailed,
 }: AgentWatchNavProps) {
   const { usage, error } = useAgentUsageContext()
+  const actionFeedback = useOptionalAsyncActionFeedback()
+  const failedActions = actionFeedback?.actions.some(
+    (action) =>
+      action.status === 'mergeFailed' || action.status === 'closeFailed',
+  )
+  const showActivityFailure = activityFailed ?? failedActions ?? false
   const recentSessions = sessions
     .filter((session) => session.lastPromptedAt != null)
     .toSorted(
@@ -135,9 +146,14 @@ export function AgentWatchNav({
           <Button
             type="button"
             aria-pressed={activeView === 'inbox'}
+            aria-label={
+              isMobile && showActivityFailure
+                ? 'Inbox, Activity has failed actions'
+                : undefined
+            }
             variant="plain"
             className={cn(
-              'view-switch-button cursor-pointer',
+              'view-switch-button view-switch-inbox-button cursor-pointer',
               activeView === 'inbox' && 'is-active',
             )}
             onClick={() => {
@@ -145,6 +161,9 @@ export function AgentWatchNav({
             }}
           >
             <span>Inbox&nbsp;</span>
+            {isMobile && showActivityFailure ? (
+              <span className="view-switch-inbox-failure" aria-hidden="true" />
+            ) : null}
             <Chip data-view-count="" tone="strong">
               {needsActionCount}
             </Chip>
@@ -283,6 +302,13 @@ export function AgentWatchNav({
           </section>
         ))}
       </div>
+      {isMobile ? (
+        <ActivityButton
+          drawer
+          {...(activityCount === undefined ? {} : { activityCount })}
+          {...(activityFailed === undefined ? {} : { failed: activityFailed })}
+        />
+      ) : null}
       <QuotaPanel
         error={error}
         isMobile={isMobile}

@@ -38,6 +38,12 @@
   border-color: var(--aw-border-control);
   padding: 0;
 }
+.async-action-activity-button.is-drawer {
+  height: 44px;
+  border: 0;
+  padding: 0 4px;
+  font-size: 14px;
+}
 .async-action-activity-count {
   position: absolute;
   right: 3px;

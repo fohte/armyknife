@@ -10,7 +10,6 @@ import {
 } from 'lucide-react'
 import { type SubmitEvent, useState } from 'react'
 
-import { ActivityButton } from '#components/activity-button'
 import { DesktopConversationActionsMenu } from '#components/desktop-conversation-actions-menu'
 import { MobileConversationActionsMenu } from '#components/mobile-conversation-actions-menu'
 import { OpenInTerminalAction } from '#components/open-in-terminal-action'
@@ -245,7 +244,6 @@ export function ConversationPaneHeader({
             )}
           </div>
           <div className="mobile-conversation-header-actions">
-            <ActivityButton mobile />
             <Button
               className="mobile-conversation-status-toggle"
               type="button"
