@@ -64,6 +64,12 @@ function getTabLayoutSnapshot(activeTabId: string) {
   return {
     hasScrolledRight: scrollLeft > startPadding,
     isAtStart: scrollLeft <= startPadding,
+    fadesLeft: tabList?.parentElement?.classList.contains(
+      'has-hidden-tabs-left',
+    ),
+    fadesRight: tabList?.parentElement?.classList.contains(
+      'has-hidden-tabs-right',
+    ),
     activeTabVisible:
       activeTabBounds !== undefined &&
       tabListBounds !== undefined &&
@@ -191,12 +197,16 @@ it('keeps overflowing tabs selectable and scrolls the active tab beside the clos
     rightwardScroll: {
       hasScrolledRight: true,
       isAtStart: false,
+      fadesLeft: true,
+      fadesRight: false,
       activeTabVisible: true,
       closeButtonVisible: true,
     },
     leftwardScroll: {
       hasScrolledRight: false,
       isAtStart: true,
+      fadesLeft: false,
+      fadesRight: true,
       activeTabVisible: true,
       closeButtonVisible: true,
     },
@@ -261,5 +271,47 @@ it('closes the status panel from its tab bar', () => {
       ?.click()
   })
 
+  expect(onClose.mock.calls).toEqual([[]])
+})
+
+it('shows the mobile page heading and returns to the conversation', () => {
+  const onClose = vi.fn()
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionStatusPanel
+        tabs={[
+          { id: 'running', label: 'Running', count: 1, content: 'Running' },
+        ]}
+        activeTabId="running"
+        onTabChange={vi.fn()}
+        onClose={onClose}
+        mobilePresentation
+      />,
+    )
+  })
+
+  const backButton = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Back to the conversation"]',
+  )
+  const snapshot = () => ({
+    heading: container.querySelector('h1')?.textContent,
+    dialog: container
+      .querySelector('[role="dialog"]')
+      ?.getAttribute('aria-modal'),
+    tabLabel: container.querySelector('[role="tab"]')?.textContent,
+    backButtonVisible: backButton !== null,
+    closeButtonVisible:
+      container.querySelector('.session-status-panel-close') !== null,
+  })
+  expect(snapshot()).toEqual({
+    heading: 'Session status',
+    dialog: 'true',
+    tabLabel: 'Running1',
+    backButtonVisible: true,
+    closeButtonVisible: false,
+  })
+
+  act(() => backButton?.click())
   expect(onClose.mock.calls).toEqual([[]])
 })

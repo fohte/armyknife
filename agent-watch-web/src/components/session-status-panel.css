@@ -27,6 +27,46 @@
   overflow-x: auto;
   overflow-y: hidden;
   padding-left: 18px;
+  scrollbar-width: none;
+}
+
+.session-status-panel-tablist::-webkit-scrollbar {
+  display: none;
+}
+
+.session-status-panel-tablist-wrap {
+  position: relative;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.session-status-panel-tablist-wrap::before,
+.session-status-panel-tablist-wrap::after {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  bottom: 0;
+  width: 40px;
+  opacity: 0;
+  pointer-events: none;
+  content: '';
+  transition: opacity 120ms ease;
+}
+
+.session-status-panel-tablist-wrap::before {
+  left: 0;
+  background: linear-gradient(90deg, var(--aw-bg-nav), transparent);
+}
+
+.session-status-panel-tablist-wrap::after {
+  right: 0;
+  background: linear-gradient(270deg, var(--aw-bg-nav), transparent);
+}
+
+.session-status-panel-tablist-wrap.has-hidden-tabs-left::before,
+.session-status-panel-tablist-wrap.has-hidden-tabs-right::after {
+  opacity: 1;
 }
 
 .session-status-panel-tab {
@@ -105,6 +145,60 @@
   place-items: center;
   color: var(--aw-text-secondary);
   font-size: 12px;
+}
+
+.session-status-panel--mobile {
+  width: 100%;
+}
+
+.session-status-panel-mobile-header {
+  box-sizing: border-box;
+  display: flex;
+  height: 56px;
+  min-height: 56px;
+  flex: 0 0 56px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+}
+
+.session-status-panel-mobile-header h1 {
+  margin: 0;
+  color: var(--aw-text-primary);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.session-status-panel-back {
+  box-sizing: border-box;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  flex: 0 0 44px;
+  justify-content: flex-start;
+  padding: 0;
+  color: var(--aw-text-primary);
+}
+
+.session-status-panel--mobile .session-status-panel-tabs {
+  height: 45px;
+  min-height: 45px;
+  flex: 0 0 45px;
+  padding: 0;
+}
+
+.session-status-panel--mobile .session-status-panel-tablist {
+  gap: 22px;
+  padding: 0 16px;
+}
+
+.session-status-panel--mobile .session-status-panel-tab {
+  font-size: 14px;
+}
+
+.session-status-panel--mobile .session-status-panel-content {
+  padding-top: 0;
 }
 
 .session-tree-feedback {

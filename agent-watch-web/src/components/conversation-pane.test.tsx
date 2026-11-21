@@ -5343,7 +5343,7 @@ it('opens and closes the existing status panel over the mobile conversation', as
   act(() => {
     requireElement(
       container.querySelector<HTMLButtonElement>(
-        '.mobile-session-status-overlay .session-status-panel-close',
+        '.mobile-session-status-overlay .session-status-panel-back',
       ),
     ).click()
   })

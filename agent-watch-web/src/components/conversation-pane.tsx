@@ -366,6 +366,7 @@ export function ConversationPane({
       activeTabId={activeTabId}
       onTabChange={onTabChange}
       onClose={onCloseStatusPanel}
+      mobilePresentation={isMobile}
     />
   ) : null
 
