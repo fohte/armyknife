@@ -235,7 +235,9 @@ mod tests {
             Vec::new(),
             None,
             None,
-            None,
+            Some(Err(WorktreeProcessGuardError::InspectionUnavailable {
+                worktree_path: PathBuf::from("/fictional/detached-worktree"),
+            })),
         );
 
         assert_eq!(
