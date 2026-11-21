@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.837](https://github.com/fohte/armyknife/compare/v0.1.836...v0.1.837) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-crit:** stop review status after Finish ([#2056](https://github.com/fohte/armyknife/issues/2056)) ([36acd70](https://github.com/fohte/armyknife/commit/36acd70fd15857c2b50cfd1aeeecbcd30f1061a6))
+
 ## [0.1.836](https://github.com/fohte/armyknife/compare/v0.1.835...v0.1.836) (2026-11-21)
 
 
