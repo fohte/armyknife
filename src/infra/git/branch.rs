@@ -1,6 +1,9 @@
 //! Branch operations.
 
-use super::repo::{GitRepo, open_repo};
+use anyhow::Context;
+
+use super::cmd::run_git;
+use super::repo::{GitRepo, get_main_branch_for_repo, open_repo};
 use crate::infra::github::{PrInfo, PrState};
 
 /// Check if a local branch exists
@@ -103,6 +106,31 @@ pub fn merge_status_from_git(_repo: &GitRepo, _branch_name: &str) -> MergeStatus
     }
 }
 
+/// Whether a local branch contains commits that are not reachable from the
+/// repository's configured main branch on `origin`.
+pub(crate) fn branch_has_commits_ahead_of_main(
+    repo: &GitRepo,
+    branch_name: &str,
+) -> anyhow::Result<bool> {
+    let main_branch = get_main_branch_for_repo(repo)?;
+    branch_has_commits_ahead_of_main_with(branch_name, &main_branch, |range| {
+        run_git(repo.workdir(), ["rev-list", "--count", range])
+    })
+}
+
+fn branch_has_commits_ahead_of_main_with(
+    branch_name: &str,
+    main_branch: &str,
+    rev_list: impl FnOnce(&str) -> anyhow::Result<String>,
+) -> anyhow::Result<bool> {
+    let range = format!("refs/remotes/origin/{main_branch}..refs/heads/{branch_name}");
+    let raw_count = rev_list(&range)?;
+    let count = raw_count
+        .parse::<usize>()
+        .context("Failed to parse branch commit count")?;
+    Ok(count > 0)
+}
+
 /// Check if a branch is merged (via PR or git merge-base).
 ///
 /// Uses the repository from the current working directory.
@@ -157,6 +185,28 @@ mod tests {
     use super::*;
     use crate::infra::github::RepoClient;
     use rstest::rstest;
+
+    #[rstest]
+    #[case::no_ahead_commits("0", false)]
+    #[case::one_ahead_commit("1", true)]
+    fn branch_ahead_check_counts_commits_from_the_selected_main_branch(
+        #[case] raw_count: &str,
+        #[case] expected: bool,
+    ) {
+        let mut range = None;
+        let result = branch_has_commits_ahead_of_main_with("feature", "main", |value| {
+            range = Some(value.to_string());
+            Ok(raw_count.to_string())
+        });
+
+        assert_eq!(
+            (result.unwrap(), range),
+            (
+                expected,
+                Some("refs/remotes/origin/main..refs/heads/feature".to_string()),
+            ),
+        );
+    }
 
     /// Mock RepoClient for testing find_base_branch_with_client
     struct MockRepoClient {

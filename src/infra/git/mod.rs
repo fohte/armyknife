@@ -15,6 +15,7 @@ mod repo;
 pub mod test_utils;
 mod worktree_creation_lock;
 
+pub(crate) use branch::branch_has_commits_ahead_of_main;
 pub use branch::{
     MergeStatus, find_base_branch, get_merge_status, get_merge_status_for_repo,
     local_branch_exists, merge_status_from_git, merge_status_from_pr,

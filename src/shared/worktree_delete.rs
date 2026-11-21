@@ -2,7 +2,10 @@ use anyhow::{Context, Result, bail};
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
-use crate::infra::git::{GitRepo, MergeStatus, get_merge_status_for_repo, get_repo_root};
+use crate::infra::git::{
+    GitRepo, MergeStatus, branch_has_commits_ahead_of_main, get_merge_status_for_repo,
+    get_repo_root,
+};
 use crate::shared::cleanup;
 use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
@@ -48,13 +51,33 @@ fn resolve_merge_guard_branch_with(
         .map(str::to_string)
 }
 
-pub(crate) fn classify_merge_guard_status(branch: String, status: MergeStatus) -> MergeGuardStatus {
-    let should_cleanup = status.should_cleanup();
+pub(crate) fn classify_merge_guard_status_for_repo(
+    repo: &GitRepo,
+    branch: String,
+    status: MergeStatus,
+) -> MergeGuardStatus {
+    classify_merge_guard_status_with(branch, status, |branch| {
+        branch_has_commits_ahead_of_main(repo, branch)
+    })
+}
+
+fn classify_merge_guard_status_with(
+    branch: String,
+    status: MergeStatus,
+    branch_has_commits_ahead: impl FnOnce(&str) -> Result<bool>,
+) -> MergeGuardStatus {
+    let should_cleanup = status.should_cleanup()
+        || branch_has_commits_ahead(&branch).is_ok_and(|has_commits| !has_commits);
     MergeGuardStatus {
         branch,
         status,
         should_cleanup,
     }
+}
+
+#[cfg(test)]
+pub(crate) fn classify_merge_guard_status(branch: String, status: MergeStatus) -> MergeGuardStatus {
+    classify_merge_guard_status_with(branch, status, |_| Ok(true))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -273,7 +296,8 @@ async fn check_merge_status(
     unmerged_policy: UnmergedWorktreePolicy,
 ) -> Result<Option<MergeStatus>> {
     let repo_for_status = repo.clone();
-    check_merge_status_with(
+    let repo_for_classification = repo.clone();
+    check_merge_status_with_classifier(
         branch_name,
         force,
         unmerged_policy,
@@ -281,6 +305,9 @@ async fn check_merge_status(
         move |branch| {
             let branch = branch.to_string();
             async move { get_merge_status_for_branch(&repo_for_status, &branch).await }
+        },
+        move |branch, status| {
+            classify_merge_guard_status_for_repo(&repo_for_classification, branch, status)
         },
         || {
             let stdin = io::stdin();
@@ -304,6 +331,7 @@ async fn inspect_merge_guard_status_with<F, G, Fut>(
     branch_name: Option<&str>,
     branch_exists: F,
     get_status: G,
+    classify: impl FnOnce(String, MergeStatus) -> MergeGuardStatus,
 ) -> Option<MergeGuardStatus>
 where
     F: FnOnce(&str) -> bool,
@@ -312,9 +340,10 @@ where
 {
     let branch = resolve_merge_guard_branch_with(branch_name, branch_exists)?;
     let status = get_status(&branch).await;
-    Some(classify_merge_guard_status(branch, status))
+    Some(classify(branch, status))
 }
 
+#[cfg(test)]
 async fn check_merge_status_with<F, G, Fut>(
     branch_name: Option<&str>,
     force: bool,
@@ -328,8 +357,35 @@ where
     G: FnOnce(&str) -> Fut,
     Fut: std::future::Future<Output = MergeStatus>,
 {
+    check_merge_status_with_classifier(
+        branch_name,
+        force,
+        unmerged_policy,
+        branch_exists,
+        get_status,
+        |branch, status| classify_merge_guard_status_with(branch, status, |_| Ok(true)),
+        confirm,
+    )
+    .await
+}
+
+async fn check_merge_status_with_classifier<F, G, Fut, C>(
+    branch_name: Option<&str>,
+    force: bool,
+    unmerged_policy: UnmergedWorktreePolicy,
+    branch_exists: F,
+    get_status: G,
+    classify: C,
+    confirm: impl FnOnce() -> Option<bool>,
+) -> Result<Option<MergeStatus>>
+where
+    F: FnOnce(&str) -> bool,
+    G: FnOnce(&str) -> Fut,
+    Fut: std::future::Future<Output = MergeStatus>,
+    C: FnOnce(String, MergeStatus) -> MergeGuardStatus,
+{
     let Some(merge_guard_status) =
-        inspect_merge_guard_status_with(branch_name, branch_exists, get_status).await
+        inspect_merge_guard_status_with(branch_name, branch_exists, get_status, classify).await
     else {
         return Ok(None);
     };
@@ -428,6 +484,97 @@ mod tests {
 
     use super::*;
     use crate::shared::testing::TestRepo;
+
+    fn no_pr_status() -> MergeStatus {
+        MergeStatus::NotMerged {
+            reason: "No PR found".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn clean_branch_without_commits_ahead_skips_unmerged_confirmation() {
+        let merge_guard_status =
+            classify_merge_guard_status_with("feature".to_string(), no_pr_status(), |_| Ok(false));
+        let result = check_merge_status_with_classifier(
+            Some("feature"),
+            false,
+            UnmergedWorktreePolicy::Confirm,
+            |_| true,
+            |_| std::future::ready(no_pr_status()),
+            |branch, status| classify_merge_guard_status_with(branch, status, |_| Ok(false)),
+            || panic!("an empty branch must not ask for confirmation"),
+        )
+        .await
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (merge_guard_status.should_cleanup, result),
+            (true, Ok(Some(no_pr_status()))),
+        );
+    }
+
+    #[rstest]
+    #[case::branch_has_ahead_commits(Some(true))]
+    #[case::base_cannot_be_resolved(None)]
+    #[tokio::test]
+    async fn unmerged_branch_without_terminal_input_is_cancelled(
+        #[case] branch_has_commits_ahead: Option<bool>,
+    ) {
+        let result = check_merge_status_with_classifier(
+            Some("feature"),
+            false,
+            UnmergedWorktreePolicy::Confirm,
+            |_| true,
+            |_| std::future::ready(no_pr_status()),
+            |branch, status| {
+                classify_merge_guard_status_with(branch, status, |_| {
+                    branch_has_commits_ahead
+                        .ok_or_else(|| anyhow::anyhow!("base branch cannot be resolved"))
+                })
+            },
+            || None,
+        )
+        .await
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            result,
+            Err(
+                "Cancelled: stdin is not a terminal; input was not accepted as confirmation."
+                    .to_string()
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::branch_has_ahead_commits(Some(true))]
+    #[case::base_cannot_be_resolved(None)]
+    #[tokio::test]
+    async fn watch_close_rejects_unmerged_branch_with_commits_or_unknown_base(
+        #[case] branch_has_commits_ahead: Option<bool>,
+    ) {
+        let result = check_merge_status_with_classifier(
+            Some("feature"),
+            false,
+            UnmergedWorktreePolicy::Reject,
+            |_| true,
+            |_| std::future::ready(no_pr_status()),
+            |branch, status| {
+                classify_merge_guard_status_with(branch, status, |_| {
+                    branch_has_commits_ahead
+                        .ok_or_else(|| anyhow::anyhow!("base branch cannot be resolved"))
+                })
+            },
+            || panic!("watch close rejects without asking for confirmation"),
+        )
+        .await
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            result,
+            Err("Branch `feature` is not merged (No PR found); close the session while keeping its worktree to continue".to_string()),
+        );
+    }
 
     #[tokio::test]
     async fn check_merge_status_uses_the_selected_repository_branch() {

@@ -78,7 +78,9 @@ impl CloseChecks {
                 )
                 .await
                 .ok()
-                .map(|status| worktree_delete::classify_merge_guard_status(branch, status))
+                .map(|status| {
+                    worktree_delete::classify_merge_guard_status_for_repo(&repo, branch, status)
+                })
             },
             move |path| {
                 check_process_guard_for_close(
