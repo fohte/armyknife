@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.842](https://github.com/fohte/armyknife/compare/v0.1.841...v0.1.842) (2026-11-21)
+
+
+### Bug Fixes
+
+* **tq:** avoid URI failures for large ID lists ([#2071](https://github.com/fohte/armyknife/issues/2071)) ([54426bc](https://github.com/fohte/armyknife/commit/54426bcd1e566a30a2a7cada6f2841c9c8fd0232))
+
 ## [0.1.841](https://github.com/fohte/armyknife/compare/v0.1.840...v0.1.841) (2026-11-21)
 
 
