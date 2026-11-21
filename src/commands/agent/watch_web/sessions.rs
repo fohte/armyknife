@@ -214,6 +214,7 @@ trait SessionSource: Clone + Send + Sync + 'static {
     fn fetch_pull_requests(
         &self,
         sessions: &[Session],
+        task_metadata: &SessionTaskMetadata,
     ) -> impl Future<Output = HashMap<String, Vec<SessionPullRequestInfo>>> + Send;
 
     fn review_document_queue(&self, _session: &Session) -> ReviewDocumentQueue {
@@ -250,8 +251,9 @@ impl SessionSource for LiveSessionSource {
     async fn fetch_pull_requests(
         &self,
         sessions: &[Session],
+        task_metadata: &SessionTaskMetadata,
     ) -> HashMap<String, Vec<SessionPullRequestInfo>> {
-        self.enrichment.pull_requests(sessions).await
+        self.enrichment.pull_requests(sessions, task_metadata).await
     }
 
     fn review_document_queue(&self, session: &Session) -> ReviewDocumentQueue {
@@ -348,9 +350,9 @@ async fn list_sessions<S: SessionSource>(
         .collect::<Vec<_>>();
     let interrupted_sessions =
         tokio::task::spawn_blocking(move || interrupted_session_ids(sessions_to_check));
-    let (task_metadata, pull_requests, question_previews) = tokio::join!(
-        source.fetch_task_metadata(&response_sessions),
-        source.fetch_pull_requests(&response_sessions),
+    let task_metadata = source.fetch_task_metadata(&response_sessions).await;
+    let (pull_requests, question_previews) = tokio::join!(
+        source.fetch_pull_requests(&response_sessions, &task_metadata),
         source.question_previews(&response_sessions),
     );
     let interrupted_session_ids = interrupted_sessions
@@ -875,12 +877,14 @@ mod tests {
                 priorities: self.task_priorities.clone(),
                 priority_order: self.task_priority_order.clone(),
                 task_projects: self.task_projects.clone(),
+                github_links: HashMap::new(),
             }
         }
 
         async fn fetch_pull_requests(
             &self,
             _sessions: &[Session],
+            _task_metadata: &SessionTaskMetadata,
         ) -> HashMap<String, Vec<SessionPullRequestInfo>> {
             self.pull_requests.clone()
         }
@@ -951,8 +955,11 @@ mod tests {
         async fn fetch_pull_requests(
             &self,
             sessions: &[Session],
+            task_metadata: &SessionTaskMetadata,
         ) -> HashMap<String, Vec<SessionPullRequestInfo>> {
-            self.source.fetch_pull_requests(sessions).await
+            self.source
+                .fetch_pull_requests(sessions, task_metadata)
+                .await
         }
 
         fn now(&self) -> DateTime<Utc> {

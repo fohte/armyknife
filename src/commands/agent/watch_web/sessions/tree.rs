@@ -155,10 +155,10 @@ pub(super) async fn session_tree<S: SessionSource>(
             resolve_repos_for_sessions(&sessions_to_resolve, &all_sessions_for_repos, resolve_repo),
         )
     });
-    let (task_metadata, pull_requests) = tokio::join!(
-        source.fetch_task_metadata(&tree_sessions),
-        source.fetch_pull_requests(&tree_sessions),
-    );
+    let task_metadata = source.fetch_task_metadata(&tree_sessions).await;
+    let pull_requests = source
+        .fetch_pull_requests(&tree_sessions, &task_metadata)
+        .await;
     let (interrupted_session_ids, missing_repo_by_id) = session_metadata
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
