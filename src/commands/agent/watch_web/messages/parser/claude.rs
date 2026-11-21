@@ -2497,6 +2497,18 @@ mod tests {
             None,
         )], true)]
     )]
+    #[case::failed_without_answer_is_cancelled(
+        indoc! {r#"
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-failed","name":"AskUserQuestion","input":{"questions":[{"question":"Which fixture option should be used?","options":[{"label":"First option"},{"label":"Second option"}]}]}}]}}
+            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-failed","content":"Fixture tool request failed.","is_error":true}]},"toolUseResult":"Fixture request rejected"}
+        "#},
+        vec![question_group_with_cancelled(vec![question_prompt(
+            "Which fixture option should be used?",
+            vec![question_choice("First option"), question_choice("Second option")],
+            false,
+            None,
+        )], true)]
+    )]
     fn parses_question_answers_from_tool_results(
         #[case] transcript: &str,
         #[case] expected: Vec<ChatItem>,

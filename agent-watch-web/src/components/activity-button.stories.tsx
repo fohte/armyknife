@@ -14,7 +14,7 @@ export const NavigationButtonShowsRunningActions: Story = {
   name: 'The navigation entry shows two recent actions.',
 }
 
-export const MobileHeaderShowsAnActivityBadge: Story = {
-  name: 'The mobile header shows the action count.',
-  args: { mobile: true },
+export const MobileDrawerShowsFailedActivity: Story = {
+  name: 'The mobile navigation drawer shows failed Activity results.',
+  args: { drawer: true, failed: true },
 }

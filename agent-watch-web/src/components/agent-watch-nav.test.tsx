@@ -1,11 +1,16 @@
 import '#index.css'
 
-import { act, type ComponentProps } from 'react'
+import { act, type ComponentProps, useEffect, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
+import {
+  AsyncActionFeedbackProvider,
+  useAsyncActionStarter,
+} from '#async-action-feedback'
 import { AgentWatchNav } from '#components/agent-watch-nav'
+import { MobileNavDrawer } from '#components/mobile-nav-drawer'
 import type { Session } from '#types'
 
 let container: HTMLDivElement
@@ -63,6 +68,60 @@ function renderNav(
       />,
     )
   })
+}
+
+function StartFailedAction() {
+  const start = useAsyncActionStarter(() => undefined)
+
+  useEffect(() => {
+    start({
+      kind: 'merge',
+      sessionId: 'fixture-session',
+      sessionTitle: 'Fixture session',
+      run: () =>
+        Promise.resolve({ status: 'mergeFailed', error: 'Fixture failure' }),
+    })
+  }, [start])
+
+  return null
+}
+
+function MobileNavigationWithActivity({
+  onCloseNavigation,
+}: {
+  onCloseNavigation: () => void
+}) {
+  const [open, setOpen] = useState(true)
+  const closeNavigation = () => {
+    onCloseNavigation()
+    setOpen(false)
+  }
+
+  return (
+    <MobileNavDrawer open={open} onClose={closeNavigation}>
+      <AgentWatchNav
+        activeView="inbox"
+        isMobile
+        paletteShortcut={{
+          modifier: 'ctrlKey',
+          label: 'Ctrl K',
+          ariaLabel: 'Control K',
+        }}
+        needsActionCount={0}
+        savedViews={[]}
+        selectedSavedViewId={null}
+        workTypeNavGroups={[]}
+        onViewChange={() => undefined}
+        onSelectSavedView={() => undefined}
+        onDeleteSavedView={() => undefined}
+        todaySessions={[]}
+        onSelectToday={() => undefined}
+        onSelectSession={() => undefined}
+        onOpenPalette={() => undefined}
+        onCloseNavigation={closeNavigation}
+      />
+    </MobileNavDrawer>
+  )
 }
 
 beforeEach(() => {
@@ -602,4 +661,98 @@ it('toggles the Inbox from the navigation and marks the collapsed state', () => 
     calls: onToggleInbox.mock.calls,
   })
   expect(snapshot()).toEqual({ pressed: 'true', calls: [[]] })
+})
+
+it('shows the failed Activity entry above quota in the mobile navigation', () => {
+  renderNav([], {
+    isMobile: true,
+    activityCount: 2,
+    activityFailed: true,
+  })
+
+  const inboxButton = container.querySelector<HTMLButtonElement>(
+    '.view-switch-inbox-button',
+  )
+  const activityButton = container.querySelector<HTMLButtonElement>(
+    '.async-action-activity-button',
+  )
+  const nav = container.querySelector('nav')
+  if (inboxButton === null || activityButton === null || nav === null) {
+    throw new Error('Mobile navigation Activity state is missing')
+  }
+
+  const snapshot = () => ({
+    inboxLabel: inboxButton.getAttribute('aria-label'),
+    inboxFailureIndicator:
+      inboxButton.querySelector('.view-switch-inbox-failure') !== null,
+    activityLabel: activityButton.getAttribute('aria-label'),
+    navigationFooter: Array.from(nav.children, (element) => element.className),
+    activityButtonClass: activityButton.className,
+  })
+  expect(snapshot()).toEqual({
+    inboxLabel: 'Inbox, Activity has failed actions',
+    inboxFailureIndicator: true,
+    activityLabel: 'Activity, failed actions',
+    navigationFooter: [
+      'agent-watch-nav-scroll',
+      'async-action-activity-button is-drawer',
+      'quota-panel',
+    ],
+    activityButtonClass: 'async-action-activity-button is-drawer',
+  })
+})
+
+it('marks Inbox when an async action in Activity fails', async () => {
+  const onCloseNavigation = vi.fn()
+  root = createRoot(container)
+  await act(() => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <StartFailedAction />
+        <MobileNavigationWithActivity onCloseNavigation={onCloseNavigation} />
+      </AsyncActionFeedbackProvider>,
+    )
+    return Promise.resolve()
+  })
+
+  const inboxButton = container.querySelector<HTMLButtonElement>(
+    '.view-switch-inbox-button',
+  )
+  const activityButton = container.querySelector<HTMLButtonElement>(
+    '.async-action-activity-button',
+  )
+  const snapshot = () => ({
+    inboxLabel: inboxButton?.getAttribute('aria-label'),
+    inboxFailureIndicator:
+      inboxButton !== null &&
+      inboxButton.querySelector('.view-switch-inbox-failure') !== null,
+    activityLabel: activityButton?.getAttribute('aria-label'),
+  })
+  expect(snapshot()).toEqual({
+    inboxLabel: 'Inbox, Activity has failed actions',
+    inboxFailureIndicator: true,
+    activityLabel: 'Activity, failed actions',
+  })
+
+  if (activityButton === null) {
+    throw new Error('The Activity button is missing')
+  }
+  await act(async () => {
+    await userEvent.click(activityButton)
+  })
+
+  const openSnapshot = () => ({
+    closeNavigationCalls: onCloseNavigation.mock.calls,
+    activityDialogVisible:
+      container.querySelector('[role="dialog"][aria-label="Activity"]') !==
+      null,
+    navigationDialogOpen:
+      container.querySelector<HTMLDialogElement>('.mobile-nav-drawer')?.open ??
+      false,
+  })
+  expect(openSnapshot()).toEqual({
+    closeNavigationCalls: [[]],
+    activityDialogVisible: true,
+    navigationDialogOpen: false,
+  })
 })

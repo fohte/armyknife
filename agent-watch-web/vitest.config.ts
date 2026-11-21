@@ -26,6 +26,7 @@ function chromiumBrowser() {
 const appTestFiles = [
   'src/components/async-action-feedback-host.browser.test.tsx',
   'src/async-action-feedback.browser.test.tsx',
+  'src/use-pending-merge-retry-navigation.browser.test.tsx',
   'src/components/collapsible-text.test.tsx',
   'src/App.test.tsx',
   'src/components/mobile-nav-drawer.test.tsx',
@@ -36,6 +37,7 @@ const appTestFiles = [
   'src/components/agent-watch-nav.test.tsx',
   'src/components/command-palette.test.tsx',
   'src/components/confirm-dialog.browser.test.tsx',
+  'src/components/conversation-message-row.browser.test.tsx',
   'src/components/board-view.test.tsx',
   'src/components/conversation-pane.test.tsx',
   'src/components/conversation-status-band.browser.test.tsx',
@@ -69,6 +71,7 @@ const appTestFiles = [
   'src/components/pull-request-list-panel.test.tsx',
   'src/components/inbox-view.test.tsx',
   'src/components/session-status-panel.test.tsx',
+  'src/components/use-focus-trap.browser.test.tsx',
   'src/components/review-document-panel.test.tsx',
   'src/components/use-conversation-status-panel.test.tsx',
   'src/components/pull-request-list-panel.browser.test.tsx',

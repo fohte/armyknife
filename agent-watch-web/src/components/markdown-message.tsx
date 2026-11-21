@@ -213,6 +213,7 @@ type MarkdownMessageProps = {
   children: string
   className?: string
   inline?: boolean
+  mobile?: boolean
   sessionId?: string
   onCommandExecuted?: () => void
 }
@@ -255,7 +256,7 @@ function unwrapTaggedMessage(value: string): string {
 
 const MarkdownCode: NonNullable<Components['code']> = ({ node, ...props }) => {
   const isCodeBlock = useContext(CodeBlockContext)
-  const { sessionsById, onSelectSession, commandContext } = useContext(
+  const { sessionsById, onSelectSession, commandContext, mobile } = useContext(
     MarkdownComponentContext,
   )
   if (node?.tagName !== 'code') return props.children
@@ -320,6 +321,7 @@ const MarkdownCode: NonNullable<Components['code']> = ({ node, ...props }) => {
       <BangCommandActions
         commands={[command]}
         messageText={commandContext.messageText}
+        {...(mobile === undefined ? {} : { mobile })}
         {...(commandContext.onCommandExecuted === undefined
           ? {}
           : { onCommandExecuted: commandContext.onCommandExecuted })}
@@ -330,7 +332,7 @@ const MarkdownCode: NonNullable<Components['code']> = ({ node, ...props }) => {
 }
 
 const MarkdownPre: NonNullable<Components['pre']> = ({ children }) => {
-  const { commandContext } = useContext(MarkdownComponentContext)
+  const { commandContext, mobile } = useContext(MarkdownComponentContext)
   const codeText = Children.toArray(children).flatMap((child) => {
     if (!isValidElement<{ children?: ReactNode }>(child)) return []
     return [textContent(child.props.children)]
@@ -346,6 +348,7 @@ const MarkdownPre: NonNullable<Components['pre']> = ({ children }) => {
       <BangCommandActions
         commands={commands}
         messageText={commandContext.messageText}
+        {...(mobile === undefined ? {} : { mobile })}
         {...(commandContext.onCommandExecuted === undefined
           ? {}
           : { onCommandExecuted: commandContext.onCommandExecuted })}
@@ -388,6 +391,7 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   children,
   className,
   inline = false,
+  mobile = false,
   sessionId,
   onCommandExecuted,
 }: MarkdownMessageProps) {
@@ -408,6 +412,7 @@ export const MarkdownMessage = memo(function MarkdownMessage({
   const componentContext: MarkdownComponentContextValue = {
     sessionsById,
     webUis: sessionLinks.webUis ?? [],
+    mobile,
     ...(sessionLinks.onSelectSession === undefined
       ? {}
       : { onSelectSession: sessionLinks.onSelectSession }),

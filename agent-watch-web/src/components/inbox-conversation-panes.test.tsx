@@ -70,6 +70,7 @@ function treeNode(
     elapsedSeconds: 0,
     task: null,
     repo: 'sample/repo',
+    vibeMode: { mode: 'disabled' },
     decisionCount: 0,
     pullRequest: null,
   }

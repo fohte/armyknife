@@ -33,6 +33,14 @@ pub(crate) fn insert_watch_web_queued_prompt_from(
     )
 }
 
+pub(crate) fn watch_web_queued_prompt_message_id_exists_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    message_id: &str,
+) -> Result<bool> {
+    database::watch_web_queued_prompt_message_id_exists(sessions_dir, session_id, message_id)
+}
+
 pub(crate) fn delete_watch_web_queued_prompts_from(
     sessions_dir: &Path,
     session_id: &str,

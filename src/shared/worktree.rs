@@ -149,9 +149,21 @@ pub fn get_main_repo(repo: &GitRepo) -> Result<GitRepo> {
 
 /// Get the branch name associated with a worktree.
 pub fn get_worktree_branch(repo: &GitRepo, worktree_name: &str) -> Option<String> {
-    let wt = list_worktrees_raw(repo).ok()?;
-    let entry = wt.into_iter().find(|w| w.name == worktree_name)?;
-    Some(entry.branch).filter(|b| !b.is_empty() && b != "(detached)")
+    get_worktree_branch_checked(repo, worktree_name)
+        .ok()
+        .flatten()
+}
+
+pub(crate) fn get_worktree_branch_checked(
+    repo: &GitRepo,
+    worktree_name: &str,
+) -> anyhow::Result<Option<String>> {
+    let worktrees = list_worktrees_raw(repo)?;
+    let entry = worktrees
+        .into_iter()
+        .find(|worktree| worktree.name == worktree_name)
+        .ok_or_else(|| anyhow::anyhow!("Worktree `{worktree_name}` was not found"))?;
+    Ok(Some(entry.branch).filter(|branch| !branch.is_empty() && branch != "(detached)"))
 }
 
 /// Delete a worktree by name. Returns true if successful.

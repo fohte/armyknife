@@ -480,15 +480,13 @@ mod tests {
                     worktree_path,
                     vec!["src/fictional.rs".to_string()],
                     Some("feature/fictional".to_string()),
-                    Some(
-                        crate::shared::worktree_delete::MergeGuardStatus::from_commit_ahead_check(
-                            "feature/fictional".to_string(),
-                            crate::infra::git::MergeStatus::NotMerged {
-                                reason: "pull request is open".to_string(),
-                            },
-                            true,
-                        ),
-                    ),
+                    Some(crate::shared::worktree_delete::MergeGuardStatus {
+                        branch: "feature/fictional".to_string(),
+                        status: crate::infra::git::MergeStatus::NotMerged {
+                            reason: "pull request is open".to_string(),
+                        },
+                        should_cleanup: false,
+                    }),
                     Some(process_inspection),
                 )
             })

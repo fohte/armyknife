@@ -3,8 +3,7 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use crate::infra::git::{
-    GitRepo, MergeStatus, branch_has_commits_ahead_of_main, get_merge_status_for_repo,
-    get_repo_root,
+    GitRepo, MergeStatus, get_main_branch_for_repo, get_merge_status_for_repo, get_repo_root,
 };
 use crate::shared::cleanup;
 use crate::shared::env_var::EnvVars;
@@ -12,15 +11,14 @@ use crate::shared::hooks;
 use crate::shared::merge_notify::notify_delegator_of_merge;
 use crate::shared::worktree::{
     branch_to_worktree_name, ensure_clean_for_deletion, find_worktree_name, get_main_repo,
-    get_worktree_branch,
+    get_worktree_branch, get_worktree_branch_checked,
 };
 use crate::shared::worktree_error::WmError;
 
 pub(crate) struct WorktreeDeletePlan {
     target: WorktreeDeleteTarget,
-    merge_guard_status: Option<MergeGuardStatus>,
+    merge_status: Option<MergeStatus>,
     force: bool,
-    unmerged_policy: UnmergedWorktreePolicy,
 }
 
 pub(crate) struct WorktreeDeleteTarget {
@@ -30,29 +28,10 @@ pub(crate) struct WorktreeDeleteTarget {
     pub(crate) worktree_path: PathBuf,
 }
 
-#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct MergeGuardStatus {
     pub(crate) branch: String,
     pub(crate) status: MergeStatus,
     pub(crate) should_cleanup: bool,
-    empty_branch: bool,
-}
-
-impl MergeGuardStatus {
-    pub(crate) fn from_commit_ahead_check(
-        branch: String,
-        status: MergeStatus,
-        has_commits_ahead: bool,
-    ) -> Self {
-        let empty_branch = !status.should_cleanup() && !has_commits_ahead;
-        let should_cleanup = status.should_cleanup() || empty_branch;
-        Self {
-            branch,
-            status,
-            should_cleanup,
-            empty_branch,
-        }
-    }
 }
 
 pub(crate) fn resolve_merge_guard_branch(
@@ -71,27 +50,13 @@ fn resolve_merge_guard_branch_with(
         .map(str::to_string)
 }
 
-pub(crate) fn classify_merge_guard_status_for_repo(
-    repo: &GitRepo,
-    branch: String,
-    status: MergeStatus,
-) -> MergeGuardStatus {
-    classify_merge_guard_status_with(branch, status, |branch| {
-        branch_has_commits_ahead_of_main(repo, branch)
-    })
-}
-
-fn classify_merge_guard_status_with(
-    branch: String,
-    status: MergeStatus,
-    branch_has_commits_ahead: impl FnOnce(&str) -> Result<bool>,
-) -> MergeGuardStatus {
-    if status.should_cleanup() {
-        return MergeGuardStatus::from_commit_ahead_check(branch, status, true);
+pub(crate) fn classify_merge_guard_status(branch: String, status: MergeStatus) -> MergeGuardStatus {
+    let should_cleanup = status.should_cleanup();
+    MergeGuardStatus {
+        branch,
+        status,
+        should_cleanup,
     }
-
-    let has_commits_ahead = branch_has_commits_ahead(&branch).unwrap_or(true);
-    MergeGuardStatus::from_commit_ahead_check(branch, status, has_commits_ahead)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -127,7 +92,7 @@ pub(crate) async fn prepare(
 
     ensure_clean_for_deletion(&target.worktree_path, force)?;
 
-    let merge_guard_status = check_merge_status(
+    let merge_status = check_merge_status(
         &target.main_repo,
         target.branch_name.as_deref(),
         force,
@@ -137,9 +102,8 @@ pub(crate) async fn prepare(
 
     Ok(WorktreeDeletePlan {
         target,
-        merge_guard_status,
+        merge_status,
         force,
-        unmerged_policy,
     })
 }
 
@@ -168,9 +132,8 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
                 branch_name,
                 worktree_path,
             },
-        merge_guard_status,
+        merge_status,
         force,
-        unmerged_policy,
     } = plan;
     let worktree_path_str = worktree_path.to_string_lossy();
 
@@ -179,79 +142,34 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
     // Must complete before cleanup_worktree_by_name below: it deletes this
     // worktree's session records and, when the command runs from the
     // worktree's own pane, kills the very pane this process is running in.
-    let merged = merge_guard_status
-        .as_ref()
-        .is_some_and(|status| status.status.is_merged());
+    let merged = merge_status.as_ref().is_some_and(MergeStatus::is_merged);
     if let Some(branch) = branch_name.as_deref()
         && merged
     {
         notify_delegator_of_merge(&main_repo, branch, &worktree_path).await;
     }
 
-    let empty_branch_status = merge_guard_status
-        .as_ref()
-        .filter(|status| status.empty_branch);
-    let branch = branch_name.as_deref();
-    let should_recheck = !force && empty_branch_status.is_some() && branch.is_some();
-    let stdin = io::stdin();
-    let stdout = io::stdout();
-    let (hook_ran, branch_already_approved) = recheck_before_pre_delete_hook(
-        should_recheck,
-        || match (branch, empty_branch_status) {
-            (Some(branch), Some(status)) => ensure_empty_branch_still_safe(
-                branch,
-                &status.status,
-                unmerged_policy,
-                |branch| branch_has_commits_ahead_of_main(&main_repo, branch),
-                || {
-                    confirm_with_terminal(
-                        "Delete anyway? [y/N] ",
-                        &mut stdin.lock(),
-                        &mut stdout.lock(),
-                        || stdin.is_terminal(),
-                    )
-                },
-            ),
-            _ => Ok(false),
-        },
-        || run_pre_delete_hook(&main_repo, branch, &worktree_path_str, skip_hooks),
-    )?;
+    let hook_ran = run_pre_delete_hook(
+        &main_repo,
+        branch_name.as_deref(),
+        &worktree_path_str,
+        skip_hooks,
+    );
 
-    if should_recheck && !branch_already_approved {
-        // A pre-delete hook can add a commit to the branch after the first check.
-        let result = match (branch, empty_branch_status) {
-            (Some(branch), Some(status)) => ensure_empty_branch_still_safe(
-                branch,
-                &status.status,
-                unmerged_policy,
-                |branch| branch_has_commits_ahead_of_main(&main_repo, branch),
-                || {
-                    confirm_with_terminal(
-                        "Delete anyway? [y/N] ",
-                        &mut stdin.lock(),
-                        &mut stdout.lock(),
-                        || stdin.is_terminal(),
-                    )
-                },
-            ),
-            _ => Ok(false),
-        };
-        if let Err(error) = result {
-            if hook_ran {
-                eprintln!(
-                    "note: the pre-worktree-delete hook already ran before this failure; \
-                     any process it stopped will not be restarted automatically"
-                );
-            }
-            return Err(error);
-        }
-    }
-
-    let result = cleanup::cleanup_worktree_by_name(
+    let result = cleanup::cleanup_worktree_by_name_with_before_delete(
         &main_repo,
         &worktree_name,
         &worktree_path,
         force,
+        || {
+            ensure_worktree_delete_plan_before_delete(
+                merge_status.as_ref(),
+                force,
+                branch_name.as_deref(),
+                || get_worktree_branch_checked(&main_repo, &worktree_name),
+                |branch| branch_has_no_unique_commits(&main_repo, branch),
+            )
+        },
         || {
             if !skip_hooks {
                 hooks::spawn_post_worktree_delete_hook(
@@ -364,10 +282,9 @@ async fn check_merge_status(
     branch_name: Option<&str>,
     force: bool,
     unmerged_policy: UnmergedWorktreePolicy,
-) -> Result<Option<MergeGuardStatus>> {
+) -> Result<Option<MergeStatus>> {
     let repo_for_status = repo.clone();
-    let repo_for_classification = repo.clone();
-    check_merge_status_with_classifier(
+    check_merge_status_with(
         branch_name,
         force,
         unmerged_policy,
@@ -375,9 +292,6 @@ async fn check_merge_status(
         move |branch| {
             let branch = branch.to_string();
             async move { get_merge_status_for_branch(&repo_for_status, &branch).await }
-        },
-        move |branch, status| {
-            classify_merge_guard_status_for_repo(&repo_for_classification, branch, status)
         },
         || {
             let stdin = io::stdin();
@@ -394,14 +308,154 @@ async fn check_merge_status(
 }
 
 pub(crate) async fn get_merge_status_for_branch(repo: &GitRepo, branch: &str) -> MergeStatus {
-    get_merge_status_for_repo(repo, branch).await
+    let status = get_merge_status_for_repo(repo, branch).await;
+    close_status_for_branch(repo, branch, status)
+}
+
+pub(crate) async fn get_merge_status_for_branch_from_local_refs(
+    repo: &GitRepo,
+    branch: &str,
+) -> MergeStatus {
+    let status = get_merge_status_for_repo(repo, branch).await;
+    let repo_for_default_branch = repo.clone();
+    let repo_for_ancestry = repo.clone();
+    close_status_for_branch_from_local_refs_with(
+        status,
+        branch.to_string(),
+        move || get_main_branch_for_repo(&repo_for_default_branch).ok(),
+        move |ancestor, descendant| repo_for_ancestry.is_ancestor(ancestor, descendant),
+    )
+    .await
+}
+
+fn close_status_for_branch(repo: &GitRepo, branch: &str, status: MergeStatus) -> MergeStatus {
+    if !matches!(&status, MergeStatus::NotMerged { .. }) {
+        return status;
+    }
+
+    let refreshed = repo.fetch_origin_prune().is_ok();
+    let default_branch = refreshed
+        .then(|| get_main_branch_for_repo(repo).ok())
+        .flatten();
+    close_status_for_branch_with(
+        status,
+        branch,
+        default_branch.as_deref(),
+        |ancestor, descendant| repo.is_ancestor(ancestor, descendant),
+    )
+}
+
+async fn close_status_for_branch_from_local_refs_with(
+    status: MergeStatus,
+    branch: String,
+    get_default_branch: impl FnOnce() -> Option<String> + Send + 'static,
+    is_ancestor: impl FnOnce(&str, &str) -> bool + Send + 'static,
+) -> MergeStatus {
+    if !matches!(&status, MergeStatus::NotMerged { .. }) {
+        return status;
+    }
+
+    let fallback_status = status.clone();
+    tokio::task::spawn_blocking(move || {
+        let default_branch = get_default_branch();
+        close_status_for_branch_with(status, &branch, default_branch.as_deref(), is_ancestor)
+    })
+    .await
+    .unwrap_or(fallback_status)
+}
+
+fn close_status_for_branch_with(
+    status: MergeStatus,
+    branch: &str,
+    default_branch: Option<&str>,
+    is_ancestor: impl FnOnce(&str, &str) -> bool,
+) -> MergeStatus {
+    if !matches!(&status, MergeStatus::NotMerged { .. })
+        || !branch_has_no_unique_commits_with(branch, default_branch, is_ancestor)
+    {
+        return status;
+    }
+
+    MergeStatus::NoUniqueCommits {
+        reason: "No commits unique to branch".to_string(),
+    }
+}
+
+fn branch_has_no_unique_commits(repo: &GitRepo, branch: &str) -> bool {
+    let refreshed = repo.fetch_origin_prune().is_ok();
+    let default_branch = refreshed
+        .then(|| get_main_branch_for_repo(repo).ok())
+        .flatten();
+    branch_has_no_unique_commits_with(branch, default_branch.as_deref(), |ancestor, descendant| {
+        repo.is_ancestor(ancestor, descendant)
+    })
+}
+
+fn ensure_worktree_delete_plan_before_delete(
+    status: Option<&MergeStatus>,
+    force: bool,
+    planned_branch: Option<&str>,
+    current_branch: impl FnOnce() -> Result<Option<String>>,
+    verify_still_safe: impl FnOnce(&str) -> bool,
+) -> Result<()> {
+    let current_branch =
+        current_branch().context("Could not inspect worktree branch before deletion")?;
+    if planned_branch != current_branch.as_deref() {
+        bail!(
+            "Worktree branch changed from `{}` to `{}` before deletion; retry close to check the current branch",
+            planned_branch.unwrap_or("detached"),
+            current_branch.as_deref().unwrap_or("detached"),
+        );
+    }
+
+    ensure_branch_no_unique_commits_before_delete(status, force, planned_branch, verify_still_safe)
+}
+
+fn ensure_branch_no_unique_commits_before_delete(
+    status: Option<&MergeStatus>,
+    force: bool,
+    branch: Option<&str>,
+    verify_still_safe: impl FnOnce(&str) -> bool,
+) -> Result<()> {
+    if force || !matches!(status, Some(MergeStatus::NoUniqueCommits { .. })) {
+        return Ok(());
+    }
+
+    let Some(branch) = branch else {
+        return Err(UnmergedWorktreeError::new(
+            "unknown",
+            "branch could not be checked again before deletion",
+        )
+        .into());
+    };
+    if verify_still_safe(branch) {
+        return Ok(());
+    }
+
+    Err(UnmergedWorktreeError::new(
+        branch,
+        "branch could not be verified as part of the origin default branch before deletion",
+    )
+    .into())
+}
+
+fn branch_has_no_unique_commits_with(
+    branch: &str,
+    default_branch: Option<&str>,
+    is_ancestor: impl FnOnce(&str, &str) -> bool,
+) -> bool {
+    let Some(default_branch) = default_branch else {
+        return false;
+    };
+    let branch_ref = format!("refs/heads/{branch}");
+    let default_branch_ref = format!("refs/remotes/origin/{default_branch}");
+    is_ancestor(&branch_ref, &default_branch_ref)
 }
 
 async fn inspect_merge_guard_status_with<F, G, Fut>(
     branch_name: Option<&str>,
     branch_exists: F,
     get_status: G,
-    classify: impl FnOnce(String, MergeStatus) -> MergeGuardStatus,
 ) -> Option<MergeGuardStatus>
 where
     F: FnOnce(&str) -> bool,
@@ -410,10 +464,9 @@ where
 {
     let branch = resolve_merge_guard_branch_with(branch_name, branch_exists)?;
     let status = get_status(&branch).await;
-    Some(classify(branch, status))
+    Some(classify_merge_guard_status(branch, status))
 }
 
-#[cfg(test)]
 async fn check_merge_status_with<F, G, Fut>(
     branch_name: Option<&str>,
     force: bool,
@@ -427,98 +480,38 @@ where
     G: FnOnce(&str) -> Fut,
     Fut: std::future::Future<Output = MergeStatus>,
 {
-    check_merge_status_with_classifier(
-        branch_name,
-        force,
-        unmerged_policy,
-        branch_exists,
-        get_status,
-        |branch, status| classify_merge_guard_status_with(branch, status, |_| Ok(true)),
-        confirm,
-    )
-    .await
-    .map(|status| status.map(|status| status.status))
-}
-
-async fn check_merge_status_with_classifier<F, G, Fut, C>(
-    branch_name: Option<&str>,
-    force: bool,
-    unmerged_policy: UnmergedWorktreePolicy,
-    branch_exists: F,
-    get_status: G,
-    classify: C,
-    confirm: impl FnOnce() -> Option<bool>,
-) -> Result<Option<MergeGuardStatus>>
-where
-    F: FnOnce(&str) -> bool,
-    G: FnOnce(&str) -> Fut,
-    Fut: std::future::Future<Output = MergeStatus>,
-    C: FnOnce(String, MergeStatus) -> MergeGuardStatus,
-{
     let Some(merge_guard_status) =
-        inspect_merge_guard_status_with(branch_name, branch_exists, get_status, classify).await
+        inspect_merge_guard_status_with(branch_name, branch_exists, get_status).await
     else {
         return Ok(None);
     };
-    if !merge_guard_status.should_cleanup && !force {
-        require_unmerged_approval(
-            &merge_guard_status.branch,
-            &merge_guard_status.status,
-            unmerged_policy,
-            confirm,
-        )?;
-    }
-
-    Ok(Some(merge_guard_status))
-}
-
-fn ensure_empty_branch_still_safe(
-    branch: &str,
-    status: &MergeStatus,
-    unmerged_policy: UnmergedWorktreePolicy,
-    branch_has_commits_ahead: impl FnOnce(&str) -> Result<bool>,
-    confirm: impl FnOnce() -> Option<bool>,
-) -> Result<bool> {
-    if matches!(branch_has_commits_ahead(branch), Ok(false)) {
-        return Ok(false);
-    }
-
-    require_unmerged_approval(branch, status, unmerged_policy, confirm)?;
-    Ok(true)
-}
-
-fn recheck_before_pre_delete_hook(
-    should_recheck: bool,
-    recheck: impl FnOnce() -> Result<bool>,
-    run_hook: impl FnOnce() -> bool,
-) -> Result<(bool, bool)> {
-    let branch_already_approved = if should_recheck { recheck()? } else { false };
-    let hook_ran = run_hook();
-    Ok((hook_ran, branch_already_approved))
-}
-
-fn require_unmerged_approval(
-    branch: &str,
-    status: &MergeStatus,
-    unmerged_policy: UnmergedWorktreePolicy,
-    confirm: impl FnOnce() -> Option<bool>,
-) -> Result<()> {
-    if unmerged_policy == UnmergedWorktreePolicy::Reject {
-        return Err(UnmergedWorktreeError::new(branch, status.reason()).into());
-    }
-
-    eprintln!(
-        "Warning: Branch '{}' is not merged ({})",
+    let MergeGuardStatus {
         branch,
-        status.reason()
-    );
-    match confirm() {
-        Some(true) => Ok(()),
-        Some(false) => Err(WmError::Cancelled.into()),
-        None => Err(anyhow::anyhow!(
-            "Cancelled: stdin is not a terminal; input was not accepted as confirmation."
-        )),
+        status: merge_status,
+        should_cleanup,
+    } = merge_guard_status;
+
+    if !should_cleanup && !force {
+        if unmerged_policy == UnmergedWorktreePolicy::Reject {
+            return Err(UnmergedWorktreeError::new(branch, merge_status.reason()).into());
+        }
+        eprintln!(
+            "Warning: Branch '{}' is not merged ({})",
+            branch,
+            merge_status.reason()
+        );
+        match confirm() {
+            Some(true) => {}
+            Some(false) => return Err(WmError::Cancelled.into()),
+            None => {
+                return Err(anyhow::anyhow!(
+                    "Cancelled: stdin is not a terminal; input was not accepted as confirmation."
+                ));
+            }
+        }
     }
+
+    Ok(Some(merge_status))
 }
 
 pub(crate) fn confirm_with_terminal<R: BufRead, W: Write>(
@@ -587,214 +580,216 @@ mod tests {
 
     use super::*;
     use crate::shared::testing::TestRepo;
+    use crate::shared::worktree::delete_worktree_if_clean;
 
-    fn no_pr_status() -> MergeStatus {
-        MergeStatus::NotMerged {
-            reason: "No PR found".to_string(),
-        }
+    #[rstest]
+    #[case::no_pr_without_unique_commits(
+        MergeStatus::NotMerged { reason: "No PR found".to_string() },
+        Some("main"),
+        true,
+        MergeStatus::NoUniqueCommits { reason: "No commits unique to branch".to_string() },
+    )]
+    #[case::open_pr_without_unique_commits(
+        MergeStatus::NotMerged { reason: "pull request is open".to_string() },
+        Some("main"),
+        true,
+        MergeStatus::NoUniqueCommits { reason: "No commits unique to branch".to_string() },
+    )]
+    #[case::branch_has_unique_commits(
+        MergeStatus::NotMerged { reason: "No PR found".to_string() },
+        Some("main"),
+        false,
+        MergeStatus::NotMerged { reason: "No PR found".to_string() },
+    )]
+    #[case::default_branch_missing(
+        MergeStatus::NotMerged { reason: "No PR found".to_string() },
+        None,
+        true,
+        MergeStatus::NotMerged { reason: "No PR found".to_string() },
+    )]
+    fn close_status_uses_origin_ancestry(
+        #[case] status: MergeStatus,
+        #[case] default_branch: Option<&str>,
+        #[case] is_ancestor: bool,
+        #[case] expected: MergeStatus,
+    ) {
+        assert_eq!(
+            close_status_for_branch_with(status, "agent-branch", default_branch, |_, _| {
+                is_ancestor
+            },),
+            expected,
+        );
     }
 
     #[tokio::test]
-    async fn clean_branch_without_commits_ahead_skips_unmerged_confirmation() {
-        let merge_guard_status =
-            classify_merge_guard_status_with("feature".to_string(), no_pr_status(), |_| Ok(false));
-        let result = check_merge_status_with_classifier(
-            Some("feature"),
-            false,
-            UnmergedWorktreePolicy::Confirm,
-            |_| true,
-            |_| std::future::ready(no_pr_status()),
-            |branch, status| classify_merge_guard_status_with(branch, status, |_| Ok(false)),
-            || panic!("an empty branch must not ask for confirmation"),
-        )
-        .await
-        .map_err(|error| error.to_string());
-
-        assert_eq!(
-            (merge_guard_status, result),
-            (
-                MergeGuardStatus {
-                    branch: "feature".to_string(),
-                    status: no_pr_status(),
-                    should_cleanup: true,
-                    empty_branch: true,
-                },
-                Ok(Some(MergeGuardStatus {
-                    branch: "feature".to_string(),
-                    status: no_pr_status(),
-                    should_cleanup: true,
-                    empty_branch: true,
-                })),
-            ),
-        );
-    }
-
-    #[test]
-    fn open_pr_with_no_commits_ahead_is_cleanup_eligible() {
-        let status = MergeStatus::NotMerged {
-            reason: "fictional pull request is open".to_string(),
-        };
-
-        let result =
-            classify_merge_guard_status_with("feature".to_string(), status.clone(), |_| Ok(false));
-
-        assert_eq!(
-            result,
-            MergeGuardStatus {
-                branch: "feature".to_string(),
-                status,
-                should_cleanup: true,
-                empty_branch: true,
+    async fn close_status_checks_local_origin_ancestry_on_a_blocking_worker() {
+        let caller_thread = std::thread::current().id();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let status = close_status_for_branch_from_local_refs_with(
+            MergeStatus::NotMerged {
+                reason: "No PR found".to_string(),
             },
-        );
-    }
-
-    #[rstest]
-    #[case::still_empty(UnmergedWorktreePolicy::Confirm, Some(false), None, Ok(false))]
-    #[case::new_commit_cancels_non_tty(
-        UnmergedWorktreePolicy::Confirm,
-        Some(true),
-        None,
-        Err("Cancelled: stdin is not a terminal; input was not accepted as confirmation.".to_string()),
-    )]
-    #[case::unresolved_base_cancels_non_tty(
-        UnmergedWorktreePolicy::Confirm,
-        None,
-        None,
-        Err("Cancelled: stdin is not a terminal; input was not accepted as confirmation.".to_string()),
-    )]
-    #[case::terminal_confirmation_approves_new_commit(
-        UnmergedWorktreePolicy::Confirm,
-        Some(true),
-        Some(true),
-        Ok(true)
-    )]
-    #[case::watch_rejects_new_commit(
-        UnmergedWorktreePolicy::Reject,
-        Some(true),
-        None,
-        Err("Branch `feature` is not merged (No PR found); close the session while keeping its worktree to continue".to_string()),
-    )]
-    #[case::watch_rejects_unresolved_base(
-        UnmergedWorktreePolicy::Reject,
-        None,
-        None,
-        Err("Branch `feature` is not merged (No PR found); close the session while keeping its worktree to continue".to_string()),
-    )]
-    fn deletion_rechecks_empty_branch_before_cleanup(
-        #[case] unmerged_policy: UnmergedWorktreePolicy,
-        #[case] branch_has_commits_ahead: Option<bool>,
-        #[case] confirm_result: Option<bool>,
-        #[case] expected: std::result::Result<bool, String>,
-    ) {
-        let mut queried_branch = None;
-        let result = ensure_empty_branch_still_safe(
-            "feature",
-            &no_pr_status(),
-            unmerged_policy,
-            |branch| {
-                queried_branch = Some(branch.to_string());
-                branch_has_commits_ahead
-                    .ok_or_else(|| anyhow::anyhow!("base branch cannot be resolved"))
-            },
-            || confirm_result,
-        )
-        .map_err(|error| error.to_string());
-
-        assert_eq!(
-            (result, queried_branch),
-            (expected, Some("feature".to_string()))
-        );
-    }
-
-    #[test]
-    fn rejected_empty_branch_recheck_skips_pre_delete_hook() {
-        let mut recheck_called = false;
-        let mut hook_called = false;
-        let result = recheck_before_pre_delete_hook(
-            true,
-            || {
-                recheck_called = true;
-                Err(anyhow::anyhow!("new commit requires confirmation"))
-            },
-            || {
-                hook_called = true;
+            "agent-branch".to_string(),
+            || Some("main".to_string()),
+            move |ancestor, descendant| {
+                sender
+                    .send((
+                        std::thread::current().id(),
+                        ancestor.to_string(),
+                        descendant.to_string(),
+                    ))
+                    .expect("send ancestry inputs");
                 true
             },
         )
-        .map_err(|error| error.to_string());
+        .await;
+        let observed_ancestry =
+            receiver
+                .try_recv()
+                .ok()
+                .map(|(worker_thread, ancestor, descendant)| {
+                    (worker_thread != caller_thread, ancestor, descendant)
+                });
 
         assert_eq!(
-            (result, recheck_called, hook_called),
+            (status, observed_ancestry),
             (
-                Err("new commit requires confirmation".to_string()),
-                true,
-                false,
+                MergeStatus::NoUniqueCommits {
+                    reason: "No commits unique to branch".to_string(),
+                },
+                Some((
+                    true,
+                    "refs/heads/agent-branch".to_string(),
+                    "refs/remotes/origin/main".to_string(),
+                )),
+            ),
+        );
+    }
+
+    #[test]
+    fn close_status_checks_the_branch_against_the_refreshed_default_branch() {
+        let mut compared_refs = None;
+        let status = close_status_for_branch_with(
+            MergeStatus::NotMerged {
+                reason: "pull request is open".to_string(),
+            },
+            "agent-branch",
+            Some("main"),
+            |ancestor, descendant| {
+                compared_refs = Some((ancestor.to_string(), descendant.to_string()));
+                true
+            },
+        );
+
+        assert_eq!(
+            (status, compared_refs),
+            (
+                MergeStatus::NoUniqueCommits {
+                    reason: "No commits unique to branch".to_string(),
+                },
+                Some((
+                    "refs/heads/agent-branch".to_string(),
+                    "refs/remotes/origin/main".to_string(),
+                )),
             ),
         );
     }
 
     #[rstest]
-    #[case::branch_has_ahead_commits(Some(true))]
-    #[case::base_cannot_be_resolved(None)]
-    #[tokio::test]
-    async fn unmerged_branch_without_terminal_input_is_cancelled(
-        #[case] branch_has_commits_ahead: Option<bool>,
+    #[case::unchanged_branch(
+        Some("agent-branch"),
+        Ok(Some("agent-branch".to_string())),
+        Ok(()),
+        true,
+    )]
+    #[case::changed_branch_with_force(
+        Some("agent-branch"),
+        Ok(Some("replacement-branch".to_string())),
+        Err("Worktree branch changed from `agent-branch` to `replacement-branch` before deletion; retry close to check the current branch".to_string()),
+        false,
+    )]
+    #[case::branch_inspection_failure(
+        Some("agent-branch"),
+        Err("git worktree list failed".to_string()),
+        Err("Could not inspect worktree branch before deletion".to_string()),
+        false,
+    )]
+    fn close_checks_the_branch_before_cleanup(
+        #[case] planned_branch: Option<&str>,
+        #[case] current_branch: std::result::Result<Option<String>, String>,
+        #[case] expected: std::result::Result<(), String>,
+        #[case] expected_deleted: bool,
     ) {
-        let result = check_merge_status_with_classifier(
-            Some("feature"),
-            false,
-            UnmergedWorktreePolicy::Confirm,
-            |_| true,
-            |_| std::future::ready(no_pr_status()),
-            |branch, status| {
-                classify_merge_guard_status_with(branch, status, |_| {
-                    branch_has_commits_ahead
-                        .ok_or_else(|| anyhow::anyhow!("base branch cannot be resolved"))
-                })
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let mut deleted = false;
+        let result = delete_worktree_if_clean(
+            temp_dir.path(),
+            true,
+            || {
+                ensure_worktree_delete_plan_before_delete(
+                    Some(&MergeStatus::NoUniqueCommits {
+                        reason: "No commits unique to branch".to_string(),
+                    }),
+                    true,
+                    planned_branch,
+                    || current_branch.map_err(anyhow::Error::msg),
+                    |_| false,
+                )
             },
-            || None,
+            || {
+                deleted = true;
+                Ok(true)
+            },
         )
-        .await
+        .map(|_| ())
         .map_err(|error| error.to_string());
 
-        assert_eq!(
-            result,
-            Err(
-                "Cancelled: stdin is not a terminal; input was not accepted as confirmation."
-                    .to_string()
-            ),
-        );
+        assert_eq!((result, deleted), (expected, expected_deleted));
     }
 
     #[rstest]
-    #[case::branch_has_ahead_commits(Some(true))]
-    #[case::base_cannot_be_resolved(None)]
-    #[tokio::test]
-    async fn watch_close_rejects_unmerged_branch_with_commits_or_unknown_base(
-        #[case] branch_has_commits_ahead: Option<bool>,
+    #[case::branch_remains_safe(
+        Some(MergeStatus::NoUniqueCommits { reason: "No commits unique to branch".to_string() }),
+        false,
+        Some("agent-branch"),
+        true,
+        Ok(()),
+    )]
+    #[case::branch_gains_unique_commit(
+        Some(MergeStatus::NoUniqueCommits { reason: "No commits unique to branch".to_string() }),
+        false,
+        Some("agent-branch"),
+        false,
+        Err("Branch `agent-branch` is not merged (branch could not be verified as part of the origin default branch before deletion); close the session while keeping its worktree to continue".to_string()),
+    )]
+    #[case::other_unmerged_status(
+        Some(MergeStatus::NotMerged { reason: "pull request is open".to_string() }),
+        false,
+        Some("agent-branch"),
+        false,
+        Ok(()),
+    )]
+    #[case::force_bypasses_revalidation(
+        Some(MergeStatus::NoUniqueCommits { reason: "No commits unique to branch".to_string() }),
+        true,
+        Some("agent-branch"),
+        false,
+        Ok(()),
+    )]
+    fn close_revalidates_no_unique_commit_status_before_deletion(
+        #[case] status: Option<MergeStatus>,
+        #[case] force: bool,
+        #[case] branch: Option<&str>,
+        #[case] still_safe: bool,
+        #[case] expected: std::result::Result<(), String>,
     ) {
-        let result = check_merge_status_with_classifier(
-            Some("feature"),
-            false,
-            UnmergedWorktreePolicy::Reject,
-            |_| true,
-            |_| std::future::ready(no_pr_status()),
-            |branch, status| {
-                classify_merge_guard_status_with(branch, status, |_| {
-                    branch_has_commits_ahead
-                        .ok_or_else(|| anyhow::anyhow!("base branch cannot be resolved"))
-                })
-            },
-            || panic!("watch close rejects without asking for confirmation"),
-        )
-        .await
-        .map_err(|error| error.to_string());
+        let result =
+            ensure_branch_no_unique_commits_before_delete(status.as_ref(), force, branch, |_| {
+                still_safe
+            })
+            .map_err(|error| error.to_string());
 
-        assert_eq!(
-            result,
-            Err("Branch `feature` is not merged (No PR found); close the session while keeping its worktree to continue".to_string()),
-        );
+        assert_eq!(result, expected);
     }
 
     #[tokio::test]

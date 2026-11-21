@@ -114,9 +114,28 @@ pub fn cleanup_worktree_by_name(
     force: bool,
     after_delete: impl FnOnce(),
 ) -> anyhow::Result<WorktreeCleanupResult> {
+    cleanup_worktree_by_name_with_before_delete(
+        repo,
+        worktree_name,
+        worktree_path,
+        force,
+        || Ok(()),
+        after_delete,
+    )
+}
+
+pub(crate) fn cleanup_worktree_by_name_with_before_delete(
+    repo: &GitRepo,
+    worktree_name: &str,
+    worktree_path: &Path,
+    force: bool,
+    before_delete: impl FnOnce() -> anyhow::Result<()>,
+    after_delete: impl FnOnce(),
+) -> anyhow::Result<WorktreeCleanupResult> {
     cleanup_worktree_by_name_with_operations(
         worktree_path,
         force,
+        before_delete,
         after_delete,
         WorktreeCleanupOperations {
             inspect_processes: |path: &Path| {
@@ -163,9 +182,11 @@ fn cleanup_worktree_by_name_with_operations<
     KillGroups,
     KillPane,
     DeleteWorktree,
+    BeforeDeleteCheck,
 >(
     worktree_path: &Path,
     force: bool,
+    before_delete_check: BeforeDeleteCheck,
     after_delete: impl FnOnce(),
     operations: WorktreeCleanupOperations<
         InspectProcesses,
@@ -179,6 +200,7 @@ fn cleanup_worktree_by_name_with_operations<
 ) -> anyhow::Result<WorktreeCleanupResult>
 where
     InspectProcesses: FnOnce(&Path) -> Option<WorktreeProcessInspection> + 'a,
+    BeforeDeleteCheck: FnOnce() -> anyhow::Result<()> + 'a,
     FindPanes: FnOnce(&Path) -> Vec<String>,
     FindGroups: FnOnce(&Path) -> Vec<libc::pid_t>,
     CleanSessions: FnOnce(&Path, bool) -> usize,
@@ -214,8 +236,8 @@ where
             *guard_pgids.borrow_mut() = inspection.daemon_descendant_pgids;
             Some(inspection.non_shell_processes)
         })
-        .map(|_| ())
-        .map_err(anyhow::Error::from)
+        .map_err(anyhow::Error::from)?;
+        before_delete_check()
     });
     let mut result = delete_worktree(force, worktree_path.to_path_buf(), before_delete)?;
     let daemon_descendant_pgids = daemon_descendant_pgids.borrow().clone();
@@ -460,7 +482,7 @@ mod tests {
         false,
         Some(WorktreeProcessInspection::default()),
         true,
-        (true, None, false, 0, vec!["panes", "detect", "delete:false", "after_delete", "sessions:false", "pane_closed"]),
+        (true, None, false, 0, vec!["panes", "detect", "verify", "delete:false", "after_delete", "sessions:false", "pane_closed"]),
     )]
     #[case::daemon_groups_are_signaled_after_delete(
         false,
@@ -469,7 +491,7 @@ mod tests {
             daemon_descendant_pgids: vec![88],
         }),
         true,
-        (true, None, false, 1, vec!["panes", "detect", "delete:false", "after_delete", "sessions:false", "groups:[88]", "pane_closed"]),
+        (true, None, false, 1, vec!["panes", "detect", "verify", "delete:false", "after_delete", "sessions:false", "groups:[88]", "pane_closed"]),
     )]
     #[case::daemon_groups_are_not_signaled_when_deletion_returns_false(
         false,
@@ -478,13 +500,13 @@ mod tests {
             daemon_descendant_pgids: vec![88],
         }),
         false,
-        (false, None, true, 0, vec!["panes", "detect", "delete:false"]),
+        (false, None, true, 0, vec!["panes", "detect", "verify", "delete:false"]),
     )]
     #[case::force_skips_the_guard_and_signals_process_groups(
         true,
         None,
         true,
-        (true, None, false, 1, vec!["panes", "groups_detect", "delete:true", "after_delete", "sessions:true", "groups:[77]", "pane_closed"]),
+        (true, None, false, 1, vec!["panes", "groups_detect", "verify", "delete:true", "after_delete", "sessions:true", "groups:[77]", "pane_closed"]),
     )]
     fn cleanup_checks_processes_before_deleting_and_signals_after_success(
         cleanup_test_context: CleanupTestContext,
@@ -502,6 +524,10 @@ mod tests {
         let result = cleanup_worktree_by_name_with_operations(
             &worktree_path,
             force,
+            || {
+                events.borrow_mut().push("verify");
+                Ok(())
+            },
             || events.borrow_mut().push("after_delete"),
             WorktreeCleanupOperations {
                 inspect_processes: |_: &Path| {
@@ -589,6 +615,10 @@ mod tests {
         let result = cleanup_worktree_by_name_with_operations(
             &worktree_path,
             false,
+            || {
+                events.borrow_mut().push("verify");
+                Ok(())
+            },
             || events.borrow_mut().push("after_delete"),
             WorktreeCleanupOperations {
                 inspect_processes: |_: &Path| {
@@ -622,7 +652,7 @@ mod tests {
 
         assert_eq!(
             (result.is_err(), events.into_inner()),
-            (true, vec!["panes", "detect", "delete_failed"]),
+            (true, vec!["panes", "detect", "verify", "delete_failed"]),
         );
     }
 

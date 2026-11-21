@@ -120,6 +120,18 @@ async function pasteImage(textarea: HTMLTextAreaElement, file: File) {
   })
 }
 
+async function dropImage(textarea: HTMLTextAreaElement, file: File) {
+  const event = new Event('drop', { bubbles: true, cancelable: true })
+  Object.defineProperty(event, 'dataTransfer', {
+    value: { types: ['Files'], files: [file], dropEffect: 'none' },
+  })
+  await act(async () => {
+    textarea.dispatchEvent(event)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  })
+  return event
+}
+
 function dispatchKey(target: EventTarget, key: string, metaKey = false) {
   const event = new KeyboardEvent('keydown', {
     key,
@@ -803,6 +815,64 @@ it('previews and sends an image pasted into the proposal comment', async () => {
       },
     ],
     completedPreview: 'blob:proposal-image',
+  })
+})
+
+it('attaches dropped images to the proposal comment without bubbling to the conversation', async () => {
+  renderCard(props())
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+  )
+  const conversationDrop = vi.fn()
+  document.body.addEventListener('drop', conversationDrop)
+  const drop = await dropImage(
+    comment,
+    new File(['image'], 'dropped.png', { type: 'image/png' }),
+  )
+  document.body.removeEventListener('drop', conversationDrop)
+
+  const snapshot = () => ({
+    dropPrevented: drop.defaultPrevented,
+    conversationDropCalls: conversationDrop.mock.calls,
+    attachmentNames: Array.from(
+      container.querySelectorAll('.attachment-preview-item span'),
+      (element) => element.textContent,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    dropPrevented: true,
+    conversationDropCalls: [],
+    attachmentNames: ['dropped.png'],
+  })
+})
+
+it('lets the conversation handle drops over a withdrawn proposal comment', async () => {
+  renderCard(
+    props({
+      resolved: true,
+      resolution: 'withdrawn',
+      withdrawalComment: 'This proposal is no longer active.',
+    }),
+  )
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+  )
+  const conversationDrops: string[] = []
+  const onConversationDrop = () => conversationDrops.push('drop')
+  document.body.addEventListener('drop', onConversationDrop)
+  const drop = await dropImage(
+    comment,
+    new File(['image'], 'dropped.png', { type: 'image/png' }),
+  )
+  document.body.removeEventListener('drop', onConversationDrop)
+
+  const snapshot = () => ({
+    dropPrevented: drop.defaultPrevented,
+    conversationDrops,
+  })
+  expect(snapshot()).toEqual({
+    dropPrevented: false,
+    conversationDrops: ['drop'],
   })
 })
 

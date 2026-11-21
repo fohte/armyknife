@@ -193,10 +193,17 @@ const requests: {
       type: 'message',
       sessionId: 'test-session',
       content: 'A message',
+      queuedPromptId: '11111111-1111-4111-8111-111111111111',
     },
     path: 'messages',
-    body: { content: 'A message' },
-    response: { ok: true, queuedPromptId: 'fixture-message-id' },
+    body: {
+      content: 'A message',
+      messageId: '11111111-1111-4111-8111-111111111111',
+    },
+    response: {
+      ok: true,
+      queuedPromptId: '11111111-1111-4111-8111-111111111111',
+    },
   },
   {
     name: 'preview agent commands',
@@ -530,6 +537,7 @@ const operationFactories: [
     'messages',
     {
       content: 'A message',
+      _queuedPromptId: '11111111-1111-4111-8111-111111111111',
       _messageCountBefore: 2,
       _operationId: 'message-fixture',
     },
@@ -538,6 +546,7 @@ const operationFactories: [
       sessionId: session.id,
       operationId: 'message-fixture',
       content: 'A message',
+      queuedPromptId: '11111111-1111-4111-8111-111111111111',
       messageCountBefore: 2,
     },
   ],
@@ -1252,6 +1261,61 @@ it('reconciles a queued message ID before trailing todo and permission items', (
   expect(
     isConversationOperationConfirmed(serverConversation, operation, null),
   ).toBe(true)
+})
+
+const operationWithReservedMessageId: SessionOperation = {
+  type: 'message',
+  sessionId: session.id,
+  content: 'A message',
+  queuedPromptId: 'fixture-message-id',
+  messageCountBefore: 1,
+}
+const conversationWithInProgressTool: ConversationResponse = {
+  ...conversation,
+  messages: [{ type: 'tool_in_progress', tool: 'exec' }],
+  total: 1,
+  decisions: [],
+  hasUnansweredProposal: false,
+  activeQuestionIndex: null,
+}
+const conversationAfterMessageDelivery: ConversationResponse = {
+  ...conversationWithInProgressTool,
+  messages: [
+    { type: 'user', text: 'A message', queuedPromptId: 'fixture-message-id' },
+    { type: 'tool_in_progress', tool: 'exec' },
+  ],
+  total: 2,
+}
+
+it('shows the queued message before delivery while a tool is in progress', () => {
+  expect(
+    applyConversationOperation(
+      conversationWithInProgressTool,
+      operationWithReservedMessageId,
+    ),
+  ).toEqual({
+    ...conversationWithInProgressTool,
+    messages: [
+      { type: 'tool_in_progress', tool: 'exec' },
+      {
+        type: 'queued_user',
+        content: [{ type: 'text', text: 'A message' }],
+      },
+    ],
+    total: 2,
+    decisions: [],
+    hasUnansweredProposal: false,
+    activeQuestionIndex: null,
+  })
+})
+
+it('reconciles a delivered message inserted before an in-progress tool', () => {
+  expect(
+    applyConversationOperation(
+      conversationAfterMessageDelivery,
+      operationWithReservedMessageId,
+    ),
+  ).toEqual(conversationAfterMessageDelivery)
 })
 
 it('reconciles an unresolved queued user by its prompt ID', () => {

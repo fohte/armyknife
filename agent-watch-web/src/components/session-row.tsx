@@ -31,6 +31,8 @@ type SessionRowData = Pick<
       | 'unreviewedDecisionCount'
       | 'pullRequest'
       | 'vibeMode'
+      | 'isWaitingForCritReview'
+      | 'waitingReason'
     >
   >
 
@@ -112,7 +114,13 @@ export function SessionRow({
     session.category === 'done' && (session.unreviewedDecisionCount ?? 0) > 0
       ? decisionLabel
       : null
-  const preview = decisionPreview ?? session.preview
+  const critReviewReason =
+    session.isWaitingForCritReview === true &&
+    session.kind === 'Review' &&
+    (session.waitingReason?.trim().length ?? 0) > 0
+      ? session.waitingReason
+      : null
+  const preview = critReviewReason ?? decisionPreview ?? session.preview
 
   return (
     <div

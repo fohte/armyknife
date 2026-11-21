@@ -58,7 +58,11 @@ export function NewSessionForm({
   ])
 
   return (
-    <section aria-label="New session" className="new-session-view">
+    <section
+      aria-label="New session"
+      className="new-session-view"
+      data-mobile={isMobile ? 'true' : undefined}
+    >
       <header className="new-session-header">
         {isMobile ? (
           <button
