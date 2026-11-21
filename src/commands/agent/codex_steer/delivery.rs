@@ -944,8 +944,15 @@ mod tests {
     }
 
     #[rstest]
-    fn retries_resume_after_missing_rollout_and_confirms_delivery(
+    #[case::missing_rollout(-32600, "no rollout found for thread id thread-a")]
+    #[case::empty_rollout(
+        -32603,
+        "failed to read thread: thread-store internal error: failed to read session metadata /session/rollout-thread-a.jsonl: rollout at /session/rollout-thread-a.jsonl is empty",
+    )]
+    fn retries_resume_after_retryable_rollout_rejection_and_confirms_delivery(
         connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
+        #[case] code: i64,
+        #[case] message: &'static str,
     ) -> anyhow::Result<()> {
         let (mut client_socket, server_socket) = connected_sockets?;
         let server = std::thread::spawn(move || -> anyhow::Result<Vec<Value>> {
@@ -958,12 +965,7 @@ mod tests {
                 json!({"turn": {"id": TURN_ID, "status": "inProgress"}}),
             )?;
             let first_resume_request = read_request(&mut socket)?;
-            send_error(
-                &mut socket,
-                THREAD_RESUME_REQUEST_ID,
-                -32600,
-                "no rollout found for thread id thread-a",
-            )?;
+            send_error(&mut socket, THREAD_RESUME_REQUEST_ID, code, message)?;
             let retry_resume_request = read_request(&mut socket)?;
             send_response(&mut socket, THREAD_RESUME_REQUEST_ID, resume_response())?;
             socket.send(Message::Text(
@@ -1012,6 +1014,11 @@ mod tests {
     #[rstest]
     #[case::wrong_code(-32601, "no rollout found for thread id thread-a")]
     #[case::extra_message_text(-32600, "no rollout found for thread id thread-a; retry")]
+    #[case::unrelated_internal_error(-32603, "thread store is unavailable")]
+    #[case::empty_rollout_for_another_thread(
+        -32603,
+        "failed to read thread: thread-store internal error: failed to read session metadata /session/rollout-thread-b.jsonl: rollout at /session/rollout-thread-b.jsonl is empty",
+    )]
     fn does_not_retry_other_resume_rejections(
         connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
         #[case] code: i64,
