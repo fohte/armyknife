@@ -46,12 +46,6 @@ export function VibePanel({
       onCancel={onClose}
       onConfirm={onChange}
     >
-      {unavailable ? null : (
-        <div className="vibe-panel-message">
-          <span className="vibe-panel-message-label">Message to send</span>
-          <blockquote>{change.message}</blockquote>
-        </div>
-      )}
       {error === null ? null : (
         <p className="vibe-panel-error" role="alert">
           {error}

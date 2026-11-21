@@ -78,7 +78,6 @@ const modeChangeCases: {
   triggerLabel: string
   actionLabel: string
   expectedLabel: string
-  message: string
 }[] = [
   {
     name: 'enables disabled mode',
@@ -86,9 +85,8 @@ const modeChangeCases: {
     enabled: true,
     resultingMode: { mode: 'enabled' },
     triggerLabel: 'Vibe off',
-    actionLabel: 'Turn on and send',
+    actionLabel: 'Turn on',
     expectedLabel: 'Vibe on',
-    message: 'watch-web からユーザーが vibe mode を on にしました。',
   },
   {
     name: 'keeps inherited mode active when clearing the local setting',
@@ -96,10 +94,8 @@ const modeChangeCases: {
     enabled: false,
     resultingMode: { mode: 'inherited', ancestorSessionId: 'fixture-parent' },
     triggerLabel: 'Vibe on',
-    actionLabel: 'Turn off and send',
+    actionLabel: 'Turn off',
     expectedLabel: 'Vibe on · inherited',
-    message:
-      'watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。',
   },
   {
     name: 'enables inherited mode explicitly for this session',
@@ -107,9 +103,8 @@ const modeChangeCases: {
     enabled: true,
     resultingMode: { mode: 'enabled' },
     triggerLabel: 'Vibe on · inherited',
-    actionLabel: 'Turn on here and send',
+    actionLabel: 'Turn on here',
     expectedLabel: 'Vibe on',
-    message: 'watch-web からユーザーが vibe mode を on にしました。',
   },
 ]
 
@@ -132,9 +127,14 @@ it.each(modeChangeCases)('$name', async (testCase) => {
   await act(async () => {
     await userEvent.click(requireButton(testCase.triggerLabel))
   })
-  expect(document.querySelector('blockquote')?.textContent).toBe(
-    testCase.message,
-  )
+  const confirmation = () => ({
+    actionLabel: requireButton(testCase.actionLabel).textContent,
+    message: document.querySelector('.vibe-panel-message'),
+  })
+  expect(confirmation()).toEqual({
+    actionLabel: testCase.actionLabel,
+    message: null,
+  })
   await act(async () => {
     await userEvent.click(requireButton(testCase.actionLabel))
     await finishRequest()
@@ -172,7 +172,7 @@ it('shows the API reason when the server rejects a change', async () => {
     await userEvent.click(requireButton('Vibe off'))
   })
   await act(async () => {
-    await userEvent.click(requireButton('Turn on and send'))
+    await userEvent.click(requireButton('Turn on'))
     await finishRequest()
   })
 
@@ -248,7 +248,7 @@ it('keeps the mobile sheet open when its contents are clicked', async () => {
       />,
     )
   })
-  const content = document.querySelector('.vibe-panel-message')
+  const content = document.querySelector('.vibe-panel')
   if (content === null) throw new Error('Expected the vibe panel content')
 
   await act(async () => {
