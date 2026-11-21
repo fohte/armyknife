@@ -290,10 +290,12 @@ export function SessionPullRequests({
           size={isMobile ? 18 : 14}
           strokeWidth={1.7}
         />
-        <span
-          className={`session-pr-trigger-ci-dot ${ciStateClass(currentPullRequest.ciState)}`}
-          aria-hidden="true"
-        />
+        {currentPullRequest.state === 'Merged' ? null : (
+          <span
+            className={`session-pr-trigger-ci-dot ${ciStateClass(currentPullRequest.ciState)}`}
+            aria-hidden="true"
+          />
+        )}
         <span className="session-pr-count" aria-hidden="true">
           {pullRequests.length}
         </span>

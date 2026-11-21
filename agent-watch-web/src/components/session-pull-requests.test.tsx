@@ -511,39 +511,66 @@ it('shows the missing head SHA reason without a merge action', () => {
   ).toEqual({ reason: 'Head SHA unavailable', mergeButton: false })
 })
 
-it('dims the pull request icon when every pull request is merged', () => {
-  render(false, [
-    {
-      number: 42,
-      state: 'Merged',
-      owner: 'example-org',
-      repo: 'example-project',
-      title: 'Complete the delivery update',
-      url: 'https://github.com/example-org/example-project/pull/42',
-      ciState: 'Successful',
-      isCurrentBranch: true,
-    },
-  ])
+it.each([
+  {
+    description: 'desktop with an open pull request',
+    isMobile: false,
+    state: 'Open' as const,
+    expectedDotClass: 'session-pr-trigger-ci-dot is-passed',
+    expectedAllMerged: false,
+  },
+  {
+    description: 'mobile with an open pull request',
+    isMobile: true,
+    state: 'Open' as const,
+    expectedDotClass: 'session-pr-trigger-ci-dot is-passed',
+    expectedAllMerged: false,
+  },
+  {
+    description: 'desktop when all pull requests are merged',
+    isMobile: false,
+    state: 'Merged' as const,
+    expectedDotClass: null,
+    expectedAllMerged: true,
+  },
+  {
+    description: 'mobile when all pull requests are merged',
+    isMobile: true,
+    state: 'Merged' as const,
+    expectedDotClass: null,
+    expectedAllMerged: true,
+  },
+])(
+  'shows the expected CI dot for the $description',
+  ({ isMobile, state, expectedDotClass, expectedAllMerged }) => {
+    render(isMobile, [
+      {
+        number: 1721,
+        state,
+        owner: 'fixture-team',
+        repo: 'session-header-demo',
+        title: 'Demonstrate the session pull request header',
+        url: 'https://github.com/fixture-team/session-header-demo/pull/1721',
+        ciState: 'Successful',
+        isCurrentBranch: true,
+      },
+    ])
 
-  const trigger = container.querySelector<HTMLButtonElement>(
-    '.session-pr-trigger',
-  )
-  if (trigger === null) throw new Error('Expected pull request trigger')
-  const icon = trigger.querySelector<SVGElement>('.session-pr-icon')
-  if (icon === null) throw new Error('Expected pull request icon')
-  const count = container.querySelector<HTMLElement>('.session-pr-count')
-  if (count === null) throw new Error('Expected pull request count')
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '.session-pr-trigger',
+    )
+    if (trigger === null) throw new Error('Expected pull request trigger')
 
-  const snapshot = () => ({
-    allMerged: trigger.classList.contains('is-all-merged'),
-    iconMatchesTriggerColor:
-      getComputedStyle(icon).color === getComputedStyle(trigger).color,
-    countMatchesTriggerColor:
-      getComputedStyle(count).color === getComputedStyle(trigger).color,
-  })
-  expect(snapshot()).toEqual({
-    allMerged: true,
-    iconMatchesTriggerColor: true,
-    countMatchesTriggerColor: true,
-  })
-})
+    const snapshot = () => ({
+      dotClass:
+        trigger
+          .querySelector('.session-pr-trigger-ci-dot')
+          ?.getAttribute('class') ?? null,
+      allMerged: trigger.classList.contains('is-all-merged'),
+    })
+    expect(snapshot()).toEqual({
+      dotClass: expectedDotClass,
+      allMerged: expectedAllMerged,
+    })
+  },
+)
