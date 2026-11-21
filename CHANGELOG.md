@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.829](https://github.com/fohte/armyknife/compare/v0.1.828...v0.1.829) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show vibe mode icons in tree ([#2046](https://github.com/fohte/armyknife/issues/2046)) ([bfb28bb](https://github.com/fohte/armyknife/commit/bfb28bb8126b2a16988edcae4d8865d1cb13ed3a))
+
 ## [0.1.828](https://github.com/fohte/armyknife/compare/v0.1.827...v0.1.828) (2026-11-21)
 
 
