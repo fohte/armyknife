@@ -284,7 +284,10 @@ fn prepare_close_session<'a, R: CloseRuntime>(
     runtime: &R,
 ) -> Result<Option<SessionClosePlan<'a>>> {
     let Some(tmux_info) = session.tmux_info.as_ref() else {
-        let draft_inspection = if !force && session.status != SessionStatus::Paused {
+        let draft_inspection = if !force
+            && !stop_and_close
+            && session.status != SessionStatus::Paused
+        {
             safety::validate_session_without_tmux_info(session, runtime.unknown_draft_timeout())?
         } else {
             DraftInspection::NotChecked
@@ -606,15 +609,15 @@ mod tests {
             expected_ended_sessions: vec!["session-1"],
         },
     )]
-    #[case::stop_and_close_still_checks_paneless_sessions(
+    #[case::stop_and_close_skips_paneless_safety_checks(
         PanelessCloseCase {
             status: SessionStatus::Running,
             force: false,
-            pending_task: false,
-            recent_activity: false,
+            pending_task: true,
+            recent_activity: true,
             stop_and_close: true,
-            expected_error: Some("Agent session `session-1` is running or waiting for input; complete any requested input and wait for the current turn to finish, then retry this command"),
-            expected_ended_sessions: vec![],
+            expected_error: None,
+            expected_ended_sessions: vec!["session-1"],
         },
     )]
     fn close_handles_sessions_without_tmux_panes(
