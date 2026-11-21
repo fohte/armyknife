@@ -2,7 +2,7 @@ import '#components/later-today.css'
 
 import { Button } from '@fohte/ui/button'
 import { Filter, X } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useState } from 'react'
 
 import { InboxFilterBar } from '#components/inbox-filter-bar'
 import { InboxFilterDialog } from '#components/inbox-filter-dialog'
@@ -54,6 +54,7 @@ type InboxViewProps = {
   onOpenNavigation?: () => void
   onOpenPalette?: () => void
   onNewSession?: () => void
+  mobileUpdateNotice?: ReactNode
 }
 
 export function InboxView({
@@ -92,6 +93,7 @@ export function InboxView({
   onOpenNavigation = () => undefined,
   onOpenPalette = () => undefined,
   onNewSession = () => undefined,
+  mobileUpdateNotice,
 }: InboxViewProps) {
   const [localFilterQuery, setLocalFilterQuery] = useState('')
   const [localDialogOpen, setLocalDialogOpen] = useState(false)
@@ -203,6 +205,7 @@ export function InboxView({
           />
         ) : null}
       </div>
+      {isMobile ? mobileUpdateNotice : null}
       <header className="view-header">
         <h1 id="inbox-title">Inbox</h1>
         <span className="sort-description">Sorted by tq priority</span>

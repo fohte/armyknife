@@ -10,11 +10,13 @@ const BUILD_INSTRUCTIONS: &str = "The Agent Watch Web UI has not been built. Run
 const IMMUTABLE_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
 const NO_CACHE_CONTROL: &str = "no-cache";
 const SERVER_INSTANCE_ID_PLACEHOLDER: &str = "__AGENT_WATCH_SERVER_INSTANCE_ID__";
+const SERVER_VERSION_PLACEHOLDER: &str = "__AGENT_WATCH_SERVER_VERSION__";
 
 pub(super) fn serve_from(
     uri: &Uri,
     dist: &'static Dir<'static>,
     server_instance_id: &str,
+    server_version: &str,
 ) -> Response<Body> {
     if dist.get_file("index.html").is_none() {
         return (StatusCode::SERVICE_UNAVAILABLE, BUILD_INSTRUCTIONS).into_response();
@@ -40,7 +42,8 @@ pub(super) fn serve_from(
     let body = if resolved_path == "index.html" {
         Body::from(
             String::from_utf8_lossy(file.contents())
-                .replace(SERVER_INSTANCE_ID_PLACEHOLDER, server_instance_id),
+                .replace(SERVER_INSTANCE_ID_PLACEHOLDER, server_instance_id)
+                .replace(SERVER_VERSION_PLACEHOLDER, server_version),
         )
     } else {
         Body::from(file.contents())
@@ -89,7 +92,9 @@ mod tests {
     use axum::http::{StatusCode, Uri};
     use include_dir::{Dir, include_dir};
 
-    use super::{BUILD_INSTRUCTIONS, SERVER_INSTANCE_ID_PLACEHOLDER, serve_from};
+    use super::{
+        BUILD_INSTRUCTIONS, SERVER_INSTANCE_ID_PLACEHOLDER, SERVER_VERSION_PLACEHOLDER, serve_from,
+    };
 
     static TEST_DIST: Dir<'_> =
         include_dir!("$CARGO_MANIFEST_DIR/src/commands/agent/watch_web/test_assets");
@@ -105,6 +110,7 @@ mod tests {
             &"/sessions/example".parse::<Uri>().unwrap(),
             &TEST_DIST,
             "fixture-server-instance",
+            "9.8.7",
         );
         let status = response.status();
         let content_type = response
@@ -129,6 +135,7 @@ mod tests {
             &"/assets/app.css".parse::<Uri>().unwrap(),
             &TEST_DIST,
             "fixture-server-instance",
+            "9.8.7",
         );
         let status = response.status();
         let content_type = response
@@ -153,6 +160,7 @@ mod tests {
             &"/".parse::<Uri>().unwrap(),
             &EMPTY_DIST,
             "fixture-server-instance",
+            "9.8.7",
         );
         let status = response.status();
         let content_type = response
@@ -172,16 +180,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn serves_the_server_instance_id_in_the_index() {
+    async fn serves_the_server_instance_id_and_version_in_the_index() {
         let response = serve_from(
             &"/".parse::<Uri>().unwrap(),
             &TEST_DIST_WITH_INSTANCE_ID,
             "fixture-server-instance",
+            "9.8.7",
         );
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let expected =
             String::from_utf8_lossy(include_bytes!("test_assets_with_instance_id/index.html"))
                 .replace(SERVER_INSTANCE_ID_PLACEHOLDER, "fixture-server-instance");
+        let expected = expected.replace(SERVER_VERSION_PLACEHOLDER, "9.8.7");
 
         assert_eq!(body.to_vec(), expected.into_bytes());
     }

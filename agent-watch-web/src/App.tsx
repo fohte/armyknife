@@ -109,6 +109,8 @@ function AppContent() {
   const [showAllInProgress, setShowAllInProgress] = useState(false)
   const [laterExpanded, setLaterExpanded] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [availableVersion, setAvailableVersion] = useState<string | null>(null)
+  const [dismissedVersion, setDismissedVersion] = useState<string | null>(null)
   const startAsyncAction = useAsyncActionStarter((feedbackError) => {
     setError(feedbackError.message)
   })
@@ -220,24 +222,28 @@ function AppContent() {
 
   useEffect(
     () =>
-      startSessionFeed((response, changedSessionIds) => {
-        const receivedAt = Date.now()
-        recordSessionSnapshot(response.sessions)
-        setWorkTypeNavLabels(response.workTypeNavLabels ?? {})
-        setSessions(
-          response.sessions.filter(
-            (session) =>
-              session.category === 'needs_action' ||
-              session.category === 'later' ||
-              session.category === 'in_progress' ||
-              session.category === 'done',
-          ),
-        )
-        recordSessionChanges(changedSessionIds)
-        setSessionsReceivedAt(receivedAt)
-        setNowMs(receivedAt)
-        setLoaded(true)
-      }, setError),
+      startSessionFeed(
+        (response, changedSessionIds) => {
+          const receivedAt = Date.now()
+          recordSessionSnapshot(response.sessions)
+          setWorkTypeNavLabels(response.workTypeNavLabels ?? {})
+          setSessions(
+            response.sessions.filter(
+              (session) =>
+                session.category === 'needs_action' ||
+                session.category === 'later' ||
+                session.category === 'in_progress' ||
+                session.category === 'done',
+            ),
+          )
+          recordSessionChanges(changedSessionIds)
+          setSessionsReceivedAt(receivedAt)
+          setNowMs(receivedAt)
+          setLoaded(true)
+        },
+        setError,
+        { onUpdateAvailable: setAvailableVersion },
+      ),
     [recordSessionSnapshot],
   )
 
@@ -418,6 +424,9 @@ function AppContent() {
         pendingFocusSessionId,
         closeConfirmationSession,
       }}
+      updateNoticeVersion={
+        availableVersion === dismissedVersion ? null : availableVersion
+      }
       actions={{
         setInboxFilterQuery,
         setShowAllInProgress,
@@ -464,6 +473,7 @@ function AppContent() {
         runPaletteCommand,
         navigate,
         closeMobileNav,
+        dismissUpdateNotice: setDismissedVersion,
       }}
       savedViews={savedViews}
       newSession={newSession}

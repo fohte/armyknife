@@ -1,0 +1,77 @@
+.update-notice {
+  z-index: 1;
+  display: flex;
+  width: 100%;
+  height: 36px;
+  flex: 0 0 36px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px 0 16px;
+  border-bottom: 1px solid #1e3a5f;
+  background: #0f1a2a;
+  color: #dbeafe;
+  font-size: 13px;
+}
+
+.update-notice-icon {
+  flex: none;
+  color: #93c5fd;
+}
+
+.update-notice-message {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-notice-reload {
+  height: 24px;
+  flex: none;
+  padding: 0 12px;
+  border: 1px solid #fafafa;
+  background: #fafafa;
+  color: #0a0a0a;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.update-notice-dismiss {
+  width: 28px;
+  height: 24px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #8b8b94;
+  cursor: pointer;
+}
+
+.update-notice--mobile {
+  height: 52px;
+  flex-basis: 52px;
+  gap: 10px;
+  padding: 0 0 0 14px;
+  font-size: 14px;
+}
+
+.update-notice--mobile .update-notice-message {
+  flex: 1;
+}
+
+.update-notice--mobile .update-notice-reload {
+  height: 36px;
+  font-size: 13.5px;
+}
+
+.update-notice--mobile .update-notice-dismiss {
+  width: 44px;
+  height: 36px;
+  margin-left: 0;
+}
