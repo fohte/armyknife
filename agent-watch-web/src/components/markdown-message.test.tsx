@@ -6,7 +6,9 @@ import { MarkdownMessage } from '#components/markdown-message'
 function renderMessage(markdown: string, className?: string) {
   const props = className === undefined ? {} : { className }
   return renderToStaticMarkup(
-    <MarkdownMessage {...props}>{markdown}</MarkdownMessage>,
+    <MarkdownMessage copyableCodeBlocks {...props}>
+      {markdown}
+    </MarkdownMessage>,
   )
 }
 
@@ -41,8 +43,8 @@ const maxPreviewItems = 7;
     '<li>Stop after three attempts</li>',
     '</ul>',
     '<table><thead><tr><th>Attempt</th><th>Delay</th></tr></thead><tbody><tr><td>1</td><td>100 ms</td></tr></tbody></table>',
-    '<pre class="syntax-code-block" data-language="rust"><code class="language-rust">const maxPreviewItems = 7;',
-    '</code></pre></div>',
+    '<div class="syntax-code-block-container"><div class="syntax-code-block-toolbar"><span class="syntax-code-block-language">rust</span><button class="syntax-code-block-copy-button" type="button" aria-label="Copy code" title="Copy code">Copy</button></div><pre class="syntax-code-block" data-language="rust"><code class="language-rust">const maxPreviewItems = 7;',
+    '</code></pre></div></div>',
   ].join(String.fromCharCode(10))
 
   expect(html).toBe(expected)
@@ -62,7 +64,17 @@ set VALUE=preview
 ~~~`)
 
   expect(html).toBe(
-    '<div class="markdown-message"><pre class="syntax-code-block" data-language="text"><code class="language-text">set VALUE=preview\n</code></pre></div>',
+    '<div class="markdown-message"><div class="syntax-code-block-container"><div class="syntax-code-block-toolbar"><span class="syntax-code-block-language">text</span><button class="syntax-code-block-copy-button" type="button" aria-label="Copy code" title="Copy code">Copy</button></div><pre class="syntax-code-block" data-language="text"><code class="language-text">set VALUE=preview\n</code></pre></div></div>',
+  )
+})
+
+it('does not show a copy toolbar unless code copying is enabled', () => {
+  const html = renderToStaticMarkup(
+    <MarkdownMessage>{'~~~text\nsample\n~~~'}</MarkdownMessage>,
+  )
+
+  expect(html).toBe(
+    '<div class="markdown-message"><pre class="syntax-code-block" data-language="text"><code class="language-text">sample\n</code></pre></div>',
   )
 })
 
@@ -123,28 +135,28 @@ it('adds a confirmation button to agent inline bang commands', () => {
 
 it('adds per-line and run-all buttons to fenced bang commands', () => {
   const html = renderToStaticMarkup(
-    <MarkdownMessage sessionId="sample-session">
+    <MarkdownMessage copyableCodeBlocks sessionId="sample-session">
       {'```sh\n! printf first\n! printf second\n```'}
     </MarkdownMessage>,
   )
 
   expect(html).toBe(
     [
-      '<div class="markdown-message"><div class="markdown-code-block"><pre class="syntax-code-block" data-language="sh"><code class="language-sh">! printf first',
+      '<div class="markdown-message"><div class="markdown-code-block"><div class="syntax-code-block-container"><div class="syntax-code-block-toolbar"><span class="syntax-code-block-language">sh</span><button class="syntax-code-block-copy-button" type="button" aria-label="Copy code" title="Copy code">Copy</button></div><pre class="syntax-code-block" data-language="sh"><code class="language-sh">! printf first',
       '! printf second',
-      '</code></pre><span class="bang-command-actions"><span class="bang-command-control"><button aria-label="Run command 1" class="bang-command-button" type="button">Run command 1</button></span><span class="bang-command-control"><button aria-label="Run command 2" class="bang-command-button" type="button">Run command 2</button></span><span class="bang-command-control"><button aria-label="Run all" class="bang-command-button" type="button">Run all</button></span></span></div></div>',
+      '</code></pre></div><span class="bang-command-actions"><span class="bang-command-control"><button aria-label="Run command 1" class="bang-command-button" type="button">Run command 1</button></span><span class="bang-command-control"><button aria-label="Run command 2" class="bang-command-button" type="button">Run command 2</button></span><span class="bang-command-control"><button aria-label="Run all" class="bang-command-button" type="button">Run all</button></span></span></div></div>',
     ].join(String.fromCharCode(10)),
   )
 })
 
 it('adds a confirmation button to an indented bang command block', () => {
   const html = renderToStaticMarkup(
-    <MarkdownMessage sessionId="sample-session">
+    <MarkdownMessage copyableCodeBlocks sessionId="sample-session">
       {'    ! printf safe'}
     </MarkdownMessage>,
   )
 
   expect(html).toBe(
-    '<div class="markdown-message"><div class="markdown-code-block"><pre class="syntax-code-block" data-language="text"><code class="language-text">! printf safe\n</code></pre><span class="bang-command-actions"><span class="bang-command-control"><button aria-label="Run command 1" class="bang-command-button" type="button">Run command 1</button></span></span></div></div>',
+    '<div class="markdown-message"><div class="markdown-code-block"><div class="syntax-code-block-container"><div class="syntax-code-block-toolbar"><span class="syntax-code-block-language">text</span><button class="syntax-code-block-copy-button" type="button" aria-label="Copy code" title="Copy code">Copy</button></div><pre class="syntax-code-block" data-language="text"><code class="language-text">! printf safe\n</code></pre></div><span class="bang-command-actions"><span class="bang-command-control"><button aria-label="Run command 1" class="bang-command-button" type="button">Run command 1</button></span></span></div></div>',
   )
 })
