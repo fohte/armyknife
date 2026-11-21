@@ -8,12 +8,28 @@ use super::worktree_error::{Result, WmError};
 use crate::infra::git::GitRepo;
 use crate::infra::git::cmd::run_git;
 
+mod lock;
+
 #[derive(Debug, thiserror::Error)]
 #[error(
     "Worktree contains uncommitted changes or untracked files: {worktree_path}; pass --force to delete it"
 )]
 pub struct DirtyWorktreeError {
     worktree_path: PathBuf,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "Worktree is being deleted by another process: {worktree_path}; retry after deletion finishes"
+)]
+pub struct WorktreeDeletionInProgressError {
+    worktree_path: PathBuf,
+}
+
+impl WorktreeDeletionInProgressError {
+    fn new(worktree_path: PathBuf) -> Self {
+        Self { worktree_path }
+    }
 }
 
 impl DirtyWorktreeError {
@@ -31,15 +47,26 @@ pub fn ensure_clean_for_deletion(
     worktree_path: &std::path::Path,
     force: bool,
 ) -> anyhow::Result<()> {
-    ensure_clean_for_deletion_with(worktree_path, force, status_from_git)
+    if force || !worktree_path.is_dir() {
+        return Ok(());
+    }
+    let lock_dir = lock::default_lock_dir()?;
+    ensure_clean_for_deletion_with(worktree_path, force, &lock_dir, status_from_git)
 }
 
 pub(crate) fn uncommitted_files(worktree_path: &std::path::Path) -> anyhow::Result<Vec<String>> {
-    uncommitted_files_with_status(worktree_path)
+    if !worktree_path.is_dir() {
+        return Ok(Vec::new());
+    }
+    let lock_dir = lock::default_lock_dir()?;
+    uncommitted_files_with_status(worktree_path, &lock_dir)
 }
 
-fn uncommitted_files_with_status(worktree_path: &std::path::Path) -> anyhow::Result<Vec<String>> {
-    uncommitted_files_with(worktree_path, status_from_git)
+fn uncommitted_files_with_status(
+    worktree_path: &std::path::Path,
+    lock_dir: &std::path::Path,
+) -> anyhow::Result<Vec<String>> {
+    uncommitted_files_with(worktree_path, lock_dir, status_from_git)
 }
 
 fn status_from_git(worktree_path: &std::path::Path) -> anyhow::Result<String> {
@@ -51,9 +78,10 @@ fn status_from_git(worktree_path: &std::path::Path) -> anyhow::Result<String> {
 
 fn uncommitted_files_with(
     worktree_path: &std::path::Path,
+    lock_dir: &std::path::Path,
     status: impl FnOnce(&std::path::Path) -> anyhow::Result<String>,
 ) -> anyhow::Result<Vec<String>> {
-    worktree_changes_with(worktree_path, status).map(|changes| changes.files)
+    worktree_changes_with(worktree_path, lock_dir, status).map(|changes| changes.files)
 }
 
 struct WorktreeChanges {
@@ -63,6 +91,7 @@ struct WorktreeChanges {
 
 fn worktree_changes_with(
     worktree_path: &std::path::Path,
+    lock_dir: &std::path::Path,
     status: impl FnOnce(&std::path::Path) -> anyhow::Result<String>,
 ) -> anyhow::Result<WorktreeChanges> {
     if !worktree_path.is_dir() {
@@ -71,6 +100,12 @@ fn worktree_changes_with(
             is_dirty: false,
         });
     }
+    let _lock = lock::try_lock_shared(lock_dir, worktree_path).map_err(|error| match error {
+        lock::WorktreeLockError::Busy => {
+            WorktreeDeletionInProgressError::new(worktree_path.to_path_buf()).into()
+        }
+        lock::WorktreeLockError::Io(error) => error,
+    })?;
     status(worktree_path).map(|status| WorktreeChanges {
         is_dirty: !status.is_empty(),
         files: parse_uncommitted_files(&status),
@@ -96,13 +131,14 @@ fn parse_uncommitted_files(status: &str) -> Vec<String> {
 fn ensure_clean_for_deletion_with(
     worktree_path: &std::path::Path,
     force: bool,
+    lock_dir: &std::path::Path,
     status: impl FnOnce(&std::path::Path) -> anyhow::Result<String>,
 ) -> anyhow::Result<()> {
     if force || !worktree_path.is_dir() {
         return Ok(());
     }
 
-    if worktree_changes_with(worktree_path, status)?.is_dirty {
+    if worktree_changes_with(worktree_path, lock_dir, status)?.is_dirty {
         return Err(DirtyWorktreeError::new(worktree_path.to_path_buf()).into());
     }
 
@@ -115,17 +151,26 @@ pub(crate) fn delete_worktree_if_clean(
     before_delete: impl FnOnce() -> anyhow::Result<()>,
     delete: impl FnOnce() -> anyhow::Result<bool>,
 ) -> anyhow::Result<bool> {
-    delete_worktree_if_clean_with(worktree_path, force, status_from_git, before_delete, delete)
+    let lock_dir = lock::default_lock_dir()?;
+    delete_worktree_if_clean_with(
+        worktree_path,
+        force,
+        &lock_dir,
+        status_from_git,
+        before_delete,
+        delete,
+    )
 }
 
 fn delete_worktree_if_clean_with(
     worktree_path: &std::path::Path,
     force: bool,
+    lock_dir: &std::path::Path,
     status: impl FnOnce(&std::path::Path) -> anyhow::Result<String>,
     before_delete: impl FnOnce() -> anyhow::Result<()>,
     delete: impl FnOnce() -> anyhow::Result<bool>,
 ) -> anyhow::Result<bool> {
-    ensure_clean_for_deletion_with(worktree_path, force, status)?;
+    ensure_clean_for_deletion_with(worktree_path, force, lock_dir, status)?;
     before_delete()?;
     delete()
 }
@@ -182,27 +227,39 @@ pub fn delete_worktree(repo: &GitRepo, worktree_name: &str) -> Result<bool> {
         }
     };
 
-    let remove = run_git(
-        repo.workdir(),
-        [
-            std::ffi::OsStr::new("worktree"),
-            std::ffi::OsStr::new("remove"),
-            std::ffi::OsStr::new("--force"),
-            entry.path.as_os_str(),
-        ],
-    );
-    if remove.is_err() {
-        // Path may have been deleted out-of-band; prune lingering admin data.
-        let _ = run_git(repo.workdir(), ["worktree", "prune"]);
-        let still_present = list_worktrees_raw(repo)
-            .map(|l| l.iter().any(|w| w.name == worktree_name))
-            .unwrap_or(false);
-        if still_present {
-            eprintln!("Failed to delete worktree {worktree_name}");
-            return Ok(false);
+    let lock_dir = lock::default_lock_dir()?;
+    with_worktree_deletion_lock(&lock_dir, &entry.path, || {
+        let remove = run_git(
+            repo.workdir(),
+            [
+                std::ffi::OsStr::new("worktree"),
+                std::ffi::OsStr::new("remove"),
+                std::ffi::OsStr::new("--force"),
+                entry.path.as_os_str(),
+            ],
+        );
+        if remove.is_err() {
+            // Path may have been deleted out-of-band; prune lingering admin data.
+            let _ = run_git(repo.workdir(), ["worktree", "prune"]);
+            let still_present = list_worktrees_raw(repo)
+                .map(|l| l.iter().any(|w| w.name == worktree_name))
+                .unwrap_or(false);
+            if still_present {
+                eprintln!("Failed to delete worktree {worktree_name}");
+                return Ok(false);
+            }
         }
-    }
-    Ok(true)
+        Ok(true)
+    })
+}
+
+fn with_worktree_deletion_lock(
+    lock_dir: &std::path::Path,
+    worktree_path: &std::path::Path,
+    delete: impl FnOnce() -> anyhow::Result<bool>,
+) -> anyhow::Result<bool> {
+    let _lock = lock::lock_exclusive(lock_dir, worktree_path)?;
+    delete()
 }
 
 /// Delete a local branch if it exists. Returns true if deleted.
@@ -361,6 +418,7 @@ mod tests {
         #[case] expected: (bool, bool, bool, bool, bool),
     ) {
         let directory = tempfile::tempdir().expect("temporary worktree should be created");
+        let lock_dir = tempfile::tempdir().expect("temporary lock directory should be created");
         let status_queried = Cell::new(false);
         let before_delete_called = Cell::new(false);
         let removed = Cell::new(false);
@@ -374,6 +432,7 @@ mod tests {
         let result = delete_worktree_if_clean_with(
             worktree_path,
             force,
+            lock_dir.path(),
             |_| {
                 status_queried.set(true);
                 Ok(status.to_string())
@@ -407,7 +466,8 @@ mod tests {
     #[test]
     fn uncommitted_files_use_the_status_paths_including_renames() {
         let directory = tempfile::tempdir().expect("temporary worktree should be created");
-        let files = uncommitted_files_with(directory.path(), |_| {
+        let lock_dir = tempfile::tempdir().expect("temporary lock directory should be created");
+        let files = uncommitted_files_with(directory.path(), lock_dir.path(), |_| {
             Ok(" M src/changed.rs\0R  src/renamed.rs\0src/old.rs\0?? src/new.rs\0".into())
         })
         .expect("status should be parsed");
@@ -416,6 +476,87 @@ mod tests {
             files,
             vec!["src/changed.rs", "src/renamed.rs", "src/new.rs",],
         );
+    }
+
+    #[test]
+    fn dirty_checks_report_deletion_in_progress_without_running_status() {
+        let worktree = tempfile::tempdir().expect("temporary worktree should be created");
+        let lock_dir = tempfile::tempdir().expect("temporary lock directory should be created");
+        let _lock = lock::lock_exclusive(lock_dir.path(), worktree.path())
+            .expect("exclusive worktree lock should be acquired");
+        let status_calls = Cell::new(0);
+
+        let ensure_result =
+            ensure_clean_for_deletion_with(worktree.path(), false, lock_dir.path(), |_| {
+                status_calls.set(status_calls.get() + 1);
+                Ok(String::new())
+            });
+        let files_result = uncommitted_files_with(worktree.path(), lock_dir.path(), |_| {
+            status_calls.set(status_calls.get() + 1);
+            Ok(String::new())
+        });
+        let observed = (
+            ensure_result
+                .as_ref()
+                .err()
+                .and_then(|error| error.downcast_ref::<WorktreeDeletionInProgressError>())
+                .is_some(),
+            files_result
+                .as_ref()
+                .err()
+                .and_then(|error| error.downcast_ref::<WorktreeDeletionInProgressError>())
+                .is_some(),
+            status_calls.get(),
+        );
+
+        assert_eq!(observed, (true, true, 0));
+    }
+
+    #[test]
+    fn shared_worktree_locks_allow_concurrent_dirty_checks() {
+        let worktree = tempfile::tempdir().expect("temporary worktree should be created");
+        let lock_dir = tempfile::tempdir().expect("temporary lock directory should be created");
+
+        let first = lock::try_lock_shared(lock_dir.path(), worktree.path())
+            .expect("first shared worktree lock should be acquired");
+        let second = lock::try_lock_shared(lock_dir.path(), worktree.path())
+            .expect("second shared worktree lock should be acquired");
+
+        assert_eq!(
+            (first.metadata().is_ok(), second.metadata().is_ok()),
+            (true, true)
+        );
+    }
+
+    #[test]
+    fn deletion_lock_waits_for_an_active_dirty_check() {
+        let worktree = tempfile::tempdir().expect("temporary worktree should be created");
+        let lock_dir = tempfile::tempdir().expect("temporary lock directory should be created");
+        let shared = lock::try_lock_shared(lock_dir.path(), worktree.path())
+            .expect("shared worktree lock should be acquired");
+        let thread_lock_dir = lock_dir.path().to_path_buf();
+        let thread_worktree = worktree.path().to_path_buf();
+        let (started_sender, started_receiver) = std::sync::mpsc::channel();
+        let (locked_sender, locked_receiver) = std::sync::mpsc::channel();
+        let delete_thread = std::thread::spawn(move || {
+            started_sender.send(()).expect("started signal should send");
+            with_worktree_deletion_lock(&thread_lock_dir, &thread_worktree, || {
+                locked_sender.send(()).expect("locked signal should send");
+                Ok(true)
+            })
+            .expect("worktree deletion should complete");
+        });
+        started_receiver.recv().expect("delete thread should start");
+
+        assert_eq!(
+            locked_receiver.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        );
+        drop(shared);
+        locked_receiver
+            .recv()
+            .expect("deletion lock should be acquired after dirty check ends");
+        delete_thread.join().expect("delete thread should finish");
     }
 
     #[rstest]
