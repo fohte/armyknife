@@ -481,12 +481,12 @@ mod tests {
                     vec!["src/fictional.rs".to_string()],
                     Some("feature/fictional".to_string()),
                     Some(
-                        crate::shared::worktree_delete::classify_merge_guard_status_with(
+                        crate::shared::worktree_delete::MergeGuardStatus::from_commit_ahead_check(
                             "feature/fictional".to_string(),
                             crate::infra::git::MergeStatus::NotMerged {
                                 reason: "pull request is open".to_string(),
                             },
-                            |_| Ok(true),
+                            true,
                         ),
                     ),
                     Some(process_inspection),

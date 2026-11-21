@@ -234,12 +234,12 @@ mod tests {
             PathBuf::from("/fictional/worktree"),
             vec!["src/fictional.rs".to_string()],
             Some("feature/fictional".to_string()),
-            Some(worktree_delete::classify_merge_guard_status_with(
+            Some(MergeGuardStatus::from_commit_ahead_check(
                 "feature/fictional".to_string(),
                 MergeStatus::NotMerged {
                     reason: "pull request is open".to_string(),
                 },
-                |_| Ok(true),
+                true,
             )),
             Some(Err(WorktreeProcessGuardError::ActiveProcesses {
                 worktree_path: PathBuf::from("/fictional/worktree"),
@@ -273,10 +273,10 @@ mod tests {
             PathBuf::from("/fictional/worktree"),
             Vec::new(),
             Some("feature/fictional".to_string()),
-            Some(worktree_delete::classify_merge_guard_status_with(
+            Some(MergeGuardStatus::from_commit_ahead_check(
                 "feature/fictional".to_string(),
                 status,
-                |_| Ok(true),
+                true,
             )),
             Some(Ok(Vec::new())),
         );
@@ -450,12 +450,12 @@ mod tests {
             move |branch| {
                 branch_flag.store(true, Ordering::SeqCst);
                 async move {
-                    Some(worktree_delete::classify_merge_guard_status_with(
+                    Some(MergeGuardStatus::from_commit_ahead_check(
                         branch,
                         MergeStatus::NotMerged {
                             reason: "pull request is open".to_string(),
                         },
-                        |_| Ok(true),
+                        true,
                     ))
                 }
             },

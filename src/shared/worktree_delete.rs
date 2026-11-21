@@ -38,6 +38,23 @@ pub(crate) struct MergeGuardStatus {
     empty_branch: bool,
 }
 
+impl MergeGuardStatus {
+    pub(crate) fn from_commit_ahead_check(
+        branch: String,
+        status: MergeStatus,
+        has_commits_ahead: bool,
+    ) -> Self {
+        let empty_branch = !status.should_cleanup() && !has_commits_ahead;
+        let should_cleanup = status.should_cleanup() || empty_branch;
+        Self {
+            branch,
+            status,
+            should_cleanup,
+            empty_branch,
+        }
+    }
+}
+
 pub(crate) fn resolve_merge_guard_branch(
     repo: &GitRepo,
     branch_name: Option<&str>,
@@ -64,20 +81,17 @@ pub(crate) fn classify_merge_guard_status_for_repo(
     })
 }
 
-pub(crate) fn classify_merge_guard_status_with(
+fn classify_merge_guard_status_with(
     branch: String,
     status: MergeStatus,
     branch_has_commits_ahead: impl FnOnce(&str) -> Result<bool>,
 ) -> MergeGuardStatus {
-    let empty_branch = !status.should_cleanup()
-        && branch_has_commits_ahead(&branch).is_ok_and(|has_commits| !has_commits);
-    let should_cleanup = status.should_cleanup() || empty_branch;
-    MergeGuardStatus {
-        branch,
-        status,
-        should_cleanup,
-        empty_branch,
+    if status.should_cleanup() {
+        return MergeGuardStatus::from_commit_ahead_check(branch, status, true);
     }
+
+    let has_commits_ahead = branch_has_commits_ahead(&branch).unwrap_or(true);
+    MergeGuardStatus::from_commit_ahead_check(branch, status, has_commits_ahead)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -174,35 +188,64 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
         notify_delegator_of_merge(&main_repo, branch, &worktree_path).await;
     }
 
-    if !force
-        && let Some(merge_guard_status) = merge_guard_status.as_ref()
-        && merge_guard_status.empty_branch
-        && let Some(branch) = branch_name.as_deref()
-    {
-        let stdin = io::stdin();
-        let stdout = io::stdout();
-        ensure_empty_branch_still_safe(
-            branch,
-            &merge_guard_status.status,
-            unmerged_policy,
-            |branch| branch_has_commits_ahead_of_main(&main_repo, branch),
-            || {
-                confirm_with_terminal(
-                    "Delete anyway? [y/N] ",
-                    &mut stdin.lock(),
-                    &mut stdout.lock(),
-                    || stdin.is_terminal(),
-                )
-            },
-        )?;
-    }
+    let empty_branch_status = merge_guard_status
+        .as_ref()
+        .filter(|status| status.empty_branch);
+    let branch = branch_name.as_deref();
+    let should_recheck = !force && empty_branch_status.is_some() && branch.is_some();
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    let (hook_ran, branch_already_approved) = recheck_before_pre_delete_hook(
+        should_recheck,
+        || match (branch, empty_branch_status) {
+            (Some(branch), Some(status)) => ensure_empty_branch_still_safe(
+                branch,
+                &status.status,
+                unmerged_policy,
+                |branch| branch_has_commits_ahead_of_main(&main_repo, branch),
+                || {
+                    confirm_with_terminal(
+                        "Delete anyway? [y/N] ",
+                        &mut stdin.lock(),
+                        &mut stdout.lock(),
+                        || stdin.is_terminal(),
+                    )
+                },
+            ),
+            _ => Ok(false),
+        },
+        || run_pre_delete_hook(&main_repo, branch, &worktree_path_str, skip_hooks),
+    )?;
 
-    let hook_ran = run_pre_delete_hook(
-        &main_repo,
-        branch_name.as_deref(),
-        &worktree_path_str,
-        skip_hooks,
-    );
+    if should_recheck && !branch_already_approved {
+        // A pre-delete hook can add a commit to the branch after the first check.
+        let result = match (branch, empty_branch_status) {
+            (Some(branch), Some(status)) => ensure_empty_branch_still_safe(
+                branch,
+                &status.status,
+                unmerged_policy,
+                |branch| branch_has_commits_ahead_of_main(&main_repo, branch),
+                || {
+                    confirm_with_terminal(
+                        "Delete anyway? [y/N] ",
+                        &mut stdin.lock(),
+                        &mut stdout.lock(),
+                        || stdin.is_terminal(),
+                    )
+                },
+            ),
+            _ => Ok(false),
+        };
+        if let Err(error) = result {
+            if hook_ran {
+                eprintln!(
+                    "note: the pre-worktree-delete hook already ran before this failure; \
+                     any process it stopped will not be restarted automatically"
+                );
+            }
+            return Err(error);
+        }
+    }
 
     let result = cleanup::cleanup_worktree_by_name(
         &main_repo,
@@ -435,12 +478,23 @@ fn ensure_empty_branch_still_safe(
     unmerged_policy: UnmergedWorktreePolicy,
     branch_has_commits_ahead: impl FnOnce(&str) -> Result<bool>,
     confirm: impl FnOnce() -> Option<bool>,
-) -> Result<()> {
+) -> Result<bool> {
     if matches!(branch_has_commits_ahead(branch), Ok(false)) {
-        return Ok(());
+        return Ok(false);
     }
 
-    require_unmerged_approval(branch, status, unmerged_policy, confirm)
+    require_unmerged_approval(branch, status, unmerged_policy, confirm)?;
+    Ok(true)
+}
+
+fn recheck_before_pre_delete_hook(
+    should_recheck: bool,
+    recheck: impl FnOnce() -> Result<bool>,
+    run_hook: impl FnOnce() -> bool,
+) -> Result<(bool, bool)> {
+    let branch_already_approved = if should_recheck { recheck()? } else { false };
+    let hook_ran = run_hook();
+    Ok((hook_ran, branch_already_approved))
 }
 
 fn require_unmerged_approval(
@@ -596,31 +650,42 @@ mod tests {
     }
 
     #[rstest]
-    #[case::still_empty(UnmergedWorktreePolicy::Confirm, Some(false), Ok(()))]
+    #[case::still_empty(UnmergedWorktreePolicy::Confirm, Some(false), None, Ok(false))]
     #[case::new_commit_cancels_non_tty(
         UnmergedWorktreePolicy::Confirm,
         Some(true),
+        None,
         Err("Cancelled: stdin is not a terminal; input was not accepted as confirmation.".to_string()),
     )]
     #[case::unresolved_base_cancels_non_tty(
         UnmergedWorktreePolicy::Confirm,
         None,
+        None,
         Err("Cancelled: stdin is not a terminal; input was not accepted as confirmation.".to_string()),
+    )]
+    #[case::terminal_confirmation_approves_new_commit(
+        UnmergedWorktreePolicy::Confirm,
+        Some(true),
+        Some(true),
+        Ok(true)
     )]
     #[case::watch_rejects_new_commit(
         UnmergedWorktreePolicy::Reject,
         Some(true),
+        None,
         Err("Branch `feature` is not merged (No PR found); close the session while keeping its worktree to continue".to_string()),
     )]
     #[case::watch_rejects_unresolved_base(
         UnmergedWorktreePolicy::Reject,
+        None,
         None,
         Err("Branch `feature` is not merged (No PR found); close the session while keeping its worktree to continue".to_string()),
     )]
     fn deletion_rechecks_empty_branch_before_cleanup(
         #[case] unmerged_policy: UnmergedWorktreePolicy,
         #[case] branch_has_commits_ahead: Option<bool>,
-        #[case] expected: std::result::Result<(), String>,
+        #[case] confirm_result: Option<bool>,
+        #[case] expected: std::result::Result<bool, String>,
     ) {
         let mut queried_branch = None;
         let result = ensure_empty_branch_still_safe(
@@ -632,13 +697,40 @@ mod tests {
                 branch_has_commits_ahead
                     .ok_or_else(|| anyhow::anyhow!("base branch cannot be resolved"))
             },
-            || None,
+            || confirm_result,
         )
         .map_err(|error| error.to_string());
 
         assert_eq!(
             (result, queried_branch),
             (expected, Some("feature".to_string()))
+        );
+    }
+
+    #[test]
+    fn rejected_empty_branch_recheck_skips_pre_delete_hook() {
+        let mut recheck_called = false;
+        let mut hook_called = false;
+        let result = recheck_before_pre_delete_hook(
+            true,
+            || {
+                recheck_called = true;
+                Err(anyhow::anyhow!("new commit requires confirmation"))
+            },
+            || {
+                hook_called = true;
+                true
+            },
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, recheck_called, hook_called),
+            (
+                Err("new commit requires confirmation".to_string()),
+                true,
+                false,
+            ),
         );
     }
 
