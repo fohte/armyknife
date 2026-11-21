@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.830](https://github.com/fohte/armyknife/compare/v0.1.829...v0.1.830) (2026-11-21)
+
+
+### Features
+
+* **agent-watch-web:** add iPhone status page ([#2032](https://github.com/fohte/armyknife/issues/2032)) ([4e7b62f](https://github.com/fohte/armyknife/commit/4e7b62fc5e204214b2e997d06d07f474bcf5412b))
+
 ## [0.1.829](https://github.com/fohte/armyknife/compare/v0.1.828...v0.1.829) (2026-11-21)
 
 
