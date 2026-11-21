@@ -161,11 +161,9 @@ impl GitRepo {
 
     /// Check whether `ancestor` is reachable from `descendant`.
     pub fn is_ancestor(&self, ancestor: &str, descendant: &str) -> bool {
-        run_git_optional(
-            &self.workdir,
-            ["merge-base", "--is-ancestor", ancestor, descendant],
-        )
-        .is_some()
+        is_ancestor_with(&self.workdir, ancestor, descendant, |dir, args| {
+            run_git_optional(dir, args).is_some()
+        })
     }
 
     pub fn origin_url(&self) -> Result<String> {
@@ -189,6 +187,18 @@ impl GitRepo {
 fn resolve_relative(base: &Path, raw: &str) -> PathBuf {
     let p = PathBuf::from(raw);
     if p.is_absolute() { p } else { base.join(p) }
+}
+
+fn is_ancestor_with<R>(
+    workdir: &Path,
+    ancestor: &str,
+    descendant: &str,
+    run: impl FnOnce(&Path, [&str; 4]) -> R,
+) -> R {
+    run(
+        workdir,
+        ["merge-base", "--is-ancestor", ancestor, descendant],
+    )
 }
 
 fn path_to_string(path: &Path) -> String {
@@ -351,16 +361,24 @@ mod tests {
 
     #[test]
     fn is_ancestor_checks_commit_reachability() {
-        let test_repo = TestRepo::new();
-        let repo = test_repo.open();
-        run_git(repo.workdir(), ["branch", "agent-branch"]).unwrap();
+        let result = is_ancestor_with(
+            Path::new("/fictional/repo"),
+            "refs/heads/agent-branch",
+            "refs/remotes/origin/main",
+            |dir, args| (dir.to_path_buf(), args.map(str::to_string)),
+        );
 
         assert_eq!(
+            result,
             (
-                repo.is_ancestor("refs/heads/agent-branch", "HEAD"),
-                repo.is_ancestor("refs/heads/missing-branch", "HEAD"),
+                PathBuf::from("/fictional/repo"),
+                [
+                    "merge-base".to_string(),
+                    "--is-ancestor".to_string(),
+                    "refs/heads/agent-branch".to_string(),
+                    "refs/remotes/origin/main".to_string(),
+                ],
             ),
-            (true, false),
         );
     }
 

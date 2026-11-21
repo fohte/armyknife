@@ -156,11 +156,19 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
         skip_hooks,
     );
 
-    let result = cleanup::cleanup_worktree_by_name(
+    let result = cleanup::cleanup_worktree_by_name_with_before_delete(
         &main_repo,
         &worktree_name,
         &worktree_path,
         force,
+        || {
+            ensure_branch_no_unique_commits_before_delete(
+                merge_status.as_ref(),
+                force,
+                branch_name.as_deref(),
+                |branch| branch_has_no_unique_commits(&main_repo, branch),
+            )
+        },
         || {
             if !skip_hooks {
                 hooks::spawn_post_worktree_delete_hook(
@@ -304,25 +312,99 @@ pub(crate) async fn get_merge_status_for_branch(repo: &GitRepo, branch: &str) ->
 }
 
 fn close_status_for_branch(repo: &GitRepo, branch: &str, status: MergeStatus) -> MergeStatus {
-    if !matches!(
-        &status,
-        MergeStatus::NotMerged { reason } if reason == "No PR found"
-    ) {
+    if !matches!(&status, MergeStatus::NotMerged { .. }) {
         return status;
     }
 
-    let Ok(default_branch) = get_main_branch_for_repo(repo) else {
+    let refreshed = repo.fetch_origin_prune().is_ok();
+    let default_branch = refreshed
+        .then(|| get_main_branch_for_repo(repo).ok())
+        .flatten();
+    close_status_for_branch_with(
+        status,
+        branch,
+        refreshed,
+        default_branch.as_deref(),
+        |ancestor, descendant| repo.is_ancestor(ancestor, descendant),
+    )
+}
+
+fn close_status_for_branch_with(
+    status: MergeStatus,
+    branch: &str,
+    origin_ref_refreshed: bool,
+    default_branch: Option<&str>,
+    is_ancestor: impl FnOnce(&str, &str) -> bool,
+) -> MergeStatus {
+    if !matches!(&status, MergeStatus::NotMerged { .. })
+        || !branch_has_no_unique_commits_with(
+            branch,
+            origin_ref_refreshed,
+            default_branch,
+            is_ancestor,
+        )
+    {
         return status;
+    }
+
+    MergeStatus::NoUniqueCommits {
+        reason: "No commits unique to branch".to_string(),
+    }
+}
+
+fn branch_has_no_unique_commits(repo: &GitRepo, branch: &str) -> bool {
+    let refreshed = repo.fetch_origin_prune().is_ok();
+    let default_branch = refreshed
+        .then(|| get_main_branch_for_repo(repo).ok())
+        .flatten();
+    branch_has_no_unique_commits_with(
+        branch,
+        refreshed,
+        default_branch.as_deref(),
+        |ancestor, descendant| repo.is_ancestor(ancestor, descendant),
+    )
+}
+
+fn ensure_branch_no_unique_commits_before_delete(
+    status: Option<&MergeStatus>,
+    force: bool,
+    branch: Option<&str>,
+    verify_still_safe: impl FnOnce(&str) -> bool,
+) -> Result<()> {
+    if force || !matches!(status, Some(MergeStatus::NoUniqueCommits { .. })) {
+        return Ok(());
+    }
+
+    let Some(branch) = branch else {
+        return Err(UnmergedWorktreeError::new(
+            "unknown",
+            "branch could not be checked again before deletion",
+        )
+        .into());
+    };
+    if verify_still_safe(branch) {
+        return Ok(());
+    }
+
+    Err(UnmergedWorktreeError::new(
+        branch,
+        "branch could not be verified as part of the origin default branch before deletion",
+    )
+    .into())
+}
+
+fn branch_has_no_unique_commits_with(
+    branch: &str,
+    origin_ref_refreshed: bool,
+    default_branch: Option<&str>,
+    is_ancestor: impl FnOnce(&str, &str) -> bool,
+) -> bool {
+    let Some(default_branch) = default_branch.filter(|_| origin_ref_refreshed) else {
+        return false;
     };
     let branch_ref = format!("refs/heads/{branch}");
     let default_branch_ref = format!("refs/remotes/origin/{default_branch}");
-    if repo.is_ancestor(&branch_ref, &default_branch_ref) {
-        MergeStatus::Closed {
-            reason: "No commits unique to branch".to_string(),
-        }
-    } else {
-        status
-    }
+    is_ancestor(&branch_ref, &default_branch_ref)
 }
 
 async fn inspect_merge_guard_status_with<F, G, Fut>(
@@ -452,91 +534,136 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::infra::git::cmd::run_git;
     use crate::shared::testing::TestRepo;
 
-    #[test]
-    fn close_allows_a_branch_without_commits_unique_to_origin_default() {
-        let test_repo = TestRepo::new();
-        let repo = test_repo.open();
-        run_git(
-            repo.workdir(),
-            ["update-ref", "refs/remotes/origin/master", "HEAD"],
-        )
-        .unwrap();
-        run_git(repo.workdir(), ["branch", "agent-branch"]).unwrap();
+    #[rstest]
+    #[case::no_pr_without_unique_commits(
+        MergeStatus::NotMerged { reason: "No PR found".to_string() },
+        true,
+        Some("main"),
+        true,
+        MergeStatus::NoUniqueCommits { reason: "No commits unique to branch".to_string() },
+    )]
+    #[case::open_pr_without_unique_commits(
+        MergeStatus::NotMerged { reason: "pull request is open".to_string() },
+        true,
+        Some("main"),
+        true,
+        MergeStatus::NoUniqueCommits { reason: "No commits unique to branch".to_string() },
+    )]
+    #[case::branch_has_unique_commits(
+        MergeStatus::NotMerged { reason: "No PR found".to_string() },
+        true,
+        Some("main"),
+        false,
+        MergeStatus::NotMerged { reason: "No PR found".to_string() },
+    )]
+    #[case::origin_fetch_failed(
+        MergeStatus::NotMerged { reason: "No PR found".to_string() },
+        false,
+        Some("main"),
+        true,
+        MergeStatus::NotMerged { reason: "No PR found".to_string() },
+    )]
+    #[case::default_branch_missing(
+        MergeStatus::NotMerged { reason: "No PR found".to_string() },
+        true,
+        None,
+        true,
+        MergeStatus::NotMerged { reason: "No PR found".to_string() },
+    )]
+    fn close_status_uses_fresh_origin_ancestry(
+        #[case] status: MergeStatus,
+        #[case] origin_ref_refreshed: bool,
+        #[case] default_branch: Option<&str>,
+        #[case] is_ancestor: bool,
+        #[case] expected: MergeStatus,
+    ) {
+        assert_eq!(
+            close_status_for_branch_with(
+                status,
+                "agent-branch",
+                origin_ref_refreshed,
+                default_branch,
+                |_, _| is_ancestor,
+            ),
+            expected,
+        );
+    }
 
-        let status = close_status_for_branch(
-            &repo,
-            "agent-branch",
+    #[test]
+    fn close_status_checks_the_branch_against_the_refreshed_default_branch() {
+        let mut compared_refs = None;
+        let status = close_status_for_branch_with(
             MergeStatus::NotMerged {
-                reason: "No PR found".to_string(),
+                reason: "pull request is open".to_string(),
+            },
+            "agent-branch",
+            true,
+            Some("main"),
+            |ancestor, descendant| {
+                compared_refs = Some((ancestor.to_string(), descendant.to_string()));
+                true
             },
         );
 
         assert_eq!(
-            (status.is_merged(), status.should_cleanup(), status,),
+            (status, compared_refs),
             (
-                false,
-                true,
-                MergeStatus::Closed {
+                MergeStatus::NoUniqueCommits {
                     reason: "No commits unique to branch".to_string(),
                 },
+                Some((
+                    "refs/heads/agent-branch".to_string(),
+                    "refs/remotes/origin/main".to_string(),
+                )),
             ),
         );
     }
 
-    #[test]
-    fn close_keeps_a_branch_with_unique_commits_unmerged() {
-        let test_repo = TestRepo::new();
-        let repo = test_repo.open();
-        let default_head = run_git(repo.workdir(), ["rev-parse", "HEAD"]).unwrap();
-        run_git(
-            repo.workdir(),
-            [
-                "update-ref",
-                "refs/remotes/origin/master",
-                default_head.as_str(),
-            ],
-        )
-        .unwrap();
-        test_repo.commit_file("branch-file", "sample content");
-        run_git(repo.workdir(), ["branch", "agent-branch"]).unwrap();
+    #[rstest]
+    #[case::branch_remains_safe(
+        Some(MergeStatus::NoUniqueCommits { reason: "No commits unique to branch".to_string() }),
+        false,
+        Some("agent-branch"),
+        true,
+        Ok(()),
+    )]
+    #[case::branch_gains_unique_commit(
+        Some(MergeStatus::NoUniqueCommits { reason: "No commits unique to branch".to_string() }),
+        false,
+        Some("agent-branch"),
+        false,
+        Err("Branch `agent-branch` is not merged (branch could not be verified as part of the origin default branch before deletion); close the session while keeping its worktree to continue".to_string()),
+    )]
+    #[case::other_unmerged_status(
+        Some(MergeStatus::NotMerged { reason: "pull request is open".to_string() }),
+        false,
+        Some("agent-branch"),
+        false,
+        Ok(()),
+    )]
+    #[case::force_bypasses_revalidation(
+        Some(MergeStatus::NoUniqueCommits { reason: "No commits unique to branch".to_string() }),
+        true,
+        Some("agent-branch"),
+        false,
+        Ok(()),
+    )]
+    fn close_revalidates_no_unique_commit_status_before_deletion(
+        #[case] status: Option<MergeStatus>,
+        #[case] force: bool,
+        #[case] branch: Option<&str>,
+        #[case] still_safe: bool,
+        #[case] expected: std::result::Result<(), String>,
+    ) {
+        let result =
+            ensure_branch_no_unique_commits_before_delete(status.as_ref(), force, branch, |_| {
+                still_safe
+            })
+            .map_err(|error| error.to_string());
 
-        let status = close_status_for_branch(
-            &repo,
-            "agent-branch",
-            MergeStatus::NotMerged {
-                reason: "No PR found".to_string(),
-            },
-        );
-
-        assert_eq!(
-            status,
-            MergeStatus::NotMerged {
-                reason: "No PR found".to_string(),
-            },
-        );
-    }
-
-    #[test]
-    fn close_keeps_a_branch_unmerged_when_origin_default_is_missing() {
-        let test_repo = TestRepo::new();
-        let repo = test_repo.open();
-        run_git(repo.workdir(), ["branch", "agent-branch"]).unwrap();
-
-        assert_eq!(
-            close_status_for_branch(
-                &repo,
-                "agent-branch",
-                MergeStatus::NotMerged {
-                    reason: "No PR found".to_string(),
-                },
-            ),
-            MergeStatus::NotMerged {
-                reason: "No PR found".to_string(),
-            },
-        );
+        assert_eq!(result, expected);
     }
 
     #[tokio::test]
