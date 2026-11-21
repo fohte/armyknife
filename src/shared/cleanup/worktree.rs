@@ -118,7 +118,9 @@ pub fn cleanup_worktree_by_name(
         force,
         after_delete,
         WorktreeCleanupOperations {
-            inspect_processes: process::inspect_worktree_processes,
+            inspect_processes: |path: &Path| {
+                process::inspect_worktree_processes(path, process::current_caller_pane_pid())
+            },
             find_panes: |path: &Path| tmux::get_pane_ids_in_path(&path.to_string_lossy()),
             find_groups: process::find_pgids_in_path,
             clean_sessions: |path: &Path, signal_agents: bool| {

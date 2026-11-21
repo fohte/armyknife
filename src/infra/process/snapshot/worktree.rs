@@ -24,10 +24,14 @@ pub(crate) struct WorktreeProcessInspection {
 /// Returns `None` when either process source cannot be inspected, so callers
 /// can refuse destructive work when they cannot verify the worktree is idle.
 pub fn find_non_shell_processes_in_path(path: &Path) -> Option<Vec<ProcessInPath>> {
-    inspect_worktree_processes(path).map(|inspection| inspection.non_shell_processes)
+    inspect_worktree_processes(path, super::current_caller_pane_pid())
+        .map(|inspection| inspection.non_shell_processes)
 }
 
-pub(crate) fn inspect_worktree_processes(path: &Path) -> Option<WorktreeProcessInspection> {
+pub(crate) fn inspect_worktree_processes(
+    path: &Path,
+    caller_pane_pid: Option<u32>,
+) -> Option<WorktreeProcessInspection> {
     let cwds = list_process_cwds()?;
     let snapshot = ProcessSnapshot::capture_with_command_lines_and_groups()?;
     let resolved_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -35,6 +39,7 @@ pub(crate) fn inspect_worktree_processes(path: &Path) -> Option<WorktreeProcessI
         &snapshot,
         &cwds,
         std::process::id(),
+        caller_pane_pid,
         &resolved_path,
     ))
 }
@@ -43,12 +48,19 @@ fn inspect_processes_in_path(
     snapshot: &ProcessSnapshot,
     cwds: &HashMap<u32, PathBuf>,
     self_pid: u32,
+    caller_pane_pid: Option<u32>,
     path: &Path,
 ) -> WorktreeProcessInspection {
     let excluded_pids = snapshot.ancestors(self_pid);
+    let ignored_descendants =
+        snapshot.caller_descendants_outside_path(self_pid, caller_pane_pid, cwds, path);
     let candidates = cwds
         .iter()
-        .filter(|(pid, cwd)| !excluded_pids.contains(pid) && cwd.starts_with(path))
+        .filter(|(pid, cwd)| {
+            !excluded_pids.contains(pid)
+                && !ignored_descendants.contains(pid)
+                && cwd.starts_with(path)
+        })
         .map(|(&pid, _)| {
             (
                 pid,
@@ -177,11 +189,26 @@ mod tests {
         )
     }
 
+    fn caller_snapshot() -> ProcessSnapshot {
+        ProcessSnapshot::from_ps_output(indoc! {"
+            1 0 launchd
+            10 1 tmux
+            20 10 zsh
+            30 20 claude
+            35 30 zsh
+            40 35 a
+            50 30 python
+            51 50 python
+            60 10 zsh
+            80 1 zsh
+            81 80 node
+        "})
+    }
+
     #[rstest]
     #[case::only_shells(&[(20, WORKTREE), (50, WORKTREE)], &[], &[])]
     #[case::non_shell_processes(&[(30, WORKTREE), (40, WORKTREE)], &[(30, "claude"), (40, "node")], &[])]
     #[case::shell_histdb_sqlite3_is_ignored(&[(100, WORKTREE)], &[], &[])]
-    #[case::shell_agent_is_still_detected(&[(30, WORKTREE)], &[(30, "claude")], &[])]
     #[case::other_shell_sqlite3_is_still_detected(&[(20, WORKTREE), (101, WORKTREE)], &[(101, "sqlite3")], &[])]
     #[case::sqlite3_without_noheader_is_still_detected(&[(102, WORKTREE)], &[(102, "sqlite3")], &[])]
     #[case::sqlite3_without_batch_is_still_detected(&[(103, WORKTREE)], &[(103, "sqlite3")], &[])]
@@ -207,7 +234,7 @@ mod tests {
             .map(|&(pid, cwd)| (pid, PathBuf::from(cwd)))
             .collect();
 
-        let actual = inspect_processes_in_path(&snapshot(), &cwds, 20, Path::new(WORKTREE));
+        let actual = inspect_processes_in_path(&snapshot(), &cwds, 20, None, Path::new(WORKTREE));
 
         assert_eq!(
             actual,
@@ -220,6 +247,49 @@ mod tests {
                     })
                     .collect(),
                 daemon_descendant_pgids: expected_pgids.to_vec(),
+            },
+        );
+    }
+
+    #[rstest]
+    #[case::caller_descendant_is_ignored_when_caller_is_outside(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (50, "/repo"), (51, WORKTREE)], &[], Some(20))]
+    #[case::missing_cwd_above_pane_does_not_block_exclusion(&[(20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (51, WORKTREE)], &[], Some(20))]
+    #[case::caller_pane_unavailable_keeps_caller_descendant(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (51, WORKTREE)], &[(51, "python")], None)]
+    #[case::caller_descendant_is_kept_when_caller_is_inside(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, WORKTREE), (51, WORKTREE)], &[(51, "python")], Some(20))]
+    #[case::known_ancestor_above_pane_inside_keeps_caller_descendant(&[(10, WORKTREE), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (51, WORKTREE)], &[(51, "python")], Some(20))]
+    #[case::unrelated_non_shell_process_is_still_detected(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (81, WORKTREE)], &[(81, "node")], Some(20))]
+    #[case::missing_caller_to_pane_cwd_keeps_caller_descendant(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (40, "/repo"), (51, WORKTREE)], &[(51, "python")], Some(20))]
+    #[case::missing_pane_cwd_keeps_caller_descendant(&[(10, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (51, WORKTREE)], &[(51, "python")], Some(20))]
+    #[case::pane_pid_not_in_caller_ancestry_keeps_caller_descendant(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (51, WORKTREE)], &[(51, "python")], Some(60))]
+    fn caller_pane_scope_preserves_worktree_process_guard(
+        #[case] cwd_entries: &[(u32, &str)],
+        #[case] expected_processes: &[(u32, &str)],
+        #[case] caller_pane_pid: Option<u32>,
+    ) {
+        let cwds = cwd_entries
+            .iter()
+            .map(|&(pid, cwd)| (pid, PathBuf::from(cwd)))
+            .collect();
+
+        let actual = inspect_processes_in_path(
+            &caller_snapshot(),
+            &cwds,
+            40,
+            caller_pane_pid,
+            Path::new(WORKTREE),
+        );
+
+        assert_eq!(
+            actual,
+            WorktreeProcessInspection {
+                non_shell_processes: expected_processes
+                    .iter()
+                    .map(|&(pid, comm)| ProcessInPath {
+                        pid,
+                        comm: comm.to_string(),
+                    })
+                    .collect(),
+                daemon_descendant_pgids: vec![],
             },
         );
     }

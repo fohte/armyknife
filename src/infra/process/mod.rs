@@ -26,7 +26,9 @@ pub use snapshot::{
     ProcessInPath, ProcessSnapshot, SHELL_COMMANDS, find_caller_pids_in_path,
     find_non_shell_processes_in_path, get_parent_pid,
 };
-pub(crate) use snapshot::{WorktreeProcessInspection, inspect_worktree_processes};
+pub(crate) use snapshot::{
+    WorktreeProcessInspection, current_caller_pane_pid, inspect_worktree_processes,
+};
 
 /// Upper bound on how long we sleep between exit checks in [`run_with_timeout`].
 const MAX_POLL_INTERVAL: Duration = Duration::from_millis(20);
