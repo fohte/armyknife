@@ -72,6 +72,30 @@ export const FullInboxRow: Story = {
   },
 }
 
+export const CritReviewWaitShowsItsReason: Story = {
+  name: 'A Crit review wait shows what needs review',
+  args: {
+    density: 'full',
+    session: {
+      ...session,
+      isWaitingForCritReview: true,
+      waitingReason: 'Review the retry policy changes',
+    },
+  },
+}
+
+export const CritReviewWaitWithoutReasonKeepsItsPreview: Story = {
+  name: 'A Crit review wait without a reason keeps the existing preview',
+  args: {
+    density: 'full',
+    session: {
+      ...session,
+      isWaitingForCritReview: true,
+      waitingReason: null,
+    },
+  },
+}
+
 export const CompactSessionRow: Story = {
   name: 'A compact row places the repository below the task details',
   args: { density: 'compact' },
