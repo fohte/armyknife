@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.839](https://github.com/fohte/armyknife/compare/v0.1.838...v0.1.839) (2026-11-21)
+
+
+### Features
+
+* **agent:** notify on unreported delegate stops ([#2069](https://github.com/fohte/armyknife/issues/2069)) ([053f7fb](https://github.com/fohte/armyknife/commit/053f7fbe93aff28a3dddc8cad8765dee8d7bd95f))
+
 ## [0.1.838](https://github.com/fohte/armyknife/compare/v0.1.837...v0.1.838) (2026-11-21)
 
 
