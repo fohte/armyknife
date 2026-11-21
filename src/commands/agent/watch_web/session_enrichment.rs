@@ -884,6 +884,11 @@ mod tests {
             "https://github.com/example-owner/example-repository/pull/23".to_string(),
             "https://github.com/example-owner/example-repository/pull/23".to_string(),
         ];
+        let mut linked_cwd_pr = tq_pr_link("linked-cwd-pr", 17);
+        linked_cwd_pr.owner = Some("EXAMPLE-OWNER".to_string());
+        linked_cwd_pr.repo = Some("EXAMPLE-REPOSITORY".to_string());
+        linked_cwd_pr.url =
+            Some("https://github.com/EXAMPLE-OWNER/EXAMPLE-REPOSITORY/pull/17".to_string());
         let mut task_only_pr = tq_pr_link("linked-task-pr", 29);
         task_only_pr.url = None;
         let task_metadata = SessionTaskMetadata {
@@ -894,7 +899,7 @@ mod tests {
             github_links: HashMap::from([(
                 "task-current".to_string(),
                 vec![
-                    tq_pr_link("linked-cwd-pr", 17),
+                    linked_cwd_pr,
                     tq_pr_link("linked-created-pr", 23),
                     task_only_pr,
                 ],
@@ -944,7 +949,11 @@ mod tests {
                         },
                     ],
                 )]),
-                vec![pr_query(23), pr_query(17), pr_query(29)],
+                vec![
+                    pr_query(23),
+                    pr_query_with_owner_repo("EXAMPLE-OWNER", "EXAMPLE-REPOSITORY", 17),
+                    pr_query(29),
+                ],
             ),
         );
     }
@@ -965,9 +974,13 @@ mod tests {
     }
 
     fn pr_query(number: u64) -> PrNumberQuery {
+        pr_query_with_owner_repo("example-owner", "example-repository", number)
+    }
+
+    fn pr_query_with_owner_repo(owner: &str, repo: &str, number: u64) -> PrNumberQuery {
         PrNumberQuery {
-            owner: "example-owner".to_string(),
-            repo: "example-repository".to_string(),
+            owner: owner.to_string(),
+            repo: repo.to_string(),
             number,
         }
     }

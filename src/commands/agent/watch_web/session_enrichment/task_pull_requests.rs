@@ -51,9 +51,9 @@ impl SessionEnrichmentCache {
                 if let Some(context) = &session.pr_context {
                     let key = PullRequestKey::Branch(branch_query(context).key());
                     if let Some(pull_request) = cached.get(&key).cloned().flatten() {
-                        let pull_request_key = (
-                            context.owner.clone(),
-                            context.repo.clone(),
+                        let pull_request_key = normalized_pull_request_key(
+                            &context.owner,
+                            &context.repo,
                             pull_request.pull_request.number,
                         );
                         if seen_pull_requests.insert(pull_request_key) {
@@ -98,7 +98,11 @@ fn append_numbered_pull_requests(
         else {
             continue;
         };
-        if seen_pull_requests.insert(query.key()) {
+        if seen_pull_requests.insert(normalized_pull_request_key(
+            &query.owner,
+            &query.repo,
+            query.number,
+        )) {
             pull_requests.push(SessionPullRequestInfo {
                 owner: query.owner,
                 repo: query.repo,
@@ -107,6 +111,14 @@ fn append_numbered_pull_requests(
             });
         }
     }
+}
+
+fn normalized_pull_request_key(owner: &str, repo: &str, number: u64) -> (String, String, u64) {
+    (
+        owner.to_ascii_lowercase(),
+        repo.to_ascii_lowercase(),
+        number,
+    )
 }
 
 fn pull_request_keys(
