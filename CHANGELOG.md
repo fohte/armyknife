@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.825](https://github.com/fohte/armyknife/compare/v0.1.824...v0.1.825) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** route comment image drops ([#2034](https://github.com/fohte/armyknife/issues/2034)) ([cc29253](https://github.com/fohte/armyknife/commit/cc2925342c0968cba23ac42158e52fd9c7107336))
+
 ## [0.1.824](https://github.com/fohte/armyknife/compare/v0.1.823...v0.1.824) (2026-11-21)
 
 
