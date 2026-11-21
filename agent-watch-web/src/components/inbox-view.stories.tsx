@@ -267,6 +267,86 @@ export const InboxFilterDialogIsOpen: Story = {
   args: { filterQuery: 'project:sample project', filterDialogOpen: true },
 }
 
+export const IPhoneFilterIsOpen: Story = {
+  name: 'The iPhone shows the full-screen filter with the available values',
+  parameters: {
+    overflowCheck: { ignoreSelectors: ['.inbox-filter-fields'] },
+  },
+  args: {
+    isMobile: true,
+    filterQuery: 'kind:question,review',
+    filterDialogOpen: true,
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        data-layout="mobile"
+        style={{
+          width: '390px',
+          height: '844px',
+          display: 'flex',
+          position: 'relative',
+        }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
+export const IPhoneInboxShowsFilteredSessions: Story = {
+  name: 'The iPhone shows matching sessions with removable filter chips',
+  args: {
+    isMobile: true,
+    filterQuery: 'project:sample project kind:question,review',
+    selectedId: null,
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        data-layout="mobile"
+        style={{
+          width: '390px',
+          height: '844px',
+          display: 'flex',
+          position: 'relative',
+        }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
+export const IPhoneInboxSavesTheFilteredView: Story = {
+  name: 'The iPhone shows the Save view sheet for its active filters',
+  args: {
+    isMobile: true,
+    filterQuery: 'project:sample project kind:question,review',
+    saveViewOpen: true,
+    saveViewName: 'Sample service reviews',
+    selectedId: null,
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        data-layout="mobile"
+        style={{
+          width: '390px',
+          height: '844px',
+          display: 'flex',
+          position: 'relative',
+        }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
 export const InboxIsLoading: Story = {
   name: 'The inbox shows a loading state before the first response',
   args: { sessions: [], loaded: false },

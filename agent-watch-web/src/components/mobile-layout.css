@@ -292,6 +292,52 @@ html[data-mobile-layout='true'] {
   border-bottom: 0;
 }
 
+.agent-watch-shell[data-layout='mobile']
+  .session-list-item:has(.inbox-row-swipe-actions),
+.story-mobile-layout .session-list-item:has(.inbox-row-swipe-actions) {
+  position: relative;
+  overflow: hidden;
+  touch-action: pan-y;
+}
+
+.inbox-row-swipe-actions {
+  position: absolute;
+  inset: 0 0 0 auto;
+  display: flex;
+}
+
+.inbox-row-swipe-actions > button {
+  display: flex;
+  width: 88px;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 0;
+  background: var(--aw-bg-active);
+  color: var(--aw-text-primary);
+  font-size: 13px;
+}
+
+.inbox-row-swipe-actions > button:last-child {
+  background: #b91c1c;
+  color: #fff;
+}
+
+.inbox-row-swipe-actions[aria-hidden='true'] > button {
+  pointer-events: none;
+}
+
+.session-list-item:has(.inbox-row-swipe-actions) > .session-row {
+  position: relative;
+  min-height: 88px;
+  background: var(--aw-bg-app);
+  transition: transform 160ms ease;
+  touch-action: pan-y;
+  will-change: transform;
+}
+
 .agent-watch-shell[data-layout='mobile'] .later-collapsed-row,
 .story-mobile-layout .later-collapsed-row,
 .agent-watch-shell[data-layout='mobile'] .mobile-collapse-row,

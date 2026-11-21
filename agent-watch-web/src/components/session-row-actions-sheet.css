@@ -1,0 +1,97 @@
+.session-row-actions-overlay {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  background: rgb(0 0 0 / 55%);
+}
+
+.story-mobile-layout .session-row-actions-overlay {
+  position: absolute;
+}
+
+.session-row-actions-sheet {
+  display: flex;
+  width: 100%;
+  box-sizing: border-box;
+  flex-direction: column;
+  padding: 14px 0 max(20px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--aw-border-control);
+  background: var(--aw-bg-popover);
+  color: var(--aw-text-primary);
+  box-shadow: 0 -12px 36px rgb(0 0 0 / 30%);
+}
+
+.session-row-actions-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px 10px;
+  color: var(--aw-text-secondary);
+  font-size: 13px;
+}
+
+.session-row-actions-heading strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--aw-text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-row-actions-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--aw-color-warning);
+}
+
+.session-row-actions-menu {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--aw-border-row);
+}
+
+.session-row-actions-menu > button {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  color: var(--aw-text-primary);
+  font-size: 15px;
+  text-align: left;
+}
+
+.session-row-actions-menu > button svg {
+  flex: none;
+  color: var(--aw-text-secondary);
+}
+
+.session-row-actions-menu > .session-row-actions-close {
+  border-top: 6px solid var(--aw-bg-app);
+  color: var(--aw-color-error);
+}
+
+.session-row-actions-menu > .session-row-actions-close svg {
+  color: inherit;
+}
+
+.session-row-actions-chevron {
+  margin-left: auto;
+  color: var(--aw-text-muted);
+}
+
+.session-row-actions-cancel {
+  padding: 10px 16px 0;
+}
+
+.session-row-actions-cancel > button {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--aw-border-control);
+  color: var(--aw-text-primary);
+}

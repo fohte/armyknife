@@ -153,6 +153,8 @@ export function AppWorkspace({
       }
       actions.openConversation(id)
     },
+    onLater: actions.onLater,
+    onCloseSession: actions.requestCloseSession,
     laterExpanded: state.laterExpanded,
     onToggleLater: () => {
       actions.setLaterExpanded((expanded) => !expanded)
@@ -310,6 +312,7 @@ export function AppWorkspace({
           laterTimes={state.laterTimes}
           laterTimesError={state.laterTimesError}
           isSubmitting={state.laterMutationPending}
+          isMobile={state.isMobile}
           onClose={() => {
             if (!actions.laterSubmissionInFlight.current) {
               actions.closeLater()

@@ -1,7 +1,9 @@
 import { Button } from '@fohte/ui/button'
 import { useEffect, useRef, useState } from 'react'
 
+import { useFocusTrap } from '#components/use-focus-trap'
 import {
+  filterInboxSessions,
   formatInboxFilterQuery,
   getInboxFilterOptions,
   INBOX_FILTER_FIELDS,
@@ -18,6 +20,7 @@ type InboxFilterDialogProps = {
   onQueryChange: (query: string) => void
   onApply: () => void
   onClose: () => void
+  mobile?: boolean
 }
 
 export function InboxFilterDialog({
@@ -27,20 +30,31 @@ export function InboxFilterDialog({
   onQueryChange,
   onApply,
   onClose,
+  mobile = false,
 }: InboxFilterDialogProps) {
   const [selectedKey, setSelectedKey] =
     useState<InboxFilterKey>(initialSelectedKey)
+  const dialogRef = useRef<HTMLElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  useFocusTrap({
+    containerRef: dialogRef,
+    initialFocusRef: inputRef,
+    isActive: mobile,
+  })
   const selectedField = INBOX_FILTER_FIELDS.find(
     (field) => field.key === selectedKey,
   )
   const draftFilters = parseInboxFilterQuery(query)
+  const matchingSessionCount = filterInboxSessions(
+    sessions,
+    draftFilters,
+  ).length
   const selectedValues =
     draftFilters.find((filter) => filter.key === selectedKey)?.values ?? []
   const options = getInboxFilterOptions(sessions, draftFilters, selectedKey)
   useEffect(() => {
-    inputRef.current?.focus()
-  }, [])
+    if (!mobile) inputRef.current?.focus()
+  }, [mobile])
 
   function toggleValue(value: string) {
     const filters = parseInboxFilterQuery(query)
@@ -63,6 +77,7 @@ export function InboxFilterDialog({
   return (
     <div
       className="inbox-filter-overlay"
+      data-mobile={mobile ? 'true' : undefined}
       onClick={onClose}
       onKeyDown={(event) => {
         if (event.key === 'Escape') {
@@ -74,8 +89,10 @@ export function InboxFilterDialog({
       <section
         aria-label="Filter inbox"
         aria-modal="true"
-        className="inbox-filter-dialog"
+        className={`inbox-filter-dialog${mobile ? ' is-mobile' : ''}`}
         role="dialog"
+        ref={dialogRef}
+        tabIndex={mobile ? -1 : undefined}
         onClick={(event) => {
           event.stopPropagation()
         }}
@@ -100,6 +117,16 @@ export function InboxFilterDialog({
           <span className="inbox-filter-key-help">
             <kbd>↵</kbd> apply · <kbd>esc</kbd> close
           </span>
+          {mobile ? (
+            <Button
+              type="button"
+              variant="plain"
+              className="inbox-filter-cancel"
+              onClick={onClose}
+            >
+              Cancel
+            </Button>
+          ) : null}
         </form>
         <div className="inbox-filter-picker">
           <nav aria-label="Filter fields" className="inbox-filter-fields">
@@ -167,6 +194,19 @@ export function InboxFilterDialog({
             project:web-app kind:review,question task:#123 has:decision
           </code>
         </p>
+        {mobile ? (
+          <div className="inbox-filter-mobile-footer">
+            <p>
+              Type to filter:{' '}
+              <code>
+                project:sample-service kind:review task:#123 has:decision
+              </code>
+            </p>
+            <Button type="button" variant="plain" onClick={onApply}>
+              Show {matchingSessionCount} sessions
+            </Button>
+          </div>
+        ) : null}
       </section>
     </div>
   )

@@ -1,0 +1,89 @@
+.inbox-save-view-overlay {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  background: rgb(0 0 0 / 55%);
+}
+
+.story-mobile-layout .inbox-save-view-overlay {
+  position: absolute;
+}
+
+.inbox-save-view-sheet {
+  display: flex;
+  width: 100%;
+  box-sizing: border-box;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 18px 16px max(20px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--aw-border-control);
+  background: var(--aw-bg-popover);
+  color: var(--aw-text-body);
+  box-shadow: 0 -12px 36px rgb(0 0 0 / 30%);
+  font-size: 14px;
+}
+
+.inbox-save-view-sheet h2,
+.inbox-save-view-sheet p {
+  margin: 0;
+}
+
+.inbox-save-view-sheet h2 {
+  color: var(--aw-text-primary);
+  font-size: 15px;
+}
+
+.inbox-save-view-summary {
+  font-size: 13px;
+}
+
+.inbox-save-view-sheet label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--aw-text-secondary);
+  font-size: 12.5px;
+}
+
+.inbox-save-view-sheet input {
+  height: 44px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  border: 1px solid var(--aw-border-control);
+  background: var(--aw-bg-app);
+  color: var(--aw-text-primary);
+  font: inherit;
+  font-size: 16px;
+}
+
+.inbox-save-view-hint {
+  color: var(--aw-text-muted);
+  font-size: 12.5px;
+}
+
+.inbox-save-view-sheet-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.inbox-save-view-sheet-actions > button {
+  min-height: 44px;
+  border: 1px solid var(--aw-border-control);
+  color: var(--aw-text-primary);
+}
+
+.inbox-save-view-sheet-actions > button[type='submit'] {
+  border-color: var(--aw-text-primary);
+  background: var(--aw-text-primary);
+  color: var(--aw-bg-app);
+  font-weight: 700;
+}
+
+.inbox-save-view-sheet-actions > button:disabled {
+  opacity: 0.5;
+}

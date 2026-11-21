@@ -705,6 +705,184 @@ function renderMobileApp(view: 'Inbox' | 'Board' = 'Inbox') {
   }
 }
 
+it('opens the Later sheet and Close confirmation from mobile inbox rows', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
+  vi.stubGlobal('fetch', fetchMock)
+  renderMobileApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-later', 'Defer the sample request'),
+      session('session-close', 'Review the sample response'),
+    ],
+  })
+  const swipeRow = (index: number) => {
+    const row = container.querySelectorAll<HTMLButtonElement>(
+      '.needs-action-section [data-session-row]',
+    )[index]
+    if (row === undefined) throw new Error('Expected the inbox row')
+    act(() => {
+      row.dispatchEvent(
+        new PointerEvent('pointerdown', {
+          bubbles: true,
+          cancelable: true,
+          pointerId: 1,
+          pointerType: 'touch',
+          clientX: 260,
+          clientY: 20,
+        }),
+      )
+      row.dispatchEvent(
+        new PointerEvent('pointermove', {
+          bubbles: true,
+          cancelable: true,
+          pointerId: 1,
+          pointerType: 'touch',
+          clientX: 120,
+          clientY: 20,
+        }),
+      )
+      row.dispatchEvent(
+        new PointerEvent('pointerup', {
+          bubbles: true,
+          cancelable: true,
+          pointerId: 1,
+          pointerType: 'touch',
+          clientX: 120,
+          clientY: 20,
+        }),
+      )
+    })
+  }
+
+  swipeRow(0)
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Later: Defer the sample request"]',
+      )
+      ?.click()
+  })
+  await act(async () => {
+    await flushAsyncState()
+  })
+  const laterMenu = container.querySelector<HTMLElement>('.later-menu--mobile')
+  const laterSheet = {
+    role: laterMenu?.getAttribute('role'),
+    label: laterMenu?.getAttribute('aria-label'),
+    focusInside: laterMenu?.contains(document.activeElement),
+  }
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.later-menu-cancel')?.click()
+  })
+  swipeRow(1)
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Close: Review the sample response"]',
+      )
+      ?.click()
+  })
+  const closeConfirmation = {
+    role: document
+      .querySelector('.session-close-confirmation')
+      ?.getAttribute('role'),
+    modal: document
+      .querySelector('.session-close-confirmation')
+      ?.getAttribute('aria-modal'),
+    confirmFocused:
+      document.activeElement ===
+      document.querySelector(
+        '.session-close-confirmation .confirm-dialog-confirm',
+      ),
+    closeRequests: fetchMock.mock.calls.filter(([request]) =>
+      requestUrl(request).endsWith('/close'),
+    ).length,
+  }
+  act(() => {
+    document
+      .querySelector<HTMLButtonElement>('.confirm-dialog-actions button')
+      ?.click()
+  })
+
+  const snapshot = () => ({
+    laterSheet,
+    closeConfirmation,
+    confirmationClosed:
+      document.querySelector('.session-close-confirmation') === null,
+  })
+  expect(snapshot()).toEqual({
+    laterSheet: { role: 'dialog', label: 'Later', focusInside: true },
+    closeConfirmation: {
+      role: 'alertdialog',
+      modal: 'true',
+      confirmFocused: true,
+      closeRequests: 0,
+    },
+    confirmationClosed: true,
+  })
+})
+
+it('saves the active filter from the mobile Save view sheet', async () => {
+  renderMobileApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session(
+        'session-sample',
+        'Sample project response',
+        'needs_action',
+        8,
+        'sample project',
+      ),
+      session(
+        'session-other',
+        'Another project response',
+        'needs_action',
+        8,
+        'another project',
+      ),
+    ],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-filter-open')?.click()
+  })
+  const filterInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Inbox filter query"]',
+  )
+  if (filterInput === null) throw new Error('Expected the filter input')
+  await act(async () => {
+    await userEvent.fill(filterInput, 'project:another project')
+    await userEvent.keyboard('{Enter}')
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-save-view')?.click()
+  })
+  const nameInput = container.querySelector<HTMLInputElement>(
+    '.inbox-save-view-sheet [aria-label="Saved view name"]',
+  )
+  if (nameInput === null) throw new Error('Expected the mobile view name input')
+  const nameFocusedOnOpen = document.activeElement === nameInput
+  await act(async () => {
+    await userEvent.fill(nameInput, 'Another project')
+    await userEvent.keyboard('{Enter}')
+  })
+
+  const snapshot = () => ({
+    nameFocusedOnOpen,
+    views: readSavedInboxViews().views.map(({ name, query }) => ({
+      name,
+      query,
+    })),
+  })
+  expect(snapshot()).toEqual({
+    nameFocusedOnOpen: true,
+    views: [{ name: 'Another project', query: 'project:"another project"' }],
+  })
+})
+
 it('prevents file drags anywhere in the app from navigating away', () => {
   renderApp()
   const dispatchFileEvent = (type: 'dragover' | 'drop') => {
@@ -1941,18 +2119,21 @@ it('opens Later for the session shown in a mobile conversation', async () => {
 
   const snapshot = () => ({
     initialConversationState,
-    menuTitle: container.querySelector('.later-menu-title')?.textContent,
+    menuTitle: container.querySelector('.later-menu-mobile-session-title')
+      ?.textContent,
     menuLabel: container
       .querySelector('.later-menu')
       ?.getAttribute('aria-label'),
+    menuRole: container.querySelector('.later-menu')?.getAttribute('role'),
   })
   expect(snapshot()).toEqual({
     initialConversationState: {
       screen: 'conversation',
       url: '?session=session-mobile&screen=conversation',
     },
-    menuTitle: 'Later: Reply to the question',
-    menuLabel: 'Later: Reply to the question',
+    menuTitle: 'Reply to the question',
+    menuLabel: 'Later',
+    menuRole: 'dialog',
   })
 })
 

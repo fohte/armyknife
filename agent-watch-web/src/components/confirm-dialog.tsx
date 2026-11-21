@@ -1,7 +1,9 @@
 import '#components/confirm-dialog.css'
 
-import { type ReactNode, useId } from 'react'
+import { type ReactNode, useId, useRef } from 'react'
 import { createPortal } from 'react-dom'
+
+import { useFocusTrap } from '#components/use-focus-trap'
 
 type ConfirmDialogProps = {
   title: string
@@ -17,6 +19,7 @@ type ConfirmDialogProps = {
   hideConfirm?: boolean
   presentation?: 'modal' | 'inline'
   mobile?: boolean
+  trapFocus?: boolean
   className?: string
   titleClassName?: string
   confirmButtonClassName?: string
@@ -41,6 +44,7 @@ export function ConfirmDialog({
   hideConfirm = false,
   presentation = 'modal',
   mobile = false,
+  trapFocus = false,
   className,
   titleClassName,
   confirmButtonClassName,
@@ -51,12 +55,21 @@ export function ConfirmDialog({
   onConfirm,
 }: ConfirmDialogProps) {
   const titleId = useId()
+  const dialogRef = useRef<HTMLElement>(null)
+  const confirmButtonRef = useRef<HTMLButtonElement>(null)
+  useFocusTrap({
+    containerRef: dialogRef,
+    initialFocusRef: confirmButtonRef,
+    isActive: trapFocus,
+  })
   const content = (
     <section
       aria-labelledby={titleId}
       aria-modal={presentation === 'modal' || mobile || undefined}
       className={`confirm-dialog${presentation === 'inline' ? ' confirm-dialog--inline' : ''}${mobile ? ' confirm-dialog--mobile' : ''}${className === undefined ? '' : ` ${className}`}`}
       role={dialogRole}
+      ref={dialogRef}
+      tabIndex={trapFocus ? -1 : undefined}
       onKeyDown={(event) => {
         if (presentation === 'inline') return
         event.stopPropagation()
@@ -100,6 +113,7 @@ export function ConfirmDialog({
             autoFocus
             className={`confirm-dialog-confirm confirm-dialog-confirm--${confirmVariant}${confirmButtonClassName === undefined ? '' : ` ${confirmButtonClassName}`}`}
             disabled={pending || confirmDisabled}
+            ref={confirmButtonRef}
             onClick={onConfirm}
             type="button"
           >

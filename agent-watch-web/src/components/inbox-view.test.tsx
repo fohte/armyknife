@@ -244,6 +244,7 @@ afterEach(() => {
   root = null
   container.remove()
   vi.unstubAllGlobals()
+  vi.useRealTimers()
 })
 
 it('filters each inbox section and updates the visible counts', () => {
@@ -483,6 +484,104 @@ it('opens the filter dialog from its button', () => {
   expect(dialogSnapshot()).toEqual({ isOpen: true })
 })
 
+it('shows the iPhone filter as a full-screen dialog and applies its query', () => {
+  const onFilterQueryChange = vi.fn()
+  const onFilterDialogOpenChange = vi.fn()
+  renderInbox({
+    isMobile: true,
+    filterQuery: 'project:web-app',
+    filterDialogOpen: true,
+    onFilterQueryChange,
+    onFilterDialogOpenChange,
+  })
+  const dialog = container.querySelector('.inbox-filter-dialog')
+
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.inbox-filter-mobile-footer button')
+      ?.click()
+  })
+
+  const snapshot = () => ({
+    mobile: container
+      .querySelector('.inbox-filter-overlay')
+      ?.getAttribute('data-mobile'),
+    dialogRole: dialog?.getAttribute('role'),
+    appliedQuery: onFilterQueryChange.mock.calls,
+    openChanges: onFilterDialogOpenChange.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    mobile: 'true',
+    dialogRole: 'dialog',
+    appliedQuery: [['project:web-app']],
+    openChanges: [[false]],
+  })
+})
+
+it('keeps keyboard focus inside the iPhone filter dialog', () => {
+  renderInbox({ isMobile: true })
+  const openButton =
+    container.querySelector<HTMLButtonElement>('.inbox-filter-open')
+  const dialog = container.querySelector<HTMLElement>('.inbox-filter-dialog')
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Inbox filter query"]',
+  )
+  const lastButton = container.querySelector<HTMLButtonElement>(
+    '.inbox-filter-mobile-footer button',
+  )
+  if (
+    openButton === null ||
+    dialog !== null ||
+    input !== null ||
+    lastButton !== null
+  ) {
+    throw new Error('Expected the iPhone filter to start closed')
+  }
+
+  act(() => {
+    openButton.focus()
+    openButton.click()
+  })
+  const activeDialog = container.querySelector<HTMLElement>(
+    '.inbox-filter-dialog',
+  )
+  const activeInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Inbox filter query"]',
+  )
+  if (activeDialog === null || activeInput === null) {
+    throw new Error('Expected the iPhone filter controls')
+  }
+  const inputFocusedOnOpen = document.activeElement === activeInput
+  act(() => {
+    openButton.focus()
+  })
+  const focusReturnedInsideDialog = activeDialog.contains(
+    document.activeElement,
+  )
+  act(() => {
+    activeDialog.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+  })
+
+  const snapshot = () => ({
+    inputFocusedOnOpen,
+    focusReturnedInsideDialog,
+    dialogClosed: container.querySelector('.inbox-filter-dialog') === null,
+    focusRestored: document.activeElement === openButton,
+  })
+  expect(snapshot()).toEqual({
+    inputFocusedOnOpen: true,
+    focusReturnedInsideDialog: true,
+    dialogClosed: true,
+    focusRestored: true,
+  })
+})
+
 it('opens the filter dialog with slash', () => {
   renderInbox()
 
@@ -591,6 +690,240 @@ it('removes only the filter chip that was cleared', () => {
   expect(chipSnapshot()).toEqual({
     chips: 'Kind review×',
     visibleTitles: ['Review the changes'],
+  })
+})
+
+it('clears all active inbox filters from the mobile filter bar', () => {
+  const onFilterQueryChange = vi.fn()
+  renderInbox({
+    isMobile: true,
+    filterQuery: 'project:web-app kind:review',
+    onFilterQueryChange,
+  })
+
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-filter-clear')?.click()
+  })
+
+  expect(onFilterQueryChange.mock.calls).toEqual([['']])
+})
+
+it('shows swipe actions and runs Later or Close without opening the session', () => {
+  const onSelect = vi.fn()
+  const onLater = vi.fn()
+  const onCloseSession = vi.fn()
+  renderInbox({ isMobile: true, onSelect, onLater, onCloseSession })
+  const row = container.querySelector<HTMLButtonElement>(
+    '.needs-action-section [data-session-row]',
+  )
+  if (row === null) throw new Error('Expected the sample inbox row')
+  const pointer = (type: string, x: number) =>
+    row.dispatchEvent(
+      new PointerEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: x,
+        clientY: 20,
+      }),
+    )
+
+  act(() => {
+    pointer('pointerdown', 260)
+    pointer('pointermove', 120)
+    pointer('pointerup', 120)
+  })
+  const swipeSnapshot = () => ({
+    isSwiped: row
+      .closest('.session-list-item')
+      ?.classList.contains('is-swiped'),
+    actions: Array.from(
+      row
+        .closest('.session-list-item')
+        ?.querySelectorAll('button[aria-label]') ?? [],
+      (button) => button.getAttribute('aria-label'),
+    ),
+    selectCalls: onSelect.mock.calls,
+  })
+  const initialSwipeState = swipeSnapshot()
+
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Later: Check the retry policy"]',
+      )
+      ?.click()
+  })
+  act(() => {
+    pointer('pointerdown', 260)
+    pointer('pointermove', 120)
+    pointer('pointerup', 120)
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Close: Check the retry policy"]',
+      )
+      ?.click()
+  })
+
+  const snapshot = () => ({
+    initialSwipeState,
+    laterCalls: onLater.mock.calls,
+    closeCalls: onCloseSession.mock.calls,
+    selectCalls: onSelect.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    initialSwipeState: {
+      isSwiped: true,
+      actions: [
+        'Later: Check the retry policy',
+        'Close: Check the retry policy',
+      ],
+      selectCalls: [],
+    },
+    laterCalls: [['sample-needs-action']],
+    closeCalls: [['sample-needs-action']],
+    selectCalls: [],
+  })
+})
+
+it('reveals only Later for a done session', () => {
+  renderInbox({
+    isMobile: true,
+    onLater: () => undefined,
+    onCloseSession: () => undefined,
+  })
+  const row = container.querySelector<HTMLButtonElement>(
+    '.done-section [data-session-row]',
+  )
+  if (row === null) throw new Error('Expected the sample done row')
+
+  act(() => {
+    for (const [type, x] of [
+      ['pointerdown', 260],
+      ['pointermove', 120],
+      ['pointerup', 120],
+    ] as const) {
+      row.dispatchEvent(
+        new PointerEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          pointerId: 1,
+          pointerType: 'touch',
+          clientX: x,
+          clientY: 20,
+        }),
+      )
+    }
+  })
+
+  const item = row.closest('.session-list-item')
+  const snapshot = () => ({
+    isSwiped: item?.classList.contains('is-swiped'),
+    transform: row.style.transform,
+    actions: Array.from(
+      item?.querySelectorAll('button[aria-label]') ?? [],
+      (button) => button.getAttribute('aria-label'),
+    ),
+  })
+  expect(snapshot()).toEqual({
+    isSwiped: true,
+    transform: 'translateX(-88px)',
+    actions: ['Later: Document request limits'],
+  })
+})
+
+it('opens the mobile row actions sheet after a long press', () => {
+  const onLater = vi.fn()
+  const onCloseSession = vi.fn()
+  renderInbox({ isMobile: true, onLater, onCloseSession })
+  const row = container.querySelector<HTMLButtonElement>(
+    '.needs-action-section [data-session-row]',
+  )
+  if (row === null) throw new Error('Expected the sample inbox row')
+  vi.useFakeTimers()
+
+  act(() => {
+    row.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 100,
+        clientY: 20,
+      }),
+    )
+  })
+  act(() => {
+    vi.advanceTimersByTime(500)
+  })
+
+  const actionSheet = container.querySelector('[aria-label="Session actions"]')
+  const actionSheetSnapshot = {
+    open: actionSheet?.getAttribute('role'),
+    focusInside: actionSheet?.contains(document.activeElement),
+    actions: Array.from(
+      actionSheet?.querySelectorAll('[role="menuitem"]') ?? [],
+      (item) => item.textContent.trim(),
+    ),
+  }
+  act(() => {
+    actionSheet
+      ?.querySelector<HTMLButtonElement>(
+        '[role="menuitem"].session-row-actions-close',
+      )
+      ?.click()
+  })
+  const snapshot = () => ({
+    actionSheetSnapshot,
+    closeCalls: onCloseSession.mock.calls,
+    laterCalls: onLater.mock.calls,
+    sheetOpen:
+      container.querySelector('[aria-label="Session actions"]') !== null,
+  })
+  expect(snapshot()).toEqual({
+    actionSheetSnapshot: {
+      open: 'dialog',
+      focusInside: true,
+      actions: ['Later›', 'Close session…'],
+    },
+    closeCalls: [['sample-needs-action']],
+    laterCalls: [],
+    sheetOpen: false,
+  })
+  vi.useRealTimers()
+})
+
+it('shows the mobile Save view sheet and saves its entered name', () => {
+  const onSaveView = vi.fn()
+  renderInbox({
+    isMobile: true,
+    filterQuery: 'project:web-app kind:review',
+    saveViewOpen: true,
+    saveViewName: 'Service reviews',
+    onSaveView,
+  })
+  const saveViewDialog = container.querySelector('[aria-label="Save view"]')
+
+  act(() => {
+    saveViewDialog
+      ?.querySelector<HTMLButtonElement>('button[type="submit"]')
+      ?.click()
+  })
+
+  const snapshot = () => ({
+    role: saveViewDialog?.getAttribute('role'),
+    summary: saveViewDialog?.querySelector('.inbox-save-view-summary')
+      ?.textContent,
+    saveCalls: onSaveView.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    role: 'dialog',
+    summary: 'Project web-app · Kind review',
+    saveCalls: [['Service reviews']],
   })
 })
 

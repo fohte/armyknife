@@ -34,6 +34,22 @@ export const MenuShowsBackNow: Story = {
   name: 'The menu offers a way back now for a Later session',
 }
 
+export const IPhoneLaterSheet: Story = {
+  name: 'The iPhone shows the existing Later choices in a bottom sheet',
+  args: { isMobile: true },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        data-layout="mobile"
+        style={{ width: '390px', height: '844px', position: 'relative' }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
 export const MenuLoadsReturnTimes: Story = {
   args: {
     isLater: false,
