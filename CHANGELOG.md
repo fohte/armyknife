@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.836](https://github.com/fohte/armyknife/compare/v0.1.835...v0.1.836) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show Activity when empty ([#2061](https://github.com/fohte/armyknife/issues/2061)) ([2a97041](https://github.com/fohte/armyknife/commit/2a97041398cc99cff5f1131f4bcc429f0b36692a))
+
 ## [0.1.835](https://github.com/fohte/armyknife/compare/v0.1.834...v0.1.835) (2026-11-21)
 
 
