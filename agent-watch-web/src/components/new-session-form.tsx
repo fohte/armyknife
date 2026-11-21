@@ -50,7 +50,7 @@ export function NewSessionForm({
     skills: state.skillSuggestions,
     onDraftChange: state.setInitialMessage,
   })
-  useBeforeUnloadWarning(state.initialMessage !== '')
+  useBeforeUnloadWarning(state.initialMessage !== '' && !launchPending)
   useDismissableLayer(directoryPickerOpen, setDirectoryPickerOpen, [
     directoryTriggerRef,
     directoryPopoverRef,

@@ -21,7 +21,6 @@ import type {
 } from '#components/permission-card'
 import { SessionLinkElapsedSecondsContext } from '#components/session-link-elapsed-seconds'
 import { SessionUsageRow } from '#components/session-usage-row'
-import { useBeforeUnloadWarning } from '#components/use-beforeunload-warning'
 import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
 import { useConversationMessageElements } from '#components/use-conversation-message-elements'
@@ -200,11 +199,6 @@ export function ConversationPaneView({
     clearDraftIfUnchanged,
     onAction,
   })
-  useBeforeUnloadWarning(
-    attachments.length > 0 ||
-      isProcessingAttachments ||
-      (draft !== '' && !storageAvailable),
-  )
   const {
     loadOlder,
     onScroll,
