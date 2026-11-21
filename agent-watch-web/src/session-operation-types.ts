@@ -99,7 +99,20 @@ export type SessionOperation =
       body: string
     }
 
-export type SessionOperationError = Error & { code?: string | null }
+export type CloseWorktreeChecks = {
+  path: string
+  files: string[]
+  branch: string | null
+  merged: boolean | null
+  reason: string | null
+  processes: { pid: number; name: string }[]
+  processInspectionUnavailable: boolean
+}
+
+export type SessionOperationError = Error & {
+  code?: string | null
+  checks?: CloseWorktreeChecks
+}
 function operationKey(operation: SessionOperation) {
   if (operation.type === 'permission') {
     return `${operation.sessionId}:permission:${operation.action}:${operation.requestId}`

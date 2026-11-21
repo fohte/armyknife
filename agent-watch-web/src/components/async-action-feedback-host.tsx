@@ -13,6 +13,8 @@ type AsyncActionFeedbackHostProps = {
   clearFinished: () => void
   openActivity: (id?: number) => void
   closeActivity: () => void
+  closeWithWorktree: (id: number) => void
+  openInTerminal: (id: number) => void
 }
 
 function timeLabel(timestamp: number) {
@@ -30,6 +32,8 @@ export function AsyncActionFeedbackHost({
   clearFinished,
   openActivity,
   closeActivity,
+  closeWithWorktree,
+  openInTerminal,
 }: AsyncActionFeedbackHostProps) {
   const ordered = [...actions].sort(
     (left, right) => right.createdAt - left.createdAt,
@@ -56,6 +60,9 @@ export function AsyncActionFeedbackHost({
               }}
               onDismiss={() => {
                 dismissToast(id)
+              }}
+              onCloseKeepWorktree={() => {
+                closeWithWorktree(id)
               }}
             />
           )
@@ -101,6 +108,13 @@ export function AsyncActionFeedbackHost({
                     }}
                     onDetails={() => {
                       openActivity(action.id)
+                    }}
+                    onCloseKeepWorktree={() => {
+                      closeWithWorktree(action.id)
+                    }}
+                    onOpenInTerminal={() => {
+                      closeActivity()
+                      openInTerminal(action.id)
                     }}
                   />
                   <time>{timeLabel(action.createdAt)}</time>

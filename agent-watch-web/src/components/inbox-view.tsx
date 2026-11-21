@@ -35,8 +35,6 @@ type InboxViewProps = {
   doneExpanded: boolean
   onToggleDone: () => void
   onCloseDone?: (sessions: readonly Session[]) => void
-  closeRetrySessionId?: string | null
-  onCloseKeepWorktree?: (sessionId: string) => void
   filterQuery?: string
   onFilterQueryChange?: (query: string) => void
   filterDialogOpen?: boolean
@@ -78,8 +76,6 @@ export function InboxView({
   doneExpanded,
   onToggleDone,
   onCloseDone = () => undefined,
-  closeRetrySessionId = null,
-  onCloseKeepWorktree = () => undefined,
   filterQuery: controlledFilterQuery,
   onFilterQueryChange,
   filterDialogOpen: controlledFilterDialogOpen,
@@ -293,17 +289,6 @@ export function InboxView({
         {error !== null ? (
           <div className="load-message is-error" role="status">
             <p>{error}</p>
-            {closeRetrySessionId !== null ? (
-              <Button
-                type="button"
-                variant="plain"
-                onClick={() => {
-                  onCloseKeepWorktree(closeRetrySessionId)
-                }}
-              >
-                Close and keep worktree
-              </Button>
-            ) : null}
           </div>
         ) : null}
         {!loaded && error === null ? (

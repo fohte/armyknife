@@ -7,7 +7,6 @@ import { clearSessionAttachments } from '#components/use-composer-message'
 import {
   type SessionOperation,
   type SessionOperationError,
-  shouldOfferKeepWorktreeRetry,
 } from '#session-operations'
 import type { Session } from '#types'
 
@@ -17,7 +16,7 @@ type UseSessionCloseOptions = {
     operation: SessionOperation,
   ) => Promise<Result<unknown, SessionOperationError>>
   closeDoneSession: (sessionId: string, keepWorktree?: boolean) => void
-  setCloseRetrySessionId: (sessionId: string | null) => void
+  openInTerminal: (sessionId: string) => void
   setError: (error: string | null) => void
 }
 
@@ -25,7 +24,7 @@ export function useSessionClose({
   sessions,
   runSessionOperation,
   closeDoneSession,
-  setCloseRetrySessionId,
+  openInTerminal,
   setError,
 }: UseSessionCloseOptions) {
   const [confirmationSessionId, setConfirmationSessionId] = useState<
@@ -59,31 +58,33 @@ export function useSessionClose({
                 sessionConversationCache?.clearCachedConversation(sessionId)
                 clearSessionAttachments(sessionId)
                 setError(null)
-                setCloseRetrySessionId(null)
                 return { status: 'closed' as const }
               },
               (operationError) => {
-                setError(operationError.message)
-                setCloseRetrySessionId(
-                  shouldOfferKeepWorktreeRetry(operationError)
-                    ? sessionId
-                    : null,
-                )
                 return {
                   status: 'closeFailed' as const,
                   error: operationError.message,
+                  ...(operationError.checks === undefined
+                    ? {}
+                    : { checks: operationError.checks }),
                 }
               },
             ),
           ),
+        onCloseKeepWorktree: () => {
+          closeNonDoneSession(sessionId, true)
+        },
+        onOpenInTerminal: () => {
+          openInTerminal(sessionId)
+        },
       })
     },
     [
       startAsyncAction,
       runSessionOperation,
+      openInTerminal,
       sessionConversationCache,
       sessions,
-      setCloseRetrySessionId,
       setError,
     ],
   )
@@ -113,24 +114,10 @@ export function useSessionClose({
     [closeNonDoneSession],
   )
 
-  const closeSessionKeepWorktree = useCallback(
-    (sessionId: string) => {
-      const session = sessions.find((candidate) => candidate.id === sessionId)
-      if (session === undefined) return
-      if (session.category === 'done') {
-        closeDoneSession(sessionId, true)
-      } else {
-        closeNonDoneSession(sessionId, true)
-      }
-    },
-    [closeDoneSession, closeNonDoneSession, sessions],
-  )
-
   return {
     confirmationSession,
     requestCloseSession,
     cancelCloseConfirmation,
     confirmCloseSession,
-    closeSessionKeepWorktree,
   }
 }

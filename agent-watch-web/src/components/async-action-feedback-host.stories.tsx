@@ -25,6 +25,8 @@ const meta = {
     clearFinished: () => undefined,
     openActivity: () => undefined,
     closeActivity: () => undefined,
+    closeWithWorktree: () => undefined,
+    openInTerminal: () => undefined,
   },
 } satisfies Meta<typeof AsyncActionFeedbackHost>
 

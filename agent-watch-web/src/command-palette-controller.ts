@@ -16,7 +16,6 @@ import { createSessionNavigationActions } from '#session-navigation-actions'
 import {
   type SessionOperation,
   type SessionOperationError,
-  shouldOfferKeepWorktreeRetry,
 } from '#session-operations'
 import type { Session } from '#types'
 
@@ -36,7 +35,6 @@ type CommandPaletteControllerOptions = {
   requestComposerFocus: (sessionId: string) => void
   navigate: Navigate
   setError: (error: string | null) => void
-  setCloseRetrySessionId: (id: string | null) => void
   setFocusedProjectName: (project: string | null) => void
   setLaterExpanded: (expanded: boolean) => void
   selectedId: string | null
@@ -55,7 +53,6 @@ export function useCommandPaletteController({
   requestComposerFocus,
   navigate,
   setError,
-  setCloseRetrySessionId,
   setFocusedProjectName,
   setLaterExpanded,
   selectedId,
@@ -77,6 +74,16 @@ export function useCommandPaletteController({
   const closeQueue = useRef<CloseBatch[]>([])
   const pendingCloseSessionIds = useRef(new Set<string>())
   const closeBatchInFlight = useRef(false)
+  const focusSession = useCallback(
+    async (id: string) => {
+      setPendingFocusSessionId(id)
+      const result = await runOperation({ type: 'focus', sessionId: id })
+      setPendingFocusSessionId(null)
+      setError(result.isOk() ? null : 'Could not open the session in terminal.')
+      setIsOpen(false)
+    },
+    [runOperation, setError],
+  )
   const closeDoneSessions = useCallback(
     async (sessionsToClose: readonly Session[], keepWorktree = false) => {
       const seenSessionIds = new Set<string>()
@@ -110,13 +117,11 @@ export function useCommandPaletteController({
 
       if (!closeBatchInFlight.current) {
         closeBatchInFlight.current = true
-        let lastFailure: string | null = null
         while (closeQueue.current.length > 0) {
           const batch = closeQueue.current.shift()
           if (batch === undefined) continue
 
-          let failure: string | null = null
-          let keepWorktreeSessionId: string | null = null
+          let failed = false
           for (const session of batch.sessions) {
             const operation = {
               type: 'close',
@@ -140,54 +145,49 @@ export function useCommandPaletteController({
                     if (!isInitialAttempt) {
                       clearSessionAttachments(session.id)
                       setError(null)
-                      setCloseRetrySessionId(null)
                     }
                     return { status: 'closed' as const }
                   },
                   (error) => {
                     const message =
                       error.message || `Could not close ${session.title}.`
-                    if (!isInitialAttempt) {
-                      setError(message)
-                      setCloseRetrySessionId(
-                        shouldOfferKeepWorktreeRetry(error) ? session.id : null,
-                      )
+                    return {
+                      status: 'closeFailed' as const,
+                      error: message,
+                      ...(error.checks === undefined
+                        ? {}
+                        : { checks: error.checks }),
                     }
-                    return { status: 'closeFailed' as const, error: message }
                   },
                 )
+              },
+              onCloseKeepWorktree: () => {
+                void closeDoneSessions([session], true)
+              },
+              onOpenInTerminal: () => {
+                void focusSession(session.id)
               },
             })
             const result = await resultPromise
             if (result.isErr()) {
-              failure =
-                result.error.message || `Could not close ${session.title}.`
-              if (shouldOfferKeepWorktreeRetry(result.error)) {
-                keepWorktreeSessionId = session.id
-              }
+              failed = true
               break
             }
           }
           for (const session of batch.sessions) {
             pendingCloseSessionIds.current.delete(session.id)
           }
-          if (failure !== null) {
-            lastFailure = failure
-            setError(failure)
-            setCloseRetrySessionId(keepWorktreeSessionId)
-          } else {
+          if (!failed) {
             batch.sessions.forEach(({ id }) => {
               clearSessionAttachments(id)
             })
-            if (closeQueue.current.length === 0 && lastFailure === null) {
+            if (closeQueue.current.length === 0) {
               setError(null)
-              setCloseRetrySessionId(null)
             }
           }
           batch.resolve()
         }
         closeBatchInFlight.current = false
-        if (lastFailure !== null) setError(lastFailure)
       }
 
       await batchComplete
@@ -196,8 +196,8 @@ export function useCommandPaletteController({
       sessionConversationCache?.clearCachedConversation,
       runOperation,
       startAsyncAction,
-      setCloseRetrySessionId,
       setError,
+      focusSession,
     ],
   )
   const recordRecentSession = useCallback((id: string) => {
@@ -239,16 +239,6 @@ export function useCommandPaletteController({
     [openSessionInInboxAction, recordRecentSession],
   )
   const openTodaySession = withRecentSession(openTodaySessionAction)
-  const focusSession = useCallback(
-    async (id: string) => {
-      setPendingFocusSessionId(id)
-      const result = await runOperation({ type: 'focus', sessionId: id })
-      setPendingFocusSessionId(null)
-      setError(result.isOk() ? null : 'Could not open the session in terminal.')
-      setIsOpen(false)
-    },
-    [runOperation, setError],
-  )
   useEffect(() => {
     if (
       selectedId !== null &&
@@ -282,14 +272,7 @@ export function useCommandPaletteController({
           return
       }
     },
-    [
-      closeDoneSessions,
-      navigate,
-      sessions,
-      setCloseRetrySessionId,
-      setError,
-      setFocusedProjectName,
-    ],
+    [closeDoneSessions, navigate, sessions, setError, setFocusedProjectName],
   )
 
   useEffect(() => {

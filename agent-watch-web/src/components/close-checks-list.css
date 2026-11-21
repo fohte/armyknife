@@ -1,0 +1,87 @@
+.close-checks-list {
+  display: flex;
+  flex-direction: column;
+  margin-top: 6px;
+  border: 1px solid var(--aw-border);
+  background: var(--aw-bg-surface);
+  color: var(--aw-text-primary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.close-checks-list__row {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  column-gap: 8px;
+  align-items: start;
+  padding: 8px 10px;
+  border-top: 1px solid var(--aw-border);
+}
+.close-checks-list__row:first-child {
+  border-top: 0;
+}
+.close-checks-list__icon {
+  margin-top: 2px;
+}
+.close-checks-list__row.is-remaining .close-checks-list__icon,
+.close-checks-list__row.is-remaining .close-checks-list__state {
+  color: var(--aw-color-error);
+}
+.close-checks-list__row.is-clear .close-checks-list__icon,
+.close-checks-list__row.is-clear .close-checks-list__state {
+  color: var(--aw-text-secondary);
+}
+.close-checks-list__content {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.close-checks-list__label {
+  color: var(--aw-text-primary);
+  font-weight: 700;
+}
+.close-checks-list__row.is-clear .close-checks-list__label {
+  color: var(--aw-text-muted);
+  font-weight: 400;
+}
+.close-checks-list__detail,
+.close-checks-list__path {
+  color: var(--aw-text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
+.close-checks-list__state {
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.close-checks-list__path {
+  padding: 8px 10px;
+  border-top: 1px solid var(--aw-border);
+}
+
+@media (max-width: 700px) {
+  .close-checks-list {
+    font-size: 13.5px;
+  }
+  .close-checks-list__row {
+    grid-template-columns: 16px minmax(0, 1fr) auto;
+    column-gap: 10px;
+    padding: 10px 12px;
+  }
+  .close-checks-list__icon {
+    width: 14px;
+    height: 14px;
+    margin-top: 3px;
+  }
+  .close-checks-list__detail,
+  .close-checks-list__path {
+    font-size: 11.5px;
+  }
+  .close-checks-list__state {
+    font-size: 12.5px;
+  }
+  .close-checks-list__path {
+    padding: 10px 12px;
+  }
+}
