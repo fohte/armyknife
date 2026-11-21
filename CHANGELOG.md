@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.834](https://github.com/fohte/armyknife/compare/v0.1.833...v0.1.834) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent/crit:** open the rendered preview page ([#2051](https://github.com/fohte/armyknife/issues/2051)) ([bffb179](https://github.com/fohte/armyknife/commit/bffb1793e4b9555bbe4fdf766b0d938f09df7d8b))
+
 ## [0.1.833](https://github.com/fohte/armyknife/compare/v0.1.832...v0.1.833) (2026-11-21)
 
 
