@@ -202,6 +202,7 @@ export function AppWorkspace({
       }}
       inboxCollapsed={state.inboxCollapsed}
       onToggleInbox={actions.toggleInbox}
+      onCloseNavigation={actions.closeMobileNav}
     />
   )
   const main = (

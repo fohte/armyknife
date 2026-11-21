@@ -2,7 +2,10 @@ import '#components/async-action-item.css'
 
 import { AlertCircle, Check, Clock3, LoaderCircle, X } from 'lucide-react'
 
-import type { AsyncAction } from '#async-action-feedback'
+import {
+  type AsyncAction,
+  isAsyncActionFailureStatus,
+} from '#async-action-feedback'
 import { CloseChecksList } from '#components/close-checks-list'
 import type { CloseWorktreeChecks } from '#session-operation-types'
 
@@ -95,7 +98,7 @@ function copy(action: AsyncAction) {
         ? 'success'
         : action.status === 'queued'
           ? 'queued'
-          : action.status === 'mergeFailed' || action.status === 'closeFailed'
+          : isAsyncActionFailureStatus(action.status)
             ? 'failure'
             : 'neutral'
   return { title, line, icon }

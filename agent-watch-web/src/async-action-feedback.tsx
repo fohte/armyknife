@@ -22,6 +22,10 @@ export type AsyncActionStatus =
   | 'closed'
   | 'closeFailed'
 
+export function isAsyncActionFailureStatus(status: AsyncActionStatus) {
+  return status === 'mergeFailed' || status === 'closeFailed'
+}
+
 export type AsyncAction = {
   id: number
   sessionId: string
@@ -71,11 +75,13 @@ type AsyncActionFeedbackValue = {
   toastIds: readonly number[]
   activityOpen: boolean
   pendingMergeRetryActionIds: readonly number[]
+  activeMergeRetryConfirmationActionId: number | null
   start: (options: StartAsyncActionOptions) => number
   retry: (id: number) => void
   retryWith: (id: number, update: AsyncActionRetryUpdate) => void
   requestMergeRetryConfirmation: (id: number) => void
   consumeMergeRetryConfirmation: (id: number) => void
+  finishMergeRetryConfirmation: (id: number) => void
   dismissToast: (id: number) => void
   clearFinished: () => void
   openActivity: (actionId?: number) => void
@@ -100,6 +106,10 @@ export function AsyncActionFeedbackProvider({
   const [pendingMergeRetryActionIds, setPendingMergeRetryActionIds] = useState<
     number[]
   >([])
+  const [
+    activeMergeRetryConfirmationActionId,
+    setActiveMergeRetryConfirmationActionId,
+  ] = useState<number | null>(null)
   const [selectedActionId, setSelectedActionId] = useState<number | null>(null)
   const nextId = useRef(0)
   const runs = useRef(new Map<number, () => Promise<AsyncActionOutcome>>())
@@ -254,6 +264,13 @@ export function AsyncActionFeedbackProvider({
     setPendingMergeRetryActionIds((current) =>
       current.filter((actionId) => actionId !== id),
     )
+    setActiveMergeRetryConfirmationActionId(id)
+  }, [])
+
+  const finishMergeRetryConfirmation = useCallback((id: number) => {
+    setActiveMergeRetryConfirmationActionId((current) =>
+      current === id ? null : current,
+    )
   }, [])
 
   const clearFinished = useCallback(() => {
@@ -316,11 +333,13 @@ export function AsyncActionFeedbackProvider({
         toastIds,
         activityOpen,
         pendingMergeRetryActionIds,
+        activeMergeRetryConfirmationActionId,
         start,
         retry,
         retryWith,
         requestMergeRetryConfirmation,
         consumeMergeRetryConfirmation,
+        finishMergeRetryConfirmation,
         dismissToast,
         clearFinished,
         openActivity,
