@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.812](https://github.com/fohte/armyknife/compare/v0.1.811...v0.1.812) (2026-11-21)
+
+
+### Bug Fixes
+
+* **process:** ignore caller-pane descendants ([#2012](https://github.com/fohte/armyknife/issues/2012)) ([f802c39](https://github.com/fohte/armyknife/commit/f802c395a1addef836741aa34704a7475f40c263))
+
 ## [0.1.811](https://github.com/fohte/armyknife/compare/v0.1.810...v0.1.811) (2026-11-21)
 
 
