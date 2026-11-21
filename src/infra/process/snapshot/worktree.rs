@@ -254,6 +254,7 @@ mod tests {
     #[rstest]
     #[case::caller_descendant_is_ignored_when_caller_is_outside(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (50, "/repo"), (51, WORKTREE)], &[], Some(20))]
     #[case::missing_cwd_above_pane_does_not_block_exclusion(&[(20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (51, WORKTREE)], &[], Some(20))]
+    #[case::caller_pane_unavailable_keeps_caller_descendant(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (51, WORKTREE)], &[(51, "python")], None)]
     #[case::caller_descendant_is_kept_when_caller_is_inside(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, WORKTREE), (51, WORKTREE)], &[(51, "python")], Some(20))]
     #[case::known_ancestor_above_pane_inside_keeps_caller_descendant(&[(10, WORKTREE), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (51, WORKTREE)], &[(51, "python")], Some(20))]
     #[case::unrelated_non_shell_process_is_still_detected(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (81, WORKTREE)], &[(81, "node")], Some(20))]

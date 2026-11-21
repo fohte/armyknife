@@ -94,6 +94,7 @@ mod tests {
     #[case::pane_pid_not_in_caller_ancestry_keeps_other_pane(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (60, WORKTREE)], &[20, 60], Some(60), &[60])]
     #[case::other_window_inside(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (80, WORKTREE), (81, WORKTREE)], &[20, 60], Some(20), &[])]
     #[case::sibling_worktree(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo/.worktrees/feature-extra")], &[20, 60], Some(20), &[])]
+    #[case::caller_pane_unavailable_keeps_background_job(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (51, WORKTREE)], &[20, 60], None, &[51])]
     #[case::background_job_without_roots(&[(10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (51, WORKTREE)], &[], None, &[])]
     #[case::ancestor_without_roots(&[(20, WORKTREE)], &[], None, &[20])]
     fn finds_caller_processes_inside_the_path(
