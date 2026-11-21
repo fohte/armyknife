@@ -149,36 +149,47 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
         notify_delegator_of_merge(&main_repo, branch, &worktree_path).await;
     }
 
-    let hook_ran = run_pre_delete_hook(
-        &main_repo,
-        branch_name.as_deref(),
-        &worktree_path_str,
-        skip_hooks,
-    );
-
-    let result = cleanup::cleanup_worktree_by_name_with_before_delete(
-        &main_repo,
-        &worktree_name,
-        &worktree_path,
-        force,
+    let check_delete_plan = || {
+        ensure_worktree_delete_plan_before_delete(
+            merge_status.as_ref(),
+            force,
+            branch_name.as_deref(),
+            || get_worktree_branch_checked(&main_repo, &worktree_name),
+            |branch| branch_has_no_unique_commits(&main_repo, branch),
+        )
+    };
+    let (result, hook_ran) = run_pre_delete_hook_and_cleanup(
+        // Avoid hook side effects when the branch assumptions have changed.
+        check_delete_plan,
         || {
-            ensure_worktree_delete_plan_before_delete(
-                merge_status.as_ref(),
-                force,
+            run_pre_delete_hook(
+                &main_repo,
                 branch_name.as_deref(),
-                || get_worktree_branch_checked(&main_repo, &worktree_name),
-                |branch| branch_has_no_unique_commits(&main_repo, branch),
+                &worktree_path_str,
+                skip_hooks,
             )
         },
         || {
-            if !skip_hooks {
-                hooks::spawn_post_worktree_delete_hook(
-                    main_repo.workdir(),
-                    &worktree_path,
-                    branch_name.as_deref(),
-                    merged,
-                );
-            }
+            cleanup::cleanup_worktree_by_name_with_before_delete(
+                &main_repo,
+                &worktree_name,
+                &worktree_path,
+                force,
+                || {
+                    // The hook can add a commit, so cleanup validates again immediately before deletion.
+                    check_delete_plan()
+                },
+                || {
+                    if !skip_hooks {
+                        hooks::spawn_post_worktree_delete_hook(
+                            main_repo.workdir(),
+                            &worktree_path,
+                            branch_name.as_deref(),
+                            merged,
+                        );
+                    }
+                },
+            )
         },
     );
 
@@ -220,6 +231,24 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
     }
 
     Ok(())
+}
+
+fn run_pre_delete_hook_and_cleanup<CheckBeforeHook, RunHook, Cleanup, Output>(
+    check_before_hook: CheckBeforeHook,
+    run_hook: RunHook,
+    cleanup: Cleanup,
+) -> (Result<Output>, bool)
+where
+    CheckBeforeHook: FnOnce() -> Result<()>,
+    RunHook: FnOnce() -> bool,
+    Cleanup: FnOnce() -> Result<Output>,
+{
+    if let Err(error) = check_before_hook() {
+        return (Err(error), false);
+    }
+
+    let hook_ran = run_hook();
+    (cleanup(), hook_ran)
 }
 
 /// Runs the pre-worktree-delete hook, if configured. Best-effort: unlike
@@ -745,6 +774,88 @@ mod tests {
         .map_err(|error| error.to_string());
 
         assert_eq!((result, deleted), (expected, expected_deleted));
+    }
+
+    #[test]
+    fn failed_pre_hook_recheck_skips_hook_and_cleanup() {
+        let events = std::cell::RefCell::new(Vec::new());
+        let (result, hook_ran) = run_pre_delete_hook_and_cleanup(
+            || {
+                events.borrow_mut().push("check_before_hook");
+                Err(anyhow::anyhow!("branch changed before hook"))
+            },
+            || {
+                events.borrow_mut().push("hook");
+                true
+            },
+            || {
+                events.borrow_mut().push("cleanup");
+                Ok(())
+            },
+        );
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                hook_ran,
+                events.into_inner()
+            ),
+            (
+                Err("branch changed before hook".to_string()),
+                false,
+                vec!["check_before_hook"],
+            ),
+        );
+    }
+
+    #[test]
+    fn commit_added_by_pre_delete_hook_is_caught_before_deletion() {
+        let status = MergeStatus::NoUniqueCommits {
+            reason: "No commits unique to branch".to_string(),
+        };
+        let unique_commit_added = std::cell::Cell::new(false);
+        let events = std::cell::RefCell::new(Vec::new());
+        let (result, hook_ran) = run_pre_delete_hook_and_cleanup(
+            || {
+                events.borrow_mut().push("check_before_hook");
+                ensure_branch_no_unique_commits_before_delete(
+                    Some(&status),
+                    false,
+                    Some("feature"),
+                    |_| !unique_commit_added.get(),
+                )
+            },
+            || {
+                events.borrow_mut().push("hook");
+                unique_commit_added.set(true);
+                true
+            },
+            || {
+                events.borrow_mut().push("cleanup");
+                events.borrow_mut().push("check_after_hook");
+                ensure_branch_no_unique_commits_before_delete(
+                    Some(&status),
+                    false,
+                    Some("feature"),
+                    |_| !unique_commit_added.get(),
+                )?;
+                events.borrow_mut().push("delete");
+                Ok(())
+            },
+        );
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                hook_ran,
+                events.into_inner(),
+            ),
+            (
+                Err("Branch `feature` is not merged (branch could not be verified as part of the origin default branch before deletion); close the session while keeping its worktree to continue".to_string()),
+                true,
+                vec!["check_before_hook", "hook", "cleanup", "check_after_hook"],
+            ),
+        );
     }
 
     #[rstest]
