@@ -1,7 +1,7 @@
 import { type RefObject, useEffect } from 'react'
 
 const FOCUSABLE_SELECTOR =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), iframe:not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])'
 
 type UseFocusTrapOptions<T extends HTMLElement> = {
   containerRef: RefObject<T | null>
@@ -49,14 +49,24 @@ export function useFocusTrap<T extends HTMLElement>({
         focusTarget.focus()
       }
     }
+    const onFocusIn = (event: FocusEvent) => {
+      if (!(event.target instanceof Node) || container.contains(event.target)) {
+        return
+      }
+      const firstFocusableElement = getFocusableElements()[0]
+      const focusTarget = firstFocusableElement ?? container
+      focusTarget.focus()
+    }
 
     const firstFocusableElement = getFocusableElements()[0]
     const initialFocusTarget =
       initialFocusRef?.current ?? firstFocusableElement ?? container
     initialFocusTarget.focus()
     document.addEventListener('keydown', onKeyDown)
+    document.addEventListener('focusin', onFocusIn)
     return () => {
       document.removeEventListener('keydown', onKeyDown)
+      document.removeEventListener('focusin', onFocusIn)
       if (
         previouslyFocused instanceof HTMLElement &&
         previouslyFocused.isConnected

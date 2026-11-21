@@ -9,8 +9,12 @@ let root: Root | null = null
 
 function FocusTrapHarness({
   initiallyOpen = false,
+  isActive = true,
+  includeIframe = false,
 }: {
   initiallyOpen?: boolean
+  isActive?: boolean
+  includeIframe?: boolean
 }) {
   const [open, setOpen] = useState(initiallyOpen)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -18,7 +22,7 @@ function FocusTrapHarness({
   useFocusTrap({
     containerRef,
     initialFocusRef,
-    isActive: open,
+    isActive: open && isActive,
   })
 
   return (
@@ -45,16 +49,23 @@ function FocusTrapHarness({
           >
             Close dialog
           </button>
+          {includeIframe ? <iframe title="Embedded interface" /> : null}
         </div>
       ) : null}
     </>
   )
 }
 
-function renderFocusTrap(initiallyOpen = false) {
+function renderFocusTrap(
+  options: {
+    initiallyOpen?: boolean
+    isActive?: boolean
+    includeIframe?: boolean
+  } = {},
+) {
   root = createRoot(container)
   act(() => {
-    root?.render(<FocusTrapHarness initiallyOpen={initiallyOpen} />)
+    root?.render(<FocusTrapHarness {...options} />)
   })
 }
 
@@ -102,7 +113,7 @@ it('restores focus to the opener when the active container closes', () => {
 })
 
 it('wraps Tab and Shift+Tab within the active container', () => {
-  renderFocusTrap(true)
+  renderFocusTrap({ initiallyOpen: true })
   const initialFocus = container.querySelector<HTMLButtonElement>(
     'button:not([aria-label])',
   )
@@ -142,4 +153,54 @@ it('wraps Tab and Shift+Tab within the active container', () => {
   recordFocus()
 
   expect(focusSequence).toEqual(['first', 'last', 'first'])
+})
+
+it('does not move focus when the trap is inactive', () => {
+  renderFocusTrap({ initiallyOpen: true, isActive: false })
+  const opener = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Open dialog"]',
+  )
+  act(() => opener?.focus())
+  const tabEvent = new KeyboardEvent('keydown', {
+    key: 'Tab',
+    bubbles: true,
+    cancelable: true,
+  })
+  act(() => {
+    document.dispatchEvent(tabEvent)
+  })
+
+  expect(document.activeElement).toBe(opener)
+})
+
+it('allows Tab to move from panel controls into an iframe', () => {
+  renderFocusTrap({ initiallyOpen: true, includeIframe: true })
+  const lastButton =
+    container.querySelector<HTMLButtonElement>('button:last-child')
+  act(() => lastButton?.focus())
+  const tabEvent = new KeyboardEvent('keydown', {
+    key: 'Tab',
+    bubbles: true,
+    cancelable: true,
+  })
+  act(() => {
+    document.dispatchEvent(tabEvent)
+  })
+
+  expect(tabEvent.defaultPrevented).toBe(false)
+})
+
+it('returns focus to the container when focus leaves an iframe', () => {
+  renderFocusTrap({ initiallyOpen: true, includeIframe: true })
+  const opener = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Open dialog"]',
+  )
+  const firstAction = container.querySelector<HTMLButtonElement>(
+    'button:not([aria-label])',
+  )
+  const iframe = container.querySelector<HTMLIFrameElement>('iframe')
+  act(() => iframe?.focus())
+  act(() => opener?.focus())
+
+  expect(document.activeElement).toBe(firstAction)
 })
