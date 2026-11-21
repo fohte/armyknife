@@ -11,18 +11,15 @@ use crate::commands::agent::tq_session_tasks::{
     order_tasks_by_priority, task_priority_metadata,
 };
 use crate::commands::agent::types::Session;
-use crate::commands::agent::types::SessionPrContext;
-use crate::infra::github::{BranchPrQuery, GitHubClient, PrNumberQuery, PrProgressInfo};
+use crate::infra::github::{PrNumberQuery, PrProgressInfo};
 use crate::infra::tq::{TqClient, TqGithubLink, TqProjectSummary, TqTaskSummary};
 
 mod cache;
+mod task_pull_requests;
 #[cfg(test)]
 mod test_support;
 
-use cache::{
-    merge_pull_request_results, merge_session_task_metadata, prune_pull_request_results,
-    prune_session_task_metadata,
-};
+use cache::{merge_session_task_metadata, prune_session_task_metadata};
 
 const CACHE_TTL: Duration = Duration::from_secs(30);
 const CACHE_KEY_RETENTION: Duration = Duration::from_secs(10 * 60);
@@ -73,9 +70,11 @@ impl SessionEnrichmentCache {
         );
         let pull_request_fetcher: PullRequestFetcher = Arc::new(
             |sessions,
-             task_queries|
+             number_queries|
              -> FetchFuture<HashMap<PullRequestKey, Option<PrProgressInfo>>> {
-                Box::pin(async move { fetch_pull_requests(&sessions, &task_queries).await })
+                Box::pin(async move {
+                    task_pull_requests::fetch_pull_requests(&sessions, &number_queries).await
+                })
             },
         );
         Self::with_fetchers(updates, FETCH_TIMEOUT, task_fetcher, pull_request_fetcher)
@@ -118,101 +117,6 @@ impl SessionEnrichmentCache {
                 prune_session_task_metadata,
             )
             .await
-    }
-
-    pub(super) async fn pull_requests(
-        &self,
-        sessions: &[Session],
-        task_metadata: &SessionTaskMetadata,
-    ) -> HashMap<String, Vec<SessionPullRequestInfo>> {
-        let task_queries = linked_task_pr_queries(sessions, task_metadata);
-        let query_keys = pull_request_keys(sessions, &task_queries);
-        if query_keys.is_empty() {
-            return HashMap::new();
-        }
-
-        let fetcher = Arc::clone(&self.pull_request_fetcher);
-        let cached = self
-            .pull_requests
-            .get_or_refresh(
-                "GitHub",
-                query_keys,
-                {
-                    let sessions = sessions.to_vec();
-                    move |_| fetcher(sessions, task_queries)
-                },
-                merge_pull_request_results,
-                prune_pull_request_results,
-            )
-            .await;
-
-        sessions
-            .iter()
-            .filter(|session| {
-                session.pr_context.is_some()
-                    || !session.created_pr_urls.is_empty()
-                    || !linked_task_pr_queries_for_session(session, task_metadata).is_empty()
-            })
-            .map(|session| {
-                let mut seen_pull_requests = HashSet::new();
-                let mut pull_requests = Vec::new();
-                if let Some(context) = &session.pr_context {
-                    let key = PullRequestKey::Branch(branch_query(context).key());
-                    if let Some(pull_request) = cached.get(&key).cloned().flatten() {
-                        let pull_request_key = (
-                            context.owner.clone(),
-                            context.repo.clone(),
-                            pull_request.pull_request.number,
-                        );
-                        if seen_pull_requests.insert(pull_request_key) {
-                            pull_requests.push(SessionPullRequestInfo {
-                                owner: context.owner.clone(),
-                                repo: context.repo.clone(),
-                                progress: pull_request,
-                                from_cwd_branch: true,
-                            });
-                        }
-                    }
-                }
-                for query in submitted_pr_queries(&session.created_pr_urls) {
-                    let Some(pull_request) = cached
-                        .get(&PullRequestKey::Number(query.key()))
-                        .cloned()
-                        .flatten()
-                    else {
-                        continue;
-                    };
-                    let pull_request_key = (query.owner.clone(), query.repo.clone(), query.number);
-                    if seen_pull_requests.insert(pull_request_key) {
-                        pull_requests.push(SessionPullRequestInfo {
-                            owner: query.owner,
-                            repo: query.repo,
-                            progress: pull_request,
-                            from_cwd_branch: false,
-                        });
-                    }
-                }
-                for query in linked_task_pr_queries_for_session(session, task_metadata) {
-                    let Some(pull_request) = cached
-                        .get(&PullRequestKey::Number(query.key()))
-                        .cloned()
-                        .flatten()
-                    else {
-                        continue;
-                    };
-                    let pull_request_key = (query.owner.clone(), query.repo.clone(), query.number);
-                    if seen_pull_requests.insert(pull_request_key) {
-                        pull_requests.push(SessionPullRequestInfo {
-                            owner: query.owner,
-                            repo: query.repo,
-                            progress: pull_request,
-                            from_cwd_branch: false,
-                        });
-                    }
-                }
-                (session.session_id.clone(), pull_requests)
-            })
-            .collect()
     }
 }
 
@@ -366,7 +270,17 @@ async fn fetch_task_metadata(
         }
     };
 
-    let github_links = fetch_task_github_links(&client, &task_ids, &previous.github_links).await;
+    let github_links = task_pull_requests::fetch_task_github_links(
+        &task_ids,
+        &previous.github_links,
+        |task_id| async move {
+            TqClient
+                .task_github_links(&task_id)
+                .await
+                .map_err(|error| error.to_string())
+        },
+    )
+    .await;
 
     let updated_at = task_update_timestamps(&tasks);
 
@@ -388,33 +302,6 @@ async fn fetch_task_metadata(
         task_projects,
         github_links,
     })
-}
-
-async fn fetch_task_github_links(
-    client: &TqClient,
-    task_ids: &HashSet<String>,
-    previous: &HashMap<String, Vec<TqGithubLink>>,
-) -> HashMap<String, Vec<TqGithubLink>> {
-    let responses = futures_util::future::join_all(
-        task_ids
-            .iter()
-            .map(|task_id| async move { (task_id, client.task_github_links(task_id).await) }),
-    )
-    .await;
-
-    responses
-        .into_iter()
-        .filter_map(|(task_id, result)| match result {
-            Ok(links) => Some((task_id.clone(), links)),
-            Err(error) => {
-                tracing::warn!(%error, task_id, "Failed to fetch agent watch tq task GitHub links; keeping cached values");
-                previous
-                    .get(task_id)
-                    .cloned()
-                    .map(|links| (task_id.clone(), links))
-            }
-        })
-        .collect()
 }
 
 fn task_update_timestamps(
@@ -477,150 +364,10 @@ fn task_project_names(
         .collect()
 }
 
-fn pull_request_keys(
-    sessions: &[Session],
-    task_queries: &[PrNumberQuery],
-) -> HashSet<PullRequestKey> {
-    let mut keys = branch_pr_queries(sessions)
-        .into_iter()
-        .map(|query| PullRequestKey::Branch(query.key()))
-        .collect::<HashSet<_>>();
-    keys.extend(
-        submitted_pr_queries_for_sessions(sessions)
-            .into_iter()
-            .map(|query| PullRequestKey::Number(query.key())),
-    );
-    keys.extend(
-        task_queries
-            .iter()
-            .map(|query| PullRequestKey::Number(query.key())),
-    );
-    keys
-}
-
-fn linked_task_pr_queries(
-    sessions: &[Session],
-    task_metadata: &SessionTaskMetadata,
-) -> Vec<PrNumberQuery> {
-    let mut queries = Vec::new();
-    let mut seen = HashSet::new();
-    for session in sessions {
-        for query in linked_task_pr_queries_for_session(session, task_metadata) {
-            if seen.insert(query.key()) {
-                queries.push(query);
-            }
-        }
-    }
-    queries
-}
-
-fn linked_task_pr_queries_for_session(
-    session: &Session,
-    task_metadata: &SessionTaskMetadata,
-) -> Vec<PrNumberQuery> {
-    let mut seen = HashSet::new();
-    task_metadata
-        .links
-        .get(&session.session_id)
-        .into_iter()
-        .flatten()
-        .filter_map(|task| task_metadata.github_links.get(&task.task_id))
-        .flatten()
-        .filter_map(|link| link.url.as_deref())
-        .filter_map(PrNumberQuery::from_github_url)
-        .filter(|query| seen.insert(query.key()))
-        .collect()
-}
-
-fn branch_pr_queries(sessions: &[Session]) -> Vec<BranchPrQuery> {
-    let mut queries = Vec::new();
-    let mut seen = HashSet::new();
-    for session in sessions {
-        if let Some(context) = &session.pr_context {
-            let query = branch_query(context);
-            if seen.insert(query.key()) {
-                queries.push(query);
-            }
-        }
-    }
-    queries
-}
-
-fn branch_query(context: &SessionPrContext) -> BranchPrQuery {
-    BranchPrQuery {
-        owner: context.owner.clone(),
-        repo: context.repo.clone(),
-        branch: context.branch.clone(),
-    }
-}
-
-fn submitted_pr_queries_for_sessions(sessions: &[Session]) -> Vec<PrNumberQuery> {
-    let mut queries = Vec::new();
-    let mut seen = HashSet::new();
-    for session in sessions {
-        for query in submitted_pr_queries(&session.created_pr_urls) {
-            if seen.insert(query.key()) {
-                queries.push(query);
-            }
-        }
-    }
-    queries
-}
-
-fn submitted_pr_queries(urls: &[String]) -> Vec<PrNumberQuery> {
-    let mut seen = HashSet::new();
-    urls.iter()
-        .filter_map(|url| PrNumberQuery::from_github_url(url))
-        .filter(|query| seen.insert(query.key()))
-        .collect()
-}
-
 async fn detected_tq_client() -> Result<Option<TqClient>, String> {
     tokio::task::spawn_blocking(TqClient::detect)
         .await
         .map_err(|error| error.to_string())
-}
-
-async fn fetch_pull_requests(
-    sessions: &[Session],
-    task_queries: &[PrNumberQuery],
-) -> Result<HashMap<PullRequestKey, Option<PrProgressInfo>>, String> {
-    let branch_queries = branch_pr_queries(sessions);
-    let mut number_queries = submitted_pr_queries_for_sessions(sessions);
-    let mut seen_numbers = number_queries
-        .iter()
-        .map(PrNumberQuery::key)
-        .collect::<HashSet<_>>();
-    for query in task_queries {
-        if seen_numbers.insert(query.key()) {
-            number_queries.push(query.clone());
-        }
-    }
-    if branch_queries.is_empty() && number_queries.is_empty() {
-        return Ok(HashMap::new());
-    }
-
-    let client = tokio::task::spawn_blocking(GitHubClient::get)
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())?;
-    let (branch_prs, number_prs) = tokio::try_join!(
-        client.get_pr_progress_for_branches_batch(&branch_queries),
-        client.get_pr_progress_for_numbers_batch(&number_queries),
-    )
-    .map_err(|error| error.to_string())?;
-
-    let mut prs = branch_prs
-        .into_iter()
-        .map(|(key, value)| (PullRequestKey::Branch(key), value))
-        .collect::<HashMap<_, _>>();
-    prs.extend(
-        number_prs
-            .into_iter()
-            .map(|(key, value)| (PullRequestKey::Number(key), value)),
-    );
-
-    Ok(prs)
 }
 
 #[cfg(test)]
@@ -1104,27 +851,25 @@ mod tests {
     async fn task_linked_prs_join_existing_prs_without_duplicates() {
         let updates = EnrichmentUpdates::new();
         let mut receiver = updates.subscribe();
-        let pull_request_fetcher: PullRequestFetcher = Arc::new(|_, _| {
+        let requested_number_queries = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let requested_queries = Arc::clone(&requested_number_queries);
+        let pull_request_fetcher: PullRequestFetcher = Arc::new(move |_, number_queries| {
+            let requested_queries = Arc::clone(&requested_queries);
             Box::pin(async move {
-                Ok(HashMap::from([
-                    (branch_key("cwd-branch"), Some(head_info(17))),
-                    (
-                        PullRequestKey::Number((
-                            "example-owner".to_string(),
-                            "example-repository".to_string(),
-                            23,
-                        )),
-                        Some(head_info(23)),
-                    ),
-                    (
-                        PullRequestKey::Number((
-                            "example-owner".to_string(),
-                            "example-repository".to_string(),
-                            29,
-                        )),
-                        Some(head_info(29)),
-                    ),
-                ]))
+                *requested_queries
+                    .lock()
+                    .expect("query recorder lock should not be poisoned") = number_queries.clone();
+                let mut results = number_queries
+                    .into_iter()
+                    .map(|query| {
+                        (
+                            PullRequestKey::Number(query.key()),
+                            Some(head_info(query.number)),
+                        )
+                    })
+                    .collect::<HashMap<_, _>>();
+                results.insert(branch_key("cwd-branch"), Some(head_info(17)));
+                Ok(results)
             })
         });
         let task_fetcher: TaskMetadataFetcher =
@@ -1139,6 +884,8 @@ mod tests {
             "https://github.com/example-owner/example-repository/pull/23".to_string(),
             "https://github.com/example-owner/example-repository/pull/23".to_string(),
         ];
+        let mut task_only_pr = tq_pr_link("linked-task-pr", 29);
+        task_only_pr.url = None;
         let task_metadata = SessionTaskMetadata {
             links: HashMap::from([(
                 current_session.session_id.clone(),
@@ -1149,7 +896,7 @@ mod tests {
                 vec![
                     tq_pr_link("linked-cwd-pr", 17),
                     tq_pr_link("linked-created-pr", 23),
-                    tq_pr_link("linked-task-pr", 29),
+                    task_only_pr,
                 ],
             )]),
             ..SessionTaskMetadata::default()
@@ -1167,7 +914,10 @@ mod tests {
             (
                 initial,
                 pull_requests,
-                branch_pr_queries(&[current_session])
+                requested_number_queries
+                    .lock()
+                    .expect("query recorder lock should not be poisoned")
+                    .clone()
             ),
             (
                 HashMap::from([("session-multiple".to_string(), Vec::new())]),
@@ -1194,11 +944,7 @@ mod tests {
                         },
                     ],
                 )]),
-                vec![BranchPrQuery {
-                    owner: "example-owner".to_string(),
-                    repo: "example-repository".to_string(),
-                    branch: "cwd-branch".to_string(),
-                },],
+                vec![pr_query(23), pr_query(17), pr_query(29)],
             ),
         );
     }
@@ -1215,6 +961,14 @@ mod tests {
                 "https://github.com/example-owner/example-repository/pull/{number}"
             )),
             state: None,
+        }
+    }
+
+    fn pr_query(number: u64) -> PrNumberQuery {
+        PrNumberQuery {
+            owner: "example-owner".to_string(),
+            repo: "example-repository".to_string(),
+            number,
         }
     }
 }
