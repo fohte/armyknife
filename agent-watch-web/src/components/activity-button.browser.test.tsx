@@ -3,7 +3,9 @@ import '#index.css'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { page, userEvent } from 'vitest/browser'
 
+import { AsyncActionFeedbackProvider } from '#async-action-feedback'
 import { ActivityButton } from '#components/activity-button'
 
 let container: HTMLDivElement
@@ -78,3 +80,50 @@ it.each([
     expect(snapshot()).toEqual(expected)
   },
 )
+
+it('closes empty Activity with Escape on desktop', async () => {
+  await page.viewport(1280, 800)
+  root = createRoot(container)
+  await act(async () => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <ActivityButton />
+      </AsyncActionFeedbackProvider>,
+    )
+    return Promise.resolve()
+  })
+
+  const activityButton = container.querySelector<HTMLButtonElement>(
+    '.async-action-activity-button',
+  )
+  if (activityButton === null) {
+    throw new Error('The Activity button is missing')
+  }
+
+  await act(async () => {
+    await userEvent.click(activityButton)
+  })
+
+  const closeButton = container.querySelector<HTMLButtonElement>(
+    '.async-action-activity-close',
+  )
+  if (closeButton === null) {
+    throw new Error('The Activity close button is missing')
+  }
+  const closeButtonDisplay = getComputedStyle(closeButton).display
+
+  await act(async () => {
+    await userEvent.keyboard('{Escape}')
+  })
+
+  const snapshot = () => ({
+    closeButtonDisplay,
+    activityOpen: container.querySelector('[role="dialog"]') !== null,
+    buttonExpanded: activityButton.getAttribute('aria-expanded'),
+  })
+  expect(snapshot()).toEqual({
+    closeButtonDisplay: 'none',
+    activityOpen: false,
+    buttonExpanded: 'false',
+  })
+})

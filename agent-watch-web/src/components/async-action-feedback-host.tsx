@@ -1,6 +1,6 @@
 import '#components/async-action-feedback-host.css'
 
-import type { RefObject } from 'react'
+import { type RefObject, useEffect } from 'react'
 
 import type { AsyncAction } from '#async-action-feedback'
 import { AsyncActionItem } from '#components/async-action-item'
@@ -48,6 +48,23 @@ export function AsyncActionFeedbackHost({
     selectedActionId === null
       ? null
       : (actions.find((action) => action.id === selectedActionId) ?? null)
+
+  useEffect(() => {
+    if (!activityOpen) return
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      closeActivity()
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [activityOpen, closeActivity])
+
   return (
     <>
       <div
