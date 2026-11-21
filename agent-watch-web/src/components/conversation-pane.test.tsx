@@ -205,6 +205,8 @@ function normalizeQueuedMessagePostBody(body: BodyInit | null | undefined) {
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     return body
   }
+  const messageId: unknown = Reflect.get(parsed, 'messageId')
+  if (typeof messageId !== 'string') return body
   return JSON.stringify({ ...parsed, messageId: '<message-id>' })
 }
 
