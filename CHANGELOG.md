@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.815](https://github.com/fohte/armyknife/compare/v0.1.814...v0.1.815) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** trim vibe confirmation copy ([#2011](https://github.com/fohte/armyknife/issues/2011)) ([38f5583](https://github.com/fohte/armyknife/commit/38f5583f1c6bed12a8f219753845347dc30a7bb2))
+
 ## [0.1.814](https://github.com/fohte/armyknife/compare/v0.1.813...v0.1.814) (2026-11-21)
 
 
