@@ -41,11 +41,24 @@ pub(super) fn try_lock_deletion(
     }
 }
 
-pub(super) fn lock_exclusive(lock_dir: &Path, worktree_path: &Path) -> Result<File> {
+pub(super) fn lock_exclusive(
+    lock_dir: &Path,
+    worktree_path: &Path,
+    on_wait: impl FnOnce(),
+) -> Result<File> {
     let file = open_lock_file(lock_dir, worktree_path, "lock")?;
-    file.lock()
-        .with_context(|| format!("locking worktree for deletion: {}", worktree_path.display()))?;
-    Ok(file)
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(std::fs::TryLockError::WouldBlock) => {
+            on_wait();
+            file.lock().with_context(|| {
+                format!("locking worktree for deletion: {}", worktree_path.display())
+            })?;
+            Ok(file)
+        }
+        Err(std::fs::TryLockError::Error(error)) => Err(error)
+            .with_context(|| format!("locking worktree for deletion: {}", worktree_path.display())),
+    }
 }
 
 fn open_lock_file(lock_dir: &Path, worktree_path: &Path, suffix: &str) -> Result<File> {
