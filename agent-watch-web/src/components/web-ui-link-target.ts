@@ -23,13 +23,15 @@ function hostMatches(left: URL, right: URL): boolean {
 }
 
 function pathMatches(pathname: string, basePathname: string): boolean {
-  const basePath = basePathname.endsWith('/')
-    ? basePathname.slice(0, -1)
-    : basePathname
+  const basePath = normalizedPathname(basePathname)
   return (
     pathname === basePath ||
     pathname.startsWith(basePath === '' ? '/' : `${basePath}/`)
   )
+}
+
+function normalizedPathname(pathname: string): string {
+  return pathname.endsWith('/') ? pathname.slice(0, -1) : pathname
 }
 
 export function findWebUiLink(
@@ -40,6 +42,7 @@ export function findWebUiLink(
   const linkUrl = parseHttpUrl(href)
   if (linkUrl === null) return null
 
+  let bestMatch: { match: WebUiLinkMatch; pathLength: number } | null = null
   for (const webUi of webUis) {
     for (const candidate of [webUi.url, webUi.exposedUrl]) {
       if (candidate == null || candidate.trim() === '') continue
@@ -49,11 +52,17 @@ export function findWebUiLink(
         hostMatches(linkUrl, registeredUrl) &&
         pathMatches(linkUrl.pathname, registeredUrl.pathname)
       ) {
-        return { webUi, registeredUrl }
+        const pathLength = normalizedPathname(registeredUrl.pathname).length
+        if (bestMatch === null || pathLength > bestMatch.pathLength) {
+          bestMatch = {
+            match: { webUi, registeredUrl },
+            pathLength,
+          }
+        }
       }
     }
   }
-  return null
+  return bestMatch?.match ?? null
 }
 
 export function webUiLinkTargetUrl(

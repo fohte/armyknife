@@ -151,7 +151,11 @@ export function WebUiPane({
         )}
       </header>
       {targetUrl !== null ? (
-        <iframe title={`${name} web interface`} src={targetUrl} />
+        <iframe
+          key={fullscreenRequest}
+          title={`${name} web interface`}
+          src={targetUrl}
+        />
       ) : (
         <p className="web-ui-pane-unavailable" role="status">
           This interface is unavailable outside this machine. Local URL: {url}

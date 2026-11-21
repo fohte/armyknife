@@ -42,6 +42,30 @@ it.each([
   expect(findWebUiLink(href, [webUi])?.webUi ?? null).toEqual(expected)
 })
 
+it('prefers the most specific registered path when registrations overlap', () => {
+  const broad: WebUiLinkTarget = {
+    name: 'Studio root',
+    url: 'http://localhost:43123/',
+  }
+  const specific: WebUiLinkTarget = {
+    name: 'Canvas editor',
+    url: 'http://localhost:43123/studio/',
+  }
+  const href = 'http://localhost:43123/studio/pages/sample#page-fixture'
+  function getMatch() {
+    const match = findWebUiLink(href, [broad, specific])
+    return {
+      registeredUrl: match?.registeredUrl.href ?? null,
+      webUi: match?.webUi ?? null,
+    }
+  }
+
+  expect(getMatch()).toEqual({
+    registeredUrl: 'http://localhost:43123/studio/',
+    webUi: specific,
+  })
+})
+
 it('maps a deep local link to the exposed web UI URL without losing its fragment', () => {
   expect(
     webUiLinkTargetUrl(

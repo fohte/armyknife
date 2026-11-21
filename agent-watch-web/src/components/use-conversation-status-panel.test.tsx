@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { page } from 'vitest/browser'
 
+import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import type { WebUiLinkTarget } from '#components/markdown-session-links'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
@@ -318,6 +319,101 @@ it('fetches and renders the review document when the status panel opens', async 
     selectedTab: 'Review',
     title: 'Fixture pull request',
     markdown: 'Fixture draft body',
+  })
+})
+
+it('preserves unsaved review edits when a preview link opens a web UI', async () => {
+  const webUi: WebUiLinkTarget = {
+    name: 'Canvas editor',
+    url: 'http://localhost:43123/studio/',
+  }
+  const fetcher = vi.fn<typeof fetch>(() =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({
+          id: 'fixture-review-a',
+          frontmatter: { title: 'Saved title' },
+          body: '[Open canvas page](http://localhost:43123/studio/pages/sample#page-fixture)',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    ),
+  )
+  vi.stubGlobal('fetch', fetcher)
+
+  function ReviewLinkHarness() {
+    const panel = useConversationStatusPanel({
+      session: {
+        ...session,
+        reviewDocumentId: 'fixture-review-a',
+        webUis: [webUi],
+      },
+      messages: [],
+      backgroundTasks: [],
+      statusPanelOpen: true,
+      onAction: () => Promise.resolve(true),
+      onCloseStatusPanel: () => undefined,
+    })
+    return (
+      <MarkdownSessionLinksProvider
+        sessions={[]}
+        webUis={[webUi]}
+        onOpenWebUi={panel.onOpenWebUiInFullscreen}
+      >
+        <SessionStatusPanel
+          tabs={panel.tabs}
+          activeTabId={panel.activeTabId}
+          onTabChange={panel.onTabChange}
+          onClose={() => undefined}
+        />
+      </MarkdownSessionLinksProvider>
+    )
+  }
+
+  act(() => root?.render(<ReviewLinkHarness />))
+  await act(async () => {
+    await page.getByRole('tab', { name: 'Review' }).click()
+  })
+  await waitForState(
+    () => container.querySelector('.review-document-preview-column a') !== null,
+  )
+  await act(async () => {
+    await page.getByRole('textbox', { name: 'title' }).fill('Unsaved title')
+    await page.getByRole('button', { name: 'Preview' }).click()
+    await page.getByRole('link', { name: 'Open canvas page' }).click()
+  })
+  await waitForState(
+    () =>
+      container.querySelector('iframe')?.getAttribute('src') ===
+      'http://localhost:43123/studio/pages/sample#page-fixture',
+  )
+  await act(async () => {
+    await page
+      .getByRole('button', { name: 'Exit Canvas editor fullscreen' })
+      .click()
+    await page.getByRole('tab', { name: 'Review' }).click()
+  })
+  await waitForState(
+    () =>
+      container.querySelector<HTMLInputElement>(
+        '.review-document-frontmatter input[type="text"]',
+      ) !== null,
+  )
+  await act(async () => {
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+  })
+
+  function getState() {
+    return {
+      requests: fetcher.mock.calls.map(([input]) => requestUrl(input)),
+      title: container.querySelector<HTMLInputElement>(
+        '.review-document-frontmatter input[type="text"]',
+      )?.value,
+    }
+  }
+  expect(getState()).toEqual({
+    requests: ['/api/sessions/fixture-session/review-document'],
+    title: 'Unsaved title',
   })
 })
 
@@ -691,7 +787,9 @@ it('opens a linked web UI URL in its fullscreen status tab', async () => {
 it('opens crit through the shared fullscreen web UI request', async () => {
   const crit: WebUiLinkTarget = {
     name: 'crit',
-    url: 'http://localhost:43123/review/sample',
+    url: 'http://localhost:43123/review/sample?token=local#local-page',
+    exposedUrl:
+      'https://crit.example.invalid/review/sample?token=exposed#exposed-page',
   }
   function CritHarness() {
     const panel = useConversationStatusPanel({
@@ -699,6 +797,7 @@ it('opens crit through the shared fullscreen web UI request', async () => {
       messages: [],
       backgroundTasks: [],
       statusPanelOpen: true,
+      hostname: 'watch.example.invalid',
       onAction: () => Promise.resolve(true),
       onCloseStatusPanel: () => undefined,
     })
@@ -733,7 +832,8 @@ it('opens crit through the shared fullscreen web UI request', async () => {
   expect(snapshot()).toEqual({
     activeTab: 'crit',
     fullscreen: true,
-    iframe: 'http://localhost:43123/review/sample',
+    iframe:
+      'https://crit.example.invalid/review/sample?token=exposed#exposed-page',
   })
 })
 

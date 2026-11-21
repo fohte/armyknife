@@ -8,6 +8,7 @@ import { webUiTabId } from '#components/web-ui-tab-id'
 type UseWebUiFullscreenOptions = {
   isMobile: boolean
   statusPanelOpen: boolean
+  hostname?: string
   onSelectTab: (id: string) => void
   onClose: () => void
 }
@@ -15,6 +16,7 @@ type UseWebUiFullscreenOptions = {
 export function useWebUiFullscreen({
   isMobile,
   statusPanelOpen,
+  hostname,
   onSelectTab,
   onClose,
 }: UseWebUiFullscreenOptions) {
@@ -25,13 +27,20 @@ export function useWebUiFullscreen({
     targetUrl: string | null
   } | null>(null)
 
-  const openWebUi = (webUi: WebUiLinkTarget, url: string) => {
+  const openWebUi = (
+    webUi: WebUiLinkTarget,
+    url: string,
+    targetUrl?: string | null,
+  ) => {
     onSelectTab(webUiTabId(webUi))
     setRequest((current) => current + 1)
     setWebUiRequest({
       webUi,
       url,
-      targetUrl: webUiLinkTargetUrl(webUi, url),
+      targetUrl:
+        targetUrl === undefined
+          ? webUiLinkTargetUrl(webUi, url, hostname)
+          : targetUrl,
     })
   }
   const closeWebUi = () => {
@@ -50,6 +59,7 @@ export function useWebUiFullscreen({
         url={webUiRequest.url}
         exposedUrl={webUiRequest.webUi.exposedUrl ?? null}
         targetUrlOverride={webUiRequest.targetUrl}
+        fullscreenRequest={request}
         defaultFullscreen
         mobilePresentation
         onClose={closeWebUi}

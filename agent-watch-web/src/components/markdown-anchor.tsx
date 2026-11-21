@@ -56,6 +56,11 @@ export const MarkdownAnchor: NonNullable<Components['a']> = ({
     onSelectSession,
   )
   const webUiLink = findWebUiLink(href, webUis)
+  const linkedMarkdownImage =
+    sessionLink === null &&
+    href !== undefined &&
+    href !== '' &&
+    node.children.some(containsMarkdownImage)
   if (sessionLink === null && webUiLink !== null) {
     const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
       if (onOpenWebUi === undefined || href === undefined) return
@@ -71,28 +76,40 @@ export const MarkdownAnchor: NonNullable<Components['a']> = ({
       event.preventDefault()
       onOpenWebUi(webUiLink.webUi, href)
     }
-    return (
-      <span className="markdown-web-ui-link">
+    const link = linkedMarkdownImage ? (
+      <span className="markdown-linked-image">
+        {children}
         <a
-          {...props}
+          className="markdown-image-link"
           href={href}
           target="_blank"
           rel="noopener noreferrer"
           {...(onOpenWebUi === undefined ? {} : { onClick: handleClick })}
         >
-          {children}
+          Open link
         </a>
+      </span>
+    ) : (
+      <a
+        {...props}
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        {...(onOpenWebUi === undefined ? {} : { onClick: handleClick })}
+      >
+        {children}
+      </a>
+    )
+    return (
+      <span className="markdown-web-ui-link">
+        {link}
         <span className="markdown-web-ui-link-name">
           {webUiLink.webUi.name}
         </span>
       </span>
     )
   }
-  if (
-    sessionLink === null &&
-    href !== '' &&
-    node.children.some(containsMarkdownImage)
-  ) {
+  if (linkedMarkdownImage) {
     return (
       <span className="markdown-linked-image">
         {children}

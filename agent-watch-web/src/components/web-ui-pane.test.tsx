@@ -232,3 +232,34 @@ it('shows the mobile web UI URL and opens it in a new tab', () => {
     },
   })
 })
+
+it('reopens the requested page after the iframe navigates', () => {
+  const targetUrl = 'http://localhost:43123/studio/pages/sample#page-fixture'
+  const renderWithRequest = (fullscreenRequest: number) => {
+    act(() => {
+      root?.render(
+        <WebUiPane
+          name="Canvas editor"
+          url={targetUrl}
+          targetUrlOverride={targetUrl}
+          onClose={() => undefined}
+          fullscreenRequest={fullscreenRequest}
+        />,
+      )
+    })
+  }
+
+  root = createRoot(container)
+  renderWithRequest(1)
+  container
+    .querySelector<HTMLIFrameElement>('iframe')
+    ?.setAttribute('src', 'http://localhost:43123/studio/pages/other')
+  renderWithRequest(2)
+
+  function getIframeState() {
+    return {
+      src: container.querySelector('iframe')?.getAttribute('src') ?? null,
+    }
+  }
+  expect(getIframeState()).toEqual({ src: targetUrl })
+})

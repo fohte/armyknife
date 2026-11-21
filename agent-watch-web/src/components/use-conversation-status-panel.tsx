@@ -1,4 +1,10 @@
-import { type Dispatch, type SetStateAction, useEffect, useState } from 'react'
+import {
+  type Dispatch,
+  type SetStateAction,
+  useEffect,
+  useRef,
+  useState,
+} from 'react'
 
 import { getPendingCritReviewUrl } from '#components/conversation-crit-url'
 import {
@@ -16,6 +22,7 @@ import { SessionTreePanel } from '#components/session-tree-panel'
 import { useWebUiFullscreen } from '#components/use-web-ui-fullscreen'
 import { WebUiPane } from '#components/web-ui-pane'
 import { webUiTabId } from '#components/web-ui-tab-id'
+import { webUiTargetUrl } from '#components/web-ui-target-url'
 import { useSessionOperations } from '#session-operation-context'
 import { createSessionOperation } from '#session-operations'
 import { getSessionTasks } from '#session-task-utils'
@@ -37,6 +44,7 @@ type UseConversationStatusPanelOptions = {
   onSelectSession?: (id: string) => void
   statusPanelOpen?: boolean
   isMobile?: boolean
+  hostname?: string
   onAction: (
     action: string,
     payload?: Record<string, unknown>,
@@ -124,6 +132,7 @@ export function useConversationStatusPanel({
   onSelectSession = () => undefined,
   statusPanelOpen = false,
   isMobile = false,
+  hostname,
   onAction,
   onCloseStatusPanel,
 }: UseConversationStatusPanelOptions) {
@@ -134,6 +143,7 @@ export function useConversationStatusPanel({
   )
   const [reviewDocumentState, setReviewDocumentState] =
     useState<ReviewDocumentState | null>(null)
+  const reviewDocumentStateRef = useRef<ReviewDocumentState | null>(null)
   const reviewDocumentId = session.reviewDocumentId
   const decisions =
     allDecisions ??
@@ -167,6 +177,7 @@ export function useConversationStatusPanel({
   } = useWebUiFullscreen({
     isMobile,
     statusPanelOpen,
+    ...(hostname === undefined ? {} : { hostname }),
     onSelectTab: setActivePanelTabId,
     onClose: onCloseStatusPanel,
   })
@@ -200,10 +211,19 @@ export function useConversationStatusPanel({
       : defaultPanelTabId
   useEffect(() => {
     if (reviewDocumentId == null) {
+      reviewDocumentStateRef.current = null
       setReviewDocumentState(null)
       return
     }
     if (!statusPanelOpen || activeTabId !== 'review-document') {
+      return
+    }
+    const currentReviewDocument = reviewDocumentStateRef.current
+    if (
+      currentReviewDocument?.sessionId === session.id &&
+      currentReviewDocument.reviewDocumentId === reviewDocumentId &&
+      currentReviewDocument.document !== null
+    ) {
       return
     }
     let current = true
@@ -223,7 +243,7 @@ export function useConversationStatusPanel({
     ).match(
       (document) => {
         if (current) {
-          setReviewDocumentState({
+          const nextState: ReviewDocumentState = {
             sessionId: session.id,
             reviewDocumentId: document.id,
             document,
@@ -232,7 +252,9 @@ export function useConversationStatusPanel({
             saveStatus: 'idle',
             saveError: null,
             mobileView: 'edit',
-          })
+          }
+          reviewDocumentStateRef.current = nextState
+          setReviewDocumentState(nextState)
         }
       },
       (error) => {
@@ -469,8 +491,13 @@ export function useConversationStatusPanel({
     activeTabId,
     onOpenCritInFullscreen: () => {
       const critWebUi = webUis.find((webUi) => webUi.name === 'crit')
-      if (critWebUi !== undefined)
-        onOpenWebUiInFullscreen(critWebUi, critWebUi.url)
+      if (critWebUi !== undefined) {
+        onOpenWebUiInFullscreen(
+          critWebUi,
+          critWebUi.url,
+          webUiTargetUrl(critWebUi, hostname),
+        )
+      }
     },
     onOpenWebUiInFullscreen,
     fullscreenWebUi,

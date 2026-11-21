@@ -628,6 +628,75 @@ it('keeps the link next to an expandable linked Markdown image', async () => {
   })
 })
 
+it('keeps a separate open action for a linked Markdown image targeting a web UI', async () => {
+  const webUi: WebUiLinkTarget = {
+    name: 'Canvas editor',
+    url: 'http://localhost:43123/studio/',
+  }
+  const targetUrl = 'http://localhost:43123/studio/pages/sample#page-fixture'
+  const onOpenWebUi = vi.fn()
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <MarkdownSessionLinksProvider
+        sessions={[]}
+        webUis={[webUi]}
+        onOpenWebUi={onOpenWebUi}
+      >
+        <MarkdownMessage>
+          {`[![Fixture illustration](/fixture-illustration.png)](${targetUrl})`}
+        </MarkdownMessage>
+      </MarkdownSessionLinksProvider>,
+    )
+  })
+
+  const openLink = container.querySelector<HTMLAnchorElement>(
+    '.markdown-image-link',
+  )
+  const enlarge = container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Enlarge Fixture illustration"]',
+  )
+  if (openLink === null) {
+    throw new Error('Expected a separate link for the registered web UI')
+  }
+  const registeredLink = openLink
+  if (enlarge === null) throw new Error('Expected the linked image button')
+  await act(async () => userEvent.click(registeredLink))
+  await act(async () => userEvent.click(enlarge))
+
+  function getState() {
+    return {
+      link: {
+        href: registeredLink.getAttribute('href'),
+        label: registeredLink.getAttribute('aria-label'),
+        rel: registeredLink.getAttribute('rel'),
+        target: registeredLink.getAttribute('target'),
+        text: registeredLink.textContent,
+      },
+      lightbox: getImageLightboxState(),
+      onOpenWebUi: onOpenWebUi.mock.calls,
+      webUiName: container.querySelector('.markdown-web-ui-link-name')
+        ?.textContent,
+    }
+  }
+  expect(getState()).toEqual({
+    link: {
+      href: targetUrl,
+      label: null,
+      rel: 'noopener noreferrer',
+      target: '_blank',
+      text: 'Open link',
+    },
+    lightbox: {
+      open: true,
+      isModal: true,
+      imageAlt: 'Fixture illustration',
+    },
+    onOpenWebUi: [[webUi, targetUrl]],
+    webUiName: 'Canvas editor',
+  })
+})
+
 it('shows a preview error and allows the command to be retried', async () => {
   runSessionOperationMock.mockImplementationOnce(() =>
     Promise.resolve(err(new Error('Preview failed'))),
