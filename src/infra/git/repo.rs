@@ -159,6 +159,15 @@ impl GitRepo {
         .is_some()
     }
 
+    /// Check whether `ancestor` is reachable from `descendant`.
+    pub fn is_ancestor(&self, ancestor: &str, descendant: &str) -> bool {
+        run_git_optional(
+            &self.workdir,
+            ["merge-base", "--is-ancestor", ancestor, descendant],
+        )
+        .is_some()
+    }
+
     pub fn origin_url(&self) -> Result<String> {
         run_git(&self.workdir, ["remote", "get-url", "origin"])
             .map_err(|_| GitError::NoOriginRemote.into())
@@ -338,6 +347,21 @@ mod tests {
             Some(branch) => assert_eq!(result.unwrap(), branch),
             None => assert!(result.is_err()),
         }
+    }
+
+    #[test]
+    fn is_ancestor_checks_commit_reachability() {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+        run_git(repo.workdir(), ["branch", "agent-branch"]).unwrap();
+
+        assert_eq!(
+            (
+                repo.is_ancestor("refs/heads/agent-branch", "HEAD"),
+                repo.is_ancestor("refs/heads/missing-branch", "HEAD"),
+            ),
+            (true, false),
+        );
     }
 
     mod parse_repo_tests {

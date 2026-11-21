@@ -2,7 +2,9 @@ use anyhow::{Context, Result, bail};
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
-use crate::infra::git::{GitRepo, MergeStatus, get_merge_status_for_repo, get_repo_root};
+use crate::infra::git::{
+    GitRepo, MergeStatus, get_main_branch_for_repo, get_merge_status_for_repo, get_repo_root,
+};
 use crate::shared::cleanup;
 use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
@@ -297,7 +299,30 @@ async fn check_merge_status(
 }
 
 pub(crate) async fn get_merge_status_for_branch(repo: &GitRepo, branch: &str) -> MergeStatus {
-    get_merge_status_for_repo(repo, branch).await
+    let status = get_merge_status_for_repo(repo, branch).await;
+    close_status_for_branch(repo, branch, status)
+}
+
+fn close_status_for_branch(repo: &GitRepo, branch: &str, status: MergeStatus) -> MergeStatus {
+    if !matches!(
+        &status,
+        MergeStatus::NotMerged { reason } if reason == "No PR found"
+    ) {
+        return status;
+    }
+
+    let Ok(default_branch) = get_main_branch_for_repo(repo) else {
+        return status;
+    };
+    let branch_ref = format!("refs/heads/{branch}");
+    let default_branch_ref = format!("refs/remotes/origin/{default_branch}");
+    if repo.is_ancestor(&branch_ref, &default_branch_ref) {
+        MergeStatus::Closed {
+            reason: "No commits unique to branch".to_string(),
+        }
+    } else {
+        status
+    }
 }
 
 async fn inspect_merge_guard_status_with<F, G, Fut>(
@@ -427,7 +452,92 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::infra::git::cmd::run_git;
     use crate::shared::testing::TestRepo;
+
+    #[test]
+    fn close_allows_a_branch_without_commits_unique_to_origin_default() {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+        run_git(
+            repo.workdir(),
+            ["update-ref", "refs/remotes/origin/master", "HEAD"],
+        )
+        .unwrap();
+        run_git(repo.workdir(), ["branch", "agent-branch"]).unwrap();
+
+        let status = close_status_for_branch(
+            &repo,
+            "agent-branch",
+            MergeStatus::NotMerged {
+                reason: "No PR found".to_string(),
+            },
+        );
+
+        assert_eq!(
+            (status.is_merged(), status.should_cleanup(), status,),
+            (
+                false,
+                true,
+                MergeStatus::Closed {
+                    reason: "No commits unique to branch".to_string(),
+                },
+            ),
+        );
+    }
+
+    #[test]
+    fn close_keeps_a_branch_with_unique_commits_unmerged() {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+        let default_head = run_git(repo.workdir(), ["rev-parse", "HEAD"]).unwrap();
+        run_git(
+            repo.workdir(),
+            [
+                "update-ref",
+                "refs/remotes/origin/master",
+                default_head.as_str(),
+            ],
+        )
+        .unwrap();
+        test_repo.commit_file("branch-file", "sample content");
+        run_git(repo.workdir(), ["branch", "agent-branch"]).unwrap();
+
+        let status = close_status_for_branch(
+            &repo,
+            "agent-branch",
+            MergeStatus::NotMerged {
+                reason: "No PR found".to_string(),
+            },
+        );
+
+        assert_eq!(
+            status,
+            MergeStatus::NotMerged {
+                reason: "No PR found".to_string(),
+            },
+        );
+    }
+
+    #[test]
+    fn close_keeps_a_branch_unmerged_when_origin_default_is_missing() {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+        run_git(repo.workdir(), ["branch", "agent-branch"]).unwrap();
+
+        assert_eq!(
+            close_status_for_branch(
+                &repo,
+                "agent-branch",
+                MergeStatus::NotMerged {
+                    reason: "No PR found".to_string(),
+                },
+            ),
+            MergeStatus::NotMerged {
+                reason: "No PR found".to_string(),
+            },
+        );
+    }
 
     #[tokio::test]
     async fn check_merge_status_uses_the_selected_repository_branch() {
