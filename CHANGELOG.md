@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.828](https://github.com/fohte/armyknife/compare/v0.1.827...v0.1.828) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show Crit wait reason ([#2043](https://github.com/fohte/armyknife/issues/2043)) ([2d35472](https://github.com/fohte/armyknife/commit/2d35472a26bde8f1e5dc9c6da8dbcda3b6cc013c))
+
 ## [0.1.827](https://github.com/fohte/armyknife/compare/v0.1.826...v0.1.827) (2026-11-21)
 
 
