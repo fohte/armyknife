@@ -41,11 +41,26 @@ fn registered_url_with_status(port: u16, url: &str, status: &serde_json::Value) 
         return url.to_string();
     }
 
-    let Ok(mut parsed_url) = reqwest::Url::parse(url) else {
+    let Ok(parsed_url) = reqwest::Url::parse(url) else {
         return url.to_string();
     };
-    parsed_url.set_path("/preview");
-    parsed_url.to_string()
+    if !matches!(parsed_url.path(), "" | "/") {
+        return url.to_string();
+    }
+    // URL serialization drops explicit default ports required by crit's monitor parser.
+    let authority_start = url
+        .find("://")
+        .map_or(url.len(), |scheme_end| scheme_end + 3);
+    let path_start = url[authority_start..]
+        .find(['/', '?', '#'])
+        .map(|suffix_start| authority_start + suffix_start)
+        .unwrap_or(url.len());
+    let suffix_start = if url[path_start..].starts_with('/') {
+        path_start + 1
+    } else {
+        path_start
+    };
+    format!("{}/preview{}", &url[..path_start], &url[suffix_start..])
 }
 
 fn preview_mode_for_port(status: &serde_json::Value, port: u16) -> bool {
@@ -60,6 +75,9 @@ fn is_loopback_url(url: &reqwest::Url) -> bool {
     url.host_str().is_some_and(|host| {
         host.eq_ignore_ascii_case("localhost")
             || host
+                .strip_prefix('[')
+                .and_then(|host| host.strip_suffix(']'))
+                .unwrap_or(host)
                 .parse::<IpAddr>()
                 .is_ok_and(|address| address.is_loopback())
     })
@@ -73,6 +91,7 @@ mod tests {
 
     #[rstest]
     #[case::preview_root_url(
+        43210,
         Ok(serde_json::json!({
             "sessions": [{ "port": 43210, "args": ["preview", "sample.html"] }],
         })),
@@ -80,6 +99,7 @@ mod tests {
         "http://localhost:43210/preview",
     )]
     #[case::preview_root_url_with_query(
+        43210,
         Ok(serde_json::json!({
             "sessions": [{ "port": 43210, "args": ["preview", "sample.html"] }],
         })),
@@ -87,6 +107,7 @@ mod tests {
         "http://localhost:43210/preview?token=fixture",
     )]
     #[case::non_preview_root_url(
+        43210,
         Ok(serde_json::json!({
             "sessions": [{ "port": 43210, "args": ["review", "sample.html"] }],
         })),
@@ -94,6 +115,7 @@ mod tests {
         "http://localhost:43210",
     )]
     #[case::preview_pathful_url(
+        43210,
         Ok(serde_json::json!({
             "sessions": [{ "port": 43210, "args": ["preview", "sample.html"] }],
         })),
@@ -101,6 +123,7 @@ mod tests {
         "http://localhost:43210/review",
     )]
     #[case::remote_root_url(
+        43210,
         Ok(serde_json::json!({
             "sessions": [{ "port": 43210, "args": ["preview", "sample.html"] }],
         })),
@@ -108,6 +131,7 @@ mod tests {
         "https://review.example.test:43210",
     )]
     #[case::preview_on_another_port(
+        43210,
         Ok(serde_json::json!({
             "sessions": [
                 { "port": 43210, "args": ["review", "sample.html"] },
@@ -117,18 +141,36 @@ mod tests {
         "http://localhost:43210",
         "http://localhost:43210",
     )]
+    #[case::preview_default_http_port(
+        80,
+        Ok(serde_json::json!({
+            "sessions": [{ "port": 80, "args": ["preview", "sample.html"] }],
+        })),
+        "http://localhost:80",
+        "http://localhost:80/preview",
+    )]
+    #[case::preview_ipv6_loopback_url(
+        43210,
+        Ok(serde_json::json!({
+            "sessions": [{ "port": 43210, "args": ["preview", "sample.html"] }],
+        })),
+        "http://[::1]:43210",
+        "http://[::1]:43210/preview",
+    )]
     #[case::status_unavailable(
+        43210,
         Err(anyhow::anyhow!("fixture status error")),
         "http://localhost:43210",
         "http://localhost:43210",
     )]
     fn registers_preview_path_only_for_local_preview_root_urls(
+        #[case] port: u16,
         #[case] status: Result<serde_json::Value>,
         #[case] url: &str,
         #[case] expected: &str,
     ) {
         assert_eq!(
-            prepare_registration_with_status(43210, url, || status).0,
+            prepare_registration_with_status(port, url, || status).0,
             expected,
         );
     }
