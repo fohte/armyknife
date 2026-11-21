@@ -131,3 +131,18 @@ export const IndentedBangCommand: Story = {
     sessionId: 'sample-session',
   },
 }
+
+export const CodeBlockWithoutLanguage: Story = {
+  name: 'A code block without a language is labelled as text',
+  args: {
+    children: '```\nPlain text can be copied from this block.\n```',
+  },
+}
+
+export const UserMessageCodeBlock: Story = {
+  name: 'A user message keeps the copy toolbar inside its bubble',
+  args: {
+    className: 'chat-user-message',
+    children: "```bash\nprintf 'ready\\n'\n```",
+  },
+}

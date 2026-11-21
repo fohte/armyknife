@@ -3,12 +3,15 @@ import '#components/syntax-code-block.css'
 import { Fragment, type ReactNode, useEffect, useState } from 'react'
 import type { TokensResult } from 'shiki/types'
 
+import { useCopyToClipboard } from '#components/use-copy-to-clipboard'
+
 type SyntaxCodeBlockProps = {
   code: string
   language: string
   className?: string
   children?: ReactNode
   links?: SyntaxCodeBlockLink[]
+  copyable?: boolean
 }
 
 export type SyntaxCodeBlockLink = {
@@ -121,7 +124,9 @@ export function SyntaxCodeBlock({
   className,
   children,
   links = [],
+  copyable = false,
 }: SyntaxCodeBlockProps) {
+  const { status, copy } = useCopyToClipboard(code)
   const [highlightedCode, setHighlightedCode] =
     useState<HighlightedCode | null>(null)
   const highlighted =
@@ -156,7 +161,7 @@ export function SyntaxCodeBlock({
     }
   }, [code, language])
 
-  return (
+  const pre = (
     <pre
       className={['syntax-code-block', className].filter(Boolean).join(' ')}
       data-language={language}
@@ -165,5 +170,43 @@ export function SyntaxCodeBlock({
         {highlightedContent ?? children ?? code}
       </code>
     </pre>
+  )
+
+  if (!copyable) return pre
+
+  const accessibleStatus =
+    status === 'copied'
+      ? 'Code copied'
+      : status === 'failed'
+        ? 'Could not copy code'
+        : ''
+  const buttonLabel =
+    status === 'copied'
+      ? '✓ Copied'
+      : status === 'failed'
+        ? 'Copy failed'
+        : 'Copy'
+
+  return (
+    <div className="syntax-code-block-container">
+      <div className="syntax-code-block-toolbar">
+        <span className="syntax-code-block-language">{language}</span>
+        <button
+          className="syntax-code-block-copy-button"
+          type="button"
+          aria-label={status === 'idle' ? 'Copy code' : accessibleStatus}
+          title="Copy code"
+          onClick={copy}
+        >
+          {buttonLabel}
+        </button>
+        {accessibleStatus === '' ? null : (
+          <span className="sr-only" role="status">
+            {accessibleStatus}
+          </span>
+        )}
+      </div>
+      {pre}
+    </div>
   )
 }

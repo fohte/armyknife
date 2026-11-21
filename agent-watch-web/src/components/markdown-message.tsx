@@ -303,7 +303,12 @@ const MarkdownCode: NonNullable<Components['code']> = ({ node, ...props }) => {
   })
   const code =
     isCodeBlock && text !== null ? (
-      <SyntaxCodeBlock code={text} language={language ?? 'text'} links={links}>
+      <SyntaxCodeBlock
+        code={text}
+        language={language ?? 'text'}
+        links={links}
+        copyable
+      >
         <>{codeChildren}</>
       </SyntaxCodeBlock>
     ) : (

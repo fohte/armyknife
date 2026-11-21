@@ -58,6 +58,7 @@ const appTestFiles = [
   'src/components/web-ui-pane.test.tsx',
   'src/components/resizable-columns.test.tsx',
   'src/components/markdown-message.browser.test.tsx',
+  'src/components/syntax-code-block.browser.test.tsx',
   'src/components/markdown-message-remount.browser.test.tsx',
   'src/components/session-link.browser.test.tsx',
   'src/components/tool-summary.browser.test.tsx',
