@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.819](https://github.com/fohte/armyknife/compare/v0.1.818...v0.1.819) (2026-11-21)
+
+
+### Features
+
+* **agent-watch-web:** open web UI links in-app ([#2021](https://github.com/fohte/armyknife/issues/2021)) ([160a6e3](https://github.com/fohte/armyknife/commit/160a6e3cbe7b8719b1b8fd9db86e0784a4c26628))
+
 ## [0.1.818](https://github.com/fohte/armyknife/compare/v0.1.817...v0.1.818) (2026-11-21)
 
 
