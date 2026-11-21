@@ -110,12 +110,24 @@ export const ProposalShowsACommentWithoutAChoice: Story = {
 
 export const ProposalOffersTouchSizedChoicesOnMobile: Story = {
   name: 'A proposal offers touch sized choices on mobile',
-  args: { isMobile: true },
+  args: { isMobile: true, defaultChoice: 0 },
 }
 
 export const ProposalShowsAChosenAnswer: Story = {
   name: 'A proposal shows the choice selected by the user',
   args: {
+    answer: {
+      choice: 0,
+      comment: 'Keep the change small.',
+    },
+    resolved: true,
+  },
+}
+
+export const MobileProposalShowsAChosenAnswer: Story = {
+  name: 'A mobile proposal shows the selected option after answering',
+  args: {
+    isMobile: true,
     answer: {
       choice: 0,
       comment: 'Keep the change small.',
