@@ -57,6 +57,20 @@ pub(super) fn set_crit_wait_state(port: u16, waiting: Option<bool>) -> Result<()
     set_crit_wait_state_in(&store::sessions_dir()?, port, waiting)
 }
 
+pub(super) fn set_crit_wait_state_if_changed(
+    previous_waiting: &mut Option<Option<bool>>,
+    waiting: Option<bool>,
+    update: impl FnOnce(Option<bool>) -> Result<()>,
+) -> Result<()> {
+    if *previous_waiting == Some(waiting) {
+        return Ok(());
+    }
+
+    update(waiting)?;
+    *previous_waiting = Some(waiting);
+    Ok(())
+}
+
 fn set_crit_wait_state_in(sessions_dir: &Path, port: u16, waiting: Option<bool>) -> Result<()> {
     let sessions = store::list_all_sessions_from(sessions_dir)?;
     for session_id in sessions
@@ -137,6 +151,24 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn crit_wait_state_updates_only_on_first_observation_or_change() -> Result<()> {
+        let mut previous_waiting = None;
+        let mut updates = Vec::new();
+        for waiting in [None, None, Some(false), Some(false), Some(true), Some(true)] {
+            set_crit_wait_state_if_changed(&mut previous_waiting, waiting, |waiting| {
+                updates.push(waiting);
+                Ok(())
+            })?;
+        }
+
+        assert_eq!(
+            (updates, previous_waiting),
+            (vec![None, Some(false), Some(true)], Some(Some(true))),
+        );
+        Ok(())
     }
 
     #[test]

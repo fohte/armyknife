@@ -22,7 +22,9 @@ use crate::infra::tmux;
 use crate::shared::log::short_run_id;
 
 use self::daemon_status::crit_pid_for_port;
-use self::wait_state::{crit_client_waiting_on_port, set_crit_wait_state};
+use self::wait_state::{
+    crit_client_waiting_on_port, set_crit_wait_state, set_crit_wait_state_if_changed,
+};
 
 const MONITOR_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const STARTING_MARKER_TTL: Duration = Duration::from_secs(15);
@@ -112,6 +114,7 @@ pub(super) fn run(args: &MonitorArgs) -> Result<()> {
     write_marker_owner(&marker, &args.reservation)?;
     tracing::info!(event = "agent.crit.monitor.start", daemon_pid = args.pid);
     let mut watched_pid = args.pid;
+    let mut previous_waiting = None;
     loop {
         while process::is_process_alive(watched_pid) {
             let waiting = match crit_client_waiting_on_port(args.port, watched_pid) {
@@ -125,7 +128,11 @@ pub(super) fn run(args: &MonitorArgs) -> Result<()> {
                     None
                 }
             };
-            if let Err(error) = set_crit_wait_state(args.port, waiting) {
+            if let Err(error) =
+                set_crit_wait_state_if_changed(&mut previous_waiting, waiting, |waiting| {
+                    set_crit_wait_state(args.port, waiting)
+                })
+            {
                 tracing::warn!(
                     event = "agent.crit.monitor.wait_state_update_failed",
                     port = args.port,
