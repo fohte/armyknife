@@ -136,6 +136,39 @@ mod tests {
     }
 
     #[rstest]
+    fn counts_a_report_sent_after_session_creation_before_the_initial_check(sessions_dir: TempDir) {
+        let session_id = "fixture-delegate";
+        let parent_id = "fixture-parent";
+        let session_created_at = Utc.with_ymd_and_hms(2026, 6, 1, 10, 0, 0).unwrap();
+        insert_watch_web_peer_out_message_from(
+            sessions_dir.path(),
+            session_id,
+            parent_id,
+            "A report before the first check.",
+            Utc.with_ymd_and_hms(2026, 6, 1, 11, 0, 0).unwrap(),
+            false,
+        )
+        .unwrap();
+
+        let initial_result = check_unreported_stop(
+            sessions_dir.path(),
+            session_id,
+            parent_id,
+            session_created_at,
+        )
+        .unwrap();
+        let next_result = check_unreported_stop(
+            sessions_dir.path(),
+            session_id,
+            parent_id,
+            session_created_at,
+        )
+        .unwrap();
+
+        assert_eq!((initial_result, next_result), (true, false));
+    }
+
+    #[rstest]
     fn ignores_reports_before_session_creation_on_the_initial_check(sessions_dir: TempDir) {
         let session_id = "fixture-delegate";
         let parent_id = "fixture-parent";
