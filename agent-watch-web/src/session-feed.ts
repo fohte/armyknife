@@ -18,7 +18,6 @@ type SessionEventSource = {
 type SessionFeedDependencies = {
   fetcher?: typeof fetch
   createEventSource?: (url: string) => SessionEventSource
-  reloadPage?: () => void
   requestRetryDelayMs?: number
   initialServerVersion?: string | null
   onUpdateAvailable?: (version: string | null) => void

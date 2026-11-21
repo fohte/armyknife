@@ -29,6 +29,7 @@ const appTestFiles = [
   'src/use-pending-merge-retry-navigation.browser.test.tsx',
   'src/components/collapsible-text.test.tsx',
   'src/App.test.tsx',
+  'src/components/update-notice.test.tsx',
   'src/components/mobile-nav-drawer.test.tsx',
   'src/components/new-session-form.browser.test.tsx',
   'src/use-new-session.browser.test.tsx',

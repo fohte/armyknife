@@ -1052,7 +1052,81 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it('shows the phone update below its header and dismisses it until a new version', () => {
+it.each([
+  {
+    screen: 'Inbox',
+    viewSelector: '.inbox-view',
+    headerSelector: '.mobile-inbox-brand',
+  },
+  {
+    screen: 'Board',
+    viewSelector: '.board-view',
+    headerSelector: '.board-header',
+  },
+  {
+    screen: 'conversation',
+    viewSelector: '.conversation-pane',
+    headerSelector: '.conversation-header',
+  },
+  {
+    screen: 'new session',
+    viewSelector: '.new-session-view',
+    headerSelector: '.new-session-header',
+  },
+] as const)(
+  'places the phone update after the $screen header',
+  async ({ screen, viewSelector, headerSelector }) => {
+    if (screen === 'new session') {
+      vi.stubGlobal(
+        'fetch',
+        createSessionLaunchFetcher(
+          jsonResponse({ launchId: 'launch-fixture' }),
+        ),
+      )
+    }
+    renderMobileApp(screen === 'Board' ? 'Board' : 'Inbox')
+    if (screen === 'conversation') {
+      publishSessions({
+        revision: 1,
+        sessions: [session('session-phone', 'A sample conversation')],
+      })
+      act(() => {
+        container
+          .querySelector<HTMLButtonElement>('[data-session-row]')
+          ?.click()
+      })
+    }
+    if (screen === 'new session') {
+      clickButton('[aria-label="New session"]')
+      await waitForDirectoryResults()
+    }
+    act(() => {
+      capturedFeed.onUpdateAvailable?.('fixture-version-next')
+    })
+
+    const view = container.querySelector(viewSelector)
+    const header = view?.querySelector(headerSelector) ?? null
+    const notice = view?.querySelector('.update-notice') ?? null
+    const snapshot = () => ({
+      noticeVisible: notice !== null,
+      followsHeader:
+        header !== null &&
+        notice !== null &&
+        (header.compareDocumentPosition(notice) &
+          Node.DOCUMENT_POSITION_FOLLOWING) !==
+          0,
+      text: notice?.textContent ?? null,
+    })
+
+    expect(snapshot()).toEqual({
+      noticeVisible: true,
+      followsHeader: true,
+      text: 'New version vfixture-version-next is ready.Reload',
+    })
+  },
+)
+
+it('hides the phone update until the server reports a different version', () => {
   vi.useFakeTimers()
   setMobileViewport(true)
   renderApp()
@@ -1087,6 +1161,22 @@ it('shows the phone update below its header and dismisses it until a new version
     noticeFollowsHeader: true,
     noticeAfterDismiss: null,
     noticeForNextVersion: 'New version vfixture-version-newer is ready.Reload',
+  })
+})
+
+it('keeps the phone page mounted when an update becomes available', () => {
+  renderMobileApp()
+  act(() => {
+    capturedFeed.onUpdateAvailable?.('fixture-version-next')
+  })
+
+  const snapshot = () => ({
+    pageMounted: container.querySelector('.agent-watch-shell') !== null,
+    noticeText: container.querySelector('.update-notice')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    pageMounted: true,
+    noticeText: 'New version vfixture-version-next is ready.Reload',
   })
 })
 

@@ -716,7 +716,6 @@ it('refreshes sessions without reloading after a server restart', async () => {
   const source = new FakeEventSource()
   const initialResponse = deferred<undefined>()
   const reconnectResponse = deferred<undefined>()
-  const reloadPage = vi.fn()
   let responseCount = 0
   const fetcher = vi
     .fn()
@@ -735,7 +734,6 @@ it('refreshes sessions without reloading after a server restart', async () => {
     {
       fetcher,
       createEventSource: () => source,
-      reloadPage,
       initialServerVersion: 'fixture-version-current',
       onUpdateAvailable: () => {},
     },
@@ -749,12 +747,43 @@ it('refreshes sessions without reloading after a server restart', async () => {
   await reconnectResponse.promise
   stop()
 
-  const snapshot = () => [
-    reloadPage.mock.calls.length,
-    fetcher.mock.calls.length,
-    source.closed,
-  ]
-  expect(snapshot()).toEqual([0, 2, true])
+  const snapshot = () => [fetcher.mock.calls.length, source.closed]
+  expect(snapshot()).toEqual([2, true])
+})
+
+it('reads the loaded server version from the page meta tag', () => {
+  const querySelector = vi.fn((selector: string) =>
+    selector === 'meta[name="server-version"]'
+      ? { content: 'fixture-version-current' }
+      : null,
+  )
+  vi.stubGlobal('document', { querySelector })
+  const source = new FakeEventSource()
+  const updates: (string | null)[] = []
+  const stop = startSessionFeed(
+    () => {},
+    () => {},
+    {
+      fetcher: vi
+        .fn()
+        .mockResolvedValue(jsonResponse({ revision: 1, sessions: [] })),
+      createEventSource: () => source,
+      onUpdateAvailable: (version) => updates.push(version),
+      visibilityTarget: new FakeVisibilityTarget(),
+    },
+  )
+
+  source.emit('version', 'fixture-version-next')
+  stop()
+
+  const snapshot = () => ({
+    metaSelectors: querySelector.mock.calls,
+    updates,
+  })
+  expect(snapshot()).toEqual({
+    metaSelectors: [['meta[name="server-version"]']],
+    updates: ['fixture-version-next'],
+  })
 })
 
 it.each([

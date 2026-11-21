@@ -23,14 +23,7 @@ export function UpdateNotice({
     >
       <RotateCw aria-hidden="true" className="update-notice-icon" size={14} />
       <span className="update-notice-message">
-        {isMobile ? (
-          <>New version v{version} is ready.</>
-        ) : (
-          <>
-            A new version of agent watch, v{version}, is ready. Reload to use
-            it.
-          </>
-        )}
+        New version v{version} is ready.
       </span>
       <button className="update-notice-reload" onClick={onReload} type="button">
         Reload
