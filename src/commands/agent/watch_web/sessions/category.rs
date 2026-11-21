@@ -123,7 +123,8 @@ pub(super) fn categories_for_with_todo_later(
         && !context.needs_action
         && context.turn.is_none()
         && session.status == SessionStatus::Stopped
-        && context.agent_status_state.is_none();
+        && context.agent_status_state.is_none()
+        && !session.is_current_tool_named("ExitPlanMode");
 
     if has_only_folded_todos {
         (

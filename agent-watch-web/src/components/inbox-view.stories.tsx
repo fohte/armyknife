@@ -286,10 +286,9 @@ export const InboxShowsFoldedTodosBelowNeedsActionOnPhone: Story = {
   parameters: { viewport: { defaultViewport: 'mobile1' } },
 }
 
-export const InboxExpandsMultipleFoldedTodoSessions: Story = {
-  name: 'The inbox expands To-do later to select among sessions',
+export const InboxSummarizesFoldedTodosAcrossSessions: Story = {
+  name: 'The inbox summarizes folded to-dos across sessions',
   args: {
-    todoLaterExpanded: true,
     sessions: [
       ...sessions,
       sampleSession('sample-folded-alert', 'done', 'Review a phone alert', {

@@ -1502,6 +1502,30 @@ mod tests {
     }
 
     #[rstest]
+    #[tokio::test]
+    async fn session_tree_route_includes_folded_todo_summaries_for_stopped_sessions(
+        mut source: TestSessionSource,
+    ) {
+        source.web_states[0].later_until = None;
+        source.folded_todo_summaries.insert(
+            "child-session".to_string(),
+            FoldedTodoSummary {
+                count: 2,
+                first_title: Some("Check the alert sound".to_string()),
+            },
+        );
+
+        let (status, tree) = session_tree_response(source, "child-session").await;
+
+        let mut expected = expected_child_tree(serde_json::json!({ "mode": "repo_disabled" }));
+        expected["sessions"][0]["category"] = serde_json::json!("done");
+        expected["sessions"][0]["kind"] = serde_json::json!("Todo");
+        expected["sessions"][0]["preview"] = serde_json::json!("Check the alert sound");
+
+        assert_eq!((status, tree), (StatusCode::OK, expected));
+    }
+
+    #[rstest]
     #[case::enabled(true, false, "enabled", None)]
     #[case::inherited(false, true, "inherited", Some("parent-session"))]
     #[tokio::test]
@@ -2652,6 +2676,48 @@ mod tests {
             },
         );
         expected["sessions"][0]["todoLaterCount"] = serde_json::json!(2);
+        expected["sessions"][0]["todoLaterTitle"] = serde_json::json!("Check the alert sound");
+        expected["sessions"][0]["preview"] = serde_json::json!("Check the alert sound");
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn folded_todos_do_not_demote_exit_plan_mode_from_needs_action(
+        mut source: TestSessionSource,
+    ) {
+        source.sessions[0].current_tool_name = Some("ExitPlanMode".to_string());
+        source.web_states[0].later_until = None;
+        source.folded_todo_summaries.insert(
+            "child-session".to_string(),
+            FoldedTodoSummary {
+                count: 1,
+                first_title: Some("Check the alert sound".to_string()),
+            },
+        );
+
+        let mut expected = expected_response(
+            "needs_action",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: Some("Plan"),
+                category_when_not_later: "needs_action",
+                is_paused: false,
+                unread: true,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["todoLaterCount"] = serde_json::json!(1);
         expected["sessions"][0]["todoLaterTitle"] = serde_json::json!("Check the alert sound");
         expected["sessions"][0]["preview"] = serde_json::json!("Check the alert sound");
 
