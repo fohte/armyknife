@@ -947,7 +947,7 @@ mod tests {
     #[case::missing_rollout(-32600, "no rollout found for thread id thread-a")]
     #[case::empty_rollout(
         -32603,
-        "thread-store internal error: failed to read session metadata /session/rollout-thread-a.jsonl: rollout at /session/rollout-thread-a.jsonl is empty",
+        "failed to read thread: thread-store internal error: failed to read session metadata /session/rollout-thread-a.jsonl: rollout at /session/rollout-thread-a.jsonl is empty",
     )]
     fn retries_resume_after_retryable_rollout_rejection_and_confirms_delivery(
         connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
@@ -1017,7 +1017,7 @@ mod tests {
     #[case::unrelated_internal_error(-32603, "thread store is unavailable")]
     #[case::empty_rollout_for_another_thread(
         -32603,
-        "thread-store internal error: failed to read session metadata /session/rollout-thread-b.jsonl: rollout at /session/rollout-thread-b.jsonl is empty",
+        "failed to read thread: thread-store internal error: failed to read session metadata /session/rollout-thread-b.jsonl: rollout at /session/rollout-thread-b.jsonl is empty",
     )]
     fn does_not_retry_other_resume_rejections(
         connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
