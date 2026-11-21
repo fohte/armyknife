@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.835](https://github.com/fohte/armyknife/compare/v0.1.834...v0.1.835) (2026-11-21)
+
+
+### Features
+
+* **agent-watch-web:** allow copying code blocks ([#2045](https://github.com/fohte/armyknife/issues/2045)) ([e6ba1d0](https://github.com/fohte/armyknife/commit/e6ba1d0ddc601fcd87f689769cca23dd9216e275))
+
 ## [0.1.834](https://github.com/fohte/armyknife/compare/v0.1.833...v0.1.834) (2026-11-21)
 
 
