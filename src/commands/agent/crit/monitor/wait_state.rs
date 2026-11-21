@@ -13,14 +13,41 @@ const CRIT_CLIENT_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(super) fn crit_client_waiting_on_port(port: u16, daemon_pid: u32) -> Result<bool> {
     let mut command = ExternalTool::Lsof.command();
-    command.args(["-nP", &format!("-iTCP:{port}"), "-sTCP:ESTABLISHED", "-Fpc"]);
+    // An empty socket result is expected after a review finishes.
+    command.args([
+        "-nP",
+        &format!("-iTCP:{port}"),
+        "-sTCP:ESTABLISHED",
+        "-Fpc",
+        "-Q",
+    ]);
     let output = process::run_with_timeout(command, CRIT_CLIENT_CHECK_TIMEOUT)
         .context("failed to inspect crit client connections")?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    crit_client_waiting_from_lsof_result(
+        output.status.success(),
+        output.status.code(),
+        &stdout,
+        &stderr,
+        daemon_pid,
+    )
+}
+
+fn crit_client_waiting_from_lsof_result(
+    status_success: bool,
+    exit_code: Option<i32>,
+    stdout: &str,
+    stderr: &str,
+    daemon_pid: u32,
+) -> Result<bool> {
+    if !status_success {
+        if exit_code == Some(1) && stdout.is_empty() && stderr.is_empty() {
+            return Ok(false);
+        }
         bail!("lsof failed to inspect crit client connections: {stderr}");
     }
-    has_crit_client(&String::from_utf8_lossy(&output.stdout), daemon_pid)
+    has_crit_client(stdout, daemon_pid)
 }
 
 fn has_crit_client(output: &str, daemon_pid: u32) -> Result<bool> {
@@ -192,6 +219,34 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[rstest]
+    #[case::empty_result_is_successful(true, Some(0))]
+    #[case::no_matching_socket_returns_nonzero(false, Some(1))]
+    fn no_lsof_matches_mean_no_crit_client(
+        #[case] status_success: bool,
+        #[case] exit_code: Option<i32>,
+    ) {
+        let actual = crit_client_waiting_from_lsof_result(status_success, exit_code, "", "", 101)
+            .map(|waiting| (true, waiting))
+            .unwrap_or((false, false));
+
+        assert_eq!(actual, (true, false));
+    }
+
+    #[test]
+    fn lsof_errors_with_diagnostics_remain_unknown() {
+        let actual = crit_client_waiting_from_lsof_result(
+            false,
+            Some(1),
+            "",
+            "lsof could not inspect a socket",
+            101,
+        )
+        .map_err(|_| "lsof error");
+
+        assert_eq!(actual, Err("lsof error"));
     }
 
     #[test]
