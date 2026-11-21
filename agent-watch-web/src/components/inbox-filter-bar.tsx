@@ -1,4 +1,5 @@
 import '#components/inbox-filter.css'
+import '#components/inbox-filter-mobile.css'
 
 import { Button } from '@fohte/ui/button'
 import { Filter } from 'lucide-react'

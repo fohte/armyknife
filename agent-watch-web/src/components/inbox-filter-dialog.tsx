@@ -1,3 +1,5 @@
+import '#components/inbox-filter-mobile.css'
+
 import { Button } from '@fohte/ui/button'
 import { useEffect, useRef, useState } from 'react'
 
