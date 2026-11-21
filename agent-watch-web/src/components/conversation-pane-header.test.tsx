@@ -457,14 +457,13 @@ it('opens the inherited vibe sheet from the first mobile menu item', async () =>
     firstItem,
     menuClosed: isMobileActionMenuClosed(),
     sheetTitle: document.body.querySelector('.vibe-panel-title')?.textContent,
-    preview: document.body.querySelector('.vibe-panel-message blockquote')
-      ?.textContent,
+    preview: document.body.querySelector('.vibe-panel-message'),
   })
   expect(snapshot()).toEqual({
     firstItem: 'Vibe modeOn · inherited',
     menuClosed: true,
     sheetTitle: 'Vibe on · inherited',
-    preview: 'watch-web からユーザーが vibe mode を on にしました。',
+    preview: null,
   })
 })
 

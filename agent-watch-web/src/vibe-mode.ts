@@ -60,17 +60,13 @@ export function vibeModeReason(mode: VibeMode, repo: string) {
 
 export function vibeModeChange(mode: VibeMode) {
   const enabled = mode.mode === 'inherited' || mode.mode === 'disabled'
-  const message = enabled
-    ? 'watch-web からユーザーが vibe mode を on にしました。'
-    : 'watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。'
   return {
     enabled,
-    message,
     actionLabel:
       mode.mode === 'inherited'
-        ? 'Turn on here and send'
+        ? 'Turn on here'
         : enabled
-          ? 'Turn on and send'
-          : 'Turn off and send',
+          ? 'Turn on'
+          : 'Turn off',
   }
 }
