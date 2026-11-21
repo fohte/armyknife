@@ -107,6 +107,28 @@ it('requires a directory before the session can start', () => {
   ).toBe(true)
 })
 
+it('warns before leaving while the first message is unsent', () => {
+  renderForm(makeState({ initialMessage: 'An unsent first message' }))
+  const event = new Event('beforeunload', { cancelable: true })
+
+  act(() => {
+    window.dispatchEvent(event)
+  })
+
+  expect(event.defaultPrevented).toBe(true)
+})
+
+it('does not warn before leaving when the first message is empty', () => {
+  renderForm(makeState())
+  const event = new Event('beforeunload', { cancelable: true })
+
+  act(() => {
+    window.dispatchEvent(event)
+  })
+
+  expect(event.defaultPrevented).toBe(false)
+})
+
 it('suggests and inserts skills in the first message field', async () => {
   root = createRoot(container)
   act(() => root?.render(<StatefulSkillForm />))

@@ -10,6 +10,7 @@ import {
   SkillSuggestionList,
   useSkillCompletion,
 } from '#components/skill-completion'
+import { useBeforeUnloadWarning } from '#components/use-beforeunload-warning'
 import { useDismissableLayer } from '#components/use-dismissable-layer'
 import type { NewSessionState } from '#use-new-session'
 
@@ -49,6 +50,7 @@ export function NewSessionForm({
     skills: state.skillSuggestions,
     onDraftChange: state.setInitialMessage,
   })
+  useBeforeUnloadWarning(state.initialMessage !== '')
   useDismissableLayer(directoryPickerOpen, setDirectoryPickerOpen, [
     directoryTriggerRef,
     directoryPopoverRef,

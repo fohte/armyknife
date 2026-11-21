@@ -6079,6 +6079,44 @@ it('sends pasted file data with the message and keeps it when sending fails', as
   })
 })
 
+it('warns before leaving while an attachment is queued', async () => {
+  renderView(
+    vi.fn(() => Promise.resolve(false)),
+    {
+      ...session,
+      id: crypto.randomUUID(),
+    },
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(pasteEvent, 'clipboardData', {
+    value: {
+      files: [
+        new File(['payload'], 'fixture-attachment.bin', {
+          type: 'application/octet-stream',
+        }),
+      ],
+    },
+  })
+  act(() => {
+    textarea.dispatchEvent(pasteEvent)
+  })
+  expect(
+    await waitForState(
+      () => container.querySelector('.attachment-preview-item') !== null,
+    ),
+  ).toBe(true)
+  const event = new Event('beforeunload', { cancelable: true })
+
+  act(() => {
+    window.dispatchEvent(event)
+  })
+
+  expect(event.defaultPrevented).toBe(true)
+})
+
 it('attaches dropped files through the composer and sends their data', async () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction, { ...session, id: crypto.randomUUID() })
