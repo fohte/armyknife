@@ -156,6 +156,28 @@ export const RecentSessionsAppearOnMobile: Story = {
   },
 }
 
+export const MobileNavigationShowsFailedActivity: Story = {
+  name: 'The mobile navigation marks Inbox while Activity has a failure',
+  args: {
+    isMobile: true,
+    activityCount: 2,
+    activityFailed: true,
+  },
+  decorators: [
+    (StoryComponent) => (
+      <div
+        style={{
+          width: '320px',
+          height: '844px',
+          background: 'var(--aw-bg-app)',
+        }}
+      >
+        <StoryComponent />
+      </div>
+    ),
+  ],
+}
+
 export const InboxIsCollapsed: Story = {
   name: 'The Inbox toggle is highlighted while the Inbox is collapsed',
   args: { inboxCollapsed: true },

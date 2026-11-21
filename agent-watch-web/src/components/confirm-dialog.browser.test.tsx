@@ -64,6 +64,54 @@ it('keeps a pending dialog open and stops Escape from reaching global shortcuts'
   })
 })
 
+it('renders mobile confirmation details inside a bottom sheet', () => {
+  act(() => {
+    root?.render(
+      <ConfirmDialog
+        title="Confirm the merge?"
+        confirmLabel="Confirm merge"
+        mobile
+        portal={false}
+        onCancel={() => undefined}
+        onConfirm={() => undefined}
+      >
+        <code className="pull-request-merge-head-sha">fixture-head-sha</code>
+        <dl className="bang-command-dialog-details">
+          <dt>Working directory</dt>
+          <dd>
+            <code>/workspace/example</code>
+          </dd>
+          <dt>Command</dt>
+          <dd>
+            <pre>git status --short</pre>
+          </dd>
+        </dl>
+      </ConfirmDialog>,
+    )
+  })
+
+  const snapshot = () => ({
+    backdrop: container.querySelector('.confirm-dialog-backdrop')?.className,
+    head: container.querySelector('.pull-request-merge-head-sha')?.textContent,
+    details: Array.from(
+      container.querySelectorAll(
+        '.bang-command-dialog-details dt, .bang-command-dialog-details dd',
+      ),
+      (element) => element.textContent,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    backdrop: 'confirm-dialog-backdrop confirm-dialog-backdrop--mobile',
+    head: 'fixture-head-sha',
+    details: [
+      'Working directory',
+      '/workspace/example',
+      'Command',
+      'git status --short',
+    ],
+  })
+})
+
 it('activates the cancel action when Enter is pressed on the cancel button', async () => {
   const onCancel = vi.fn()
   const onConfirm = vi.fn()

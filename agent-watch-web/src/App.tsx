@@ -22,6 +22,7 @@ import { useComposerFocus } from '#use-composer-focus'
 import { useLaterSessionActions } from '#use-later-session-actions'
 import { useNewSession } from '#use-new-session'
 import { useNewSessionNavigation } from '#use-new-session-navigation'
+import { usePendingMergeRetryNavigation } from '#use-pending-merge-retry-navigation'
 import { useSessionClose } from '#use-session-close'
 import { useSessionRefreshRevisions } from '#use-session-refresh-revisions'
 
@@ -345,6 +346,15 @@ function AppContent() {
     },
     [closeMobileNav, openSessionInInbox],
   )
+  usePendingMergeRetryNavigation({
+    isMobile,
+    view,
+    selectedId,
+    conversationOpen: mobileConversationOpen,
+    newSessionMode,
+    sessions: sessionsWithElapsedTime,
+    openSessionInInbox: openSessionFromNavigation,
+  })
   const selectSavedViewFromNavigation = useCallback(
     (id: string) => {
       closeMobileNav()

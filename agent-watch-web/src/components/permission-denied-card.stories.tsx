@@ -81,6 +81,24 @@ export const Dismissed: Story = {
   },
 }
 
+export const DismissedOnIPhone: Story = {
+  name: 'A dismissed denial fits a single row on an iPhone',
+  args: {
+    message: { ...deniedOperation, resolved: true, resolution: 'dismissed' },
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="conversation-pane"
+        data-mobile="true"
+        style={{ width: 390, padding: 16 }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
 export const DismissedExpanded: Story = {
   name: 'A dismissed denial shows its details when expanded',
   args: {

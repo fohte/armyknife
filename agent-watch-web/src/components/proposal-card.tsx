@@ -2,12 +2,11 @@ import '#components/card-comment.css'
 import '#components/proposal-card.css'
 
 import { Button } from '@fohte/ui/button'
-import type { ClipboardEvent } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   AttachmentPreviewList,
-  handleAttachmentPaste,
+  createAttachmentInputHandlers,
 } from '#components/attachment-preview-list'
 import { numberShortcutChoice } from '#components/conversation-keyboard'
 import { MarkdownMessage } from '#components/markdown-message'
@@ -312,9 +311,10 @@ export function ProposalCard({
             rows={2}
             value={comment}
             disabled={isAnswered || isSubmitting}
-            onPaste={(event: ClipboardEvent<HTMLTextAreaElement>) => {
-              handleAttachmentPaste(event, attachmentState.onPasteFiles)
-            }}
+            {...createAttachmentInputHandlers(
+              attachmentState.onPasteFiles,
+              !isAnswered && !isSubmitting,
+            )}
             onChange={(event) => {
               updateDraft(event.currentTarget.value)
             }}

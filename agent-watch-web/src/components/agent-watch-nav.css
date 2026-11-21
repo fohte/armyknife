@@ -43,6 +43,18 @@
   overflow-y: auto;
 }
 
+.view-switch-inbox-button {
+  position: relative;
+}
+
+.view-switch-inbox-failure {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: var(--aw-color-error);
+}
+
 .saved-views-nav ul {
   margin: 0;
   padding: 0;

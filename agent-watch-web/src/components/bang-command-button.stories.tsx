@@ -19,6 +19,22 @@ export const ReadyToRun: Story = {
   name: 'The command is ready to run',
 }
 
+export const ReadyToRunOnIPhone: Story = {
+  name: 'The command offers a touch sized action on an iPhone',
+  parameters: { viewport: { defaultViewport: 'mobile2' } },
+  decorators: [
+    (Story) => (
+      <div
+        className="conversation-pane"
+        data-mobile="true"
+        style={{ boxSizing: 'border-box', width: '100%', maxWidth: 390 }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
 export const Running: Story = {
   name: 'The command is running',
   args: { status: 'running' },

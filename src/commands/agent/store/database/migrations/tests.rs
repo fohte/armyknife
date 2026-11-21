@@ -100,6 +100,148 @@ fn adds_one_time_permission_approvals_to_version_twenty_five_database(
 }
 
 #[rstest]
+fn adds_queued_prompt_message_id_index_to_version_twenty_six_database(
+    database_fixture: DatabaseFixture,
+) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
+    Migrations::from_slice(&MIGRATION_ENTRIES[..26])
+        .to_latest(&mut connection)
+        .expect("version twenty six schema should be created");
+    drop(connection);
+
+    let connection = super::super::open_connection(temp_dir.path())
+        .expect("version twenty six database should migrate to the queued prompt index");
+    let actual = connection
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'index'
+                    AND name = 'watch_web_queued_prompt_session_message_id'
+            )",
+            [],
+            |row| row.get::<_, bool>(0),
+        )
+        .expect("queued prompt message ID index should be queryable");
+    let actual_user_version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("database migration version should be readable");
+
+    assert_eq!((actual, actual_user_version), (true, current_version()));
+}
+
+#[rstest]
+fn adds_unreported_stop_check_to_version_twenty_seven_database(database_fixture: DatabaseFixture) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
+    Migrations::from_slice(&MIGRATION_ENTRIES[..27])
+        .to_latest(&mut connection)
+        .expect("version twenty seven schema should be created");
+    drop(connection);
+
+    let connection = super::super::open_connection(temp_dir.path())
+        .expect("version twenty seven database should migrate to the unreported stop schema");
+    let actual_schema = connection
+        .query_row(
+            indoc! {"
+                SELECT
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'watch_web_queued_prompt_session_message_id'),
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_unreported_stop_check'),
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'agent_unreported_stop_check_delete_session')
+            "},
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("both migration branches should be queryable");
+    let actual_user_version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("database migration version should be readable");
+
+    assert_eq!(
+        (actual_schema, actual_user_version),
+        ((true, true, true), current_version()),
+    );
+}
+
+#[rstest]
+fn upgrades_branch_version_twenty_seven_without_recreating_its_stop_check(
+    database_fixture: DatabaseFixture,
+) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
+    Migrations::from_slice(&MIGRATION_ENTRIES[..26])
+        .to_latest(&mut connection)
+        .expect("version twenty six schema should be created");
+    connection
+        .execute_batch(
+            "CREATE TABLE agent_unreported_stop_check (
+                session_id TEXT PRIMARY KEY,
+                checked_at TEXT NOT NULL
+            );
+            CREATE TRIGGER agent_unreported_stop_check_delete_session
+                AFTER DELETE ON sessions
+                BEGIN
+                    DELETE FROM agent_unreported_stop_check WHERE session_id = OLD.session_id;
+                END;
+            INSERT INTO sessions (session_id, data, rev)
+                VALUES ('fixture-session-maple', '{}', 1);
+            INSERT INTO agent_unreported_stop_check (session_id, checked_at)
+                VALUES ('fixture-session-maple', '2026-01-01T00:00:00Z');",
+        )
+        .expect("branch version twenty seven schema should be stored");
+    connection
+        .pragma_update(None, "user_version", 27)
+        .expect("branch migration version should be stored");
+    drop(connection);
+
+    let connection = super::super::open_connection(temp_dir.path())
+        .expect("branch version twenty seven database should migrate idempotently");
+    let actual_schema = connection
+        .query_row(
+            indoc! {"
+                SELECT
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'watch_web_queued_prompt_session_message_id'),
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'agent_unreported_stop_check_delete_session'),
+                (SELECT checked_at FROM agent_unreported_stop_check WHERE session_id = 'fixture-session-maple')
+            "},
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("existing stop check should be retained");
+    connection
+        .execute(
+            "DELETE FROM sessions WHERE session_id = 'fixture-session-maple'",
+            [],
+        )
+        .expect("session should be deleted");
+    let actual_remaining_checks: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM agent_unreported_stop_check",
+            [],
+            |row| row.get(0),
+        )
+        .expect("stop checks should be queryable");
+    let actual_user_version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("database migration version should be readable");
+
+    assert_eq!(
+        (actual_schema, actual_remaining_checks, actual_user_version,),
+        (
+            (true, true, Some("2026-01-01T00:00:00Z".to_string()),),
+            0,
+            current_version(),
+        ),
+    );
+}
+
+#[rstest]
 fn adds_permission_request_mailbox_to_version_nine_database(database_fixture: DatabaseFixture) {
     let DatabaseFixture {
         temp_dir,

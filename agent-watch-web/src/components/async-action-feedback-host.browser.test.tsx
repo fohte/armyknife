@@ -25,6 +25,7 @@ function ActivityRetryHarness({ calls }: { calls: string[] }) {
       actions={[failedMerge]}
       toastIds={[]}
       activityOpen={activityOpen}
+      toastBottomOffset={null}
       selectedActionId={failedMerge.id}
       retry={() => {
         calls.push('retry')
@@ -80,4 +81,33 @@ it('closes Activity before retrying a failed action', () => {
     calls: ['close', 'retry'],
     activityOpen: false,
   })
+})
+
+it('positions the toast stack at the supplied screen offset', () => {
+  container = document.createElement('div')
+  document.body.append(container)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <AsyncActionFeedbackHost
+        actions={[failedMerge]}
+        toastIds={[failedMerge.id]}
+        activityOpen={false}
+        toastBottomOffset={200}
+        selectedActionId={null}
+        retry={() => undefined}
+        dismissToast={() => undefined}
+        clearFinished={() => undefined}
+        openActivity={() => undefined}
+        closeActivity={() => undefined}
+        closeWithWorktree={() => undefined}
+        openInTerminal={() => undefined}
+      />,
+    )
+  })
+
+  const stack = document.querySelector<HTMLElement>('.async-action-toast-stack')
+  expect(stack === null ? null : getComputedStyle(stack).bottom).toEqual(
+    '200px',
+  )
 })
