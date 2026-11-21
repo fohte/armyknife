@@ -1300,6 +1300,9 @@ it('posts a message when randomUUID is unavailable', async () => {
     if (url.endsWith('/messages?limit=100')) {
       return Promise.resolve(jsonResponse(messagesResponse([])))
     }
+    if (url.endsWith('/messages?from=0')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
     if (url.endsWith('/actions')) {
       return Promise.resolve(jsonResponse(actions))
     }
