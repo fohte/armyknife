@@ -185,3 +185,50 @@ it('shows the local URL when no remote URL is available', () => {
     localUrl: 'http://127.0.0.1:48761/design/sample/',
   })
 })
+
+it('shows the mobile web UI URL and opens it in a new tab', () => {
+  const targetUrl = 'http://localhost:43123/studio/pages/sample#page-fakehash'
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <WebUiPane
+        name="Canvas editor"
+        url={targetUrl}
+        targetUrlOverride={targetUrl}
+        onClose={() => undefined}
+        defaultFullscreen
+        mobilePresentation
+      />,
+    )
+  })
+
+  const externalLink = container.querySelector<HTMLAnchorElement>(
+    'a[aria-label="Open in a new tab"]',
+  )
+  function mobileHeaderState() {
+    return {
+      backButtonLabel: container
+        .querySelector<HTMLButtonElement>('button')
+        ?.getAttribute('aria-label'),
+      name: container.querySelector('.web-ui-pane-title')?.textContent,
+      url: container.querySelector('.web-ui-pane-mobile-url')?.textContent,
+      externalLink: {
+        href: externalLink?.getAttribute('href'),
+        label: externalLink?.getAttribute('aria-label'),
+        rel: externalLink?.getAttribute('rel'),
+        target: externalLink?.getAttribute('target'),
+      },
+    }
+  }
+  expect(mobileHeaderState()).toEqual({
+    backButtonLabel: 'Back to the conversation',
+    name: 'Canvas editor',
+    url: targetUrl,
+    externalLink: {
+      href: targetUrl,
+      label: 'Open in a new tab',
+      rel: 'noopener noreferrer',
+      target: '_blank',
+    },
+  })
+})

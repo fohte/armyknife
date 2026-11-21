@@ -44,7 +44,7 @@ export const CanvasPageFillsTheScreen: Story = {
 }
 
 export const MobileCanvasPageHasConversationBackNavigation: Story = {
-  name: 'A mobile canvas page shows back navigation without tabs',
+  name: 'A mobile canvas page shows its URL and an external link',
   args: {
     name: 'Canvas editor',
     url: 'http://localhost:43123/studio/pages/sample#page-fakehash',

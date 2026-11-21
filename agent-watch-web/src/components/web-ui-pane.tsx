@@ -54,18 +54,61 @@ export function WebUiPane({
       aria-modal={mobilePresentation || undefined}
       id="web-ui-pane"
     >
-      <header className="web-ui-pane-header">
+      <header
+        className={`web-ui-pane-header${mobilePresentation ? ' is-mobile-fullscreen' : ''}`}
+      >
         {mobilePresentation ? (
           <>
             <Button
               type="button"
               variant="plain"
-              aria-label="Back to conversation"
+              className="web-ui-pane-mobile-back"
+              aria-label="Back to the conversation"
               onClick={onClose}
             >
-              ←
+              <svg
+                width="30"
+                height="30"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="m15 18-6-6 6-6" />
+              </svg>
             </Button>
-            <span className="web-ui-pane-title">{name}</span>
+            <div className="web-ui-pane-mobile-heading">
+              <span className="web-ui-pane-title">{name}</span>
+              <span className="web-ui-pane-mobile-url">{targetUrl ?? url}</span>
+            </div>
+            {targetUrl !== null ? (
+              <a
+                className="web-ui-pane-open-new-tab"
+                href={targetUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Open in a new tab"
+              >
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M15 3h6v6" />
+                  <path d="M10 14 21 3" />
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                </svg>
+              </a>
+            ) : null}
           </>
         ) : (
           <>

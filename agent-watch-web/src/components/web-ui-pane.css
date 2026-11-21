@@ -38,8 +38,8 @@
   font-weight: 700;
 }
 
-.web-ui-pane-header a,
-.web-ui-pane-header span {
+.web-ui-pane-header > a:not(.web-ui-pane-open-new-tab),
+.web-ui-pane-header > span {
   overflow: hidden;
   flex: 1;
   color: var(--aw-text-muted);
@@ -47,6 +47,51 @@
   font-size: 10.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.web-ui-pane-header.is-mobile-fullscreen {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  column-gap: 4px;
+  min-height: 56px;
+  flex: 0 0 56px;
+  padding: 6px 12px 6px 0;
+}
+
+.web-ui-pane-mobile-heading {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.web-ui-pane-mobile-heading .web-ui-pane-title {
+  display: block;
+  overflow: hidden;
+  color: var(--aw-text-primary);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-ui-pane-mobile-url {
+  display: block;
+  overflow: hidden;
+  color: var(--aw-text-muted);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-ui-pane-open-new-tab {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  place-items: center;
+  color: var(--aw-text-muted);
 }
 
 .web-ui-pane-unavailable {
@@ -63,6 +108,14 @@
   padding: 0 7px;
   color: var(--aw-text-body);
   font-size: 16px;
+}
+
+.web-ui-pane-header.is-mobile-fullscreen [data-slot='button'] {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
 }
 
 .web-ui-pane-header [data-slot='button'][aria-label*='fullscreen'] {
