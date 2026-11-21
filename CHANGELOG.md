@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.822](https://github.com/fohte/armyknife/compare/v0.1.821...v0.1.822) (2026-11-21)
+
+
+### Features
+
+* **agent-watch-web:** move phone Activity to nav ([#2028](https://github.com/fohte/armyknife/issues/2028)) ([136dbd7](https://github.com/fohte/armyknife/commit/136dbd7e1b0f847eb161bb84caba6c2f40d3187a))
+
 ## [0.1.821](https://github.com/fohte/armyknife/compare/v0.1.820...v0.1.821) (2026-11-21)
 
 
