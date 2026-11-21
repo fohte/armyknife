@@ -11,7 +11,7 @@ use crate::shared::hooks;
 use crate::shared::merge_notify::notify_delegator_of_merge;
 use crate::shared::worktree::{
     branch_to_worktree_name, ensure_clean_for_deletion, find_worktree_name, get_main_repo,
-    get_worktree_branch,
+    get_worktree_branch, get_worktree_branch_checked,
 };
 use crate::shared::worktree_error::WmError;
 
@@ -162,15 +162,11 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
         &worktree_path,
         force,
         || {
-            ensure_worktree_branch_unchanged_before_delete(
-                force,
-                branch_name.as_deref(),
-                get_worktree_branch(&main_repo, &worktree_name).as_deref(),
-            )?;
-            ensure_branch_no_unique_commits_before_delete(
+            ensure_worktree_delete_plan_before_delete(
                 merge_status.as_ref(),
                 force,
                 branch_name.as_deref(),
+                || get_worktree_branch_checked(&main_repo, &worktree_name),
                 |branch| branch_has_no_unique_commits(&main_repo, branch),
             )
         },
@@ -395,20 +391,24 @@ fn branch_has_no_unique_commits(repo: &GitRepo, branch: &str) -> bool {
     })
 }
 
-fn ensure_worktree_branch_unchanged_before_delete(
+fn ensure_worktree_delete_plan_before_delete(
+    status: Option<&MergeStatus>,
     force: bool,
     planned_branch: Option<&str>,
-    current_branch: Option<&str>,
+    current_branch: impl FnOnce() -> Result<Option<String>>,
+    verify_still_safe: impl FnOnce(&str) -> bool,
 ) -> Result<()> {
-    if force || planned_branch == current_branch {
-        return Ok(());
+    let current_branch =
+        current_branch().context("Could not inspect worktree branch before deletion")?;
+    if planned_branch != current_branch.as_deref() {
+        bail!(
+            "Worktree branch changed from `{}` to `{}` before deletion; retry close to check the current branch",
+            planned_branch.unwrap_or("detached"),
+            current_branch.as_deref().unwrap_or("detached"),
+        );
     }
 
-    bail!(
-        "Worktree branch changed from `{}` to `{}` before deletion; retry close to check the current branch",
-        planned_branch.unwrap_or("detached"),
-        current_branch.unwrap_or("detached"),
-    )
+    ensure_branch_no_unique_commits_before_delete(status, force, planned_branch, verify_still_safe)
 }
 
 fn ensure_branch_no_unique_commits_before_delete(
@@ -580,6 +580,7 @@ mod tests {
 
     use super::*;
     use crate::shared::testing::TestRepo;
+    use crate::shared::worktree::delete_worktree_if_clean;
 
     #[rstest]
     #[case::no_pr_without_unique_commits(
@@ -695,30 +696,55 @@ mod tests {
     }
 
     #[rstest]
-    #[case::unchanged_branch(false, Some("agent-branch"), Some("agent-branch"), Ok(()))]
-    #[case::changed_branch(
-        false,
+    #[case::unchanged_branch(
         Some("agent-branch"),
-        Some("replacement-branch"),
-        Err("Worktree branch changed from `agent-branch` to `replacement-branch` before deletion; retry close to check the current branch".to_string()),
-    )]
-    #[case::force_accepts_branch_change(
-        true,
-        Some("agent-branch"),
-        Some("replacement-branch"),
+        Ok(Some("agent-branch".to_string())),
         Ok(()),
+        true,
     )]
-    fn close_rejects_a_changed_worktree_branch_before_deletion(
-        #[case] force: bool,
+    #[case::changed_branch_with_force(
+        Some("agent-branch"),
+        Ok(Some("replacement-branch".to_string())),
+        Err("Worktree branch changed from `agent-branch` to `replacement-branch` before deletion; retry close to check the current branch".to_string()),
+        false,
+    )]
+    #[case::branch_inspection_failure(
+        Some("agent-branch"),
+        Err("git worktree list failed".to_string()),
+        Err("Could not inspect worktree branch before deletion".to_string()),
+        false,
+    )]
+    fn close_checks_the_branch_before_cleanup(
         #[case] planned_branch: Option<&str>,
-        #[case] current_branch: Option<&str>,
+        #[case] current_branch: std::result::Result<Option<String>, String>,
         #[case] expected: std::result::Result<(), String>,
+        #[case] expected_deleted: bool,
     ) {
-        let result =
-            ensure_worktree_branch_unchanged_before_delete(force, planned_branch, current_branch)
-                .map_err(|error| error.to_string());
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let mut deleted = false;
+        let result = delete_worktree_if_clean(
+            temp_dir.path(),
+            true,
+            || {
+                ensure_worktree_delete_plan_before_delete(
+                    Some(&MergeStatus::NoUniqueCommits {
+                        reason: "No commits unique to branch".to_string(),
+                    }),
+                    true,
+                    planned_branch,
+                    || current_branch.map_err(anyhow::Error::msg),
+                    |_| false,
+                )
+            },
+            || {
+                deleted = true;
+                Ok(true)
+            },
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string());
 
-        assert_eq!(result, expected);
+        assert_eq!((result, deleted), (expected, expected_deleted));
     }
 
     #[rstest]
