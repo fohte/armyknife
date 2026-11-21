@@ -944,8 +944,15 @@ mod tests {
     }
 
     #[rstest]
-    fn retries_resume_after_missing_rollout_and_confirms_delivery(
+    #[case::missing_rollout(-32600, "no rollout found for thread id thread-a")]
+    #[case::empty_rollout(
+        -32603,
+        "thread-store internal error: failed to read session metadata /session/rollout-thread-a.jsonl: rollout at /session/rollout-thread-a.jsonl is empty",
+    )]
+    fn retries_resume_after_retryable_rollout_rejection_and_confirms_delivery(
         connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
+        #[case] code: i64,
+        #[case] message: &'static str,
     ) -> anyhow::Result<()> {
         let (mut client_socket, server_socket) = connected_sockets?;
         let server = std::thread::spawn(move || -> anyhow::Result<Vec<Value>> {
@@ -958,78 +965,7 @@ mod tests {
                 json!({"turn": {"id": TURN_ID, "status": "inProgress"}}),
             )?;
             let first_resume_request = read_request(&mut socket)?;
-            send_error(
-                &mut socket,
-                THREAD_RESUME_REQUEST_ID,
-                -32600,
-                "no rollout found for thread id thread-a",
-            )?;
-            let retry_resume_request = read_request(&mut socket)?;
-            send_response(&mut socket, THREAD_RESUME_REQUEST_ID, resume_response())?;
-            socket.send(Message::Text(
-                user_message_notification().to_string().into(),
-            ))?;
-            let history_request = read_request(&mut socket)?;
-            send_response(
-                &mut socket,
-                THREAD_TURNS_LIST_REQUEST_ID,
-                thread_response("inProgress", None, None),
-            )?;
-            Ok(vec![
-                snapshot_request,
-                turn_request,
-                first_resume_request,
-                retry_resume_request,
-                history_request,
-            ])
-        });
-
-        let result = result_text(send_and_confirm_with_retry_timing(
-            &mut client_socket,
-            THREAD_ID,
-            "hello there",
-            None,
-            CLIENT_USER_MESSAGE_ID,
-            ResumeRetryTiming {
-                timeout: Duration::from_secs(3),
-                interval: Duration::from_millis(5),
-            },
-            |socket| socket.read(),
-        ));
-        let requests = join_server(&client_socket, &result, server)?;
-        let expected_requests = start_and_subscribe_requests()
-            .into_iter()
-            .chain([
-                thread_resume_request(THREAD_ID).payload,
-                thread_turns_list_request_payload(THREAD_TURNS_LIST_REQUEST_ID),
-            ])
-            .collect::<Vec<_>>();
-
-        assert_eq!((result, requests), (Ok(()), expected_requests));
-        Ok(())
-    }
-
-    #[rstest]
-    fn retries_resume_after_empty_rollout_and_confirms_delivery(
-        connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
-    ) -> anyhow::Result<()> {
-        let (mut client_socket, server_socket) = connected_sockets?;
-        let server = std::thread::spawn(move || -> anyhow::Result<Vec<Value>> {
-            let mut socket = server_socket;
-            let snapshot_request = read_empty_snapshot(&mut socket)?;
-            let turn_request = read_request(&mut socket)?;
-            send_response(
-                &mut socket,
-                TURN_START_REQUEST_ID,
-                json!({"turn": {"id": TURN_ID, "status": "inProgress"}}),
-            )?;
-            let first_resume_request = read_request(&mut socket)?;
-            send_error(
-                &mut socket,
-                THREAD_RESUME_REQUEST_ID,
-                -32603,
-                "thread-store internal error: failed to read session metadata /session/rollout-thread-a.jsonl: rollout at /session/rollout-thread-a.jsonl is empty",
-            )?;
+            send_error(&mut socket, THREAD_RESUME_REQUEST_ID, code, message)?;
             let retry_resume_request = read_request(&mut socket)?;
             send_response(&mut socket, THREAD_RESUME_REQUEST_ID, resume_response())?;
             socket.send(Message::Text(
@@ -1079,6 +1015,10 @@ mod tests {
     #[case::wrong_code(-32601, "no rollout found for thread id thread-a")]
     #[case::extra_message_text(-32600, "no rollout found for thread id thread-a; retry")]
     #[case::unrelated_internal_error(-32603, "thread store is unavailable")]
+    #[case::empty_rollout_for_another_thread(
+        -32603,
+        "thread-store internal error: failed to read session metadata /session/rollout-thread-b.jsonl: rollout at /session/rollout-thread-b.jsonl is empty",
+    )]
     fn does_not_retry_other_resume_rejections(
         connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
         #[case] code: i64,
