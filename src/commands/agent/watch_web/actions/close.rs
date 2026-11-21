@@ -32,17 +32,50 @@ pub(super) async fn close(
 ) -> Result<Json<Success>, ApiError> {
     let session = load_session(state.clone(), id).await?;
     let request = request.map(|Json(request)| request).unwrap_or_default();
-    state
+    if let Err(error) = state
         .runtime
         .close_session(&session, request.keep_worktree, request.stop_and_close)
         .await
-        .map_err(ApiError::close)?;
+    {
+        log_close_failure(&session.session_id, &error);
+        let checks = if ApiError::requires_close_checks(&error) {
+            Some((state.close_checks_inspector)(session.cwd.clone()).await)
+        } else {
+            None
+        };
+        return Err(ApiError::close(error, checks));
+    }
     Ok(Json(Success::new()))
+}
+
+fn log_close_failure(session_id: &str, error: &anyhow::Error) {
+    tracing::warn!(
+        event = "agent.watch_web.close_failed",
+        session_id,
+        error = %error,
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn close_failures_are_logged_with_the_session_id_and_error() {
+        let error = anyhow::anyhow!("synthetic close failure");
+        let (_, events) = crate::shared::testing::capture_json_events(tracing::Level::WARN, || {
+            log_close_failure("synthetic-session", &error)
+        });
+
+        assert_eq!(
+            events,
+            vec![serde_json::json!({
+                "event": "agent.watch_web.close_failed",
+                "session_id": "synthetic-session",
+                "error": "synthetic close failure",
+            })],
+        );
+    }
 
     #[tokio::test]
     async fn operations_run_on_a_blocking_worker() {
