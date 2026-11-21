@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.831](https://github.com/fohte/armyknife/compare/v0.1.830...v0.1.831) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** add vibeMode to tree story ([#2057](https://github.com/fohte/armyknife/issues/2057)) ([d26ae92](https://github.com/fohte/armyknife/commit/d26ae9294c591678c2a3c7552d32bcb6dc2ea0d8))
+
 ## [0.1.830](https://github.com/fohte/armyknife/compare/v0.1.829...v0.1.830) (2026-11-21)
 
 
