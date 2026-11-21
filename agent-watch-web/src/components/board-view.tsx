@@ -1,7 +1,7 @@
 import '#components/board-view.css'
 
 import { Button } from '@fohte/ui/button'
-import { useEffect, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 
 import type { BoardProject } from '#board-model'
 import { MobileNavigationActions } from '#components/mobile-navigation-actions'
@@ -20,6 +20,7 @@ type BoardViewProps = {
   isMobile?: boolean
   onOpenNavigation?: () => void
   onOpenPalette?: () => void
+  mobileUpdateNotice?: ReactNode
 }
 
 const GROUPS = [
@@ -161,6 +162,7 @@ export function BoardView({
   isMobile = false,
   onOpenNavigation = () => undefined,
   onOpenPalette = () => undefined,
+  mobileUpdateNotice,
 }: BoardViewProps) {
   const projectsScrollRef = useRef<HTMLDivElement>(null)
   const [remainingProjects, setRemainingProjects] = useState(0)
@@ -264,6 +266,7 @@ export function BoardView({
         </div>
         <p className="board-description">Projects that need you come first</p>
       </header>
+      {isMobile ? mobileUpdateNotice : null}
       {error !== null ? (
         <p className="board-message is-error" role="status">
           {error}

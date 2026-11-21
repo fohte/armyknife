@@ -51,6 +51,7 @@ pub struct WatchWebArgs {
 }
 
 const LISTEN_PORT: u16 = 4317;
+const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub(super) static SERVER_INSTANCE_ID: LazyLock<String> =
     LazyLock::new(|| uuid::Uuid::new_v4().to_string());
 
@@ -295,7 +296,7 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
         .nest("/api", api)
         .route("/api/", any(api_not_found))
         .fallback(move |request: axum::extract::Request| async move {
-            assets::serve_from(request.uri(), dist, &SERVER_INSTANCE_ID)
+            assets::serve_from(request.uri(), dist, &SERVER_INSTANCE_ID, SERVER_VERSION)
         })
         .layer(axum::middleware::from_fn(security::validate_request))
         .layer(compression_layer())
