@@ -1,12 +1,8 @@
-import { act, useEffect } from 'react'
+import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { page } from 'vitest/browser'
 
-import {
-  AsyncActionFeedbackProvider,
-  useAsyncActionStarter,
-} from '#async-action-feedback'
 import { buildBoardProjects } from '#board-model'
 import { BoardView } from '#components/board-view'
 import type { Session } from '#types'
@@ -56,44 +52,6 @@ function renderBoard(
         onNewSession={() => undefined}
         onSelectSession={() => undefined}
       />,
-    )
-  })
-}
-
-function renderPhoneBoardWithActivity() {
-  function PhoneBoardWithActivity() {
-    const startAsyncAction = useAsyncActionStarter(() => undefined)
-
-    useEffect(() => {
-      startAsyncAction({
-        kind: 'merge',
-        sessionId: 'example-session',
-        sessionTitle: 'Example session',
-        pullRequestNumber: 42,
-        run: () => new Promise(() => undefined),
-      })
-    }, [startAsyncAction])
-
-    return (
-      <BoardView
-        projects={buildBoardProjects([completedSession])}
-        loaded
-        error={null}
-        hideQuietProjects={false}
-        isMobile
-        onHideQuietProjectsChange={() => undefined}
-        onNewSession={() => undefined}
-        onSelectSession={() => undefined}
-      />
-    )
-  }
-
-  root = createRoot(container)
-  act(() => {
-    root?.render(
-      <AsyncActionFeedbackProvider>
-        <PhoneBoardWithActivity />
-      </AsyncActionFeedbackProvider>,
     )
   })
 }
@@ -241,20 +199,17 @@ it('keeps the quiet-project control as a labeled native checkbox', () => {
   })
 })
 
-it('keeps the phone Board title and quiet-project control apart', async () => {
-  await page.viewport(375, 844)
+it('keeps the narrow phone Board title and quiet-project control apart', async () => {
+  await page.viewport(320, 844)
   try {
-    container.style.cssText = 'display: flex; width: 375px; height: 844px'
-    renderPhoneBoardWithActivity()
+    container.style.cssText = 'display: flex; width: 320px; height: 844px'
+    renderBoard([completedSession], () => undefined, true)
 
     const title = container.querySelector<HTMLElement>('.board-header-title')
     const quietToggle = container.querySelector<HTMLElement>(
       '.board-quiet-toggle',
     )
-    const activityButton = container.querySelector(
-      '.async-action-activity-button',
-    )
-    if (title === null || quietToggle === null || activityButton === null) {
+    if (title === null || quietToggle === null) {
       throw new Error('Expected the phone Board heading and filter to render')
     }
 
