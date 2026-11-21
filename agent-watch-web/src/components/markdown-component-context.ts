@@ -8,6 +8,7 @@ export type MarkdownComponentContextValue = {
   onSelectSession?: (id: string) => void
   webUis: readonly WebUiLinkTarget[]
   onOpenWebUi?: (webUi: WebUiLinkTarget, url: string) => void
+  mobile?: boolean
   commandContext?: {
     messageText: string
     sessionId: string

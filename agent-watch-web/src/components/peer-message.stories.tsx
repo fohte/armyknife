@@ -28,7 +28,10 @@ const meta = {
     (Story) => (
       <div
         style={{
-          width: 672,
+          boxSizing: 'border-box',
+          width: 'min(100%, 672px)',
+          minWidth: 0,
+          maxWidth: '672px',
           padding: 24,
           background: 'var(--aw-bg-app)',
         }}
@@ -46,6 +49,26 @@ export const PeerMessageArrivesFromAnotherSession: Story = {
   name: 'A peer message shows its source on the left',
 }
 
+export const PeerMessageArrivesOnIPhone: Story = {
+  name: 'An incoming peer message fits the iPhone conversation width',
+  parameters: { viewport: { defaultViewport: 'mobile2' } },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        style={{
+          boxSizing: 'border-box',
+          width: '100%',
+          maxWidth: 390,
+          padding: 16,
+        }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
 export const PeerMessageIsSentToAnotherSession: Story = {
   name: 'A peer message shows its destination on the right',
   args: {
@@ -56,6 +79,34 @@ export const PeerMessageIsSentToAnotherSession: Story = {
       content: [{ type: 'text', text: 'Please inspect the fictional branch.' }],
     },
   },
+}
+
+export const PeerMessageIsSentOnIPhone: Story = {
+  name: 'An outgoing peer message uses a wider dashed iPhone card',
+  parameters: { viewport: { defaultViewport: 'mobile2' } },
+  args: {
+    message: {
+      type: 'peer',
+      direction: 'to',
+      session_id: target.id,
+      content: [{ type: 'text', text: 'Please inspect the fictional branch.' }],
+    },
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        style={{
+          boxSizing: 'border-box',
+          width: '100%',
+          maxWidth: 390,
+          padding: 16,
+        }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
 }
 
 export const PeerMessageDeliveryFails: Story = {

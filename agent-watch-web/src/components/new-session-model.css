@@ -33,6 +33,17 @@
   font: inherit;
 }
 
+.new-session-view[data-mobile='true'] .new-session-model-change {
+  align-items: flex-start;
+  font-size: 14px;
+}
+
+.new-session-view[data-mobile='true'] .new-session-model-change button {
+  min-height: 44px;
+  flex: 0 0 auto;
+  padding: 0 12px;
+}
+
 .new-session-model-trigger {
   display: inline-flex;
   align-items: center;

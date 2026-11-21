@@ -1,9 +1,12 @@
 import '#components/session-pull-requests.css'
 
 import { GitPullRequest } from 'lucide-react'
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
 
-import type { AsyncActionStatus } from '#async-action-feedback'
+import {
+  type AsyncActionStatus,
+  useOptionalAsyncActionFeedback,
+} from '#async-action-feedback'
 import { PullRequestMergeAction } from '#components/pull-request-merge-action'
 import { useDismissableLayer } from '#components/use-dismissable-layer'
 import type { PullRequest } from '#types'
@@ -147,6 +150,7 @@ export function SessionPullRequests({
 }: SessionPullRequestsProps) {
   const triggerRef = useRef<HTMLButtonElement>(null)
   const contentRef = useRef<HTMLElement>(null)
+  const actionFeedback = useOptionalAsyncActionFeedback()
   const currentPullRequest = getRepresentativePullRequest(pullRequests)
   const allMerged = pullRequests.every(
     (pullRequest) => pullRequest.state === 'Merged',
@@ -158,6 +162,36 @@ export function SessionPullRequests({
       : `${allMerged ? `All ${String(pullRequests.length)} pull requests are merged. ` : ''}PR #${String(currentPullRequest.number)}: ${currentPullRequest.title ?? 'Untitled pull request'}, ${currentPullRequest.state.toLowerCase()}, ${ciStateLabel(currentPullRequest.ciState)}${additionalCount > 0 ? `. ${String(additionalCount)} more PR${additionalCount === 1 ? '' : 's'} from this session` : ''}`
 
   useDismissableLayer(open, onOpenChange, [triggerRef, contentRef])
+
+  useEffect(() => {
+    const setToastBottomOffset = actionFeedback?.setToastBottomOffset
+    if (!isMobile || !open || setToastBottomOffset === undefined) {
+      setToastBottomOffset?.(null)
+      return
+    }
+
+    const updateOffset = () => {
+      const content = contentRef.current
+      if (content === null) return
+      setToastBottomOffset(
+        Math.max(
+          112,
+          window.innerHeight - content.getBoundingClientRect().top + 8,
+        ),
+      )
+    }
+
+    updateOffset()
+    const observer = new ResizeObserver(updateOffset)
+    const content = contentRef.current
+    if (content !== null) observer.observe(content)
+    window.addEventListener('resize', updateOffset)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', updateOffset)
+      setToastBottomOffset(null)
+    }
+  }, [actionFeedback?.setToastBottomOffset, isMobile, open])
 
   if (pullRequests.length === 0 || currentPullRequest === undefined) return null
 

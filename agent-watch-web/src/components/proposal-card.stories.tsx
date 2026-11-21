@@ -111,6 +111,13 @@ export const ProposalShowsACommentWithoutAChoice: Story = {
 export const ProposalOffersTouchSizedChoicesOnMobile: Story = {
   name: 'A proposal offers touch sized choices on mobile',
   args: { isMobile: true, defaultChoice: 0 },
+  decorators: [
+    (Story) => (
+      <div style={{ width: 390, padding: 16 }}>
+        <Story />
+      </div>
+    ),
+  ],
 }
 
 export const ProposalShowsAChosenAnswer: Story = {

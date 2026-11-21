@@ -7,6 +7,7 @@ type AsyncActionFeedbackHostProps = {
   actions: readonly AsyncAction[]
   toastIds: readonly number[]
   activityOpen: boolean
+  toastBottomOffset: number | null
   selectedActionId: number | null
   retry: (id: number) => void
   dismissToast: (id: number) => void
@@ -26,6 +27,7 @@ export function AsyncActionFeedbackHost({
   actions,
   toastIds,
   activityOpen,
+  toastBottomOffset,
   selectedActionId,
   retry,
   dismissToast,
@@ -44,7 +46,18 @@ export function AsyncActionFeedbackHost({
       : (actions.find((action) => action.id === selectedActionId) ?? null)
   return (
     <>
-      <div className="async-action-toast-stack" aria-live="polite">
+      <div
+        className="async-action-toast-stack"
+        aria-live="polite"
+        style={
+          toastBottomOffset === null
+            ? undefined
+            : {
+                bottom: `${String(toastBottomOffset)}px`,
+                maxHeight: `calc(100dvh - ${String(toastBottomOffset)}px - 16px)`,
+              }
+        }
+      >
         {toastIds.map((id) => {
           const action = actions.find((candidate) => candidate.id === id)
           return action === undefined ? null : (

@@ -70,6 +70,8 @@ type AsyncActionFeedbackValue = {
   actions: readonly AsyncAction[]
   toastIds: readonly number[]
   activityOpen: boolean
+  toastBottomOffset: number | null
+  setToastBottomOffset: (offset: number | null) => void
   pendingMergeRetryActionIds: readonly number[]
   start: (options: StartAsyncActionOptions) => number
   retry: (id: number) => void
@@ -97,6 +99,9 @@ export function AsyncActionFeedbackProvider({
   const [actions, setActions] = useState<AsyncAction[]>([])
   const [toastIds, setToastIds] = useState<number[]>([])
   const [activityOpen, setActivityOpen] = useState(false)
+  const [toastBottomOffset, setToastBottomOffset] = useState<number | null>(
+    null,
+  )
   const [pendingMergeRetryActionIds, setPendingMergeRetryActionIds] = useState<
     number[]
   >([])
@@ -315,6 +320,8 @@ export function AsyncActionFeedbackProvider({
         actions,
         toastIds,
         activityOpen,
+        toastBottomOffset,
+        setToastBottomOffset,
         pendingMergeRetryActionIds,
         start,
         retry,
@@ -334,6 +341,7 @@ export function AsyncActionFeedbackProvider({
         actions={actions}
         toastIds={toastIds}
         activityOpen={activityOpen}
+        toastBottomOffset={toastBottomOffset}
         selectedActionId={selectedActionId}
         retry={retry}
         dismissToast={dismissToast}
