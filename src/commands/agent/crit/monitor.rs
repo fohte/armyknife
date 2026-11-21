@@ -1,7 +1,9 @@
 //! Detached cleanup worker for crit review daemons.
 
 mod registration;
+mod start;
 mod status;
+mod wait_state;
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -21,6 +23,11 @@ use crate::infra::external_tool::ExternalTool;
 use crate::infra::process;
 use crate::infra::tmux;
 use crate::shared::log::short_run_id;
+
+pub(super) use self::start::{ensure_started, ensure_started_with_status};
+use self::wait_state::{
+    crit_client_waiting_on_port, set_crit_wait_state, set_crit_wait_state_if_changed,
+};
 
 pub(super) fn prepare_registration(port: u16, url: &str) -> (String, Option<serde_json::Value>) {
     registration::prepare_registration(port, url)
@@ -54,61 +61,6 @@ pub struct MonitorArgs {
     reservation: String,
 }
 
-pub(super) fn ensure_started(port: u16, session: Option<&Session>) -> Result<()> {
-    ensure_started_with_status(port, session, None)
-}
-
-pub(super) fn ensure_started_with_status(
-    port: u16,
-    session: Option<&Session>,
-    status: Option<&serde_json::Value>,
-) -> Result<()> {
-    let marker = marker_path(port)?;
-    let Some(reservation) = claim_marker(&marker)? else {
-        return Ok(());
-    };
-    let pane_id = session
-        .and_then(|session| session.tmux_info.as_ref().map(|info| info.pane_id.as_str()))
-        .unwrap_or_default();
-    let session_id = session.map(|session| session.session_id.as_str());
-
-    let result = (|| {
-        let pid = monitor_pid_for_port(port, status, status::crit_status)?;
-        let executable =
-            std::env::current_exe().context("failed to resolve the armyknife executable")?;
-        let mut args = vec![
-            "agent".to_string(),
-            "crit".to_string(),
-            "monitor".to_string(),
-            format!("--port={port}"),
-            format!("--pid={pid}"),
-            format!("--reservation={reservation}"),
-        ];
-        if let Some(session_id) = session_id {
-            args.push(format!("--session={session_id}"));
-        }
-        if !pane_id.is_empty() {
-            args.push(format!("--pane={pane_id}"));
-        }
-
-        let worker_pid =
-            process::spawn_detached_with_pid(&executable, args, Some(Path::new("/")), &[])
-                .context("failed to spawn crit lifecycle monitor")?;
-        tracing::info!(
-            event = "agent.crit.monitor.started",
-            port,
-            worker_pid,
-            session = session_id.unwrap_or("none"),
-        );
-        Ok(())
-    })();
-
-    if result.is_err() {
-        remove_marker_if_equals(&marker, &reservation);
-    }
-    result
-}
-
 fn monitor_pid_for_port(
     port: u16,
     status: Option<&serde_json::Value>,
@@ -134,8 +86,31 @@ pub(super) fn run(args: &MonitorArgs) -> Result<()> {
     write_marker_owner(&marker, &args.reservation)?;
     tracing::info!(event = "agent.crit.monitor.start", daemon_pid = args.pid);
     let mut watched_pid = args.pid;
+    let mut previous_waiting = None;
     loop {
         while process::is_process_alive(watched_pid) {
+            let waiting = match crit_client_waiting_on_port(args.port, watched_pid) {
+                Ok(waiting) => Some(waiting),
+                Err(error) => {
+                    tracing::warn!(
+                        event = "agent.crit.monitor.client_check_failed",
+                        port = args.port,
+                        error = %error,
+                    );
+                    None
+                }
+            };
+            if let Err(error) =
+                set_crit_wait_state_if_changed(&mut previous_waiting, waiting, |waiting| {
+                    set_crit_wait_state(args.port, waiting)
+                })
+            {
+                tracing::warn!(
+                    event = "agent.crit.monitor.wait_state_update_failed",
+                    port = args.port,
+                    error = %error,
+                );
+            }
             thread::sleep(MONITOR_POLL_INTERVAL);
         }
 
@@ -444,11 +419,18 @@ fn drop_port_from_session_in(
     session
         .crit_urls
         .retain(|url| parse_port(url).ok() != Some(port));
+    let previous_not_waiting_len = session.crit_not_waiting_urls.len();
+    session
+        .crit_not_waiting_urls
+        .retain(|url| parse_port(url).ok() != Some(port));
     let previous_web_ui_len = session.web_uis.len();
     session
         .web_uis
         .retain(|web_ui| web_ui.name != "crit" || parse_port(&web_ui.url).ok() != Some(port));
-    if session.crit_urls.len() != previous_len || session.web_uis.len() != previous_web_ui_len {
+    if session.crit_urls.len() != previous_len
+        || session.crit_not_waiting_urls.len() != previous_not_waiting_len
+        || session.web_uis.len() != previous_web_ui_len
+    {
         lock.save(&session)?;
     }
     drop(lock);
@@ -641,6 +623,7 @@ mod tests {
                 created_pr_urls: Vec::new(),
                 session_id: id.to_string(),
                 crit_urls: urls.iter().map(|url| (*url).to_string()).collect(),
+                crit_not_waiting_urls: Default::default(),
                 web_uis: Vec::new(),
                 pending_human_review_ids: BTreeSet::new(),
                 cwd: PathBuf::from("/tmp/fixture-worktree"),
