@@ -29,6 +29,16 @@ struct CloseProcess {
     name: String,
 }
 
+async fn inspect_close_merge_status(
+    branch: String,
+    status: impl Future<Output = crate::infra::git::MergeStatus>,
+) -> Option<MergeGuardStatus> {
+    tokio::time::timeout(Duration::from_secs(5), status)
+        .await
+        .ok()
+        .map(|status| worktree_delete::classify_merge_guard_status(branch, status))
+}
+
 impl CloseChecks {
     pub(super) async fn inspect(session: &Session, filter_stopped_agent: bool) -> Self {
         let session_path = session.cwd.clone();
@@ -74,13 +84,12 @@ impl CloseChecks {
             move |branch| async move {
                 // The UI preview skips the synchronous origin fetch; close refreshes and
                 // revalidates before deletion.
-                tokio::time::timeout(
-                    Duration::from_secs(5),
-                    crate::infra::git::get_merge_status_for_repo(&repo, &branch),
+                let status_branch = branch.clone();
+                inspect_close_merge_status(
+                    branch,
+                    crate::infra::git::get_merge_status_for_repo(&repo, &status_branch),
                 )
                 .await
-                .ok()
-                .map(|status| worktree_delete::classify_merge_guard_status(branch, status))
             },
             move |path| {
                 check_process_guard_for_close(
@@ -295,21 +304,18 @@ mod tests {
 
     #[tokio::test]
     async fn no_pr_status_stays_unmerged_in_watch_close_check() {
-        let checks = CloseChecks::inspect_with(
+        let checks = CloseChecks::from_observations(
             PathBuf::from("/fictional/worktree"),
+            Vec::new(),
             Some("feature/fictional".to_string()),
-            |_| Vec::new(),
-            |branch| async move {
-                Some(worktree_delete::classify_merge_guard_status(
-                    branch,
-                    MergeStatus::NotMerged {
-                        reason: "No PR found".to_string(),
-                    },
-                ))
-            },
-            |_| Ok(Vec::new()),
-        )
-        .await;
+            inspect_close_merge_status("feature/fictional".to_string(), async {
+                MergeStatus::NotMerged {
+                    reason: "No PR found".to_string(),
+                }
+            })
+            .await,
+            Some(Ok(Vec::new())),
+        );
 
         assert_eq!(
             serde_json::to_value(checks).unwrap(),
