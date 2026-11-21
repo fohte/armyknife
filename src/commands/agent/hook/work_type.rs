@@ -191,6 +191,7 @@ mod tests {
             created_pr_urls: Vec::new(),
             session_id: "session-test".to_owned(),
             crit_urls: Vec::new(),
+            crit_not_waiting_urls: Default::default(),
             web_uis: Vec::new(),
             cwd: "/tmp/test".into(),
             transcript_path: None,

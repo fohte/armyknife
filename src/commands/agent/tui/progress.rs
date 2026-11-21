@@ -524,6 +524,7 @@ mod tests {
             created_pr_urls: Vec::new(),
             session_id: id.to_string(),
             crit_urls: Vec::new(),
+            crit_not_waiting_urls: Default::default(),
             web_uis: Vec::new(),
             pending_human_review_ids: BTreeSet::new(),
             cwd: PathBuf::from("/tmp/example-project/.worktrees/example-branch"),
