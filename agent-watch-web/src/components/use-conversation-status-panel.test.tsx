@@ -879,7 +879,7 @@ it('opens a linked web UI as a tabless mobile page and returns to conversation',
     iframe: container.querySelector('iframe')?.getAttribute('src') ?? null,
   }
   await act(async () => {
-    await page.getByRole('button', { name: 'Back to the conversation' }).click()
+    await page.getByRole('button', { name: 'Close web UI' }).click()
   })
 
   const snapshot = () => ({
