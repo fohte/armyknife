@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.823](https://github.com/fohte/armyknife/compare/v0.1.822...v0.1.823) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** match the iPhone UI ([#2033](https://github.com/fohte/armyknife/issues/2033)) ([afaf64d](https://github.com/fohte/armyknife/commit/afaf64d243ae2e267a4af3c172abccdd9a9e226b))
+
 ## [0.1.822](https://github.com/fohte/armyknife/compare/v0.1.821...v0.1.822) (2026-11-21)
 
 
