@@ -51,12 +51,12 @@
 
 .web-ui-pane-header.is-mobile-fullscreen {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  grid-template-columns: minmax(0, 1fr) auto;
   column-gap: 4px;
   min-height: 56px;
   flex: 0 0 56px;
-  padding: 6px calc(12px + env(safe-area-inset-right, 0px)) 6px
-    env(safe-area-inset-left, 0px);
+  padding: 6px calc(4px + env(safe-area-inset-right, 0px)) 6px
+    calc(16px + env(safe-area-inset-left, 0px));
 }
 
 .web-ui-pane-mobile-heading {
@@ -93,6 +93,12 @@
   flex: none;
   place-items: center;
   color: var(--aw-text-muted);
+}
+
+.web-ui-pane-mobile-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .web-ui-pane-unavailable {
