@@ -1,6 +1,7 @@
 import '#components/session-status-panel.css'
 
 import { Button } from '@fohte/ui/button'
+import { ChevronLeft } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
@@ -123,19 +124,7 @@ export function SessionStatusPanel({
               onClose()
             }}
           >
-            <svg
-              width="30"
-              height="30"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <path d="m15 18-6-6 6-6" />
-            </svg>
+            <ChevronLeft aria-hidden="true" size={30} strokeWidth={2.5} />
           </Button>
           <h1 id="session-status-panel-title">Session status</h1>
         </header>
