@@ -86,6 +86,20 @@ function snapshot() {
   }
 }
 
+function expectedFullRow(preview: string | null) {
+  return {
+    density: 'full',
+    mobile: false,
+    title: 'Review the retry policy',
+    age: '2m',
+    preview,
+    role: 'development',
+    engine: 'codex',
+    task: 'P2 #17 Improve request reliability',
+    repositoryLines: ['sample/service'],
+  }
+}
+
 function vibeIndicatorState() {
   const indicator = container.querySelector(
     '.session-title-line .vibe-indicator',
@@ -112,17 +126,63 @@ afterEach(() => {
 it('shows the full Inbox row with role, engine, task and repository', () => {
   renderRow('full')
 
-  expect(snapshot()).toEqual({
-    density: 'full',
-    mobile: false,
-    title: 'Review the retry policy',
-    age: '2m',
+  expect(snapshot()).toEqual(
+    expectedFullRow('Should retries stop after three attempts?'),
+  )
+})
+
+it.each([
+  {
+    name: 'shows the reason while waiting for a Crit review',
+    isWaitingForCritReview: true,
+    kind: 'Review',
+    waitingReason: 'Review the retry policy changes',
+    preview: 'Review the retry policy changes',
+  },
+  {
+    name: 'keeps the existing preview when the Crit wait has no reason',
+    isWaitingForCritReview: true,
+    kind: 'Review',
+    waitingReason: null,
     preview: 'Should retries stop after three attempts?',
-    role: 'development',
-    engine: 'codex',
-    task: 'P2 #17 Improve request reliability',
-    repositoryLines: ['sample/service'],
+  },
+  {
+    name: 'keeps the existing preview when a reason is not for a Crit wait',
+    isWaitingForCritReview: false,
+    kind: 'Review',
+    waitingReason: 'Review the retry policy changes',
+    preview: 'Should retries stop after three attempts?',
+  },
+  {
+    name: 'keeps the existing preview when the Crit wait reason is blank',
+    isWaitingForCritReview: true,
+    kind: 'Review',
+    waitingReason: '  ',
+    preview: 'Should retries stop after three attempts?',
+  },
+  {
+    name: 'keeps the Todo preview while a Crit review waits',
+    isWaitingForCritReview: true,
+    kind: 'Todo',
+    waitingReason: 'Review the retry policy changes',
+    preview: 'Should retries stop after three attempts?',
+  },
+  {
+    name: 'keeps the Proposal preview while a Crit review waits',
+    isWaitingForCritReview: true,
+    kind: 'Proposal',
+    waitingReason: 'Review the retry policy changes',
+    preview: 'Should retries stop after three attempts?',
+  },
+])('$name', ({ isWaitingForCritReview, kind, waitingReason, preview }) => {
+  renderRow('full', {
+    ...session,
+    isWaitingForCritReview,
+    kind,
+    waitingReason,
   })
+
+  expect(snapshot()).toEqual(expectedFullRow(preview))
 })
 
 it('shows compact rows without a preview and reserves the missing role slot', () => {

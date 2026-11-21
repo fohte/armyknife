@@ -12,6 +12,7 @@ import { ConversationSelectionReply } from '#components/conversation-selection-r
 import { ConversationStatusBand } from '#components/conversation-status-band'
 import { getConversationStatusBandState } from '#components/conversation-status-band-state'
 import { EndedSessionBanner } from '#components/ended-session-banner'
+import { FileDropIndicator } from '#components/file-drop-indicator'
 import { MarkdownCommandContextProvider } from '#components/markdown-command-context'
 import { MessageComposer } from '#components/message-composer'
 import type {
@@ -22,11 +23,11 @@ import { SessionLinkElapsedSecondsContext } from '#components/session-link-elaps
 import { SessionUsageRow } from '#components/session-usage-row'
 import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
-import { useConversationFileDrop } from '#components/use-conversation-file-drop'
 import { useConversationMessageElements } from '#components/use-conversation-message-elements'
 import { useConversationPaneKeyboard } from '#components/use-conversation-pane-keyboard'
 import { useConversationScroll } from '#components/use-conversation-scroll'
 import { useConversationSelectionReply } from '#components/use-conversation-selection-reply'
+import { useFileDrop } from '#components/use-file-drop'
 import { useOwnMessageKeyboardNavigation } from '#components/use-own-message-keyboard-navigation'
 import { useSessionResume } from '#components/use-session-resume'
 import { useSessionLinkTargets } from '#session-link-targets'
@@ -306,13 +307,8 @@ export function ConversationPaneView({
     }
     void onAction('interrupt').then(finish, finish)
   }, [actions?.interrupt, onAction])
-  const {
-    isFileDragActive,
-    handleDragEnter,
-    handleDragOver,
-    handleDragLeave,
-    handleDrop,
-  } = useConversationFileDrop(handlePasteFiles)
+  const { isFileDragActive, onDragEnter, onDragOver, onDragLeave, onDrop } =
+    useFileDrop(handlePasteFiles)
 
   const onComposerKeyDown = useConversationPaneKeyboard({
     isMobile,
@@ -328,15 +324,13 @@ export function ConversationPaneView({
       className="conversation-pane"
       data-mobile={isMobile ? 'true' : undefined}
       aria-label={`Conversation with ${session.title}`}
-      onDragEnter={handleDragEnter}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
     >
       {fileDropActive || isFileDragActive ? (
-        <div className="conversation-drop-target" role="status">
-          Drop files to attach
-        </div>
+        <FileDropIndicator className="conversation-drop-target" />
       ) : null}
       <ConversationPaneHeader
         key={session.id}

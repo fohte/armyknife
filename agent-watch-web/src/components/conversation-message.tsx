@@ -205,7 +205,9 @@ export function renderConversationMessage({
         cancelled={message.cancelled === true}
         canAnswer={canAnswer}
         isMobile={isMobile}
-        showTerminalFallback={unanswered && actionsReady && !canAnswer}
+        showTerminalFallback={
+          message.cancelled !== true && unanswered && actionsReady && !canAnswer
+        }
         canOpenInTerminal={actions?.openInTerminal === true}
         openInTerminalStatus={openInTerminalStatus}
         onAnswer={(answers) =>

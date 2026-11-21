@@ -95,6 +95,7 @@ export type SessionTreeNode = {
   elapsedSeconds: number
   task: SessionTask | null
   repo: string
+  vibeMode: VibeMode
   decisionCount: number
   pullRequest: PullRequest | null
   pullRequests?: PullRequest[]

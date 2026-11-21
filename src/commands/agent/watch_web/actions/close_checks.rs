@@ -29,6 +29,16 @@ struct CloseProcess {
     name: String,
 }
 
+async fn inspect_close_merge_status(
+    branch: String,
+    status: impl Future<Output = crate::infra::git::MergeStatus>,
+) -> Option<MergeGuardStatus> {
+    tokio::time::timeout(Duration::from_secs(5), status)
+        .await
+        .ok()
+        .map(|status| worktree_delete::classify_merge_guard_status(branch, status))
+}
+
 impl CloseChecks {
     pub(super) async fn inspect(session: &Session, filter_stopped_agent: bool) -> Self {
         let session_path = session.cwd.clone();
@@ -72,13 +82,17 @@ impl CloseChecks {
             branch,
             |path| worktree::uncommitted_files(path).unwrap_or_default(),
             move |branch| async move {
-                tokio::time::timeout(
-                    Duration::from_secs(5),
-                    worktree_delete::get_merge_status_for_branch(&repo, &branch),
-                )
+                // The preview checks local refs; close fetches and revalidates before deletion.
+                let status_branch = branch.clone();
+                let status_repo = repo.clone();
+                inspect_close_merge_status(branch, async move {
+                    worktree_delete::get_merge_status_for_branch_from_local_refs(
+                        &status_repo,
+                        &status_branch,
+                    )
+                    .await
+                })
                 .await
-                .ok()
-                .map(|status| worktree_delete::classify_merge_guard_status(branch, status))
             },
             move |path| {
                 check_process_guard_for_close(
@@ -276,6 +290,38 @@ mod tests {
             )),
             Some(Ok(Vec::new())),
         );
+
+        assert_eq!(
+            serde_json::to_value(checks).unwrap(),
+            json!({
+                "path": "/fictional/worktree",
+                "files": [],
+                "branch": "feature/fictional",
+                "merged": true,
+                "reason": null,
+                "processes": [],
+                "processInspectionUnavailable": false,
+            }),
+        );
+    }
+
+    #[tokio::test]
+    async fn no_unique_commits_are_cleanup_eligible_in_watch_close_check() {
+        let checks = CloseChecks::inspect_with(
+            PathBuf::from("/fictional/worktree"),
+            Some("feature/fictional".to_string()),
+            |_| Vec::new(),
+            |branch| async move {
+                inspect_close_merge_status(branch, async {
+                    MergeStatus::NoUniqueCommits {
+                        reason: "No commits unique to branch".to_string(),
+                    }
+                })
+                .await
+            },
+            |_| Ok(Vec::new()),
+        )
+        .await;
 
         assert_eq!(
             serde_json::to_value(checks).unwrap(),

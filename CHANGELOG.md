@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.1.832](https://github.com/fohte/armyknife/compare/v0.1.831...v0.1.832) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show task-linked PRs ([#2052](https://github.com/fohte/armyknife/issues/2052)) ([53b7cce](https://github.com/fohte/armyknife/commit/53b7cce023d7a26ac25f4e40c5b49a6e59b5e722))
+
+## [0.1.831](https://github.com/fohte/armyknife/compare/v0.1.830...v0.1.831) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** add vibeMode to tree story ([#2057](https://github.com/fohte/armyknife/issues/2057)) ([d26ae92](https://github.com/fohte/armyknife/commit/d26ae9294c591678c2a3c7552d32bcb6dc2ea0d8))
+
+## [0.1.830](https://github.com/fohte/armyknife/compare/v0.1.829...v0.1.830) (2026-11-21)
+
+
+### Features
+
+* **agent-watch-web:** add iPhone status page ([#2032](https://github.com/fohte/armyknife/issues/2032)) ([4e7b62f](https://github.com/fohte/armyknife/commit/4e7b62fc5e204214b2e997d06d07f474bcf5412b))
+
+## [0.1.829](https://github.com/fohte/armyknife/compare/v0.1.828...v0.1.829) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show vibe mode icons in tree ([#2046](https://github.com/fohte/armyknife/issues/2046)) ([bfb28bb](https://github.com/fohte/armyknife/commit/bfb28bb8126b2a16988edcae4d8865d1cb13ed3a))
+
+## [0.1.828](https://github.com/fohte/armyknife/compare/v0.1.827...v0.1.828) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show Crit wait reason ([#2043](https://github.com/fohte/armyknife/issues/2043)) ([2d35472](https://github.com/fohte/armyknife/commit/2d35472a26bde8f1e5dc9c6da8dbcda3b6cc013c))
+
+## [0.1.827](https://github.com/fohte/armyknife/compare/v0.1.826...v0.1.827) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** cancel failed prompts ([#2044](https://github.com/fohte/armyknife/issues/2044)) ([5855cae](https://github.com/fohte/armyknife/commit/5855cae5dfd46f91c1cb2d7d3b9635be80c55c04))
+
+## [0.1.826](https://github.com/fohte/armyknife/compare/v0.1.825...v0.1.826) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** clear stale queued status ([#2036](https://github.com/fohte/armyknife/issues/2036)) ([0bffcb2](https://github.com/fohte/armyknife/commit/0bffcb2fc2517a11d2c7008a34b43b8131b5e916))
+
 ## [0.1.825](https://github.com/fohte/armyknife/compare/v0.1.824...v0.1.825) (2026-11-21)
 
 
