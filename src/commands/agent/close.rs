@@ -4,10 +4,10 @@ use std::io;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use chrono::Utc;
 use clap::Args;
 
 mod child;
+mod safety;
 mod session_close;
 mod target;
 mod worktree;
@@ -16,6 +16,8 @@ pub(crate) use worktree::close_worktree_path;
 use worktree::linked_worktree_root;
 #[cfg(test)]
 mod test_support;
+
+use safety::{check_draft_state, ensure_session_is_idle, write_draft_unavailable_warning};
 
 use super::auto_pause;
 use super::graceful_quit::GracefulQuitRequester;
@@ -264,10 +266,12 @@ fn prepare_close_session<'a, R: CloseRuntime>(
     stop_and_close: bool,
     runtime: &R,
 ) -> Result<Option<SessionClosePlan<'a>>> {
-    let tmux_info = session
-        .tmux_info
-        .as_ref()
-        .context("Agent session has no tmux pane")?;
+    let Some(tmux_info) = session.tmux_info.as_ref() else {
+        if !force && session.status != SessionStatus::Paused {
+            safety::validate_session_without_tmux_info(session, runtime.unknown_draft_timeout())?;
+        }
+        return Ok(None);
+    };
     if !runtime.pane_exists(tmux_info)? {
         return Ok(None);
     }
@@ -449,80 +453,11 @@ fn ensure_pane_session<R: CloseRuntime>(
     Ok(())
 }
 
-fn ensure_session_is_idle(session: &Session, effective_status: SessionStatus) -> Result<()> {
-    if session.has_active_work(effective_status) {
-        match effective_status {
-            SessionStatus::Running | SessionStatus::WaitingInput => bail!(
-                "Agent session `{}` is running or waiting for input; complete any requested input and wait for the current turn to finish, then retry this command",
-                session.session_id
-            ),
-            _ => bail!(
-                "Agent session `{}` has pending background or agent tasks; wait for them to finish, then retry this command",
-                session.session_id
-            ),
-        }
-    }
-    if session.has_pending_permission_requests() {
-        bail!(
-            "Agent session `{}` has pending permission requests; resolve them and retry this command",
-            session.session_id
-        );
-    }
-    Ok(())
-}
-
-fn check_draft_state<R: CloseRuntime>(
-    runtime: &R,
-    tmux_info: &TmuxInfo,
-    session: &Session,
-) -> Result<DraftInspection> {
-    match runtime.has_draft(tmux_info, session.engine) {
-        Some(false) => Ok(DraftInspection::NoDraft),
-        Some(true) => bail!(
-            "Agent session `{}` has an unsent draft; pass --force to close it",
-            session.session_id
-        ),
-        None => check_unknown_draft_state(session, runtime.unknown_draft_timeout()),
-    }
-}
-
-fn check_unknown_draft_state(session: &Session, timeout: Duration) -> Result<DraftInspection> {
-    let active = match Utc::now()
-        .signed_duration_since(session.updated_at)
-        .to_std()
-    {
-        Ok(elapsed) => elapsed < timeout,
-        Err(_) => true,
-    };
-    tracing::debug!(
-        event = "agent.close.draft_state_unavailable",
-        session = %session.session_id,
-        timeout = ?timeout,
-        decision = if active { "blocked_recent_activity" } else { "proceed_after_timeout" },
-    );
-    if active {
-        bail!(
-            "Could not check for an unsent draft in agent session `{}`; recent activity prevents closing it, pass --force to close it",
-            session.session_id
-        );
-    }
-    Ok(DraftInspection::Unavailable)
-}
-
-fn write_draft_unavailable_warning(
-    writer: &mut impl io::Write,
-    session_id: &str,
-) -> io::Result<()> {
-    writeln!(
-        writer,
-        "Warning: could not inspect the unsent draft for session `{session_id}`; using its last update time for the close safety check"
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use std::io;
 
+    use chrono::Utc;
     use rstest::rstest;
 
     use super::test_support::{
@@ -530,6 +465,16 @@ mod tests {
         pane_session_call, resolve_pid_call, session,
     };
     use super::*;
+
+    struct PanelessCloseCase {
+        status: SessionStatus,
+        force: bool,
+        pending_task: bool,
+        recent_activity: bool,
+        stop_and_close: bool,
+        expected_error: Option<&'static str>,
+        expected_ended_sessions: Vec<&'static str>,
+    }
 
     #[rstest]
     #[case::stopped(
@@ -564,6 +509,125 @@ mod tests {
                     .into_iter()
                     .map(str::to_string)
                     .collect(),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::idle_session_is_ended(
+        PanelessCloseCase {
+            status: SessionStatus::Stopped,
+            force: false,
+            pending_task: false,
+            recent_activity: false,
+            stop_and_close: false,
+            expected_error: None,
+            expected_ended_sessions: vec!["session-1"],
+        },
+    )]
+    #[case::active_session_is_rejected(
+        PanelessCloseCase {
+            status: SessionStatus::Running,
+            force: false,
+            pending_task: false,
+            recent_activity: false,
+            stop_and_close: false,
+            expected_error: Some("Agent session `session-1` is running or waiting for input; complete any requested input and wait for the current turn to finish, then retry this command"),
+            expected_ended_sessions: vec![],
+        },
+    )]
+    #[case::pending_tasks_are_rejected(
+        PanelessCloseCase {
+            status: SessionStatus::Stopped,
+            force: false,
+            pending_task: true,
+            recent_activity: false,
+            stop_and_close: false,
+            expected_error: Some("Agent session `session-1` has pending background or agent tasks; wait for them to finish, then retry this command"),
+            expected_ended_sessions: vec![],
+        },
+    )]
+    #[case::recent_activity_is_rejected(
+        PanelessCloseCase {
+            status: SessionStatus::Stopped,
+            force: false,
+            pending_task: false,
+            recent_activity: true,
+            stop_and_close: false,
+            expected_error: Some("Could not check for an unsent draft in agent session `session-1`; recent activity prevents closing it, pass --force to close it"),
+            expected_ended_sessions: vec![],
+        },
+    )]
+    #[case::forced_close_skips_safety_checks(
+        PanelessCloseCase {
+            status: SessionStatus::Running,
+            force: true,
+            pending_task: true,
+            recent_activity: true,
+            stop_and_close: false,
+            expected_error: None,
+            expected_ended_sessions: vec!["session-1"],
+        },
+    )]
+    #[case::paused_close_skips_safety_checks(
+        PanelessCloseCase {
+            status: SessionStatus::Paused,
+            force: false,
+            pending_task: false,
+            recent_activity: true,
+            stop_and_close: false,
+            expected_error: None,
+            expected_ended_sessions: vec!["session-1"],
+        },
+    )]
+    #[case::stop_and_close_still_checks_paneless_sessions(
+        PanelessCloseCase {
+            status: SessionStatus::Running,
+            force: false,
+            pending_task: false,
+            recent_activity: false,
+            stop_and_close: true,
+            expected_error: Some("Agent session `session-1` is running or waiting for input; complete any requested input and wait for the current turn to finish, then retry this command"),
+            expected_ended_sessions: vec![],
+        },
+    )]
+    fn close_handles_sessions_without_tmux_panes(
+        mut session: Session,
+        #[case] case: PanelessCloseCase,
+    ) {
+        session.tmux_info = None;
+        session.status = case.status;
+        session.updated_at = if case.recent_activity {
+            Utc::now()
+        } else {
+            Utc::now() - chrono::Duration::hours(1)
+        };
+        if case.pending_task {
+            session.pending_bg_task_ids.insert("task-1".to_string());
+        }
+        let runtime = FakeRuntime::default();
+
+        let result = close_tracked_session_with_runtime_and_stop(
+            &session,
+            case.force,
+            case.stop_and_close,
+            &runtime,
+        );
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                runtime.ended_sessions.into_inner(),
+                runtime.calls.into_inner(),
+            ),
+            (
+                case.expected_error
+                    .map_or(Ok(()), |error| Err(error.to_string())),
+                case.expected_ended_sessions
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+                vec![],
             ),
         );
     }

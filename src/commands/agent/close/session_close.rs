@@ -583,6 +583,38 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn watch_web_closes_a_paneless_session_and_marks_it_ended() {
+        let mut session = session();
+        session.tmux_info = None;
+        session.status = SessionStatus::Paused;
+        let runtime = FakeRuntime::default();
+        let worktree_close_called = RefCell::new(false);
+
+        let result = close_session_value_from_watch_web_with_dependencies(
+            &session,
+            false,
+            false,
+            None,
+            &runtime,
+            |_, _| {
+                *worktree_close_called.borrow_mut() = true;
+                async { Ok(()) }
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                runtime.ended_sessions.into_inner(),
+                runtime.calls.into_inner(),
+                worktree_close_called.into_inner(),
+            ),
+            (Ok(()), vec![session.session_id], vec![], false),
+        );
+    }
+
     #[rstest]
     #[tokio::test]
     async fn forced_close_keeps_worktree_for_active_sessions_and_reports_their_ids(
