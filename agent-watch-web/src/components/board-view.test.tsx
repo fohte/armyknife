@@ -221,6 +221,7 @@ it('keeps the narrow phone Board title and quiet-project control apart', async (
     }
 
     const layoutSnapshot = () => ({
+      headingIsVisible: headingRect.width > 0 && headingRect.height > 0,
       headingAndFilterDoNotOverlap:
         headingRect.right <= quietToggleRect.left ||
         headingRect.bottom <= quietToggleRect.top ||
@@ -229,6 +230,7 @@ it('keeps the narrow phone Board title and quiet-project control apart', async (
       filterWrapsBelowTitle: quietToggleRect.top >= titleRect.bottom,
     })
     expect(layoutSnapshot()).toEqual({
+      headingIsVisible: true,
       headingAndFilterDoNotOverlap: true,
       filterWrapsBelowTitle: true,
     })
