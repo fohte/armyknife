@@ -705,59 +705,52 @@ function renderMobileApp(view: 'Inbox' | 'Board' = 'Inbox') {
   }
 }
 
-it('opens the Later sheet and Close confirmation from mobile inbox rows', async () => {
-  const fetchMock = vi
-    .fn<typeof fetch>()
-    .mockImplementation(mockSessionActionFetch)
-  vi.stubGlobal('fetch', fetchMock)
+function swipeMobileInboxRow() {
+  const row = container.querySelector<HTMLButtonElement>(
+    '.needs-action-section [data-session-row]',
+  )
+  if (row === null) throw new Error('Expected the inbox row')
+  act(() => {
+    row.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 260,
+        clientY: 20,
+      }),
+    )
+    row.dispatchEvent(
+      new PointerEvent('pointermove', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 120,
+        clientY: 20,
+      }),
+    )
+    row.dispatchEvent(
+      new PointerEvent('pointerup', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 120,
+        clientY: 20,
+      }),
+    )
+  })
+}
+
+it('opens the mobile Later sheet from an inbox row', async () => {
   renderMobileApp()
   publishSessions({
     revision: 1,
-    sessions: [
-      session('session-later', 'Defer the sample request'),
-      session('session-close', 'Review the sample response'),
-    ],
+    sessions: [session('session-later', 'Defer the sample request')],
   })
-  const swipeRow = (index: number) => {
-    const row = container.querySelectorAll<HTMLButtonElement>(
-      '.needs-action-section [data-session-row]',
-    )[index]
-    if (row === undefined) throw new Error('Expected the inbox row')
-    act(() => {
-      row.dispatchEvent(
-        new PointerEvent('pointerdown', {
-          bubbles: true,
-          cancelable: true,
-          pointerId: 1,
-          pointerType: 'touch',
-          clientX: 260,
-          clientY: 20,
-        }),
-      )
-      row.dispatchEvent(
-        new PointerEvent('pointermove', {
-          bubbles: true,
-          cancelable: true,
-          pointerId: 1,
-          pointerType: 'touch',
-          clientX: 120,
-          clientY: 20,
-        }),
-      )
-      row.dispatchEvent(
-        new PointerEvent('pointerup', {
-          bubbles: true,
-          cancelable: true,
-          pointerId: 1,
-          pointerType: 'touch',
-          clientX: 120,
-          clientY: 20,
-        }),
-      )
-    })
-  }
-
-  swipeRow(0)
+  swipeMobileInboxRow()
   act(() => {
     container
       .querySelector<HTMLButtonElement>(
@@ -777,7 +770,27 @@ it('opens the Later sheet and Close confirmation from mobile inbox rows', async 
   act(() => {
     container.querySelector<HTMLButtonElement>('.later-menu-cancel')?.click()
   })
-  swipeRow(1)
+  const snapshot = () => ({
+    laterSheet,
+    closedAfterCancel: container.querySelector('.later-menu--mobile') === null,
+  })
+  expect(snapshot()).toEqual({
+    laterSheet: { role: 'dialog', label: 'Later', focusInside: true },
+    closedAfterCancel: true,
+  })
+})
+
+it('opens the mobile Close confirmation from an inbox row', () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
+  vi.stubGlobal('fetch', fetchMock)
+  renderMobileApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-close', 'Review the sample response')],
+  })
+  swipeMobileInboxRow()
   act(() => {
     container
       .querySelector<HTMLButtonElement>(
@@ -808,13 +821,11 @@ it('opens the Later sheet and Close confirmation from mobile inbox rows', async 
   })
 
   const snapshot = () => ({
-    laterSheet,
     closeConfirmation,
     confirmationClosed:
       document.querySelector('.session-close-confirmation') === null,
   })
   expect(snapshot()).toEqual({
-    laterSheet: { role: 'dialog', label: 'Later', focusInside: true },
     closeConfirmation: {
       role: 'alertdialog',
       modal: 'true',
