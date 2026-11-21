@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.818](https://github.com/fohte/armyknife/compare/v0.1.817...v0.1.818) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent/codex-steer:** retry empty rollout errors ([#2022](https://github.com/fohte/armyknife/issues/2022)) ([1342422](https://github.com/fohte/armyknife/commit/134242233fcc47ce2a5bfca24b901217245d043f))
+
 ## [0.1.817](https://github.com/fohte/armyknife/compare/v0.1.816...v0.1.817) (2026-11-21)
 
 
