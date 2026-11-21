@@ -90,15 +90,33 @@ pub(super) fn reconcile_registered_session(
     session_id: &str,
     status: Option<&serde_json::Value>,
 ) -> Result<()> {
+    reconcile_registered_session_with(
+        &store::sessions_dir()?,
+        session_id,
+        port,
+        status,
+        super::status::crit_status,
+        crit_client_waiting_on_port,
+    )
+}
+
+fn reconcile_registered_session_with(
+    sessions_dir: &Path,
+    session_id: &str,
+    port: u16,
+    status: Option<&serde_json::Value>,
+    read_status: impl FnOnce() -> Result<serde_json::Value>,
+    check_client: impl FnOnce(u16, u32) -> Result<bool>,
+) -> Result<()> {
     let crit_pid = match status {
         Some(status) => Ok(super::status::pid_for_port(status, port)),
-        None => super::status::crit_pid_for_port(port),
+        None => read_status().map(|status| super::status::pid_for_port(&status, port)),
     };
     let waiting = match crit_pid
         .and_then(|pid| {
             pid.with_context(|| format!("crit status did not report a daemon on port {port}"))
         })
-        .and_then(|pid| crit_client_waiting_on_port(port, pid))
+        .and_then(|pid| check_client(port, pid))
     {
         Ok(waiting) => Some(waiting),
         Err(error) => {
@@ -111,7 +129,7 @@ pub(super) fn reconcile_registered_session(
         }
     };
 
-    set_crit_wait_state_for_session(&store::sessions_dir()?, session_id, port, waiting)
+    set_crit_wait_state_for_session(sessions_dir, session_id, port, waiting)
 }
 
 pub(super) fn set_crit_wait_state_if_changed(
@@ -377,7 +395,7 @@ mod tests {
     }
 
     #[test]
-    fn registered_session_state_reconciles_without_scanning_other_sessions() -> Result<()> {
+    fn active_monitor_reconciliation_uses_status_snapshot_for_registered_session() -> Result<()> {
         let sessions_dir = tempfile::TempDir::new()?;
         let registered: Session = serde_json::from_value(serde_json::json!({
             "session_id": "fixture-registered",
@@ -395,14 +413,29 @@ mod tests {
             "updated_at": "2026-01-01T00:00:00Z",
             "crit_urls": ["http://localhost:48761/crit/review"]
         }))?;
+        let status = serde_json::json!({
+            "sessions": [{ "port": 48761, "pid": 12345 }],
+        });
+        let status_reads = std::cell::Cell::new(0);
+        let inspected_connection = std::cell::Cell::new(None);
         store::save_session_to(sessions_dir.path(), &registered)?;
         store::save_session_to(sessions_dir.path(), &other)?;
 
-        set_crit_wait_state_for_session(
+        reconcile_registered_session_with(
             sessions_dir.path(),
             &registered.session_id,
             48761,
-            Some(false),
+            Some(&status),
+            || {
+                status_reads.set(status_reads.get() + 1);
+                Ok(serde_json::json!({
+                    "sessions": [{ "port": 48761, "pid": 54321 }],
+                }))
+            },
+            |port, pid| {
+                inspected_connection.set(Some((port, pid)));
+                Ok(false)
+            },
         )?;
         let updated = store::load_session_from(sessions_dir.path(), &registered.session_id)?
             .context("registered session should remain available")?;
@@ -411,14 +444,22 @@ mod tests {
 
         assert_eq!(
             (
+                updated.is_waiting_for_crit_review(),
                 updated.crit_not_waiting_urls,
+                unchanged.is_waiting_for_crit_review(),
                 unchanged.crit_not_waiting_urls,
+                status_reads.get(),
+                inspected_connection.get(),
             ),
             (
+                false,
                 ["http://localhost:48761/crit/review".to_string()]
                     .into_iter()
                     .collect(),
+                true,
                 Default::default(),
+                0,
+                Some((48761, 12345)),
             ),
         );
         Ok(())
