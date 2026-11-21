@@ -246,6 +246,52 @@ it('shows the mobile web UI URL and closes it from the header', () => {
   })
 })
 
+it('closes the mobile web UI when its target URL is unavailable', () => {
+  const onClose = vi.fn()
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <WebUiPane
+        name="Canvas editor"
+        url="http://127.0.0.1:43123/studio/pages/sample"
+        hostname="watch.example.test"
+        onClose={onClose}
+        defaultFullscreen
+        mobilePresentation
+      />,
+    )
+  })
+
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('button[aria-label="Close web UI"]')
+      ?.click()
+  })
+
+  function unavailableMobileHeaderState() {
+    return {
+      iframe: container.querySelector('iframe')?.getAttribute('src') ?? null,
+      status: container.querySelector('[role="status"]')?.textContent,
+      url: container.querySelector('.web-ui-pane-mobile-url')?.textContent,
+      externalLink: container.querySelector('a'),
+      closeButtonLabel: container
+        .querySelector<HTMLButtonElement>('button[aria-label="Close web UI"]')
+        ?.getAttribute('aria-label'),
+      closeCalled: onClose.mock.calls.length,
+    }
+  }
+
+  expect(unavailableMobileHeaderState()).toEqual({
+    iframe: null,
+    status:
+      'This interface is unavailable outside this machine. Local URL: http://127.0.0.1:43123/studio/pages/sample',
+    url: 'http://127.0.0.1:43123/studio/pages/sample',
+    externalLink: null,
+    closeButtonLabel: 'Close web UI',
+    closeCalled: 1,
+  })
+})
+
 it('reopens the requested page after the iframe navigates', () => {
   const targetUrl = 'http://localhost:43123/studio/pages/sample#page-fixture'
   const renderWithRequest = (fullscreenRequest: number) => {
