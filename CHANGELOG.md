@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.1.834](https://github.com/fohte/armyknife/compare/v0.1.833...v0.1.834) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent/crit:** open the rendered preview page ([#2051](https://github.com/fohte/armyknife/issues/2051)) ([bffb179](https://github.com/fohte/armyknife/commit/bffb1793e4b9555bbe4fdf766b0d938f09df7d8b))
+
+## [0.1.833](https://github.com/fohte/armyknife/compare/v0.1.832...v0.1.833) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent/close:** skip prompt for clean branches ([#2048](https://github.com/fohte/armyknife/issues/2048)) ([3046bfa](https://github.com/fohte/armyknife/commit/3046bfa5b2cbd8d5d14083cfbf9ba4fe19b70fe3))
+
+## [0.1.832](https://github.com/fohte/armyknife/compare/v0.1.831...v0.1.832) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show task-linked PRs ([#2052](https://github.com/fohte/armyknife/issues/2052)) ([53b7cce](https://github.com/fohte/armyknife/commit/53b7cce023d7a26ac25f4e40c5b49a6e59b5e722))
+
+## [0.1.831](https://github.com/fohte/armyknife/compare/v0.1.830...v0.1.831) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** add vibeMode to tree story ([#2057](https://github.com/fohte/armyknife/issues/2057)) ([d26ae92](https://github.com/fohte/armyknife/commit/d26ae9294c591678c2a3c7552d32bcb6dc2ea0d8))
+
 ## [0.1.830](https://github.com/fohte/armyknife/compare/v0.1.829...v0.1.830) (2026-11-21)
 
 

@@ -96,6 +96,20 @@ async function dropImage(textarea: HTMLTextAreaElement, file: File) {
   return event
 }
 
+function dispatchFileDragEvent(
+  textarea: HTMLTextAreaElement,
+  type: 'dragenter' | 'dragleave',
+) {
+  const event = new Event(type, { bubbles: true, cancelable: true })
+  Object.defineProperty(event, 'dataTransfer', {
+    value: { types: ['Files'], files: [] },
+  })
+  act(() => {
+    textarea.dispatchEvent(event)
+  })
+  return event
+}
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   onSelectSession.mockReset()
@@ -143,6 +157,35 @@ it('shows a pending task with optional detail and a completion action', () => {
       { text: 'Mark done', disabled: false },
       { text: 'Reject', disabled: false },
     ],
+  })
+})
+
+it('shows the comment drop target while files are dragged over the comment', () => {
+  renderCard(props())
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+
+  const dragEnter = dispatchFileDragEvent(textarea, 'dragenter')
+  const targetAfterEnter =
+    container.querySelector('.chat-card-comment-drop-zone .file-drop-indicator')
+      ?.textContent ?? null
+  const dragLeave = dispatchFileDragEvent(textarea, 'dragleave')
+  const targetAfterLeave =
+    container.querySelector('.chat-card-comment-drop-zone .file-drop-indicator')
+      ?.textContent ?? null
+
+  const snapshot = () => ({
+    dragEnterPrevented: dragEnter.defaultPrevented,
+    dragLeavePrevented: dragLeave.defaultPrevented,
+    targetAfterEnter,
+    targetAfterLeave,
+  })
+  expect(snapshot()).toEqual({
+    dragEnterPrevented: true,
+    dragLeavePrevented: false,
+    targetAfterEnter: 'Drop files to attach',
+    targetAfterLeave: null,
   })
 })
 
@@ -560,6 +603,10 @@ it('lets the conversation handle drops while the task is submitting', async () =
   const comment = requireElement(
     container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
   )
+  const dragEnter = dispatchFileDragEvent(comment, 'dragenter')
+  const indicatorDuringSubmit =
+    container.querySelector('.chat-card-comment-drop-zone .file-drop-indicator')
+      ?.textContent ?? null
   const conversationDrops: string[] = []
   const onConversationDrop = () => conversationDrops.push('drop')
   document.body.addEventListener('drop', onConversationDrop)
@@ -575,11 +622,15 @@ it('lets the conversation handle drops while the task is submitting', async () =
 
   const snapshot = () => ({
     commentDisabled: comment.disabled,
+    dragEnterPrevented: dragEnter.defaultPrevented,
+    indicatorDuringSubmit,
     dropPrevented: drop.defaultPrevented,
     conversationDrops,
   })
   expect(snapshot()).toEqual({
     commentDisabled: true,
+    dragEnterPrevented: false,
+    indicatorDuringSubmit: null,
     dropPrevented: false,
     conversationDrops: ['drop'],
   })
