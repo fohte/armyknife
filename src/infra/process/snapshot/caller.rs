@@ -5,9 +5,10 @@ use super::{ProcessSnapshot, list_process_cwds};
 
 /// Returns the pids of the caller's processes whose cwd is inside `path`.
 ///
-/// The caller's processes are this process and its ancestors, plus every
-/// descendant of `roots` (e.g. the pane processes of the caller's tmux
-/// window, which also covers background jobs the calling agent started).
+/// The caller's processes are this process and its ancestors, plus descendants
+/// of `roots` (e.g. panes of the caller's tmux window). Descendants of the
+/// caller's pane are ignored when every caller ancestor has a known cwd outside
+/// `path`.
 ///
 /// Returns `None` if `lsof` or `ps` is unavailable, so callers can refuse to
 /// act instead of assuming the caller is elsewhere.
@@ -83,7 +84,8 @@ mod tests {
     #[rstest]
     #[case::caller_itself_inside(&[(40, WORKTREE)], &[20, 60], Some(20), &[40])]
     #[case::agent_inside_subdirectory(&[(30, "/repo/.worktrees/feature/src")], &[20, 60], Some(20), &[30])]
-    #[case::background_job_inside_is_ignored_when_caller_is_outside(&[(50, "/repo"), (51, WORKTREE)], &[20, 60], Some(20), &[])]
+    #[case::background_job_inside_is_ignored_when_caller_is_outside(&[(1, "/repo"), (10, "/repo"), (20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (50, "/repo"), (51, WORKTREE)], &[20, 60], Some(20), &[])]
+    #[case::missing_ancestor_cwd_keeps_background_job(&[(20, "/repo"), (30, "/repo"), (35, "/repo"), (40, "/repo"), (51, WORKTREE)], &[20, 60], Some(20), &[51])]
     #[case::background_job_inside_is_kept_when_caller_is_inside(&[(30, WORKTREE), (51, WORKTREE)], &[20, 60], Some(20), &[30, 51])]
     #[case::other_pane_in_caller_window_inside(&[(60, WORKTREE)], &[20, 60], Some(20), &[60])]
     #[case::other_window_inside(&[(80, WORKTREE), (81, WORKTREE)], &[20, 60], Some(20), &[])]

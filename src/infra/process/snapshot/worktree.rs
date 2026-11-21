@@ -236,9 +236,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case::caller_descendant_is_ignored_when_caller_is_outside(&[(30, WORKTREE)], &[])]
+    #[case::caller_descendant_is_ignored_when_caller_is_outside(&[(1, "/"), (10, "/repo"), (20, "/repo"), (30, WORKTREE)], &[])]
     #[case::caller_descendant_is_kept_when_caller_is_inside(&[(20, WORKTREE), (30, WORKTREE)], &[(30, "claude")])]
-    #[case::unrelated_non_shell_process_is_still_detected(&[(71, WORKTREE)], &[(71, "node")])]
+    #[case::unrelated_non_shell_process_is_still_detected(&[(1, "/"), (10, "/repo"), (20, "/repo"), (71, WORKTREE)], &[(71, "node")])]
+    #[case::missing_ancestor_cwd_keeps_caller_descendant(&[(1, "/"), (20, "/repo"), (30, WORKTREE)], &[(30, "claude")])]
     fn caller_pane_scope_preserves_worktree_process_guard(
         #[case] cwd_entries: &[(u32, &str)],
         #[case] expected_processes: &[(u32, &str)],

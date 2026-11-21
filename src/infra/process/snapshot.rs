@@ -142,7 +142,7 @@ impl ProcessSnapshot {
     /// Returns caller-pane descendants that should not block worktree removal.
     ///
     /// A pane is eligible only when it is part of this process's ancestry and
-    /// every process in that ancestry is already outside the worktree.
+    /// every ancestor has a known cwd outside the worktree.
     pub(super) fn caller_descendants_outside_path(
         &self,
         self_pid: u32,
@@ -153,7 +153,7 @@ impl ProcessSnapshot {
         let ancestors = self.ancestors(self_pid);
         if ancestors
             .iter()
-            .any(|pid| cwds.get(pid).is_some_and(|cwd| cwd.starts_with(path)))
+            .any(|pid| *pid != 0 && cwds.get(pid).is_none_or(|cwd| cwd.starts_with(path)))
         {
             return HashSet::new();
         }
