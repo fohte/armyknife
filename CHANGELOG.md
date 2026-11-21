@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.826](https://github.com/fohte/armyknife/compare/v0.1.825...v0.1.826) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** clear stale queued status ([#2036](https://github.com/fohte/armyknife/issues/2036)) ([0bffcb2](https://github.com/fohte/armyknife/commit/0bffcb2fc2517a11d2c7008a34b43b8131b5e916))
+
 ## [0.1.825](https://github.com/fohte/armyknife/compare/v0.1.824...v0.1.825) (2026-11-21)
 
 
