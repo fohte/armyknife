@@ -10,6 +10,7 @@ import type { SessionLinkTarget } from '#types'
 const meta = {
   component: MarkdownMessage,
   args: {
+    copyableCodeBlocks: true,
     children: `## Retry policy
 
 Use \`retry()\` with the [request guide](https://example.com/guide).
@@ -139,10 +140,26 @@ export const CodeBlockWithoutLanguage: Story = {
   },
 }
 
+export const AssistantMessageCodeBlock: Story = {
+  name: 'An assistant message shows the copy toolbar above its code',
+  args: {
+    className: 'chat-assistant-message',
+    children: '```typescript\nconst value = 1\n```',
+  },
+}
+
 export const UserMessageCodeBlock: Story = {
   name: 'A user message keeps the copy toolbar inside its bubble',
   args: {
     className: 'chat-user-message',
     children: "```bash\nprintf 'ready\\n'\n```",
+  },
+}
+
+export const GenericCodeBlockWithoutCopyToolbar: Story = {
+  name: 'A generic Markdown code block has no copy toolbar',
+  args: {
+    copyableCodeBlocks: false,
+    children: '~~~text\nRendered without a toolbar.\n~~~',
   },
 }

@@ -138,6 +138,7 @@ export function renderConversationMessage({
     return (
       <article className="chat-assistant-message">
         <MarkdownMessage
+          copyableCodeBlocks
           {...(sessionId === undefined ? {} : { sessionId })}
           {...(onCommandExecuted === undefined ? {} : { onCommandExecuted })}
         >

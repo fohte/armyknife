@@ -224,7 +224,7 @@ const maxPreviewItems = 7;
     'normal',
     'pre-line',
     2,
-    ['H2', 'P', 'UL', 'TABLE', 'DIV'],
+    ['H2', 'P', 'UL', 'TABLE', 'PRE'],
     [12, 12, 12, 12],
     true,
   ])
@@ -399,7 +399,7 @@ ${fencedCode}~~~`}</MarkdownMessage>
     selectedIds: onSelectSession.mock.calls.map(([id]) => id),
   })
   const expected = {
-    text: `The session ${linkedId} is active, while ${unknownId} is unknown.\nUse ${linkedId} to open it.\nrustCopylet sessionId = "${linkedId}";\nlet unknownId = "${unknownId}";\n`,
+    text: `The session ${linkedId} is active, while ${unknownId} is unknown.\nUse ${linkedId} to open it.\nlet sessionId = "${linkedId}";\nlet unknownId = "${unknownId}";\n`,
     highlightedCode: true,
     links: [
       {

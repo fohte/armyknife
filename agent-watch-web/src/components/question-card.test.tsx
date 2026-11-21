@@ -267,6 +267,51 @@ it('sends a single-choice answer as soon as an option is selected', async () => 
   })
 })
 
+it('does not submit a single-choice answer from a copy action in its description', async () => {
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  renderQuestion(
+    props({
+      questions: [
+        {
+          header: 'Direction',
+          question: 'Which direction should be used?',
+          choices: [
+            {
+              label: 'North',
+              description: '```text\nnorth\n```',
+            },
+          ],
+          multi_select: false,
+          answer: null,
+        },
+      ],
+      isMobile: true,
+      onAnswer,
+    }),
+  )
+
+  const copyButton = container.querySelector<HTMLButtonElement>(
+    '.syntax-code-block-copy-button',
+  )
+  if (copyButton !== null) {
+    await act(async () => {
+      await userEvent.click(copyButton)
+      await Promise.resolve()
+    })
+  }
+
+  const snapshot = () => ({
+    copyButtonRendered: copyButton !== null,
+    answerCalls: onAnswer.mock.calls,
+    selected: choiceButton('North').getAttribute('aria-pressed'),
+  })
+  expect(snapshot()).toEqual({
+    copyButtonRendered: false,
+    answerCalls: [],
+    selected: 'false',
+  })
+})
+
 it('answers a desktop single-choice question with its number shortcut', async () => {
   const onAnswer = vi.fn(() => Promise.resolve(true))
   renderQuestion(props({ questions: singleChoiceQuestions, onAnswer }))

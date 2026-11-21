@@ -6,7 +6,9 @@ import { MarkdownMessage } from '#components/markdown-message'
 function renderMessage(markdown: string, className?: string) {
   const props = className === undefined ? {} : { className }
   return renderToStaticMarkup(
-    <MarkdownMessage {...props}>{markdown}</MarkdownMessage>,
+    <MarkdownMessage copyableCodeBlocks {...props}>
+      {markdown}
+    </MarkdownMessage>,
   )
 }
 
@@ -63,6 +65,16 @@ set VALUE=preview
 
   expect(html).toBe(
     '<div class="markdown-message"><div class="syntax-code-block-container"><div class="syntax-code-block-toolbar"><span class="syntax-code-block-language">text</span><button class="syntax-code-block-copy-button" type="button" aria-label="Copy code" title="Copy code">Copy</button></div><pre class="syntax-code-block" data-language="text"><code class="language-text">set VALUE=preview\n</code></pre></div></div>',
+  )
+})
+
+it('does not show a copy toolbar unless code copying is enabled', () => {
+  const html = renderToStaticMarkup(
+    <MarkdownMessage>{'~~~text\nsample\n~~~'}</MarkdownMessage>,
+  )
+
+  expect(html).toBe(
+    '<div class="markdown-message"><pre class="syntax-code-block" data-language="text"><code class="language-text">sample\n</code></pre></div>',
   )
 })
 
@@ -123,7 +135,7 @@ it('adds a confirmation button to agent inline bang commands', () => {
 
 it('adds per-line and run-all buttons to fenced bang commands', () => {
   const html = renderToStaticMarkup(
-    <MarkdownMessage sessionId="sample-session">
+    <MarkdownMessage copyableCodeBlocks sessionId="sample-session">
       {'```sh\n! printf first\n! printf second\n```'}
     </MarkdownMessage>,
   )
@@ -139,7 +151,7 @@ it('adds per-line and run-all buttons to fenced bang commands', () => {
 
 it('adds a confirmation button to an indented bang command block', () => {
   const html = renderToStaticMarkup(
-    <MarkdownMessage sessionId="sample-session">
+    <MarkdownMessage copyableCodeBlocks sessionId="sample-session">
       {'    ! printf safe'}
     </MarkdownMessage>,
   )

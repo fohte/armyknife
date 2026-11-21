@@ -21,6 +21,8 @@
   font-family: var(--font-mono, monospace);
   font-size: 0.75rem;
   line-height: 1;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .syntax-code-block-language {
@@ -85,6 +87,7 @@
   max-height: 8rem;
 }
 
+.markdown-message > * + .syntax-code-block,
 .markdown-message > * + .syntax-code-block-container {
   margin-top: 0.75rem;
 }
