@@ -27,9 +27,6 @@ const MAX_TQ_REQUEST_URI_BYTES: usize = 4 * 1024;
 const TQ_STATIC_REQUEST_URI_RESERVE_BYTES: usize = 1024;
 const MAX_TQ_ID_QUERY_BYTES: usize = MAX_TQ_REQUEST_URI_BYTES - TQ_STATIC_REQUEST_URI_RESERVE_BYTES;
 
-/// Keep fallback priority comparisons bounded when configured groups are numerous.
-const MAX_TQ_PRIORITY_ORDER_PROBES: usize = 4;
-
 /// Runs `tq session list --limit unlimited --session-id <id> ...` once per
 /// query chunk and combines the parsed results. Blocking, so callers must run
 /// it via [`tokio::task::spawn_blocking`].
@@ -93,8 +90,11 @@ fn merge_task_chunks(
     }
 
     let mut tasks = chunks.iter().flatten().cloned().collect::<Vec<_>>();
-    let priority_order = resolve_task_priority_order(&chunks, max_query_bytes, run_query)?;
-    sort_tasks_by_priority(&mut tasks, &priority_order);
+    if let Some(priority_order) = resolve_task_priority_order(&chunks, max_query_bytes, run_query) {
+        sort_tasks_by_configured_order(&mut tasks, &priority_order);
+    } else {
+        sort_tasks_by_priority(&mut tasks);
+    }
     Ok(tasks)
 }
 
@@ -145,7 +145,7 @@ fn resolve_task_priority_order(
     chunks: &[Vec<TqTaskSummary>],
     max_query_bytes: usize,
     mut run_query: impl FnMut(&[String]) -> Result<Vec<TqTaskSummary>>,
-) -> Result<Vec<Option<i32>>> {
+) -> Option<Vec<Option<i32>>> {
     let mut representatives = Vec::new();
     let mut seen_priorities = HashSet::new();
     for task in chunks.iter().flatten() {
@@ -155,47 +155,59 @@ fn resolve_task_priority_order(
     }
 
     if representatives.len() <= 1 {
-        return Ok(representatives
-            .into_iter()
-            .map(|task| task.priority)
-            .collect());
+        return Some(
+            representatives
+                .into_iter()
+                .map(|task| task.priority)
+                .collect(),
+        );
     }
 
     let representative_ids = representatives
         .iter()
         .map(|task| task.id.clone())
         .collect::<Vec<_>>();
-    let priority_chunks = chunk_ids(&representative_ids, max_query_bytes, "ids=".len(), 0, 5)?;
-    if priority_chunks.len() == 1 {
-        let sorted = run_query(&representative_ids)?;
-        let priority_order = ordered_priorities(&sorted);
-        if priority_order.len() != representatives.len() {
-            return Err(TqError::command_failed(
-                TASK_LIST_ARGS,
-                "priority order query omitted a requested priority",
-                None,
-            ));
+    let priority_chunks = match chunk_ids(&representative_ids, max_query_bytes, "ids=".len(), 0, 5)
+    {
+        Ok(chunks) => chunks,
+        Err(error) => {
+            tracing::warn!(%error, "Falling back to local tq task priority ordering");
+            return None;
         }
-        return Ok(priority_order);
+    };
+    if priority_chunks.len() != 1 {
+        tracing::warn!(
+            "Skipping tq priority-order query because representative IDs exceed the URI budget"
+        );
+        return None;
     }
 
-    // Pairwise probes stay within the URI budget when the representative list does not fit.
-    let mut probe_count = 0;
-    sort_by_fallible(&mut representatives, &mut |left, right| {
-        if probe_count >= MAX_TQ_PRIORITY_ORDER_PROBES {
-            return Err(TqError::command_failed(
-                TASK_LIST_ARGS,
-                "priority ordering exceeds the tq probe limit",
-                None,
-            ));
+    let sorted = match run_query(&representative_ids) {
+        Ok(tasks) => tasks,
+        Err(error) => {
+            tracing::warn!(%error, "Falling back to local tq task priority ordering");
+            return None;
         }
-        probe_count += 1;
-        compare_task_priorities(left, right, max_query_bytes, &mut run_query)
-    })?;
-    Ok(representatives
-        .into_iter()
+    };
+    let requested_ids = representative_ids.iter().collect::<HashSet<_>>();
+    let returned_ids = sorted.iter().map(|task| &task.id).collect::<HashSet<_>>();
+    let requested_priorities = representatives
+        .iter()
         .map(|task| task.priority)
-        .collect())
+        .collect::<HashSet<_>>();
+    let returned_priorities = sorted
+        .iter()
+        .map(|task| task.priority)
+        .collect::<HashSet<_>>();
+    if sorted.len() != representatives.len()
+        || requested_ids != returned_ids
+        || requested_priorities != returned_priorities
+    {
+        tracing::warn!("Tq returned an incomplete priority-order result; using local ordering");
+        return None;
+    }
+
+    Some(ordered_priorities(&sorted))
 }
 
 fn ordered_priorities(tasks: &[TqTaskSummary]) -> Vec<Option<i32>> {
@@ -208,77 +220,13 @@ fn ordered_priorities(tasks: &[TqTaskSummary]) -> Vec<Option<i32>> {
     priorities
 }
 
-fn compare_task_priorities(
-    left: &TqTaskSummary,
-    right: &TqTaskSummary,
-    max_query_bytes: usize,
-    run_query: &mut impl FnMut(&[String]) -> Result<Vec<TqTaskSummary>>,
-) -> Result<std::cmp::Ordering> {
-    let ids = [left.id.clone(), right.id.clone()];
-    let chunks = chunk_ids(&ids, max_query_bytes, "ids=".len(), 0, 5)?;
-    if chunks.len() != 1 {
-        return Err(TqError::command_failed(
-            TASK_LIST_ARGS,
-            "priority comparison identifiers exceed the tq query size budget",
-            None,
-        ));
-    }
-    let results = run_query(&chunks[0])?;
-    let left_index = results
-        .iter()
-        .position(|task| task.priority == left.priority);
-    let right_index = results
-        .iter()
-        .position(|task| task.priority == right.priority);
-    match (left_index, right_index) {
-        (Some(left_index), Some(right_index)) => Ok(left_index.cmp(&right_index)),
-        _ => Err(TqError::command_failed(
-            TASK_LIST_ARGS,
-            "priority comparison query omitted a requested task",
-            None,
-        )),
-    }
-}
-
-fn sort_by_fallible<T: Clone>(
-    items: &mut [T],
-    compare: &mut impl FnMut(&T, &T) -> Result<std::cmp::Ordering>,
-) -> Result<()> {
-    if items.len() <= 1 {
-        return Ok(());
-    }
-
-    let middle = items.len() / 2;
-    sort_by_fallible(&mut items[..middle], compare)?;
-    sort_by_fallible(&mut items[middle..], compare)?;
-
-    let left = items[..middle].to_vec();
-    let right = items[middle..].to_vec();
-    let mut merged = Vec::with_capacity(items.len());
-    let mut left_index = 0;
-    let mut right_index = 0;
-    while left_index < left.len() && right_index < right.len() {
-        if compare(&left[left_index], &right[right_index])? != std::cmp::Ordering::Greater {
-            merged.push(left[left_index].clone());
-            left_index += 1;
-        } else {
-            merged.push(right[right_index].clone());
-            right_index += 1;
-        }
-    }
-    merged.extend_from_slice(&left[left_index..]);
-    merged.extend_from_slice(&right[right_index..]);
-    items.clone_from_slice(&merged);
-    Ok(())
-}
-
 fn run_task_summary_query(task_ids: &[String]) -> Result<Vec<TqTaskSummary>> {
     let args = build_task_list_args(task_ids);
     let output = run_tq_command(&args)?;
     parse_task_list(&String::from_utf8_lossy(&output.stdout))
 }
 
-fn sort_tasks_by_priority(tasks: &mut [TqTaskSummary], priority_order: &[Option<i32>]) {
+fn sort_tasks_by_configured_order(tasks: &mut [TqTaskSummary], priority_order: &[Option<i32>]) {
     // Priority values are configurable, so use the order returned by tq.
     let order = priority_order
         .iter()
@@ -286,6 +234,14 @@ fn sort_tasks_by_priority(tasks: &mut [TqTaskSummary], priority_order: &[Option<
         .map(|(index, priority)| (*priority, index))
         .collect::<HashMap<_, _>>();
     tasks.sort_by_key(|task| order.get(&task.priority).copied().unwrap_or(usize::MAX));
+}
+
+fn sort_tasks_by_priority(tasks: &mut [TqTaskSummary]) {
+    tasks.sort_by_key(|task| match task.priority {
+        Some(priority) if priority >= 0 => (0, std::cmp::Reverse(priority)),
+        None => (1, std::cmp::Reverse(0)),
+        Some(priority) => (2, std::cmp::Reverse(priority)),
+    });
 }
 
 /// Splits identifiers so their encoded query component stays within a
@@ -340,7 +296,7 @@ fn encoded_query_value_len(value: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
 
     use super::*;
 
@@ -353,6 +309,16 @@ mod tests {
             priority,
             project_id: None,
         }
+    }
+
+    #[fixture]
+    fn out_of_order_priority_chunks() -> Vec<Vec<TqTaskSummary>> {
+        vec![
+            vec![task_summary("d", Some(-1))],
+            vec![task_summary("u", None)],
+            vec![task_summary("n", Some(0))],
+            vec![task_summary("h", Some(1))],
+        ]
     }
 
     #[rstest]
@@ -459,7 +425,9 @@ mod tests {
             vec![task_summary("high", Some(1))],
             vec![task_summary("normal", Some(0))],
         ];
+        let mut probe_count = 0;
         let tasks = merge_task_chunks(chunks, MAX_TQ_ID_QUERY_BYTES, |_| {
+            probe_count += 1;
             Ok(vec![
                 task_summary("normal", Some(0)),
                 task_summary("high", Some(1)),
@@ -468,11 +436,14 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            tasks,
-            vec![
-                task_summary("normal", Some(0)),
-                task_summary("high", Some(1))
-            ],
+            (tasks, probe_count),
+            (
+                vec![
+                    task_summary("normal", Some(0)),
+                    task_summary("high", Some(1))
+                ],
+                1,
+            ),
         );
     }
 
@@ -493,97 +464,84 @@ mod tests {
         assert_eq!((result, probe_count), (tq_order, 0));
     }
 
-    #[test]
-    fn priority_order_fallback_uses_tq_order_for_pairs() {
-        let chunks = vec![
-            vec![task_summary("c", Some(-1))],
-            vec![task_summary("b", Some(1))],
-            vec![task_summary("a", Some(0))],
-        ];
-        let priority_order = resolve_task_priority_order(&chunks, 12, |ids| {
-            let mut results = ids
-                .iter()
-                .map(|id| match id.as_str() {
-                    "a" => task_summary("a", Some(0)),
-                    "b" => task_summary("b", Some(1)),
-                    "c" => task_summary("c", Some(-1)),
-                    _ => unreachable!(),
-                })
-                .collect::<Vec<_>>();
-            results.sort_by_key(|task| match task.priority {
-                Some(0) => 0,
-                Some(-1) => 1,
-                Some(1) => 2,
-                _ => 3,
-            });
-            Ok(results)
+    #[rstest]
+    fn priority_query_over_uri_budget_falls_back_to_local_order(
+        out_of_order_priority_chunks: Vec<Vec<TqTaskSummary>>,
+    ) {
+        let mut probe_count = 0;
+
+        let result = merge_task_chunks(out_of_order_priority_chunks, 12, |_| {
+            probe_count += 1;
+            Ok(Vec::new())
         })
         .unwrap();
 
-        assert_eq!(priority_order, vec![Some(0), Some(-1), Some(1)]);
+        assert_eq!(
+            (result, probe_count),
+            (
+                vec![
+                    task_summary("h", Some(1)),
+                    task_summary("n", Some(0)),
+                    task_summary("u", None),
+                    task_summary("d", Some(-1)),
+                ],
+                0,
+            ),
+        );
     }
 
-    #[test]
-    fn priority_order_probe_failure_is_propagated() {
-        let chunks = vec![
-            vec![task_summary("first", Some(0))],
-            vec![task_summary("second", Some(1))],
-        ];
+    #[rstest]
+    fn incomplete_priority_query_falls_back_to_local_order(
+        out_of_order_priority_chunks: Vec<Vec<TqTaskSummary>>,
+    ) {
         let mut probe_count = 0;
 
-        let result = merge_task_chunks(chunks, MAX_TQ_ID_QUERY_BYTES, |_| {
+        let result = merge_task_chunks(out_of_order_priority_chunks, MAX_TQ_ID_QUERY_BYTES, |_| {
+            probe_count += 1;
+            Ok(vec![task_summary("h", Some(1))])
+        })
+        .unwrap();
+
+        assert_eq!(
+            (result, probe_count),
+            (
+                vec![
+                    task_summary("h", Some(1)),
+                    task_summary("n", Some(0)),
+                    task_summary("u", None),
+                    task_summary("d", Some(-1)),
+                ],
+                1,
+            ),
+        );
+    }
+
+    #[rstest]
+    fn failed_priority_query_falls_back_to_local_order(
+        out_of_order_priority_chunks: Vec<Vec<TqTaskSummary>>,
+    ) {
+        let mut probe_count = 0;
+
+        let result = merge_task_chunks(out_of_order_priority_chunks, MAX_TQ_ID_QUERY_BYTES, |_| {
             probe_count += 1;
             Err(TqError::command_failed(
                 TASK_LIST_ARGS,
                 "probe failed",
                 None,
             ))
-        });
+        })
+        .unwrap();
 
         assert_eq!(
+            (result, probe_count),
             (
-                result.map(|_| ()).map_err(|error| error.to_string()),
-                probe_count,
-            ),
-            (
-                Err("tq task list --context all --status all --limit unlimited --sort-by priority failed: probe failed".to_string()),
+                vec![
+                    task_summary("h", Some(1)),
+                    task_summary("n", Some(0)),
+                    task_summary("u", None),
+                    task_summary("d", Some(-1)),
+                ],
                 1,
-            ),
-        );
-    }
-
-    #[test]
-    fn priority_order_fallback_stops_after_the_probe_limit() {
-        let chunks = ('a'..='h')
-            .rev()
-            .map(|id| {
-                let priority = i32::from(id as u8 - b'a');
-                vec![task_summary(&id.to_string(), Some(priority))]
-            })
-            .collect::<Vec<_>>();
-        let mut probe_count = 0;
-
-        let result = resolve_task_priority_order(&chunks, 16, |ids| {
-            probe_count += 1;
-            let mut tasks = ids
-                .iter()
-                .map(|id| {
-                    let priority = i32::from(id.as_bytes()[0] - b'a');
-                    task_summary(id, Some(priority))
-                })
-                .collect::<Vec<_>>();
-            tasks.sort_by_key(|task| task.priority);
-            Ok(tasks)
-        });
-
-        assert_eq!(
-            (
-                result.map(|_| ()).map_err(|error| error.to_string()),
-                probe_count,
-            ),
-            (
-                Err("tq task list --context all --status all --limit unlimited --sort-by priority failed: priority ordering exceeds the tq probe limit".to_string()),
-                MAX_TQ_PRIORITY_ORDER_PROBES,
             ),
         );
     }
