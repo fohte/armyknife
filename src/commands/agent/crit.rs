@@ -30,7 +30,12 @@ pub(super) fn crit_port_from_url(url: &str) -> Result<u16> {
 
 trait CritAddRuntime {
     fn sync_pane(&mut self, pane_id: &str, url: &str) -> Result<()>;
-    fn start_monitor(&mut self, port: u16, session: Option<&Session>) -> Result<()>;
+    fn start_monitor(
+        &mut self,
+        port: u16,
+        session: Option<&Session>,
+        status: Option<&serde_json::Value>,
+    ) -> Result<()>;
     fn display_review(&mut self, args: &AddArgs, port: u16) -> Result<()>;
     fn send_notification(
         &mut self,
@@ -51,8 +56,13 @@ impl CritAddRuntime for LiveCritAddRuntime {
         }
     }
 
-    fn start_monitor(&mut self, port: u16, session: Option<&Session>) -> Result<()> {
-        monitor::ensure_started(port, session)
+    fn start_monitor(
+        &mut self,
+        port: u16,
+        session: Option<&Session>,
+        status: Option<&serde_json::Value>,
+    ) -> Result<()> {
+        monitor::ensure_started_with_status(port, session, status)
     }
 
     fn display_review(&mut self, args: &AddArgs, port: u16) -> Result<()> {
@@ -141,7 +151,8 @@ fn add(args: &AddArgs) -> Result<()> {
         port,
     );
     let _guard = span.enter();
-    let session = match record_session_url(&session_id, port, &args.url) {
+    let (url, status) = monitor::prepare_registration(port, &args.url);
+    let session = match record_session_url(&session_id, &url) {
         Ok(session) => {
             tracing::info!(event = "agent.crit.add.registered");
             Some(session)
@@ -159,14 +170,20 @@ fn add(args: &AddArgs) -> Result<()> {
         }
     };
     let mut runtime = LiveCritAddRuntime;
-    continue_add(args, &session_id, port, session, &mut runtime);
+    continue_add(
+        args,
+        &session_id,
+        port,
+        session,
+        status.as_ref(),
+        &mut runtime,
+    );
 
     Ok(())
 }
 
-fn record_session_url(session_id: &str, port: u16, url: &str) -> Result<Session> {
-    let url = monitor::registered_url(port, url);
-    super::web_ui::record_url(session_id, "crit", &url, true)
+fn record_session_url(session_id: &str, url: &str) -> Result<Session> {
+    super::web_ui::record_url(session_id, "crit", url, true)
 }
 
 fn continue_add(
@@ -174,6 +191,7 @@ fn continue_add(
     session_id: &str,
     port: u16,
     session: Option<Session>,
+    status: Option<&serde_json::Value>,
     runtime: &mut impl CritAddRuntime,
 ) {
     if let Some(session) = session.as_ref()
@@ -188,7 +206,7 @@ fn continue_add(
         eprintln!("[armyknife] warning: failed to update the review queue: {error:#}");
     }
 
-    if let Err(error) = runtime.start_monitor(port, session.as_ref()) {
+    if let Err(error) = runtime.start_monitor(port, session.as_ref(), status) {
         tracing::warn!(
             event = "agent.crit.monitor.start_failed",
             session = %session_id,
@@ -453,7 +471,12 @@ mod tests {
             Ok(())
         }
 
-        fn start_monitor(&mut self, port: u16, session: Option<&Session>) -> Result<()> {
+        fn start_monitor(
+            &mut self,
+            port: u16,
+            session: Option<&Session>,
+            _status: Option<&serde_json::Value>,
+        ) -> Result<()> {
             self.actions.push(CritAddAction::StartMonitor {
                 port,
                 session_id: session.map(|session| session.session_id.clone()),
@@ -491,7 +514,7 @@ mod tests {
         };
         let mut runtime = FakeCritAddRuntime::default();
 
-        continue_add(&args, "fixture-session", 43210, None, &mut runtime);
+        continue_add(&args, "fixture-session", 43210, None, None, &mut runtime);
 
         assert_eq!(
             runtime.actions,
