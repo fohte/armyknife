@@ -24,10 +24,14 @@ pub(crate) struct WorktreeProcessInspection {
 /// Returns `None` when either process source cannot be inspected, so callers
 /// can refuse destructive work when they cannot verify the worktree is idle.
 pub fn find_non_shell_processes_in_path(path: &Path) -> Option<Vec<ProcessInPath>> {
-    inspect_worktree_processes(path).map(|inspection| inspection.non_shell_processes)
+    inspect_worktree_processes(path, super::current_caller_pane_pid())
+        .map(|inspection| inspection.non_shell_processes)
 }
 
-pub(crate) fn inspect_worktree_processes(path: &Path) -> Option<WorktreeProcessInspection> {
+pub(crate) fn inspect_worktree_processes(
+    path: &Path,
+    caller_pane_pid: Option<u32>,
+) -> Option<WorktreeProcessInspection> {
     let cwds = list_process_cwds()?;
     let snapshot = ProcessSnapshot::capture_with_command_lines_and_groups()?;
     let resolved_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -35,6 +39,7 @@ pub(crate) fn inspect_worktree_processes(path: &Path) -> Option<WorktreeProcessI
         &snapshot,
         &cwds,
         std::process::id(),
+        caller_pane_pid,
         &resolved_path,
     ))
 }
@@ -43,12 +48,19 @@ fn inspect_processes_in_path(
     snapshot: &ProcessSnapshot,
     cwds: &HashMap<u32, PathBuf>,
     self_pid: u32,
+    caller_pane_pid: Option<u32>,
     path: &Path,
 ) -> WorktreeProcessInspection {
     let excluded_pids = snapshot.ancestors(self_pid);
+    let ignored_descendants =
+        snapshot.caller_descendants_outside_path(self_pid, caller_pane_pid, cwds, path);
     let candidates = cwds
         .iter()
-        .filter(|(pid, cwd)| !excluded_pids.contains(pid) && cwd.starts_with(path))
+        .filter(|(pid, cwd)| {
+            !excluded_pids.contains(pid)
+                && !ignored_descendants.contains(pid)
+                && cwd.starts_with(path)
+        })
         .map(|(&pid, _)| {
             (
                 pid,
@@ -181,7 +193,6 @@ mod tests {
     #[case::only_shells(&[(20, WORKTREE), (50, WORKTREE)], &[], &[])]
     #[case::non_shell_processes(&[(30, WORKTREE), (40, WORKTREE)], &[(30, "claude"), (40, "node")], &[])]
     #[case::shell_histdb_sqlite3_is_ignored(&[(100, WORKTREE)], &[], &[])]
-    #[case::shell_agent_is_still_detected(&[(30, WORKTREE)], &[(30, "claude")], &[])]
     #[case::other_shell_sqlite3_is_still_detected(&[(20, WORKTREE), (101, WORKTREE)], &[(101, "sqlite3")], &[])]
     #[case::sqlite3_without_noheader_is_still_detected(&[(102, WORKTREE)], &[(102, "sqlite3")], &[])]
     #[case::sqlite3_without_batch_is_still_detected(&[(103, WORKTREE)], &[(103, "sqlite3")], &[])]
@@ -207,7 +218,7 @@ mod tests {
             .map(|&(pid, cwd)| (pid, PathBuf::from(cwd)))
             .collect();
 
-        let actual = inspect_processes_in_path(&snapshot(), &cwds, 20, Path::new(WORKTREE));
+        let actual = inspect_processes_in_path(&snapshot(), &cwds, 20, None, Path::new(WORKTREE));
 
         assert_eq!(
             actual,
@@ -220,6 +231,37 @@ mod tests {
                     })
                     .collect(),
                 daemon_descendant_pgids: expected_pgids.to_vec(),
+            },
+        );
+    }
+
+    #[rstest]
+    #[case::caller_descendant_is_ignored_when_caller_is_outside(&[(30, WORKTREE)], &[])]
+    #[case::caller_descendant_is_kept_when_caller_is_inside(&[(20, WORKTREE), (30, WORKTREE)], &[(30, "claude")])]
+    #[case::unrelated_non_shell_process_is_still_detected(&[(71, WORKTREE)], &[(71, "node")])]
+    fn caller_pane_scope_preserves_worktree_process_guard(
+        #[case] cwd_entries: &[(u32, &str)],
+        #[case] expected_processes: &[(u32, &str)],
+    ) {
+        let cwds = cwd_entries
+            .iter()
+            .map(|&(pid, cwd)| (pid, PathBuf::from(cwd)))
+            .collect();
+
+        let actual =
+            inspect_processes_in_path(&snapshot(), &cwds, 20, Some(20), Path::new(WORKTREE));
+
+        assert_eq!(
+            actual,
+            WorktreeProcessInspection {
+                non_shell_processes: expected_processes
+                    .iter()
+                    .map(|&(pid, comm)| ProcessInPath {
+                        pid,
+                        comm: comm.to_string(),
+                    })
+                    .collect(),
+                daemon_descendant_pgids: vec![],
             },
         );
     }

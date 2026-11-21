@@ -5,6 +5,11 @@ use std::process::Command;
 use crate::infra::external_tool::ExternalTool;
 use crate::shared::command;
 
+pub(crate) fn current_caller_pane_pid() -> Option<u32> {
+    let pane_id = crate::shared::caller_pane::resolve_caller_pane_id()?;
+    crate::infra::tmux::get_pane_pid(&pane_id)
+}
+
 mod caller;
 mod worktree;
 
@@ -134,6 +139,35 @@ impl ProcessSnapshot {
         result
     }
 
+    /// Returns caller-pane descendants that should not block worktree removal.
+    ///
+    /// A pane is eligible only when it is part of this process's ancestry and
+    /// every process in that ancestry is already outside the worktree.
+    pub(super) fn caller_descendants_outside_path(
+        &self,
+        self_pid: u32,
+        caller_pane_pid: Option<u32>,
+        cwds: &HashMap<u32, PathBuf>,
+        path: &Path,
+    ) -> HashSet<u32> {
+        let ancestors = self.ancestors(self_pid);
+        if ancestors
+            .iter()
+            .any(|pid| cwds.get(pid).is_some_and(|cwd| cwd.starts_with(path)))
+        {
+            return HashSet::new();
+        }
+
+        let Some(caller_pane_pid) = caller_pane_pid.filter(|pane_pid| ancestors.contains(pane_pid))
+        else {
+            return HashSet::new();
+        };
+
+        let mut descendants = self.self_and_descendants(caller_pane_pid);
+        descendants.retain(|pid| !ancestors.contains(pid));
+        descendants
+    }
+
     /// Returns the basename of the comm for `pid`, if known.
     pub fn comm_basename(&self, pid: u32) -> Option<&str> {
         self.comms
@@ -143,6 +177,19 @@ impl ProcessSnapshot {
 
     pub(super) fn parent_pid(&self, pid: u32) -> Option<u32> {
         self.parents.get(&pid).copied()
+    }
+
+    pub(super) fn self_and_descendants(&self, pid: u32) -> HashSet<u32> {
+        let mut result = HashSet::from([pid]);
+        let mut stack = vec![pid];
+        while let Some(current) = stack.pop() {
+            for &(child, _) in self.children.get(&current).into_iter().flatten() {
+                if result.insert(child) {
+                    stack.push(child);
+                }
+            }
+        }
+        result
     }
 
     pub(super) fn command_line(&self, pid: u32) -> Option<&str> {

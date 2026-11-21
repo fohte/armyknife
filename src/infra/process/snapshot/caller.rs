@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::{ProcessSnapshot, list_process_cwds};
@@ -21,6 +21,7 @@ pub fn find_caller_pids_in_path(path: &Path, roots: &[u32]) -> Option<Vec<u32>> 
         &cwds,
         std::process::id(),
         roots,
+        super::current_caller_pane_pid(),
         &resolved_path,
     ))
 }
@@ -30,12 +31,16 @@ fn caller_pids_in_path(
     cwds: &HashMap<u32, PathBuf>,
     self_pid: u32,
     roots: &[u32],
+    caller_pane_pid: Option<u32>,
     path: &Path,
 ) -> Vec<u32> {
+    let ignored_descendants =
+        snapshot.caller_descendants_outside_path(self_pid, caller_pane_pid, cwds, path);
     let mut caller_pids = snapshot.ancestors(self_pid);
     for &root in roots {
         caller_pids.extend(snapshot.self_and_descendants(root));
     }
+    caller_pids.retain(|pid| !ignored_descendants.contains(pid));
     let mut pids: Vec<u32> = cwds
         .iter()
         .filter(|(pid, cwd)| caller_pids.contains(pid) && cwd.starts_with(path))
@@ -43,21 +48,6 @@ fn caller_pids_in_path(
         .collect();
     pids.sort_unstable();
     pids
-}
-
-impl ProcessSnapshot {
-    fn self_and_descendants(&self, pid: u32) -> HashSet<u32> {
-        let mut result = HashSet::from([pid]);
-        let mut stack = vec![pid];
-        while let Some(current) = stack.pop() {
-            for &(child, _) in self.children.get(&current).into_iter().flatten() {
-                if result.insert(child) {
-                    stack.push(child);
-                }
-            }
-        }
-        result
-    }
 }
 
 #[cfg(test)]
@@ -91,18 +81,20 @@ mod tests {
     }
 
     #[rstest]
-    #[case::caller_itself_inside(&[(40, WORKTREE)], &[20, 60], &[40])]
-    #[case::agent_inside_subdirectory(&[(30, "/repo/.worktrees/feature/src")], &[20, 60], &[30])]
-    #[case::background_job_inside(&[(50, "/repo"), (51, WORKTREE)], &[20, 60], &[51])]
-    #[case::other_pane_in_caller_window_inside(&[(60, WORKTREE)], &[20, 60], &[60])]
-    #[case::other_window_inside(&[(80, WORKTREE), (81, WORKTREE)], &[20, 60], &[])]
-    #[case::sibling_worktree(&[(40, "/repo/.worktrees/feature-extra")], &[20, 60], &[])]
-    #[case::background_job_without_roots(&[(51, WORKTREE)], &[], &[])]
-    #[case::ancestor_without_roots(&[(20, WORKTREE)], &[], &[20])]
+    #[case::caller_itself_inside(&[(40, WORKTREE)], &[20, 60], Some(20), &[40])]
+    #[case::agent_inside_subdirectory(&[(30, "/repo/.worktrees/feature/src")], &[20, 60], Some(20), &[30])]
+    #[case::background_job_inside_is_ignored_when_caller_is_outside(&[(50, "/repo"), (51, WORKTREE)], &[20, 60], Some(20), &[])]
+    #[case::background_job_inside_is_kept_when_caller_is_inside(&[(30, WORKTREE), (51, WORKTREE)], &[20, 60], Some(20), &[30, 51])]
+    #[case::other_pane_in_caller_window_inside(&[(60, WORKTREE)], &[20, 60], Some(20), &[60])]
+    #[case::other_window_inside(&[(80, WORKTREE), (81, WORKTREE)], &[20, 60], Some(20), &[])]
+    #[case::sibling_worktree(&[(40, "/repo/.worktrees/feature-extra")], &[20, 60], Some(20), &[])]
+    #[case::background_job_without_roots(&[(51, WORKTREE)], &[], None, &[])]
+    #[case::ancestor_without_roots(&[(20, WORKTREE)], &[], None, &[20])]
     fn finds_caller_processes_inside_the_path(
         snapshot: ProcessSnapshot,
         #[case] cwds: &[(u32, &str)],
         #[case] roots: &[u32],
+        #[case] caller_pane_pid: Option<u32>,
         #[case] expected: &[u32],
     ) {
         let cwds: HashMap<u32, PathBuf> = cwds
@@ -111,7 +103,14 @@ mod tests {
             .collect();
 
         assert_eq!(
-            caller_pids_in_path(&snapshot, &cwds, 40, roots, Path::new(WORKTREE)),
+            caller_pids_in_path(
+                &snapshot,
+                &cwds,
+                40,
+                roots,
+                caller_pane_pid,
+                Path::new(WORKTREE),
+            ),
             expected,
         );
     }
