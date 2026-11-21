@@ -38,12 +38,12 @@ pub(super) async fn close(
         .await
     {
         log_close_failure(&session.session_id, &error);
-        let checks = if ApiError::requires_close_checks(&error) {
-            Some((state.close_checks_inspector)(session.cwd.clone()).await)
-        } else {
-            None
-        };
-        return Err(ApiError::close(error, checks));
+        let mut api_error = ApiError::close(error);
+        if api_error.needs_close_checks() {
+            let checks = (state.close_checks_inspector)(session.cwd.clone()).await;
+            api_error.set_close_checks(checks);
+        }
+        return Err(api_error);
     }
     Ok(Json(Success::new()))
 }
@@ -51,7 +51,7 @@ pub(super) async fn close(
 fn log_close_failure(session_id: &str, error: &anyhow::Error) {
     tracing::warn!(
         event = "agent.watch_web.close_failed",
-        session_id,
+        session = %session_id,
         error = %error,
     );
 }
@@ -71,7 +71,7 @@ mod tests {
             events,
             vec![serde_json::json!({
                 "event": "agent.watch_web.close_failed",
-                "session_id": "synthetic-session",
+                "session": "synthetic-session",
                 "error": "synthetic close failure",
             })],
         );

@@ -68,26 +68,17 @@ impl ApiError {
         }
     }
 
-    pub(super) fn requires_close_checks(error: &anyhow::Error) -> bool {
-        if error
-            .downcast_ref::<crate::commands::agent::SessionLifecyclePersistenceError>()
-            .is_some()
-        {
-            return false;
-        }
-
-        error
-            .downcast_ref::<crate::shared::worktree::DirtyWorktreeError>()
-            .is_some()
-            || error
-                .downcast_ref::<crate::shared::cleanup::WorktreeProcessGuardError>()
-                .is_some()
-            || error
-                .downcast_ref::<crate::shared::worktree_delete::UnmergedWorktreeError>()
-                .is_some()
+    pub(super) fn needs_close_checks(&self) -> bool {
+        self.code.is_some()
     }
 
-    pub(super) fn close(error: anyhow::Error, checks: Option<CloseChecks>) -> Self {
+    pub(super) fn set_close_checks(&mut self, checks: CloseChecks) {
+        if self.needs_close_checks() {
+            self.checks = Some(Box::new(checks));
+        }
+    }
+
+    pub(super) fn close(error: anyhow::Error) -> Self {
         if error
             .downcast_ref::<crate::commands::agent::SessionLifecyclePersistenceError>()
             .is_some()
@@ -105,7 +96,7 @@ impl ApiError {
                     dirty_worktree.worktree_path().display(),
                 ),
                 code: Some("dirty_worktree"),
-                checks: checks.map(Box::new),
+                checks: None,
             };
         }
 
@@ -131,7 +122,7 @@ impl ApiError {
                 status: StatusCode::CONFLICT,
                 message,
                 code: Some("worktree_process_guard"),
-                checks: checks.map(Box::new),
+                checks: None,
             };
         }
 
@@ -142,7 +133,7 @@ impl ApiError {
             status: StatusCode::CONFLICT,
             message: error.to_string(),
             code,
-            checks: checks.map(Box::new),
+            checks: None,
         }
     }
 }
@@ -168,14 +159,11 @@ mod tests {
 
     #[test]
     fn close_lifecycle_persistence_errors_are_internal_server_errors() {
-        let error = ApiError::close(
-            anyhow::Error::new(
-                crate::commands::agent::SessionLifecyclePersistenceError::new(anyhow::anyhow!(
-                    "database unavailable"
-                )),
-            ),
-            None,
-        );
+        let error = ApiError::close(anyhow::Error::new(
+            crate::commands::agent::SessionLifecyclePersistenceError::new(anyhow::anyhow!(
+                "database unavailable"
+            )),
+        ));
 
         assert_eq!(
             (error.status, error.message, error.code),
@@ -189,12 +177,11 @@ mod tests {
 
     #[test]
     fn close_dirty_worktree_errors_have_a_code_and_no_unavailable_force_option() {
-        let error = ApiError::close(
-            anyhow::Error::new(crate::shared::worktree::DirtyWorktreeError::new(
-                std::path::PathBuf::from("/worktrees/dirty"),
+        let error = ApiError::close(anyhow::Error::new(
+            crate::shared::worktree::DirtyWorktreeError::new(std::path::PathBuf::from(
+                "/worktrees/dirty",
             )),
-            None,
-        );
+        ));
 
         assert_eq!(
             (error.status, error.message, error.code),
@@ -208,15 +195,12 @@ mod tests {
 
     #[test]
     fn close_process_guard_errors_offer_a_keep_worktree_retry() {
-        let error = ApiError::close(
-            anyhow::Error::new(
-                crate::shared::cleanup::WorktreeProcessGuardError::ActiveProcesses {
-                    worktree_path: std::path::PathBuf::from("/worktrees/busy"),
-                    process_list: "42 (editor)".to_string(),
-                },
-            ),
-            None,
-        );
+        let error = ApiError::close(anyhow::Error::new(
+            crate::shared::cleanup::WorktreeProcessGuardError::ActiveProcesses {
+                worktree_path: std::path::PathBuf::from("/worktrees/busy"),
+                process_list: "42 (editor)".to_string(),
+            },
+        ));
 
         assert_eq!(
             (error.status, error.message, error.code),
@@ -230,14 +214,11 @@ mod tests {
 
     #[test]
     fn close_process_inspection_errors_offer_a_keep_worktree_retry() {
-        let error = ApiError::close(
-            anyhow::Error::new(
-                crate::shared::cleanup::WorktreeProcessGuardError::InspectionUnavailable {
-                    worktree_path: std::path::PathBuf::from("/worktrees/uncheckable"),
-                },
-            ),
-            None,
-        );
+        let error = ApiError::close(anyhow::Error::new(
+            crate::shared::cleanup::WorktreeProcessGuardError::InspectionUnavailable {
+                worktree_path: std::path::PathBuf::from("/worktrees/uncheckable"),
+            },
+        ));
 
         assert_eq!(
             (error.status, error.message, error.code),
