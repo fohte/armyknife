@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.814](https://github.com/fohte/armyknife/compare/v0.1.813...v0.1.814) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show vibe changes as events ([#2016](https://github.com/fohte/armyknife/issues/2016)) ([dee561d](https://github.com/fohte/armyknife/commit/dee561dbf85ee139a4ea86be467bedbe161b85a5))
+
 ## [0.1.813](https://github.com/fohte/armyknife/compare/v0.1.812...v0.1.813) (2026-11-21)
 
 
