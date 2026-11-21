@@ -222,8 +222,13 @@ const meta = {
   decorators: [
     (Story, context) => (
       <div
-        className="story-inbox-container"
+        className={
+          context.args.isMobile
+            ? 'story-inbox-container story-mobile-layout'
+            : 'story-inbox-container'
+        }
         data-layout={context.args.isMobile ? 'mobile' : 'desktop'}
+        style={context.args.isMobile ? { width: '100%' } : undefined}
       >
         <Story />
       </div>
@@ -264,6 +269,7 @@ export const InboxShowsFoldedTodosBelowNeedsAction: Story = {
 export const InboxShowsFoldedTodosBelowNeedsActionOnPhone: Story = {
   name: 'A phone shows the folded to-do row below Needs action',
   args: {
+    isMobile: true,
     sessions: [
       ...sessions,
       sampleSession(
