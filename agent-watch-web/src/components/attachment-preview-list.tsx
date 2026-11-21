@@ -1,7 +1,7 @@
 import '#components/attachment-preview-list.css'
 
 import { Button } from '@fohte/ui/button'
-import type { ClipboardEvent } from 'react'
+import type { ClipboardEvent, DragEvent as ReactDragEvent } from 'react'
 
 import { ImageLightbox } from '#components/image-lightbox'
 
@@ -20,6 +20,33 @@ export function handleAttachmentPaste(
   if (files.length === 0) return
   event.preventDefault()
   onPasteFiles(files)
+}
+
+function containsFiles(event: ReactDragEvent<HTMLElement>) {
+  return Array.from(event.dataTransfer.types).includes('Files')
+}
+
+export function handleAttachmentDrag(event: ReactDragEvent<HTMLElement>) {
+  if (!containsFiles(event)) return
+  event.preventDefault()
+  event.stopPropagation()
+  event.dataTransfer.dropEffect = 'copy'
+}
+
+export function handleAttachmentDragLeave(event: ReactDragEvent<HTMLElement>) {
+  if (!containsFiles(event)) return
+  event.stopPropagation()
+}
+
+export function handleAttachmentDrop(
+  event: ReactDragEvent<HTMLElement>,
+  onPasteFiles: (files: File[]) => void,
+) {
+  if (!containsFiles(event)) return
+  event.preventDefault()
+  event.stopPropagation()
+  const files = Array.from(event.dataTransfer.files)
+  if (files.length > 0) onPasteFiles(files)
 }
 
 type AttachmentPreviewListProps = {

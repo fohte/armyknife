@@ -7,6 +7,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   AttachmentPreviewList,
+  handleAttachmentDrag,
+  handleAttachmentDragLeave,
+  handleAttachmentDrop,
   handleAttachmentPaste,
 } from '#components/attachment-preview-list'
 import { numberShortcutChoice } from '#components/conversation-keyboard'
@@ -314,6 +317,12 @@ export function ProposalCard({
             disabled={isAnswered || isSubmitting}
             onPaste={(event: ClipboardEvent<HTMLTextAreaElement>) => {
               handleAttachmentPaste(event, attachmentState.onPasteFiles)
+            }}
+            onDragEnter={handleAttachmentDrag}
+            onDragOver={handleAttachmentDrag}
+            onDragLeave={handleAttachmentDragLeave}
+            onDrop={(event) => {
+              handleAttachmentDrop(event, attachmentState.onPasteFiles)
             }}
             onChange={(event) => {
               updateDraft(event.currentTarget.value)

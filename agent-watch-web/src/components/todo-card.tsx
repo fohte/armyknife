@@ -6,6 +6,9 @@ import { useId, useMemo, useState } from 'react'
 
 import {
   AttachmentPreviewList,
+  handleAttachmentDrag,
+  handleAttachmentDragLeave,
+  handleAttachmentDrop,
   handleAttachmentPaste,
 } from '#components/attachment-preview-list'
 import { CollapsibleText } from '#components/collapsible-text'
@@ -166,6 +169,12 @@ export function TodoCard({
         disabled={isSubmitting}
         onPaste={(event: ClipboardEvent<HTMLTextAreaElement>) => {
           handleAttachmentPaste(event, attachmentState.onPasteFiles)
+        }}
+        onDragEnter={handleAttachmentDrag}
+        onDragOver={handleAttachmentDrag}
+        onDragLeave={handleAttachmentDragLeave}
+        onDrop={(event) => {
+          handleAttachmentDrop(event, attachmentState.onPasteFiles)
         }}
         onChange={(event) => {
           updateDraft(event.currentTarget.value)

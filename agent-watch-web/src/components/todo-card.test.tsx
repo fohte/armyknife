@@ -84,6 +84,18 @@ async function pasteImage(textarea: HTMLTextAreaElement, file: File) {
   })
 }
 
+async function dropImage(textarea: HTMLTextAreaElement, file: File) {
+  const event = new Event('drop', { bubbles: true, cancelable: true })
+  Object.defineProperty(event, 'dataTransfer', {
+    value: { types: ['Files'], files: [file], dropEffect: 'none' },
+  })
+  await act(async () => {
+    textarea.dispatchEvent(event)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  })
+  return event
+}
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   onSelectSession.mockReset()
@@ -492,6 +504,34 @@ it('previews and sends an image pasted into the task comment', async () => {
       },
     ],
     completedPreview: 'blob:todo-image',
+  })
+})
+
+it('attaches dropped images to the task comment without bubbling to the conversation', async () => {
+  renderCard(props())
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+  const conversationDrop = vi.fn()
+  document.body.addEventListener('drop', conversationDrop)
+  const drop = await dropImage(
+    comment,
+    new File(['image'], 'dropped.png', { type: 'image/png' }),
+  )
+  document.body.removeEventListener('drop', conversationDrop)
+
+  const snapshot = () => ({
+    dropPrevented: drop.defaultPrevented,
+    conversationDropCalls: conversationDrop.mock.calls,
+    attachmentNames: Array.from(
+      container.querySelectorAll('.attachment-preview-item span'),
+      (element) => element.textContent,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    dropPrevented: true,
+    conversationDropCalls: [],
+    attachmentNames: ['dropped.png'],
   })
 })
 
