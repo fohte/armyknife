@@ -145,37 +145,59 @@ mod tests {
     }
 
     #[rstest]
-    fn stop_hook_records_the_report_check_for_a_delegate(sessions_dir: TempDir) {
-        let session = delegate_session(Engine::Claude, "fixture-delegate", "fixture-parent");
+    #[case::claude(Engine::Claude)]
+    #[case::codex(Engine::Codex)]
+    fn stop_hook_sends_the_full_rendered_notification_to_the_direct_parent(
+        #[case] engine: Engine,
+        sessions_dir: TempDir,
+    ) {
+        let mut session = delegate_session(engine, "fixture-delegate", "fixture-parent");
+        session.status = SessionStatus::Running;
         store::save_session_to(sessions_dir.path(), &session).unwrap();
-        insert_watch_web_peer_out_message_from(
-            sessions_dir.path(),
-            &session.session_id,
-            "fixture-parent",
-            "A fictional report.",
-            at(12, 0),
-            false,
-        )
-        .unwrap();
-        let result = super::super::process_hook_event_impl_with_instruction(
+
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let calls_for_notify = Arc::clone(&calls);
+        let agent_config = config(Some(TEMPLATE));
+        let notify_hook = move |session: &Session, input: &HookInput, sessions_dir: &Path| {
+            notify_if_unreported(
+                session,
+                input,
+                sessions_dir,
+                &agent_config,
+                |recipient, message| {
+                    calls_for_notify
+                        .lock()
+                        .unwrap()
+                        .push((recipient.to_string(), message.to_string()));
+                },
+            )
+        };
+        let result = super::super::process_hook_event_impl_with_env_and_unreported_stop(
             HookEvent::Stop,
-            stop_input(Engine::Claude),
+            stop_input(engine),
             sessions_dir.path(),
             &super::super::side_effects::SideEffects::none(),
             None,
-        )
-        .unwrap();
-        let has_reported = check_unreported_stop(
-            sessions_dir.path(),
-            &session.session_id,
-            "fixture-parent",
-            session.created_at,
+            crate::shared::env_var::EnvVars::default(),
+            notify_hook,
         )
         .unwrap();
 
         assert_eq!(
-            (result, has_reported),
-            (super::super::ProcessResult::SessionSaved, false),
+            (result, calls.lock().unwrap().clone()),
+            (
+                super::super::ProcessResult::SessionSaved,
+                vec![(
+                    "fixture-parent".to_string(),
+                    indoc! {"
+                        <delegation-update>
+                        Session: fixture-delegate
+                        Last message: I finished sample change.
+                        </delegation-update>"
+                    }
+                    .to_string(),
+                )],
+            ),
         );
     }
 
