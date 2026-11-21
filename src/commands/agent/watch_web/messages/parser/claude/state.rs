@@ -167,10 +167,11 @@ impl ClaudeParserState {
                                     id: id.to_owned(),
                                     answers,
                                 });
-                            } else if block
-                                .get("content")
-                                .and_then(tool_result_text)
-                                .is_some_and(|text| is_question_cancelled(&text))
+                            } else if tool_result_failed(record, block)
+                                || block
+                                    .get("content")
+                                    .and_then(tool_result_text)
+                                    .is_some_and(|text| is_question_cancelled(&text))
                             {
                                 effects.push(ClaudeEffect::QuestionCancelled { id: id.to_owned() });
                             }
