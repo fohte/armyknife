@@ -190,29 +190,33 @@ export function BoardView({
       const offscreenProjects = columns.filter(
         (project) => project.offsetLeft + project.clientWidth > rightEdge,
       )
-      const scrollPaddingLeft =
-        Number.parseFloat(getComputedStyle(scroller).scrollPaddingLeft) || 16
-      const targetLeft = scroller.scrollLeft + scrollPaddingLeft
-      const currentIndex = columns.reduce((closestIndex, project, index) => {
-        const projectLeft =
-          project.getBoundingClientRect().left -
-          scroller.getBoundingClientRect().left +
-          scroller.scrollLeft
-        const closestProject = columns[closestIndex]
-        if (closestProject === undefined) {
-          return index
-        }
-        const closestLeft =
-          closestProject.getBoundingClientRect().left -
-          scroller.getBoundingClientRect().left +
-          scroller.scrollLeft
-        return Math.abs(projectLeft - targetLeft) <
-          Math.abs(closestLeft - targetLeft)
-          ? index
-          : closestIndex
-      }, 0)
       setRemainingProjects(offscreenProjects.length)
-      setActiveProjectIndex(currentIndex)
+      if (isMobile) {
+        const scrollPaddingLeft =
+          Number.parseFloat(getComputedStyle(scroller).scrollPaddingLeft) || 16
+        const targetLeft = scroller.scrollLeft + scrollPaddingLeft
+        const scrollerLeft = scroller.getBoundingClientRect().left
+        const projectPositions = columns.map(
+          (project) =>
+            project.getBoundingClientRect().left -
+            scrollerLeft +
+            scroller.scrollLeft,
+        )
+        const currentIndex = projectPositions.reduce(
+          (closestIndex, projectLeft, index) => {
+            const closestLeft = projectPositions[closestIndex]
+            if (closestLeft === undefined) {
+              return index
+            }
+            return Math.abs(projectLeft - targetLeft) <
+              Math.abs(closestLeft - targetLeft)
+              ? index
+              : closestIndex
+          },
+          0,
+        )
+        setActiveProjectIndex(currentIndex)
+      }
     }
 
     updateProjectIndicators()
@@ -228,7 +232,7 @@ export function BoardView({
       scroller.removeEventListener('scroll', updateProjectIndicators)
       resizeObserver.disconnect()
     }
-  }, [visibleProjects])
+  }, [isMobile, visibleProjects])
 
   return (
     <section
