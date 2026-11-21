@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.821](https://github.com/fohte/armyknife/compare/v0.1.820...v0.1.821) (2026-11-21)
+
+
+### Features
+
+* **agent-watch-web:** support the Board on iPhone ([#2027](https://github.com/fohte/armyknife/issues/2027)) ([4fb68b4](https://github.com/fohte/armyknife/commit/4fb68b42564ad0a12970bc252deb45f5811308e1))
+
 ## [0.1.820](https://github.com/fohte/armyknife/compare/v0.1.819...v0.1.820) (2026-11-21)
 
 
