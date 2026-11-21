@@ -162,6 +162,11 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
         &worktree_path,
         force,
         || {
+            ensure_worktree_branch_unchanged_before_delete(
+                force,
+                branch_name.as_deref(),
+                get_worktree_branch(&main_repo, &worktree_name).as_deref(),
+            )?;
             ensure_branch_no_unique_commits_before_delete(
                 merge_status.as_ref(),
                 force,
@@ -388,6 +393,22 @@ fn branch_has_no_unique_commits(repo: &GitRepo, branch: &str) -> bool {
     branch_has_no_unique_commits_with(branch, default_branch.as_deref(), |ancestor, descendant| {
         repo.is_ancestor(ancestor, descendant)
     })
+}
+
+fn ensure_worktree_branch_unchanged_before_delete(
+    force: bool,
+    planned_branch: Option<&str>,
+    current_branch: Option<&str>,
+) -> Result<()> {
+    if force || planned_branch == current_branch {
+        return Ok(());
+    }
+
+    bail!(
+        "Worktree branch changed from `{}` to `{}` before deletion; retry close to check the current branch",
+        planned_branch.unwrap_or("detached"),
+        current_branch.unwrap_or("detached"),
+    )
 }
 
 fn ensure_branch_no_unique_commits_before_delete(
@@ -671,6 +692,33 @@ mod tests {
                 )),
             ),
         );
+    }
+
+    #[rstest]
+    #[case::unchanged_branch(false, Some("agent-branch"), Some("agent-branch"), Ok(()))]
+    #[case::changed_branch(
+        false,
+        Some("agent-branch"),
+        Some("replacement-branch"),
+        Err("Worktree branch changed from `agent-branch` to `replacement-branch` before deletion; retry close to check the current branch".to_string()),
+    )]
+    #[case::force_accepts_branch_change(
+        true,
+        Some("agent-branch"),
+        Some("replacement-branch"),
+        Ok(()),
+    )]
+    fn close_rejects_a_changed_worktree_branch_before_deletion(
+        #[case] force: bool,
+        #[case] planned_branch: Option<&str>,
+        #[case] current_branch: Option<&str>,
+        #[case] expected: std::result::Result<(), String>,
+    ) {
+        let result =
+            ensure_worktree_branch_unchanged_before_delete(force, planned_branch, current_branch)
+                .map_err(|error| error.to_string());
+
+        assert_eq!(result, expected);
     }
 
     #[rstest]
