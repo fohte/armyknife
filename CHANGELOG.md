@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.833](https://github.com/fohte/armyknife/compare/v0.1.832...v0.1.833) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent/close:** skip prompt for clean branches ([#2048](https://github.com/fohte/armyknife/issues/2048)) ([3046bfa](https://github.com/fohte/armyknife/commit/3046bfa5b2cbd8d5d14083cfbf9ba4fe19b70fe3))
+
 ## [0.1.832](https://github.com/fohte/armyknife/compare/v0.1.831...v0.1.832) (2026-11-21)
 
 
