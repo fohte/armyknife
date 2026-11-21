@@ -270,26 +270,22 @@ fn run_tq_command(args: &[String]) -> Result<std::process::Output> {
     Ok(output)
 }
 
-/// Runs `tq session list --limit unlimited --session-id <id> ...` (one flag
-/// per id in `session_ids`) to completion and parses its stdout. Blocking, so
-/// callers must run it via [`tokio::task::spawn_blocking`].
+/// Runs `tq session list --limit unlimited --session-id <id> ...` once per
+/// query chunk and combines the parsed results. Blocking, so callers must run
+/// it via [`tokio::task::spawn_blocking`].
 fn run_session_list(session_ids: &[String]) -> Result<Vec<SessionTasks>> {
-    let chunks = chunk_ids(
+    run_chunked_query(
         session_ids,
         MAX_TQ_ID_QUERY_BYTES,
         0,
         "session-id=".len(),
         1,
-    )?;
-    let mut sessions = Vec::new();
-    for chunk in chunks {
-        let args = build_session_list_args(&chunk);
-        let output = run_tq_command(&args)?;
-        sessions.extend(parse_session_list(&String::from_utf8_lossy(
-            &output.stdout,
-        ))?);
-    }
-    Ok(sessions)
+        |chunk| {
+            let args = build_session_list_args(chunk);
+            let output = run_tq_command(&args)?;
+            parse_session_list(&String::from_utf8_lossy(&output.stdout))
+        },
+    )
 }
 
 /// Builds the argv for [`run_session_list`]. Isolated from the process spawn
@@ -311,14 +307,51 @@ fn build_task_list_args(task_ids: &[String]) -> Vec<String> {
 }
 
 fn run_task_list(task_ids: &[String]) -> Result<Vec<TqTaskSummary>> {
-    let chunks = chunk_ids(task_ids, MAX_TQ_ID_QUERY_BYTES, "ids=".len(), 0, 5)?;
-    let mut tasks = Vec::new();
-    for chunk in chunks {
-        let args = build_task_list_args(&chunk);
-        let output = run_tq_command(&args)?;
-        tasks.extend(parse_task_list(&String::from_utf8_lossy(&output.stdout))?);
-    }
+    let mut tasks = run_chunked_query(
+        task_ids,
+        MAX_TQ_ID_QUERY_BYTES,
+        "ids=".len(),
+        0,
+        5,
+        |chunk| {
+            let args = build_task_list_args(chunk);
+            let output = run_tq_command(&args)?;
+            parse_task_list(&String::from_utf8_lossy(&output.stdout))
+        },
+    )?;
+    sort_tasks_by_priority(&mut tasks);
     Ok(tasks)
+}
+
+fn run_chunked_query<T>(
+    ids: &[String],
+    max_query_bytes: usize,
+    fixed_bytes: usize,
+    item_overhead_bytes: usize,
+    separator_bytes: usize,
+    mut run_chunk: impl FnMut(&[String]) -> Result<Vec<T>>,
+) -> Result<Vec<T>> {
+    let chunks = chunk_ids(
+        ids,
+        max_query_bytes,
+        fixed_bytes,
+        item_overhead_bytes,
+        separator_bytes,
+    )?;
+    let mut results = Vec::new();
+    for chunk in chunks {
+        results.extend(run_chunk(&chunk)?);
+    }
+    Ok(results)
+}
+
+fn sort_tasks_by_priority(tasks: &mut [TqTaskSummary]) {
+    // Match tq's priority groups when merging individually sorted chunk responses.
+    tasks.sort_by_key(|task| match task.priority {
+        Some(priority) if priority >= 0 => (0, std::cmp::Reverse(priority)),
+        None => (1, std::cmp::Reverse(0)),
+        Some(priority) => (2, std::cmp::Reverse(priority)),
+    });
 }
 
 /// Splits identifiers so their encoded query component stays within a
@@ -767,15 +800,68 @@ mod tests {
         assert_eq!(
             chunk_ids(
                 &["a/b".to_string(), "cd".to_string(), "ef".to_string(),],
-                16,
+                15,
                 "ids=".len(),
                 0,
                 5,
             )
             .unwrap(),
             vec![
-                vec!["a/b".to_string(), "cd".to_string()],
-                vec!["ef".to_string()],
+                vec!["a/b".to_string()],
+                vec!["cd".to_string(), "ef".to_string()],
+            ],
+        );
+    }
+
+    #[test]
+    fn runs_each_chunk_and_combines_all_results() {
+        let ids = vec!["aa".to_string(), "bb".to_string(), "cc".to_string()];
+        let mut executed_chunks = Vec::new();
+        let results = run_chunked_query(&ids, 3, 0, 0, 1, |chunk| {
+            executed_chunks.push(chunk.to_vec());
+            Ok(chunk.to_vec())
+        })
+        .unwrap();
+
+        assert_eq!(
+            (results, executed_chunks),
+            (
+                ids,
+                vec![
+                    vec!["aa".to_string()],
+                    vec!["bb".to_string()],
+                    vec!["cc".to_string()],
+                ],
+            ),
+        );
+    }
+
+    #[test]
+    fn merged_task_summaries_keep_tq_priority_groups() {
+        let task = |id: &str, priority| TqTaskSummary {
+            id: id.to_string(),
+            number: 1,
+            title: id.to_string(),
+            updated_at: None,
+            priority,
+            project_id: None,
+        };
+        let mut tasks = vec![
+            task("deferred", Some(-1)),
+            task("unset", None),
+            task("normal", Some(0)),
+            task("high", Some(1)),
+        ];
+
+        sort_tasks_by_priority(&mut tasks);
+
+        assert_eq!(
+            tasks,
+            vec![
+                task("high", Some(1)),
+                task("normal", Some(0)),
+                task("unset", None),
+                task("deferred", Some(-1)),
             ],
         );
     }
