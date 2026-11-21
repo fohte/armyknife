@@ -535,6 +535,56 @@ it('attaches dropped images to the task comment without bubbling to the conversa
   })
 })
 
+it('lets the conversation handle drops while the task is submitting', async () => {
+  let resolveTodo: (succeeded: boolean) => void = () => undefined
+  const todoResult = new Promise<boolean>((resolve) => {
+    resolveTodo = resolve
+  })
+  let notifyTodoCalled: () => void = () => undefined
+  const todoCalled = new Promise<void>((resolve) => {
+    notifyTodoCalled = resolve
+  })
+  const onResolve = vi.fn<Props['onResolve']>(() => {
+    notifyTodoCalled()
+    return todoResult
+  })
+  renderCard(props({ onResolve }))
+  const resolveButton = requireElement(
+    container.querySelector<HTMLButtonElement>('.chat-todo-footer button'),
+  )
+  await act(async () => {
+    resolveButton.click()
+    await todoCalled
+  })
+
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+  const conversationDrops: string[] = []
+  const onConversationDrop = () => conversationDrops.push('drop')
+  document.body.addEventListener('drop', onConversationDrop)
+  const drop = await dropImage(
+    comment,
+    new File(['image'], 'dropped.png', { type: 'image/png' }),
+  )
+  document.body.removeEventListener('drop', onConversationDrop)
+  await act(async () => {
+    resolveTodo(true)
+    await todoResult
+  })
+
+  const snapshot = () => ({
+    commentDisabled: comment.disabled,
+    dropPrevented: drop.defaultPrevented,
+    conversationDrops,
+  })
+  expect(snapshot()).toEqual({
+    commentDisabled: true,
+    dropPrevented: false,
+    conversationDrops: ['drop'],
+  })
+})
+
 it('shows a completed task compactly with its saved comment', () => {
   renderCard(
     props({
