@@ -1095,27 +1095,29 @@ fn process_hook_event_impl_with_env(
     }
 
     if unreported_stop::can_check_stop(event, stop_block_reason.is_some()) {
+        #[cfg(test)]
+        let agent_config = crate::shared::config::AgentConfig::default();
         #[cfg(not(test))]
-        {
-            let config = config::load_config_or_default();
-            let checked_at = Utc::now();
-            let session_id = session.session_id.clone();
-            if let Err(error) = unreported_stop::notify_if_unreported(
-                &session,
-                &input,
-                sessions_dir,
-                &config.agent,
-                checked_at,
-                |recipient, message| {
-                    unreported_stop_notification::spawn(&session_id, recipient, message);
-                },
-            ) {
-                tracing::warn!(
-                    event = "agent.hook.unreported_stop.failed",
-                    session = %session.session_id,
-                    error = %error,
-                );
-            }
+        let agent_config = config::load_config_or_default().agent;
+        #[cfg(not(test))]
+        let session_id = session.session_id.clone();
+        if let Err(error) = unreported_stop::notify_if_unreported(
+            &session,
+            &input,
+            sessions_dir,
+            &agent_config,
+            |recipient, message| {
+                #[cfg(test)]
+                let _ = (recipient, message);
+                #[cfg(not(test))]
+                unreported_stop_notification::spawn(&session_id, recipient, message);
+            },
+        ) {
+            tracing::warn!(
+                event = "agent.hook.unreported_stop.failed",
+                session = %session.session_id,
+                error = %error,
+            );
         }
         title_generation::maybe_generate(&session, sessions_dir, side_effects);
     }

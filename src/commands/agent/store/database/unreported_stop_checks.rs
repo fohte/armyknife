@@ -2,18 +2,17 @@ use std::path::Path;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use rusqlite::{OptionalExtension, TransactionBehavior, params};
+use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 
 use super::open_connection;
 
 /// Checks peer reports after the previous completed Stop decision and advances
-/// the boundary in the same transaction so concurrent Stop hooks cannot race.
+/// both boundaries in the same transaction so delayed rows cannot be skipped.
 pub(crate) fn check_unreported_stop(
     sessions_dir: &Path,
     session_id: &str,
     parent_session_id: &str,
     session_created_at: DateTime<Utc>,
-    checked_at: DateTime<Utc>,
 ) -> Result<bool> {
     super::validate_session_id(session_id)?;
     super::validate_session_id(parent_session_id)?;
@@ -27,27 +26,41 @@ pub(crate) fn check_unreported_stop(
             |row| row.get::<_, String>(0),
         )
         .optional()?;
-    let boundary = previous_check
+    let previous_check_at = previous_check
         .map(|value| DateTime::parse_from_rfc3339(&value).map(|value| value.with_timezone(&Utc)))
-        .transpose()?
-        .unwrap_or(session_created_at);
-
-    let mut statement = transaction.prepare(
-        "SELECT sent_at FROM watch_web_peer_out_message
-         WHERE from_session_id = ?1 AND to_session_id = ?2",
+        .transpose()?;
+    let previous_boundary = previous_check_at.unwrap_or(session_created_at);
+    let previous_message_id = match transaction
+        .query_row(
+            "SELECT last_message_id FROM agent_unreported_stop_peer_cursor WHERE session_id = ?1",
+            [session_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+    {
+        Some(last_message_id) => last_message_id,
+        None => last_message_id_through(
+            &transaction,
+            session_id,
+            parent_session_id,
+            previous_boundary,
+        )?,
+    };
+    let checked_at = Utc::now();
+    let has_reported = transaction.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM watch_web_peer_out_message
+             WHERE from_session_id = ?1 AND to_session_id = ?2 AND id > ?3
+         )",
+        params![session_id, parent_session_id, previous_message_id],
+        |row| row.get::<_, bool>(0),
     )?;
-    let rows = statement.query_map(params![session_id, parent_session_id], |row| {
-        row.get::<_, String>(0)
-    })?;
-    let mut reported = false;
-    for row in rows {
-        let sent_at = DateTime::parse_from_rfc3339(&row?)?.with_timezone(&Utc);
-        if sent_at > boundary && sent_at <= checked_at {
-            reported = true;
-            break;
-        }
-    }
-    drop(statement);
+    let last_message_id = transaction.query_row(
+        "SELECT COALESCE(MAX(id), 0) FROM watch_web_peer_out_message
+         WHERE from_session_id = ?1 AND to_session_id = ?2",
+        params![session_id, parent_session_id],
+        |row| row.get::<_, i64>(0),
+    )?;
 
     transaction.execute(
         "INSERT INTO agent_unreported_stop_check (session_id, checked_at)
@@ -55,8 +68,38 @@ pub(crate) fn check_unreported_stop(
          ON CONFLICT(session_id) DO UPDATE SET checked_at = excluded.checked_at",
         params![session_id, checked_at.to_rfc3339()],
     )?;
+    transaction.execute(
+        "INSERT INTO agent_unreported_stop_peer_cursor (session_id, last_message_id)
+         VALUES (?1, ?2)
+         ON CONFLICT(session_id) DO UPDATE SET last_message_id = excluded.last_message_id",
+        params![session_id, last_message_id],
+    )?;
     transaction.commit()?;
-    Ok(reported)
+    Ok(has_reported)
+}
+
+fn last_message_id_through(
+    transaction: &Transaction<'_>,
+    session_id: &str,
+    parent_session_id: &str,
+    boundary: DateTime<Utc>,
+) -> Result<i64> {
+    let mut statement = transaction.prepare(
+        "SELECT id, sent_at FROM watch_web_peer_out_message
+         WHERE from_session_id = ?1 AND to_session_id = ?2",
+    )?;
+    let rows = statement.query_map(params![session_id, parent_session_id], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut last_message_id = 0;
+    for row in rows {
+        let (message_id, sent_at) = row?;
+        let sent_at = DateTime::parse_from_rfc3339(&sent_at)?.with_timezone(&Utc);
+        if sent_at <= boundary {
+            last_message_id = last_message_id.max(message_id);
+        }
+    }
+    Ok(last_message_id)
 }
 
 #[cfg(test)]
@@ -69,64 +112,15 @@ mod tests {
     use crate::commands::agent::store::insert_watch_web_peer_out_message_from;
 
     #[rstest]
-    #[case::before_boundary("2026-06-01T12:00:00Z", false)]
-    #[case::at_boundary("2026-06-01T12:01:00Z", false)]
-    #[case::after_boundary("2026-06-01T12:01:01Z", true)]
-    fn detects_only_parent_reports_after_the_previous_check(
-        #[case] sent_at: &str,
-        #[case] expected: bool,
-        sessions_dir: TempDir,
-    ) {
-        let session_id = "fixture-delegate";
-        let parent_id = "fixture-parent";
-        let sent_at = DateTime::parse_from_rfc3339(sent_at)
-            .unwrap()
-            .with_timezone(&Utc);
-        check_unreported_stop(
-            sessions_dir.path(),
-            session_id,
-            parent_id,
-            Utc.with_ymd_and_hms(2026, 6, 1, 11, 59, 0).unwrap(),
-            Utc.with_ymd_and_hms(2026, 6, 1, 12, 1, 0).unwrap(),
-        )
-        .unwrap();
-        insert_watch_web_peer_out_message_from(
-            sessions_dir.path(),
-            session_id,
-            parent_id,
-            "A fictional report.",
-            sent_at,
-            true,
-        )
-        .unwrap();
-
-        assert_eq!(
-            check_unreported_stop(
-                sessions_dir.path(),
-                session_id,
-                parent_id,
-                Utc.with_ymd_and_hms(2026, 6, 1, 11, 59, 0).unwrap(),
-                Utc.with_ymd_and_hms(2026, 6, 1, 12, 2, 0).unwrap(),
-            )
-            .unwrap(),
-            expected,
-        );
-    }
-
-    #[rstest]
-    fn advances_the_boundary_after_each_completed_decision(sessions_dir: TempDir) {
+    fn counts_late_records_and_ignores_previous_turn_reports(sessions_dir: TempDir) {
         let session_id = "fixture-delegate";
         let parent_id = "fixture-parent";
         let session_created_at = Utc.with_ymd_and_hms(2026, 6, 1, 10, 0, 0).unwrap();
-        let first_check = Utc.with_ymd_and_hms(2026, 6, 1, 11, 30, 0).unwrap();
-        let second_check = Utc.with_ymd_and_hms(2026, 6, 1, 12, 1, 0).unwrap();
-        let third_check = Utc.with_ymd_and_hms(2026, 6, 1, 12, 2, 0).unwrap();
         let initial_result = check_unreported_stop(
             sessions_dir.path(),
             session_id,
             parent_id,
             session_created_at,
-            first_check,
         )
         .unwrap();
         insert_watch_web_peer_out_message_from(
@@ -143,7 +137,6 @@ mod tests {
             session_id,
             parent_id,
             session_created_at,
-            second_check,
         )
         .unwrap();
         let previous_turn_result = check_unreported_stop(
@@ -151,7 +144,6 @@ mod tests {
             session_id,
             parent_id,
             session_created_at,
-            third_check,
         )
         .unwrap();
 
@@ -159,6 +151,45 @@ mod tests {
             (initial_result, report_result, previous_turn_result),
             (false, true, false),
         );
+    }
+
+    #[rstest]
+    fn bootstraps_the_cursor_from_an_existing_time_boundary(sessions_dir: TempDir) {
+        let session_id = "fixture-delegate";
+        let parent_id = "fixture-parent";
+        let session_created_at = Utc.with_ymd_and_hms(2026, 6, 1, 10, 0, 0).unwrap();
+        insert_watch_web_peer_out_message_from(
+            sessions_dir.path(),
+            session_id,
+            parent_id,
+            "A fictional report from an earlier turn.",
+            Utc.with_ymd_and_hms(2026, 6, 1, 11, 0, 0).unwrap(),
+            false,
+        )
+        .unwrap();
+        let initial_result = check_unreported_stop(
+            sessions_dir.path(),
+            session_id,
+            parent_id,
+            session_created_at,
+        )
+        .unwrap();
+        super::super::open_connection(sessions_dir.path())
+            .unwrap()
+            .execute(
+                "DELETE FROM agent_unreported_stop_peer_cursor WHERE session_id = ?1",
+                [session_id],
+            )
+            .unwrap();
+        let migrated_result = check_unreported_stop(
+            sessions_dir.path(),
+            session_id,
+            parent_id,
+            session_created_at,
+        )
+        .unwrap();
+
+        assert_eq!((initial_result, migrated_result), (true, false));
     }
 
     #[fixture]

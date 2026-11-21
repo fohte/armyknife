@@ -24,7 +24,7 @@ CREATE TRIGGER agent_file_delete_session
         DELETE FROM agent_file WHERE session_id = OLD.session_id;
     END;";
 
-static MIGRATION_ENTRIES: [M<'static>; 28] = [
+static MIGRATION_ENTRIES: [M<'static>; 29] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -281,6 +281,17 @@ static MIGRATION_ENTRIES: [M<'static>; 28] = [
             AFTER DELETE ON sessions
             BEGIN
                 DELETE FROM agent_unreported_stop_check WHERE session_id = OLD.session_id;
+            END;",
+    ),
+    M::up(
+        "CREATE TABLE agent_unreported_stop_peer_cursor (
+            session_id TEXT PRIMARY KEY,
+            last_message_id INTEGER NOT NULL
+        );
+        CREATE TRIGGER agent_unreported_stop_peer_cursor_delete_session
+            AFTER DELETE ON sessions
+            BEGIN
+                DELETE FROM agent_unreported_stop_peer_cursor WHERE session_id = OLD.session_id;
             END;",
     ),
 ];

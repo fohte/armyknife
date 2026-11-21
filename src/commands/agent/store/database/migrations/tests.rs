@@ -151,10 +151,20 @@ fn adds_unreported_stop_check_to_version_twenty_seven_database(database_fixture:
                 SELECT
                 EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'watch_web_queued_prompt_session_message_id'),
                 EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_unreported_stop_check'),
-                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'agent_unreported_stop_check_delete_session')
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'agent_unreported_stop_check_delete_session'),
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_unreported_stop_peer_cursor'),
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'agent_unreported_stop_peer_cursor_delete_session')
             "},
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )
         .expect("both migration branches should be queryable");
     let actual_user_version: i64 = connection
@@ -163,7 +173,7 @@ fn adds_unreported_stop_check_to_version_twenty_seven_database(database_fixture:
 
     assert_eq!(
         (actual_schema, actual_user_version),
-        ((true, true, true), current_version()),
+        ((true, true, true, true, true), current_version()),
     );
 }
 
@@ -208,10 +218,11 @@ fn upgrades_branch_version_twenty_seven_without_recreating_its_stop_check(
                 SELECT
                 EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'watch_web_queued_prompt_session_message_id'),
                 EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'agent_unreported_stop_check_delete_session'),
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_unreported_stop_peer_cursor'),
                 (SELECT checked_at FROM agent_unreported_stop_check WHERE session_id = 'fixture-session-maple')
             "},
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .expect("existing stop check should be retained");
     connection
@@ -234,7 +245,7 @@ fn upgrades_branch_version_twenty_seven_without_recreating_its_stop_check(
     assert_eq!(
         (actual_schema, actual_remaining_checks, actual_user_version,),
         (
-            (true, true, Some("2026-01-01T00:00:00Z".to_string()),),
+            (true, true, true, Some("2026-01-01T00:00:00Z".to_string()),),
             0,
             current_version(),
         ),

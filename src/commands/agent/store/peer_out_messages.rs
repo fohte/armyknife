@@ -37,7 +37,7 @@ pub(crate) fn insert_watch_web_peer_out_message(
     sent_at: DateTime<Utc>,
     failed: bool,
 ) -> Result<i64> {
-    insert_watch_web_peer_out_message_from(
+    super::insert_watch_web_peer_out_message_from(
         &super::sessions_dir()?,
         from_session_id,
         to_session_id,

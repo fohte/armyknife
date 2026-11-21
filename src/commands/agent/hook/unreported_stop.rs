@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use anyhow::Result;
-use chrono::{DateTime, Utc};
 
 use super::super::store;
 use super::super::types::{ChildLaunchPermission, HookEvent, HookInput, Session};
@@ -17,7 +16,6 @@ pub(super) fn notify_if_unreported(
     input: &HookInput,
     sessions_dir: &Path,
     agent_config: &AgentConfig,
-    checked_at: DateTime<Utc>,
     mut notify: impl FnMut(&str, &str),
 ) -> Result<()> {
     let Some(parent_session_id) = session.ancestor_session_ids.last() else {
@@ -32,7 +30,6 @@ pub(super) fn notify_if_unreported(
         &session.session_id,
         parent_session_id,
         session.created_at,
-        checked_at,
     )?;
     if has_reported {
         tracing::debug!(
@@ -78,7 +75,7 @@ fn has_pending_work(session: &Session, input: &HookInput) -> bool {
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use chrono::{TimeZone, Utc};
+    use chrono::{DateTime, TimeZone, Utc};
     use indoc::indoc;
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
@@ -123,7 +120,6 @@ mod tests {
             &stop_input(engine),
             sessions_dir.path(),
             &config(Some(TEMPLATE)),
-            at(12, 1),
             move |recipient, message| {
                 calls_for_notify
                     .lock()
@@ -149,6 +145,41 @@ mod tests {
     }
 
     #[rstest]
+    fn stop_hook_records_the_report_check_for_a_delegate(sessions_dir: TempDir) {
+        let session = delegate_session(Engine::Claude, "fixture-delegate", "fixture-parent");
+        store::save_session_to(sessions_dir.path(), &session).unwrap();
+        insert_watch_web_peer_out_message_from(
+            sessions_dir.path(),
+            &session.session_id,
+            "fixture-parent",
+            "A fictional report.",
+            at(12, 0),
+            false,
+        )
+        .unwrap();
+        let result = super::super::process_hook_event_impl_with_instruction(
+            HookEvent::Stop,
+            stop_input(Engine::Claude),
+            sessions_dir.path(),
+            &super::super::side_effects::SideEffects::none(),
+            None,
+        )
+        .unwrap();
+        let has_reported = check_unreported_stop(
+            sessions_dir.path(),
+            &session.session_id,
+            "fixture-parent",
+            session.created_at,
+        )
+        .unwrap();
+
+        assert_eq!(
+            (result, has_reported),
+            (super::super::ProcessResult::SessionSaved, false),
+        );
+    }
+
+    #[rstest]
     #[case::delivered(false)]
     #[case::failed(true)]
     fn does_not_notify_after_a_parent_report(#[case] failed: bool, sessions_dir: TempDir) {
@@ -169,7 +200,6 @@ mod tests {
             &stop_input(Engine::Claude),
             sessions_dir.path(),
             &config(Some(TEMPLATE)),
-            at(12, 2),
             move |recipient, message| {
                 calls_for_notify
                     .lock()
@@ -201,7 +231,6 @@ mod tests {
             &session.session_id,
             "fixture-parent",
             session.created_at,
-            at(11, 30),
         )
         .unwrap();
         insert_watch_web_peer_out_message_from(
@@ -222,7 +251,6 @@ mod tests {
             &stop_input(Engine::Claude),
             sessions_dir.path(),
             &config(Some(TEMPLATE)),
-            at(12, 1),
             |_, _| {},
         )
         .unwrap();
@@ -234,7 +262,6 @@ mod tests {
             &stop_input(Engine::Claude),
             sessions_dir.path(),
             &config(Some(TEMPLATE)),
-            at(12, 2),
             move |recipient, message| {
                 calls_for_notify
                     .lock()
@@ -265,7 +292,6 @@ mod tests {
             &stop_input(Engine::Claude),
             sessions_dir.path(),
             &config(Some(TEMPLATE)),
-            at(12, 1),
             move |recipient, message| {
                 calls_for_notify
                     .lock()
@@ -286,37 +312,69 @@ mod tests {
         #[case] session_crons: bool,
         sessions_dir: TempDir,
     ) {
-        let session = delegate_session(Engine::Claude, "fixture-delegate", "fixture-parent");
+        let session_without_report =
+            delegate_session(Engine::Claude, "fixture-pending-delegate", "fixture-parent");
         let input = stop_input_with_pending_work(Engine::Claude, background_tasks, session_crons);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let calls_for_notify = Arc::clone(&calls);
         notify_if_unreported(
-            &session,
+            &session_without_report,
             &input,
             sessions_dir.path(),
             &config(Some(TEMPLATE)),
-            at(12, 1),
-            |_, _| {},
-        )
-        .unwrap();
-        insert_watch_web_peer_out_message_from(
-            sessions_dir.path(),
-            &session.session_id,
-            "fixture-parent",
-            "A report while work was pending.",
-            at(12, 2),
-            false,
+            move |recipient, message| {
+                calls_for_notify
+                    .lock()
+                    .unwrap()
+                    .push((recipient.to_string(), message.to_string()));
+            },
         )
         .unwrap();
 
-        assert!(
-            check_unreported_stop(
-                sessions_dir.path(),
-                &session.session_id,
-                "fixture-parent",
-                session.created_at,
-                at(12, 3),
-            )
-            .unwrap(),
+        let session_with_report = delegate_session(
+            Engine::Claude,
+            "fixture-reported-delegate",
+            "fixture-parent",
         );
+        insert_watch_web_peer_out_message_from(
+            sessions_dir.path(),
+            &session_with_report.session_id,
+            "fixture-parent",
+            "A report before the pending check.",
+            at(12, 0),
+            false,
+        )
+        .unwrap();
+        let calls_for_pending = Arc::clone(&calls);
+        notify_if_unreported(
+            &session_with_report,
+            &input,
+            sessions_dir.path(),
+            &config(Some(TEMPLATE)),
+            |recipient, message| {
+                calls_for_pending
+                    .lock()
+                    .unwrap()
+                    .push((recipient.to_string(), message.to_string()));
+            },
+        )
+        .unwrap();
+        let calls_for_next_stop = Arc::clone(&calls);
+        notify_if_unreported(
+            &session_with_report,
+            &stop_input(Engine::Claude),
+            sessions_dir.path(),
+            &config(Some(TEMPLATE)),
+            move |recipient, message| {
+                calls_for_next_stop
+                    .lock()
+                    .unwrap()
+                    .push((recipient.to_string(), message.to_string()));
+            },
+        )
+        .unwrap();
+
+        assert_eq!(*calls.lock().unwrap(), Vec::<(String, String)>::new());
     }
 
     #[rstest]
@@ -329,7 +387,6 @@ mod tests {
             &stop_input(Engine::Claude),
             sessions_dir.path(),
             &config(None),
-            at(12, 1),
             move |recipient, message| {
                 calls_for_notify
                     .lock()
@@ -355,7 +412,6 @@ mod tests {
             &stop_input(Engine::Claude),
             sessions_dir.path(),
             &config(Some(TEMPLATE)),
-            at(12, 2),
             |recipient, message| {
                 calls
                     .lock()
@@ -366,6 +422,48 @@ mod tests {
         .unwrap();
 
         assert_eq!(*calls.lock().unwrap(), Vec::<(String, String)>::new());
+    }
+
+    #[rstest]
+    #[case::absent(None)]
+    #[case::empty(Some(""))]
+    fn renders_the_session_message_when_the_stop_payload_has_none(
+        #[case] input_message: Option<&str>,
+        sessions_dir: TempDir,
+    ) {
+        let mut session = delegate_session(Engine::Claude, "fixture-delegate", "fixture-parent");
+        session.last_message = Some("Saved final response.".to_string());
+        let mut input = stop_input(Engine::Claude);
+        input.last_assistant_message = input_message.map(str::to_string);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let calls_for_notify = Arc::clone(&calls);
+        notify_if_unreported(
+            &session,
+            &input,
+            sessions_dir.path(),
+            &config(Some(TEMPLATE)),
+            move |recipient, message| {
+                calls_for_notify
+                    .lock()
+                    .unwrap()
+                    .push((recipient.to_string(), message.to_string()));
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![(
+                "fixture-parent".to_string(),
+                indoc! {"
+                    <delegation-update>
+                    Session: fixture-delegate
+                    Last message: Saved final response.
+                    </delegation-update>"
+                }
+                .to_string(),
+            )],
+        );
     }
 
     #[fixture]
