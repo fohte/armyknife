@@ -63,6 +63,15 @@ type ReviewDocumentState = {
   mobileView: 'edit' | 'preview'
 }
 
+function savedReviewDocumentRevision(value: unknown): string | null {
+  if (!isRecord(value)) return null
+  return typeof value['revision'] === 'string' ? value['revision'] : null
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
 function requestReviewDocumentAction(
   sessionId: string,
   document: ReviewDocumentResponse,
@@ -85,11 +94,19 @@ function requestReviewDocumentAction(
     }
   })
 
-  const onSuccess = () => {
+  const onSuccess = (result: unknown) => {
+    const revision = savedReviewDocumentRevision(result)
     setState((current) => {
       if (!matchesDocument(current)) return current
       return action === 'save'
-        ? { ...current, saveStatus: 'saved', saveError: null }
+        ? {
+            ...current,
+            ...(current.document === null || revision === null
+              ? {}
+              : { document: { ...current.document, revision } }),
+            saveStatus: 'saved',
+            saveError: null,
+          }
         : null
     })
   }
@@ -109,6 +126,7 @@ function requestReviewDocumentAction(
     `review-document/${action}`,
     {
       id: document.id,
+      revision: document.revision,
       frontmatter: document.frontmatter,
       body: document.body,
     },
