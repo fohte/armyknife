@@ -66,6 +66,14 @@ const otherPullRequests: PullRequest[] = [
   },
 ]
 
+const allMergedPullRequests: PullRequest[] = [
+  { ...currentBranchPullRequest, state: 'Merged' },
+  ...otherPullRequests.map((pullRequest) => ({
+    ...pullRequest,
+    state: 'Merged' as const,
+  })),
+]
+
 const meta = {
   component: SessionPullRequests,
   args: {
@@ -111,26 +119,14 @@ export const MorePullRequestsAreAvailable: Story = {
 export const AllPullRequestsAreMerged: Story = {
   name: 'The desktop header hides the CI dot when all pull requests are merged.',
   args: {
-    pullRequests: [
-      { ...currentBranchPullRequest, state: 'Merged' },
-      ...otherPullRequests.map((pullRequest) => ({
-        ...pullRequest,
-        state: 'Merged' as const,
-      })),
-    ],
+    pullRequests: allMergedPullRequests,
   },
 }
 
 export const AllPullRequestsAreMergedOnMobile: Story = {
   name: 'The mobile header hides the CI dot when all pull requests are merged.',
   args: {
-    pullRequests: [
-      { ...currentBranchPullRequest, state: 'Merged' },
-      ...otherPullRequests.map((pullRequest) => ({
-        ...pullRequest,
-        state: 'Merged' as const,
-      })),
-    ],
+    pullRequests: allMergedPullRequests,
     isMobile: true,
   },
   decorators: [

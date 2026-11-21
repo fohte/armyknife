@@ -39,6 +39,17 @@ const pullRequests: PullRequest[] = [
   },
 ]
 
+const openPullRequestElsewhere: PullRequest = {
+  number: 817,
+  state: 'Open',
+  owner: 'fixture-team',
+  repo: 'another-session-demo',
+  title: 'Keep checks visible for an open pull request',
+  url: 'https://github.com/fixture-team/another-session-demo/pull/817',
+  ciState: 'InProgress',
+  isCurrentBranch: false,
+}
+
 let container: HTMLDivElement
 let root: Root | null = null
 
@@ -518,6 +529,7 @@ it.each([
     state: 'Open' as const,
     expectedDotClass: 'session-pr-trigger-ci-dot is-passed',
     expectedAllMerged: false,
+    includeOpenElsewhere: false,
   },
   {
     description: 'mobile with an open pull request',
@@ -525,6 +537,7 @@ it.each([
     state: 'Open' as const,
     expectedDotClass: 'session-pr-trigger-ci-dot is-passed',
     expectedAllMerged: false,
+    includeOpenElsewhere: false,
   },
   {
     description: 'desktop when all pull requests are merged',
@@ -532,6 +545,7 @@ it.each([
     state: 'Merged' as const,
     expectedDotClass: null,
     expectedAllMerged: true,
+    includeOpenElsewhere: false,
   },
   {
     description: 'mobile when all pull requests are merged',
@@ -539,10 +553,25 @@ it.each([
     state: 'Merged' as const,
     expectedDotClass: null,
     expectedAllMerged: true,
+    includeOpenElsewhere: false,
+  },
+  {
+    description: 'desktop with a merged representative and another open PR',
+    isMobile: false,
+    state: 'Merged' as const,
+    expectedDotClass: null,
+    expectedAllMerged: false,
+    includeOpenElsewhere: true,
   },
 ])(
   'shows the expected CI dot for the $description',
-  ({ isMobile, state, expectedDotClass, expectedAllMerged }) => {
+  ({
+    isMobile,
+    state,
+    expectedDotClass,
+    expectedAllMerged,
+    includeOpenElsewhere,
+  }) => {
     render(isMobile, [
       {
         number: 1721,
@@ -554,6 +583,7 @@ it.each([
         ciState: 'Successful',
         isCurrentBranch: true,
       },
+      ...(includeOpenElsewhere ? [openPullRequestElsewhere] : []),
     ])
 
     const trigger = container.querySelector<HTMLButtonElement>(
