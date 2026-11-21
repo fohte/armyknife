@@ -12,7 +12,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tokio::sync::watch;
 use tokio::time::{self, Interval};
 
-use super::{EnrichmentUpdates, SERVER_INSTANCE_ID};
+use super::{EnrichmentUpdates, SERVER_INSTANCE_ID, SERVER_VERSION};
 use crate::commands::agent::session_store_event::is_session_store_change;
 use crate::commands::agent::store;
 
@@ -41,6 +41,7 @@ async fn events(
     let watcher = create_watcher(signal_tx).await;
     let stream = event_stream(
         SERVER_INSTANCE_ID.clone(),
+        SERVER_VERSION,
         signal_rx,
         updates.enrichment.subscribe(),
         watcher,
@@ -57,6 +58,7 @@ async fn events(
 
 fn event_stream<F, Fut>(
     instance_id: String,
+    server_version: &'static str,
     signals: UnboundedReceiver<()>,
     enrichment_updates: watch::Receiver<()>,
     watcher: Option<RecommendedWatcher>,
@@ -67,15 +69,17 @@ where
     F: Fn() -> Fut + Send + 'static,
     Fut: Future<Output = Option<i64>> + Send + 'static,
 {
-    stream::once(async move { Ok(Event::default().event("instance").data(instance_id)) }).chain(
-        revision_stream(
+    stream::once(async move { Ok(Event::default().event("instance").data(instance_id)) })
+        .chain(stream::once(async move {
+            Ok(Event::default().event("version").data(server_version))
+        }))
+        .chain(revision_stream(
             signals,
             enrichment_updates,
             watcher,
             restart_signal,
             read_revision,
-        ),
-    )
+        ))
 }
 
 async fn create_watcher(
@@ -238,6 +242,7 @@ mod tests {
         let (_restart_tx, restart_rx) = watch::channel(false);
         let body = Sse::new(event_stream(
             "fixture-server-instance".to_string(),
+            "9.8.7",
             signal_rx,
             enrichment_rx,
             None,
@@ -248,14 +253,21 @@ mod tests {
         .into_body();
         let mut chunks = body.into_data_stream();
         let instance = next_chunk(&mut chunks).await;
+        let version = next_chunk(&mut chunks).await;
         let sessions = next_chunk(&mut chunks).await;
 
         assert_eq!(
-            (instance, sessions),
+            (instance, version, sessions),
             (
                 indoc! {"
                     event: instance
                     data: fixture-server-instance
+
+                "}
+                .to_string(),
+                indoc! {"
+                    event: version
+                    data: 9.8.7
 
                 "}
                 .to_string(),

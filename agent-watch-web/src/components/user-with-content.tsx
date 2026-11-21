@@ -159,6 +159,7 @@ export function UserWithContent({
         part.type === 'text' ? (
           <MarkdownMessage
             className="chat-user-message"
+            copyableCodeBlocks
             key={`text-${String(partIndex)}`}
           >
             {part.text}

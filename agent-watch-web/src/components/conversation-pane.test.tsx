@@ -13,6 +13,7 @@ import { MarkdownSessionLinksProvider } from '#components/markdown-message'
 import { formatMessageTime } from '#components/message-time'
 import { SessionConversationCacheProvider } from '#components/session-conversation-cache'
 import { SessionStatusPanel } from '#components/session-status-panel'
+import { clearSessionAttachments } from '#components/use-composer-message'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import { useSessionLinkTargets } from '#session-link-targets'
 import type {
@@ -249,6 +250,7 @@ const permissionDenied: ChatItem = {
 }
 let container: HTMLDivElement
 let root: Root | null = null
+const renderedSessionIds = new Set<string>()
 const originalExecCommand = Object.getOwnPropertyDescriptor(
   document,
   'execCommand',
@@ -340,6 +342,7 @@ function renderView(
     draft: string,
   ) => Promise<boolean>,
 ) {
+  renderedSessionIds.add(viewSession.id)
   root ??= createRoot(container)
   act(() => {
     root?.render(
@@ -1300,6 +1303,9 @@ it('posts a message when randomUUID is unavailable', async () => {
     if (url.includes('/messages?')) {
       return Promise.resolve(jsonResponse(messagesResponse([])))
     }
+    if (url.endsWith('/messages?from=0')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
     if (url.endsWith('/actions')) {
       return Promise.resolve(jsonResponse(actions))
     }
@@ -2086,6 +2092,10 @@ it('loads a different tree after navigating away from a cached tree', async () =
 afterEach(() => {
   if (root !== null) act(() => root?.unmount())
   root = null
+  for (const sessionId of renderedSessionIds) {
+    clearSessionAttachments(sessionId)
+  }
+  renderedSessionIds.clear()
   container.remove()
   vi.useRealTimers()
   vi.restoreAllMocks()
@@ -6079,6 +6089,103 @@ it('sends pasted file data with the message and keeps it when sending fails', as
   })
 })
 
+it('warns before leaving after its conversation pane unmounts', async () => {
+  const sessionId = crypto.randomUUID()
+  renderView(
+    vi.fn(() => Promise.resolve(false)),
+    {
+      ...session,
+      id: sessionId,
+    },
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(pasteEvent, 'clipboardData', {
+    value: {
+      files: [
+        new File(['payload'], 'fixture-attachment.bin', {
+          type: 'application/octet-stream',
+        }),
+      ],
+    },
+  })
+  act(() => {
+    textarea.dispatchEvent(pasteEvent)
+  })
+  expect(
+    await waitForState(
+      () => container.querySelector('.attachment-preview-item') !== null,
+    ),
+  ).toBe(true)
+  const event = new Event('beforeunload', { cancelable: true })
+
+  act(() => {
+    root?.unmount()
+    root = null
+    window.dispatchEvent(event)
+  })
+
+  expect(event.defaultPrevented).toBe(true)
+})
+
+it('warns before leaving while an attachment is being processed', async () => {
+  let resolveOptimization: ((file: File) => void) | undefined
+  optimizeImageAttachmentMock.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        resolveOptimization = resolve
+      }),
+  )
+  renderView(
+    vi.fn(() => Promise.resolve(false)),
+    {
+      ...session,
+      id: crypto.randomUUID(),
+    },
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const file = new File(['payload'], 'fixture-pending.bin', {
+    type: 'application/octet-stream',
+  })
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(pasteEvent, 'clipboardData', {
+    value: { files: [file] },
+  })
+  act(() => {
+    textarea.dispatchEvent(pasteEvent)
+  })
+  await waitForState(() => resolveOptimization !== undefined)
+
+  const duringProcessing = new Event('beforeunload', { cancelable: true })
+  act(() => {
+    window.dispatchEvent(duringProcessing)
+  })
+  await act(async () => {
+    if (resolveOptimization === undefined) {
+      throw new Error('Expected attachment optimization to start')
+    }
+    resolveOptimization(file)
+    await Promise.resolve()
+  })
+  await waitForState(
+    () => container.querySelector('.attachment-preview-item') !== null,
+  )
+  const whileQueued = new Event('beforeunload', { cancelable: true })
+  act(() => {
+    window.dispatchEvent(whileQueued)
+  })
+
+  const snapshot = () => ({
+    duringProcessing: duringProcessing.defaultPrevented,
+    whileQueued: whileQueued.defaultPrevented,
+  })
+  expect(snapshot()).toEqual({ duringProcessing: true, whileQueued: true })
+})
+
 it('attaches dropped files through the composer and sends their data', async () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction, { ...session, id: crypto.randomUUID() })
@@ -6808,16 +6915,22 @@ it('keeps the composer usable when browser storage is unavailable', () => {
     container.querySelector<HTMLTextAreaElement>('textarea'),
   )
   setTextareaValue(textarea, 'Keep editing in memory')
+  const beforeUnload = new Event('beforeunload', { cancelable: true })
+  act(() => {
+    window.dispatchEvent(beforeUnload)
+  })
 
   const snapshot = () => ({
     draft: textarea.value,
     composerVisible: textarea.isConnected,
+    unloadPrevented: beforeUnload.defaultPrevented,
     storageNotice: container.querySelector('.conversation-error[role="status"]')
       ?.textContent,
   })
   expect(snapshot()).toEqual({
     draft: 'Keep editing in memory',
     composerVisible: true,
+    unloadPrevented: true,
     storageNotice:
       'Browser storage is unavailable. Drafts may not survive a page reload.',
   })

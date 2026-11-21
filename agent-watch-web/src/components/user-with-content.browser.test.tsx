@@ -142,6 +142,33 @@ it('shows the local send time above a user message', () => {
   ])
 })
 
+it('shows a copy toolbar inside a user message code block', () => {
+  render({
+    type: 'user',
+    text: '```bash\nprintf example\n```',
+    timestamp: '2026-06-01T12:00:00Z',
+  })
+
+  const message = container.querySelector('.chat-user-message')
+  const snapshot = () => ({
+    className: message?.className ?? null,
+    language:
+      message?.querySelector('.syntax-code-block-language')?.textContent ??
+      null,
+    copyLabel:
+      message
+        ?.querySelector('.syntax-code-block-copy-button')
+        ?.getAttribute('aria-label') ?? null,
+    code: message?.querySelector('pre')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    className: 'markdown-message chat-user-message',
+    language: 'bash',
+    copyLabel: 'Copy code',
+    code: 'printf example\n',
+  })
+})
+
 it('explains when an image fails to load', () => {
   render({
     type: 'user_with_content',

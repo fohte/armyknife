@@ -34,12 +34,30 @@ it.each([
     expected: null,
   },
   {
+    description: 'a root link to a pathful non-Crit web UI',
+    href: 'http://localhost:43123/',
+    expected: null,
+  },
+  {
     description: 'a non-HTTP URL',
     href: 'mailto:canvas@example.invalid',
     expected: null,
   },
 ])('finds only registered web UI links: $description', ({ href, expected }) => {
   expect(findWebUiLink(href, [webUi])?.webUi ?? null).toEqual(expected)
+})
+
+it('routes Crit preview root links through the registered preview URL', () => {
+  const critPreview: WebUiLinkTarget = {
+    name: 'crit',
+    url: 'http://localhost:43123/preview',
+    exposedUrl: 'https://crit.example.invalid/preview',
+  }
+  const href = 'http://localhost:43123/'
+
+  expect(webUiLinkTargetUrl(critPreview, href, 'watch.example.invalid')).toBe(
+    'https://crit.example.invalid/preview',
+  )
 })
 
 it('prefers the most specific registered path when registrations overlap', () => {

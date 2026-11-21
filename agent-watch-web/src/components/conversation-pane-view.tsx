@@ -88,6 +88,7 @@ type ConversationPaneViewProps = {
   statusPanelOpen?: boolean
   mobileStatusPanel?: ReactNode
   mobileWebUi?: ReactNode
+  mobileUpdateNotice?: ReactNode
   selectedDecisionSeq?: number | null
   onToggleStatusPanel?: () => void
   onOpenTasks?: () => void
@@ -139,6 +140,7 @@ export function ConversationPaneView({
   statusPanelOpen = false,
   mobileStatusPanel = null,
   mobileWebUi = null,
+  mobileUpdateNotice,
   selectedDecisionSeq = null,
   onToggleStatusPanel = () => undefined,
   onOpenTasks = () => undefined,
@@ -350,6 +352,7 @@ export function ConversationPaneView({
         {...(onLater === undefined ? {} : { onLater })}
         {...(onClose === undefined ? {} : { onClose })}
       />
+      {isMobile ? mobileUpdateNotice : null}
 
       <div
         ref={conversationScrollRef}

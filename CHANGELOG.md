@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.1.838](https://github.com/fohte/armyknife/compare/v0.1.837...v0.1.838) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show update banner ([#2064](https://github.com/fohte/armyknife/issues/2064)) ([e1b9f19](https://github.com/fohte/armyknife/commit/e1b9f19a5c6be58a9ae6f09b887a0b63562f832f))
+
+## [0.1.837](https://github.com/fohte/armyknife/compare/v0.1.836...v0.1.837) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-crit:** stop review status after Finish ([#2056](https://github.com/fohte/armyknife/issues/2056)) ([36acd70](https://github.com/fohte/armyknife/commit/36acd70fd15857c2b50cfd1aeeecbcd30f1061a6))
+
+## [0.1.836](https://github.com/fohte/armyknife/compare/v0.1.835...v0.1.836) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show Activity when empty ([#2061](https://github.com/fohte/armyknife/issues/2061)) ([2a97041](https://github.com/fohte/armyknife/commit/2a97041398cc99cff5f1131f4bcc429f0b36692a))
+
+## [0.1.835](https://github.com/fohte/armyknife/compare/v0.1.834...v0.1.835) (2026-11-21)
+
+
+### Features
+
+* **agent-watch-web:** allow copying code blocks ([#2045](https://github.com/fohte/armyknife/issues/2045)) ([e6ba1d0](https://github.com/fohte/armyknife/commit/e6ba1d0ddc601fcd87f689769cca23dd9216e275))
+
+## [0.1.834](https://github.com/fohte/armyknife/compare/v0.1.833...v0.1.834) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent/crit:** open the rendered preview page ([#2051](https://github.com/fohte/armyknife/issues/2051)) ([bffb179](https://github.com/fohte/armyknife/commit/bffb1793e4b9555bbe4fdf766b0d938f09df7d8b))
+
+## [0.1.833](https://github.com/fohte/armyknife/compare/v0.1.832...v0.1.833) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent/close:** skip prompt for clean branches ([#2048](https://github.com/fohte/armyknife/issues/2048)) ([3046bfa](https://github.com/fohte/armyknife/commit/3046bfa5b2cbd8d5d14083cfbf9ba4fe19b70fe3))
+
 ## [0.1.832](https://github.com/fohte/armyknife/compare/v0.1.831...v0.1.832) (2026-11-21)
 
 

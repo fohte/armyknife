@@ -52,12 +52,17 @@ function makeState(overrides: Partial<NewSessionState> = {}): NewSessionState {
   }
 }
 
-function renderForm(state: NewSessionState, onLaunched = vi.fn()) {
+function renderForm(
+  state: NewSessionState,
+  onLaunched = vi.fn(),
+  launchPending = false,
+) {
   root = createRoot(container)
   act(() => {
     root?.render(
       <NewSessionForm
         state={state}
+        launchPending={launchPending}
         onClose={() => undefined}
         onLaunched={onLaunched}
       />,
@@ -105,6 +110,43 @@ it('requires a directory before the session can start', () => {
   expect(
     container.querySelector<HTMLButtonElement>('.new-session-start')?.disabled,
   ).toBe(true)
+})
+
+it('warns before leaving while the first message is unsent', () => {
+  renderForm(makeState({ initialMessage: 'An unsent first message' }))
+  const event = new Event('beforeunload', { cancelable: true })
+
+  act(() => {
+    window.dispatchEvent(event)
+  })
+
+  expect(event.defaultPrevented).toBe(true)
+})
+
+it('does not warn before leaving when the first message is empty', () => {
+  renderForm(makeState())
+  const event = new Event('beforeunload', { cancelable: true })
+
+  act(() => {
+    window.dispatchEvent(event)
+  })
+
+  expect(event.defaultPrevented).toBe(false)
+})
+
+it('does not warn before leaving after the first message is sent', () => {
+  renderForm(
+    makeState({ initialMessage: 'A sent first message' }),
+    vi.fn(),
+    true,
+  )
+  const event = new Event('beforeunload', { cancelable: true })
+
+  act(() => {
+    window.dispatchEvent(event)
+  })
+
+  expect(event.defaultPrevented).toBe(false)
 })
 
 it('suggests and inserts skills in the first message field', async () => {

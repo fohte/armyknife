@@ -4,6 +4,7 @@ import { startSessionFeed } from '#session-feed'
 
 afterEach(() => {
   vi.useRealTimers()
+  vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
 
@@ -480,7 +481,6 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
   const reconnectReceived = deferred<undefined>()
   const responses: unknown[] = []
   const errors: (string | null)[] = []
-  const reloads: number[] = []
   const fetcher = vi
     .fn()
     .mockImplementationOnce(() => {
@@ -567,7 +567,6 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
     {
       fetcher,
       createEventSource: () => source,
-      reloadPage: () => reloads.push(responses.length),
     },
   )
 
@@ -611,7 +610,6 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
   const snapshot = () => [
     responses,
     errors,
-    reloads,
     fetcher.mock.calls.length,
     source.closed,
   ]
@@ -709,40 +707,124 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
       },
     ],
     [null, null, 'Connection lost. Reconnecting…', null, null],
-    [],
     3,
     true,
   ])
 })
 
-it('reloads after the server announces a restart and reconnects', async () => {
+it('refreshes sessions without reloading after a server restart', async () => {
   const source = new FakeEventSource()
   const initialResponse = deferred<undefined>()
-  const reloads: string[] = []
+  const reconnectResponse = deferred<undefined>()
+  let responseCount = 0
   const fetcher = vi
     .fn()
-    .mockResolvedValue(jsonResponse({ revision: 1, sessions: [] }))
+    .mockResolvedValueOnce(jsonResponse({ revision: 1, sessions: [] }))
+    .mockResolvedValueOnce(jsonResponse({ revision: 2, sessions: [] }))
   const stop = startSessionFeed(
     () => {
-      initialResponse.resolve(undefined)
+      responseCount += 1
+      if (responseCount === 1) {
+        initialResponse.resolve(undefined)
+      } else {
+        reconnectResponse.resolve(undefined)
+      }
     },
     () => {},
     {
       fetcher,
       createEventSource: () => source,
-      reloadPage: () => reloads.push('reloaded'),
+      initialServerVersion: 'fixture-version-current',
+      onUpdateAvailable: () => {},
     },
   )
 
   await initialResponse.promise
+  source.emit('version', 'fixture-version-current')
   source.emit('restart')
   source.emit('error')
   source.emit('open')
+  await reconnectResponse.promise
   stop()
 
-  const snapshot = () => [reloads, fetcher.mock.calls.length, source.closed]
-  expect(snapshot()).toEqual([['reloaded'], 1, true])
+  const snapshot = () => [fetcher.mock.calls.length, source.closed]
+  expect(snapshot()).toEqual([2, true])
 })
+
+it('reads the loaded server version from the page meta tag', () => {
+  const querySelector = vi.fn((selector: string) =>
+    selector === 'meta[name="server-version"]'
+      ? { content: 'fixture-version-current' }
+      : null,
+  )
+  vi.stubGlobal('document', { querySelector })
+  const source = new FakeEventSource()
+  const updates: (string | null)[] = []
+  const stop = startSessionFeed(
+    () => {},
+    () => {},
+    {
+      fetcher: vi
+        .fn()
+        .mockResolvedValue(jsonResponse({ revision: 1, sessions: [] })),
+      createEventSource: () => source,
+      onUpdateAvailable: (version) => updates.push(version),
+      visibilityTarget: new FakeVisibilityTarget(),
+    },
+  )
+
+  source.emit('version', 'fixture-version-next')
+  stop()
+
+  const snapshot = () => ({
+    metaSelectors: querySelector.mock.calls,
+    updates,
+  })
+  expect(snapshot()).toEqual({
+    metaSelectors: [['meta[name="server-version"]']],
+    updates: ['fixture-version-next'],
+  })
+})
+
+it.each([
+  {
+    scenario: 'the same server version',
+    serverVersion: 'fixture-version-current',
+    expected: null,
+  },
+  {
+    scenario: 'a different server version',
+    serverVersion: 'fixture-version-next',
+    expected: 'fixture-version-next',
+  },
+])(
+  'compares $scenario with the page version',
+  async ({ serverVersion, expected }) => {
+    const source = new FakeEventSource()
+    const received = deferred<undefined>()
+    const updates: (string | null)[] = []
+    const stop = startSessionFeed(
+      () => {
+        received.resolve(undefined)
+      },
+      () => {},
+      {
+        fetcher: vi
+          .fn()
+          .mockResolvedValue(jsonResponse({ revision: 1, sessions: [] })),
+        createEventSource: () => source,
+        initialServerVersion: 'fixture-version-current',
+        onUpdateAvailable: (version) => updates.push(version),
+      },
+    )
+
+    source.emit('version', serverVersion)
+    await received.promise
+    stop()
+
+    expect(updates).toEqual([expected])
+  },
+)
 
 it('retries a failed session request and clears the error after success', async () => {
   const source = new FakeEventSource()
@@ -861,22 +943,22 @@ it('stops stream retries and clears connection errors while hidden', async () =>
 
 it.each([
   {
-    scenario: 'an unchanged server instance',
-    resumedServerInstanceId: 'fixture-server-instance',
-    expectedReloads: [],
+    scenario: 'the same server version',
+    resumedServerVersion: 'fixture-version-current',
+    expectedUpdates: [null],
   },
   {
-    scenario: 'a changed server instance',
-    resumedServerInstanceId: 'fixture-server-instance-after',
-    expectedReloads: ['reloaded'],
+    scenario: 'a different server version',
+    resumedServerVersion: 'fixture-version-next',
+    expectedUpdates: ['fixture-version-next'],
   },
 ])(
   'checks $scenario after a hidden period',
-  async ({ resumedServerInstanceId, expectedReloads }) => {
+  async ({ resumedServerVersion, expectedUpdates }) => {
     const visibilityTarget = new FakeVisibilityTarget()
     const sources: FakeEventSource[] = []
     const received = deferred<undefined>()
-    const reloads: string[] = []
+    const updates: (string | null)[] = []
     const fetcher = vi
       .fn()
       .mockResolvedValue(jsonResponse({ revision: 1, sessions: [] }))
@@ -892,23 +974,20 @@ it.each([
           sources.push(source)
           return source
         },
-        reloadPage: () => {
-          reloads.push('reloaded')
-        },
-        initialServerInstanceId: 'fixture-server-instance',
+        initialServerVersion: 'fixture-version-current',
+        onUpdateAvailable: (version) => updates.push(version),
         visibilityTarget,
       },
     )
 
     await received.promise
-    sources[0]?.emit('instance', 'fixture-server-instance')
     visibilityTarget.setVisibility('hidden')
     visibilityTarget.setVisibility('visible')
     sources[1]?.emit('open')
-    sources[1]?.emit('instance', resumedServerInstanceId)
+    sources[1]?.emit('version', resumedServerVersion)
     stop()
 
-    expect(reloads).toEqual(expectedReloads)
+    expect(updates).toEqual(expectedUpdates)
   },
 )
 
@@ -916,7 +995,6 @@ it('waits for visibility before starting the stream when initially hidden', asyn
   const visibilityTarget = new FakeVisibilityTarget()
   visibilityTarget.setVisibility('hidden')
   const sources: FakeEventSource[] = []
-  const reloads: string[] = []
   const received = deferred<undefined>()
   const fetcher = vi
     .fn()
@@ -933,10 +1011,7 @@ it('waits for visibility before starting the stream when initially hidden', asyn
         sources.push(source)
         return source
       },
-      reloadPage: () => {
-        reloads.push('reloaded')
-      },
-      initialServerInstanceId: 'fixture-server-instance',
+      initialServerVersion: 'fixture-version-current',
       visibilityTarget,
     },
   )
@@ -944,11 +1019,10 @@ it('waits for visibility before starting the stream when initially hidden', asyn
   const beforeVisible = {
     connections: sources.length,
     requests: fetcher.mock.calls.length,
-    reloads: [...reloads],
   }
   visibilityTarget.setVisibility('visible')
   sources[0]?.emit('open')
-  sources[0]?.emit('instance', 'fixture-server-instance')
+  sources[0]?.emit('version', 'fixture-version-current')
   await received.promise
   stop()
 
@@ -958,16 +1032,14 @@ it('waits for visibility before starting the stream when initially hidden', asyn
       connections: sources.length,
       closed: sources.map((source) => source.closed),
       requests: fetcher.mock.calls.length,
-      reloads,
     },
   })
   expect(snapshot()).toEqual({
-    beforeVisible: { connections: 0, requests: 0, reloads: [] },
+    beforeVisible: { connections: 0, requests: 0 },
     afterVisible: {
       connections: 1,
       closed: [true],
       requests: 1,
-      reloads: [],
     },
   })
 })

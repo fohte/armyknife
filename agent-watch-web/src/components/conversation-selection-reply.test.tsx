@@ -103,6 +103,44 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+it('keeps the code language label out of selectable assistant text', () => {
+  render([
+    {
+      type: 'assistant',
+      text: 'Review this value:\n\n```typescript\nconst value = 1\n```',
+    },
+  ])
+
+  const toolbar = requireElement(
+    container.querySelector('.syntax-code-block-toolbar'),
+  )
+  const style = getComputedStyle(toolbar)
+
+  const snapshot = () => ({
+    userSelect: style.userSelect,
+    webkitUserSelect: style.getPropertyValue('-webkit-user-select'),
+  })
+  expect(snapshot()).toEqual({
+    userSelect: 'none',
+    webkitUserSelect: 'none',
+  })
+})
+
+it('shows a copy button for assistant code blocks', () => {
+  render([
+    {
+      type: 'assistant',
+      text: '```typescript\nconst value = 1\n```',
+    },
+  ])
+
+  expect(
+    container
+      .querySelector('.chat-assistant-message .syntax-code-block-copy-button')
+      ?.getAttribute('aria-label') ?? null,
+  ).toBe('Copy code')
+})
+
 it.each([
   {
     name: 'existing draft',

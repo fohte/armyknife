@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::fs;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -213,19 +213,8 @@ fn read_live_crit_ports(
 fn local_crit_address(url: &str) -> Option<SocketAddr> {
     let port = crit::crit_port_from_url(url).ok()?;
     let host = reqwest::Url::parse(url).ok()?.host_str()?.to_string();
-    if host == "localhost" || host.ends_with(".localhost") {
-        return Some(SocketAddr::from((Ipv4Addr::LOCALHOST, port)));
-    }
-
-    match host.parse::<IpAddr>().ok()? {
-        IpAddr::V4(address) if address.is_loopback() => {
-            Some(SocketAddr::from((Ipv4Addr::LOCALHOST, port)))
-        }
-        IpAddr::V6(address) if address.is_loopback() => {
-            Some(SocketAddr::from((Ipv6Addr::LOCALHOST, port)))
-        }
-        _ => None,
-    }
+    let address = crit::url::local_crit_ip(&host)?;
+    Some(SocketAddr::new(address, port))
 }
 
 #[cfg(test)]
@@ -233,7 +222,7 @@ mod tests {
     use std::cell::Cell;
     use std::collections::{BTreeMap, BTreeSet, HashSet};
     use std::fs;
-    use std::net::TcpListener;
+    use std::net::{Ipv4Addr, Ipv6Addr, TcpListener};
     use std::path::PathBuf;
 
     use chrono::Utc;
@@ -252,6 +241,7 @@ mod tests {
             created_pr_urls: Vec::new(),
             session_id: "fixture-session".to_string(),
             crit_urls: crit_urls.iter().map(|url| (*url).to_string()).collect(),
+            crit_not_waiting_urls: Default::default(),
             web_uis: Vec::new(),
             pending_human_review_ids: BTreeSet::new(),
             cwd: PathBuf::from("/tmp/fixture-worktree"),

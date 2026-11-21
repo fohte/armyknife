@@ -60,6 +60,23 @@ function renderPalette(
   })
 }
 
+async function pressKeys(...keys: string[]) {
+  for (const key of keys) {
+    await act(async () => {
+      await userEvent.keyboard(key)
+    })
+  }
+}
+
+async function openActionsMenu() {
+  await pressKeys('{ArrowRight}')
+  await vi.waitFor(() => {
+    if (container.querySelector('[role="menu"]') === null) {
+      throw new Error('Actions menu was not rendered')
+    }
+  })
+}
+
 const openBesideModifier = getCommandPaletteModifierLabel(
   getCommandPaletteShortcut(navigator.platform),
 )
@@ -710,9 +727,8 @@ it('opens the highlighted session actions with ArrowRight and runs Later', async
   const onLater = vi.fn<(id: string) => void>()
   renderPalette({ onLater })
 
-  await act(async () => {
-    await userEvent.keyboard('{ArrowRight}{ArrowDown}{ArrowDown}{Enter}')
-  })
+  await openActionsMenu()
+  await pressKeys('{ArrowDown}', '{ArrowDown}', '{Enter}')
 
   expect(onLater.mock.calls).toEqual([['session-alerts']])
 })
@@ -721,11 +737,15 @@ it('requests closing the highlighted session from its actions submenu', async ()
   const onCloseSession = vi.fn<(id: string) => void>()
   renderPalette({ onCloseSession })
 
-  await act(async () => {
-    await userEvent.keyboard(
-      '{ArrowRight}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{Enter}',
-    )
-  })
+  await openActionsMenu()
+  await pressKeys(
+    '{ArrowDown}',
+    '{ArrowDown}',
+    '{ArrowDown}',
+    '{ArrowDown}',
+    '{ArrowDown}',
+    '{Enter}',
+  )
 
   expect(onCloseSession.mock.calls).toEqual([['session-alerts']])
 })
@@ -734,9 +754,8 @@ it('opens the highlighted session beside from the actions submenu', async () => 
   const onOpenSessionBeside = vi.fn<(id: string) => void>()
   renderPalette({ onOpenSessionBeside })
 
-  await act(async () => {
-    await userEvent.keyboard('{ArrowRight}{ArrowDown}{Enter}')
-  })
+  await openActionsMenu()
+  await pressKeys('{ArrowDown}', '{Enter}')
 
   expect(onOpenSessionBeside.mock.calls).toEqual([['session-alerts']])
 })
@@ -745,11 +764,14 @@ it('opens the highlighted session in its terminal from the actions submenu', asy
   const onOpenInTerminal = vi.fn<(id: string) => void>()
   renderPalette({ onOpenInTerminal })
 
-  await act(async () => {
-    await userEvent.keyboard(
-      '{ArrowRight}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{Enter}',
-    )
-  })
+  await openActionsMenu()
+  await pressKeys(
+    '{ArrowDown}',
+    '{ArrowDown}',
+    '{ArrowDown}',
+    '{ArrowDown}',
+    '{Enter}',
+  )
 
   const snapshot = () => ({
     calls: onOpenInTerminal.mock.calls,
@@ -795,11 +817,8 @@ it('copies the session ID from the actions submenu with Enter', async () => {
   })
   renderPalette()
 
-  await act(async () => {
-    await userEvent.keyboard(
-      '{ArrowRight}{ArrowDown}{ArrowDown}{ArrowDown}{Enter}',
-    )
-  })
+  await openActionsMenu()
+  await pressKeys('{ArrowDown}', '{ArrowDown}', '{ArrowDown}', '{Enter}')
 
   const snapshot = () => ({
     clipboardCalls: writeText.mock.calls,
