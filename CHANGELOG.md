@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.832](https://github.com/fohte/armyknife/compare/v0.1.831...v0.1.832) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show task-linked PRs ([#2052](https://github.com/fohte/armyknife/issues/2052)) ([53b7cce](https://github.com/fohte/armyknife/commit/53b7cce023d7a26ac25f4e40c5b49a6e59b5e722))
+
 ## [0.1.831](https://github.com/fohte/armyknife/compare/v0.1.830...v0.1.831) (2026-11-21)
 
 
