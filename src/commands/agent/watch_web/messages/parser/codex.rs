@@ -1202,10 +1202,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn keeps_a_queued_vibe_notice_as_user_content_without_action_id() {
+    #[rstest]
+    #[case::vibe_notice(
+        "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>"
+    )]
+    #[case::generic_tagged_prompt("<delegation-update>Review this syntax</delegation-update>")]
+    fn keeps_a_queued_tagged_prompt_as_user_content_without_action_id(#[case] content: &str) {
         let message_id = "fixture-message-coral";
-        let content = "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>";
         let delivered_content = queued_prompt::add_id_marker(content, message_id);
         let turn_context = json!({"type":"turn_context","payload":{"turn_id":"fixture-turn-id"}});
         let delivery = json!({"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":delivered_content}}});

@@ -51,7 +51,10 @@ pub(super) fn classify_inbound(
     }
 
     let content_without_id = super::super::queued_prompt::strip_id_marker(text);
-    let tagged = tagged_body(&content_without_id);
+    let tagged = tagged_body(text).or_else(|| {
+        let (tag, body) = tagged_body(&content_without_id)?;
+        action_event::is_action_event_tag(tag).then_some((tag, body))
+    });
     if tagged.is_some_and(|(tag, _)| is_hidden_tag(tag)) {
         return MessageKind::Hidden;
     }
