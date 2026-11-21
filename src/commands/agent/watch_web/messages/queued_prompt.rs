@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::commands::agent::store::{WatchWebQueuedAttachment, WatchWebQueuedPrompt};
 
 use super::action_event;
-use super::tagged_message::tagged_body;
+use super::tagged_message::tagged_action_body;
 use super::{ChatItem, EventKind, UserContentPart};
 
 const ID_MARKER_PREFIX: &str = "<!-- armyknife-queued-prompt-id:";
@@ -81,7 +81,7 @@ pub(super) fn user_content(prompt: &WatchWebQueuedPrompt) -> Vec<UserContentPart
 
 pub(super) fn chat_item(prompt: &WatchWebQueuedPrompt) -> ChatItem {
     let content = strip_id_marker(&prompt.content);
-    if let Some((tag, body)) = tagged_body(&content)
+    if let Some((tag, body)) = tagged_action_body(&content)
         && let Some(text) = action_event::event_text(tag, body, prompt.message_id.as_deref())
     {
         return ChatItem::Event {
@@ -269,6 +269,62 @@ mod tests {
                 failed: false,
                 timestamp: Some(prompt.sent_at.to_rfc3339()),
             }],
+        );
+    }
+
+    #[test]
+    fn tagged_action_prompt_with_attachment_paths_is_an_event_while_queued() {
+        let prompt = WatchWebQueuedPrompt {
+            id: 7,
+            message_id: Some("armyknife-action:fixture-message-cyan".to_owned()),
+            content: indoc::indoc! {"
+                <armyknife-todo-rejected>The user rejected the to-do: Review the fixture.</armyknife-todo-rejected>
+
+                Attached file(s):
+                - attachment-store/fixture.gif
+            "}
+            .to_owned(),
+            attachments: Vec::<WatchWebQueuedAttachment>::new(),
+            resolved: false,
+            sent_at: Utc::now(),
+        };
+
+        assert_eq!(
+            chat_item(&prompt),
+            ChatItem::Event {
+                kind: EventKind::Armyknife,
+                text: "The user rejected the to-do: Review the fixture.".to_owned(),
+                failed: false,
+                timestamp: Some(prompt.sent_at.to_rfc3339()),
+            },
+        );
+    }
+
+    #[test]
+    fn tagged_action_prompt_preserves_comment_that_looks_like_attachment_paths() {
+        let prompt = WatchWebQueuedPrompt {
+            id: 7,
+            message_id: Some("armyknife-action:fixture-message-cyan".to_owned()),
+            content: indoc::indoc! {"
+                <armyknife-todo-rejected>The user rejected the to-do: Review the fixture.
+
+                Attached file(s):
+                - attachment-store/fixture.txt</armyknife-todo-rejected>
+            "}
+            .to_owned(),
+            attachments: Vec::<WatchWebQueuedAttachment>::new(),
+            resolved: false,
+            sent_at: Utc::now(),
+        };
+
+        assert_eq!(
+            chat_item(&prompt),
+            ChatItem::Event {
+                kind: EventKind::Armyknife,
+                text: "The user rejected the to-do: Review the fixture. Attached file(s): - attachment-store/fixture.txt".to_owned(),
+                failed: false,
+                timestamp: Some(prompt.sent_at.to_rfc3339()),
+            },
         );
     }
 

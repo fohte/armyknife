@@ -1,3 +1,6 @@
+use super::action_event;
+use crate::commands::agent::watch_web::attachments::strip_attachment_paths;
+
 pub(super) fn tagged_body(text: &str) -> Option<(&str, &str)> {
     let tag = outer_tag(text)?;
     let trimmed = text.trim();
@@ -8,6 +11,17 @@ pub(super) fn tagged_body(text: &str) -> Option<(&str, &str)> {
         .strip_suffix(&closing)?
         .trim();
     Some((tag, body))
+}
+
+pub(super) fn tagged_action_body(text: &str) -> Option<(&str, &str)> {
+    if let Some((tag, body)) = tagged_body(text)
+        && action_event::is_action_event_tag(tag)
+    {
+        return Some((tag, body));
+    }
+
+    let (tag, body) = tagged_body(strip_attachment_paths(text))?;
+    action_event::is_action_event_tag(tag).then_some((tag, body))
 }
 
 fn outer_tag(text: &str) -> Option<&str> {
