@@ -133,6 +133,44 @@ fn adds_queued_prompt_message_id_index_to_version_twenty_six_database(
 }
 
 #[rstest]
+fn adds_unreported_stop_peer_cursor_to_version_twenty_seven_database(
+    database_fixture: DatabaseFixture,
+) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
+    Migrations::from_slice(&MIGRATION_ENTRIES[..27])
+        .to_latest(&mut connection)
+        .expect("version twenty seven schema should be created");
+    drop(connection);
+
+    let connection = super::super::open_connection(temp_dir.path())
+        .expect("version twenty seven database should migrate to the unreported stop schema");
+    let actual_schema = connection
+        .query_row(
+            indoc! {"
+                SELECT
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'watch_web_queued_prompt_session_message_id'),
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_unreported_stop_check'),
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_unreported_stop_peer_cursor'),
+                EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'agent_unreported_stop_peer_cursor_delete_session')
+            "},
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("cursor migration schema should be queryable");
+    let actual_user_version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("database migration version should be readable");
+
+    assert_eq!(
+        (actual_schema, actual_user_version),
+        ((true, false, true, true), current_version()),
+    );
+}
+
+#[rstest]
 fn adds_permission_request_mailbox_to_version_nine_database(database_fixture: DatabaseFixture) {
     let DatabaseFixture {
         temp_dir,

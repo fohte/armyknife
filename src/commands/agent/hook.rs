@@ -22,9 +22,13 @@ use super::types::{
     ChildLaunchPermission, Engine, HookEvent, HookInput, MAIN_THREAD_AGENT_KEY, Session,
     SessionPrContext, SessionStatus, TmuxInfo,
 };
+#[cfg(not(test))]
+use super::unreported_stop_notification;
 use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::tmux;
 use crate::shared::cache;
+#[cfg(test)]
+use crate::shared::config::AgentConfig;
 use crate::shared::config::{self, Config};
 use crate::shared::env_var::{EnvVars, parse_ancestor_session_ids};
 use crate::shared::log::short_run_id;
@@ -41,6 +45,7 @@ mod session_start;
 mod side_effects;
 mod stop;
 mod title_generation;
+mod unreported_stop;
 mod vibe;
 mod work_type;
 
@@ -432,6 +437,46 @@ fn process_hook_event_impl_with_env(
     side_effects: &SideEffects,
     stop_hook_instruction: Option<&str>,
     env: EnvVars,
+) -> Result<ProcessResult> {
+    #[cfg(not(test))]
+    let session_id = input.session_id.clone();
+
+    process_hook_event_impl_with_env_and_unreported_stop(
+        event,
+        input,
+        sessions_dir,
+        side_effects,
+        stop_hook_instruction,
+        env,
+        move |session, input, sessions_dir| {
+            #[cfg(test)]
+            let agent_config = AgentConfig::default();
+            #[cfg(not(test))]
+            let agent_config = config::load_config_or_default().agent;
+            unreported_stop::notify_if_unreported(
+                session,
+                input,
+                sessions_dir,
+                &agent_config,
+                |recipient, message| {
+                    #[cfg(test)]
+                    let _ = (recipient, message);
+                    #[cfg(not(test))]
+                    unreported_stop_notification::spawn(&session_id, recipient, message);
+                },
+            )
+        },
+    )
+}
+
+fn process_hook_event_impl_with_env_and_unreported_stop(
+    event: HookEvent,
+    input: HookInput,
+    sessions_dir: &Path,
+    side_effects: &SideEffects,
+    stop_hook_instruction: Option<&str>,
+    env: EnvVars,
+    mut notify_unreported_stop: impl FnMut(&Session, &HookInput, &Path) -> Result<()>,
 ) -> Result<ProcessResult> {
     // Claude's SessionEnd confirms termination; Codex's hook does not because
     // the app-server also fires it during daemon shutdown.
@@ -1092,7 +1137,14 @@ fn process_hook_event_impl_with_env(
         }
     }
 
-    if stop_block_reason.is_none() && event == HookEvent::Stop {
+    if unreported_stop::can_check_stop(event, stop_block_reason.is_some()) {
+        if let Err(error) = notify_unreported_stop(&session, &input, sessions_dir) {
+            tracing::warn!(
+                event = "agent.hook.unreported_stop.failed",
+                session = %session.session_id,
+                error = %error,
+            );
+        }
         title_generation::maybe_generate(&session, sessions_dir, side_effects);
     }
 
