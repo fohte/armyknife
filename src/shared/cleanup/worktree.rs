@@ -6,8 +6,8 @@ use crate::infra::git::GitRepo;
 use crate::infra::process::{self, ProcessInPath, WorktreeProcessInspection};
 use crate::infra::tmux;
 use crate::shared::worktree::{
-    delete_branch_if_exists, delete_worktree, delete_worktree_if_clean, find_worktree_name,
-    get_main_repo, get_worktree_branch,
+    delete_branch_if_exists, delete_worktree_after_lock, delete_worktree_if_clean,
+    find_worktree_name, get_main_repo, get_worktree_branch,
 };
 
 type BeforeWorktreeDelete<'a> = Box<dyn FnOnce() -> anyhow::Result<()> + 'a>;
@@ -342,12 +342,25 @@ fn delete_worktree_and_branch(
 ) -> anyhow::Result<WorktreeCleanupResult> {
     let branch_name = get_worktree_branch(repo, worktree_name);
 
-    let worktree_deleted = delete_worktree_if_clean(worktree_path, force, before_delete, || {
-        Ok(delete_worktree(repo, worktree_name).unwrap_or(false))
-    })?;
+    delete_worktree_and_branch_with(
+        branch_name,
+        || {
+            delete_worktree_if_clean(worktree_path, force, before_delete, || {
+                delete_worktree_after_lock(repo, worktree_name)
+            })
+        },
+        |branch| delete_branch_if_exists(repo, branch),
+    )
+}
 
+fn delete_worktree_and_branch_with(
+    branch_name: Option<String>,
+    delete_worktree: impl FnOnce() -> anyhow::Result<bool>,
+    delete_branch: impl FnOnce(&str) -> bool,
+) -> anyhow::Result<WorktreeCleanupResult> {
+    let worktree_deleted = delete_worktree()?;
     let branch_deleted = if worktree_deleted {
-        branch_name.filter(|branch| delete_branch_if_exists(repo, branch))
+        branch_name.filter(|branch| delete_branch(branch))
     } else {
         None
     };
@@ -426,6 +439,21 @@ mod tests {
             crate::infra::git::cmd::run_git(repo.workdir(), ["worktree", "list", "--porcelain"])
                 .unwrap();
         assert!(!list.contains("/.worktrees/cleanup-test"));
+    }
+
+    #[test]
+    fn delete_worktree_and_branch_preserves_deletion_errors() {
+        let result = delete_worktree_and_branch_with(
+            None,
+            || Err(anyhow::anyhow!("worktree deletion is already in progress")),
+            |_| true,
+        );
+        let observed = result
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default();
+
+        assert_eq!(observed, "worktree deletion is already in progress");
     }
 
     #[test]
