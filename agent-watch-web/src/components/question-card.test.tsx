@@ -267,8 +267,7 @@ it('sends a single-choice answer as soon as an option is selected', async () => 
   })
 })
 
-it('does not submit a single-choice answer from a copy action in its description', async () => {
-  const onAnswer = vi.fn(() => Promise.resolve(true))
+it('does not render copy controls in a single-choice option description', () => {
   renderQuestion(
     props({
       questions: [
@@ -286,29 +285,15 @@ it('does not submit a single-choice answer from a copy action in its description
         },
       ],
       isMobile: true,
-      onAnswer,
     }),
   )
 
-  const copyButton = container.querySelector<HTMLButtonElement>(
-    '.syntax-code-block-copy-button',
-  )
-  if (copyButton !== null) {
-    await act(async () => {
-      await userEvent.click(copyButton)
-      await Promise.resolve()
-    })
-  }
-
   const snapshot = () => ({
-    copyButtonRendered: copyButton !== null,
-    answerCalls: onAnswer.mock.calls,
-    selected: choiceButton('North').getAttribute('aria-pressed'),
+    copyButtonRendered:
+      container.querySelector('.syntax-code-block-copy-button') !== null,
   })
   expect(snapshot()).toEqual({
     copyButtonRendered: false,
-    answerCalls: [],
-    selected: 'false',
   })
 })
 
