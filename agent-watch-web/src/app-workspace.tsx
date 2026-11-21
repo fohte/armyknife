@@ -40,7 +40,6 @@ type AppWorkspaceState = {
   laterExpanded: boolean
   inProgressExpanded: boolean
   doneExpanded: boolean
-  closeRetrySessionId: string | null
   statusPanelOpen: boolean
   pendingLaunchId: string | null
   projects: readonly BoardProject[]
@@ -87,7 +86,6 @@ type AppWorkspaceActions = {
   openSessionInInbox: (id: string) => void
   closeDoneSessions: (sessions: readonly Session[]) => void
   closeDoneSession: (id: string, keepWorktree?: boolean) => void
-  closeSessionKeepWorktree: (id: string) => void
   requestCloseSession: (id: string) => void
   cancelCloseConfirmation: () => void
   confirmCloseSession: (id: string) => void
@@ -171,16 +169,12 @@ export function AppWorkspace({
       actions.setDoneExpanded((expanded) => !expanded)
     },
     onCloseDone: actions.closeDoneSessions,
-    closeRetrySessionId: state.closeRetrySessionId,
     onOpenNavigation: () => {
       actions.setMobileNavOpen(true)
     },
     onOpenPalette: actions.openMobilePalette,
     onNewSession: () => {
       actions.openNewSession('form')
-    },
-    onCloseKeepWorktree: (sessionId: string) => {
-      actions.closeSessionKeepWorktree(sessionId)
     },
   }
   const navigation = (

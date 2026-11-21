@@ -10,6 +10,7 @@ import {
 } from 'react'
 
 import { AsyncActionFeedbackHost } from '#components/async-action-feedback-host'
+import type { CloseWorktreeChecks } from '#session-operation-types'
 
 export type AsyncActionStatus =
   | 'merging'
@@ -33,13 +34,18 @@ export type AsyncAction = {
   pullRequestHeadSha?: string
   message?: string
   error?: string
+  checks?: CloseWorktreeChecks
   createdAt: number
 }
 
 export type AsyncActionOutcome =
   | { status: 'merged' | 'alreadyMerged' | 'queued'; message?: string }
   | { status: 'closed' }
-  | { status: 'mergeFailed' | 'closeFailed'; error: string }
+  | {
+      status: 'mergeFailed' | 'closeFailed'
+      error: string
+      checks?: CloseWorktreeChecks
+    }
 
 export type StartAsyncActionOptions = {
   kind: 'merge' | 'close'
@@ -51,6 +57,8 @@ export type StartAsyncActionOptions = {
   pullRequestHeadSha?: string
   run: () => Promise<AsyncActionOutcome>
   onRetry?: (retry: () => void, actionId: number) => void
+  onCloseKeepWorktree?: () => void
+  onOpenInTerminal?: () => void
 }
 
 type AsyncActionRetryUpdate = Pick<
@@ -72,6 +80,8 @@ type AsyncActionFeedbackValue = {
   clearFinished: () => void
   openActivity: (actionId?: number) => void
   closeActivity: () => void
+  closeWithWorktree: (id: number) => void
+  openInTerminal: (id: number) => void
 }
 
 const AsyncActionFeedbackContext =
@@ -96,6 +106,8 @@ export function AsyncActionFeedbackProvider({
   const retryHandlers = useRef(
     new Map<number, (retry: () => void, actionId: number) => void>(),
   )
+  const closeWithWorktreeHandlers = useRef(new Map<number, () => void>())
+  const openInTerminalHandlers = useRef(new Map<number, () => void>())
   const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>())
 
   const dismissToast = useCallback((id: number) => {
@@ -122,6 +134,7 @@ export function AsyncActionFeedbackProvider({
           }
           delete next.error
           delete next.message
+          delete next.checks
           return next
         }),
       )
@@ -133,6 +146,11 @@ export function AsyncActionFeedbackProvider({
           if ('message' in outcome) next.message = outcome.message
           if ('error' in outcome) next.error = outcome.error
           else delete next.error
+          if ('checks' in outcome) {
+            next.checks = outcome.checks
+          } else {
+            delete next.checks
+          }
           return next
         }),
       )
@@ -157,6 +175,12 @@ export function AsyncActionFeedbackProvider({
       runs.current.set(id, options.run)
       if (options.onRetry !== undefined) {
         retryHandlers.current.set(id, options.onRetry)
+      }
+      if (options.onCloseKeepWorktree !== undefined) {
+        closeWithWorktreeHandlers.current.set(id, options.onCloseKeepWorktree)
+      }
+      if (options.onOpenInTerminal !== undefined) {
+        openInTerminalHandlers.current.set(id, options.onOpenInTerminal)
       }
       setActions((current) => [
         {
@@ -254,6 +278,8 @@ export function AsyncActionFeedbackProvider({
       if (timer !== undefined) clearTimeout(timer)
       timers.current.delete(id)
       retryHandlers.current.delete(id)
+      closeWithWorktreeHandlers.current.delete(id)
+      openInTerminalHandlers.current.delete(id)
     }
   }, [actions])
 
@@ -265,6 +291,14 @@ export function AsyncActionFeedbackProvider({
   const closeActivity = useCallback(() => {
     setActivityOpen(false)
     setSelectedActionId(null)
+  }, [])
+
+  const closeWithWorktree = useCallback((id: number) => {
+    closeWithWorktreeHandlers.current.get(id)?.()
+  }, [])
+
+  const openInTerminal = useCallback((id: number) => {
+    openInTerminalHandlers.current.get(id)?.()
   }, [])
 
   useEffect(
@@ -291,6 +325,8 @@ export function AsyncActionFeedbackProvider({
         clearFinished,
         openActivity,
         closeActivity,
+        closeWithWorktree,
+        openInTerminal,
       }}
     >
       {children}
@@ -304,6 +340,8 @@ export function AsyncActionFeedbackProvider({
         clearFinished={clearFinished}
         openActivity={openActivity}
         closeActivity={closeActivity}
+        closeWithWorktree={closeWithWorktree}
+        openInTerminal={openInTerminal}
       />
     </AsyncActionFeedbackContext.Provider>
   )

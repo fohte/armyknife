@@ -3182,13 +3182,14 @@ it('stops the close batch and reports the failed session', async () => {
   })
 
   const snapshot = () => ({
-    error: container.querySelector('.load-message.is-error')?.textContent,
+    error:
+      container.querySelector('.load-message.is-error')?.textContent ?? null,
     closeUrls: fetchMock.mock.calls
       .map(([request]) => requestUrl(request))
       .filter((url) => url.endsWith('/close')),
   })
   expect(snapshot()).toEqual({
-    error: 'Could not close Unarchivable session.',
+    error: null,
     closeUrls: ['/api/sessions/session-failed-close/close'],
   })
 })
@@ -3233,14 +3234,15 @@ it('retries a failed Done close from the action toast', async () => {
       .map(([request]) => requestUrl(request))
       .filter((url) => url.endsWith('/close'))
   const initialSnapshot = () => ({
-    error: container.querySelector('.load-message.is-error')?.textContent,
+    error:
+      container.querySelector('.load-message.is-error')?.textContent ?? null,
     toast: container.querySelector('.async-action-toast-stack')?.textContent,
     closeUrls: closeUrls(),
   })
   expect(initialSnapshot()).toEqual({
-    error: 'Could not close Unarchivable session.',
+    error: null,
     toast:
-      'Close failedUnarchivable sessionCould not close Unarchivable session.RetryDetails',
+      'Close failedUnarchivable sessionCould not close Unarchivable session.Retry',
     closeUrls: ['/api/sessions/session-failed-close/close'],
   })
 
@@ -3299,13 +3301,14 @@ it('closes all Done sessions from the Inbox heading and reports failures', async
   })
 
   const snapshot = () => ({
-    error: container.querySelector('.load-message.is-error')?.textContent,
+    error:
+      container.querySelector('.load-message.is-error')?.textContent ?? null,
     closeUrls: fetchMock.mock.calls
       .map(([request]) => requestUrl(request))
       .filter((url) => url.endsWith('/close')),
   })
   expect(snapshot()).toEqual({
-    error: 'Could not close Unarchivable session.',
+    error: null,
     closeUrls: ['/api/sessions/session-failed-close/close'],
   })
 })
@@ -3317,6 +3320,16 @@ it.each([
     message:
       'Branch `sample-branch` is not merged (pull request is open); close the session while keeping its worktree to continue',
     sessionId: 'session-unmerged',
+    checks: {
+      path: '/worktrees/example-unmerged',
+      files: [],
+      branch: 'feature/example-unmerged',
+      merged: false,
+      reason: 'The example pull request is still open.',
+      processes: [],
+      processInspectionUnavailable: false,
+    },
+    summary: 'Left in the worktree: branch not merged.',
   },
   {
     caseName: 'dirty worktree',
@@ -3324,6 +3337,16 @@ it.each([
     message:
       'Worktree contains uncommitted changes or untracked files: /worktrees/sample; commit or move them before closing',
     sessionId: 'session-dirty',
+    checks: {
+      path: '/worktrees/example-dirty',
+      files: ['src/example.ts'],
+      branch: 'feature/example-dirty',
+      merged: true,
+      reason: null,
+      processes: [],
+      processInspectionUnavailable: false,
+    },
+    summary: 'Left in the worktree: 1 uncommitted file.',
   },
   {
     caseName: 'worktree with running processes',
@@ -3331,6 +3354,16 @@ it.each([
     message:
       "Worktree '/worktrees/sample' contains running processes: 42 (editor). Stop them and retry, or close the session while keeping the worktree.",
     sessionId: 'session-busy-processes',
+    checks: {
+      path: '/worktrees/example-busy',
+      files: [],
+      branch: 'feature/example-busy',
+      merged: true,
+      reason: null,
+      processes: [{ pid: 12345, name: 'example-server' }],
+      processInspectionUnavailable: false,
+    },
+    summary: 'Left in the worktree: 1 running process.',
   },
   {
     caseName: 'worktree whose processes cannot be checked',
@@ -3338,10 +3371,20 @@ it.each([
     message:
       "Could not inspect processes in worktree '/worktrees/sample'. Ensure lsof and ps are available and working, or close the session while keeping the worktree.",
     sessionId: 'session-uncheckable-processes',
+    checks: {
+      path: '/worktrees/example-unknown',
+      files: [],
+      branch: null,
+      merged: null,
+      reason: null,
+      processes: [],
+      processInspectionUnavailable: true,
+    },
+    summary: 'Left in the worktree: process inspection unavailable.',
   },
 ])(
   'offers to keep a $caseName and retries Close with that choice',
-  async ({ code, message, sessionId }) => {
+  async ({ code, message, sessionId, checks, summary }) => {
     const closeBodies: string[] = []
     const fetchMock = vi
       .fn<typeof fetch>()
@@ -3356,6 +3399,7 @@ it.each([
                 JSON.stringify({
                   error: message,
                   code,
+                  checks,
                 }),
                 { status: 409 },
               )
@@ -3379,13 +3423,19 @@ it.each([
       await flushAsyncState()
     })
     const initialFailure = {
-      error: container.querySelector('.load-message.is-error p')?.textContent,
-      choice: container.querySelector('.load-message.is-error button')
-        ?.textContent,
+      error:
+        container.querySelector('.load-message.is-error')?.textContent ?? null,
+      toast: container.querySelector('.async-action-toast-stack')?.textContent,
     }
+    expect(initialFailure).toEqual({
+      error: null,
+      toast: `Close failedSession with retained worktree${summary}Close and keep worktreeRetryDetails`,
+    })
     await act(async () => {
       container
-        .querySelector<HTMLButtonElement>('.load-message.is-error button')
+        .querySelector<HTMLButtonElement>(
+          '.async-action-toast-stack button:not(.async-action-dismiss)',
+        )
         ?.click()
       await flushAsyncState()
     })
@@ -3398,13 +3448,129 @@ it.each([
     }
     expect(closeRetrySnapshot()).toEqual({
       initialFailure: {
-        error: message,
-        choice: 'Close and keep worktree',
+        error: null,
+        toast: `Close failedSession with retained worktree${summary}Close and keep worktreeRetryDetails`,
       },
       closeBodies: [{ keepWorktree: false }, { keepWorktree: true }],
     })
   },
 )
+
+it('shows every close check in Activity and opens the failed worktree in a terminal', async () => {
+  const checks = {
+    path: '/worktrees/example-project',
+    files: ['src/example.ts', 'src/example.test.ts'],
+    branch: 'feature/example-work',
+    merged: false,
+    reason: 'The example pull request is still open.',
+    processes: [
+      { pid: 12345, name: 'example-server' },
+      { pid: 23456, name: 'example-watcher' },
+    ],
+    processInspectionUnavailable: false,
+  }
+  const closeBodies: unknown[] = []
+  const requestUrls: string[] = []
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation((input, init) => {
+    const url = requestUrl(input)
+    requestUrls.push(url)
+    if (url.endsWith('/close')) {
+      closeBodies.push(
+        typeof init?.body === 'string' ? JSON.parse(init.body) : null,
+      )
+      return Promise.resolve(
+        closeBodies.length === 1
+          ? new Response(
+              JSON.stringify({
+                error: 'The session could not be closed.',
+                code: 'unmerged_worktree',
+                checks,
+              }),
+              { status: 409 },
+            )
+          : new Response(null, { status: 204 }),
+      )
+    }
+    return mockSessionActionFetch(input)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-example-close', 'Example session', 'done')],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  await act(async () => {
+    await flushAsyncState()
+  })
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>('.conversation-close')?.click()
+    await flushAsyncState()
+  })
+  await act(async () => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '.async-action-toast-stack .async-action-controls button:nth-child(3)',
+      )
+      ?.click()
+    await flushAsyncState()
+  })
+
+  const activity = container.querySelector(
+    '.async-action-activity-list .async-action-item',
+  )
+  const conversationLine = container.querySelector(
+    '.conversation-pane .async-action-item--line',
+  )
+  const activitySnapshot = () => ({
+    text: activity?.textContent,
+    buttons: Array.from(
+      activity?.querySelectorAll('button') ?? [],
+      (button) => button.textContent,
+    ),
+    conversationLine: conversationLine?.textContent,
+  })
+  expect(activitySnapshot()).toEqual({
+    text: 'Close failedExample sessionUncommitted changes2 filessrc/example.ts · src/example.test.tsBranch feature/example-workNot mergedThe example pull request is still open.Running processes2 running12345 example-server · 23456 example-watcher/worktrees/example-projectClose and keep worktreeRetryOpen in terminal',
+    buttons: ['Close and keep worktree', 'Retry', 'Open in terminal'],
+    conversationLine:
+      'Close failedLeft in the worktree: 2 uncommitted files, branch not merged, 2 running processes.Close and keep worktreeRetry',
+  })
+
+  await act(async () => {
+    Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.async-action-activity-list button',
+      ),
+    )
+      .find((button) => button.textContent === 'Open in terminal')
+      ?.click()
+    await flushAsyncState()
+  })
+  await act(async () => {
+    Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.async-action-toast-stack .async-action-controls button',
+      ),
+    )
+      .find((button) => button.textContent === 'Close and keep worktree')
+      ?.click()
+    await flushAsyncState()
+  })
+
+  const snapshot = () => ({
+    closeBodies,
+    focusUrls: requestUrls.filter((url) => url.endsWith('/focus')),
+    activityOpen: container.querySelector('[aria-label="Activity"]') !== null,
+  })
+  expect(snapshot()).toEqual({
+    closeBodies: [{ keepWorktree: false }, { keepWorktree: true }],
+    focusUrls: ['/api/sessions/session-example-close/focus'],
+    activityOpen: false,
+  })
+})
 
 it('offers a keep-worktree retry after a non-Done session close fails', async () => {
   const message =
@@ -3420,7 +3586,19 @@ it('offers a keep-worktree retry after a non-Done session close fails', async ()
     return Promise.resolve(
       closeBodies.length === 1
         ? new Response(
-            JSON.stringify({ error: message, code: 'unmerged_worktree' }),
+            JSON.stringify({
+              error: message,
+              code: 'unmerged_worktree',
+              checks: {
+                path: '/worktrees/example-session',
+                files: [],
+                branch: 'feature/example-session',
+                merged: false,
+                reason: 'The example pull request is still open.',
+                processes: [],
+                processInspectionUnavailable: false,
+              },
+            }),
             {
               status: 409,
             },
@@ -3445,20 +3623,31 @@ it('offers a keep-worktree retry after a non-Done session close fails', async ()
     await flushAsyncState()
   })
   const initialFailure = {
-    error: container.querySelector('.load-message.is-error p')?.textContent,
-    choice: container.querySelector('.load-message.is-error button')
-      ?.textContent,
+    error:
+      container.querySelector('.load-message.is-error')?.textContent ?? null,
+    toast: container.querySelector('.async-action-toast-stack')?.textContent,
   }
+  expect(initialFailure).toEqual({
+    error: null,
+    toast:
+      'Close failedAnswer a questionLeft in the worktree: branch not merged.Close and keep worktreeRetryDetails',
+  })
   await act(async () => {
     container
-      .querySelector<HTMLButtonElement>('.load-message.is-error button')
+      .querySelector<HTMLButtonElement>(
+        '.async-action-toast-stack .async-action-controls button',
+      )
       ?.click()
     await flushAsyncState()
   })
 
   const snapshot = () => ({ initialFailure, closeBodies })
   expect(snapshot()).toEqual({
-    initialFailure: { error: message, choice: 'Close and keep worktree' },
+    initialFailure: {
+      error: null,
+      toast:
+        'Close failedAnswer a questionLeft in the worktree: branch not merged.Close and keep worktreeRetryDetails',
+    },
     closeBodies: [
       { keepWorktree: false, stopAndClose: true },
       { keepWorktree: true, stopAndClose: true },

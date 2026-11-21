@@ -92,7 +92,7 @@ export const CloseSucceededInActivity: Story = {
 }
 
 export const CloseFailedAndCanBeRetried: Story = {
-  name: 'A failed close shows its reason and Retry action.',
+  name: 'A close failure without checks shows its message and Retry.',
   args: {
     action: {
       id: 2,
@@ -102,6 +102,114 @@ export const CloseFailedAndCanBeRetried: Story = {
       status: 'closeFailed',
       error: 'The session could not be closed.',
       createdAt: 1_800_000_000_000,
+    },
+  },
+}
+
+const failedCloseInActivity = {
+  id: 3,
+  sessionId: 'example-session',
+  sessionTitle: 'Review the example configuration',
+  kind: 'close' as const,
+  status: 'closeFailed' as const,
+  error: 'The session could not be closed.',
+  createdAt: 1_800_000_000_000,
+}
+
+export const UncommittedFilesAreListed: Story = {
+  name: 'Activity lists every uncommitted file.',
+  args: {
+    form: 'row',
+    action: {
+      ...failedCloseInActivity,
+      checks: {
+        path: '/worktrees/example-project',
+        files: ['src/example.ts', 'src/example.test.ts'],
+        branch: 'feature/example-work',
+        merged: true,
+        reason: null,
+        processes: [],
+        processInspectionUnavailable: false,
+      },
+    },
+  },
+}
+
+export const UnmergedBranchShowsItsReason: Story = {
+  name: 'Activity shows the unmerged branch and reason.',
+  args: {
+    form: 'row',
+    action: {
+      ...failedCloseInActivity,
+      checks: {
+        path: '/worktrees/example-project',
+        files: [],
+        branch: 'feature/example-work',
+        merged: false,
+        reason: 'The example pull request is still open.',
+        processes: [],
+        processInspectionUnavailable: false,
+      },
+    },
+  },
+}
+
+export const RunningProcessesAreListed: Story = {
+  name: 'Activity lists each running process.',
+  args: {
+    form: 'row',
+    action: {
+      ...failedCloseInActivity,
+      checks: {
+        path: '/worktrees/example-project',
+        files: [],
+        branch: 'feature/example-work',
+        merged: true,
+        reason: null,
+        processes: [
+          { pid: 12345, name: 'example-server' },
+          { pid: 23456, name: 'example-watcher' },
+        ],
+        processInspectionUnavailable: false,
+      },
+    },
+  },
+}
+
+export const AllThreeChecksAreVisible: Story = {
+  name: 'Activity shows all three checks together.',
+  args: {
+    form: 'row',
+    action: {
+      ...failedCloseInActivity,
+      checks: {
+        path: '/worktrees/example-project',
+        files: ['src/example.ts'],
+        branch: 'feature/example-work',
+        merged: false,
+        reason: 'The example pull request is still open.',
+        processes: [{ pid: 12345, name: 'example-server' }],
+        processInspectionUnavailable: false,
+      },
+    },
+  },
+}
+
+export const ProcessCheckIsUnavailable: Story = {
+  name: 'Activity marks an unavailable process check.',
+  args: {
+    form: 'row',
+    action: {
+      ...failedCloseInActivity,
+      checks: {
+        path: '/worktrees/example-project',
+        files: [],
+        branch: null,
+        merged: null,
+        reason: null,
+        processes: [],
+        processInspectionUnavailable: true,
+      },
     },
   },
 }

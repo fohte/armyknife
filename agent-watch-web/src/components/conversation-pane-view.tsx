@@ -399,6 +399,9 @@ export function ConversationPaneView({
               action={action}
               form="line"
               key={action.id}
+              onCloseKeepWorktree={() => {
+                actionFeedback.closeWithWorktree(action.id)
+              }}
               onRetry={() => {
                 actionFeedback.retry(action.id)
               }}

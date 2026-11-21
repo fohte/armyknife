@@ -38,6 +38,9 @@ export function InboxSessionListItem({
         <AsyncActionItem
           action={closeAction}
           form="line"
+          onCloseKeepWorktree={() =>
+            feedback?.closeWithWorktree(closeAction.id)
+          }
           onRetry={() => feedback?.retry(closeAction.id)}
         />
       )}

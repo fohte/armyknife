@@ -36,6 +36,8 @@ function ActivityRetryHarness({ calls }: { calls: string[] }) {
         calls.push('close')
         setActivityOpen(false)
       }}
+      closeWithWorktree={() => undefined}
+      openInTerminal={() => undefined}
     />
   )
 }

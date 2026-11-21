@@ -1,5 +1,7 @@
 import { err, ok, Result, ResultAsync } from 'neverthrow'
 
+import type { CloseWorktreeChecks } from '#session-operation-types'
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
@@ -10,12 +12,33 @@ function toError(error: unknown) {
     : new Error('Request failed', { cause: error })
 }
 
+function isCloseWorktreeChecks(value: unknown): value is CloseWorktreeChecks {
+  return (
+    isRecord(value) &&
+    typeof value['path'] === 'string' &&
+    Array.isArray(value['files']) &&
+    value['files'].every((file) => typeof file === 'string') &&
+    (typeof value['branch'] === 'string' || value['branch'] === null) &&
+    (typeof value['merged'] === 'boolean' || value['merged'] === null) &&
+    (typeof value['reason'] === 'string' || value['reason'] === null) &&
+    Array.isArray(value['processes']) &&
+    value['processes'].every(
+      (process) =>
+        isRecord(process) &&
+        typeof process['pid'] === 'number' &&
+        typeof process['name'] === 'string',
+    ) &&
+    typeof value['processInspectionUnavailable'] === 'boolean'
+  )
+}
+
 export function errorFromResponse(response: Response) {
   const fallback =
     response.statusText || `Request failed (${String(response.status)})`
   return ResultAsync.fromPromise(response.text(), toError).map((body) => {
     let message = fallback
     let code: string | null = null
+    let checks: CloseWorktreeChecks | undefined
     const parsed =
       body === ''
         ? null
@@ -27,8 +50,14 @@ export function errorFromResponse(response: Response) {
       if (typeof parsed.value['code'] === 'string') {
         code = parsed.value['code']
       }
+      if (isCloseWorktreeChecks(parsed.value['checks'])) {
+        checks = parsed.value['checks']
+      }
     }
-    return Object.assign(new Error(message), { code })
+    return Object.assign(new Error(message), {
+      code,
+      ...(checks === undefined ? {} : { checks }),
+    })
   })
 }
 

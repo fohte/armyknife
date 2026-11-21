@@ -111,9 +111,6 @@ function AppContent() {
   const startAsyncAction = useAsyncActionStarter((feedbackError) => {
     setError(feedbackError.message)
   })
-  const [closeRetrySessionId, setCloseRetrySessionId] = useState<string | null>(
-    null,
-  )
   const [loaded, setLoaded] = useState(false)
   const newSession = useNewSession(newSessionMode !== null)
   const inboxCollapsed = manualInboxCollapsed ?? statusPanelOpen
@@ -181,7 +178,6 @@ function AppContent() {
     requestComposerFocus,
     navigate,
     setError,
-    setCloseRetrySessionId,
     setFocusedProjectName,
     setLaterExpanded,
     selectedId,
@@ -211,12 +207,13 @@ function AppContent() {
     requestCloseSession,
     cancelCloseConfirmation,
     confirmCloseSession,
-    closeSessionKeepWorktree,
   } = useSessionClose({
     sessions: sessionsWithElapsedTime,
     runSessionOperation,
     closeDoneSession,
-    setCloseRetrySessionId,
+    openInTerminal: (sessionId) => {
+      void focusSession(sessionId)
+    },
     setError,
   })
 
@@ -393,7 +390,6 @@ function AppContent() {
         laterExpanded,
         inProgressExpanded,
         doneExpanded,
-        closeRetrySessionId,
         statusPanelOpen,
         pendingLaunchId,
         projects,
@@ -444,7 +440,6 @@ function AppContent() {
         requestCloseSession,
         cancelCloseConfirmation,
         confirmCloseSession,
-        closeSessionKeepWorktree,
         onLater: openLater,
         closeLater,
         laterSubmissionInFlight,
