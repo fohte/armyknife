@@ -19,6 +19,7 @@ import {
   type SessionTreeCallbacks,
   useSessionTree,
 } from '#components/use-session-tree'
+import { createQueuedPromptId } from '#queued-prompt-id'
 import { useSessionLinkTargets } from '#session-link-targets'
 import { useSessionOperations } from '#session-operation-context'
 import {
@@ -240,6 +241,7 @@ export function ConversationPane({
         action === 'messages'
           ? {
               ...payload,
+              _queuedPromptId: createQueuedPromptId(),
               _messageCountBefore: messageCountBefore,
             }
           : payload,

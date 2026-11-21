@@ -199,6 +199,17 @@ function messagesResponse(
   }
 }
 
+function normalizeQueuedMessagePostBody(body: BodyInit | null | undefined) {
+  if (typeof body !== 'string') return body
+  const parsed: unknown = JSON.parse(body)
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return body
+  }
+  const messageId: unknown = Reflect.get(parsed, 'messageId')
+  if (typeof messageId !== 'string') return body
+  return JSON.stringify({ ...parsed, messageId: '<message-id>' })
+}
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -1276,6 +1287,89 @@ it('provides session links to cards through the conversation pane context', asyn
   expect(getActual()).toEqual({
     href: `?session=${linkedSession.id}`,
     selectedSessions: [linkedSession.id],
+  })
+})
+
+it('posts a message when randomUUID is unavailable', async () => {
+  vi.stubGlobal('crypto', {
+    getRandomValues: (bytes: Uint8Array) => bytes.fill(0),
+  })
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(actions))
+    }
+    if (url.endsWith('/messages') && init?.method === 'POST') {
+      return Promise.resolve(
+        jsonResponse({
+          queuedPromptId: '00000000-0000-4000-8000-000000000000',
+        }),
+      )
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+
+  const composerReady = await waitForState(
+    () =>
+      container.querySelector<HTMLTextAreaElement>('textarea')?.disabled ===
+      false,
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Send without randomUUID')
+  act(() => {
+    dispatchKey(textarea, 'Enter')
+  })
+  const requestWasSent = await waitForState(() =>
+    fetcher.mock.calls.some(
+      ([input, init]) =>
+        requestUrl(input).endsWith('/messages') && init?.method === 'POST',
+    ),
+  )
+  const postRequest = fetcher.mock.calls
+    .filter(
+      ([input, init]) =>
+        requestUrl(input).endsWith('/messages') && init?.method === 'POST',
+    )
+    .map(([input, init]) => ({
+      url: requestUrl(input),
+      body: typeof init?.body === 'string' ? init.body : null,
+    }))
+  const snapshot = () => ({
+    composerReady,
+    requestWasSent,
+    postRequest,
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    composerReady: true,
+    requestWasSent: true,
+    postRequest: [
+      {
+        url: '/api/sessions/sample-session/messages',
+        body: JSON.stringify({
+          content: 'Send without randomUUID',
+          messageId: '00000000-0000-4000-8000-000000000000',
+        }),
+      },
+    ],
+    alert: null,
   })
 })
 
@@ -6384,13 +6478,14 @@ it('shows a server attachment validation error and retains the rejected attachme
     error: container.querySelector('[role="alert"]')?.textContent ?? null,
     attachmentName: container.querySelector('.attachment-preview-item span')
       ?.textContent,
-    postBody: fetcher.mock.calls[2]?.[1]?.body,
+    postBody: normalizeQueuedMessagePostBody(fetcher.mock.calls[2]?.[1]?.body),
   })
   expect(snapshot()).toEqual({
     error: 'file attachment data is invalid',
     attachmentName: 'document.pdf',
     postBody: JSON.stringify({
       content: '',
+      messageId: '<message-id>',
       attachments: [
         {
           name: 'document.pdf',
@@ -6497,9 +6592,10 @@ it('waits for pasted image optimization and sends the optimized attachment', asy
   ).toBe(true)
 
   const sentBody = () => fetcher.mock.calls[2]?.[1]?.body
-  expect(sentBody()).toEqual(
+  expect(normalizeQueuedMessagePostBody(sentBody())).toEqual(
     JSON.stringify({
       content: 'Inspect this photo.',
+      messageId: '<message-id>',
       attachments: [
         {
           name: 'photo.jpg',

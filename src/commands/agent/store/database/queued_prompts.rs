@@ -50,6 +50,29 @@ pub(crate) fn insert_watch_web_queued_prompt(
     Ok(connection.last_insert_rowid())
 }
 
+pub(crate) fn watch_web_queued_prompt_message_id_exists(
+    sessions_dir: &Path,
+    session_id: &str,
+    message_id: &str,
+) -> Result<bool> {
+    super::validate_session_id(session_id)?;
+    if !sessions_dir.exists() {
+        return Ok(false);
+    }
+
+    let connection = open_connection(sessions_dir)?;
+    connection
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM watch_web_queued_prompt
+                WHERE session_id = ?1 AND message_id = ?2
+            )",
+            params![session_id, message_id],
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
+}
+
 pub(crate) fn watch_web_queued_prompts(
     sessions_dir: &Path,
     session_id: &str,
@@ -152,7 +175,7 @@ mod tests {
     use super::{
         WatchWebQueuedAttachment, WatchWebQueuedPrompt, delete_watch_web_queued_prompts,
         insert_watch_web_queued_prompt, mark_watch_web_queued_prompts_resolved,
-        watch_web_queued_prompts,
+        watch_web_queued_prompt_message_id_exists, watch_web_queued_prompts,
     };
 
     #[fixture]
@@ -243,6 +266,46 @@ mod tests {
                     sent_at: second_sent_at,
                 }],
             ),
+        );
+    }
+
+    #[rstest]
+    fn detects_reused_message_ids_within_a_session(sessions_dir: TempDir) {
+        let sent_at = chrono::Utc
+            .with_ymd_and_hms(2026, 3, 14, 9, 26, 53)
+            .unwrap();
+        let message_id = "88888888-8888-4888-8888-888888888888";
+        let before_insert = watch_web_queued_prompt_message_id_exists(
+            sessions_dir.path(),
+            "fixture-session-a",
+            message_id,
+        )
+        .unwrap();
+        insert_watch_web_queued_prompt(
+            sessions_dir.path(),
+            "fixture-session-a",
+            message_id,
+            "A queued message",
+            &[],
+            sent_at,
+        )
+        .unwrap();
+        let after_insert = watch_web_queued_prompt_message_id_exists(
+            sessions_dir.path(),
+            "fixture-session-a",
+            message_id,
+        )
+        .unwrap();
+        let other_session = watch_web_queued_prompt_message_id_exists(
+            sessions_dir.path(),
+            "fixture-session-b",
+            message_id,
+        )
+        .unwrap();
+
+        assert_eq!(
+            (before_insert, after_insert, other_session),
+            (false, true, false)
         );
     }
 
