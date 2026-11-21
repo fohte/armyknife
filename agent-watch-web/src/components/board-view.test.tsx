@@ -243,40 +243,43 @@ it('keeps the quiet-project control as a labeled native checkbox', () => {
 
 it('keeps the phone Board title and quiet-project control apart', async () => {
   await page.viewport(375, 844)
-  container.style.cssText = 'display: flex; width: 375px; height: 844px'
-  renderPhoneBoardWithActivity()
+  try {
+    container.style.cssText = 'display: flex; width: 375px; height: 844px'
+    renderPhoneBoardWithActivity()
 
-  const title = container.querySelector<HTMLElement>('.board-header-title')
-  const quietToggle = container.querySelector<HTMLElement>(
-    '.board-quiet-toggle',
-  )
-  const activityButton = container.querySelector(
-    '.async-action-activity-button',
-  )
-  if (title === null || quietToggle === null || activityButton === null) {
-    throw new Error('Expected the phone Board heading and filter to render')
+    const title = container.querySelector<HTMLElement>('.board-header-title')
+    const quietToggle = container.querySelector<HTMLElement>(
+      '.board-quiet-toggle',
+    )
+    const activityButton = container.querySelector(
+      '.async-action-activity-button',
+    )
+    if (title === null || quietToggle === null || activityButton === null) {
+      throw new Error('Expected the phone Board heading and filter to render')
+    }
+
+    const titleRect = title.getBoundingClientRect()
+    const quietToggleRect = quietToggle.getBoundingClientRect()
+    const headingRect = title.querySelector('h1')?.getBoundingClientRect()
+    if (headingRect === undefined) {
+      throw new Error('Expected the phone Board title to render')
+    }
+
+    const layoutSnapshot = () => ({
+      headingAndFilterDoNotOverlap:
+        headingRect.right <= quietToggleRect.left ||
+        headingRect.bottom <= quietToggleRect.top ||
+        quietToggleRect.right <= headingRect.left ||
+        quietToggleRect.bottom <= headingRect.top,
+      filterWrapsBelowTitle: quietToggleRect.top >= titleRect.bottom,
+    })
+    expect(layoutSnapshot()).toEqual({
+      headingAndFilterDoNotOverlap: true,
+      filterWrapsBelowTitle: true,
+    })
+  } finally {
+    await page.viewport(1280, 800)
   }
-
-  const titleRect = title.getBoundingClientRect()
-  const quietToggleRect = quietToggle.getBoundingClientRect()
-  const headingRect = title.querySelector('h1')?.getBoundingClientRect()
-  if (headingRect === undefined) {
-    throw new Error('Expected the phone Board title to render')
-  }
-
-  const layoutSnapshot = () => ({
-    headingAndFilterDoNotOverlap:
-      headingRect.right <= quietToggleRect.left ||
-      headingRect.bottom <= quietToggleRect.top ||
-      quietToggleRect.right <= headingRect.left ||
-      quietToggleRect.bottom <= headingRect.top,
-    filterWrapsBelowTitle: quietToggleRect.top >= titleRect.bottom,
-  })
-  expect(layoutSnapshot()).toEqual({
-    headingAndFilterDoNotOverlap: true,
-    filterWrapsBelowTitle: true,
-  })
-  await page.viewport(1280, 800)
 })
 
 it('shows the primary task and the count of other linked tasks on a card', () => {
