@@ -43,8 +43,8 @@ export const CanvasPageFillsTheScreen: Story = {
   },
 }
 
-export const MobileCanvasPageHasConversationBackNavigation: Story = {
-  name: 'A mobile canvas page shows its URL and an external link',
+export const MobileCanvasPageHasCloseButton: Story = {
+  name: 'A mobile canvas page shows its URL and close button',
   args: {
     name: 'Canvas editor',
     url: 'http://localhost:43123/studio/pages/sample#page-fakehash',

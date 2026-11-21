@@ -186,8 +186,9 @@ it('shows the local URL when no remote URL is available', () => {
   })
 })
 
-it('shows the mobile web UI URL and opens it in a new tab', () => {
+it('shows the mobile web UI URL and closes it from the header', () => {
   const targetUrl = 'http://localhost:43123/studio/pages/sample#page-fakehash'
+  const onClose = vi.fn()
   root = createRoot(container)
   act(() => {
     root?.render(
@@ -195,7 +196,7 @@ it('shows the mobile web UI URL and opens it in a new tab', () => {
         name="Canvas editor"
         url={targetUrl}
         targetUrlOverride={targetUrl}
-        onClose={() => undefined}
+        onClose={onClose}
         defaultFullscreen
         mobilePresentation
       />,
@@ -205,11 +206,17 @@ it('shows the mobile web UI URL and opens it in a new tab', () => {
   const externalLink = container.querySelector<HTMLAnchorElement>(
     'a[aria-label="Open in a new tab"]',
   )
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('button[aria-label="Close web UI"]')
+      ?.click()
+  })
   function mobileHeaderState() {
     return {
-      backButtonLabel: container
-        .querySelector<HTMLButtonElement>('button')
-        ?.getAttribute('aria-label'),
+      hasBackButton:
+        container.querySelector(
+          'button[aria-label="Back to the conversation"]',
+        ) !== null,
       name: container.querySelector('.web-ui-pane-title')?.textContent,
       url: container.querySelector('.web-ui-pane-mobile-url')?.textContent,
       externalLink: {
@@ -218,10 +225,14 @@ it('shows the mobile web UI URL and opens it in a new tab', () => {
         rel: externalLink?.getAttribute('rel'),
         target: externalLink?.getAttribute('target'),
       },
+      closeButtonLabel: container
+        .querySelector<HTMLButtonElement>('button[aria-label="Close web UI"]')
+        ?.getAttribute('aria-label'),
+      closeCalled: onClose.mock.calls.length,
     }
   }
   expect(mobileHeaderState()).toEqual({
-    backButtonLabel: 'Back to the conversation',
+    hasBackButton: false,
     name: 'Canvas editor',
     url: targetUrl,
     externalLink: {
@@ -230,6 +241,54 @@ it('shows the mobile web UI URL and opens it in a new tab', () => {
       rel: 'noopener noreferrer',
       target: '_blank',
     },
+    closeButtonLabel: 'Close web UI',
+    closeCalled: 1,
+  })
+})
+
+it('closes the mobile web UI when its target URL is unavailable', () => {
+  const onClose = vi.fn()
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <WebUiPane
+        name="Canvas editor"
+        url="http://127.0.0.1:43123/studio/pages/sample"
+        hostname="watch.example.test"
+        onClose={onClose}
+        defaultFullscreen
+        mobilePresentation
+      />,
+    )
+  })
+
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('button[aria-label="Close web UI"]')
+      ?.click()
+  })
+
+  function unavailableMobileHeaderState() {
+    return {
+      iframe: container.querySelector('iframe')?.getAttribute('src') ?? null,
+      status: container.querySelector('[role="status"]')?.textContent,
+      url: container.querySelector('.web-ui-pane-mobile-url')?.textContent,
+      externalLink: container.querySelector('a'),
+      closeButtonLabel: container
+        .querySelector<HTMLButtonElement>('button[aria-label="Close web UI"]')
+        ?.getAttribute('aria-label'),
+      closeCalled: onClose.mock.calls.length,
+    }
+  }
+
+  expect(unavailableMobileHeaderState()).toEqual({
+    iframe: null,
+    status:
+      'This interface is unavailable outside this machine. Local URL: http://127.0.0.1:43123/studio/pages/sample',
+    url: 'http://127.0.0.1:43123/studio/pages/sample',
+    externalLink: null,
+    closeButtonLabel: 'Close web UI',
+    closeCalled: 1,
   })
 })
 

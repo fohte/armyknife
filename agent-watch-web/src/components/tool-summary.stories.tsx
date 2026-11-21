@@ -7,8 +7,8 @@ const conversationWidthDecorator: Decorator = (Story) => (
     style={{
       boxSizing: 'border-box',
       display: 'flex',
-      width: '600px',
-      minWidth: '600px',
+      width: 'min(100%, 600px)',
+      minWidth: 0,
       maxWidth: '600px',
       height: '400px',
       flex: 'none',
@@ -180,4 +180,40 @@ export const ThinkingWithoutToolsFormsItsOwnSummary: Story = {
     ],
   },
   decorators: [conversationWidthDecorator],
+}
+
+export const ThoughtRowsUseTouchSizedTargetsOnIPhone: Story = {
+  name: 'Expanded thought rows use touch sized targets on an iPhone',
+  args: {
+    summary: 'Thought ×1 · Read ×1',
+    operations: [{ tool: 'Read', target: 'src/example.ts', failed: false }],
+    items: [
+      { type: 'thinking', text: 'Review the fictional requirement.' },
+      {
+        type: 'tool_use',
+        tool: 'Read',
+        target: 'src/example.ts',
+        failed: false,
+      },
+    ],
+    open: true,
+  },
+  parameters: { viewport: { defaultViewport: 'mobile2' } },
+  decorators: [
+    (Story) => (
+      <div
+        className="conversation-pane"
+        data-mobile="true"
+        style={{
+          boxSizing: 'border-box',
+          width: '100%',
+          maxWidth: 390,
+          height: 844,
+          padding: 16,
+        }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
 }

@@ -21,6 +21,12 @@ export const ConfirmsCommandAndDirectory: Story = {
   name: 'The confirmation shows the command and working directory',
 }
 
+export const IPhoneSheetShowsCommandAndDirectory: Story = {
+  name: 'The iPhone confirmation sheet shows the directory and command',
+  args: { mobile: true },
+  parameters: { viewport: { defaultViewport: 'mobile1' } },
+}
+
 export const ConfirmsEveryCommand: Story = {
   name: 'The confirmation lists every command before running them',
   args: { commands: ['git status --short', 'git diff --stat'] },

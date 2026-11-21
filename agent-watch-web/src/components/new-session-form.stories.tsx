@@ -98,7 +98,38 @@ export const IPhoneShowsTheEmptyNewSession: Story = {
   args: { isMobile: true },
   decorators: [
     (Story) => (
-      <div className="story-mobile-layout" style={{ height: '844px' }}>
+      <div
+        className="agent-watch-shell"
+        data-layout="mobile"
+        data-mobile-screen="conversation"
+        style={{ width: 390, height: 844 }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
+export const IPhoneShowsTheEngineModelSwitch: Story = {
+  name: 'The iPhone composer explains the model reset and offers Undo',
+  args: {
+    isMobile: true,
+    state: createNewSessionStoryState({
+      selectedDirectory: exampleSessionDirectories[0] ?? null,
+      engine: 'codex',
+      modelChangeNotice:
+        'This engine does not offer the selected model. The model returned to its default.',
+      selectedEffort: 'xhigh',
+    }),
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="agent-watch-shell"
+        data-layout="mobile"
+        data-mobile-screen="conversation"
+        style={{ width: 390, height: 844 }}
+      >
         <Story />
       </div>
     ),

@@ -2,12 +2,11 @@ import '#components/todo-card.css'
 
 import { Button } from '@fohte/ui/button'
 import { ChevronDown, ChevronUp } from 'lucide-react'
-import type { ClipboardEvent } from 'react'
 import { useId, useMemo, useState } from 'react'
 
 import {
   AttachmentPreviewList,
-  handleAttachmentPaste,
+  createAttachmentInputHandlers,
 } from '#components/attachment-preview-list'
 import { CollapsibleText } from '#components/collapsible-text'
 import { MarkdownMessage } from '#components/markdown-message'
@@ -231,9 +230,10 @@ export function TodoCard({
         rows={2}
         value={comment}
         disabled={isSubmitting}
-        onPaste={(event: ClipboardEvent<HTMLTextAreaElement>) => {
-          handleAttachmentPaste(event, attachmentState.onPasteFiles)
-        }}
+        {...createAttachmentInputHandlers(
+          attachmentState.onPasteFiles,
+          !isSubmitting,
+        )}
         onChange={(event) => {
           updateDraft(event.currentTarget.value)
         }}

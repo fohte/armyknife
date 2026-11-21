@@ -50,6 +50,62 @@ export const MergeWasAddedToQueue: Story = {
   },
 }
 
+export const QueuedMergeToastOnIPhone: Story = {
+  name: 'The queued merge appears in an iPhone toast.',
+  parameters: { viewport: { defaultViewport: 'mobile2' } },
+  args: {
+    form: 'toast',
+    action: {
+      ...meta.args.action,
+      status: 'queued',
+      message: 'It merges when the queue’s checks pass.',
+    },
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        style={{
+          boxSizing: 'border-box',
+          width: '100%',
+          maxWidth: 390,
+          padding: 16,
+        }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
+export const QueuedMergeLineOnIPhone: Story = {
+  name: 'The conversation marks the merge as queued on an iPhone.',
+  parameters: { viewport: { defaultViewport: 'mobile2' } },
+  args: {
+    form: 'line',
+    action: {
+      ...meta.args.action,
+      status: 'queued',
+      message: 'It merges when the queue’s checks pass.',
+    },
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        style={{
+          boxSizing: 'border-box',
+          width: '100%',
+          maxWidth: 390,
+          padding: 16,
+        }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
 export const MergeFailureCanBeRetried: Story = {
   name: 'The failed merge offers Retry and Details.',
   args: {
@@ -59,6 +115,34 @@ export const MergeFailureCanBeRetried: Story = {
       error: 'The branch changed after confirmation.',
     },
   },
+}
+
+export const FailedMergeToastOnIPhone: Story = {
+  name: 'An iPhone merge toast shows its failure reason and actions.',
+  parameters: { viewport: { defaultViewport: 'mobile2' } },
+  args: {
+    form: 'toast',
+    action: {
+      ...meta.args.action,
+      status: 'mergeFailed',
+      error: 'The example branch changed after confirmation.',
+    },
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        style={{
+          boxSizing: 'border-box',
+          width: '100%',
+          maxWidth: 390,
+          padding: 16,
+        }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
 }
 
 export const CloseIsRunningInConversation: Story = {
@@ -89,6 +173,37 @@ export const CloseSucceededInActivity: Story = {
       createdAt: 1_800_000_000_000,
     },
   },
+}
+
+export const ClosedSessionToastOnIPhone: Story = {
+  name: 'A closed session result appears in an iPhone toast.',
+  parameters: { viewport: { defaultViewport: 'mobile2' } },
+  args: {
+    form: 'toast',
+    action: {
+      id: 3,
+      sessionId: 'example-session',
+      sessionTitle: 'Review the example configuration',
+      kind: 'close',
+      status: 'closed',
+      createdAt: 1_800_000_000_000,
+    },
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        style={{
+          boxSizing: 'border-box',
+          width: '100%',
+          maxWidth: 390,
+          padding: 16,
+        }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
 }
 
 export const CloseFailedAndCanBeRetried: Story = {

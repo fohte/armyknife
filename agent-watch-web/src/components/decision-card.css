@@ -216,3 +216,17 @@
   color: var(--aw-text-primary);
   font: inherit;
 }
+
+.conversation-pane[data-mobile='true'] .decision-card {
+  font-size: 15px;
+}
+
+.conversation-pane[data-mobile='true'] .decision-card-summary {
+  min-height: 44px;
+}
+
+.conversation-pane[data-mobile='true']
+  .decision-card-buttons
+  [data-slot='button'] {
+  min-height: 44px;
+}

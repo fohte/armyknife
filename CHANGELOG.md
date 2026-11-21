@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.1.825](https://github.com/fohte/armyknife/compare/v0.1.824...v0.1.825) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** route comment image drops ([#2034](https://github.com/fohte/armyknife/issues/2034)) ([cc29253](https://github.com/fohte/armyknife/commit/cc2925342c0968cba23ac42158e52fd9c7107336))
+
+## [0.1.824](https://github.com/fohte/armyknife/compare/v0.1.823...v0.1.824) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** parse attached action events ([#2038](https://github.com/fohte/armyknife/issues/2038)) ([d2c0a8d](https://github.com/fohte/armyknife/commit/d2c0a8d0c68b3fe74da65f7e31eccf8988db74cf))
+
+## [0.1.823](https://github.com/fohte/armyknife/compare/v0.1.822...v0.1.823) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** match the iPhone UI ([#2033](https://github.com/fohte/armyknife/issues/2033)) ([afaf64d](https://github.com/fohte/armyknife/commit/afaf64d243ae2e267a4af3c172abccdd9a9e226b))
+
+## [0.1.822](https://github.com/fohte/armyknife/compare/v0.1.821...v0.1.822) (2026-11-21)
+
+
+### Features
+
+* **agent-watch-web:** move phone Activity to nav ([#2028](https://github.com/fohte/armyknife/issues/2028)) ([136dbd7](https://github.com/fohte/armyknife/commit/136dbd7e1b0f847eb161bb84caba6c2f40d3187a))
+
+## [0.1.821](https://github.com/fohte/armyknife/compare/v0.1.820...v0.1.821) (2026-11-21)
+
+
+### Features
+
+* **agent-watch-web:** support the Board on iPhone ([#2027](https://github.com/fohte/armyknife/issues/2027)) ([4fb68b4](https://github.com/fohte/armyknife/commit/4fb68b42564ad0a12970bc252deb45f5811308e1))
+
+## [0.1.820](https://github.com/fohte/armyknife/compare/v0.1.819...v0.1.820) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** restore mobile close button ([#2029](https://github.com/fohte/armyknife/issues/2029)) ([ab5a89c](https://github.com/fohte/armyknife/commit/ab5a89c36bdd451e4a526482d044499e4f155ff7))
+
 ## [0.1.819](https://github.com/fohte/armyknife/compare/v0.1.818...v0.1.819) (2026-11-21)
 
 

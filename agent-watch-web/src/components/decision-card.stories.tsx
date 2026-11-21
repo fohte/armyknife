@@ -33,7 +33,14 @@ const meta = {
   },
   decorators: [
     (Story) => (
-      <div style={{ width: '100%', maxWidth: '720px', padding: '16px' }}>
+      <div
+        style={{
+          boxSizing: 'border-box',
+          width: '100%',
+          maxWidth: '720px',
+          padding: '16px',
+        }}
+      >
         <Story />
       </div>
     ),
@@ -87,7 +94,45 @@ export const MobileConversationRowKeepsALongTitleReadable: Story = {
     },
     position: '131 of 132',
   },
-  parameters: { viewport: { defaultViewport: 'mobile1' } },
+  parameters: { viewport: { defaultViewport: 'mobile2' } },
+  decorators: [
+    (Story) => (
+      <div
+        className="conversation-pane"
+        data-mobile="true"
+        style={{
+          boxSizing: 'border-box',
+          width: '100%',
+          maxWidth: 390,
+          padding: 16,
+        }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
+export const ExpandedDecisionActionsOnIPhone: Story = {
+  name: 'The expanded iPhone decision shows touch sized review actions',
+  args: { expanded: true },
+  parameters: { viewport: { defaultViewport: 'mobile2' } },
+  decorators: [
+    (Story) => (
+      <div
+        className="conversation-pane"
+        data-mobile="true"
+        style={{
+          boxSizing: 'border-box',
+          width: '100%',
+          maxWidth: 390,
+          padding: 16,
+        }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
 }
 
 export const SelectedConversationRowShowsItsPosition: Story = {

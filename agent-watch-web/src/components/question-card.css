@@ -126,3 +126,13 @@
   font-size: 13px;
   white-space: pre-wrap;
 }
+
+.conversation-pane[data-mobile='true'] .chat-question-prompt h3 {
+  font-size: 15px;
+}
+
+.conversation-pane[data-mobile='true']
+  .chat-question-actions
+  [data-slot='button'] {
+  min-height: 44px;
+}

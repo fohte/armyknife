@@ -140,6 +140,7 @@ export function renderConversationMessage({
         <MarkdownMessage
           {...(sessionId === undefined ? {} : { sessionId })}
           {...(onCommandExecuted === undefined ? {} : { onCommandExecuted })}
+          mobile={isMobile}
         >
           {message.text}
         </MarkdownMessage>
@@ -154,6 +155,7 @@ export function renderConversationMessage({
     )
   }
   if (message.type === 'thinking') {
+    if (isMobile && message.text.trim() === '') return null
     const items = [{ type: 'thinking' as const, text: message.text }]
     return (
       <ToolSummary

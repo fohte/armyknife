@@ -51,6 +51,26 @@ export const WaitingForDecision: Story = {
   name: 'A permission request offers approval and rejection',
 }
 
+export const PermissionActionsOnIPhone: Story = {
+  name: 'The iPhone permission card offers touch sized actions',
+  decorators: [
+    (Story) => (
+      <div
+        className="conversation-pane"
+        data-mobile="true"
+        style={{
+          boxSizing: 'border-box',
+          width: '100%',
+          maxWidth: 390,
+          padding: 16,
+        }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
 export const CodexApprovalIsAvailable: Story = {
   name: 'A Codex permission request offers web approval and rejection',
   args: {
