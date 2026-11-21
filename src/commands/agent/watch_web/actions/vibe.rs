@@ -84,18 +84,25 @@ pub(super) async fn set_vibe(
     })
     .await?;
 
-    let message = if request.enabled {
-        "watch-web からユーザーが vibe mode を on にしました。".to_string()
+    let (event_tag, message) = if request.enabled {
+        (
+            "armyknife-vibe-mode-on",
+            "watch-web からユーザーが vibe mode を on にしました。",
+        )
     } else {
-        "watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。".to_string()
+        (
+            "armyknife-vibe-mode-off",
+            "watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。",
+        )
     };
+    let event_message = format!("<{event_tag}>{message}</{event_tag}>");
     let delivery = send_queued_prompt(QueuedPromptDelivery {
         runtime: state.runtime,
         sessions_dir: sessions_dir.clone(),
         session,
         marker,
-        queued_content: message.clone(),
-        message_content: message,
+        queued_content: event_message.clone(),
+        message_content: event_message,
         queued_attachments: Vec::<store::WatchWebQueuedAttachment>::new(),
         attachment_paths: Vec::new(),
     })

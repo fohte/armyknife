@@ -3368,6 +3368,55 @@ it('shows a local time on system event rows', () => {
   })
 })
 
+it('renders vibe mode changes as centered events with a time separator', () => {
+  const offTimestamp = '2026-06-01T12:10:00Z'
+  const onTimestamp = '2026-06-01T12:20:00Z'
+  const events = [
+    {
+      type: 'event' as const,
+      kind: 'armyknife' as const,
+      text: 'Vibe mode turned off',
+      failed: false,
+      timestamp: offTimestamp,
+    },
+    {
+      type: 'event' as const,
+      kind: 'armyknife' as const,
+      text: 'Vibe mode turned on',
+      failed: false,
+      timestamp: onTimestamp,
+    },
+  ]
+  renderView(() => Promise.resolve(true), session, undefined, events)
+
+  const actual = Array.from(
+    container.querySelectorAll<HTMLElement>('.chat-event'),
+  ).map((event) => ({
+    text: event.querySelector('.chat-event-text')?.textContent ?? null,
+    separator:
+      event.querySelector('.chat-event-separator')?.textContent ?? null,
+    time: event.querySelector('time')?.textContent ?? null,
+    kind: event.getAttribute('data-kind'),
+    alignSelf: getComputedStyle(event).alignSelf,
+  }))
+  expect(actual).toEqual([
+    {
+      text: 'Vibe mode turned off',
+      separator: '·',
+      time: formatMessageTime(offTimestamp),
+      kind: 'armyknife',
+      alignSelf: 'center',
+    },
+    {
+      text: 'Vibe mode turned on',
+      separator: '·',
+      time: formatMessageTime(onTimestamp),
+      kind: 'armyknife',
+      alignSelf: 'center',
+    },
+  ])
+})
+
 it('renders compact boundaries as a distinct conversation event', () => {
   renderView(() => Promise.resolve(true), session, undefined, [
     {

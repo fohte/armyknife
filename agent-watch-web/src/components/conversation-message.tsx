@@ -125,7 +125,9 @@ export function renderConversationMessage({
         <span className="chat-event-text">{message.text}</span>
         {time !== null && (
           <>
-            {' '}
+            <span aria-hidden="true" className="chat-event-separator">
+              ·
+            </span>
             <time dateTime={message.timestamp}>{time}</time>
           </>
         )}

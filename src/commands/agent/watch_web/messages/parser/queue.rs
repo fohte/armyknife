@@ -350,12 +350,7 @@ impl Queue {
             .into_iter()
             .filter(|queued| !queued.resolved && !delivered_prompt_ids.contains(&queued.id))
         {
-            items.push(ChatItem::QueuedUser {
-                content: super::super::queued_prompt::user_content(&queued),
-                queued_prompt_id: queued.message_id.clone(),
-                from: None,
-                timestamp: Some(queued.sent_at.to_rfc3339()),
-            });
+            items.push(super::super::queued_prompt::chat_item(&queued));
         }
         items
     }

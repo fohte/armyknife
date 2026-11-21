@@ -120,7 +120,7 @@
 .chat-event {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   overflow: hidden;
   align-self: center;
   max-width: 100%;
@@ -137,6 +137,10 @@
 .chat-event time {
   flex: 0 0 auto;
   font-size: 10px;
+}
+
+.chat-event-separator {
+  flex: 0 0 auto;
 }
 
 .chat-event[data-failed='true'] {

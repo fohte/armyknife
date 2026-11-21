@@ -286,7 +286,9 @@ fn nested_tag_value<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
         .map(|(value, _)| value)
 }
 
-pub(super) fn tagged_body(text: &str) -> Option<(&str, &str)> {
+pub(in crate::commands::agent::watch_web::messages) fn tagged_body(
+    text: &str,
+) -> Option<(&str, &str)> {
     let tag = outer_tag(text)?;
     let trimmed = text.trim();
     let opening = format!("<{tag}>");
@@ -355,21 +357,37 @@ fn marked_or_peer_message(text: &str, marker: Option<&str>) -> Option<MessageKin
 }
 
 fn marked_user_message_body(body: String) -> MessageKind {
-    match tagged_body(&body) {
+    let body_without_id = super::super::queued_prompt::strip_id_marker(&body);
+    match tagged_body(&body_without_id) {
         Some((tag, event_body)) if is_watch_web_action_tag(tag) => MessageKind::Event {
             kind: EventKind::Armyknife,
-            text: one_line(event_body),
+            text: watch_web_action_event_text(tag, event_body),
             failed: false,
         },
         _ => MessageKind::User { text: body },
     }
 }
 
-pub(super) fn is_watch_web_action_tag(tag: &str) -> bool {
+pub(in crate::commands::agent::watch_web::messages) fn is_watch_web_action_tag(tag: &str) -> bool {
     matches!(
         tag,
-        "armyknife-todo-completed" | "armyknife-todo-rejected" | "armyknife-decision-change"
+        "armyknife-todo-completed"
+            | "armyknife-todo-rejected"
+            | "armyknife-decision-change"
+            | "armyknife-vibe-mode-on"
+            | "armyknife-vibe-mode-off"
     )
+}
+
+pub(in crate::commands::agent::watch_web::messages) fn watch_web_action_event_text(
+    tag: &str,
+    body: &str,
+) -> String {
+    match tag {
+        "armyknife-vibe-mode-on" => "Vibe mode turned on".to_owned(),
+        "armyknife-vibe-mode-off" => "Vibe mode turned off".to_owned(),
+        _ => one_line(body),
+    }
 }
 
 #[cfg(test)]
@@ -476,6 +494,28 @@ mod tests {
         "},
         Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
         MessageKind::Event { kind: EventKind::Armyknife, text: "Change requested for the fixture decision. Please use the second fictional option.".to_owned(), failed: false },
+    )]
+    #[case::marked_vibe_mode_on_is_an_event(
+        json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
+        indoc! {"
+            ⟦armyknife-user:fixture-marker-cobalt⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            <armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>
+            <!-- armyknife-queued-prompt-id:fixture-message-cyan -->
+        "},
+        Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
+        MessageKind::Event { kind: EventKind::Armyknife, text: "Vibe mode turned on".to_owned(), failed: false },
+    )]
+    #[case::marked_vibe_mode_off_is_an_event(
+        json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
+        indoc! {"
+            ⟦armyknife-user:fixture-marker-cobalt⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            <armyknife-vibe-mode-off>watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。</armyknife-vibe-mode-off>
+            <!-- armyknife-queued-prompt-id:fixture-message-amber -->
+        "},
+        Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
+        MessageKind::Event { kind: EventKind::Armyknife, text: "Vibe mode turned off".to_owned(), failed: false },
     )]
     #[case::marked_unrecognized_armyknife_tag_stays_user_text(
         json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
