@@ -264,6 +264,13 @@ fn with_worktree_deletion_lock(
     worktree_path: &std::path::Path,
     delete: impl FnOnce() -> anyhow::Result<bool>,
 ) -> anyhow::Result<bool> {
+    let _deletion_lock =
+        lock::try_lock_deletion(lock_dir, worktree_path).map_err(|error| match error {
+            lock::WorktreeLockError::Busy => {
+                WorktreeDeletionInProgressError::new(worktree_path.to_path_buf()).into()
+            }
+            lock::WorktreeLockError::Io(error) => error,
+        })?;
     let _lock = lock::lock_exclusive(lock_dir, worktree_path)?;
     delete()
 }
@@ -591,6 +598,46 @@ mod tests {
             (blocked_before_release, acquired_after_release),
             (true, true)
         );
+    }
+
+    #[test]
+    fn competing_deletions_return_an_in_progress_error_without_waiting() {
+        let worktree = tempfile::tempdir().expect("temporary worktree should be created");
+        let lock_dir = tempfile::tempdir().expect("temporary lock directory should be created");
+        let first_deletion = lock::try_lock_deletion(lock_dir.path(), worktree.path())
+            .expect("first deletion marker should be acquired");
+        let thread_lock_dir = lock_dir.path().to_path_buf();
+        let thread_worktree = worktree.path().to_path_buf();
+        let (result_sender, result_receiver) = std::sync::mpsc::channel();
+        let delete_thread = std::thread::spawn(move || {
+            let result =
+                with_worktree_deletion_lock(&thread_lock_dir, &thread_worktree, || Ok(true));
+            let outcome = match result {
+                Err(error)
+                    if error
+                        .downcast_ref::<WorktreeDeletionInProgressError>()
+                        .is_some() =>
+                {
+                    "busy"
+                }
+                Err(_) => "other error",
+                Ok(_) => "deleted",
+            };
+            result_sender.send(outcome).expect("result should be sent");
+        });
+        let returned_without_waiting = result_receiver
+            .recv_timeout(std::time::Duration::from_millis(50))
+            .ok();
+        let did_return_without_waiting = returned_without_waiting.is_some();
+        drop(first_deletion);
+        let outcome = returned_without_waiting.or_else(|| {
+            result_receiver
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .ok()
+        });
+        delete_thread.join().expect("delete thread should finish");
+
+        assert_eq!((did_return_without_waiting, outcome), (true, Some("busy")));
     }
 
     #[rstest]

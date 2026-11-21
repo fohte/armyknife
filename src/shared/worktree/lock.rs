@@ -20,7 +20,7 @@ pub(super) fn try_lock_shared(
     lock_dir: &Path,
     worktree_path: &Path,
 ) -> std::result::Result<File, WorktreeLockError> {
-    let file = open_lock_file(lock_dir, worktree_path).map_err(WorktreeLockError::Io)?;
+    let file = open_lock_file(lock_dir, worktree_path, "lock").map_err(WorktreeLockError::Io)?;
     match file.try_lock_shared() {
         Ok(()) => Ok(file),
         Err(std::fs::TryLockError::WouldBlock) => Err(WorktreeLockError::Busy),
@@ -28,14 +28,27 @@ pub(super) fn try_lock_shared(
     }
 }
 
+pub(super) fn try_lock_deletion(
+    lock_dir: &Path,
+    worktree_path: &Path,
+) -> std::result::Result<File, WorktreeLockError> {
+    let file =
+        open_lock_file(lock_dir, worktree_path, "deletion.lock").map_err(WorktreeLockError::Io)?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(std::fs::TryLockError::WouldBlock) => Err(WorktreeLockError::Busy),
+        Err(std::fs::TryLockError::Error(error)) => Err(WorktreeLockError::Io(error.into())),
+    }
+}
+
 pub(super) fn lock_exclusive(lock_dir: &Path, worktree_path: &Path) -> Result<File> {
-    let file = open_lock_file(lock_dir, worktree_path)?;
+    let file = open_lock_file(lock_dir, worktree_path, "lock")?;
     file.lock()
         .with_context(|| format!("locking worktree for deletion: {}", worktree_path.display()))?;
     Ok(file)
 }
 
-fn open_lock_file(lock_dir: &Path, worktree_path: &Path) -> Result<File> {
+fn open_lock_file(lock_dir: &Path, worktree_path: &Path, suffix: &str) -> Result<File> {
     fs::create_dir_all(lock_dir)
         .with_context(|| format!("creating worktree lock directory {}", lock_dir.display()))?;
     let canonical_path = canonicalize_with_missing_suffix(worktree_path)?;
@@ -44,7 +57,7 @@ fn open_lock_file(lock_dir: &Path, worktree_path: &Path) -> Result<File> {
         .map(|byte| format!("{byte:02x}"))
         .collect::<Vec<_>>()
         .join("");
-    let lock_path = lock_dir.join(format!("{key_hash}.lock"));
+    let lock_path = lock_dir.join(format!("{key_hash}.{suffix}"));
     OpenOptions::new()
         .create(true)
         .truncate(false)
