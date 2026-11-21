@@ -2,7 +2,7 @@ import '#components/later-today.css'
 
 import { Button } from '@fohte/ui/button'
 import { Filter, X } from 'lucide-react'
-import { useCallback, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useState } from 'react'
 
 import { InboxFilterBar } from '#components/inbox-filter-bar'
 import { InboxViewDialogLayers } from '#components/inbox-view-dialog-layers'
@@ -10,10 +10,9 @@ import { MobileNavigationActions } from '#components/mobile-navigation-actions'
 import { filterInboxSessions, parseInboxFilterQuery } from '#inbox-filter'
 import { InboxSessionListItem } from '#inbox-session-list-item'
 import { renderInboxSessionSection } from '#inbox-session-section'
-import { formatMobileConnectionTime, nextReturnLabel } from '#inbox-view-utils'
+import { nextReturnLabel } from '#inbox-view-utils'
 import type { SavedInboxView } from '#saved-inbox-views'
 import type { Session } from '#types'
-import { useInboxFilterShortcut } from '#use-inbox-filter-shortcut'
 
 type InboxViewProps = {
   sessions: readonly Session[]
@@ -57,6 +56,7 @@ type InboxViewProps = {
   onOpenNavigation?: () => void
   onOpenPalette?: () => void
   onNewSession?: () => void
+  mobileUpdateNotice?: ReactNode
 }
 
 export function InboxView({
@@ -97,6 +97,7 @@ export function InboxView({
   onOpenNavigation = () => undefined,
   onOpenPalette = () => undefined,
   onNewSession = () => undefined,
+  mobileUpdateNotice,
 }: InboxViewProps) {
   const [localFilterQuery, setLocalFilterQuery] = useState('')
   const [localDialogOpen, setLocalDialogOpen] = useState(false)
@@ -153,7 +154,30 @@ export function InboxView({
     setFilterDialogOpen(true)
   }, [filterQuery, setFilterDialogOpen])
 
-  useInboxFilterShortcut(filterDialogOpen, openFilterDialog)
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== '/' || event.defaultPrevented) return
+      const target = event.target
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable ||
+          target instanceof HTMLInputElement ||
+          target instanceof HTMLTextAreaElement ||
+          target instanceof HTMLSelectElement)
+      ) {
+        return
+      }
+      if (!filterDialogOpen) {
+        event.preventDefault()
+        openFilterDialog()
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [filterDialogOpen, openFilterDialog])
 
   const visibleInProgress = isMobile
     ? inProgressExpanded
@@ -188,6 +212,7 @@ export function InboxView({
           />
         ) : null}
       </div>
+      {isMobile ? mobileUpdateNotice : null}
       <header className="view-header">
         <h1 id="inbox-title">Inbox</h1>
         <span className="sort-description">Sorted by tq priority</span>
@@ -473,4 +498,9 @@ export function InboxView({
       />
     </section>
   )
+}
+
+function formatMobileConnectionTime(timestamp: number) {
+  const date = new Date(timestamp)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }

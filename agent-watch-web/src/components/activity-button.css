@@ -36,3 +36,19 @@
   padding: 0 4px;
   font-size: 14px;
 }
+.async-action-activity-button.is-empty {
+  color: var(--aw-text-secondary);
+}
+.async-action-activity-button.is-icon-only {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--aw-radius);
+  padding: 0;
+  color: var(--aw-text-secondary);
+}
+.async-action-activity-button.is-icon-only > span {
+  display: none;
+}

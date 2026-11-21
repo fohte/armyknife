@@ -18,24 +18,22 @@ type SessionEventSource = {
 type SessionFeedDependencies = {
   fetcher?: typeof fetch
   createEventSource?: (url: string) => SessionEventSource
-  reloadPage?: () => void
   requestRetryDelayMs?: number
-  initialServerInstanceId?: string | null
+  initialServerVersion?: string | null
+  onUpdateAvailable?: (version: string | null) => void
   visibilityTarget?: PageVisibilityTarget
 }
 
-const SERVER_INSTANCE_ID_PLACEHOLDER = '__AGENT_WATCH_SERVER_INSTANCE_ID__'
+const SERVER_VERSION_PLACEHOLDER = '__AGENT_WATCH_SERVER_VERSION__'
 
-function readInitialServerInstanceId() {
+function readInitialServerVersion() {
   if (typeof document === 'undefined') {
     return null
   }
-  const instanceId = document.querySelector<HTMLMetaElement>(
-    'meta[name="server-instance-id"]',
+  const version = document.querySelector<HTMLMetaElement>(
+    'meta[name="server-version"]',
   )?.content
-  return instanceId === SERVER_INSTANCE_ID_PLACEHOLDER
-    ? null
-    : (instanceId ?? null)
+  return version === SERVER_VERSION_PLACEHOLDER ? null : (version ?? null)
 }
 
 type SessionsFeedResponse =
@@ -283,11 +281,9 @@ export function startSessionFeed(
   {
     fetcher = fetch,
     createEventSource = (url) => new EventSource(url),
-    reloadPage = () => {
-      window.location.reload()
-    },
     requestRetryDelayMs = 2_000,
-    initialServerInstanceId = readInitialServerInstanceId(),
+    initialServerVersion = readInitialServerVersion(),
+    onUpdateAvailable,
     visibilityTarget = typeof document === 'undefined' ? undefined : document,
   }: SessionFeedDependencies = {},
 ) {
@@ -297,8 +293,6 @@ export function startSessionFeed(
   let refreshQueued = false
   let requestError = false
   let streamError = false
-  let restartPending = false
-  let serverInstanceId = initialServerInstanceId
   let currentSessions: CurrentSessions | null = null
   let requestRetryTimer: ReturnType<typeof setTimeout> | null = null
   let reconnectPollTimer: ReturnType<typeof setInterval> | null = null
@@ -418,41 +412,30 @@ export function startSessionFeed(
       reconnectPollTimer = setInterval(refresh, requestRetryDelayMs)
     }
   }
-  const onServerRestart: EventListener = () => {
-    restartPending = true
-  }
-  const onServerInstance: EventListener = (event) => {
+  const onServerVersion: EventListener = (event) => {
     if (!active || !visible) {
       return
     }
-    const instanceId = 'data' in event ? event.data : null
-    if (typeof instanceId !== 'string' || instanceId.length === 0) {
+    const version = 'data' in event ? event.data : null
+    if (typeof version !== 'string' || version.length === 0) {
       return
     }
-
-    const instanceChanged =
-      serverInstanceId !== null && serverInstanceId !== instanceId
-    serverInstanceId = instanceId
-    if (instanceChanged) {
-      reloadPage()
-    }
+    onUpdateAvailable?.(
+      initialServerVersion !== null && initialServerVersion !== version
+        ? version
+        : null,
+    )
   }
   const onConnectionOpen: EventListener = () => {
     if (!active || !visible) {
       return
     }
-    const restartDetected = restartPending
-    restartPending = false
     streamError = false
     if (reconnectPollTimer !== null) {
       clearInterval(reconnectPollTimer)
       reconnectPollTimer = null
     }
     reportStatus()
-    if (restartDetected) {
-      reloadPage()
-      return
-    }
     refresh()
   }
 
@@ -462,8 +445,7 @@ export function startSessionFeed(
     }
     eventSource = createEventSource('/api/events')
     eventSource.addEventListener('sessions', onSessionsEvent)
-    eventSource.addEventListener('restart', onServerRestart)
-    eventSource.addEventListener('instance', onServerInstance)
+    eventSource.addEventListener('version', onServerVersion)
     eventSource.addEventListener('error', onConnectionError)
     eventSource.addEventListener('open', onConnectionOpen)
   }
@@ -473,8 +455,7 @@ export function startSessionFeed(
       return
     }
     eventSource.removeEventListener('sessions', onSessionsEvent)
-    eventSource.removeEventListener('restart', onServerRestart)
-    eventSource.removeEventListener('instance', onServerInstance)
+    eventSource.removeEventListener('version', onServerVersion)
     eventSource.removeEventListener('error', onConnectionError)
     eventSource.removeEventListener('open', onConnectionOpen)
     eventSource.close()

@@ -82,6 +82,9 @@ pub struct Session {
     /// Crit review URLs opened by this session, ordered by most recently requested.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub crit_urls: Vec<String>,
+    /// Crit review URLs whose client is no longer waiting for the user's review.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub crit_not_waiting_urls: BTreeSet<String>,
     /// Named local web interfaces registered with this session.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub web_uis: Vec<WebUiRegistration>,
@@ -229,6 +232,12 @@ pub struct WebUiRegistration {
 }
 
 impl Session {
+    pub(crate) fn is_waiting_for_crit_review(&self) -> bool {
+        self.crit_urls
+            .iter()
+            .any(|url| !self.crit_not_waiting_urls.contains(url))
+    }
+
     pub(crate) fn is_current_tool_named(&self, name: &str) -> bool {
         // Legacy records store display values, and these built-in names have no display detail.
         self.current_tool_name.as_deref() == Some(name)

@@ -1,6 +1,8 @@
 import { Result } from 'neverthrow'
 import { useCallback, useRef, useState } from 'react'
 
+import { useBeforeUnloadWarning } from '#components/use-beforeunload-warning'
+
 const fallbackDrafts = new Map<string, string>()
 
 function readDraft(key: string, initialDraft: string) {
@@ -66,6 +68,7 @@ export function useDraft(storageKey: string, initialValue = '') {
   const [storageAvailable, setStorageAvailable] = useState(
     initialDraft.storageAvailable,
   )
+  useBeforeUnloadWarning(draft !== '' && !storageAvailable)
   const draftRef = useRef(draft)
 
   const updateDraft = useCallback(

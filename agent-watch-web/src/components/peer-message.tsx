@@ -89,6 +89,7 @@ export function PeerMessage({
           part.type === 'text' ? (
             <MarkdownMessage
               className="chat-peer-text"
+              copyableCodeBlocks
               key={`text-${String(index)}`}
             >
               {part.text}

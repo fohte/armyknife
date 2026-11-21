@@ -1,4 +1,4 @@
-.agent-watch-shell[data-layout='mobile'] {
+.agent-watch-app[data-layout='mobile'] {
   position: fixed;
   top: var(--mobile-viewport-top, 0px);
   right: 0;
@@ -6,6 +6,15 @@
   height: var(--mobile-viewport-height, 100dvh);
   min-height: 0;
   overflow: hidden;
+}
+
+.agent-watch-shell[data-layout='mobile'] {
+  position: relative;
+  top: auto;
+  right: auto;
+  left: auto;
+  height: auto;
+  flex: 1 1 auto;
   font-size: var(--aw-font-size-mobile-body);
   line-height: var(--aw-line-height-body);
 }

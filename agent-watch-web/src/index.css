@@ -29,10 +29,17 @@
   }
 }
 
-.agent-watch-shell {
+.agent-watch-app {
   display: flex;
   height: 100vh;
-  min-height: 100vh;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.agent-watch-shell {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
   overflow: hidden;
   background: var(--aw-bg-app);
   font-size: var(--aw-font-size-body);
