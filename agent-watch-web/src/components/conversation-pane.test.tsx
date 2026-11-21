@@ -1349,7 +1349,7 @@ it('posts a message when randomUUID is unavailable', async () => {
     )
     .map(([input, init]) => ({
       url: requestUrl(input),
-      body: normalizeQueuedMessagePostBody(init?.body) ?? null,
+      body: typeof init?.body === 'string' ? init.body : null,
     }))
   const snapshot = () => ({
     composerReady,
@@ -1365,7 +1365,7 @@ it('posts a message when randomUUID is unavailable', async () => {
         url: '/api/sessions/sample-session/messages',
         body: JSON.stringify({
           content: 'Send without randomUUID',
-          messageId: '<message-id>',
+          messageId: '00000000-0000-4000-8000-000000000000',
         }),
       },
     ],
