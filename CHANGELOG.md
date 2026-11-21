@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.811](https://github.com/fohte/armyknife/compare/v0.1.810...v0.1.811) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show close guard details ([#2009](https://github.com/fohte/armyknife/issues/2009)) ([6497202](https://github.com/fohte/armyknife/commit/6497202a18c9f448c867fa8e107b266a07abd124))
+
 ## [0.1.810](https://github.com/fohte/armyknife/compare/v0.1.809...v0.1.810) (2026-11-20)
 
 
