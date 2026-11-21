@@ -131,10 +131,39 @@ it('closes on backdrop clicks without closing when content is clicked', async ()
   if (insideAction === null || overlay === null) {
     throw new Error('The sheet controls are missing')
   }
+  const snapshot = () => ({
+    closeCalls: onClose.mock.calls,
+    dialogIsOpen: container.querySelector('[role="dialog"]') !== null,
+  })
 
   await act(async () => {
     await userEvent.click(insideAction)
+  })
+
+  expect(snapshot()).toEqual({
+    closeCalls: [],
+    dialogIsOpen: true,
+  })
+
+  await act(async () => {
     await userEvent.click(overlay)
+  })
+
+  expect(snapshot()).toEqual({
+    closeCalls: [[]],
+    dialogIsOpen: false,
+  })
+})
+
+it('closes when a pointerdown lands outside the overlay', async () => {
+  const onClose = vi.fn()
+  await openSheet({ onClose })
+  const outside = document.createElement('button')
+  outside.type = 'button'
+  container.append(outside)
+
+  act(() => {
+    outside.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
   })
 
   const snapshot = () => ({

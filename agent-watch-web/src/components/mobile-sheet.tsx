@@ -26,6 +26,7 @@ export function MobileSheet({
   presentation = 'bottom',
   canDismiss = true,
 }: MobileSheetProps) {
+  const overlayRef = useRef<HTMLDivElement>(null)
   const sheetRef = useRef<HTMLElement>(null)
   useFocusTrap({
     containerRef: sheetRef,
@@ -37,16 +38,31 @@ export function MobileSheet({
         : { initialFocusRef }),
   })
   useEffect(() => {
+    if (!canDismiss) return
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const overlay = overlayRef.current
+      if (
+        event.target instanceof Node &&
+        overlay !== null &&
+        !overlay.contains(event.target)
+      ) {
+        onClose()
+      }
+    }
+
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.defaultPrevented || !canDismiss) {
+      if (event.key !== 'Escape' || event.defaultPrevented) {
         return
       }
       event.preventDefault()
       onClose()
     }
 
+    document.addEventListener('pointerdown', handlePointerDown, true)
     window.addEventListener('keydown', handleKeyDown)
     return () => {
+      document.removeEventListener('pointerdown', handlePointerDown, true)
       window.removeEventListener('keydown', handleKeyDown)
     }
   }, [canDismiss, onClose])
@@ -55,6 +71,7 @@ export function MobileSheet({
     <div
       className="mobile-sheet-overlay"
       data-presentation={presentation}
+      ref={overlayRef}
       onClick={(event) => {
         if (canDismiss && event.target === event.currentTarget) onClose()
       }}
