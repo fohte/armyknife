@@ -434,6 +434,8 @@ pub(super) fn spawn_open_after_watch(session_id: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
     #[derive(Debug, PartialEq, Eq)]
@@ -445,6 +447,7 @@ mod tests {
         StartMonitor {
             port: u16,
             session_id: Option<String>,
+            status: Option<serde_json::Value>,
         },
         DisplayReview {
             url: String,
@@ -475,11 +478,12 @@ mod tests {
             &mut self,
             port: u16,
             session: Option<&Session>,
-            _status: Option<&serde_json::Value>,
+            status: Option<&serde_json::Value>,
         ) -> Result<()> {
             self.actions.push(CritAddAction::StartMonitor {
                 port,
                 session_id: session.map(|session| session.session_id.clone()),
+                status: status.cloned(),
             });
             Ok(())
         }
@@ -507,14 +511,28 @@ mod tests {
         }
     }
 
-    #[test]
-    fn displays_and_notifies_when_session_recording_fails() {
+    #[rstest]
+    #[case::without_status_snapshot(None)]
+    #[case::with_status_snapshot(Some(serde_json::json!({
+        "sessions": [{ "port": 43210, "pid": 12345 }],
+    })))]
+    fn forwards_optional_status_snapshot_when_session_recording_fails(
+        #[case] status: Option<serde_json::Value>,
+    ) {
         let args = AddArgs {
             url: "http://review.example.test:43210/review".to_string(),
         };
         let mut runtime = FakeCritAddRuntime::default();
+        let expected_status = status.clone();
 
-        continue_add(&args, "fixture-session", 43210, None, None, &mut runtime);
+        continue_add(
+            &args,
+            "fixture-session",
+            43210,
+            None,
+            status.as_ref(),
+            &mut runtime,
+        );
 
         assert_eq!(
             runtime.actions,
@@ -522,6 +540,7 @@ mod tests {
                 CritAddAction::StartMonitor {
                     port: 43210,
                     session_id: None,
+                    status: expected_status,
                 },
                 CritAddAction::DisplayReview {
                     url: args.url.clone(),

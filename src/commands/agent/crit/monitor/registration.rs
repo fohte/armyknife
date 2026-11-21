@@ -1,7 +1,6 @@
-use std::net::IpAddr;
-
 use anyhow::Result;
 
+use super::super::url::local_crit_ip;
 use super::status::{crit_status, session_for_port};
 
 pub(super) fn prepare_registration(port: u16, url: &str) -> (String, Option<serde_json::Value>) {
@@ -72,15 +71,7 @@ fn preview_mode_for_port(status: &serde_json::Value, port: u16) -> bool {
 }
 
 fn is_loopback_url(url: &reqwest::Url) -> bool {
-    url.host_str().is_some_and(|host| {
-        host.eq_ignore_ascii_case("localhost")
-            || host
-                .strip_prefix('[')
-                .and_then(|host| host.strip_suffix(']'))
-                .unwrap_or(host)
-                .parse::<IpAddr>()
-                .is_ok_and(|address| address.is_loopback())
-    })
+    url.host_str().and_then(local_crit_ip).is_some()
 }
 
 #[cfg(test)]
@@ -96,6 +87,7 @@ mod tests {
             "sessions": [{ "port": 43210, "args": ["preview", "sample.html"] }],
         })),
         "http://localhost:43210",
+        true,
         "http://localhost:43210/preview",
     )]
     #[case::preview_root_url_with_query(
@@ -104,6 +96,7 @@ mod tests {
             "sessions": [{ "port": 43210, "args": ["preview", "sample.html"] }],
         })),
         "http://localhost:43210/?token=fixture",
+        true,
         "http://localhost:43210/preview?token=fixture",
     )]
     #[case::non_preview_root_url(
@@ -112,6 +105,7 @@ mod tests {
             "sessions": [{ "port": 43210, "args": ["review", "sample.html"] }],
         })),
         "http://localhost:43210",
+        true,
         "http://localhost:43210",
     )]
     #[case::preview_pathful_url(
@@ -120,6 +114,7 @@ mod tests {
             "sessions": [{ "port": 43210, "args": ["preview", "sample.html"] }],
         })),
         "http://localhost:43210/review",
+        false,
         "http://localhost:43210/review",
     )]
     #[case::remote_root_url(
@@ -128,6 +123,7 @@ mod tests {
             "sessions": [{ "port": 43210, "args": ["preview", "sample.html"] }],
         })),
         "https://review.example.test:43210",
+        false,
         "https://review.example.test:43210",
     )]
     #[case::preview_on_another_port(
@@ -139,6 +135,7 @@ mod tests {
             ],
         })),
         "http://localhost:43210",
+        true,
         "http://localhost:43210",
     )]
     #[case::preview_default_http_port(
@@ -147,6 +144,7 @@ mod tests {
             "sessions": [{ "port": 80, "args": ["preview", "sample.html"] }],
         })),
         "http://localhost:80",
+        true,
         "http://localhost:80/preview",
     )]
     #[case::preview_ipv6_loopback_url(
@@ -155,23 +153,40 @@ mod tests {
             "sessions": [{ "port": 43210, "args": ["preview", "sample.html"] }],
         })),
         "http://[::1]:43210",
+        true,
         "http://[::1]:43210/preview",
+    )]
+    #[case::preview_localhost_subdomain(
+        43210,
+        Ok(serde_json::json!({
+            "sessions": [{ "port": 43210, "args": ["preview", "sample.html"] }],
+        })),
+        "http://design.localhost:43210",
+        true,
+        "http://design.localhost:43210/preview",
     )]
     #[case::status_unavailable(
         43210,
         Err(anyhow::anyhow!("fixture status error")),
         "http://localhost:43210",
+        false,
         "http://localhost:43210",
     )]
     fn registers_preview_path_only_for_local_preview_root_urls(
         #[case] port: u16,
         #[case] status: Result<serde_json::Value>,
         #[case] url: &str,
+        #[case] expect_status_snapshot: bool,
         #[case] expected: &str,
     ) {
+        let expected_status = if expect_status_snapshot {
+            status.as_ref().ok().cloned()
+        } else {
+            None
+        };
         assert_eq!(
-            prepare_registration_with_status(port, url, || status).0,
-            expected,
+            prepare_registration_with_status(port, url, || status),
+            (expected.to_string(), expected_status),
         );
     }
 }

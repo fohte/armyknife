@@ -73,11 +73,7 @@ pub(super) fn ensure_started_with_status(
     let session_id = session.map(|session| session.session_id.as_str());
 
     let result = (|| {
-        let pid = match status {
-            Some(status) => pid_for_port(status, port),
-            None => crit_pid_for_port(port)?,
-        }
-        .with_context(|| format!("crit status did not report a daemon on port {port}"))?;
+        let pid = monitor_pid_for_port(port, status, status::crit_status)?;
         let executable =
             std::env::current_exe().context("failed to resolve the armyknife executable")?;
         let mut args = vec![
@@ -111,6 +107,19 @@ pub(super) fn ensure_started_with_status(
         remove_marker_if_equals(&marker, &reservation);
     }
     result
+}
+
+fn monitor_pid_for_port(
+    port: u16,
+    status: Option<&serde_json::Value>,
+    read_status: impl FnOnce() -> Result<serde_json::Value>,
+) -> Result<u32> {
+    let pid = match status {
+        Some(status) => pid_for_port(status, port),
+        None => pid_for_port(&read_status()?, port),
+    }
+    .with_context(|| format!("crit status did not report a daemon on port {port}"))?;
+    Ok(pid)
 }
 
 pub(super) fn run(args: &MonitorArgs) -> Result<()> {
@@ -489,6 +498,23 @@ mod tests {
 
     use super::*;
     use crate::commands::agent::types::WebUiRegistration;
+
+    #[test]
+    fn uses_registered_status_snapshot_without_rereading() {
+        let status = serde_json::json!({
+            "sessions": [{ "port": 43210, "pid": 12345 }],
+        });
+        let status_reads = Cell::new(0);
+        let result = monitor_pid_for_port(43210, Some(&status), || {
+            status_reads.set(status_reads.get() + 1);
+            Ok(serde_json::json!({
+                "sessions": [{ "port": 43210, "pid": 54321 }],
+            }))
+        })
+        .map_err(|error| format!("{error:#}"));
+
+        assert_eq!((result, status_reads.get()), (Ok(12345), 0));
+    }
 
     #[test]
     fn dropping_a_crit_port_only_removes_its_registration() {
