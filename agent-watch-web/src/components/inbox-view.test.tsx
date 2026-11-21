@@ -262,6 +262,69 @@ it('filters each inbox section and updates the visible counts', () => {
   })
 })
 
+it('groups folded to-dos after Needs action and opens the first session', () => {
+  const onSelect = vi.fn<(id: string) => void>()
+  const progressSession = sessions.at(2)
+  if (progressSession === undefined) {
+    throw new Error('Expected an in-progress session')
+  }
+  renderInbox({
+    sessions: [
+      ...sessions,
+      {
+        ...progressSession,
+        id: 'folded-todo-session',
+        category: 'in_progress',
+        title: 'Review a phone alert',
+        todoLaterCount: 2,
+        todoLaterTitle: 'Check the alert sound',
+      },
+    ],
+    onSelect,
+  })
+
+  const row = requireElement(
+    container.querySelector<HTMLButtonElement>('.todo-later-row'),
+  )
+  act(() => {
+    row.click()
+  })
+
+  expect(readTodoLaterState(row, onSelect.mock.calls)).toEqual({
+    label: 'To-do later',
+    count: '2',
+    title: 'Check the alert sound',
+    afterNeedsAction: true,
+    progressTitles: ['Add request metrics'],
+    selection: [['folded-todo-session']],
+  })
+})
+
+function readTodoLaterState(row: HTMLButtonElement, selection: [string][]) {
+  const needsAction = requireElement(
+    container.querySelector('.needs-action-section'),
+  )
+  return {
+    label: row.querySelector('.todo-later-label')?.textContent,
+    count: row.querySelector('.todo-later-count')?.textContent,
+    title: row.querySelector('.todo-later-title')?.textContent,
+    afterNeedsAction:
+      (needsAction.compareDocumentPosition(row) &
+        Node.DOCUMENT_POSITION_FOLLOWING) !==
+      0,
+    progressTitles: Array.from(
+      container.querySelectorAll('.in-progress-section .session-title'),
+      (title) => title.textContent,
+    ),
+    selection,
+  }
+}
+
+function requireElement<T extends Element>(element: T | null): T {
+  if (element === null) throw new Error('Expected element was not rendered')
+  return element
+}
+
 it('labels the Starred session strip for assistive technology', () => {
   renderInbox({ isMobile: true })
 

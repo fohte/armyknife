@@ -80,6 +80,8 @@ export type Session = {
   isToday?: boolean
   decisionCount?: number
   unreviewedDecisionCount?: number
+  todoLaterCount?: number
+  todoLaterTitle?: string | null
 }
 
 export type SessionTreeNode = {
@@ -221,6 +223,8 @@ export type ChatItem =
       seq: number
       title: string
       detail: string | null
+      folded?: boolean
+      addedFolded?: boolean
       completed: boolean
       resolution: 'completed' | 'rejected' | 'withdrawn' | null
       comment: string | null

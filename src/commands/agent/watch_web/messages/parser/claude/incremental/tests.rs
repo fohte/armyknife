@@ -1263,6 +1263,8 @@ fn overlay_changes_render_the_cached_transcript_without_reingestion() {
         seq: 1,
         title: "Review the sample report".to_owned(),
         detail: None,
+        folded: false,
+        added_folded: false,
         created_at: DateTime::parse_from_rfc3339("2026-01-01T00:00:01.500Z")
             .unwrap()
             .with_timezone(&Utc),

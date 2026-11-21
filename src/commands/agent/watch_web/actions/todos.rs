@@ -18,11 +18,38 @@ pub(super) struct ResolveRequest {
     attachments: Vec<attachments::Request>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct FoldRequest {
+    folded: bool,
+}
+
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum UserTodoResolution {
     Completed,
     Rejected,
+}
+
+pub(super) async fn fold_todo(
+    State(state): State<ActionState>,
+    RoutePath((id, seq)): RoutePath<(String, i64)>,
+    Json(request): Json<FoldRequest>,
+) -> Result<Json<Success>, ApiError> {
+    let session = load_session(state.clone(), id).await?;
+    let configured_sessions_dir = state.sessions_dir;
+    let session_id = session.session_id;
+    let found = run_blocking(move || match configured_sessions_dir {
+        Some(sessions_dir) => {
+            store::set_agent_todo_folded_from(&sessions_dir, &session_id, seq, request.folded)
+        }
+        None => store::set_agent_todo_folded(&session_id, seq, request.folded),
+    })
+    .await?;
+    if !found {
+        return Err(ApiError::conflict("todo is not pending"));
+    }
+    Ok(Json(Success::new()))
 }
 
 pub(super) async fn resolve_todo(

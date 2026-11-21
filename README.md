@@ -615,13 +615,14 @@ $ a agent proposal withdraw 1 --comment "The decision is no longer needed."
 Withdrew proposal 1
 ```
 
-Run `a agent todo add` from a tracked Claude Code or Codex session and pipe a JSON object to stdin. The required field is `title`; `detail` is optional. A todo stays in the watch-web conversation after it is completed, rejected, or withdrawn, with its final state and optional comment. Use a proposal when the user should choose from options. The command prints `Recorded todo <seq>` after saving the todo. The user can complete or reject a todo in watch-web; an agent can withdraw a pending todo from its own session with `a agent todo withdraw <seq> [--comment <reason>]`. Withdrawal does not send a message to the session.
+Run `a agent todo add` from a tracked Claude Code or Codex session and pipe a JSON object to stdin. The required field is `title`; `detail` and `folded` are optional. Set `folded` to `true` when the user needs to check the task later; it starts folded and watch-web marks it as added folded. A todo stays in the watch-web conversation after it is completed, rejected, or withdrawn, with its final state and optional comment. Use a proposal when the user should choose from options. The command prints `Recorded todo <seq>` after saving the todo. The user can complete or reject a todo in watch-web; an agent can withdraw a pending todo from its own session with `a agent todo withdraw <seq> [--comment <reason>]`. Withdrawal does not send a message to the session.
 
 ```console
 $ cat <<'JSON' | a agent todo add
 {
   "title": "Check the mobile layout",
-  "detail": "Confirm the navigation fits on a narrow screen."
+  "detail": "Confirm the navigation fits on a narrow screen.",
+  "folded": true
 }
 JSON
 Recorded todo 1

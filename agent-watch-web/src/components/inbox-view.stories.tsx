@@ -222,8 +222,13 @@ const meta = {
   decorators: [
     (Story, context) => (
       <div
-        className="story-inbox-container"
+        className={
+          context.args.isMobile
+            ? 'story-inbox-container story-mobile-layout'
+            : 'story-inbox-container'
+        }
         data-layout={context.args.isMobile ? 'mobile' : 'desktop'}
+        style={context.args.isMobile ? { width: '100%' } : undefined}
       >
         <Story />
       </div>
@@ -241,6 +246,44 @@ export const InboxHasSessionsAcrossStatuses: Story = {
 export const InboxHasNoFilters: Story = {
   name: 'The inbox shows the filter shortcut before any filters are set',
   args: { filterQuery: '' },
+}
+
+export const InboxShowsFoldedTodosBelowNeedsAction: Story = {
+  name: 'The inbox groups folded to-dos below Needs action',
+  args: {
+    sessions: [
+      ...sessions,
+      sampleSession(
+        'sample-todo-later',
+        'in_progress',
+        'Check the alert on a phone',
+        {
+          todoLaterCount: 2,
+          todoLaterTitle: 'Check the alert on a phone',
+        },
+      ),
+    ],
+  },
+}
+
+export const InboxShowsFoldedTodosBelowNeedsActionOnPhone: Story = {
+  name: 'A phone shows the folded to-do row below Needs action',
+  args: {
+    isMobile: true,
+    sessions: [
+      ...sessions,
+      sampleSession(
+        'sample-todo-later',
+        'in_progress',
+        'Check the alert on a phone',
+        {
+          todoLaterCount: 2,
+          todoLaterTitle: 'Check the alert on a phone',
+        },
+      ),
+    ],
+  },
+  parameters: { viewport: { defaultViewport: 'mobile1' } },
 }
 
 export const InboxFiltersSessionsByProjectAndKind: Story = {

@@ -88,6 +88,7 @@ async fn todo_markdown_command_can_be_previewed_and_executed(action_context: Act
         "sample-session",
         "Review the output",
         Some(detail),
+        false,
     )
     .unwrap();
 

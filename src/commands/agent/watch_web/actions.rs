@@ -119,6 +119,7 @@ fn router_with_state(state: ActionState) -> Router {
             post(todos::resolve_todo)
                 .layer(DefaultBodyLimit::max(messages::MAX_MESSAGE_BODY_BYTES)),
         )
+        .route("/sessions/{id}/todos/{seq}/fold", post(todos::fold_todo))
         .route("/sessions/{id}/title", post(title::set_title))
         .route(
             "/sessions/{id}/answer",

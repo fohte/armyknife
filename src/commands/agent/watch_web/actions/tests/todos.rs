@@ -10,6 +10,92 @@ use crate::commands::agent::types::SessionStatus;
 
 #[rstest]
 #[tokio::test]
+async fn folds_a_pending_todo_without_erasing_its_added_folded_marker(
+    action_context: ActionContext,
+) {
+    action_context.save_session(&session("sample-session"));
+    store::add_agent_todo_in(
+        &action_context.temp_dir.path().join("sessions"),
+        "sample-session",
+        "Check the alert sound",
+        None,
+        true,
+    )
+    .unwrap();
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            "/sessions/sample-session/todos/1/fold",
+            json!({ "folded": false }),
+        ))
+        .await
+        .unwrap();
+    let todo = store::agent_todos_from(
+        &action_context.temp_dir.path().join("sessions"),
+        "sample-session",
+    )
+    .unwrap()
+    .into_iter()
+    .next()
+    .map(|todo| (todo.folded, todo.added_folded));
+
+    assert_eq!(
+        (response_snapshot(response, &action_context).await, todo),
+        (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [],
+            }),
+            Some((false, true)),
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn folding_a_completed_todo_returns_conflict(action_context: ActionContext) {
+    action_context.save_session(&session("sample-session"));
+    let sessions_dir = action_context.temp_dir.path().join("sessions");
+    let seq = store::add_agent_todo_in(
+        &sessions_dir,
+        "sample-session",
+        "Check the alert sound",
+        None,
+        false,
+    )
+    .unwrap();
+    store::resolve_agent_todo_from(
+        &sessions_dir,
+        "sample-session",
+        seq,
+        store::TodoResolution::Completed,
+        None,
+    )
+    .unwrap();
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            &format!("/sessions/sample-session/todos/{seq}/fold"),
+            json!({ "folded": true }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response_snapshot(response, &action_context).await,
+        json!({
+            "status": StatusCode::CONFLICT.as_u16(),
+            "body": { "error": "todo is not pending" },
+            "calls": [],
+        }),
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn completing_a_todo_notifies_the_session_before_persisting(action_context: ActionContext) {
     action_context.save_session(&session("sample-session"));
     store::add_agent_todo_in(
@@ -17,6 +103,7 @@ async fn completing_a_todo_notifies_the_session_before_persisting(action_context
         "sample-session",
         "Check the page",
         Some("Use a phone"),
+        false,
     )
     .unwrap();
 
@@ -87,6 +174,7 @@ async fn resolving_a_todo_saves_and_forwards_image_attachments(action_context: A
         "sample-session",
         "Check the page",
         None,
+        false,
     )
     .unwrap();
 
@@ -176,7 +264,14 @@ async fn completing_a_todo_for_an_ended_session_skips_notification(action_contex
     ended_session.status = SessionStatus::Ended;
     action_context.save_session(&ended_session);
     let sessions_dir = action_context.temp_dir.path().join("sessions");
-    store::add_agent_todo_in(&sessions_dir, "sample-session", "Check the page", None).unwrap();
+    store::add_agent_todo_in(
+        &sessions_dir,
+        "sample-session",
+        "Check the page",
+        None,
+        false,
+    )
+    .unwrap();
 
     let response = action_context
         .router()
@@ -222,7 +317,14 @@ async fn ended_session_rejects_todo_attachments(action_context: ActionContext) {
     ended_session.status = SessionStatus::Ended;
     action_context.save_session(&ended_session);
     let sessions_dir = action_context.temp_dir.path().join("sessions");
-    store::add_agent_todo_in(&sessions_dir, "sample-session", "Check the page", None).unwrap();
+    store::add_agent_todo_in(
+        &sessions_dir,
+        "sample-session",
+        "Check the page",
+        None,
+        false,
+    )
+    .unwrap();
 
     let response = action_context
         .router()
@@ -278,7 +380,14 @@ async fn rejecting_a_todo_notifies_the_session_and_persists_the_reason(
 ) {
     action_context.save_session(&session("sample-session"));
     let sessions_dir = action_context.temp_dir.path().join("sessions");
-    store::add_agent_todo_in(&sessions_dir, "sample-session", "Check the page", None).unwrap();
+    store::add_agent_todo_in(
+        &sessions_dir,
+        "sample-session",
+        "Check the page",
+        None,
+        false,
+    )
+    .unwrap();
 
     let response = action_context
         .router()
@@ -325,7 +434,14 @@ async fn rejecting_a_todo_notifies_the_session_and_persists_the_reason(
 async fn failed_session_notification_does_not_complete_the_todo(action_context: ActionContext) {
     action_context.save_session(&session("sample-session"));
     let sessions_dir = action_context.temp_dir.path().join("sessions");
-    store::add_agent_todo_in(&sessions_dir, "sample-session", "Check the page", None).unwrap();
+    store::add_agent_todo_in(
+        &sessions_dir,
+        "sample-session",
+        "Check the page",
+        None,
+        false,
+    )
+    .unwrap();
     action_context.set_message_error("peer notify failed");
 
     let response = action_context
@@ -399,7 +515,8 @@ async fn failed_session_notification_does_not_complete_the_todo(action_context: 
 async fn completed_todos_cannot_be_completed_again(action_context: ActionContext) {
     action_context.save_session(&session("sample-session"));
     let sessions_dir = action_context.temp_dir.path().join("sessions");
-    let seq = store::add_agent_todo_in(&sessions_dir, "sample-session", "Task", None).unwrap();
+    let seq =
+        store::add_agent_todo_in(&sessions_dir, "sample-session", "Task", None, false).unwrap();
     store::resolve_agent_todo_from(
         &sessions_dir,
         "sample-session",
@@ -435,7 +552,14 @@ async fn concurrent_todo_resolutions_notify_only_the_persisted_winner(
 ) {
     action_context.save_session(&session("sample-session"));
     let sessions_dir = action_context.temp_dir.path().join("sessions");
-    store::add_agent_todo_in(&sessions_dir, "sample-session", "Check the page", None).unwrap();
+    store::add_agent_todo_in(
+        &sessions_dir,
+        "sample-session",
+        "Check the page",
+        None,
+        false,
+    )
+    .unwrap();
     let router = action_context.router();
     let (message_started, release_message) = action_context.block_next_message();
     let first_router = router.clone();
