@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.843](https://github.com/fohte/armyknife/compare/v0.1.842...v0.1.843) (2026-11-21)
+
+
+### Bug Fixes
+
+* **worktree:** report worktree deletion conflicts ([#2078](https://github.com/fohte/armyknife/issues/2078)) ([c75e65b](https://github.com/fohte/armyknife/commit/c75e65b99344eb0a0e489764abc754d6db6347bc))
+
 ## [0.1.842](https://github.com/fohte/armyknife/compare/v0.1.841...v0.1.842) (2026-11-21)
 
 
