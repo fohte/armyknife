@@ -64,7 +64,7 @@ pub(crate) fn classify_merge_guard_status_for_repo(
     })
 }
 
-fn classify_merge_guard_status_with(
+pub(crate) fn classify_merge_guard_status_with(
     branch: String,
     status: MergeStatus,
     branch_has_commits_ahead: impl FnOnce(&str) -> Result<bool>,
@@ -78,11 +78,6 @@ fn classify_merge_guard_status_with(
         should_cleanup,
         empty_branch,
     }
-}
-
-#[cfg(test)]
-pub(crate) fn classify_merge_guard_status(branch: String, status: MergeStatus) -> MergeGuardStatus {
-    classify_merge_guard_status_with(branch, status, |_| Ok(true))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -179,13 +174,6 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
         notify_delegator_of_merge(&main_repo, branch, &worktree_path).await;
     }
 
-    let hook_ran = run_pre_delete_hook(
-        &main_repo,
-        branch_name.as_deref(),
-        &worktree_path_str,
-        skip_hooks,
-    );
-
     if !force
         && let Some(merge_guard_status) = merge_guard_status.as_ref()
         && merge_guard_status.empty_branch
@@ -193,7 +181,7 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
     {
         let stdin = io::stdin();
         let stdout = io::stdout();
-        let result = ensure_empty_branch_still_safe(
+        ensure_empty_branch_still_safe(
             branch,
             &merge_guard_status.status,
             unmerged_policy,
@@ -206,17 +194,15 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
                     || stdin.is_terminal(),
                 )
             },
-        );
-        if let Err(error) = result {
-            if hook_ran {
-                eprintln!(
-                    "note: the pre-worktree-delete hook already ran before this failure; \
-                     any process it stopped will not be restarted automatically"
-                );
-            }
-            return Err(error);
-        }
+        )?;
     }
+
+    let hook_ran = run_pre_delete_hook(
+        &main_repo,
+        branch_name.as_deref(),
+        &worktree_path_str,
+        skip_hooks,
+    );
 
     let result = cleanup::cleanup_worktree_by_name(
         &main_repo,
