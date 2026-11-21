@@ -81,12 +81,8 @@ export function webUiLinkTargetUrl(
     return null
   }
 
-  const basePath = match.registeredUrl.pathname.endsWith('/')
-    ? match.registeredUrl.pathname.slice(0, -1)
-    : match.registeredUrl.pathname
-  const targetBasePath = targetUrl.pathname.endsWith('/')
-    ? targetUrl.pathname.slice(0, -1)
-    : targetUrl.pathname
+  const basePath = normalizedPathname(match.registeredUrl.pathname)
+  const targetBasePath = normalizedPathname(targetUrl.pathname)
   const suffix = requestedUrl.pathname.slice(basePath.length)
   targetUrl.pathname = `${targetBasePath}${suffix}`
   const requestedKeys = new Set(requestedUrl.searchParams.keys())
