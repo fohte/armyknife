@@ -1290,6 +1290,89 @@ it('provides session links to cards through the conversation pane context', asyn
   })
 })
 
+it('posts a message when randomUUID is unavailable', async () => {
+  vi.stubGlobal('crypto', {
+    getRandomValues: (bytes: Uint8Array) => bytes.fill(0),
+  })
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(actions))
+    }
+    if (url.endsWith('/messages') && init?.method === 'POST') {
+      return Promise.resolve(
+        jsonResponse({
+          queuedPromptId: '00000000-0000-4000-8000-000000000000',
+        }),
+      )
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+
+  const composerReady = await waitForState(
+    () =>
+      container.querySelector<HTMLTextAreaElement>('textarea')?.disabled ===
+      false,
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Send without randomUUID')
+  act(() => {
+    dispatchKey(textarea, 'Enter')
+  })
+  const requestWasSent = await waitForState(() =>
+    fetcher.mock.calls.some(
+      ([input, init]) =>
+        requestUrl(input).endsWith('/messages') && init?.method === 'POST',
+    ),
+  )
+  const postRequest = fetcher.mock.calls
+    .filter(
+      ([input, init]) =>
+        requestUrl(input).endsWith('/messages') && init?.method === 'POST',
+    )
+    .map(([input, init]) => ({
+      url: requestUrl(input),
+      body: normalizeQueuedMessagePostBody(init?.body) ?? null,
+    }))
+  const snapshot = () => ({
+    composerReady,
+    requestWasSent,
+    postRequest,
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    composerReady: true,
+    requestWasSent: true,
+    postRequest: [
+      {
+        url: '/api/sessions/sample-session/messages',
+        body: JSON.stringify({
+          content: 'Send without randomUUID',
+          messageId: '<message-id>',
+        }),
+      },
+    ],
+    alert: null,
+  })
+})
+
 it('executes a bang command from a todo card in the conversation', async () => {
   const markdown = 'Check `! printf safe`.'
   const todo: ChatItem = {
