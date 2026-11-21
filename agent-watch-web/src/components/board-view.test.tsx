@@ -1,7 +1,12 @@
-import { act } from 'react'
+import { act, useEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { page } from 'vitest/browser'
 
+import {
+  AsyncActionFeedbackProvider,
+  useAsyncActionStarter,
+} from '#async-action-feedback'
 import { buildBoardProjects } from '#board-model'
 import { BoardView } from '#components/board-view'
 import type { Session } from '#types'
@@ -36,6 +41,7 @@ const completedSession: Session = {
 function renderBoard(
   sessions: Session[],
   onHideQuietProjectsChange: (checked: boolean) => void = () => undefined,
+  isMobile = false,
 ) {
   root = createRoot(container)
   act(() => {
@@ -45,12 +51,62 @@ function renderBoard(
         loaded
         error={null}
         hideQuietProjects={false}
+        isMobile={isMobile}
         onHideQuietProjectsChange={onHideQuietProjectsChange}
         onNewSession={() => undefined}
         onSelectSession={() => undefined}
       />,
     )
   })
+}
+
+function renderPhoneBoardWithActivity() {
+  function PhoneBoardWithActivity() {
+    const startAsyncAction = useAsyncActionStarter(() => undefined)
+
+    useEffect(() => {
+      startAsyncAction({
+        kind: 'merge',
+        sessionId: 'example-session',
+        sessionTitle: 'Example session',
+        pullRequestNumber: 42,
+        run: () => new Promise(() => undefined),
+      })
+    }, [startAsyncAction])
+
+    return (
+      <BoardView
+        projects={buildBoardProjects([completedSession])}
+        loaded
+        error={null}
+        hideQuietProjects={false}
+        isMobile
+        onHideQuietProjectsChange={() => undefined}
+        onNewSession={() => undefined}
+        onSelectSession={() => undefined}
+      />
+    )
+  }
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <PhoneBoardWithActivity />
+      </AsyncActionFeedbackProvider>,
+    )
+  })
+}
+
+function paginationSnapshot() {
+  return {
+    ariaHidden: container
+      .querySelector('.board-pagination-dots')
+      ?.getAttribute('aria-hidden'),
+    dots: Array.from(
+      container.querySelectorAll<HTMLElement>('.board-pagination-dot'),
+    ).map((dot) => dot.dataset['current']),
+  }
 }
 
 function snapshot() {
@@ -185,6 +241,47 @@ it('keeps the quiet-project control as a labeled native checkbox', () => {
   })
 })
 
+it('keeps the phone Board title and quiet-project control apart', async () => {
+  await page.viewport(375, 844)
+  try {
+    container.style.cssText = 'display: flex; width: 375px; height: 844px'
+    renderPhoneBoardWithActivity()
+
+    const title = container.querySelector<HTMLElement>('.board-header-title')
+    const quietToggle = container.querySelector<HTMLElement>(
+      '.board-quiet-toggle',
+    )
+    const activityButton = container.querySelector(
+      '.async-action-activity-button',
+    )
+    if (title === null || quietToggle === null || activityButton === null) {
+      throw new Error('Expected the phone Board heading and filter to render')
+    }
+
+    const titleRect = title.getBoundingClientRect()
+    const quietToggleRect = quietToggle.getBoundingClientRect()
+    const headingRect = title.querySelector('h1')?.getBoundingClientRect()
+    if (headingRect === undefined) {
+      throw new Error('Expected the phone Board title to render')
+    }
+
+    const layoutSnapshot = () => ({
+      headingAndFilterDoNotOverlap:
+        headingRect.right <= quietToggleRect.left ||
+        headingRect.bottom <= quietToggleRect.top ||
+        quietToggleRect.right <= headingRect.left ||
+        quietToggleRect.bottom <= headingRect.top,
+      filterWrapsBelowTitle: quietToggleRect.top >= titleRect.bottom,
+    })
+    expect(layoutSnapshot()).toEqual({
+      headingAndFilterDoNotOverlap: true,
+      filterWrapsBelowTitle: true,
+    })
+  } finally {
+    await page.viewport(1280, 800)
+  }
+})
+
 it('shows the primary task and the count of other linked tasks on a card', () => {
   renderBoard([
     {
@@ -241,6 +338,56 @@ it('shows the task placeholder on cards without an assigned task', () => {
     repo: container.querySelector('.board-card .session-repo')?.textContent,
   })
   expect(rowSnapshot()).toEqual({ task: '— No task', repo: 'example/service' })
+})
+
+it('shows one active page dot for a single phone project', () => {
+  renderBoard([completedSession], undefined, true)
+
+  expect(paginationSnapshot()).toEqual({
+    ariaHidden: 'true',
+    dots: ['true'],
+  })
+})
+
+it('updates the active page dot as phone projects scroll', () => {
+  renderBoard(
+    [
+      { ...completedSession, id: 'first-project', project: 'first project' },
+      { ...completedSession, id: 'second-project', project: 'second project' },
+    ],
+    undefined,
+    true,
+  )
+
+  const scroller = container.querySelector<HTMLElement>(
+    '.board-projects-scroll',
+  )
+  const columns = Array.from(
+    container.querySelectorAll<HTMLElement>('.board-project'),
+  )
+  if (scroller === null || columns.length !== 2) {
+    throw new Error('Expected two phone project columns')
+  }
+
+  Object.defineProperties(scroller, {
+    clientWidth: { configurable: true, value: 390 },
+    scrollLeft: { configurable: true, value: 310 },
+  })
+  const scrollerRect = new DOMRect(0, 0, 390, 844)
+  vi.spyOn(scroller, 'getBoundingClientRect').mockReturnValue(scrollerRect)
+  columns.forEach((column, index) => {
+    vi.spyOn(column, 'getBoundingClientRect').mockReturnValue(
+      new DOMRect(index === 0 ? -294 : 16, 0, 300, 700),
+    )
+  })
+  act(() => {
+    scroller.dispatchEvent(new Event('scroll'))
+  })
+
+  expect(paginationSnapshot()).toEqual({
+    ariaHidden: 'true',
+    dots: ['false', 'true'],
+  })
 })
 
 it('keeps the overflow hint at the visible edge while projects are scrolled', async () => {
