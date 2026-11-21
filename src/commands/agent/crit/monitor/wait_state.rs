@@ -85,8 +85,16 @@ pub(super) fn set_crit_wait_state(port: u16, waiting: Option<bool>) -> Result<()
     set_crit_wait_state_in(&store::sessions_dir()?, port, waiting)
 }
 
-pub(super) fn reconcile_registered_session(port: u16, session_id: &str) -> Result<()> {
-    let waiting = match super::daemon_status::crit_pid_for_port(port)
+pub(super) fn reconcile_registered_session(
+    port: u16,
+    session_id: &str,
+    status: Option<&serde_json::Value>,
+) -> Result<()> {
+    let crit_pid = match status {
+        Some(status) => Ok(super::status::pid_for_port(status, port)),
+        None => super::status::crit_pid_for_port(port),
+    };
+    let waiting = match crit_pid
         .and_then(|pid| {
             pid.with_context(|| format!("crit status did not report a daemon on port {port}"))
         })

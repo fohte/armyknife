@@ -16,6 +16,7 @@ pub(super) const MAX_ATTACHMENTS_PER_MESSAGE: usize = 16;
 const MAX_STORAGE_BYTES: u64 = 1024 * 1024 * 1024;
 const STORAGE_FILE_OVERHEAD_BYTES: u64 = 64 * 1024;
 const ATTACHMENT_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+const ATTACHMENT_PATHS_HEADING: &str = "Attached file(s):";
 static STORAGE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[derive(Debug, Deserialize)]
@@ -248,13 +249,38 @@ pub(super) fn append_paths_to_message(content: String, attachment_paths: &[PathB
             indoc::indoc! {"
                 {}
 
-                Attached file(s):
                 {}
             "},
-            content, paths
+            content,
+            format!("{ATTACHMENT_PATHS_HEADING}\n{paths}")
         )
         .trim_end()
         .to_string()
+    }
+}
+
+pub(super) fn strip_attachment_paths(content: &str) -> &str {
+    let Some((message_with_separator, paths_with_separator)) =
+        content.rsplit_once(ATTACHMENT_PATHS_HEADING)
+    else {
+        return content;
+    };
+    let Some(message) = message_with_separator
+        .strip_suffix('\n')
+        .and_then(|message| message.strip_suffix('\n'))
+    else {
+        return content;
+    };
+    let Some(paths) = paths_with_separator.strip_prefix('\n') else {
+        return content;
+    };
+    let mut lines = paths.lines();
+    if lines.next().is_some_and(|line| line.starts_with("- "))
+        && lines.all(|line| line.starts_with("- "))
+    {
+        message
+    } else {
+        content
     }
 }
 

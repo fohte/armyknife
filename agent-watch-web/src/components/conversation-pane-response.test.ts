@@ -1,6 +1,9 @@
 import { expect, it } from 'vitest'
 
-import { isConversationResponse } from '#components/conversation-pane-response'
+import {
+  isConversationResponse,
+  isSessionTreeResponse,
+} from '#components/conversation-pane-response'
 
 const response = (message: unknown) => ({
   messages: [message],
@@ -78,6 +81,42 @@ it.each([
       hasUnansweredProposal: false,
       activeQuestionIndex: null,
       vibeMode,
+    }),
+  ).toEqual(expected)
+})
+
+it.each([
+  {
+    name: 'a tree node with vibe mode',
+    vibeMode: { mode: 'enabled' },
+    expected: true,
+  },
+  {
+    name: 'a tree node without vibe mode',
+    vibeMode: undefined,
+    expected: false,
+  },
+])('validates $name', ({ vibeMode, expected }) => {
+  expect(
+    isSessionTreeResponse({
+      revision: 7,
+      sessions: [
+        {
+          id: 'fixture-session',
+          parentId: null,
+          category: 'in_progress',
+          isActive: true,
+          kind: null,
+          title: 'Fixture session',
+          preview: null,
+          elapsedSeconds: 0,
+          task: null,
+          repo: 'sample/repo',
+          ...(vibeMode === undefined ? {} : { vibeMode }),
+          decisionCount: 0,
+          pullRequest: null,
+        },
+      ],
     }),
   ).toEqual(expected)
 })

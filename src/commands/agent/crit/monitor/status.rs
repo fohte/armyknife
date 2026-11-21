@@ -1,15 +1,19 @@
 use std::time::Duration;
 
+use anyhow::{Context, Result, bail};
+
 use crate::infra::external_tool::ExternalTool;
 use crate::infra::process;
-use anyhow::{Context, Result, bail};
 
 pub(super) fn crit_pid_for_port(port: u16) -> Result<Option<u32>> {
     let status = crit_status()?;
     Ok(pid_for_port(&status, port))
 }
 
-fn pid_for_port(status: &serde_json::Value, port: u16) -> Option<u32> {
+pub(super) fn session_for_port(
+    status: &serde_json::Value,
+    port: u16,
+) -> Option<&serde_json::Value> {
     status
         .get("sessions")
         .and_then(serde_json::Value::as_array)
@@ -18,11 +22,15 @@ fn pid_for_port(status: &serde_json::Value, port: u16) -> Option<u32> {
         .find(|session| {
             session.get("port").and_then(serde_json::Value::as_u64) == Some(port.into())
         })
+}
+
+pub(super) fn pid_for_port(status: &serde_json::Value, port: u16) -> Option<u32> {
+    session_for_port(status, port)
         .and_then(|session| session.get("pid").and_then(serde_json::Value::as_u64))
         .and_then(|pid| u32::try_from(pid).ok())
 }
 
-fn crit_status() -> Result<serde_json::Value> {
+pub(super) fn crit_status() -> Result<serde_json::Value> {
     let mut command = ExternalTool::Crit.command();
     command.args(["status", "--json"]);
     let output = process::run_with_timeout(command, Duration::from_secs(5))

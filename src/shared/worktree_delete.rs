@@ -2,14 +2,16 @@ use anyhow::{Context, Result, bail};
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
-use crate::infra::git::{GitRepo, MergeStatus, get_merge_status_for_repo, get_repo_root};
+use crate::infra::git::{
+    GitRepo, MergeStatus, get_main_branch_for_repo, get_merge_status_for_repo, get_repo_root,
+};
 use crate::shared::cleanup;
 use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
 use crate::shared::merge_notify::notify_delegator_of_merge;
 use crate::shared::worktree::{
     branch_to_worktree_name, ensure_clean_for_deletion, find_worktree_name, get_main_repo,
-    get_worktree_branch,
+    get_worktree_branch, get_worktree_branch_checked,
 };
 use crate::shared::worktree_error::WmError;
 
@@ -154,11 +156,20 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
         skip_hooks,
     );
 
-    let result = cleanup::cleanup_worktree_by_name(
+    let result = cleanup::cleanup_worktree_by_name_with_before_delete(
         &main_repo,
         &worktree_name,
         &worktree_path,
         force,
+        || {
+            ensure_worktree_delete_plan_before_delete(
+                merge_status.as_ref(),
+                force,
+                branch_name.as_deref(),
+                || get_worktree_branch_checked(&main_repo, &worktree_name),
+                |branch| branch_has_no_unique_commits(&main_repo, branch),
+            )
+        },
         || {
             if !skip_hooks {
                 hooks::spawn_post_worktree_delete_hook(
@@ -297,7 +308,148 @@ async fn check_merge_status(
 }
 
 pub(crate) async fn get_merge_status_for_branch(repo: &GitRepo, branch: &str) -> MergeStatus {
-    get_merge_status_for_repo(repo, branch).await
+    let status = get_merge_status_for_repo(repo, branch).await;
+    close_status_for_branch(repo, branch, status)
+}
+
+pub(crate) async fn get_merge_status_for_branch_from_local_refs(
+    repo: &GitRepo,
+    branch: &str,
+) -> MergeStatus {
+    let status = get_merge_status_for_repo(repo, branch).await;
+    let repo_for_default_branch = repo.clone();
+    let repo_for_ancestry = repo.clone();
+    close_status_for_branch_from_local_refs_with(
+        status,
+        branch.to_string(),
+        move || get_main_branch_for_repo(&repo_for_default_branch).ok(),
+        move |ancestor, descendant| repo_for_ancestry.is_ancestor(ancestor, descendant),
+    )
+    .await
+}
+
+fn close_status_for_branch(repo: &GitRepo, branch: &str, status: MergeStatus) -> MergeStatus {
+    if !matches!(&status, MergeStatus::NotMerged { .. }) {
+        return status;
+    }
+
+    let refreshed = repo.fetch_origin_prune().is_ok();
+    let default_branch = refreshed
+        .then(|| get_main_branch_for_repo(repo).ok())
+        .flatten();
+    close_status_for_branch_with(
+        status,
+        branch,
+        default_branch.as_deref(),
+        |ancestor, descendant| repo.is_ancestor(ancestor, descendant),
+    )
+}
+
+async fn close_status_for_branch_from_local_refs_with(
+    status: MergeStatus,
+    branch: String,
+    get_default_branch: impl FnOnce() -> Option<String> + Send + 'static,
+    is_ancestor: impl FnOnce(&str, &str) -> bool + Send + 'static,
+) -> MergeStatus {
+    if !matches!(&status, MergeStatus::NotMerged { .. }) {
+        return status;
+    }
+
+    let fallback_status = status.clone();
+    tokio::task::spawn_blocking(move || {
+        let default_branch = get_default_branch();
+        close_status_for_branch_with(status, &branch, default_branch.as_deref(), is_ancestor)
+    })
+    .await
+    .unwrap_or(fallback_status)
+}
+
+fn close_status_for_branch_with(
+    status: MergeStatus,
+    branch: &str,
+    default_branch: Option<&str>,
+    is_ancestor: impl FnOnce(&str, &str) -> bool,
+) -> MergeStatus {
+    if !matches!(&status, MergeStatus::NotMerged { .. })
+        || !branch_has_no_unique_commits_with(branch, default_branch, is_ancestor)
+    {
+        return status;
+    }
+
+    MergeStatus::NoUniqueCommits {
+        reason: "No commits unique to branch".to_string(),
+    }
+}
+
+fn branch_has_no_unique_commits(repo: &GitRepo, branch: &str) -> bool {
+    let refreshed = repo.fetch_origin_prune().is_ok();
+    let default_branch = refreshed
+        .then(|| get_main_branch_for_repo(repo).ok())
+        .flatten();
+    branch_has_no_unique_commits_with(branch, default_branch.as_deref(), |ancestor, descendant| {
+        repo.is_ancestor(ancestor, descendant)
+    })
+}
+
+fn ensure_worktree_delete_plan_before_delete(
+    status: Option<&MergeStatus>,
+    force: bool,
+    planned_branch: Option<&str>,
+    current_branch: impl FnOnce() -> Result<Option<String>>,
+    verify_still_safe: impl FnOnce(&str) -> bool,
+) -> Result<()> {
+    let current_branch =
+        current_branch().context("Could not inspect worktree branch before deletion")?;
+    if planned_branch != current_branch.as_deref() {
+        bail!(
+            "Worktree branch changed from `{}` to `{}` before deletion; retry close to check the current branch",
+            planned_branch.unwrap_or("detached"),
+            current_branch.as_deref().unwrap_or("detached"),
+        );
+    }
+
+    ensure_branch_no_unique_commits_before_delete(status, force, planned_branch, verify_still_safe)
+}
+
+fn ensure_branch_no_unique_commits_before_delete(
+    status: Option<&MergeStatus>,
+    force: bool,
+    branch: Option<&str>,
+    verify_still_safe: impl FnOnce(&str) -> bool,
+) -> Result<()> {
+    if force || !matches!(status, Some(MergeStatus::NoUniqueCommits { .. })) {
+        return Ok(());
+    }
+
+    let Some(branch) = branch else {
+        return Err(UnmergedWorktreeError::new(
+            "unknown",
+            "branch could not be checked again before deletion",
+        )
+        .into());
+    };
+    if verify_still_safe(branch) {
+        return Ok(());
+    }
+
+    Err(UnmergedWorktreeError::new(
+        branch,
+        "branch could not be verified as part of the origin default branch before deletion",
+    )
+    .into())
+}
+
+fn branch_has_no_unique_commits_with(
+    branch: &str,
+    default_branch: Option<&str>,
+    is_ancestor: impl FnOnce(&str, &str) -> bool,
+) -> bool {
+    let Some(default_branch) = default_branch else {
+        return false;
+    };
+    let branch_ref = format!("refs/heads/{branch}");
+    let default_branch_ref = format!("refs/remotes/origin/{default_branch}");
+    is_ancestor(&branch_ref, &default_branch_ref)
 }
 
 async fn inspect_merge_guard_status_with<F, G, Fut>(
@@ -428,6 +580,217 @@ mod tests {
 
     use super::*;
     use crate::shared::testing::TestRepo;
+    use crate::shared::worktree::delete_worktree_if_clean;
+
+    #[rstest]
+    #[case::no_pr_without_unique_commits(
+        MergeStatus::NotMerged { reason: "No PR found".to_string() },
+        Some("main"),
+        true,
+        MergeStatus::NoUniqueCommits { reason: "No commits unique to branch".to_string() },
+    )]
+    #[case::open_pr_without_unique_commits(
+        MergeStatus::NotMerged { reason: "pull request is open".to_string() },
+        Some("main"),
+        true,
+        MergeStatus::NoUniqueCommits { reason: "No commits unique to branch".to_string() },
+    )]
+    #[case::branch_has_unique_commits(
+        MergeStatus::NotMerged { reason: "No PR found".to_string() },
+        Some("main"),
+        false,
+        MergeStatus::NotMerged { reason: "No PR found".to_string() },
+    )]
+    #[case::default_branch_missing(
+        MergeStatus::NotMerged { reason: "No PR found".to_string() },
+        None,
+        true,
+        MergeStatus::NotMerged { reason: "No PR found".to_string() },
+    )]
+    fn close_status_uses_origin_ancestry(
+        #[case] status: MergeStatus,
+        #[case] default_branch: Option<&str>,
+        #[case] is_ancestor: bool,
+        #[case] expected: MergeStatus,
+    ) {
+        assert_eq!(
+            close_status_for_branch_with(status, "agent-branch", default_branch, |_, _| {
+                is_ancestor
+            },),
+            expected,
+        );
+    }
+
+    #[tokio::test]
+    async fn close_status_checks_local_origin_ancestry_on_a_blocking_worker() {
+        let caller_thread = std::thread::current().id();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let status = close_status_for_branch_from_local_refs_with(
+            MergeStatus::NotMerged {
+                reason: "No PR found".to_string(),
+            },
+            "agent-branch".to_string(),
+            || Some("main".to_string()),
+            move |ancestor, descendant| {
+                sender
+                    .send((
+                        std::thread::current().id(),
+                        ancestor.to_string(),
+                        descendant.to_string(),
+                    ))
+                    .expect("send ancestry inputs");
+                true
+            },
+        )
+        .await;
+        let observed_ancestry =
+            receiver
+                .try_recv()
+                .ok()
+                .map(|(worker_thread, ancestor, descendant)| {
+                    (worker_thread != caller_thread, ancestor, descendant)
+                });
+
+        assert_eq!(
+            (status, observed_ancestry),
+            (
+                MergeStatus::NoUniqueCommits {
+                    reason: "No commits unique to branch".to_string(),
+                },
+                Some((
+                    true,
+                    "refs/heads/agent-branch".to_string(),
+                    "refs/remotes/origin/main".to_string(),
+                )),
+            ),
+        );
+    }
+
+    #[test]
+    fn close_status_checks_the_branch_against_the_refreshed_default_branch() {
+        let mut compared_refs = None;
+        let status = close_status_for_branch_with(
+            MergeStatus::NotMerged {
+                reason: "pull request is open".to_string(),
+            },
+            "agent-branch",
+            Some("main"),
+            |ancestor, descendant| {
+                compared_refs = Some((ancestor.to_string(), descendant.to_string()));
+                true
+            },
+        );
+
+        assert_eq!(
+            (status, compared_refs),
+            (
+                MergeStatus::NoUniqueCommits {
+                    reason: "No commits unique to branch".to_string(),
+                },
+                Some((
+                    "refs/heads/agent-branch".to_string(),
+                    "refs/remotes/origin/main".to_string(),
+                )),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::unchanged_branch(
+        Some("agent-branch"),
+        Ok(Some("agent-branch".to_string())),
+        Ok(()),
+        true,
+    )]
+    #[case::changed_branch_with_force(
+        Some("agent-branch"),
+        Ok(Some("replacement-branch".to_string())),
+        Err("Worktree branch changed from `agent-branch` to `replacement-branch` before deletion; retry close to check the current branch".to_string()),
+        false,
+    )]
+    #[case::branch_inspection_failure(
+        Some("agent-branch"),
+        Err("git worktree list failed".to_string()),
+        Err("Could not inspect worktree branch before deletion".to_string()),
+        false,
+    )]
+    fn close_checks_the_branch_before_cleanup(
+        #[case] planned_branch: Option<&str>,
+        #[case] current_branch: std::result::Result<Option<String>, String>,
+        #[case] expected: std::result::Result<(), String>,
+        #[case] expected_deleted: bool,
+    ) {
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let mut deleted = false;
+        let result = delete_worktree_if_clean(
+            temp_dir.path(),
+            true,
+            || {
+                ensure_worktree_delete_plan_before_delete(
+                    Some(&MergeStatus::NoUniqueCommits {
+                        reason: "No commits unique to branch".to_string(),
+                    }),
+                    true,
+                    planned_branch,
+                    || current_branch.map_err(anyhow::Error::msg),
+                    |_| false,
+                )
+            },
+            || {
+                deleted = true;
+                Ok(true)
+            },
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string());
+
+        assert_eq!((result, deleted), (expected, expected_deleted));
+    }
+
+    #[rstest]
+    #[case::branch_remains_safe(
+        Some(MergeStatus::NoUniqueCommits { reason: "No commits unique to branch".to_string() }),
+        false,
+        Some("agent-branch"),
+        true,
+        Ok(()),
+    )]
+    #[case::branch_gains_unique_commit(
+        Some(MergeStatus::NoUniqueCommits { reason: "No commits unique to branch".to_string() }),
+        false,
+        Some("agent-branch"),
+        false,
+        Err("Branch `agent-branch` is not merged (branch could not be verified as part of the origin default branch before deletion); close the session while keeping its worktree to continue".to_string()),
+    )]
+    #[case::other_unmerged_status(
+        Some(MergeStatus::NotMerged { reason: "pull request is open".to_string() }),
+        false,
+        Some("agent-branch"),
+        false,
+        Ok(()),
+    )]
+    #[case::force_bypasses_revalidation(
+        Some(MergeStatus::NoUniqueCommits { reason: "No commits unique to branch".to_string() }),
+        true,
+        Some("agent-branch"),
+        false,
+        Ok(()),
+    )]
+    fn close_revalidates_no_unique_commit_status_before_deletion(
+        #[case] status: Option<MergeStatus>,
+        #[case] force: bool,
+        #[case] branch: Option<&str>,
+        #[case] still_safe: bool,
+        #[case] expected: std::result::Result<(), String>,
+    ) {
+        let result =
+            ensure_branch_no_unique_commits_before_delete(status.as_ref(), force, branch, |_| {
+                still_safe
+            })
+            .map_err(|error| error.to_string());
+
+        assert_eq!(result, expected);
+    }
 
     #[tokio::test]
     async fn check_merge_status_uses_the_selected_repository_branch() {

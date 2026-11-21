@@ -2,7 +2,6 @@ import '#components/card-comment.css'
 import '#components/proposal-card.css'
 
 import { Button } from '@fohte/ui/button'
-import type { ClipboardEvent } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
@@ -10,10 +9,12 @@ import {
   handleAttachmentPaste,
 } from '#components/attachment-preview-list'
 import { numberShortcutChoice } from '#components/conversation-keyboard'
+import { FileDropIndicator } from '#components/file-drop-indicator'
 import { MarkdownMessage } from '#components/markdown-message'
 import type { EncodedAttachment } from '#components/use-attachments'
 import { useAttachments } from '#components/use-attachments'
 import { cardDraftStorageKey, useDraft } from '#components/use-composer-draft'
+import { useFileDrop } from '#components/use-file-drop'
 import type { ProposalAnswer, ProposalOption } from '#types'
 
 type ProposalCardProps = {
@@ -88,6 +89,11 @@ export function ProposalCard({
   const isWithdrawn = resolution === 'withdrawn'
   const isAnswered = latestAnswer !== null || resolved || isWithdrawn
   const isDisabled = isAnswered || isSubmitting
+  const { isFileDragActive, ...fileDropHandlers } = useFileDrop(
+    attachmentState.onPasteFiles,
+    !isDisabled,
+    true,
+  )
 
   useEffect(() => {
     if (answer !== null || resolved || isWithdrawn) {
@@ -306,19 +312,23 @@ export function ProposalCard({
           >
             Comment (optional)
           </label>
-          <textarea
-            id={`proposal-comment-${String(seq)}`}
-            className="chat-card-comment chat-proposal-comment"
-            rows={2}
-            value={comment}
-            disabled={isAnswered || isSubmitting}
-            onPaste={(event: ClipboardEvent<HTMLTextAreaElement>) => {
-              handleAttachmentPaste(event, attachmentState.onPasteFiles)
-            }}
-            onChange={(event) => {
-              updateDraft(event.currentTarget.value)
-            }}
-          />
+          <div className="chat-card-comment-drop-zone">
+            {isFileDragActive ? <FileDropIndicator /> : null}
+            <textarea
+              id={`proposal-comment-${String(seq)}`}
+              className="chat-card-comment chat-proposal-comment"
+              rows={2}
+              value={comment}
+              disabled={isDisabled}
+              onPaste={(event) => {
+                handleAttachmentPaste(event, attachmentState.onPasteFiles)
+              }}
+              {...fileDropHandlers}
+              onChange={(event) => {
+                updateDraft(event.currentTarget.value)
+              }}
+            />
+          </div>
         </>
       )}
       {!isAnswered &&

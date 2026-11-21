@@ -84,6 +84,32 @@ async function pasteImage(textarea: HTMLTextAreaElement, file: File) {
   })
 }
 
+async function dropImage(textarea: HTMLTextAreaElement, file: File) {
+  const event = new Event('drop', { bubbles: true, cancelable: true })
+  Object.defineProperty(event, 'dataTransfer', {
+    value: { types: ['Files'], files: [file], dropEffect: 'none' },
+  })
+  await act(async () => {
+    textarea.dispatchEvent(event)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  })
+  return event
+}
+
+function dispatchFileDragEvent(
+  textarea: HTMLTextAreaElement,
+  type: 'dragenter' | 'dragleave',
+) {
+  const event = new Event(type, { bubbles: true, cancelable: true })
+  Object.defineProperty(event, 'dataTransfer', {
+    value: { types: ['Files'], files: [] },
+  })
+  act(() => {
+    textarea.dispatchEvent(event)
+  })
+  return event
+}
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   onSelectSession.mockReset()
@@ -131,6 +157,35 @@ it('shows a pending task with optional detail and a completion action', () => {
       { text: 'Mark done', disabled: false },
       { text: 'Reject', disabled: false },
     ],
+  })
+})
+
+it('shows the comment drop target while files are dragged over the comment', () => {
+  renderCard(props())
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+
+  const dragEnter = dispatchFileDragEvent(textarea, 'dragenter')
+  const targetAfterEnter =
+    container.querySelector('.chat-card-comment-drop-zone .file-drop-indicator')
+      ?.textContent ?? null
+  const dragLeave = dispatchFileDragEvent(textarea, 'dragleave')
+  const targetAfterLeave =
+    container.querySelector('.chat-card-comment-drop-zone .file-drop-indicator')
+      ?.textContent ?? null
+
+  const snapshot = () => ({
+    dragEnterPrevented: dragEnter.defaultPrevented,
+    dragLeavePrevented: dragLeave.defaultPrevented,
+    targetAfterEnter,
+    targetAfterLeave,
+  })
+  expect(snapshot()).toEqual({
+    dragEnterPrevented: true,
+    dragLeavePrevented: false,
+    targetAfterEnter: 'Drop files to attach',
+    targetAfterLeave: null,
   })
 })
 
@@ -492,6 +547,92 @@ it('previews and sends an image pasted into the task comment', async () => {
       },
     ],
     completedPreview: 'blob:todo-image',
+  })
+})
+
+it('attaches dropped images to the task comment without bubbling to the conversation', async () => {
+  renderCard(props())
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+  const conversationDrop = vi.fn()
+  document.body.addEventListener('drop', conversationDrop)
+  const drop = await dropImage(
+    comment,
+    new File(['image'], 'dropped.png', { type: 'image/png' }),
+  )
+  document.body.removeEventListener('drop', conversationDrop)
+
+  const snapshot = () => ({
+    dropPrevented: drop.defaultPrevented,
+    conversationDropCalls: conversationDrop.mock.calls,
+    attachmentNames: Array.from(
+      container.querySelectorAll('.attachment-preview-item span'),
+      (element) => element.textContent,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    dropPrevented: true,
+    conversationDropCalls: [],
+    attachmentNames: ['dropped.png'],
+  })
+})
+
+it('lets the conversation handle drops while the task is submitting', async () => {
+  let resolveTodo: (succeeded: boolean) => void = () => undefined
+  const todoResult = new Promise<boolean>((resolve) => {
+    resolveTodo = resolve
+  })
+  let notifyTodoCalled: () => void = () => undefined
+  const todoCalled = new Promise<void>((resolve) => {
+    notifyTodoCalled = resolve
+  })
+  const onResolve = vi.fn<Props['onResolve']>(() => {
+    notifyTodoCalled()
+    return todoResult
+  })
+  renderCard(props({ onResolve }))
+  const resolveButton = requireElement(
+    container.querySelector<HTMLButtonElement>('.chat-todo-footer button'),
+  )
+  await act(async () => {
+    resolveButton.click()
+    await todoCalled
+  })
+
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+  const dragEnter = dispatchFileDragEvent(comment, 'dragenter')
+  const indicatorDuringSubmit =
+    container.querySelector('.chat-card-comment-drop-zone .file-drop-indicator')
+      ?.textContent ?? null
+  const conversationDrops: string[] = []
+  const onConversationDrop = () => conversationDrops.push('drop')
+  document.body.addEventListener('drop', onConversationDrop)
+  const drop = await dropImage(
+    comment,
+    new File(['image'], 'dropped.png', { type: 'image/png' }),
+  )
+  document.body.removeEventListener('drop', onConversationDrop)
+  await act(async () => {
+    resolveTodo(true)
+    await todoResult
+  })
+
+  const snapshot = () => ({
+    commentDisabled: comment.disabled,
+    dragEnterPrevented: dragEnter.defaultPrevented,
+    indicatorDuringSubmit,
+    dropPrevented: drop.defaultPrevented,
+    conversationDrops,
+  })
+  expect(snapshot()).toEqual({
+    commentDisabled: true,
+    dragEnterPrevented: false,
+    indicatorDuringSubmit: null,
+    dropPrevented: false,
+    conversationDrops: ['drop'],
   })
 })
 

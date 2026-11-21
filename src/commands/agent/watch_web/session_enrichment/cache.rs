@@ -79,6 +79,7 @@ fn prune_unlinked_task_metadata(
         cached.updated_at.remove(task_id);
         cached.priority_order.remove(task_id);
         cached.task_projects.remove(task_id);
+        cached.github_links.remove(task_id);
     }
 }
 
@@ -117,6 +118,11 @@ fn merge_refreshed_task_metadata(
                 .insert(task_id.clone(), project.clone());
         } else {
             cached.task_projects.remove(task_id);
+        }
+        if let Some(links) = refreshed.github_links.get(task_id) {
+            cached.github_links.insert(task_id.clone(), links.clone());
+        } else {
+            cached.github_links.remove(task_id);
         }
     }
 
@@ -275,7 +281,7 @@ mod tests {
             Box::pin(async move { Ok(metadata_with_task_details(session_ids)) })
         });
         let pull_request_fetcher: PullRequestFetcher =
-            Arc::new(|_| Box::pin(async { Ok(HashMap::new()) }));
+            Arc::new(|_, _| Box::pin(async { Ok(HashMap::new()) }));
         let cache = cache_with_fetchers(updates, FETCH_TIMEOUT, task_fetcher, pull_request_fetcher);
         let session_a = session("session-a", None);
         let session_b = session("session-b", None);
@@ -335,11 +341,12 @@ mod tests {
                         ("deferred".to_string(), 2),
                     ]),
                     task_projects: HashMap::new(),
+                    github_links: HashMap::new(),
                 })
             })
         });
         let pull_request_fetcher: PullRequestFetcher =
-            Arc::new(|_| Box::pin(async { Ok(HashMap::new()) }));
+            Arc::new(|_, _| Box::pin(async { Ok(HashMap::new()) }));
         let cache = cache_with_fetchers(updates, FETCH_TIMEOUT, task_fetcher, pull_request_fetcher);
         let session = session("session-a", None);
 
@@ -369,6 +376,7 @@ mod tests {
                     ("deferred".to_string(), 2),
                 ]),
                 task_projects: HashMap::new(),
+                github_links: HashMap::new(),
             },
         );
     }
@@ -379,7 +387,7 @@ mod tests {
         updates_and_receiver: (EnrichmentUpdates, watch::Receiver<()>),
     ) {
         let (updates, mut receiver) = updates_and_receiver;
-        let pull_request_fetcher: PullRequestFetcher = Arc::new(|sessions| {
+        let pull_request_fetcher: PullRequestFetcher = Arc::new(|sessions, _| {
             Box::pin(async move {
                 Ok(sessions
                     .iter()
@@ -406,14 +414,25 @@ mod tests {
         let cache = cache_with_fetchers(updates, FETCH_TIMEOUT, task_fetcher, pull_request_fetcher);
         let session_a = session_with_branch_name("session-a", "branch-a");
         let session_b = session_with_branch_name("session-b", "branch-b");
+        let task_metadata = SessionTaskMetadata::default();
 
-        let initial = cache.pull_requests(std::slice::from_ref(&session_a)).await;
+        let initial = cache
+            .pull_requests(std::slice::from_ref(&session_a), &task_metadata)
+            .await;
         wait_for_refresh(&mut receiver).await;
-        let cached_a = cache.pull_requests(std::slice::from_ref(&session_a)).await;
-        let cached_while_b_refreshes = cache.pull_requests(std::slice::from_ref(&session_b)).await;
+        let cached_a = cache
+            .pull_requests(std::slice::from_ref(&session_a), &task_metadata)
+            .await;
+        let cached_while_b_refreshes = cache
+            .pull_requests(std::slice::from_ref(&session_b), &task_metadata)
+            .await;
         wait_for_refresh(&mut receiver).await;
-        let cached_a_after_b_refresh = cache.pull_requests(std::slice::from_ref(&session_a)).await;
-        let cached_b_after_refresh = cache.pull_requests(std::slice::from_ref(&session_b)).await;
+        let cached_a_after_b_refresh = cache
+            .pull_requests(std::slice::from_ref(&session_a), &task_metadata)
+            .await;
+        let cached_b_after_refresh = cache
+            .pull_requests(std::slice::from_ref(&session_b), &task_metadata)
+            .await;
 
         assert_eq!(
             (
@@ -497,6 +516,7 @@ mod tests {
                     ("task-session-a".to_string(), "project-a".to_string()),
                     ("task-session-b".to_string(), "project-b".to_string()),
                 ]),
+                github_links: HashMap::new(),
             }
         );
     }

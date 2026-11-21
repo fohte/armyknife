@@ -2,7 +2,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use super::daemon_status::crit_pid_for_port;
 use super::wait_state::reconcile_registered_session;
 use super::{claim_marker, marker_path, remove_marker_if_equals};
 use crate::commands::agent::types::Session;
@@ -12,10 +11,18 @@ pub(in crate::commands::agent::crit) fn ensure_started(
     port: u16,
     session: Option<&Session>,
 ) -> Result<()> {
+    ensure_started_with_status(port, session, None)
+}
+
+pub(in crate::commands::agent::crit) fn ensure_started_with_status(
+    port: u16,
+    session: Option<&Session>,
+    status: Option<&serde_json::Value>,
+) -> Result<()> {
     let marker = marker_path(port)?;
     let Some(reservation) = claim_marker(&marker)? else {
         if let Some(session) = session
-            && let Err(error) = reconcile_registered_session(port, &session.session_id)
+            && let Err(error) = reconcile_registered_session(port, &session.session_id, status)
         {
             tracing::warn!(
                 event = "agent.crit.monitor.wait_state_update_failed",
@@ -31,8 +38,7 @@ pub(in crate::commands::agent::crit) fn ensure_started(
     let session_id = session.map(|session| session.session_id.as_str());
 
     let result = (|| {
-        let pid = crit_pid_for_port(port)?
-            .with_context(|| format!("crit status did not report a daemon on port {port}"))?;
+        let pid = super::monitor_pid_for_port(port, status, super::status::crit_status)?;
         let executable =
             std::env::current_exe().context("failed to resolve the armyknife executable")?;
         let mut args = vec![

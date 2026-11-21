@@ -329,6 +329,8 @@ it('keeps secondary controls out of the mobile header', () => {
       container.querySelector('.conversation-copy-session-id') !== null,
     titleEditButtonVisible:
       container.querySelector('[aria-label="Edit session title"]') !== null,
+    activityButtonVisible:
+      container.querySelector('.async-action-activity-button') !== null,
   })
   expect(snapshot()).toEqual({
     headerButtons: [
@@ -338,6 +340,7 @@ it('keeps secondary controls out of the mobile header', () => {
     ],
     titleCopyButtonVisible: false,
     titleEditButtonVisible: false,
+    activityButtonVisible: false,
   })
 })
 

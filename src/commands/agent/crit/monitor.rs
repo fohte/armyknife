@@ -1,7 +1,8 @@
 //! Detached cleanup worker for crit review daemons.
 
-mod daemon_status;
+mod registration;
 mod start;
+mod status;
 mod wait_state;
 
 use std::collections::BTreeMap;
@@ -13,6 +14,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use clap::Args;
 
+use self::status::{crit_pid_for_port, pid_for_port};
 use super::super::store;
 use super::super::types::Session;
 use super::url::parse_port;
@@ -22,11 +24,14 @@ use crate::infra::process;
 use crate::infra::tmux;
 use crate::shared::log::short_run_id;
 
-use self::daemon_status::crit_pid_for_port;
-pub(super) use self::start::ensure_started;
+pub(super) use self::start::{ensure_started, ensure_started_with_status};
 use self::wait_state::{
     crit_client_waiting_on_port, set_crit_wait_state, set_crit_wait_state_if_changed,
 };
+
+pub(super) fn prepare_registration(port: u16, url: &str) -> (String, Option<serde_json::Value>) {
+    registration::prepare_registration(port, url)
+}
 
 const MONITOR_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const STARTING_MARKER_TTL: Duration = Duration::from_secs(15);
@@ -54,6 +59,19 @@ pub struct MonitorArgs {
     /// Reservation marker claimed by the process that launched this worker.
     #[arg(long)]
     reservation: String,
+}
+
+fn monitor_pid_for_port(
+    port: u16,
+    status: Option<&serde_json::Value>,
+    read_status: impl FnOnce() -> Result<serde_json::Value>,
+) -> Result<u32> {
+    let pid = match status {
+        Some(status) => pid_for_port(status, port),
+        None => pid_for_port(&read_status()?, port),
+    }
+    .with_context(|| format!("crit status did not report a daemon on port {port}"))?;
+    Ok(pid)
 }
 
 pub(super) fn run(args: &MonitorArgs) -> Result<()> {
@@ -462,6 +480,23 @@ mod tests {
 
     use super::*;
     use crate::commands::agent::types::WebUiRegistration;
+
+    #[test]
+    fn uses_registered_status_snapshot_without_rereading() {
+        let status = serde_json::json!({
+            "sessions": [{ "port": 43210, "pid": 12345 }],
+        });
+        let status_reads = Cell::new(0);
+        let result = monitor_pid_for_port(43210, Some(&status), || {
+            status_reads.set(status_reads.get() + 1);
+            Ok(serde_json::json!({
+                "sessions": [{ "port": 43210, "pid": 54321 }],
+            }))
+        })
+        .map_err(|error| format!("{error:#}"));
+
+        assert_eq!((result, status_reads.get()), (Ok(12345), 0));
+    }
 
     #[test]
     fn dropping_a_crit_port_only_removes_its_registration() {

@@ -460,6 +460,7 @@ fn status_color(status: &MergeStatus) -> &'static str {
     match status {
         MergeStatus::Merged { .. } => color::MAGENTA, // Purple for merged
         MergeStatus::Closed { .. } => color::RED,     // Red for closed PR (not merged)
+        MergeStatus::NoUniqueCommits { .. } => color::RED,
         MergeStatus::NotMerged { .. } => color::GREEN, // Green for open PR or not merged
     }
 }
@@ -469,6 +470,7 @@ fn status_icon(status: &MergeStatus) -> &'static str {
     match status {
         MergeStatus::Merged { .. } => "✓",
         MergeStatus::Closed { .. } => "✗",
+        MergeStatus::NoUniqueCommits { .. } => "✗",
         MergeStatus::NotMerged { .. } => " ",
     }
 }
@@ -1003,6 +1005,7 @@ mod tests {
     #[rstest]
     #[case::merged(MergeStatus::Merged { reason: "test".to_string() }, "✓")]
     #[case::closed(MergeStatus::Closed { reason: "test".to_string() }, "✗")]
+    #[case::no_unique_commits(MergeStatus::NoUniqueCommits { reason: "test".to_string() }, "✗")]
     #[case::not_merged(MergeStatus::NotMerged { reason: "test".to_string() }, " ")]
     fn test_status_icon(#[case] status: MergeStatus, #[case] expected: &str) {
         assert_eq!(status_icon(&status), expected);
@@ -1013,6 +1016,7 @@ mod tests {
     #[case::open_pr(MergeStatus::NotMerged { reason: "open".to_string() }, color::GREEN)]
     #[case::not_merged(MergeStatus::NotMerged { reason: "Not merged".to_string() }, color::GREEN)]
     #[case::closed_pr(MergeStatus::Closed { reason: "closed".to_string() }, color::RED)]
+    #[case::no_unique_commits(MergeStatus::NoUniqueCommits { reason: "test".to_string() }, color::RED)]
     fn test_status_color(#[case] status: MergeStatus, #[case] expected: &str) {
         assert_eq!(status_color(&status), expected);
     }

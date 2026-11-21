@@ -19,6 +19,7 @@ const sessions: SessionTreeNode[] = [
     elapsedSeconds: 300,
     task: null,
     repo: 'sample/repo',
+    vibeMode: { mode: 'enabled' },
     decisionCount: 0,
     pullRequest: null,
   },
@@ -40,6 +41,7 @@ const sessions: SessionTreeNode[] = [
       priority: null,
     },
     repo: 'sample/other-repo',
+    vibeMode: { mode: 'inherited', ancestorSessionId: 'root' },
     decisionCount: 0,
     pullRequest: null,
   },
@@ -56,6 +58,7 @@ const sessions: SessionTreeNode[] = [
     elapsedSeconds: 3_600,
     task: null,
     repo: 'sample/other-repo',
+    vibeMode: { mode: 'disabled' },
     decisionCount: 0,
     pullRequest: null,
   },
@@ -103,6 +106,9 @@ it('shows every tree session with the shared row and keeps ended sessions visibl
       selected: row.getAttribute('aria-selected'),
       task: row.querySelector('.session-task')?.textContent ?? null,
       repo: row.querySelector('.session-repo')?.textContent ?? null,
+      vibeMode:
+        row.querySelector('.vibe-indicator')?.getAttribute('aria-label') ??
+        null,
       ended: row.classList.contains('is-ended'),
     })),
   ).toEqual([
@@ -113,6 +119,7 @@ it('shows every tree session with the shared row and keeps ended sessions visibl
       selected: 'true',
       task: '— No task',
       repo: 'sample/repo',
+      vibeMode: 'Vibe on',
       ended: false,
     },
     {
@@ -122,6 +129,7 @@ it('shows every tree session with the shared row and keeps ended sessions visibl
       selected: 'false',
       task: '— #17 Sample task',
       repo: 'sample/other-repo',
+      vibeMode: 'Vibe on · inherited',
       ended: false,
     },
     {
@@ -131,6 +139,7 @@ it('shows every tree session with the shared row and keeps ended sessions visibl
       selected: 'false',
       task: '— No task',
       repo: 'sample/other-repo',
+      vibeMode: null,
       ended: true,
     },
   ])
