@@ -1,9 +1,10 @@
 import '#components/session-status-panel.css'
 
 import { Button } from '@fohte/ui/button'
-import { ArrowLeft } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+
+import { useFocusTrap } from '#components/use-focus-trap'
 
 export type SessionStatusPanelTab = {
   id: string
@@ -42,6 +43,11 @@ export function SessionStatusPanel({
   const [hasHiddenTabs, setHasHiddenTabs] = useState({
     left: false,
     right: false,
+  })
+  useFocusTrap({
+    containerRef: panelRef,
+    initialFocusRef: backButtonRef,
+    isActive: mobilePresentation,
   })
 
   const updateHiddenTabs = useCallback(() => {
@@ -92,53 +98,6 @@ export function SessionStatusPanel({
     }
   }, [updateHiddenTabs, visibleTabSignature])
 
-  useEffect(() => {
-    if (!mobilePresentation) return
-    const previouslyFocused = document.activeElement
-    const panel = panelRef.current
-    if (panel === null) return
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Tab') return
-      const focusableElements = Array.from(
-        panel.querySelectorAll<HTMLElement>(
-          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        ),
-      ).filter((element) => element.getClientRects().length > 0)
-      const first = focusableElements[0]
-      const last = focusableElements.at(-1)
-      if (first === undefined || last === undefined) {
-        event.preventDefault()
-        panel.focus()
-        return
-      }
-
-      const focusIsOutsidePanel = !panel.contains(document.activeElement)
-      if (
-        (event.shiftKey &&
-          (document.activeElement === first || focusIsOutsidePanel)) ||
-        (!event.shiftKey &&
-          (document.activeElement === last || focusIsOutsidePanel))
-      ) {
-        event.preventDefault()
-        const focusTarget = event.shiftKey ? last : first
-        focusTarget.focus()
-      }
-    }
-
-    backButtonRef.current?.focus()
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.removeEventListener('keydown', onKeyDown)
-      if (
-        previouslyFocused instanceof HTMLElement &&
-        previouslyFocused.isConnected
-      ) {
-        previouslyFocused.focus()
-      }
-    }
-  }, [mobilePresentation])
-
   return (
     <aside
       ref={panelRef}
@@ -164,7 +123,19 @@ export function SessionStatusPanel({
               onClose()
             }}
           >
-            <ArrowLeft aria-hidden="true" size={24} />
+            <svg
+              width="30"
+              height="30"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="m15 18-6-6 6-6" />
+            </svg>
           </Button>
           <h1 id="session-status-panel-title">Session status</h1>
         </header>
