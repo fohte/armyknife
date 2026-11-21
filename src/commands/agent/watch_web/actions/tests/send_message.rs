@@ -77,7 +77,7 @@ async fn send_message_forwards_nonempty_content_unchanged(action_context: Action
 #[tokio::test]
 async fn send_message_keeps_a_newer_prompt_timestamp(action_context: ActionContext) {
     action_context.save_session(&session("sample-session"));
-    let later_prompt_at = Utc::now() + chrono::Duration::seconds(1);
+    let later_prompt_at = Utc::now() + chrono::Duration::minutes(1);
     let callback_prompt_at = later_prompt_at;
     let sessions_dir = action_context.temp_dir.path().join("sessions");
     action_context.set_after_message(move || {

@@ -203,6 +203,9 @@ pub(super) async fn session_tree<S: SessionSource>(
                 .unanswered_proposal_titles
                 .contains_key(&session.session_id);
             let todo_title = snapshot.unanswered_todo_titles.get(&session.session_id);
+            let has_folded_todo = snapshot
+                .folded_todo_summaries
+                .contains_key(&session.session_id);
             let needs_action = interrupted_session_ids.contains(&session.session_id)
                 || has_unanswered_proposal
                 || todo_title.is_some();
@@ -235,7 +238,7 @@ pub(super) async fn session_tree<S: SessionSource>(
                     session,
                     turn,
                     has_unanswered_proposal,
-                    todo_title.is_some(),
+                    todo_title.is_some() || has_folded_todo,
                     has_running_background_task,
                 ),
                 title: snapshot
@@ -248,6 +251,12 @@ pub(super) async fn session_tree<S: SessionSource>(
                     .get(&session.session_id)
                     .cloned()
                     .or_else(|| todo_title.cloned())
+                    .or_else(|| {
+                        snapshot
+                            .folded_todo_summaries
+                            .get(&session.session_id)
+                            .and_then(|summary| summary.first_title.clone())
+                    })
                     .or_else(|| session.last_message.clone()),
                 elapsed_seconds: now
                     .signed_duration_since(session.updated_at)

@@ -154,6 +154,8 @@ mod tests {
                 seq: 2,
                 title: "todo title".to_string(),
                 detail: Some("todo detail".to_string()),
+                folded: false,
+                added_folded: false,
                 completed: false,
                 resolution: None,
                 comment: Some("todo comment".to_string()),

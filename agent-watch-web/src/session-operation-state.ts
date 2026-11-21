@@ -174,6 +174,13 @@ export function applyConversationOperation(
           : message,
       )
       break
+    case 'todo_fold':
+      messages = updateChatItems(messages, (message) =>
+        message.type === 'todo' && message.seq === operation.seq
+          ? { ...message, folded: operation.folded }
+          : message,
+      )
+      break
     case 'permission_retry':
       messages = updateChatItems(messages, (message) =>
         message.type === 'permission_denied' && message.seq === operation.seq
@@ -277,6 +284,13 @@ export function isConversationOperationConfirmed(
           message.completed &&
           message.resolution === operation.resolution &&
           message.comment === operation.comment,
+      )
+    case 'todo_fold':
+      return conversation.messages.some(
+        (message) =>
+          message.type === 'todo' &&
+          message.seq === operation.seq &&
+          (message.folded ?? false) === operation.folded,
       )
     case 'permission':
       return (
@@ -399,6 +413,7 @@ export function requiresStateConfirmation(operation: SessionOperation) {
     operation.type === 'decision_change' ||
     operation.type === 'proposal_answer' ||
     operation.type === 'todo_resolve' ||
+    operation.type === 'todo_fold' ||
     operation.type === 'permission' ||
     operation.type === 'permission_retry' ||
     operation.type === 'permission_dismiss'

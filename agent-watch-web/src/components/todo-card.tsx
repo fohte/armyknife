@@ -1,6 +1,7 @@
 import '#components/todo-card.css'
 
 import { Button } from '@fohte/ui/button'
+import { ChevronDown, ChevronUp } from 'lucide-react'
 import type { ClipboardEvent } from 'react'
 import { useId, useMemo, useState } from 'react'
 
@@ -19,6 +20,8 @@ type TodoCardProps = {
   sessionId?: string
   title: string
   detail: string | null
+  folded?: boolean
+  addedFolded?: boolean
   resolution: 'completed' | 'rejected' | 'withdrawn' | null
   defaultComment?: string
   onResolve: (
@@ -26,6 +29,7 @@ type TodoCardProps = {
     comment: string | null,
     attachments?: readonly EncodedAttachment[],
   ) => Promise<boolean>
+  onFold: (folded: boolean) => Promise<boolean>
 }
 
 export function TodoCard({
@@ -33,9 +37,12 @@ export function TodoCard({
   sessionId,
   title,
   detail,
+  folded = false,
+  addedFolded = false,
   resolution,
   defaultComment = '',
   onResolve,
+  onFold,
 }: TodoCardProps) {
   const [draftSessionId] = useState(() => sessionId ?? crypto.randomUUID())
   const commentId = useId()
@@ -132,6 +139,36 @@ export function TodoCard({
     )
   }
 
+  if (folded) {
+    return (
+      <article
+        className="chat-todo-card chat-todo-card--folded"
+        aria-label="User task, folded"
+        data-resolution="pending"
+        data-folded="true"
+      >
+        <Button
+          type="button"
+          variant="plain"
+          className="chat-todo-folded-row cursor-pointer"
+          aria-expanded={false}
+          onClick={() => {
+            void onFold(false)
+          }}
+        >
+          <span className="chat-todo-folded-label">
+            <span>To-do · later</span>
+            {addedFolded ? <span> · added folded</span> : null}
+          </span>
+          <span className="chat-todo-folded-title-row">
+            <strong className="chat-todo-folded-title">{title}</strong>
+            <ChevronDown aria-hidden="true" className="chat-todo-chevron" />
+          </span>
+        </Button>
+      </article>
+    )
+  }
+
   return (
     <article
       className="chat-todo-card"
@@ -139,7 +176,22 @@ export function TodoCard({
       aria-busy={isSubmitting || attachmentState.isProcessingAttachments}
       data-resolution="pending"
     >
-      <h2>To-do · pending</h2>
+      <header className="chat-todo-heading">
+        <h2>To-do · pending</h2>
+        <Button
+          type="button"
+          variant="plain"
+          className="chat-todo-fold-button cursor-pointer"
+          aria-label="Fold this to-do"
+          title="Fold"
+          aria-expanded={true}
+          onClick={() => {
+            void onFold(true)
+          }}
+        >
+          <ChevronUp aria-hidden="true" />
+        </Button>
+      </header>
       <h3>{title}</h3>
       {detailContent !== null ? (
         <CollapsibleText

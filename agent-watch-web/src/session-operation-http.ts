@@ -145,6 +145,11 @@ function requestFor(operation: SessionOperation) {
             : { attachments: operation.attachments }),
         },
       }
+    case 'todo_fold':
+      return {
+        path: `todos/${String(operation.seq)}/fold`,
+        body: { folded: operation.folded },
+      }
     case 'permission':
       return {
         path: `permission/${operation.action}`,
@@ -419,6 +424,15 @@ export function createSessionOperation(
           ...(Array.isArray(payload['attachments'])
             ? { attachments: payload['attachments'] }
             : {}),
+        })
+      }
+      const foldedTodo = sequenceFromPath('todos', 'fold')
+      if (foldedTodo !== null && typeof payload['folded'] === 'boolean') {
+        return ok<SessionOperation, Error>({
+          type: 'todo_fold',
+          sessionId,
+          seq: foldedTodo,
+          folded: payload['folded'],
         })
       }
       const retry = sequenceFromPath('permission-denials', 'retry')

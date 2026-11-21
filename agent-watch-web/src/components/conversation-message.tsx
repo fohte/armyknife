@@ -266,6 +266,8 @@ export function renderConversationMessage({
         {...(sessionId === undefined ? {} : { sessionId })}
         title={message.title}
         detail={message.detail}
+        folded={message.folded ?? false}
+        addedFolded={message.addedFolded ?? false}
         resolution={message.resolution}
         defaultComment={message.comment ?? ''}
         onResolve={(resolution, comment, attachments) =>
@@ -274,6 +276,9 @@ export function renderConversationMessage({
             comment,
             ...(attachments === undefined ? {} : { attachments }),
           })
+        }
+        onFold={(folded) =>
+          onAction(`todos/${String(message.seq)}/fold`, { folded })
         }
       />
     )

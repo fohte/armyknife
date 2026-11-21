@@ -1,7 +1,7 @@
 import '#components/later-today.css'
 
 import { Button } from '@fohte/ui/button'
-import { Filter, X } from 'lucide-react'
+import { ChevronRight, Filter, X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 
 import { InboxFilterBar } from '#components/inbox-filter-bar'
@@ -106,11 +106,26 @@ export function InboxView({
   const needsAction = filteredSessions.filter(
     (session) => session.category === 'needs_action',
   )
-  const inProgress = filteredSessions.filter(
-    (session) => session.category === 'in_progress',
+  const todoLaterSessions = filteredSessions.filter(
+    (session) => (session.todoLaterCount ?? 0) > 0,
   )
-  const done = filteredSessions.filter((session) => session.category === 'done')
-  const allDone = sessions.filter((session) => session.category === 'done')
+  const firstTodoLaterSession = todoLaterSessions[0]
+  const todoLaterCount = todoLaterSessions.reduce(
+    (count, session) => count + (session.todoLaterCount ?? 0),
+    0,
+  )
+  const inProgress = filteredSessions.filter(
+    (session) =>
+      session.category === 'in_progress' && (session.todoLaterCount ?? 0) === 0,
+  )
+  const done = filteredSessions.filter(
+    (session) =>
+      session.category === 'done' && (session.todoLaterCount ?? 0) === 0,
+  )
+  const allDone = sessions.filter(
+    (session) =>
+      session.category === 'done' && (session.todoLaterCount ?? 0) === 0,
+  )
   const unreviewedDoneCount = done.reduce(
     (count, session) => count + (session.unreviewedDecisionCount ?? 0),
     0,
@@ -118,7 +133,8 @@ export function InboxView({
   const connected = connectionError === null
   const lastUpdatedTime = formatMobileConnectionTime(lastUpdatedAt)
   const later = filteredSessions.filter(
-    (session) => session.category === 'later',
+    (session) =>
+      session.category === 'later' && (session.todoLaterCount ?? 0) === 0,
   )
   const setFilterQuery = useCallback(
     (query: string) => {
@@ -310,6 +326,23 @@ export function InboxView({
           onSelect,
           isMobile,
         })}
+        {todoLaterCount > 0 && firstTodoLaterSession !== undefined ? (
+          <Button
+            type="button"
+            variant="plain"
+            className="todo-later-row cursor-pointer"
+            onClick={() => {
+              onSelect(firstTodoLaterSession.id)
+            }}
+          >
+            <span className="todo-later-label">To-do later</span>
+            <span className="todo-later-count">{todoLaterCount}</span>
+            <span className="todo-later-title">
+              {firstTodoLaterSession.todoLaterTitle}
+            </span>
+            <ChevronRight aria-hidden="true" className="todo-later-chevron" />
+          </Button>
+        ) : null}
         <Button
           type="button"
           variant="plain"

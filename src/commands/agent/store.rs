@@ -639,8 +639,9 @@ pub(crate) fn add_agent_todo_in(
     session_id: &str,
     title: &str,
     detail: Option<&str>,
+    folded: bool,
 ) -> Result<i64> {
-    database::add_agent_todo(sessions_dir, session_id, title, detail)
+    database::add_agent_todo(sessions_dir, session_id, title, detail, folded)
 }
 
 pub(crate) fn agent_todos_from(sessions_dir: &Path, session_id: &str) -> Result<Vec<AgentTodo>> {
@@ -678,8 +679,21 @@ pub(crate) fn agent_file_from(
 pub(crate) fn incomplete_agent_todo_titles_from(
     sessions_dir: &Path,
     session_ids: &[String],
-) -> Result<Vec<(String, String)>> {
+) -> Result<Vec<(String, String, bool)>> {
     database::incomplete_agent_todo_titles(sessions_dir, session_ids)
+}
+
+pub(crate) fn set_agent_todo_folded_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    folded: bool,
+) -> Result<bool> {
+    database::set_agent_todo_folded(sessions_dir, session_id, seq, folded)
+}
+
+pub(crate) fn set_agent_todo_folded(session_id: &str, seq: i64, folded: bool) -> Result<bool> {
+    set_agent_todo_folded_from(&sessions_dir()?, session_id, seq, folded)
 }
 
 pub(crate) fn resolve_agent_todo_from(

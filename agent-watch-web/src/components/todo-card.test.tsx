@@ -37,9 +37,52 @@ function props(overrides: Partial<Props> = {}): Props {
     detail: 'Confirm the action stays visible on a small screen.',
     resolution: null,
     onResolve: vi.fn(() => Promise.resolve(true)),
+    onFold: vi.fn(() => Promise.resolve(true)),
     ...overrides,
   }
 }
+
+it('opens a folded to-do and preserves its added-folded marker', async () => {
+  const onFold = vi.fn(() => Promise.resolve(true))
+  renderCard(props({ folded: true, addedFolded: true, onFold }))
+
+  await userEvent.click(
+    requireElement(
+      container.querySelector<HTMLButtonElement>('.chat-todo-folded-row'),
+    ),
+  )
+
+  expect(readFoldedTodoCardState(onFold.mock.calls)).toEqual({
+    label: 'To-do · later · added folded',
+    title: 'Check the updated layout on a phone',
+    expanded: 'false',
+    call: [[false]],
+  })
+})
+
+function readFoldedTodoCardState(calls: [boolean][]) {
+  return {
+    label: container.querySelector('.chat-todo-folded-label')?.textContent,
+    title: container.querySelector('.chat-todo-folded-title')?.textContent,
+    expanded: container
+      .querySelector('.chat-todo-folded-row')
+      ?.getAttribute('aria-expanded'),
+    call: calls,
+  }
+}
+
+it('folds a pending to-do from its heading', async () => {
+  const onFold = vi.fn(() => Promise.resolve(true))
+  renderCard(props({ onFold }))
+
+  await userEvent.click(
+    requireElement(
+      container.querySelector<HTMLButtonElement>('.chat-todo-fold-button'),
+    ),
+  )
+
+  expect(onFold.mock.calls).toEqual([[true]])
+})
 
 function renderCard(cardProps: Props) {
   root ??= createRoot(container)

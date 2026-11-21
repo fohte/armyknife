@@ -69,6 +69,12 @@ export type SessionOperation =
       attachments?: unknown[]
     }
   | {
+      type: 'todo_fold'
+      sessionId: string
+      seq: number
+      folded: boolean
+    }
+  | {
       type: 'permission'
       sessionId: string
       action: Exclude<PermissionAction, 'retry'>
@@ -161,6 +167,9 @@ function operationKey(operation: SessionOperation) {
   }
   if (operation.type === 'todo_resolve') {
     return `${operation.sessionId}:todo_resolve:${String(operation.seq)}:${operation.resolution}:${operation.comment ?? ''}`
+  }
+  if (operation.type === 'todo_fold') {
+    return `${operation.sessionId}:todo_fold:${String(operation.seq)}:${String(operation.folded)}`
   }
   return `${operation.sessionId}:${operation.type}`
 }

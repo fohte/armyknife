@@ -414,6 +414,8 @@ fn adds_todo_resolution_to_master_version_fourteen_database(database_fixture: Da
             seq: 1,
             title: "Task".to_string(),
             detail: None,
+            folded: false,
+            added_folded: false,
             created_at: chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
                 .unwrap()
                 .to_utc(),

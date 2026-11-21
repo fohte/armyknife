@@ -491,6 +491,7 @@ mod tests {
             &session.session_id,
             "A finished task",
             None,
+            false,
         )
         .expect("completed todo should be recorded");
         store::resolve_agent_todo_from(
@@ -506,6 +507,7 @@ mod tests {
             &session.session_id,
             "A pending task",
             None,
+            false,
         )
         .expect("pending todo should be recorded");
 

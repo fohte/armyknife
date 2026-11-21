@@ -243,6 +243,43 @@ export const InboxHasNoFilters: Story = {
   args: { filterQuery: '' },
 }
 
+export const InboxShowsFoldedTodosBelowNeedsAction: Story = {
+  name: 'The inbox groups folded to-dos below Needs action',
+  args: {
+    sessions: [
+      ...sessions,
+      sampleSession(
+        'sample-todo-later',
+        'in_progress',
+        'Check the alert on a phone',
+        {
+          todoLaterCount: 2,
+          todoLaterTitle: 'Check the alert on a phone',
+        },
+      ),
+    ],
+  },
+}
+
+export const InboxShowsFoldedTodosBelowNeedsActionOnPhone: Story = {
+  name: 'A phone shows the folded to-do row below Needs action',
+  args: {
+    sessions: [
+      ...sessions,
+      sampleSession(
+        'sample-todo-later',
+        'in_progress',
+        'Check the alert on a phone',
+        {
+          todoLaterCount: 2,
+          todoLaterTitle: 'Check the alert on a phone',
+        },
+      ),
+    ],
+  },
+  parameters: { viewport: { defaultViewport: 'mobile1' } },
+}
+
 export const InboxFiltersSessionsByProjectAndKind: Story = {
   name: 'The inbox shows project and kind filters as removable chips',
   args: { filterQuery: 'project:sample project kind:question,review' },

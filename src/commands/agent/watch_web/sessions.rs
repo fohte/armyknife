@@ -54,6 +54,8 @@ use self::feed::{
 };
 use self::question_preview::question_previews;
 use self::task_selection::primary_task_id;
+mod todo_summary;
+use self::todo_summary::{FoldedTodoSummary, summarize as summarize_todos};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -169,6 +171,10 @@ struct SessionView {
     is_compacting: bool,
     decision_count: i64,
     unreviewed_decision_count: i64,
+    #[serde(skip_serializing_if = "is_zero")]
+    todo_later_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    todo_later_title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     review_document_id: Option<String>,
 }
@@ -191,9 +197,14 @@ struct SessionSnapshot {
     decision_counts: HashMap<String, store::AgentDecisionCounts>,
     unanswered_proposal_titles: HashMap<String, String>,
     unanswered_todo_titles: HashMap<String, String>,
+    folded_todo_summaries: HashMap<String, FoldedTodoSummary>,
     agent_config: AgentConfig,
     vibe_config: Arc<Config>,
     vibe_ancestor_loader: VibeAncestorLoader,
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 trait SessionSource: Clone + Send + Sync + 'static {
@@ -334,6 +345,10 @@ async fn list_sessions<S: SessionSource>(
                     && snapshot
                         .unanswered_todo_titles
                         .contains_key(&session.session_id)
+                    || session.status == SessionStatus::Ended
+                        && snapshot
+                            .folded_todo_summaries
+                            .contains_key(&session.session_id)
             })
             .filter(|session| response_session_ids.insert(session.session_id.clone()))
             .cloned(),
@@ -486,6 +501,7 @@ async fn list_sessions<S: SessionSource>(
                 && agent_status_state == Some(config::AgentStatusState::Waiting);
             let proposal_title = unanswered_proposal_titles.get(&session.session_id);
             let todo_title = unanswered_todo_titles.get(&session.session_id);
+            let folded_todo_summary = snapshot.folded_todo_summaries.get(&session.session_id);
             let needs_action = interrupted || proposal_title.is_some() || todo_title.is_some();
             let category_when_not_later = category_for_with_interruption(
                 session,
@@ -562,7 +578,7 @@ async fn list_sessions<S: SessionSource>(
                     session,
                     turn,
                     proposal_title.is_some(),
-                    todo_title.is_some(),
+                    todo_title.is_some() || folded_todo_summary.is_some(),
                     has_running_background_task,
                 ),
                 title: snapshot
@@ -575,6 +591,7 @@ async fn list_sessions<S: SessionSource>(
                     .cloned()
                     .or_else(|| proposal_title.cloned())
                     .or_else(|| todo_title.cloned())
+                    .or_else(|| folded_todo_summary.and_then(|summary| summary.first_title.clone()))
                     .or_else(|| session.last_message.clone()),
                 updated_at: session.updated_at,
                 last_prompted_at: session.last_prompted_at,
@@ -613,6 +630,14 @@ async fn list_sessions<S: SessionSource>(
                     .decision_counts
                     .get(&session.session_id)
                     .map_or(0, |counts| counts.unreviewed),
+                todo_later_count: snapshot
+                    .folded_todo_summaries
+                    .get(&session.session_id)
+                    .map_or(0, |summary| summary.count),
+                todo_later_title: snapshot
+                    .folded_todo_summaries
+                    .get(&session.session_id)
+                    .and_then(|summary| summary.first_title.clone()),
                 review_document_id: review_document_ids
                     .get(&session.session_id)
                     .cloned()
@@ -672,7 +697,6 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
     let vibe_sessions_dir = sessions_dir.clone();
     let decision_counts = store::agent_decision_counts_by_session_from(&sessions_dir)?;
     let mut unanswered_proposal_titles = HashMap::new();
-    let mut unanswered_todo_titles = HashMap::new();
     let visible_session_ids = all_sessions
         .iter()
         .map(|session| session.session_id.clone())
@@ -683,11 +707,9 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
             .entry(session_id)
             .or_insert(proposal.title);
     }
-    for (session_id, title) in
-        store::incomplete_agent_todo_titles_from(&sessions_dir, &visible_session_ids)?
-    {
-        unanswered_todo_titles.entry(session_id).or_insert(title);
-    }
+    let (unanswered_todo_titles, folded_todo_summaries) = summarize_todos(
+        store::incomplete_agent_todo_titles_from(&sessions_dir, &visible_session_ids)?,
+    );
 
     let mut config = config::load_config_or_default();
     let agent_config = std::mem::take(&mut config.agent);
@@ -702,6 +724,7 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         decision_counts,
         unanswered_proposal_titles,
         unanswered_todo_titles,
+        folded_todo_summaries,
         agent_config,
         vibe_config: Arc::new(config),
         vibe_ancestor_loader: Arc::new(move |session_id| {
@@ -801,6 +824,7 @@ mod tests {
         repo_by_id: HashMap<String, String>,
         unanswered_proposal_titles: HashMap<String, String>,
         unanswered_todo_titles: HashMap<String, String>,
+        folded_todo_summaries: HashMap<String, FoldedTodoSummary>,
         task_links: HashMap<String, Vec<LinkedSessionTask>>,
         task_updated_at: HashMap<String, DateTime<Utc>>,
         task_priorities: HashMap<String, Option<i32>>,
@@ -830,6 +854,7 @@ mod tests {
                 decision_counts: self.decision_counts.clone(),
                 unanswered_proposal_titles: self.unanswered_proposal_titles.clone(),
                 unanswered_todo_titles: self.unanswered_todo_titles.clone(),
+                folded_todo_summaries: self.folded_todo_summaries.clone(),
                 agent_config: AgentConfig {
                     work_types: self
                         .work_type_nav_labels
@@ -1023,6 +1048,7 @@ mod tests {
             ]),
             unanswered_proposal_titles: HashMap::new(),
             unanswered_todo_titles: HashMap::new(),
+            folded_todo_summaries: HashMap::new(),
             task_links: HashMap::from([
                 (
                     "child-session".to_string(),
@@ -2431,6 +2457,126 @@ mod tests {
         );
         expected["sessions"][0]["activityStatus"] = serde_json::json!("working");
         expected["sessions"][0]["preview"] = serde_json::json!("Check the page");
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn folded_todos_keep_a_running_session_out_of_needs_action(
+        mut source: TestSessionSource,
+    ) {
+        source.sessions[0].status = SessionStatus::Running;
+        source.web_states[0].later_until = None;
+        source.folded_todo_summaries.insert(
+            "child-session".to_string(),
+            FoldedTodoSummary {
+                count: 2,
+                first_title: Some("Check the alert sound".to_string()),
+            },
+        );
+
+        let mut expected = expected_response(
+            "in_progress",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: Some("Todo"),
+                category_when_not_later: "in_progress",
+                is_paused: false,
+                unread: false,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["todoLaterCount"] = serde_json::json!(2);
+        expected["sessions"][0]["todoLaterTitle"] = serde_json::json!("Check the alert sound");
+        expected["sessions"][0]["preview"] = serde_json::json!("Check the alert sound");
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn ended_folded_todos_remain_in_the_session_feed(mut source: TestSessionSource) {
+        source.sessions.clear();
+        source.all_sessions[0].status = SessionStatus::Ended;
+        source.folded_todo_summaries.insert(
+            "child-session".to_string(),
+            FoldedTodoSummary {
+                count: 1,
+                first_title: Some("Check the alert sound".to_string()),
+            },
+        );
+
+        let (status, response) = sessions_response(source).await;
+
+        assert_eq!(
+            (
+                status,
+                response["sessions"].as_array().map(Vec::len),
+                response["sessions"][0]["id"].clone(),
+                response["sessions"][0]["todoLaterCount"].clone(),
+                response["sessions"][0]["todoLaterTitle"].clone(),
+            ),
+            (
+                StatusCode::OK,
+                Some(1),
+                serde_json::json!("child-session"),
+                serde_json::json!(1),
+                serde_json::json!("Check the alert sound"),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn an_unfolded_todo_keeps_a_mixed_session_in_needs_action(mut source: TestSessionSource) {
+        source.sessions[0].status = SessionStatus::Running;
+        source.web_states[0].later_until = None;
+        source.unanswered_todo_titles.insert(
+            "child-session".to_string(),
+            "Check the page now".to_string(),
+        );
+        source.folded_todo_summaries.insert(
+            "child-session".to_string(),
+            FoldedTodoSummary {
+                count: 1,
+                first_title: Some("Check the alert sound".to_string()),
+            },
+        );
+
+        let mut expected = expected_response(
+            "needs_action",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: Some("Todo"),
+                category_when_not_later: "needs_action",
+                is_paused: false,
+                unread: false,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["activityStatus"] = serde_json::json!("working");
+        expected["sessions"][0]["preview"] = serde_json::json!("Check the page now");
+        expected["sessions"][0]["todoLaterCount"] = serde_json::json!(1);
+        expected["sessions"][0]["todoLaterTitle"] = serde_json::json!("Check the alert sound");
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
