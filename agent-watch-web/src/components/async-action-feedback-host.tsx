@@ -102,12 +102,17 @@ export function AsyncActionFeedbackHost({
           >
             <header>
               <h2>Activity</h2>
-              <button type="button" onClick={clearFinished}>
-                Clear finished
-              </button>
+              {ordered.length > 0 ? (
+                <button type="button" onClick={clearFinished}>
+                  Clear finished
+                </button>
+              ) : null}
             </header>
             {ordered.length === 0 ? (
-              <p className="async-action-empty">No recent activity.</p>
+              <div className="async-action-empty">
+                <p>No recent activity.</p>
+                <p>Merge and Close results appear here.</p>
+              </div>
             ) : null}
             <div className="async-action-activity-list">
               {ordered.map((action) => (
