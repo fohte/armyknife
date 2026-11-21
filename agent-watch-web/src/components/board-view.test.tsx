@@ -36,6 +36,7 @@ const completedSession: Session = {
 function renderBoard(
   sessions: Session[],
   onHideQuietProjectsChange: (checked: boolean) => void = () => undefined,
+  isMobile = false,
 ) {
   root = createRoot(container)
   act(() => {
@@ -45,12 +46,24 @@ function renderBoard(
         loaded
         error={null}
         hideQuietProjects={false}
+        isMobile={isMobile}
         onHideQuietProjectsChange={onHideQuietProjectsChange}
         onNewSession={() => undefined}
         onSelectSession={() => undefined}
       />,
     )
   })
+}
+
+function paginationSnapshot() {
+  return {
+    ariaHidden: container
+      .querySelector('.board-pagination-dots')
+      ?.getAttribute('aria-hidden'),
+    dots: Array.from(
+      container.querySelectorAll<HTMLElement>('.board-pagination-dot'),
+    ).map((dot) => dot.dataset['current']),
+  }
 }
 
 function snapshot() {
@@ -241,6 +254,56 @@ it('shows the task placeholder on cards without an assigned task', () => {
     repo: container.querySelector('.board-card .session-repo')?.textContent,
   })
   expect(rowSnapshot()).toEqual({ task: '— No task', repo: 'example/service' })
+})
+
+it('shows one active page dot for a single phone project', () => {
+  renderBoard([completedSession], undefined, true)
+
+  expect(paginationSnapshot()).toEqual({
+    ariaHidden: 'true',
+    dots: ['true'],
+  })
+})
+
+it('updates the active page dot as phone projects scroll', () => {
+  renderBoard(
+    [
+      { ...completedSession, id: 'first-project', project: 'first project' },
+      { ...completedSession, id: 'second-project', project: 'second project' },
+    ],
+    undefined,
+    true,
+  )
+
+  const scroller = container.querySelector<HTMLElement>(
+    '.board-projects-scroll',
+  )
+  const columns = Array.from(
+    container.querySelectorAll<HTMLElement>('.board-project'),
+  )
+  if (scroller === null || columns.length !== 2) {
+    throw new Error('Expected two phone project columns')
+  }
+
+  Object.defineProperties(scroller, {
+    clientWidth: { configurable: true, value: 390 },
+    scrollLeft: { configurable: true, value: 310 },
+  })
+  const scrollerRect = new DOMRect(0, 0, 390, 844)
+  vi.spyOn(scroller, 'getBoundingClientRect').mockReturnValue(scrollerRect)
+  columns.forEach((column, index) => {
+    vi.spyOn(column, 'getBoundingClientRect').mockReturnValue(
+      new DOMRect(index === 0 ? -294 : 16, 0, 300, 700),
+    )
+  })
+  act(() => {
+    scroller.dispatchEvent(new Event('scroll'))
+  })
+
+  expect(paginationSnapshot()).toEqual({
+    ariaHidden: 'true',
+    dots: ['false', 'true'],
+  })
 })
 
 it('keeps the overflow hint at the visible edge while projects are scrolled', async () => {

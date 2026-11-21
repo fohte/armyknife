@@ -206,3 +206,44 @@ export const BoardShowsRefreshError: Story = {
   name: 'The board keeps showing projects when metadata refresh fails',
   args: { error: 'Project metadata could not be refreshed.' },
 }
+
+export const PhoneBoardShowsOneProject: Story = {
+  name: 'The phone board shows a single project column',
+  args: {
+    isMobile: true,
+    projects: buildBoardProjects(
+      sessions.filter((session) => session.project === 'alpha suite'),
+    ),
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        style={{ width: '390px', height: '844px', display: 'flex' }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+  parameters: {
+    overflowCheck: { ignoreSelectors: ['.board-projects-scroll'] },
+  },
+}
+
+export const PhoneBoardShowsMultipleProjects: Story = {
+  name: 'The phone board shows adjacent project columns',
+  args: { isMobile: true },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        style={{ width: '390px', height: '844px', display: 'flex' }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+  parameters: {
+    overflowCheck: { ignoreSelectors: ['.board-projects-scroll'] },
+  },
+}
