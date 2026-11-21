@@ -5456,12 +5456,14 @@ it('opens and closes the existing status panel over the mobile conversation', as
   await act(async () => {
     for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
+  const toggle = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.mobile-conversation-status-toggle',
+    ),
+  )
+  toggle.focus()
   act(() => {
-    requireElement(
-      container.querySelector<HTMLButtonElement>(
-        '.mobile-conversation-status-toggle',
-      ),
-    ).click()
+    toggle.click()
   })
 
   const opened = {
@@ -5470,17 +5472,21 @@ it('opens and closes the existing status panel over the mobile conversation', as
       ?.textContent,
     decisionHeading: container.querySelector('.decisions-panel-header h2')
       ?.textContent,
+    backButtonFocused:
+      document.activeElement ===
+      container.querySelector('.session-status-panel-back'),
   }
   act(() => {
     requireElement(
       container.querySelector<HTMLButtonElement>(
-        '.mobile-session-status-overlay .session-status-panel-close',
+        '.mobile-session-status-overlay .session-status-panel-back',
       ),
     ).click()
   })
   const closed = {
     overlay: container.querySelector('.mobile-session-status-overlay') !== null,
     conversation: container.querySelector('.conversation-pane') !== null,
+    focusRestored: document.activeElement === toggle,
   }
 
   const snapshot = () => ({ opened, closed })
@@ -5489,8 +5495,9 @@ it('opens and closes the existing status panel over the mobile conversation', as
       overlay: true,
       selectedTab: 'Decisions1',
       decisionHeading: 'Decisions in this session',
+      backButtonFocused: true,
     },
-    closed: { overlay: false, conversation: true },
+    closed: { overlay: false, conversation: true, focusRestored: true },
   })
 })
 

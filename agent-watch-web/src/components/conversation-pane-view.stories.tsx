@@ -376,6 +376,7 @@ export const IPhoneConversationShowsTheStatusPanel: Story = {
         activeTabId="tree"
         onTabChange={() => undefined}
         onClose={() => undefined}
+        mobilePresentation
       />
     ),
   },
