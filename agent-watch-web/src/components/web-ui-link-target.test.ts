@@ -53,3 +53,27 @@ it('maps a deep local link to the exposed web UI URL without losing its fragment
     'https://canvas.example.invalid/studio/pages/sample?mode=edit#page-fakehash',
   )
 })
+
+it.each([
+  {
+    description: 'keeps configured query parameters without link overrides',
+    href: 'http://localhost:43123/studio/pages/sample',
+    expected:
+      'https://canvas.example.invalid/studio/pages/sample?token=fixture',
+  },
+  {
+    description: 'merges link query parameters over configured values',
+    href: 'http://localhost:43123/studio/pages/sample?mode=edit#page-fakehash',
+    expected:
+      'https://canvas.example.invalid/studio/pages/sample?token=fixture&mode=edit#page-fakehash',
+  },
+])('preserves configured query data: $description', ({ href, expected }) => {
+  const webUiWithQuery: WebUiLinkTarget = {
+    ...webUi,
+    url: 'http://localhost:43123/studio/?token=fixture',
+    exposedUrl: 'https://canvas.example.invalid/studio/?token=fixture',
+  }
+  expect(
+    webUiLinkTargetUrl(webUiWithQuery, href, 'watch.example.invalid'),
+  ).toBe(expected)
+})

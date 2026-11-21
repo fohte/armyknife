@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import type { WebUiLinkTarget } from '#components/markdown-session-links'
 import { webUiLinkTargetUrl } from '#components/web-ui-link-target'
 import { WebUiPane } from '#components/web-ui-pane'
+import { webUiTabId } from '#components/web-ui-tab-id'
 
 type UseWebUiFullscreenOptions = {
   isMobile: boolean
@@ -25,11 +26,7 @@ export function useWebUiFullscreen({
   } | null>(null)
 
   const openWebUi = (webUi: WebUiLinkTarget, url: string) => {
-    onSelectTab(
-      webUi.name === 'crit'
-        ? 'crit'
-        : `web-ui-${encodeURIComponent(webUi.url)}`,
-    )
+    onSelectTab(webUiTabId(webUi))
     setRequest((current) => current + 1)
     setWebUiRequest({
       webUi,

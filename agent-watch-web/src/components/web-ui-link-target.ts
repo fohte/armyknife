@@ -80,7 +80,13 @@ export function webUiLinkTargetUrl(
     : targetUrl.pathname
   const suffix = requestedUrl.pathname.slice(basePath.length)
   targetUrl.pathname = `${targetBasePath}${suffix}`
-  targetUrl.search = requestedUrl.search
+  const requestedKeys = new Set(requestedUrl.searchParams.keys())
+  requestedKeys.forEach((key) => {
+    targetUrl.searchParams.delete(key)
+  })
+  requestedUrl.searchParams.forEach((value, key) => {
+    targetUrl.searchParams.append(key, value)
+  })
   targetUrl.hash = requestedUrl.hash
   return targetUrl.href
 }

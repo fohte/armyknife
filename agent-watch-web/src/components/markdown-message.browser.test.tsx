@@ -2,7 +2,7 @@ import { err, type Result } from 'neverthrow'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { page, userEvent } from 'vitest/browser'
+import { userEvent } from 'vitest/browser'
 
 import {
   MarkdownMessage,
@@ -83,21 +83,36 @@ it('opens a registered web UI link in its tab instead of navigating the browser'
     )
   })
 
-  const link = page.getByRole('link', { name: 'canvas page' })
+  const link = container.querySelector<HTMLAnchorElement>(
+    '.markdown-web-ui-link a',
+  )
+  if (link === null) throw new Error('Expected the registered web UI link')
   await act(async () => userEvent.click(link))
+  let modifiedClickAllowed = false
+  act(() => {
+    modifiedClickAllowed = link.dispatchEvent(
+      new MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+        metaKey: true,
+      }),
+    )
+  })
 
   const snapshot = () => ({
     chip: container.querySelector('.markdown-web-ui-link-name')?.textContent,
     linkHref: container.querySelector('a')?.getAttribute('href'),
     target: container.querySelector('a')?.getAttribute('target') ?? null,
     calls: onOpenWebUi.mock.calls,
+    modifiedClickAllowed,
     currentUrl: window.location.href,
   })
   expect(snapshot()).toEqual({
     chip: 'Canvas editor',
     linkHref: 'http://localhost:43123/studio/page#page-fakehash',
-    target: null,
+    target: '_blank',
     calls: [[webUi, 'http://localhost:43123/studio/page#page-fakehash']],
+    modifiedClickAllowed: true,
     currentUrl,
   })
 })

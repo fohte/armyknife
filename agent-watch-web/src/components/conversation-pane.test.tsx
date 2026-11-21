@@ -4911,6 +4911,76 @@ it('opens a registered web UI when other status tabs are available', () => {
   })
 })
 
+it('opens a registered deep link when the desktop status panel starts closed', async () => {
+  const webUi = {
+    name: 'Canvas editor',
+    url: 'http://localhost:43123/studio/',
+  }
+  const message: ChatItem = {
+    type: 'assistant',
+    text: '[canvas page](http://localhost:43123/studio/pages/sample#page-fakehash)',
+  }
+  vi.stubGlobal(
+    'fetch',
+    vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input)
+      if (url.endsWith('/messages?limit=100')) {
+        return Promise.resolve(jsonResponse(messagesResponse([message])))
+      }
+      if (url.endsWith('/actions')) {
+        return Promise.resolve(jsonResponse(actions))
+      }
+      return Promise.resolve(jsonResponse({}))
+    }),
+  )
+  function ConversationHarness() {
+    const [statusPanelOpen, setStatusPanelOpen] = useState(false)
+    return (
+      <ConversationPane
+        session={{ ...session, webUis: [webUi] }}
+        shouldSkipSessionTreeFetch
+        initialSessionTree={[]}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+        statusPanelOpen={statusPanelOpen}
+        onToggleStatusPanel={() => {
+          setStatusPanelOpen((open) => !open)
+        }}
+        onCloseStatusPanel={() => {
+          setStatusPanelOpen(false)
+        }}
+      />
+    )
+  }
+
+  root = createRoot(container)
+  act(() => root?.render(<ConversationHarness />))
+  await waitForState(
+    () => container.querySelector('.markdown-web-ui-link a') !== null,
+  )
+  const link = requireElement(
+    container.querySelector<HTMLAnchorElement>('.markdown-web-ui-link a'),
+  )
+  await act(async () => userEvent.click(link))
+
+  const snapshot = () => ({
+    statusPanel: container.querySelector('.session-status-panel') !== null,
+    selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
+      ?.textContent,
+    fullscreen: container
+      .querySelector('.web-ui-pane')
+      ?.classList.contains('is-fullscreen'),
+    iframe: container.querySelector('iframe')?.getAttribute('src') ?? null,
+  })
+  expect(snapshot()).toEqual({
+    statusPanel: true,
+    selectedTab: 'Canvas editor',
+    fullscreen: true,
+    iframe: 'http://localhost:43123/studio/pages/sample#page-fakehash',
+  })
+})
+
 it('posts decision reviews and reflects the refreshed review state', async () => {
   const jsonResponse = (body: unknown) =>
     new Response(JSON.stringify(body), {

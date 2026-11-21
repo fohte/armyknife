@@ -15,6 +15,7 @@ import { SessionTasksPanel } from '#components/session-tasks-panel'
 import { SessionTreePanel } from '#components/session-tree-panel'
 import { useWebUiFullscreen } from '#components/use-web-ui-fullscreen'
 import { WebUiPane } from '#components/web-ui-pane'
+import { webUiTabId } from '#components/web-ui-tab-id'
 import { useSessionOperations } from '#session-operation-context'
 import { createSessionOperation } from '#session-operations'
 import { getSessionTasks } from '#session-task-utils'
@@ -156,9 +157,7 @@ export function useConversationStatusPanel({
     !registeredWebUis.some((webUi) => webUi.name === 'crit')
       ? [...registeredWebUis, { name: 'crit', url: pendingCritReviewUrl }]
       : registeredWebUis
-  const webUiTabIds = webUis.map((webUi) =>
-    webUi.name === 'crit' ? 'crit' : `web-ui-${encodeURIComponent(webUi.url)}`,
-  )
+  const webUiTabIds = webUis.map(webUiTabId)
   const {
     request: fullscreenRequest,
     webUiRequest: fullscreenWebUi,

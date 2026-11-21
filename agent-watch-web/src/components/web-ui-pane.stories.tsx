@@ -43,6 +43,18 @@ export const CanvasPageFillsTheScreen: Story = {
   },
 }
 
+export const MobileCanvasPageHasConversationBackNavigation: Story = {
+  name: 'A mobile canvas page shows back navigation without tabs',
+  args: {
+    name: 'Canvas editor',
+    url: 'http://localhost:43123/studio/pages/sample#page-fakehash',
+    targetUrlOverride:
+      'http://localhost:43123/studio/pages/sample#page-fakehash',
+    defaultFullscreen: true,
+    mobilePresentation: true,
+  },
+}
+
 export const RemotePaneOpensTheExposedUrl: Story = {
   name: 'A remote pane opens the exposed URL',
   args: {

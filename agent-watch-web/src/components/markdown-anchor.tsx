@@ -59,6 +59,15 @@ export const MarkdownAnchor: NonNullable<Components['a']> = ({
   if (sessionLink === null && webUiLink !== null) {
     const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
       if (onOpenWebUi === undefined || href === undefined) return
+      if (
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      ) {
+        return
+      }
       event.preventDefault()
       onOpenWebUi(webUiLink.webUi, href)
     }
@@ -67,9 +76,9 @@ export const MarkdownAnchor: NonNullable<Components['a']> = ({
         <a
           {...props}
           href={href}
-          {...(onOpenWebUi === undefined
-            ? { target: '_blank', rel: 'noopener noreferrer' }
-            : { onClick: handleClick })}
+          target="_blank"
+          rel="noopener noreferrer"
+          {...(onOpenWebUi === undefined ? {} : { onClick: handleClick })}
         >
           {children}
         </a>
