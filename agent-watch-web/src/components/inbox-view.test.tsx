@@ -835,6 +835,62 @@ it('reveals only Later for a done session', () => {
   })
 })
 
+it('keeps swipe actions visible when vertical scrolling starts on a swiped row', () => {
+  const onSelect = vi.fn()
+  renderInbox({
+    isMobile: true,
+    onLater: () => undefined,
+    onCloseSession: () => undefined,
+    onSelect,
+  })
+  const row = container.querySelector<HTMLButtonElement>(
+    '.needs-action-section [data-session-row]',
+  )
+  if (row === null) throw new Error('Expected the sample inbox row')
+  const dispatchPointer = (type: string, x: number, y: number) =>
+    row.dispatchEvent(
+      new PointerEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: x,
+        clientY: y,
+      }),
+    )
+
+  act(() => {
+    dispatchPointer('pointerdown', 260, 20)
+    dispatchPointer('pointermove', 120, 20)
+    dispatchPointer('pointerup', 120, 20)
+  })
+  act(() => {
+    dispatchPointer('pointerdown', 260, 20)
+    dispatchPointer('pointermove', 260, 40)
+  })
+  act(() => {
+    dispatchPointer('pointerup', 260, 40)
+    row.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+
+  const item = row.closest('.session-list-item')
+  const snapshot = () => ({
+    isSwiped: item?.classList.contains('is-swiped'),
+    transform: row.style.transform,
+    actions: Array.from(
+      item?.querySelectorAll('button[aria-label]') ?? [],
+      (button) => button.getAttribute('aria-label'),
+    ),
+    selectCalls: onSelect.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    isSwiped: true,
+    transform: 'translateX(-176px)',
+    actions: ['Later: Check the retry policy', 'Close: Check the retry policy'],
+    selectCalls: [],
+  })
+})
+
 it('opens the mobile row actions sheet after a long press', () => {
   const onLater = vi.fn()
   const onCloseSession = vi.fn()
@@ -895,6 +951,79 @@ it('opens the mobile row actions sheet after a long press', () => {
     sheetOpen: false,
   })
   vi.useRealTimers()
+})
+
+it('runs Later and dismisses the row actions sheet after a long press', () => {
+  const onLater = vi.fn()
+  renderInbox({ isMobile: true, onLater })
+  const row = container.querySelector<HTMLButtonElement>(
+    '.needs-action-section [data-session-row]',
+  )
+  if (row === null) throw new Error('Expected the sample inbox row')
+  vi.useFakeTimers()
+
+  act(() => {
+    row.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 1,
+        pointerType: 'touch',
+        clientX: 100,
+        clientY: 20,
+      }),
+    )
+    vi.advanceTimersByTime(500)
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Session actions"] [role="menuitem"]',
+      )
+      ?.click()
+  })
+
+  const snapshot = () => ({
+    laterCalls: onLater.mock.calls,
+    sheetOpen:
+      container.querySelector('[aria-label="Session actions"]') !== null,
+  })
+  expect(snapshot()).toEqual({
+    laterCalls: [['sample-needs-action']],
+    sheetOpen: false,
+  })
+})
+
+it('cancels a long press when another pointer touches the row', () => {
+  renderInbox({ isMobile: true, onLater: () => undefined })
+  const row = container.querySelector<HTMLButtonElement>(
+    '.needs-action-section [data-session-row]',
+  )
+  if (row === null) throw new Error('Expected the sample inbox row')
+  vi.useFakeTimers()
+
+  act(() => {
+    for (const pointerId of [1, 2]) {
+      row.dispatchEvent(
+        new PointerEvent('pointerdown', {
+          bubbles: true,
+          cancelable: true,
+          pointerId,
+          pointerType: 'touch',
+          clientX: 100,
+          clientY: 20,
+        }),
+      )
+    }
+    vi.advanceTimersByTime(500)
+  })
+
+  const snapshot = () => ({
+    sheetOpen:
+      container.querySelector('[aria-label="Session actions"]') !== null,
+    transform: row.style.transform,
+  })
+  expect(snapshot()).toEqual({ sheetOpen: false, transform: 'translateX(0px)' })
 })
 
 it('shows the mobile Save view sheet and saves its entered name', () => {

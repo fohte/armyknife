@@ -37,10 +37,16 @@ export function InboxSessionListItem({
   const swipeWidth = (showLaterAction ? 88 : 0) + (showCloseAction ? 88 : 0)
   const [swiped, setSwiped] = useState(defaultSwiped)
   const [dragOffset, setDragOffset] = useState(defaultSwiped ? -swipeWidth : 0)
-  const pointerStart = useRef<{ x: number; y: number; baseX: number } | null>(
-    null,
-  )
-  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pointerStart = useRef<{
+    pointerId: number
+    x: number
+    y: number
+    baseX: number
+  } | null>(null)
+  const longPressTimer = useRef<{
+    pointerId: number
+    timeout: ReturnType<typeof setTimeout>
+  } | null>(null)
   const suppressClick = useRef(false)
   const feedback = useOptionalAsyncActionFeedback()
   const closeAction = feedback?.actions.find(
@@ -54,50 +60,77 @@ export function InboxSessionListItem({
 
   useEffect(
     () => () => {
-      if (longPressTimer.current !== null) clearTimeout(longPressTimer.current)
+      if (longPressTimer.current !== null) {
+        clearTimeout(longPressTimer.current.timeout)
+      }
     },
     [],
   )
 
-  function clearLongPress() {
-    if (longPressTimer.current !== null) {
-      clearTimeout(longPressTimer.current)
-      longPressTimer.current = null
+  function clearLongPress(pointerId?: number) {
+    const timer = longPressTimer.current
+    if (
+      timer === null ||
+      (pointerId !== undefined && timer.pointerId !== pointerId)
+    ) {
+      return
     }
+    clearTimeout(timer.timeout)
+    longPressTimer.current = null
   }
 
   function handlePointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
     if (!canShowActions || event.button !== 0) return
+    const activePointer = pointerStart.current
+    if (activePointer !== null && activePointer.pointerId !== event.pointerId) {
+      clearLongPress(activePointer.pointerId)
+      pointerStart.current = null
+      suppressClick.current = true
+      setDragOffset(swiped ? -swipeWidth : 0)
+      return
+    }
+    clearLongPress()
     suppressClick.current = false
     pointerStart.current = {
+      pointerId: event.pointerId,
       x: event.clientX,
       y: event.clientY,
       baseX: swiped ? -swipeWidth : 0,
     }
     setDragOffset(swiped ? -swipeWidth : 0)
     if (event.pointerType === 'touch' && onOpenActions !== undefined) {
-      longPressTimer.current = setTimeout(() => {
+      const pointerId = event.pointerId
+      const timeout = setTimeout(() => {
+        if (
+          pointerStart.current?.pointerId !== pointerId ||
+          longPressTimer.current?.pointerId !== pointerId
+        ) {
+          return
+        }
+        longPressTimer.current = null
         suppressClick.current = true
         pointerStart.current = null
         setSwiped(false)
         setDragOffset(0)
         onOpenActions(session)
       }, 500)
+      longPressTimer.current = { pointerId, timeout }
     }
   }
 
   function handlePointerMove(event: ReactPointerEvent<HTMLButtonElement>) {
     const start = pointerStart.current
-    if (start === null) return
+    if (start === null || start.pointerId !== event.pointerId) return
     const deltaX = event.clientX - start.x
     const deltaY = event.clientY - start.y
     if (Math.abs(deltaY) > 10 && Math.abs(deltaY) > Math.abs(deltaX)) {
-      clearLongPress()
+      clearLongPress(event.pointerId)
       pointerStart.current = null
-      setDragOffset(0)
+      suppressClick.current = true
+      setDragOffset(start.baseX)
       return
     }
-    if (Math.abs(deltaX) > 8) clearLongPress()
+    if (Math.abs(deltaX) > 8) clearLongPress(event.pointerId)
     if (Math.abs(deltaX) > Math.abs(deltaY)) {
       setDragOffset(Math.max(-swipeWidth, Math.min(0, start.baseX + deltaX)))
     }
@@ -105,9 +138,9 @@ export function InboxSessionListItem({
 
   function handlePointerUp(event: ReactPointerEvent<HTMLButtonElement>) {
     const start = pointerStart.current
-    clearLongPress()
+    if (start === null || start.pointerId !== event.pointerId) return
+    clearLongPress(event.pointerId)
     pointerStart.current = null
-    if (start === null) return
     const deltaX = event.clientX - start.x
     if (Math.abs(deltaX) >= 35) {
       suppressClick.current = true
@@ -165,14 +198,18 @@ export function InboxSessionListItem({
         onContextMenu={(event) => {
           if (!canShowActions || onOpenActions === undefined) return
           event.preventDefault()
+          clearLongPress()
+          pointerStart.current = null
           suppressClick.current = true
           onOpenActions(session)
         }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        onPointerCancel={() => {
-          clearLongPress()
+        onPointerCancel={(event) => {
+          const start = pointerStart.current
+          if (start === null || start.pointerId !== event.pointerId) return
+          clearLongPress(event.pointerId)
           pointerStart.current = null
           setDragOffset(swiped ? -swipeWidth : 0)
         }}
