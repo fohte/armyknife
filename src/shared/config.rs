@@ -870,6 +870,7 @@ mod tests {
                     active_profile: None,
                     profiles: HashMap::new(),
                     merge_notification: None,
+                    unreported_stop_notification: None,
                     stop_hook_instruction: None,
                     bg_task_reminder: BgTaskReminderConfig::default(),
                     codex: CodexConfig {
@@ -1002,6 +1003,21 @@ mod tests {
                 ),
                 ..Default::default()
             }
+        );
+    }
+
+    #[test]
+    fn parse_agent_unreported_stop_notification_yaml() {
+        let yaml = indoc! {"
+            agent:
+              unreported_stop_notification: |
+                Delegate {session_id} stopped: {last_message}
+        "};
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+
+        assert_eq!(
+            config.agent.unreported_stop_notification,
+            Some("Delegate {session_id} stopped: {last_message}\n".to_string()),
         );
     }
 
@@ -2125,6 +2141,23 @@ mod tests {
                 "description": indoc! {"
                     Message template sent to the delegator when a delegated branch's PR merges.
                     Supports `{branch}` and `{pr_url}` placeholders. When unset, no notification is sent."},
+                "type": ["string", "null"],
+                "default": null,
+            })
+        );
+    }
+
+    #[cfg(feature = "schema-gen")]
+    #[rstest]
+    fn generate_schema_contains_unreported_stop_notification_description(
+        schema_value: serde_json::Value,
+    ) {
+        assert_eq!(
+            schema_value["$defs"]["AgentConfig"]["properties"]["unreported_stop_notification"],
+            serde_json::json!({
+                "description": indoc! {"
+                    Message template sent to the delegator when a delegate stops without reporting.
+                    Supports `{session_id}` and `{last_message}`. When unset, no notification is sent."},
                 "type": ["string", "null"],
                 "default": null,
             })

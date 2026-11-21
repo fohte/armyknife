@@ -23,6 +23,7 @@ mod usage;
 pub(crate) use archive::{ArchiveLogContext, archive_codex_thread_before_delete_with};
 pub(crate) use database::AgentFile;
 pub(crate) use database::ProposalResolution;
+pub(crate) use database::check_unreported_stop;
 pub(crate) use database::set_watch_web_compacting;
 pub(crate) use database::{
     AgentDecision, AgentDecisionCounts, AgentProposal, PermissionDeniedOperation,
@@ -33,6 +34,7 @@ pub(crate) use database::{
     resolve_permission_request, resolve_permission_request_with_answers, serialize_session,
 };
 pub(crate) use database::{AgentTodo, TodoResolution};
+pub(crate) use peer_out_messages::insert_watch_web_peer_out_message_from;
 pub(crate) use peer_out_messages::{
     insert_watch_web_peer_out_message, mark_watch_web_peer_out_message_delivered,
     watch_web_peer_out_messages_from,

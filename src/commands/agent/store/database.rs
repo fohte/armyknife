@@ -24,6 +24,7 @@ mod queued_prompts;
 mod replacements;
 mod resolution_lock;
 mod todos;
+mod unreported_stop_checks;
 mod vibe_setting_revision;
 mod wake;
 mod web_state;
@@ -72,6 +73,7 @@ pub(crate) use todos::{
     add_agent_todo, agent_todos, incomplete_agent_todo_titles, lock_agent_todo_resolution,
     resolve_agent_todo, set_agent_todo_folded,
 };
+pub(crate) use unreported_stop_checks::check_unreported_stop;
 pub(crate) use web_state::WatchWebSessionState;
 pub(crate) use web_state::set_watch_web_compacting;
 pub(super) use web_state::{
