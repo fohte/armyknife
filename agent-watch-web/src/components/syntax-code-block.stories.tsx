@@ -34,6 +34,13 @@ export const BashHighlightsACommand: Story = {
   name: 'A Bash block keeps heredocs and line breaks visible',
 }
 
+export const WithoutCopyToolbar: Story = {
+  name: 'The block renders without a copy toolbar',
+  args: {
+    copyable: false,
+  },
+}
+
 export const UnspecifiedLanguageUsesText: Story = {
   name: 'A block without a language label is identified as text',
   args: {

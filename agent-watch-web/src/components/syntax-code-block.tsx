@@ -3,6 +3,7 @@ import '#components/syntax-code-block.css'
 import { Fragment, type ReactNode, useEffect, useState } from 'react'
 import type { TokensResult } from 'shiki/types'
 
+import { CodeBlockCopyButton } from '#components/code-block-copy-button'
 import { useCopyToClipboard } from '#components/use-copy-to-clipboard'
 
 type SyntaxCodeBlockProps = {
@@ -174,37 +175,11 @@ export function SyntaxCodeBlock({
 
   if (!copyable) return pre
 
-  const accessibleStatus =
-    status === 'copied'
-      ? 'Code copied'
-      : status === 'failed'
-        ? 'Could not copy code'
-        : ''
-  const buttonLabel =
-    status === 'copied'
-      ? '✓ Copied'
-      : status === 'failed'
-        ? 'Copy failed'
-        : 'Copy'
-
   return (
     <div className="syntax-code-block-container">
       <div className="syntax-code-block-toolbar">
         <span className="syntax-code-block-language">{language}</span>
-        <button
-          className="syntax-code-block-copy-button"
-          type="button"
-          aria-label={status === 'idle' ? 'Copy code' : accessibleStatus}
-          title="Copy code"
-          onClick={copy}
-        >
-          {buttonLabel}
-        </button>
-        {accessibleStatus === '' ? null : (
-          <span className="sr-only" role="status">
-            {accessibleStatus}
-          </span>
-        )}
+        <CodeBlockCopyButton onCopy={copy} status={status} />
       </div>
       {pre}
     </div>
