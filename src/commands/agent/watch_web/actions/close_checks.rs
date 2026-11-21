@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
+use crate::commands::agent::types::Session;
 use crate::infra::process::ProcessInPath;
 use crate::infra::process::find_non_shell_processes_in_path;
 use crate::shared::cleanup::{self, WorktreeProcessGuardError};
@@ -29,28 +30,42 @@ struct CloseProcess {
 }
 
 impl CloseChecks {
-    pub(super) async fn inspect(session_path: &Path) -> Self {
-        let session_path = session_path.to_path_buf();
+    pub(super) async fn inspect(session: &Session, stop_and_close: bool) -> Self {
+        let session_path = session.cwd.clone();
         let target_path = session_path.clone();
-        let target = tokio::task::spawn_blocking(move || {
-            let target = worktree_delete::resolve_target(&target_path).ok()?;
-            let branch = worktree_delete::resolve_merge_guard_branch(
-                &target.main_repo,
-                target.branch_name.as_deref(),
-            );
-            Some((target, branch))
+        let inspection_session = session.clone();
+        let (target, stopped_agent_pid) = tokio::task::spawn_blocking(move || {
+            let stopped_agent_pid = if stop_and_close {
+                crate::commands::agent::close::resolve_agent_pid_for_session(&inspection_session)
+                    .ok()
+                    .flatten()
+            } else {
+                None
+            };
+            let target = worktree_delete::resolve_target(&target_path)
+                .ok()
+                .map(|target| {
+                    let branch = worktree_delete::resolve_merge_guard_branch(
+                        &target.main_repo,
+                        target.branch_name.as_deref(),
+                    );
+                    (target, branch)
+                });
+            (target, stopped_agent_pid)
         })
         .await
-        .ok()
-        .flatten();
-        let Some((target, branch)) = target else {
-            return Self::inspect_without_target(session_path).await;
-        };
-
-        Self::inspect_target(target, branch).await
+        .unwrap_or_default();
+        match target {
+            Some((target, branch)) => Self::inspect_target(target, branch, stopped_agent_pid).await,
+            None => Self::inspect_without_target(session_path, stopped_agent_pid).await,
+        }
     }
 
-    async fn inspect_target(target: WorktreeDeleteTarget, branch: Option<String>) -> Self {
+    async fn inspect_target(
+        target: WorktreeDeleteTarget,
+        branch: Option<String>,
+        stopped_agent_pid: Option<u32>,
+    ) -> Self {
         let worktree_path = target.worktree_path.clone();
         let repo = target.main_repo;
         Self::inspect_with(
@@ -66,18 +81,33 @@ impl CloseChecks {
                 .ok()
                 .map(|status| worktree_delete::classify_merge_guard_status(branch, status))
             },
-            |path| cleanup::check_process_guard(path, false, find_non_shell_processes_in_path),
+            move |path| {
+                check_process_guard_for_close(
+                    path,
+                    stopped_agent_pid,
+                    find_non_shell_processes_in_path,
+                )
+            },
         )
         .await
     }
 
-    async fn inspect_without_target(worktree_path: PathBuf) -> Self {
+    async fn inspect_without_target(
+        worktree_path: PathBuf,
+        stopped_agent_pid: Option<u32>,
+    ) -> Self {
         Self::inspect_with(
             worktree_path,
             None,
             |path| worktree::uncommitted_files(path).unwrap_or_default(),
             |_| async { None },
-            |path| cleanup::check_process_guard(path, false, find_non_shell_processes_in_path),
+            move |path| {
+                check_process_guard_for_close(
+                    path,
+                    stopped_agent_pid,
+                    find_non_shell_processes_in_path,
+                )
+            },
         )
         .await
     }
@@ -155,6 +185,21 @@ impl CloseChecks {
             process_inspection_unavailable,
         }
     }
+}
+
+fn check_process_guard_for_close(
+    worktree_path: &Path,
+    stopped_agent_pid: Option<u32>,
+    detect_processes: impl FnOnce(&Path) -> Option<Vec<ProcessInPath>>,
+) -> Result<Vec<ProcessInPath>, WorktreeProcessGuardError> {
+    cleanup::check_process_guard(worktree_path, false, |path| {
+        detect_processes(path).map(|processes| {
+            processes
+                .into_iter()
+                .filter(|process| Some(process.pid) != stopped_agent_pid)
+                .collect()
+        })
+    })
 }
 
 #[cfg(test)]
@@ -275,6 +320,64 @@ mod tests {
                 "processes": [],
                 "processInspectionUnavailable": false,
             }),
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::stopped_agent_is_filtered(
+        Some(12345),
+        "23456 (fictional-worker)",
+        vec![(23456, "fictional-worker")],
+    )]
+    #[case::running_agent_remains_a_blocker(
+        None,
+        "12345 (fictional-agent), 23456 (fictional-worker)",
+        vec![(12345, "fictional-agent"), (23456, "fictional-worker")],
+    )]
+    fn process_guard_filters_only_the_agent_selected_for_stopping(
+        #[case] stopped_agent_pid: Option<u32>,
+        #[case] expected_process_list: &str,
+        #[case] expected_processes: Vec<(u32, &str)>,
+    ) {
+        let worktree_path = PathBuf::from("/fictional/worktree");
+        let actual = check_process_guard_for_close(&worktree_path, stopped_agent_pid, |_| {
+            Some(vec![
+                ProcessInPath {
+                    pid: 12345,
+                    comm: "fictional-agent".to_string(),
+                },
+                ProcessInPath {
+                    pid: 23456,
+                    comm: "fictional-worker".to_string(),
+                },
+            ])
+        });
+        let Err(WorktreeProcessGuardError::ActiveProcesses {
+            worktree_path,
+            process_list,
+            processes,
+        }) = actual
+        else {
+            panic!("expected active process guard error");
+        };
+
+        assert_eq!(
+            (
+                worktree_path.display().to_string(),
+                process_list,
+                processes
+                    .into_iter()
+                    .map(|process| (process.pid, process.comm))
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                "/fictional/worktree".to_string(),
+                expected_process_list.to_string(),
+                expected_processes
+                    .into_iter()
+                    .map(|(pid, comm)| (pid, comm.to_string()))
+                    .collect::<Vec<_>>(),
+            ),
         );
     }
 

@@ -66,8 +66,10 @@ pub(super) fn router(message_loaders: RouteLoaders) -> Router {
         resume_locks: KeyedMutexRegistry::default(),
         resume_pending: resume::PendingSessionResumes::default(),
         message_loaders,
-        close_checks_inspector: Arc::new(|path| {
-            Box::pin(async move { close_checks::CloseChecks::inspect(&path).await })
+        close_checks_inspector: Arc::new(|session, stop_and_close| {
+            Box::pin(
+                async move { close_checks::CloseChecks::inspect(&session, stop_and_close).await },
+            )
         }),
     })
 }
@@ -161,7 +163,7 @@ struct ActionState {
 type RepoIdentityResolver = Arc<dyn Fn(&Path) -> Option<(String, String)> + Send + Sync>;
 type VibeConfigLoader = Arc<dyn Fn() -> Config + Send + Sync>;
 type CloseChecksInspector = Arc<
-    dyn Fn(PathBuf) -> Pin<Box<dyn Future<Output = close_checks::CloseChecks> + Send>>
+    dyn Fn(Session, bool) -> Pin<Box<dyn Future<Output = close_checks::CloseChecks> + Send>>
         + Send
         + Sync,
 >;
@@ -453,7 +455,7 @@ mod tests {
     use crate::commands::agent::types::{MAIN_THREAD_AGENT_KEY, TmuxInfo};
 
     fn test_close_checks_inspector() -> CloseChecksInspector {
-        Arc::new(|_| {
+        Arc::new(|_, _| {
             Box::pin(async {
                 CloseChecks::from_observations(
                     PathBuf::from("/fictional/worktree"),

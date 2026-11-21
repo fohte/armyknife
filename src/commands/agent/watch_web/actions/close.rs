@@ -40,7 +40,8 @@ pub(super) async fn close(
         log_close_failure(&session.session_id, &error);
         let mut api_error = ApiError::close(error);
         if api_error.needs_close_checks() {
-            let checks = (state.close_checks_inspector)(session.cwd.clone()).await;
+            let checks =
+                (state.close_checks_inspector)(session.clone(), request.stop_and_close).await;
             api_error.set_close_checks(checks);
         }
         return Err(api_error);
