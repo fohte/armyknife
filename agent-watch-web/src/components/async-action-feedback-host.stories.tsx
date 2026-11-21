@@ -43,6 +43,17 @@ export const ActivityKeepsTheResult: Story = {
   args: { activityOpen: true, toastIds: [] },
 }
 
+export const ActivityShowsEmptyState: Story = {
+  name: 'Activity explains where merge and close results will appear.',
+  args: { actions: [], toastIds: [], activityOpen: true },
+}
+
+export const PhoneShowsEmptyActivity: Story = {
+  name: 'The phone shows the empty Activity state.',
+  parameters: { viewport: { defaultViewport: 'mobile2' } },
+  args: { actions: [], toastIds: [], activityOpen: true },
+}
+
 export const ToastsSitAboveAnOpenPhoneSheet: Story = {
   name: 'The phone action toast sits above an open sheet.',
   parameters: { viewport: { defaultViewport: 'mobile2' } },

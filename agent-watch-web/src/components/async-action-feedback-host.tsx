@@ -1,6 +1,6 @@
 import '#components/async-action-feedback-host.css'
 
-import type { RefObject } from 'react'
+import { type RefObject, useEffect } from 'react'
 
 import type { AsyncAction } from '#async-action-feedback'
 import { AsyncActionItem } from '#components/async-action-item'
@@ -48,6 +48,23 @@ export function AsyncActionFeedbackHost({
     selectedActionId === null
       ? null
       : (actions.find((action) => action.id === selectedActionId) ?? null)
+
+  useEffect(() => {
+    if (!activityOpen) return
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      closeActivity()
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [activityOpen, closeActivity])
+
   return (
     <>
       <div
@@ -102,12 +119,17 @@ export function AsyncActionFeedbackHost({
           >
             <header>
               <h2>Activity</h2>
-              <button type="button" onClick={clearFinished}>
-                Clear finished
-              </button>
+              {ordered.length > 0 ? (
+                <button type="button" onClick={clearFinished}>
+                  Clear finished
+                </button>
+              ) : null}
             </header>
             {ordered.length === 0 ? (
-              <p className="async-action-empty">No recent activity.</p>
+              <div className="async-action-empty">
+                <p>No recent activity.</p>
+                <p>Merge and Close results appear here.</p>
+              </div>
             ) : null}
             <div className="async-action-activity-list">
               {ordered.map((action) => (
