@@ -48,7 +48,7 @@ impl Session {
     pub fn display_status(&self) -> DisplayStatus {
         let has_pending_bg_tasks = self.has_pending_bg_tasks();
         let has_review_wait_marker =
-            !self.crit_urls.is_empty() || !self.pending_human_review_ids.is_empty();
+            self.is_waiting_for_crit_review() || !self.pending_human_review_ids.is_empty();
         let codex_review_wait = self.engine == Engine::Codex && has_review_wait_marker;
 
         if self.status == SessionStatus::Stopped && (has_pending_bg_tasks || codex_review_wait) {
@@ -158,6 +158,7 @@ mod tests {
             launched_with_vibe: false,
             child_launch: Default::default(),
             crit_urls: Vec::new(),
+            crit_not_waiting_urls: Default::default(),
             web_uis: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/tmp/test"),

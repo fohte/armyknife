@@ -131,7 +131,7 @@ fn has_pending_review_document(session: &Session) -> bool {
 }
 
 fn waiting_input_user_turn(session: &Session) -> Option<UserTurnKind> {
-    if !session.crit_urls.is_empty() {
+    if session.is_waiting_for_crit_review() {
         Some(UserTurnKind::Crit)
     } else if has_pending_review_document(session) {
         Some(UserTurnKind::Body)
@@ -177,6 +177,7 @@ mod tests {
             launched_with_vibe: false,
             child_launch: Default::default(),
             crit_urls: Vec::new(),
+            crit_not_waiting_urls: Default::default(),
             web_uis: Vec::new(),
             pending_human_review_ids: BTreeSet::new(),
             cwd: PathBuf::from("/tmp/example"),
@@ -322,6 +323,20 @@ mod tests {
         assert_eq!(
             next_user_turn(&[session], &AgentConfig::default()).map(|turn| turn.kind),
             Some(UserTurnKind::Body)
+        );
+    }
+
+    #[test]
+    fn finished_crit_review_is_not_a_user_turn_until_the_client_reconnects() {
+        let mut session = session("review", timestamp(1));
+        session.status = SessionStatus::WaitingInput;
+        let url = "https://example.test/review";
+        session.crit_urls.push(url.to_string());
+        session.crit_not_waiting_urls.insert(url.to_string());
+
+        assert_eq!(
+            next_user_turn(&[session], &AgentConfig::default()).map(|turn| turn.kind),
+            None
         );
     }
 
