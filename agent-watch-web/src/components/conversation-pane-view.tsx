@@ -86,6 +86,7 @@ type ConversationPaneViewProps = {
   isMobile?: boolean
   statusPanelOpen?: boolean
   mobileStatusPanel?: ReactNode
+  mobileWebUi?: ReactNode
   selectedDecisionSeq?: number | null
   onToggleStatusPanel?: () => void
   onOpenTasks?: () => void
@@ -136,6 +137,7 @@ export function ConversationPaneView({
   isMobile = false,
   statusPanelOpen = false,
   mobileStatusPanel = null,
+  mobileWebUi = null,
   selectedDecisionSeq = null,
   onToggleStatusPanel = () => undefined,
   onOpenTasks = () => undefined,
@@ -484,7 +486,9 @@ export function ConversationPaneView({
         position={selectionReplyPosition}
         onReply={replyToSelection}
       />
-      {isMobile && statusPanelOpen && mobileStatusPanel !== null ? (
+      {isMobile && mobileWebUi !== null ? (
+        <div className="mobile-session-status-overlay">{mobileWebUi}</div>
+      ) : isMobile && statusPanelOpen && mobileStatusPanel !== null ? (
         <div className="mobile-session-status-overlay">{mobileStatusPanel}</div>
       ) : null}
     </section>

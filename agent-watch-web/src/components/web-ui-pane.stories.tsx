@@ -32,6 +32,29 @@ export const CritReviewFillsTheScreen: Story = {
   },
 }
 
+export const CanvasPageFillsTheScreen: Story = {
+  name: 'A canvas page fills the screen with its deep link',
+  args: {
+    name: 'Canvas editor',
+    url: 'http://localhost:43123/studio/pages/sample#page-fakehash',
+    targetUrlOverride:
+      'http://localhost:43123/studio/pages/sample#page-fakehash',
+    defaultFullscreen: true,
+  },
+}
+
+export const MobileCanvasPageHasConversationBackNavigation: Story = {
+  name: 'A mobile canvas page shows its URL and an external link',
+  args: {
+    name: 'Canvas editor',
+    url: 'http://localhost:43123/studio/pages/sample#page-fakehash',
+    targetUrlOverride:
+      'http://localhost:43123/studio/pages/sample#page-fakehash',
+    defaultFullscreen: true,
+    mobilePresentation: true,
+  },
+}
+
 export const RemotePaneOpensTheExposedUrl: Story = {
   name: 'A remote pane opens the exposed URL',
   args: {

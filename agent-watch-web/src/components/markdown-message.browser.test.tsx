@@ -8,6 +8,7 @@ import {
   MarkdownMessage,
   MarkdownSessionLinksProvider,
 } from '#components/markdown-message'
+import type { WebUiLinkTarget } from '#components/markdown-session-links'
 import { PeerMessage } from '#components/peer-message'
 import { getImageLightboxState } from '#image-lightbox-state.test'
 import type {
@@ -56,6 +57,64 @@ afterEach(() => {
   root = null
   container.remove()
   vi.unstubAllGlobals()
+})
+
+it('opens a registered web UI link in its tab instead of navigating the browser', async () => {
+  const webUi: WebUiLinkTarget = {
+    name: 'Canvas editor',
+    url: 'http://localhost:43123/studio/',
+  }
+  const onOpenWebUi = vi.fn()
+  const currentUrl = window.location.href
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <MarkdownSessionLinksProvider
+        sessions={[]}
+        webUis={[webUi]}
+        onOpenWebUi={onOpenWebUi}
+      >
+        <MarkdownMessage>
+          {
+            'Open the [canvas page](http://localhost:43123/studio/page#page-fakehash).'
+          }
+        </MarkdownMessage>
+      </MarkdownSessionLinksProvider>,
+    )
+  })
+
+  const link = container.querySelector<HTMLAnchorElement>(
+    '.markdown-web-ui-link a',
+  )
+  if (link === null) throw new Error('Expected the registered web UI link')
+  await act(async () => userEvent.click(link))
+  let modifiedClickAllowed = false
+  act(() => {
+    modifiedClickAllowed = link.dispatchEvent(
+      new MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+        metaKey: true,
+      }),
+    )
+  })
+
+  const snapshot = () => ({
+    chip: container.querySelector('.markdown-web-ui-link-name')?.textContent,
+    linkHref: container.querySelector('a')?.getAttribute('href'),
+    target: container.querySelector('a')?.getAttribute('target') ?? null,
+    calls: onOpenWebUi.mock.calls,
+    modifiedClickAllowed,
+    currentUrl: window.location.href,
+  })
+  expect(snapshot()).toEqual({
+    chip: 'Canvas editor',
+    linkHref: 'http://localhost:43123/studio/page#page-fakehash',
+    target: '_blank',
+    calls: [[webUi, 'http://localhost:43123/studio/page#page-fakehash']],
+    modifiedClickAllowed: true,
+    currentUrl,
+  })
 })
 
 function getMarkdownLayoutSnapshot() {
@@ -566,6 +625,89 @@ it('keeps the link next to an expandable linked Markdown image', async () => {
     },
     linkHref: 'https://example.test/article',
     imageHasNoLinkAncestor: true,
+  })
+})
+
+it('keeps a separate open action for a linked Markdown image targeting a web UI', async () => {
+  const webUi: WebUiLinkTarget = {
+    name: 'Canvas editor',
+    url: 'https://canvas.example.invalid/studio/',
+  }
+  const targetUrl =
+    'https://canvas.example.invalid/studio/pages/sample#page-fixture'
+  const onOpenWebUi = vi.fn()
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <MarkdownSessionLinksProvider
+        sessions={[]}
+        webUis={[webUi]}
+        onOpenWebUi={onOpenWebUi}
+      >
+        <MarkdownMessage>
+          {`[![Fixture illustration](/fixture-illustration.png)](${targetUrl})`}
+        </MarkdownMessage>
+      </MarkdownSessionLinksProvider>,
+    )
+  })
+
+  const openLink = container.querySelector<HTMLAnchorElement>(
+    '.markdown-image-link',
+  )
+  const enlarge = container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Enlarge Fixture illustration"]',
+  )
+  if (openLink === null) {
+    throw new Error('Expected a separate link for the registered web UI')
+  }
+  const registeredLink = openLink
+  if (enlarge === null) throw new Error('Expected the linked image button')
+  let nativeLinkDefaultPrevented = false
+  const recordLinkDefault = (event: MouseEvent) => {
+    if (
+      event.target instanceof Element &&
+      event.target.closest('.markdown-image-link') !== null
+    ) {
+      nativeLinkDefaultPrevented = event.defaultPrevented
+    }
+  }
+  container.addEventListener('click', recordLinkDefault)
+  await act(async () => userEvent.click(registeredLink))
+  container.removeEventListener('click', recordLinkDefault)
+  await act(async () => userEvent.click(enlarge))
+
+  function getState() {
+    return {
+      link: {
+        href: registeredLink.getAttribute('href'),
+        label: registeredLink.getAttribute('aria-label'),
+        rel: registeredLink.getAttribute('rel'),
+        target: registeredLink.getAttribute('target'),
+        text: registeredLink.textContent,
+      },
+      lightbox: getImageLightboxState(),
+      onOpenWebUi: onOpenWebUi.mock.calls,
+      nativeLinkDefaultPrevented,
+      webUiName: container.querySelector('.markdown-web-ui-link-name')
+        ?.textContent,
+    }
+  }
+  expect(getState()).toEqual({
+    link: {
+      href: targetUrl,
+      label: null,
+      rel: 'noopener noreferrer',
+      target: '_blank',
+      text: 'Open link',
+    },
+    lightbox: {
+      open: true,
+      isModal: true,
+      imageAlt: 'Fixture illustration',
+    },
+    onOpenWebUi: [[webUi, targetUrl]],
+    nativeLinkDefaultPrevented: true,
+    webUiName: 'Canvas editor',
   })
 })
 

@@ -4,6 +4,7 @@ import {
   MarkdownMessage,
   MarkdownSessionLinksProvider,
 } from '#components/markdown-message'
+import type { WebUiLinkTarget } from '#components/markdown-session-links'
 import type { SessionLinkTarget } from '#types'
 
 const meta = {
@@ -81,6 +82,29 @@ Use \`${linkedSession.id}\` to open it.
 ~~~text
 ${linkedSession.id}
 ~~~`,
+  },
+}
+
+const designWebUi: WebUiLinkTarget = {
+  name: 'Canvas editor',
+  url: 'http://localhost:43123/studio/',
+  exposedUrl: 'https://canvas.example.invalid/studio/',
+}
+
+export const RegisteredWebUiLinksShowTheirTabName: Story = {
+  name: 'A registered web UI link shows its tab name',
+  render: (args) => (
+    <MarkdownSessionLinksProvider
+      sessions={[]}
+      webUis={[designWebUi]}
+      onOpenWebUi={() => undefined}
+    >
+      <MarkdownMessage {...args} />
+    </MarkdownSessionLinksProvider>
+  ),
+  args: {
+    children:
+      'Open the [canvas page](http://localhost:43123/studio/pages/sample#page-fakehash) or the [external guide](https://example.invalid/guide).',
   },
 }
 
