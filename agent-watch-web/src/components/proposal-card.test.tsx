@@ -238,18 +238,18 @@ it('renders the proposal heading, recommended option, and pros and cons', () => 
     groupRole: 'radiogroup',
     options: [
       {
-        text: 'A · Use the existing flowRecommendedExplain the change before applying it.+ Small change− Adds one step',
+        text: 'Use the existing flowRecommendedExplain the change before applying it.+ Small change− Adds one step',
         checked: false,
         recommended: 'Recommended',
       },
       {
-        text: 'B · Show the choice earlierMove the choice before the next action.+ Clearer timing',
+        text: 'Show the choice earlierMove the choice before the next action.+ Clearer timing',
         checked: false,
         recommended: undefined,
       },
     ],
     buttons: [
-      { text: 'Choose …', disabled: true },
+      { text: 'Choose', disabled: true },
       { text: 'Ask for another option', disabled: false },
     ],
     hint: '1 / 2 to pick · ⌘↵ to send',
@@ -317,7 +317,7 @@ it('shows a saved image in an answered proposal comment', () => {
   })
 
   expect(snapshot()).toEqual({
-    status: 'Proposal · chose A',
+    status: 'Proposal · chose Use the existing flow',
     comment:
       '<p><button class="image-lightbox-trigger" type="button" aria-label="Enlarge Sample screenshot"><img class="chat-user-image" alt="Sample screenshot" loading="lazy" decoding="async" src="/api/images/fixture-image.png"></button></p>',
     commentInput: false,
@@ -363,7 +363,7 @@ it('keeps option labels phrasing-only and links associated with their radios', (
     optionTag: 'DIV',
     inputId: 'proposal-7-option-0',
     labelFor: 'proposal-7-option-0',
-    labelText: 'A · Use the existing flow',
+    labelText: 'Use the existing flow',
     labelLinkCount: 0,
     descriptionTag: 'DIV',
     descriptionLink: 'https://example.test',
@@ -485,7 +485,7 @@ it('selects a numbered option and sends it with the comment on Command-Enter', a
   expect(snapshot()).toEqual({
     submitPrevented: true,
     answerCalls: [[{ choice: 1, comment: 'Keep the earlier prompt short.' }]],
-    status: 'Proposal · chose B',
+    status: 'Proposal · chose Show the choice earlier',
     selected: [false, true],
     disabled: [true, true],
     comment: 'Keep the earlier prompt short.',
@@ -687,7 +687,10 @@ it('sends Command-Enter to the proposal card containing the comment field', asyn
     submitPrevented: true,
     firstCalls: [],
     secondCalls: [[{ choice: 1, comment: null }]],
-    statuses: ['Proposal · waiting for your choice', 'Proposal · chose B'],
+    statuses: [
+      'Proposal · waiting for your choice',
+      'Proposal · chose Show the choice earlier',
+    ],
   })
 })
 

@@ -35,10 +35,6 @@ type ProposalCardProps = {
   ) => Promise<boolean>
 }
 
-function choiceLabel(choice: number) {
-  return String.fromCharCode(65 + choice)
-}
-
 export function ProposalCard({
   sessionId,
   seq,
@@ -202,7 +198,7 @@ export function ProposalCard({
     latestAnswer !== null
       ? latestAnswer.choice === null
         ? 'asked for another option'
-        : `chose ${choiceLabel(latestAnswer.choice)}`
+        : `chose ${options[latestAnswer.choice]?.label ?? 'an option'}`
       : isWithdrawn
         ? 'withdrawn'
         : resolved
@@ -269,7 +265,7 @@ export function ProposalCard({
                   className="chat-proposal-option-label"
                   htmlFor={`proposal-${String(seq)}-option-${String(index)}`}
                 >
-                  {choiceLabel(index)} · {option.label}
+                  {option.label}
                 </label>
                 {option.recommended ? (
                   <span className="chat-proposal-recommended">Recommended</span>
@@ -358,7 +354,7 @@ export function ProposalCard({
               void submitAnswer(selectedChoice)
             }}
           >
-            Choose {selectedChoice === null ? '…' : choiceLabel(selectedChoice)}
+            Choose
           </Button>
           <Button
             type="button"
