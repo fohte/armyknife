@@ -1,0 +1,17 @@
+.file-drop-indicator {
+  position: absolute;
+  z-index: 1;
+  display: grid;
+  inset: var(--file-drop-indicator-inset, 0);
+  place-items: center;
+  border: 2px dashed var(--aw-text-muted);
+  border-radius: var(--aw-radius);
+  background: var(--aw-bg-scrim-overlay);
+  color: var(--aw-text-primary);
+  font-size: 16px;
+  pointer-events: none;
+}
+
+.chat-card-comment-drop-zone {
+  position: relative;
+}
