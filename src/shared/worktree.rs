@@ -106,6 +106,12 @@ fn worktree_changes_with(
         }
         lock::WorktreeLockError::Io(error) => error,
     })?;
+    if !worktree_path.is_dir() {
+        return Ok(WorktreeChanges {
+            files: Vec::new(),
+            is_dirty: false,
+        });
+    }
     status(worktree_path).map(|status| WorktreeChanges {
         is_dirty: !status.is_empty(),
         files: parse_uncommitted_files(&status),
@@ -529,6 +535,29 @@ mod tests {
     }
 
     #[test]
+    fn worktree_path_aliases_share_the_same_lock() {
+        let directory = tempfile::tempdir().expect("temporary parent should be created");
+        let worktree = directory.path().join("worktree");
+        let alias_parent = directory.path().join("nested");
+        std::fs::create_dir_all(&worktree).expect("temporary worktree should be created");
+        std::fs::create_dir(&alias_parent).expect("alias parent should be created");
+        let alias = alias_parent.join("..").join("worktree");
+        let lock_dir = tempfile::tempdir().expect("temporary lock directory should be created");
+        let _lock = lock::lock_exclusive(lock_dir.path(), &worktree)
+            .expect("exclusive worktree lock should be acquired");
+
+        let alias_lock = lock::try_lock_shared(lock_dir.path(), &alias);
+
+        let observed = match alias_lock {
+            Err(lock::WorktreeLockError::Busy) => "busy",
+            Err(lock::WorktreeLockError::Io(_)) => "io error",
+            Ok(_) => "available",
+        };
+
+        assert_eq!(observed, "busy");
+    }
+
+    #[test]
     fn deletion_lock_waits_for_an_active_dirty_check() {
         let worktree = tempfile::tempdir().expect("temporary worktree should be created");
         let lock_dir = tempfile::tempdir().expect("temporary lock directory should be created");
@@ -548,15 +577,20 @@ mod tests {
         });
         started_receiver.recv().expect("delete thread should start");
 
-        assert_eq!(
-            locked_receiver.try_recv(),
-            Err(std::sync::mpsc::TryRecvError::Empty)
+        let blocked_before_release = matches!(
+            locked_receiver.recv_timeout(std::time::Duration::from_millis(50)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
         );
         drop(shared);
-        locked_receiver
-            .recv()
-            .expect("deletion lock should be acquired after dirty check ends");
+        let acquired_after_release = locked_receiver
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .is_ok();
         delete_thread.join().expect("delete thread should finish");
+
+        assert_eq!(
+            (blocked_before_release, acquired_after_release),
+            (true, true)
+        );
     }
 
     #[rstest]
