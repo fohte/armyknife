@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.820](https://github.com/fohte/armyknife/compare/v0.1.819...v0.1.820) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** restore mobile close button ([#2029](https://github.com/fohte/armyknife/issues/2029)) ([ab5a89c](https://github.com/fohte/armyknife/commit/ab5a89c36bdd451e4a526482d044499e4f155ff7))
+
 ## [0.1.819](https://github.com/fohte/armyknife/compare/v0.1.818...v0.1.819) (2026-11-21)
 
 
