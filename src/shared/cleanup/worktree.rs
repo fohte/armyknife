@@ -6,8 +6,8 @@ use crate::infra::git::GitRepo;
 use crate::infra::process::{self, ProcessInPath, WorktreeProcessInspection};
 use crate::infra::tmux;
 use crate::shared::worktree::{
-    delete_branch_if_exists, delete_worktree, delete_worktree_if_clean, find_worktree_name,
-    get_main_repo, get_worktree_branch,
+    delete_branch_if_exists, delete_worktree_after_lock, delete_worktree_if_clean,
+    find_worktree_name, get_main_repo, get_worktree_branch,
 };
 
 type BeforeWorktreeDelete<'a> = Box<dyn FnOnce() -> anyhow::Result<()> + 'a>;
@@ -346,7 +346,7 @@ fn delete_worktree_and_branch(
         branch_name,
         || {
             delete_worktree_if_clean(worktree_path, force, before_delete, || {
-                delete_worktree(repo, worktree_name)
+                delete_worktree_after_lock(repo, worktree_name)
             })
         },
         |branch| delete_branch_if_exists(repo, branch),

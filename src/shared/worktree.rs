@@ -184,9 +184,17 @@ fn delete_worktree_if_clean_with(
     before_delete: impl FnOnce() -> anyhow::Result<()>,
     delete: impl FnOnce() -> anyhow::Result<bool>,
 ) -> anyhow::Result<bool> {
-    ensure_clean_for_deletion_with(worktree_path, force, lock_dir, status)?;
-    before_delete()?;
-    delete()
+    with_worktree_deletion_lock(lock_dir, worktree_path, || {
+        if !force && worktree_path.is_dir() {
+            let status = status(worktree_path)?;
+            if !status.is_empty() {
+                return Err(DirtyWorktreeError::new(worktree_path.to_path_buf()).into());
+            }
+        }
+
+        before_delete()?;
+        delete()
+    })
 }
 
 /// Normalize a branch name to a worktree directory name.
@@ -227,44 +235,75 @@ pub(crate) fn get_worktree_branch_checked(
 
 /// Delete a worktree by name. Returns true if successful.
 pub fn delete_worktree(repo: &GitRepo, worktree_name: &str) -> Result<bool> {
-    let entry = match list_worktrees_raw(repo) {
-        Ok(list) => match list.into_iter().find(|w| w.name == worktree_name) {
-            Some(e) => e,
-            None => {
-                eprintln!("Failed to find worktree {worktree_name}");
-                return Ok(false);
-            }
-        },
-        Err(e) => {
-            eprintln!("Failed to list worktrees: {e}");
-            return Ok(false);
-        }
+    let Some(worktree_path) = worktree_path_for_name(repo, worktree_name) else {
+        return Ok(false);
     };
 
     let lock_dir = lock::default_lock_dir()?;
-    with_worktree_deletion_lock(&lock_dir, &entry.path, || {
-        let remove = run_git(
-            repo.workdir(),
-            [
-                std::ffi::OsStr::new("worktree"),
-                std::ffi::OsStr::new("remove"),
-                std::ffi::OsStr::new("--force"),
-                entry.path.as_os_str(),
-            ],
-        );
-        if remove.is_err() {
-            // Path may have been deleted out-of-band; prune lingering admin data.
-            let _ = run_git(repo.workdir(), ["worktree", "prune"]);
-            let still_present = list_worktrees_raw(repo)
-                .map(|l| l.iter().any(|w| w.name == worktree_name))
-                .unwrap_or(false);
-            if still_present {
-                eprintln!("Failed to delete worktree {worktree_name}");
-                return Ok(false);
-            }
-        }
-        Ok(true)
+    with_worktree_deletion_lock(&lock_dir, &worktree_path, || {
+        delete_worktree_at_path(repo, worktree_name, &worktree_path)
     })
+}
+
+pub(crate) fn delete_worktree_after_lock(
+    repo: &GitRepo,
+    worktree_name: &str,
+) -> anyhow::Result<bool> {
+    let Some(worktree_path) = worktree_path_for_name(repo, worktree_name) else {
+        return Ok(false);
+    };
+    delete_worktree_at_path(repo, worktree_name, &worktree_path)
+}
+
+fn worktree_path_for_name(repo: &GitRepo, worktree_name: &str) -> Option<PathBuf> {
+    match list_worktrees_raw(repo) {
+        Ok(list) => match list
+            .into_iter()
+            .find(|worktree| worktree.name == worktree_name)
+        {
+            Some(worktree) => Some(worktree.path),
+            None => {
+                eprintln!("Failed to find worktree {worktree_name}");
+                None
+            }
+        },
+        Err(error) => {
+            eprintln!("Failed to list worktrees: {error}");
+            None
+        }
+    }
+}
+
+fn delete_worktree_at_path(
+    repo: &GitRepo,
+    worktree_name: &str,
+    worktree_path: &std::path::Path,
+) -> anyhow::Result<bool> {
+    let remove = run_git(
+        repo.workdir(),
+        [
+            std::ffi::OsStr::new("worktree"),
+            std::ffi::OsStr::new("remove"),
+            std::ffi::OsStr::new("--force"),
+            worktree_path.as_os_str(),
+        ],
+    );
+    if remove.is_err() {
+        // Path may have been deleted out-of-band; prune lingering admin data.
+        let _ = run_git(repo.workdir(), ["worktree", "prune"]);
+        let still_present = list_worktrees_raw(repo)
+            .map(|worktrees| {
+                worktrees
+                    .iter()
+                    .any(|worktree| worktree.name == worktree_name)
+            })
+            .unwrap_or(false);
+        if still_present {
+            eprintln!("Failed to delete worktree {worktree_name}");
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn with_worktree_deletion_lock(
@@ -526,6 +565,83 @@ mod tests {
         );
 
         assert_eq!(observed, (true, true, 0));
+    }
+
+    #[test]
+    fn delete_rechecks_worktree_after_waiting_for_status_lock() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let worktree = tempfile::tempdir().expect("temporary worktree should be created");
+        let lock_dir = tempfile::tempdir().expect("temporary lock directory should be created");
+        let shared = lock::try_lock_shared(lock_dir.path(), worktree.path())
+            .expect("shared worktree lock should be acquired");
+        let status_became_dirty = std::sync::Arc::new(AtomicBool::new(false));
+        let deleted = std::sync::Arc::new(AtomicBool::new(false));
+        let thread_status = std::sync::Arc::clone(&status_became_dirty);
+        let thread_deleted = std::sync::Arc::clone(&deleted);
+        let thread_worktree = worktree.path().to_path_buf();
+        let thread_lock_dir = lock_dir.path().to_path_buf();
+        let (started_sender, started_receiver) = std::sync::mpsc::channel();
+        let (result_sender, result_receiver) = std::sync::mpsc::channel();
+        let delete_thread = std::thread::spawn(move || {
+            started_sender.send(()).expect("started signal should send");
+            let result = delete_worktree_if_clean_with(
+                &thread_worktree,
+                false,
+                &thread_lock_dir,
+                |_| {
+                    Ok(if thread_status.load(Ordering::SeqCst) {
+                        " M saved-during-wait.txt\0".to_string()
+                    } else {
+                        String::new()
+                    })
+                },
+                || Ok(()),
+                || {
+                    with_worktree_deletion_lock(&thread_lock_dir, &thread_worktree, || {
+                        thread_deleted.store(true, Ordering::SeqCst);
+                        Ok(true)
+                    })
+                },
+            );
+            result_sender
+                .send(result)
+                .expect("deletion result should send");
+        });
+        started_receiver.recv().expect("delete thread should start");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let deletion_is_waiting = loop {
+            match lock::try_lock_deletion(lock_dir.path(), worktree.path()) {
+                Err(lock::WorktreeLockError::Busy) => break true,
+                Err(lock::WorktreeLockError::Io(_)) => break false,
+                Ok(marker) => drop(marker),
+            }
+            if std::time::Instant::now() >= deadline {
+                break false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+        status_became_dirty.store(true, Ordering::SeqCst);
+        drop(shared);
+
+        let result = result_receiver
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("deletion should finish after the status lock is released");
+        delete_thread.join().expect("delete thread should finish");
+        let rejected_as_dirty = result
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.downcast_ref::<DirtyWorktreeError>().is_some());
+
+        assert_eq!(
+            (
+                deletion_is_waiting,
+                rejected_as_dirty,
+                deleted.load(Ordering::SeqCst)
+            ),
+            (true, true, false),
+        );
     }
 
     #[test]
