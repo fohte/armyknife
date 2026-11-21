@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.841](https://github.com/fohte/armyknife/compare/v0.1.840...v0.1.841) (2026-11-21)
+
+
+### Features
+
+* **agent-watch-web:** support folding todos ([#2055](https://github.com/fohte/armyknife/issues/2055)) ([c72d23e](https://github.com/fohte/armyknife/commit/c72d23e00d2606db9212a68343480368a6df5dc9))
+
 ## [0.1.840](https://github.com/fohte/armyknife/compare/v0.1.839...v0.1.840) (2026-11-21)
 
 
