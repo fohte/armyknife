@@ -54,6 +54,7 @@ pub(crate) mod tq_session_tasks;
 mod transcript;
 pub(super) mod tui;
 pub(crate) mod types;
+mod unreported_stop_notification;
 pub(crate) mod usage;
 pub(crate) mod user_turn;
 mod vibe;
@@ -99,6 +100,7 @@ pub use status::StatusCommands;
 pub use sweep::SweepArgs;
 pub use title::TitleCommands;
 pub use todo::TodoCommands;
+pub use unreported_stop_notification::UnreportedStopNotificationArgs;
 pub use usage::{RecordArgs, UsageCommands};
 pub use vibe::{VibeCommands, is_vibe_enabled};
 pub(crate) use vibe::{ensure_no_review_access, ensure_repo_vibe_access};
@@ -252,6 +254,10 @@ pub enum AgentCommands {
     /// agent process exit.
     #[command(name = "archive-tq-session-detached", hide = true)]
     ArchiveTqSessionDetached(ArchiveTqSessionDetachedArgs),
+
+    /// Internal: send a rendered notification for a delegate that stopped without reporting.
+    #[command(name = "unreported-stop-notification", hide = true)]
+    UnreportedStopNotification(UnreportedStopNotificationArgs),
 }
 
 impl AgentCommands {
@@ -294,6 +300,7 @@ impl AgentCommands {
             Self::GenerateTitleDetached(args) => generate_title_detached::run(args)?,
             Self::ArchiveDetached(args) => archive_detached::run(args)?,
             Self::ArchiveTqSessionDetached(args) => archive_tq_session_detached::run(args)?,
+            Self::UnreportedStopNotification(args) => unreported_stop_notification::run(args)?,
         }
         Ok(None)
     }

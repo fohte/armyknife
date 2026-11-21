@@ -35,9 +35,11 @@ armyknife reads every `*.yaml` and `*.yml` file directly under `~/.config/armykn
 
 Mapping keys are merged recursively; sequences and scalars are replaced wholesale by later files. All fields are optional and fall back to sensible defaults. If no config files exist and no `ARMYKNIFE_*` environment variable overrides are set (see [Environment variable overrides](#environment-variable-overrides)), armyknife runs entirely on defaults.
 
-Unknown configuration keys fail parsing. Put worktree settings under `agent.worktree`, pause settings under `agent.auto_pause`, compaction settings under `agent.auto_compact`, background task reminders under `agent.bg_task_reminder`, merge notification text under `agent.merge_notification`, status names and states under `agent.statuses`, and Stop hook instructions under `agent.stop_hook_instruction`.
+Unknown configuration keys fail parsing. Put worktree settings under `agent.worktree`, pause settings under `agent.auto_pause`, compaction settings under `agent.auto_compact`, background task reminders under `agent.bg_task_reminder`, merge notification text under `agent.merge_notification`, unreported delegate Stop notifications under `agent.unreported_stop_notification`, status names and states under `agent.statuses`, and Stop hook instructions under `agent.stop_hook_instruction`.
 
 `agent.merge_notification` is an optional template sent to the delegator after a delegated PR merges. Use `{branch}` and `{pr_url}` where the branch name and PR URL should appear. When the key is omitted, no merge notification is sent.
+
+`agent.unreported_stop_notification` is an optional template sent to the direct parent when a delegate session stops without sending it a peer message since the previous completed Stop check. Use `{session_id}` and `{last_message}` where the delegate session ID and final assistant message should appear. Stops held by the Stop hook or with background work pending are checked later. When the key is omitted, no notification is sent.
 
 `agent.statuses` maps user-defined names to `user`, `waiting`, or `done` states. `user` status names appear as red labels on TASKS rows and in tmux's next action; `waiting` and `done` status names mark TASKS rows without signaling a user action. `a agent status set` accepts only names from this map. A stored name missing from the current map is treated as `user` so it remains visible.
 
@@ -59,6 +61,12 @@ For editor autocompletion, add the following to the top of your config file:
 agent:
   # Sent to the delegator after a delegated PR merges; omitted means no notification.
   merge_notification: 'Branch {branch} merged: {pr_url}'
+  # Sent to the direct parent when a delegate stops without reporting; omitted means no notification.
+  unreported_stop_notification: |
+    <delegation-update>
+    Session: {session_id}
+    Last message: {last_message}
+    </delegation-update>
   statuses: # user-defined status names mapped to display behavior
     finished_work: { state: done }
     waiting_for_build: { state: waiting }

@@ -22,6 +22,8 @@ use super::types::{
     ChildLaunchPermission, Engine, HookEvent, HookInput, MAIN_THREAD_AGENT_KEY, Session,
     SessionPrContext, SessionStatus, TmuxInfo,
 };
+#[cfg(not(test))]
+use super::unreported_stop_notification;
 use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::tmux;
 use crate::shared::cache;
@@ -41,6 +43,7 @@ mod session_start;
 mod side_effects;
 mod stop;
 mod title_generation;
+mod unreported_stop;
 mod vibe;
 mod work_type;
 
@@ -1091,7 +1094,29 @@ fn process_hook_event_impl_with_env(
         }
     }
 
-    if stop_block_reason.is_none() && event == HookEvent::Stop {
+    if unreported_stop::can_check_stop(event, stop_block_reason.is_some()) {
+        #[cfg(not(test))]
+        {
+            let config = config::load_config_or_default();
+            let checked_at = Utc::now();
+            let session_id = session.session_id.clone();
+            if let Err(error) = unreported_stop::notify_if_unreported(
+                &session,
+                &input,
+                sessions_dir,
+                &config.agent,
+                checked_at,
+                |recipient, message| {
+                    unreported_stop_notification::spawn(&session_id, recipient, message);
+                },
+            ) {
+                tracing::warn!(
+                    event = "agent.hook.unreported_stop.failed",
+                    session = %session.session_id,
+                    error = %error,
+                );
+            }
+        }
         title_generation::maybe_generate(&session, sessions_dir, side_effects);
     }
 
