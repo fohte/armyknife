@@ -240,6 +240,7 @@ export function ConversationPane({
         action === 'messages'
           ? {
               ...payload,
+              _queuedPromptId: crypto.randomUUID(),
               _messageCountBefore: messageCountBefore,
             }
           : payload,

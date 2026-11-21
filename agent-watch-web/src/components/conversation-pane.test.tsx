@@ -199,6 +199,15 @@ function messagesResponse(
   }
 }
 
+function normalizeQueuedMessagePostBody(body: BodyInit | null | undefined) {
+  if (typeof body !== 'string') return body
+  const parsed: unknown = JSON.parse(body)
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return body
+  }
+  return JSON.stringify({ ...parsed, messageId: '<message-id>' })
+}
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -6312,13 +6321,14 @@ it('shows a server attachment validation error and retains the rejected attachme
     error: container.querySelector('[role="alert"]')?.textContent ?? null,
     attachmentName: container.querySelector('.attachment-preview-item span')
       ?.textContent,
-    postBody: fetcher.mock.calls[2]?.[1]?.body,
+    postBody: normalizeQueuedMessagePostBody(fetcher.mock.calls[2]?.[1]?.body),
   })
   expect(snapshot()).toEqual({
     error: 'file attachment data is invalid',
     attachmentName: 'document.pdf',
     postBody: JSON.stringify({
       content: '',
+      messageId: '<message-id>',
       attachments: [
         {
           name: 'document.pdf',
@@ -6425,9 +6435,10 @@ it('waits for pasted image optimization and sends the optimized attachment', asy
   ).toBe(true)
 
   const sentBody = () => fetcher.mock.calls[2]?.[1]?.body
-  expect(sentBody()).toEqual(
+  expect(normalizeQueuedMessagePostBody(sentBody())).toEqual(
     JSON.stringify({
       content: 'Inspect this photo.',
+      messageId: '<message-id>',
       attachments: [
         {
           name: 'photo.jpg',
