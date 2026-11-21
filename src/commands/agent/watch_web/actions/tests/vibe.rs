@@ -440,13 +440,13 @@ async fn disabling_vibe_reports_inherited_ancestor_state(action_context: ActionC
                 "calls": [{
                     "kind": "message",
                     "sessionId": "fixture-session",
-                    "content": "<armyknife-vibe-mode-off>watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。</armyknife-vibe-mode-off>",
+                    "content": "<armyknife-vibe-mode-inherited>watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。</armyknife-vibe-mode-inherited>",
                 }],
             }),
             false,
             json!([{
                 "id": "<prompt-id>",
-                "content": "<armyknife-vibe-mode-off>watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。</armyknife-vibe-mode-off>",
+                "content": "<armyknife-vibe-mode-inherited>watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。</armyknife-vibe-mode-inherited>",
                 "sentAt": "<sent-at>",
             }]),
         ),

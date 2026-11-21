@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::commands::agent::store::{WatchWebQueuedAttachment, WatchWebQueuedPrompt};
 
+use super::action_event;
+use super::tagged_message::tagged_body;
 use super::{ChatItem, EventKind, UserContentPart};
 
 const ID_MARKER_PREFIX: &str = "<!-- armyknife-queued-prompt-id:";
@@ -79,12 +81,12 @@ pub(super) fn user_content(prompt: &WatchWebQueuedPrompt) -> Vec<UserContentPart
 
 pub(super) fn chat_item(prompt: &WatchWebQueuedPrompt) -> ChatItem {
     let content = strip_id_marker(&prompt.content);
-    if let Some((tag, body)) = super::parser::classifier::tagged_body(&content)
-        && super::parser::classifier::is_watch_web_action_tag(tag)
+    if let Some((tag, body)) = tagged_body(&content)
+        && let Some(text) = action_event::event_text(tag, body)
     {
         return ChatItem::Event {
             kind: EventKind::Armyknife,
-            text: super::parser::classifier::watch_web_action_event_text(tag, body),
+            text,
             failed: false,
             timestamp: Some(prompt.sent_at.to_rfc3339()),
         };
@@ -131,7 +133,9 @@ pub(super) fn resolve_transcript_messages(
             continue;
         };
         if matches!(message, ChatItem::Event { .. }) {
-            resolved.push(prompt.id);
+            if !prompt.resolved {
+                resolved.push(prompt.id);
+            }
             continue;
         }
         let (timestamp, from, rewind_id) = match message {
@@ -193,9 +197,12 @@ mod tests {
     use chrono::Utc;
     use rstest::rstest;
 
-    use super::{add_id_marker, append_unresolved_prompts, id_from_content, strip_id_marker};
+    use super::{
+        add_id_marker, append_unresolved_prompts, chat_item, id_from_content,
+        resolve_transcript_messages, strip_id_marker,
+    };
     use crate::commands::agent::store::{WatchWebQueuedAttachment, WatchWebQueuedPrompt};
-    use crate::commands::agent::watch_web::messages::{ChatItem, EventKind};
+    use crate::commands::agent::watch_web::messages::{ChatItem, EventKind, UserContentPart};
 
     #[rstest]
     #[case::empty("")]
@@ -220,6 +227,11 @@ mod tests {
         "armyknife-vibe-mode-off",
         "watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。",
         "Vibe mode turned off"
+    )]
+    #[case::vibe_inherited(
+        "armyknife-vibe-mode-inherited",
+        "watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。",
+        "Vibe mode remains on"
     )]
     fn tagged_vibe_prompts_are_events_while_queued(
         #[case] tag: &str,
@@ -247,6 +259,55 @@ mod tests {
                 failed: false,
                 timestamp: Some(prompt.sent_at.to_rfc3339()),
             }],
+        );
+    }
+
+    #[test]
+    fn user_text_with_a_vibe_tag_stays_queued_user_content() {
+        let prompt = WatchWebQueuedPrompt {
+            id: 7,
+            message_id: Some("fixture-message-cyan".to_owned()),
+            content: "<armyknife-vibe-mode-on>Here is user-authored text.</armyknife-vibe-mode-on>"
+                .to_owned(),
+            attachments: Vec::<WatchWebQueuedAttachment>::new(),
+            resolved: false,
+            sent_at: Utc::now(),
+        };
+
+        assert_eq!(
+            chat_item(&prompt),
+            ChatItem::QueuedUser {
+                content: vec![UserContentPart::Text {
+                    text: prompt.content.clone(),
+                }],
+                queued_prompt_id: Some("fixture-message-cyan".to_owned()),
+                from: None,
+                timestamp: Some(prompt.sent_at.to_rfc3339()),
+            },
+        );
+    }
+
+    #[test]
+    fn resolved_event_prompt_is_not_marked_resolved_again() {
+        let prompt = WatchWebQueuedPrompt {
+            id: 7,
+            message_id: Some("fixture-message-cyan".to_owned()),
+            content: "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>"
+                .to_owned(),
+            attachments: Vec::<WatchWebQueuedAttachment>::new(),
+            resolved: true,
+            sent_at: Utc::now(),
+        };
+        let mut messages = [ChatItem::Event {
+            kind: EventKind::Armyknife,
+            text: add_id_marker("Vibe mode turned on", "fixture-message-cyan"),
+            failed: false,
+            timestamp: Some(prompt.sent_at.to_rfc3339()),
+        }];
+
+        assert_eq!(
+            resolve_transcript_messages(&mut messages, &[prompt]),
+            Vec::<i64>::new(),
         );
     }
 }

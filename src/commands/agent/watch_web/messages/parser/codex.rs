@@ -342,13 +342,13 @@ impl CodexParserState {
                         if let Some(text) = item.get("content").and_then(value_text) {
                             let content_without_id =
                                 super::super::queued_prompt::strip_id_marker(&text);
-                            if let Some((tag, body)) = classifier::tagged_body(&content_without_id)
-                                && classifier::is_watch_web_action_tag(tag)
+                            if let Some((tag, body)) =
+                                super::super::tagged_message::tagged_body(&content_without_id)
+                                && let Some(event_text) =
+                                    super::super::action_event::event_text(tag, body)
                             {
                                 effects.push(CodexEffect::ArmyknifeEvent {
-                                    text: CodexText::new(classifier::watch_web_action_event_text(
-                                        tag, body,
-                                    ))?,
+                                    text: CodexText::new(event_text)?,
                                     timestamp,
                                     queued_prompt_id: super::super::queued_prompt::id_from_content(
                                         &text,
@@ -1156,6 +1156,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn keeps_user_text_with_a_vibe_tag_as_a_user_message() {
+        let transcript = indoc! {r#"
+            {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<armyknife-vibe-mode-on>Here is user-authored text.</armyknife-vibe-mode-on>"}}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None).unwrap(),
+            vec![ChatItem::User {
+                rewind_id: None,
+                text:
+                    "<armyknife-vibe-mode-on>Here is user-authored text.</armyknife-vibe-mode-on>"
+                        .to_owned(),
+                timestamp: Some("2026-06-01T12:05:00+00:00".to_owned()),
+                from: None,
+                queued_prompt_id: None,
+            }],
+        );
+    }
+
     #[rstest]
     #[case::enabled(
         "armyknife-vibe-mode-on",
@@ -1166,6 +1186,11 @@ mod tests {
         "armyknife-vibe-mode-off",
         "watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。",
         "Vibe mode turned off"
+    )]
+    #[case::inherited(
+        "armyknife-vibe-mode-inherited",
+        "watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。",
+        "Vibe mode remains on"
     )]
     fn renders_vibe_mode_changes_as_armyknife_events(
         #[case] tag: &str,

@@ -53,9 +53,11 @@ use self::questions::{QuestionPrompt, question_item_from_input};
 use self::routes::MessagesRouteState;
 pub(super) use self::routes::{RouteLoaders, routes_with_proposals_and_peer_out_messages};
 
+pub(in crate::commands::agent::watch_web) mod action_event;
 mod cache;
 mod file_attachments;
 mod session_titles;
+mod tagged_message;
 use self::transcript_path::archived_codex_transcript_path;
 
 pub(super) fn registered_background_tasks(session_id: &str) -> Result<Vec<BackgroundTask>> {

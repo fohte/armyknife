@@ -2,6 +2,9 @@ use serde_json::Value;
 
 use crate::commands::agent::peer_message::{extract_peer_message, task_notification_envelope};
 
+use super::super::action_event;
+use super::super::tagged_message::tagged_body;
+
 mod system_record;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,6 +76,18 @@ pub(super) fn classify_inbound(
     }
 
     if let Some((tag, body)) = tagged {
+        if action_event::is_vibe_mode_tag(tag) {
+            return action_event::event_text(tag, body).map_or_else(
+                || MessageKind::User {
+                    text: text.to_owned(),
+                },
+                |text| MessageKind::Event {
+                    kind: EventKind::Armyknife,
+                    text,
+                    failed: false,
+                },
+            );
+        }
         return event(tag, body, record);
     }
 
@@ -286,34 +301,6 @@ fn nested_tag_value<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
         .map(|(value, _)| value)
 }
 
-pub(in crate::commands::agent::watch_web::messages) fn tagged_body(
-    text: &str,
-) -> Option<(&str, &str)> {
-    let tag = outer_tag(text)?;
-    let trimmed = text.trim();
-    let opening = format!("<{tag}>");
-    let closing = format!("</{tag}>");
-    let body = trimmed
-        .strip_prefix(&opening)?
-        .strip_suffix(&closing)?
-        .trim();
-    Some((tag, body))
-}
-
-fn outer_tag(text: &str) -> Option<&str> {
-    let trimmed = text.trim();
-    let tag = trimmed.strip_prefix('<')?.split_once('>')?.0;
-    if tag.is_empty()
-        || tag.starts_with('/')
-        || !tag
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
-    {
-        return None;
-    }
-    trimmed.ends_with(&format!("</{tag}>")).then_some(tag)
-}
-
 fn is_hidden_tag(tag: &str) -> bool {
     matches!(tag, "system-reminder" | "local-command-caveat")
 }
@@ -358,35 +345,15 @@ fn marked_or_peer_message(text: &str, marker: Option<&str>) -> Option<MessageKin
 
 fn marked_user_message_body(body: String) -> MessageKind {
     let body_without_id = super::super::queued_prompt::strip_id_marker(&body);
-    match tagged_body(&body_without_id) {
-        Some((tag, event_body)) if is_watch_web_action_tag(tag) => MessageKind::Event {
+    match tagged_body(&body_without_id)
+        .and_then(|(tag, event_body)| action_event::event_text(tag, event_body))
+    {
+        Some(text) => MessageKind::Event {
             kind: EventKind::Armyknife,
-            text: watch_web_action_event_text(tag, event_body),
+            text,
             failed: false,
         },
         _ => MessageKind::User { text: body },
-    }
-}
-
-pub(in crate::commands::agent::watch_web::messages) fn is_watch_web_action_tag(tag: &str) -> bool {
-    matches!(
-        tag,
-        "armyknife-todo-completed"
-            | "armyknife-todo-rejected"
-            | "armyknife-decision-change"
-            | "armyknife-vibe-mode-on"
-            | "armyknife-vibe-mode-off"
-    )
-}
-
-pub(in crate::commands::agent::watch_web::messages) fn watch_web_action_event_text(
-    tag: &str,
-    body: &str,
-) -> String {
-    match tag {
-        "armyknife-vibe-mode-on" => "Vibe mode turned on".to_owned(),
-        "armyknife-vibe-mode-off" => "Vibe mode turned off".to_owned(),
-        _ => one_line(body),
     }
 }
 
@@ -516,6 +483,28 @@ mod tests {
         "},
         Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
         MessageKind::Event { kind: EventKind::Armyknife, text: "Vibe mode turned off".to_owned(), failed: false },
+    )]
+    #[case::marked_vibe_mode_inherited_is_an_event(
+        json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
+        indoc! {"
+            ⟦armyknife-user:fixture-marker-cobalt⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            <armyknife-vibe-mode-inherited>watch-web からユーザーが vibe mode を off にしました。祖先セッションから引き継いでいる場合、vibe mode は引き続き有効です。</armyknife-vibe-mode-inherited>
+        "},
+        Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
+        MessageKind::Event { kind: EventKind::Armyknife, text: "Vibe mode remains on".to_owned(), failed: false },
+    )]
+    #[case::marked_vibe_tag_with_user_text_stays_user(
+        json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
+        indoc! {"
+            ⟦armyknife-user:fixture-marker-cobalt⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            <armyknife-vibe-mode-on>Here is user-authored text.</armyknife-vibe-mode-on>
+        "},
+        Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
+        MessageKind::User {
+            text: "<armyknife-vibe-mode-on>Here is user-authored text.</armyknife-vibe-mode-on>\n".to_owned(),
+        },
     )]
     #[case::marked_unrecognized_armyknife_tag_stays_user_text(
         json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),

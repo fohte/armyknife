@@ -159,3 +159,17 @@ export const VibeModeTurnedOff: Story = {
     now: new Date(2026, 10, 21, 10, 30),
   },
 }
+
+export const VibeModeRemainsOn: Story = {
+  name: 'Inherited vibe mode remains on after the local setting is turned off',
+  args: {
+    message: {
+      type: 'event',
+      kind: 'armyknife',
+      text: 'Vibe mode remains on',
+      failed: false,
+      timestamp: new Date(2026, 10, 21, 10, 14).toISOString(),
+    },
+    now: new Date(2026, 10, 21, 10, 30),
+  },
+}
