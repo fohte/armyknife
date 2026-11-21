@@ -152,3 +152,17 @@
 .chat-proposal-card[data-mobile='true'] .chat-proposal-actions {
   flex-wrap: wrap;
 }
+
+.conversation-pane[data-mobile='true'] .chat-proposal-summary,
+.conversation-pane[data-mobile='true'] .chat-proposal-option-description {
+  font-size: 14px;
+}
+
+.conversation-pane[data-mobile='true'] .chat-proposal-actions .aw-button {
+  min-height: 44px;
+}
+
+.conversation-pane[data-mobile='true'] .chat-proposal-hint {
+  order: -1;
+  text-align: left;
+}

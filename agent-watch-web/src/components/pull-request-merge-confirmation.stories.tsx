@@ -20,6 +20,12 @@ export const MergeIsReadyForConfirmation: Story = {
   name: 'The merge confirmation is ready for approval.',
 }
 
+export const IPhoneSheetShowsTheConfirmedHead: Story = {
+  name: 'The iPhone merge sheet shows the confirmed head commit.',
+  args: { mobile: true },
+  parameters: { viewport: { defaultViewport: 'mobile1' } },
+}
+
 export const MergeRequestIsSending: Story = {
   name: 'The merge confirmation blocks input while the request is sending.',
   args: { merging: true },

@@ -35,9 +35,11 @@ const GROUPS = [
 function ProjectCard({
   session,
   onSelectSession,
+  isMobile,
 }: {
   session: BoardProject['sessions'][number]
   onSelectSession: (id: string) => void
+  isMobile: boolean
 }) {
   return (
     <Button
@@ -50,7 +52,7 @@ function ProjectCard({
         onSelectSession(session.id)
       }}
     >
-      <SessionRow session={session} density="compact" />
+      <SessionRow session={session} density="compact" isMobile={isMobile} />
     </Button>
   )
 }
@@ -58,9 +60,11 @@ function ProjectCard({
 function ProjectColumn({
   project,
   onSelectSession,
+  isMobile,
 }: {
   project: BoardProject
   onSelectSession: (id: string) => void
+  isMobile: boolean
 }) {
   return (
     <section className="board-project" aria-label={project.name}>
@@ -129,6 +133,7 @@ function ProjectColumn({
                   key={session.id}
                   session={session}
                   onSelectSession={onSelectSession}
+                  isMobile={isMobile}
                 />
               ))}
               {sessions.length > visibleSessions.length ? (
@@ -159,6 +164,7 @@ export function BoardView({
 }: BoardViewProps) {
   const projectsScrollRef = useRef<HTMLDivElement>(null)
   const [remainingProjects, setRemainingProjects] = useState(0)
+  const [activeProjectIndex, setActiveProjectIndex] = useState(0)
   const quietCount = projects.filter((project) => project.quiet).length
   const focusedProject = projects.filter(
     (project) => project.name === focusedProjectName,
@@ -176,19 +182,46 @@ export function BoardView({
       return
     }
 
-    const updateRemainingProjects = () => {
+    const updateProjectIndicators = () => {
       const rightEdge = scroller.scrollLeft + scroller.clientWidth
-      const offscreenProjects = Array.from(
+      const columns = Array.from(
         scroller.querySelectorAll<HTMLElement>('.board-project'),
-      ).filter(
+      )
+      const offscreenProjects = columns.filter(
         (project) => project.offsetLeft + project.clientWidth > rightEdge,
       )
       setRemainingProjects(offscreenProjects.length)
+      if (isMobile) {
+        const scrollPaddingLeft =
+          Number.parseFloat(getComputedStyle(scroller).scrollPaddingLeft) || 16
+        const targetLeft = scroller.scrollLeft + scrollPaddingLeft
+        const scrollerLeft = scroller.getBoundingClientRect().left
+        const projectPositions = columns.map(
+          (project) =>
+            project.getBoundingClientRect().left -
+            scrollerLeft +
+            scroller.scrollLeft,
+        )
+        const currentIndex = projectPositions.reduce(
+          (closestIndex, projectLeft, index) => {
+            const closestLeft = projectPositions[closestIndex]
+            if (closestLeft === undefined) {
+              return index
+            }
+            return Math.abs(projectLeft - targetLeft) <
+              Math.abs(closestLeft - targetLeft)
+              ? index
+              : closestIndex
+          },
+          0,
+        )
+        setActiveProjectIndex(currentIndex)
+      }
     }
 
-    updateRemainingProjects()
-    scroller.addEventListener('scroll', updateRemainingProjects)
-    const resizeObserver = new ResizeObserver(updateRemainingProjects)
+    updateProjectIndicators()
+    scroller.addEventListener('scroll', updateProjectIndicators)
+    const resizeObserver = new ResizeObserver(updateProjectIndicators)
     resizeObserver.observe(scroller)
     const projects = scroller.querySelector('.board-projects')
     if (projects !== null) {
@@ -196,35 +229,40 @@ export function BoardView({
     }
 
     return () => {
-      scroller.removeEventListener('scroll', updateRemainingProjects)
+      scroller.removeEventListener('scroll', updateProjectIndicators)
       resizeObserver.disconnect()
     }
-  }, [visibleProjects])
+  }, [isMobile, visibleProjects])
 
   return (
-    <section className="board-view" aria-labelledby="board-title">
+    <section
+      className={`board-view${isMobile ? ' is-mobile' : ''}`}
+      aria-labelledby="board-title"
+    >
       <header className="board-header">
-        <div className="board-header-title">
-          {isMobile ? (
-            <MobileNavigationActions
-              onOpenNavigation={onOpenNavigation}
-              onOpenPalette={onOpenPalette}
-              onNewSession={onNewSession}
+        <div className="board-header-main">
+          <div className="board-header-title">
+            {isMobile ? (
+              <MobileNavigationActions
+                onOpenNavigation={onOpenNavigation}
+                onOpenPalette={onOpenPalette}
+                onNewSession={onNewSession}
+              />
+            ) : null}
+            <h1 id="board-title">Board</h1>
+          </div>
+          <label className="board-quiet-toggle">
+            <input
+              type="checkbox"
+              checked={hideQuietProjects}
+              onChange={(event) => {
+                onHideQuietProjectsChange(event.currentTarget.checked)
+              }}
             />
-          ) : null}
-          <h1 id="board-title">Board</h1>
-          <span>Projects that need you come first</span>
+            <span>Hide quiet projects ({quietCount})</span>
+          </label>
         </div>
-        <label className="board-quiet-toggle">
-          <input
-            type="checkbox"
-            checked={hideQuietProjects}
-            onChange={(event) => {
-              onHideQuietProjectsChange(event.currentTarget.checked)
-            }}
-          />
-          <span>Hide quiet projects ({quietCount})</span>
-        </label>
+        <p className="board-description">Projects that need you come first</p>
       </header>
       {error !== null ? (
         <p className="board-message is-error" role="status">
@@ -240,24 +278,38 @@ export function BoardView({
       ) : visibleProjects.length === 0 ? (
         <p className="board-message">No projects to show.</p>
       ) : (
-        <div className="board-projects-container">
-          <div className="board-projects-scroll" ref={projectsScrollRef}>
-            <div className="board-projects">
-              {visibleProjects.map((project) => (
-                <ProjectColumn
+        <>
+          {isMobile ? (
+            <div className="board-pagination-dots" aria-hidden="true">
+              {visibleProjects.map((project, index) => (
+                <span
                   key={project.name}
-                  project={project}
-                  onSelectSession={onSelectSession}
+                  className="board-pagination-dot"
+                  data-current={index === activeProjectIndex}
                 />
               ))}
             </div>
-          </div>
-          {remainingProjects > 0 ? (
-            <div className="board-overflow-hint" aria-hidden="true">
-              {remainingProjects} more →
-            </div>
           ) : null}
-        </div>
+          <div className="board-projects-container">
+            <div className="board-projects-scroll" ref={projectsScrollRef}>
+              <div className="board-projects">
+                {visibleProjects.map((project) => (
+                  <ProjectColumn
+                    key={project.name}
+                    project={project}
+                    onSelectSession={onSelectSession}
+                    isMobile={isMobile}
+                  />
+                ))}
+              </div>
+            </div>
+            {remainingProjects > 0 && !isMobile ? (
+              <div className="board-overflow-hint" aria-hidden="true">
+                {remainingProjects} more →
+              </div>
+            ) : null}
+          </div>
+        </>
       )}
     </section>
   )

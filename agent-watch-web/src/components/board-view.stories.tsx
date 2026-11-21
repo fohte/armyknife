@@ -1,4 +1,4 @@
-import type { Meta, StoryObj } from '@storybook/react-vite'
+import type { Decorator, Meta, StoryObj } from '@storybook/react-vite'
 
 import { buildBoardProjects } from '#board-model'
 import { BoardView } from '#components/board-view'
@@ -129,6 +129,15 @@ const sessions: Session[] = [
 
 const projects = buildBoardProjects(sessions)
 
+const phoneBoardViewportDecorator: Decorator = (Story) => (
+  <div
+    className="story-mobile-layout"
+    style={{ width: '390px', height: '844px', display: 'flex' }}
+  >
+    <Story />
+  </div>
+)
+
 const meta = {
   component: BoardView,
   args: {
@@ -205,4 +214,27 @@ export const BoardIsLoading: Story = {
 export const BoardShowsRefreshError: Story = {
   name: 'The board keeps showing projects when metadata refresh fails',
   args: { error: 'Project metadata could not be refreshed.' },
+}
+
+export const PhoneBoardShowsOneProject: Story = {
+  name: 'The phone board shows a single project column',
+  args: {
+    isMobile: true,
+    projects: buildBoardProjects(
+      sessions.filter((session) => session.project === 'alpha suite'),
+    ),
+  },
+  decorators: [phoneBoardViewportDecorator],
+  parameters: {
+    overflowCheck: { ignoreSelectors: ['.board-projects-scroll'] },
+  },
+}
+
+export const PhoneBoardShowsMultipleProjects: Story = {
+  name: 'The phone board shows adjacent project columns',
+  args: { isMobile: true },
+  decorators: [phoneBoardViewportDecorator],
+  parameters: {
+    overflowCheck: { ignoreSelectors: ['.board-projects-scroll'] },
+  },
 }

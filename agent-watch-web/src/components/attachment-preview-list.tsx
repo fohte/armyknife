@@ -1,8 +1,9 @@
 import '#components/attachment-preview-list.css'
 
 import { Button } from '@fohte/ui/button'
-import type { ClipboardEvent } from 'react'
+import type { ClipboardEvent, DragEvent as ReactDragEvent } from 'react'
 
+import { containsFiles, getDroppedFiles } from '#components/file-drop'
 import { ImageLightbox } from '#components/image-lightbox'
 
 export type AttachmentPreview = {
@@ -20,6 +21,48 @@ export function handleAttachmentPaste(
   if (files.length === 0) return
   event.preventDefault()
   onPasteFiles(files)
+}
+
+function handleAttachmentDrag(event: ReactDragEvent<HTMLElement>) {
+  if (!containsFiles(event.dataTransfer)) return
+  event.preventDefault()
+  event.stopPropagation()
+  event.dataTransfer.dropEffect = 'copy'
+}
+
+function handleAttachmentDragLeave(event: ReactDragEvent<HTMLElement>) {
+  if (!containsFiles(event.dataTransfer)) return
+  event.stopPropagation()
+}
+
+function handleAttachmentDrop(
+  event: ReactDragEvent<HTMLElement>,
+  onFiles: (files: File[]) => void,
+) {
+  if (!containsFiles(event.dataTransfer)) return
+  event.preventDefault()
+  event.stopPropagation()
+  const files = getDroppedFiles(event.dataTransfer)
+  if (files.length > 0) onFiles(files)
+}
+
+export function createAttachmentInputHandlers(
+  onFiles: (files: File[]) => void,
+  enabled = true,
+) {
+  if (!enabled) return {}
+
+  return {
+    onPaste: (event: ClipboardEvent<HTMLElement>) => {
+      handleAttachmentPaste(event, onFiles)
+    },
+    onDragEnter: handleAttachmentDrag,
+    onDragOver: handleAttachmentDrag,
+    onDragLeave: handleAttachmentDragLeave,
+    onDrop: (event: ReactDragEvent<HTMLElement>) => {
+      handleAttachmentDrop(event, onFiles)
+    },
+  }
 }
 
 type AttachmentPreviewListProps = {

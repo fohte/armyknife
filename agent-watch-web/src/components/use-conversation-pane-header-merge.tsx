@@ -241,6 +241,9 @@ export function useConversationPaneHeaderMerge({
     const options = mergeActionOptionsFor(target)
     if (retryingActionId === null) actionFeedback.start(options)
     else actionFeedback.retryWith(retryingActionId, options)
+    if (retryingActionId !== null) {
+      actionFeedback.finishMergeRetryConfirmation(retryingActionId)
+    }
     setRetryingActionId(null)
   }
 
@@ -254,6 +257,9 @@ export function useConversationPaneHeaderMerge({
     openMergeConfirmation,
     showHeaderMergeAction: headerMergeOperation !== null,
     closeMergeConfirmation: () => {
+      if (retryingActionId !== null) {
+        actionFeedback?.finishMergeRetryConfirmation(retryingActionId)
+      }
       setMergeConfirmationOpen(false)
       setRetryingActionId(null)
     },

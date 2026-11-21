@@ -1,5 +1,82 @@
 # Changelog
 
+## [0.1.830](https://github.com/fohte/armyknife/compare/v0.1.829...v0.1.830) (2026-11-21)
+
+
+### Features
+
+* **agent-watch-web:** add iPhone status page ([#2032](https://github.com/fohte/armyknife/issues/2032)) ([4e7b62f](https://github.com/fohte/armyknife/commit/4e7b62fc5e204214b2e997d06d07f474bcf5412b))
+
+## [0.1.829](https://github.com/fohte/armyknife/compare/v0.1.828...v0.1.829) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show vibe mode icons in tree ([#2046](https://github.com/fohte/armyknife/issues/2046)) ([bfb28bb](https://github.com/fohte/armyknife/commit/bfb28bb8126b2a16988edcae4d8865d1cb13ed3a))
+
+## [0.1.828](https://github.com/fohte/armyknife/compare/v0.1.827...v0.1.828) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show Crit wait reason ([#2043](https://github.com/fohte/armyknife/issues/2043)) ([2d35472](https://github.com/fohte/armyknife/commit/2d35472a26bde8f1e5dc9c6da8dbcda3b6cc013c))
+
+## [0.1.827](https://github.com/fohte/armyknife/compare/v0.1.826...v0.1.827) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** cancel failed prompts ([#2044](https://github.com/fohte/armyknife/issues/2044)) ([5855cae](https://github.com/fohte/armyknife/commit/5855cae5dfd46f91c1cb2d7d3b9635be80c55c04))
+
+## [0.1.826](https://github.com/fohte/armyknife/compare/v0.1.825...v0.1.826) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** clear stale queued status ([#2036](https://github.com/fohte/armyknife/issues/2036)) ([0bffcb2](https://github.com/fohte/armyknife/commit/0bffcb2fc2517a11d2c7008a34b43b8131b5e916))
+
+## [0.1.825](https://github.com/fohte/armyknife/compare/v0.1.824...v0.1.825) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** route comment image drops ([#2034](https://github.com/fohte/armyknife/issues/2034)) ([cc29253](https://github.com/fohte/armyknife/commit/cc2925342c0968cba23ac42158e52fd9c7107336))
+
+## [0.1.824](https://github.com/fohte/armyknife/compare/v0.1.823...v0.1.824) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** parse attached action events ([#2038](https://github.com/fohte/armyknife/issues/2038)) ([d2c0a8d](https://github.com/fohte/armyknife/commit/d2c0a8d0c68b3fe74da65f7e31eccf8988db74cf))
+
+## [0.1.823](https://github.com/fohte/armyknife/compare/v0.1.822...v0.1.823) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** match the iPhone UI ([#2033](https://github.com/fohte/armyknife/issues/2033)) ([afaf64d](https://github.com/fohte/armyknife/commit/afaf64d243ae2e267a4af3c172abccdd9a9e226b))
+
+## [0.1.822](https://github.com/fohte/armyknife/compare/v0.1.821...v0.1.822) (2026-11-21)
+
+
+### Features
+
+* **agent-watch-web:** move phone Activity to nav ([#2028](https://github.com/fohte/armyknife/issues/2028)) ([136dbd7](https://github.com/fohte/armyknife/commit/136dbd7e1b0f847eb161bb84caba6c2f40d3187a))
+
+## [0.1.821](https://github.com/fohte/armyknife/compare/v0.1.820...v0.1.821) (2026-11-21)
+
+
+### Features
+
+* **agent-watch-web:** support the Board on iPhone ([#2027](https://github.com/fohte/armyknife/issues/2027)) ([4fb68b4](https://github.com/fohte/armyknife/commit/4fb68b42564ad0a12970bc252deb45f5811308e1))
+
+## [0.1.820](https://github.com/fohte/armyknife/compare/v0.1.819...v0.1.820) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** restore mobile close button ([#2029](https://github.com/fohte/armyknife/issues/2029)) ([ab5a89c](https://github.com/fohte/armyknife/commit/ab5a89c36bdd451e4a526482d044499e4f155ff7))
+
 ## [0.1.819](https://github.com/fohte/armyknife/compare/v0.1.818...v0.1.819) (2026-11-21)
 
 

@@ -7,6 +7,7 @@ type BangCommandDialogProps = {
   commands: readonly string[]
   cwd: string
   running?: boolean
+  mobile?: boolean
   onCancel: () => void
   onConfirm: () => void
 }
@@ -16,6 +17,7 @@ export function BangCommandDialog({
   commands,
   cwd,
   running = false,
+  mobile = false,
   onCancel,
   onConfirm,
 }: BangCommandDialogProps) {
@@ -28,6 +30,7 @@ export function BangCommandDialog({
       confirmLabel="Run command"
       pendingLabel="Running command…"
       pending={running}
+      mobile={mobile}
       className="bang-command-dialog"
       dialogRole="dialog"
       onCancel={onCancel}

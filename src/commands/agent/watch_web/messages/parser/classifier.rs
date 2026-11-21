@@ -3,7 +3,7 @@ use serde_json::Value;
 use crate::commands::agent::peer_message::{extract_peer_message, task_notification_envelope};
 
 use super::super::action_event;
-use super::super::tagged_message::tagged_body;
+use super::super::tagged_message::{tagged_action_body, tagged_body};
 
 mod system_record;
 
@@ -51,10 +51,7 @@ pub(super) fn classify_inbound(
     }
 
     let content_without_id = super::super::queued_prompt::strip_id_marker(text);
-    let tagged = tagged_body(text).or_else(|| {
-        let (tag, body) = tagged_body(&content_without_id)?;
-        action_event::is_action_event_tag(tag).then_some((tag, body))
-    });
+    let tagged = tagged_body(text).or_else(|| tagged_action_body(&content_without_id));
     if tagged.is_some_and(|(tag, _)| is_hidden_tag(tag)) {
         return MessageKind::Hidden;
     }
@@ -358,7 +355,7 @@ fn marked_or_peer_message(text: &str, marker: Option<&str>) -> Option<MessageKin
 fn marked_user_message_body(body: String) -> MessageKind {
     let queued_prompt_id = super::super::queued_prompt::id_from_content(&body).map(str::to_owned);
     let body_without_id = super::super::queued_prompt::strip_id_marker(&body);
-    match tagged_body(&body_without_id).and_then(|(tag, event_body)| {
+    match tagged_action_body(&body_without_id).and_then(|(tag, event_body)| {
         action_event::event_text(tag, event_body, queued_prompt_id.as_deref())
     }) {
         Some(text) => {
@@ -498,6 +495,42 @@ mod tests {
         "},
         Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
         MessageKind::Event { kind: EventKind::Armyknife, text: "Change requested for the fixture decision. Please use the second fictional option.\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-lime -->".to_owned(), failed: false },
+    )]
+    #[case::marked_todo_rejection_with_attachment_paths_is_an_event(
+        json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
+        indoc! {"
+            ⟦armyknife-user:fixture-marker-cobalt⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            <armyknife-todo-rejected>The user rejected the to-do: Review the fixture.</armyknife-todo-rejected>
+
+            Attached file(s):
+            - attachment-store/fixture.gif
+            <!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-violet -->
+        "},
+        Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
+        MessageKind::Event {
+            kind: EventKind::Armyknife,
+            text: "The user rejected the to-do: Review the fixture.\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-violet -->".to_owned(),
+            failed: false,
+        },
+    )]
+    #[case::marked_decision_change_with_attachment_paths_is_an_event(
+        json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
+        indoc! {"
+            ⟦armyknife-user:fixture-marker-cobalt⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            <armyknife-decision-change>Change requested for the fixture decision.</armyknife-decision-change>
+
+            Attached file(s):
+            - attachment-store/fixture.gif
+            <!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-amber -->
+        "},
+        Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
+        MessageKind::Event {
+            kind: EventKind::Armyknife,
+            text: "Change requested for the fixture decision.\n<!-- armyknife-queued-prompt-id:armyknife-action:fixture-message-amber -->".to_owned(),
+            failed: false,
+        },
     )]
     #[case::marked_vibe_mode_on_is_an_event(
         json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),

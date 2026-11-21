@@ -199,6 +199,17 @@ function messagesResponse(
   }
 }
 
+function normalizeQueuedMessagePostBody(body: BodyInit | null | undefined) {
+  if (typeof body !== 'string') return body
+  const parsed: unknown = JSON.parse(body)
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return body
+  }
+  const messageId: unknown = Reflect.get(parsed, 'messageId')
+  if (typeof messageId !== 'string') return body
+  return JSON.stringify({ ...parsed, messageId: '<message-id>' })
+}
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -636,6 +647,7 @@ function treeNode(
     elapsedSeconds: 0,
     task: null,
     repo: session.repo,
+    vibeMode: { mode: 'disabled' },
     decisionCount: 0,
     pullRequest: null,
   }
@@ -1279,6 +1291,89 @@ it('provides session links to cards through the conversation pane context', asyn
   })
 })
 
+it('posts a message when randomUUID is unavailable', async () => {
+  vi.stubGlobal('crypto', {
+    getRandomValues: (bytes: Uint8Array) => bytes.fill(0),
+  })
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(actions))
+    }
+    if (url.endsWith('/messages') && init?.method === 'POST') {
+      return Promise.resolve(
+        jsonResponse({
+          queuedPromptId: '00000000-0000-4000-8000-000000000000',
+        }),
+      )
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        sessionTreeRefreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+
+  const composerReady = await waitForState(
+    () =>
+      container.querySelector<HTMLTextAreaElement>('textarea')?.disabled ===
+      false,
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Send without randomUUID')
+  act(() => {
+    dispatchKey(textarea, 'Enter')
+  })
+  const requestWasSent = await waitForState(() =>
+    fetcher.mock.calls.some(
+      ([input, init]) =>
+        requestUrl(input).endsWith('/messages') && init?.method === 'POST',
+    ),
+  )
+  const postRequest = fetcher.mock.calls
+    .filter(
+      ([input, init]) =>
+        requestUrl(input).endsWith('/messages') && init?.method === 'POST',
+    )
+    .map(([input, init]) => ({
+      url: requestUrl(input),
+      body: typeof init?.body === 'string' ? init.body : null,
+    }))
+  const snapshot = () => ({
+    composerReady,
+    requestWasSent,
+    postRequest,
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    composerReady: true,
+    requestWasSent: true,
+    postRequest: [
+      {
+        url: '/api/sessions/sample-session/messages',
+        body: JSON.stringify({
+          content: 'Send without randomUUID',
+          messageId: '00000000-0000-4000-8000-000000000000',
+        }),
+      },
+    ],
+    alert: null,
+  })
+})
+
 it('executes a bang command from a todo card in the conversation', async () => {
   const markdown = 'Check `! printf safe`.'
   const todo: ChatItem = {
@@ -1398,6 +1493,7 @@ it('loads and shows the session tree from the tree endpoint', async () => {
       elapsedSeconds: 20,
       task: null,
       repo: session.repo,
+      vibeMode: { mode: 'disabled' },
       decisionCount: 0,
       pullRequest: null,
     },
@@ -1412,6 +1508,7 @@ it('loads and shows the session tree from the tree endpoint', async () => {
       elapsedSeconds: 8,
       task: null,
       repo: session.repo,
+      vibeMode: { mode: 'disabled' },
       decisionCount: 0,
       pullRequest: null,
     },
@@ -1538,6 +1635,7 @@ it('shows an error when the returned tree omits the selected session', async () 
               elapsedSeconds: 0,
               task: null,
               repo: session.repo,
+              vibeMode: { mode: 'disabled' },
               decisionCount: 0,
               pullRequest: null,
             },
@@ -1552,6 +1650,7 @@ it('shows an error when the returned tree omits the selected session', async () 
               elapsedSeconds: 0,
               task: null,
               repo: session.repo,
+              vibeMode: { mode: 'disabled' },
               decisionCount: 0,
               pullRequest: null,
             },
@@ -2494,6 +2593,38 @@ it('shows terminal guidance for an unanswered question without a request ID', ()
     choicesDisabled: [true, true],
     terminalMessage: 'Answer in terminal to continue.',
     submitButton: null,
+    actionCalls: [],
+  })
+})
+
+it('does not show terminal guidance for a cancelled question', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  const cancelledQuestion: ChatItem = {
+    type: 'question',
+    cancelled: true,
+    questions: [questionPrompt],
+  }
+  renderView(onAction, session, undefined, [cancelledQuestion])
+
+  const snapshot = () => ({
+    unansweredQuestionCount: container.querySelectorAll(
+      '.chat-question-card[data-has-unanswered-question="true"]',
+    ).length,
+    terminalMessage: container.querySelector(
+      '.conversation-terminal-fallback span',
+    )?.textContent,
+    choiceButtons: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.chat-question-choices button',
+      ),
+      (button) => button.disabled,
+    ),
+    actionCalls: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    unansweredQuestionCount: 0,
+    terminalMessage: undefined,
+    choiceButtons: [true, true],
     actionCalls: [],
   })
 })
@@ -5325,12 +5456,14 @@ it('opens and closes the existing status panel over the mobile conversation', as
   await act(async () => {
     for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
+  const toggle = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.mobile-conversation-status-toggle',
+    ),
+  )
+  toggle.focus()
   act(() => {
-    requireElement(
-      container.querySelector<HTMLButtonElement>(
-        '.mobile-conversation-status-toggle',
-      ),
-    ).click()
+    toggle.click()
   })
 
   const opened = {
@@ -5339,17 +5472,21 @@ it('opens and closes the existing status panel over the mobile conversation', as
       ?.textContent,
     decisionHeading: container.querySelector('.decisions-panel-header h2')
       ?.textContent,
+    backButtonFocused:
+      document.activeElement ===
+      container.querySelector('.session-status-panel-back'),
   }
   act(() => {
     requireElement(
       container.querySelector<HTMLButtonElement>(
-        '.mobile-session-status-overlay .session-status-panel-close',
+        '.mobile-session-status-overlay .session-status-panel-back',
       ),
     ).click()
   })
   const closed = {
     overlay: container.querySelector('.mobile-session-status-overlay') !== null,
     conversation: container.querySelector('.conversation-pane') !== null,
+    focusRestored: document.activeElement === toggle,
   }
 
   const snapshot = () => ({ opened, closed })
@@ -5358,8 +5495,9 @@ it('opens and closes the existing status panel over the mobile conversation', as
       overlay: true,
       selectedTab: 'Decisions1',
       decisionHeading: 'Decisions in this session',
+      backButtonFocused: true,
     },
-    closed: { overlay: false, conversation: true },
+    closed: { overlay: false, conversation: true, focusRestored: true },
   })
 })
 
@@ -6016,6 +6154,78 @@ it('attaches dropped files through the composer and sends their data', async () 
   })
 })
 
+it('attaches files dropped on a proposal comment without activating the conversation drop target', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, { ...session, id: crypto.randomUUID() }, undefined, [
+    proposal,
+  ])
+  const file = new File(['payload'], 'dropped.png', { type: 'image/png' })
+  const dataTransfer = { types: ['Files'], files: [file], dropEffect: 'none' }
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+  )
+  const dispatchFileEvent = (type: 'dragenter' | 'dragover' | 'drop') => {
+    const event = new Event(type, { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'dataTransfer', { value: dataTransfer })
+    act(() => {
+      comment.dispatchEvent(event)
+    })
+    return event
+  }
+
+  const dragEnter = dispatchFileEvent('dragenter')
+  const targetAfterDragEnter = container.querySelector(
+    '.conversation-drop-target',
+  )
+  const dragOver = dispatchFileEvent('dragover')
+  const targetAfterDragOver = container.querySelector(
+    '.conversation-drop-target',
+  )
+  const drop = dispatchFileEvent('drop')
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector(
+          '.chat-proposal-card .attachment-preview-item span',
+        )?.textContent === file.name,
+    ),
+  ).toBe(true)
+
+  const snapshot = () => ({
+    dragEnterPrevented: dragEnter.defaultPrevented,
+    dragOverPrevented: dragOver.defaultPrevented,
+    dropPrevented: drop.defaultPrevented,
+    targetAfterDragEnter: targetAfterDragEnter?.textContent ?? null,
+    targetAfterDragOver: targetAfterDragOver?.textContent ?? null,
+    targetAfterDrop:
+      container.querySelector('.conversation-drop-target')?.textContent ?? null,
+    commentAttachmentNames: Array.from(
+      container.querySelectorAll(
+        '.chat-proposal-card .attachment-preview-item span',
+      ),
+      (element) => element.textContent,
+    ),
+    composerAttachmentNames: Array.from(
+      container.querySelectorAll(
+        '.conversation-composer .attachment-preview-item span',
+      ),
+      (element) => element.textContent,
+    ),
+    actionCalls: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    dragEnterPrevented: true,
+    dragOverPrevented: true,
+    dropPrevented: true,
+    targetAfterDragEnter: null,
+    targetAfterDragOver: null,
+    targetAfterDrop: null,
+    commentAttachmentNames: ['dropped.png'],
+    composerAttachmentNames: [],
+    actionCalls: [],
+  })
+})
+
 it('hides the drop target when a file drag leaves the conversation', () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction)
@@ -6312,13 +6522,14 @@ it('shows a server attachment validation error and retains the rejected attachme
     error: container.querySelector('[role="alert"]')?.textContent ?? null,
     attachmentName: container.querySelector('.attachment-preview-item span')
       ?.textContent,
-    postBody: fetcher.mock.calls[2]?.[1]?.body,
+    postBody: normalizeQueuedMessagePostBody(fetcher.mock.calls[2]?.[1]?.body),
   })
   expect(snapshot()).toEqual({
     error: 'file attachment data is invalid',
     attachmentName: 'document.pdf',
     postBody: JSON.stringify({
       content: '',
+      messageId: '<message-id>',
       attachments: [
         {
           name: 'document.pdf',
@@ -6425,9 +6636,10 @@ it('waits for pasted image optimization and sends the optimized attachment', asy
   ).toBe(true)
 
   const sentBody = () => fetcher.mock.calls[2]?.[1]?.body
-  expect(sentBody()).toEqual(
+  expect(normalizeQueuedMessagePostBody(sentBody())).toEqual(
     JSON.stringify({
       content: 'Inspect this photo.',
+      messageId: '<message-id>',
       attachments: [
         {
           name: 'photo.jpg',

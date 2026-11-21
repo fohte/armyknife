@@ -164,3 +164,22 @@
   min-width: 0;
   flex: 0 1 auto;
 }
+
+@media (max-width: 700px) {
+  .chat-peer-message-to {
+    width: 92%;
+    max-width: 92%;
+  }
+
+  .chat-peer-message-from .chat-peer-content {
+    padding: 10px 12px;
+  }
+
+  .chat-peer-message-to .chat-peer-content {
+    padding: 0 12px 10px;
+  }
+
+  .chat-peer-content {
+    font-size: 15px;
+  }
+}
