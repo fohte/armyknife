@@ -1,5 +1,8 @@
 //! Detached cleanup worker for crit review daemons.
 
+mod registration;
+mod status;
+
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
@@ -9,6 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use clap::Args;
 
+use self::status::{crit_pid_for_port, pid_for_port};
 use super::super::store;
 use super::super::types::Session;
 use super::url::parse_port;
@@ -17,6 +21,10 @@ use crate::infra::external_tool::ExternalTool;
 use crate::infra::process;
 use crate::infra::tmux;
 use crate::shared::log::short_run_id;
+
+pub(super) fn prepare_registration(port: u16, url: &str) -> (String, Option<serde_json::Value>) {
+    registration::prepare_registration(port, url)
+}
 
 const MONITOR_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const STARTING_MARKER_TTL: Duration = Duration::from_secs(15);
@@ -47,6 +55,14 @@ pub struct MonitorArgs {
 }
 
 pub(super) fn ensure_started(port: u16, session: Option<&Session>) -> Result<()> {
+    ensure_started_with_status(port, session, None)
+}
+
+pub(super) fn ensure_started_with_status(
+    port: u16,
+    session: Option<&Session>,
+    status: Option<&serde_json::Value>,
+) -> Result<()> {
     let marker = marker_path(port)?;
     let Some(reservation) = claim_marker(&marker)? else {
         return Ok(());
@@ -57,8 +73,7 @@ pub(super) fn ensure_started(port: u16, session: Option<&Session>) -> Result<()>
     let session_id = session.map(|session| session.session_id.as_str());
 
     let result = (|| {
-        let pid = crit_pid_for_port(port)?
-            .with_context(|| format!("crit status did not report a daemon on port {port}"))?;
+        let pid = monitor_pid_for_port(port, status, status::crit_status)?;
         let executable =
             std::env::current_exe().context("failed to resolve the armyknife executable")?;
         let mut args = vec![
@@ -92,6 +107,19 @@ pub(super) fn ensure_started(port: u16, session: Option<&Session>) -> Result<()>
         remove_marker_if_equals(&marker, &reservation);
     }
     result
+}
+
+fn monitor_pid_for_port(
+    port: u16,
+    status: Option<&serde_json::Value>,
+    read_status: impl FnOnce() -> Result<serde_json::Value>,
+) -> Result<u32> {
+    let pid = match status {
+        Some(status) => pid_for_port(status, port),
+        None => pid_for_port(&read_status()?, port),
+    }
+    .with_context(|| format!("crit status did not report a daemon on port {port}"))?;
+    Ok(pid)
 }
 
 pub(super) fn run(args: &MonitorArgs) -> Result<()> {
@@ -147,24 +175,6 @@ pub(super) fn run(args: &MonitorArgs) -> Result<()> {
     remove_marker_if_owned(&marker);
     tracing::info!(event = "agent.crit.monitor.exit", daemon_pid = watched_pid);
     Ok(())
-}
-
-fn crit_pid_for_port(port: u16) -> Result<Option<u32>> {
-    let status = crit_status()?;
-    Ok(pid_for_port(&status, port))
-}
-
-fn pid_for_port(status: &serde_json::Value, port: u16) -> Option<u32> {
-    status
-        .get("sessions")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .find(|session| {
-            session.get("port").and_then(serde_json::Value::as_u64) == Some(port.into())
-        })
-        .and_then(|session| session.get("pid").and_then(serde_json::Value::as_u64))
-        .and_then(|pid| u32::try_from(pid).ok())
 }
 
 fn marker_path(port: u16) -> Result<PathBuf> {
@@ -445,19 +455,6 @@ fn drop_port_from_session_in(
     Ok(Some(session))
 }
 
-fn crit_status() -> Result<serde_json::Value> {
-    let mut command = ExternalTool::Crit.command();
-    command.args(["status", "--json"]);
-    let output = process::run_with_timeout(command, Duration::from_secs(5))
-        .context("failed to read crit daemon status")?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("crit status --json failed: {stderr}");
-    }
-
-    serde_json::from_slice(&output.stdout).context("failed to parse crit status JSON")
-}
-
 fn restore_pane_link(
     port: u16,
     pane_id: Option<&str>,
@@ -501,6 +498,23 @@ mod tests {
 
     use super::*;
     use crate::commands::agent::types::WebUiRegistration;
+
+    #[test]
+    fn uses_registered_status_snapshot_without_rereading() {
+        let status = serde_json::json!({
+            "sessions": [{ "port": 43210, "pid": 12345 }],
+        });
+        let status_reads = Cell::new(0);
+        let result = monitor_pid_for_port(43210, Some(&status), || {
+            status_reads.set(status_reads.get() + 1);
+            Ok(serde_json::json!({
+                "sessions": [{ "port": 43210, "pid": 54321 }],
+            }))
+        })
+        .map_err(|error| format!("{error:#}"));
+
+        assert_eq!((result, status_reads.get()), (Ok(12345), 0));
+    }
 
     #[test]
     fn dropping_a_crit_port_only_removes_its_registration() {
