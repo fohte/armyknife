@@ -48,6 +48,7 @@ export function AsyncActionFeedbackHost({
     <>
       <div
         className="async-action-toast-stack"
+        data-dismissable-layer-branch=""
         aria-live="polite"
         style={
           toastBottomOffset === null

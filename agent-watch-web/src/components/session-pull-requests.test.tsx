@@ -2,7 +2,10 @@ import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
-import { AsyncActionFeedbackProvider } from '#async-action-feedback'
+import {
+  AsyncActionFeedbackProvider,
+  useAsyncActionStarter,
+} from '#async-action-feedback'
 import { SessionPullRequests } from '#components/session-pull-requests'
 import type { PullRequest } from '#types'
 
@@ -88,6 +91,52 @@ function ToastOffsetHarness() {
         isMergeSuccessful={() => false}
         onOpenChange={setOpen}
       />
+    </AsyncActionFeedbackProvider>
+  )
+}
+
+function ToastDismissContents() {
+  const [open, setOpen] = useState(false)
+  const startAsyncAction = useAsyncActionStarter(() => undefined)
+  return (
+    <>
+      <button
+        className="start-failed-merge"
+        onClick={() => {
+          startAsyncAction({
+            kind: 'merge',
+            sessionId: 'fixture-session',
+            sessionTitle: 'Fixture session',
+            pullRequestNumber: 42,
+            run: () =>
+              Promise.resolve({
+                status: 'mergeFailed',
+                error: 'The pull request head changed.',
+              }),
+          })
+        }}
+        type="button"
+      >
+        Start failed merge
+      </button>
+      <SessionPullRequests
+        pullRequests={pullRequests}
+        repo="example-org/example-repo"
+        isMobile
+        open={open}
+        onMerge={() => undefined}
+        isMerging={() => false}
+        isMergeSuccessful={() => false}
+        onOpenChange={setOpen}
+      />
+    </>
+  )
+}
+
+function ToastDismissHarness() {
+  return (
+    <AsyncActionFeedbackProvider>
+      <ToastDismissContents />
     </AsyncActionFeedbackProvider>
   )
 }
@@ -528,6 +577,36 @@ it('updates the phone toast offset with sheet geometry and clears stale offsets'
     },
     { bottom: '', maxHeight: '' },
   ])
+})
+
+it('keeps the phone pull request sheet open when scrolling a toast', async () => {
+  act(() => {
+    root?.render(<ToastDismissHarness />)
+  })
+
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>('.start-failed-merge')?.click()
+    await Promise.resolve()
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.session-pr-trigger')?.click()
+  })
+
+  const toast = container.querySelector<HTMLElement>(
+    '.async-action-toast-stack .async-action-item',
+  )
+  if (toast === null) throw new Error('Expected a failed merge toast')
+  act(() => {
+    toast.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+  })
+
+  const snapshot = () => ({
+    expanded: container
+      .querySelector('.session-pr-trigger')
+      ?.getAttribute('aria-expanded'),
+    dialogVisible: container.querySelector('.session-pr-list--mobile') !== null,
+  })
+  expect(snapshot()).toEqual({ expanded: 'true', dialogVisible: true })
 })
 
 it('lists a merged current-branch pull request only in Merged', () => {

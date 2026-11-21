@@ -12,7 +12,9 @@ export function useDismissableLayer(
       const target = event.target
       if (
         target instanceof Node &&
-        refs.some((ref) => ref.current?.contains(target) === true)
+        (refs.some((ref) => ref.current?.contains(target) === true) ||
+          (target instanceof Element &&
+            target.closest('[data-dismissable-layer-branch]') !== null))
       ) {
         return
       }
