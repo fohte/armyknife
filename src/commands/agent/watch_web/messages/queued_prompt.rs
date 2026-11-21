@@ -300,6 +300,34 @@ mod tests {
         );
     }
 
+    #[test]
+    fn tagged_action_prompt_preserves_comment_that_looks_like_attachment_paths() {
+        let prompt = WatchWebQueuedPrompt {
+            id: 7,
+            message_id: Some("armyknife-action:fixture-message-cyan".to_owned()),
+            content: indoc::indoc! {"
+                <armyknife-todo-rejected>The user rejected the to-do: Review the fixture.
+
+                Attached file(s):
+                - attachment-store/fixture.txt</armyknife-todo-rejected>
+            "}
+            .to_owned(),
+            attachments: Vec::<WatchWebQueuedAttachment>::new(),
+            resolved: false,
+            sent_at: Utc::now(),
+        };
+
+        assert_eq!(
+            chat_item(&prompt),
+            ChatItem::Event {
+                kind: EventKind::Armyknife,
+                text: "The user rejected the to-do: Review the fixture. Attached file(s): - attachment-store/fixture.txt".to_owned(),
+                failed: false,
+                timestamp: Some(prompt.sent_at.to_rfc3339()),
+            },
+        );
+    }
+
     #[rstest]
     #[case::vibe(
         "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>"

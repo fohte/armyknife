@@ -14,6 +14,12 @@ pub(super) fn tagged_body(text: &str) -> Option<(&str, &str)> {
 }
 
 pub(super) fn tagged_action_body(text: &str) -> Option<(&str, &str)> {
+    if let Some((tag, body)) = tagged_body(text)
+        && action_event::is_action_event_tag(tag)
+    {
+        return Some((tag, body));
+    }
+
     let (tag, body) = tagged_body(strip_attachment_paths(text))?;
     action_event::is_action_event_tag(tag).then_some((tag, body))
 }
