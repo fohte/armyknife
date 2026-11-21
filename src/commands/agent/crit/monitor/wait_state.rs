@@ -235,16 +235,12 @@ mod tests {
         assert_eq!(actual, (true, false));
     }
 
-    #[test]
-    fn lsof_errors_with_diagnostics_remain_unknown() {
-        let actual = crit_client_waiting_from_lsof_result(
-            false,
-            Some(1),
-            "",
-            "lsof could not inspect a socket",
-            101,
-        )
-        .map_err(|_| "lsof error");
+    #[rstest]
+    #[case::diagnostics("", "lsof could not inspect a socket")]
+    #[case::partial_output("partial lsof output", "")]
+    fn lsof_errors_or_partial_results_remain_unknown(#[case] stdout: &str, #[case] stderr: &str) {
+        let actual = crit_client_waiting_from_lsof_result(false, Some(1), stdout, stderr, 101)
+            .map_err(|_| "lsof error");
 
         assert_eq!(actual, Err("lsof error"));
     }
