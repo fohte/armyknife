@@ -1,5 +1,5 @@
 import { err, ok, type Result } from 'neverthrow'
-import type { ReactNode } from 'react'
+import type { ReactNode, RefObject } from 'react'
 import {
   createContext,
   useCallback,
@@ -73,7 +73,10 @@ type AsyncActionRetryUpdate = Pick<
 type AsyncActionFeedbackValue = {
   actions: readonly AsyncAction[]
   toastIds: readonly number[]
+  toastRef: RefObject<HTMLDivElement | null>
   activityOpen: boolean
+  toastBottomOffset: number | null
+  setToastBottomOffset: (offset: number | null) => void
   pendingMergeRetryActionIds: readonly number[]
   activeMergeRetryConfirmationActionId: number | null
   start: (options: StartAsyncActionOptions) => number
@@ -103,6 +106,9 @@ export function AsyncActionFeedbackProvider({
   const [actions, setActions] = useState<AsyncAction[]>([])
   const [toastIds, setToastIds] = useState<number[]>([])
   const [activityOpen, setActivityOpen] = useState(false)
+  const [toastBottomOffset, setToastBottomOffset] = useState<number | null>(
+    null,
+  )
   const [pendingMergeRetryActionIds, setPendingMergeRetryActionIds] = useState<
     number[]
   >([])
@@ -111,6 +117,7 @@ export function AsyncActionFeedbackProvider({
     setActiveMergeRetryConfirmationActionId,
   ] = useState<number | null>(null)
   const [selectedActionId, setSelectedActionId] = useState<number | null>(null)
+  const toastRef = useRef<HTMLDivElement>(null)
   const nextId = useRef(0)
   const runs = useRef(new Map<number, () => Promise<AsyncActionOutcome>>())
   const retryHandlers = useRef(
@@ -331,7 +338,10 @@ export function AsyncActionFeedbackProvider({
       value={{
         actions,
         toastIds,
+        toastRef,
         activityOpen,
+        toastBottomOffset,
+        setToastBottomOffset,
         pendingMergeRetryActionIds,
         activeMergeRetryConfirmationActionId,
         start,
@@ -352,7 +362,9 @@ export function AsyncActionFeedbackProvider({
       <AsyncActionFeedbackHost
         actions={actions}
         toastIds={toastIds}
+        toastRef={toastRef}
         activityOpen={activityOpen}
+        toastBottomOffset={toastBottomOffset}
         selectedActionId={selectedActionId}
         retry={retry}
         dismissToast={dismissToast}

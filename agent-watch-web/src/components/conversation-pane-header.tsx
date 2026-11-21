@@ -442,6 +442,7 @@ export function ConversationPaneHeader({
           number={merge.mergeTarget.number}
           headSha={merge.mergeTarget.expectedHeadSha}
           merging={merge.isMerging(merge.mergeTarget)}
+          mobile={isMobile}
           onCancel={merge.closeMergeConfirmation}
           onConfirm={() => {
             merge.confirmMerge()

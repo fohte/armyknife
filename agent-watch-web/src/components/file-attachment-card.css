@@ -104,3 +104,7 @@
   color: var(--aw-text-muted);
   overflow-wrap: anywhere;
 }
+
+.conversation-pane[data-mobile='true'] .chat-file-attachment {
+  max-width: 100%;
+}

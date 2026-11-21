@@ -109,6 +109,11 @@
   list-style: none;
 }
 
+.conversation-pane[data-mobile='true'] .chat-tool-thought details > summary {
+  min-height: 44px;
+  align-items: center;
+}
+
 .chat-tool-thought details > summary::after {
   color: var(--aw-text-disabled);
   content: '›';

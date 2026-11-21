@@ -30,6 +30,11 @@
   opacity: 0.7;
 }
 
+.conversation-pane[data-mobile='true'] .bang-command-button {
+  min-height: 44px;
+  font-size: 13px;
+}
+
 .bang-command-status {
   margin-left: 0.4rem;
   color: var(--aw-text-muted);
@@ -85,4 +90,18 @@
   background: var(--aw-bg-palette-muted);
   font-family: var(--font-mono);
   white-space: pre-wrap;
+}
+
+.confirm-dialog-backdrop--mobile .bang-command-dialog-details {
+  margin: 0;
+}
+
+.confirm-dialog-backdrop--mobile .bang-command-dialog-details dt {
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+.confirm-dialog-backdrop--mobile .bang-command-dialog-details dd code,
+.confirm-dialog-backdrop--mobile .bang-command-dialog-details dd pre {
+  font-size: 13px;
 }

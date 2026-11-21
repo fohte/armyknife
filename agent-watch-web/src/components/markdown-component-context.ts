@@ -9,6 +9,7 @@ export type MarkdownComponentContextValue = {
   copyableCodeBlocks: boolean
   webUis: readonly WebUiLinkTarget[]
   onOpenWebUi?: (webUi: WebUiLinkTarget, url: string) => void
+  mobile?: boolean
   commandContext?: {
     messageText: string
     sessionId: string
