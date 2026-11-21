@@ -11,6 +11,7 @@ use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, Session, SessionStatus};
 use crate::infra::tmux;
 mod worktree;
+pub(crate) use worktree::check_process_guard;
 pub use worktree::{
     WorktreeCleanupResult, WorktreeProcessGuardError, cleanup_worktree_by_name,
     cleanup_worktree_resources, cleanup_worktree_resources_with_post_delete,

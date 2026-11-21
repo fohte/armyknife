@@ -113,6 +113,27 @@ fn close_tracked_session_with_runtime_and_stop<R: CloseRuntime>(
     Ok(())
 }
 
+pub(crate) fn resolve_agent_pid_for_session(session: &Session) -> Result<Option<u32>> {
+    let Some(tmux_info) = session.tmux_info.as_ref() else {
+        return Ok(None);
+    };
+    resolve_agent_pid_for_pane(tmux_info, session.engine)
+}
+
+fn resolve_agent_pid_for_pane(tmux_info: &TmuxInfo, engine: Engine) -> Result<Option<u32>> {
+    let Some(pane_pid) =
+        tmux::get_pane_pid_for_socket(tmux_info.socket_path.as_deref(), &tmux_info.pane_id)?
+    else {
+        return Ok(None);
+    };
+    let snapshot = ProcessSnapshot::capture().context("Could not inspect running processes")?;
+    Ok(snapshot.find_self_or_descendant_by_command(
+        pane_pid,
+        engine.process_name(),
+        MAX_DESCENDANT_NODES,
+    ))
+}
+
 #[derive(Debug, thiserror::Error)]
 #[error(
     "the session closed, but its lifecycle storage cleanup failed; retry Close when storage is available: {0}"
@@ -177,17 +198,7 @@ impl CloseRuntime for LiveCloseRuntime {
     }
 
     fn resolve_agent_pid(&self, tmux_info: &TmuxInfo, engine: Engine) -> Result<Option<u32>> {
-        let Some(pane_pid) =
-            tmux::get_pane_pid_for_socket(tmux_info.socket_path.as_deref(), &tmux_info.pane_id)?
-        else {
-            return Ok(None);
-        };
-        let snapshot = ProcessSnapshot::capture().context("Could not inspect running processes")?;
-        Ok(snapshot.find_self_or_descendant_by_command(
-            pane_pid,
-            engine.process_name(),
-            MAX_DESCENDANT_NODES,
-        ))
+        resolve_agent_pid_for_pane(tmux_info, engine)
     }
 
     fn request_graceful_quit(&self, tmux_info: &TmuxInfo, pid: u32) -> io::Result<bool> {

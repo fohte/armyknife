@@ -128,12 +128,18 @@ async fn get_merge_status_impl(repo: Option<&GitRepo>, branch_name: &str) -> Mer
     // First, check PR status via GitHub API
     if let Some(repo) = repo
         && let Ok((owner, repo_name)) = github_owner_and_repo(repo)
-        && let Ok(client) = GitHubClient::get()
-        && let Ok(Some(pr_info)) = client
-            .get_pr_for_branch(&owner, &repo_name, branch_name)
-            .await
     {
-        return merge_status_from_pr(&pr_info);
+        let client = tokio::task::spawn_blocking(GitHubClient::get)
+            .await
+            .ok()
+            .and_then(std::result::Result::ok);
+        if let Some(client) = client
+            && let Ok(Some(pr_info)) = client
+                .get_pr_for_branch(&owner, &repo_name, branch_name)
+                .await
+        {
+            return merge_status_from_pr(&pr_info);
+        }
     }
 
     // Fallback: protect branches without an associated PR.

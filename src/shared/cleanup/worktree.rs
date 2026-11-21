@@ -20,6 +20,7 @@ pub enum WorktreeProcessGuardError {
     ActiveProcesses {
         worktree_path: PathBuf,
         process_list: String,
+        processes: Vec<ProcessInPath>,
     },
     #[error(
         "Could not inspect processes in worktree '{worktree_path}'; pass --force to delete the worktree"
@@ -213,6 +214,8 @@ where
             *guard_pgids.borrow_mut() = inspection.daemon_descendant_pgids;
             Some(inspection.non_shell_processes)
         })
+        .map(|_| ())
+        .map_err(anyhow::Error::from)
     });
     let mut result = delete_worktree(force, worktree_path.to_path_buf(), before_delete)?;
     let daemon_descendant_pgids = daemon_descendant_pgids.borrow().clone();
@@ -240,13 +243,13 @@ where
     Ok(result)
 }
 
-fn check_process_guard(
+pub(crate) fn check_process_guard(
     worktree_path: &Path,
     force: bool,
     detect_processes: impl FnOnce(&Path) -> Option<Vec<ProcessInPath>>,
-) -> anyhow::Result<()> {
+) -> Result<Vec<ProcessInPath>, WorktreeProcessGuardError> {
     if force {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let processes = detect_processes(worktree_path).ok_or_else(|| {
         WorktreeProcessGuardError::InspectionUnavailable {
@@ -262,10 +265,10 @@ fn check_process_guard(
         return Err(WorktreeProcessGuardError::ActiveProcesses {
             worktree_path: worktree_path.to_path_buf(),
             process_list,
-        }
-        .into());
+            processes,
+        });
     }
-    Ok(())
+    Ok(processes)
 }
 
 fn run_post_delete_cleanup(
@@ -401,6 +404,40 @@ mod tests {
             crate::infra::git::cmd::run_git(repo.workdir(), ["worktree", "list", "--porcelain"])
                 .unwrap();
         assert!(!list.contains("/.worktrees/cleanup-test"));
+    }
+
+    #[test]
+    fn process_guard_errors_keep_structured_process_details() {
+        let worktree_path = PathBuf::from("/fictional/worktree");
+        let detected_processes = vec![ProcessInPath {
+            pid: 12345,
+            comm: "fictional-worker".to_string(),
+        }];
+        let actual =
+            check_process_guard(&worktree_path, false, |_| Some(detected_processes.clone()))
+                .err()
+                .map(|error| match error {
+                    WorktreeProcessGuardError::ActiveProcesses {
+                        worktree_path,
+                        process_list,
+                        processes,
+                    } => (worktree_path, process_list, processes),
+                    WorktreeProcessGuardError::InspectionUnavailable { .. } => {
+                        (PathBuf::new(), String::new(), Vec::new())
+                    }
+                });
+
+        assert_eq!(
+            actual,
+            Some((
+                PathBuf::from("/fictional/worktree"),
+                "12345 (fictional-worker)".to_string(),
+                vec![ProcessInPath {
+                    pid: 12345,
+                    comm: "fictional-worker".to_string(),
+                }],
+            )),
+        );
     }
 
     #[rstest]
