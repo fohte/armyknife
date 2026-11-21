@@ -2498,6 +2498,38 @@ it('shows terminal guidance for an unanswered question without a request ID', ()
   })
 })
 
+it('does not show terminal guidance for a cancelled question', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  const cancelledQuestion: ChatItem = {
+    type: 'question',
+    cancelled: true,
+    questions: [questionPrompt],
+  }
+  renderView(onAction, session, undefined, [cancelledQuestion])
+
+  const snapshot = () => ({
+    unansweredQuestionCount: container.querySelectorAll(
+      '.chat-question-card[data-has-unanswered-question="true"]',
+    ).length,
+    terminalMessage: container.querySelector(
+      '.conversation-terminal-fallback span',
+    )?.textContent,
+    choiceButtons: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.chat-question-choices button',
+      ),
+      (button) => button.disabled,
+    ),
+    actionCalls: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    unansweredQuestionCount: 0,
+    terminalMessage: undefined,
+    choiceButtons: [true, true],
+    actionCalls: [],
+  })
+})
+
 it('keeps the message composer available while a proposal waits for a choice', () => {
   renderView(
     vi.fn(() => Promise.resolve(true)),
