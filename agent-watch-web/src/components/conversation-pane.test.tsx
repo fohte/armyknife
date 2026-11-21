@@ -1297,10 +1297,7 @@ it('posts a message when randomUUID is unavailable', async () => {
   })
   const fetcher = vi.fn<typeof fetch>((input, init) => {
     const url = requestUrl(input)
-    if (
-      url.endsWith('/messages?limit=100') ||
-      url.endsWith('/messages?from=0')
-    ) {
+    if (url.includes('/messages?')) {
       return Promise.resolve(jsonResponse(messagesResponse([])))
     }
     if (url.endsWith('/actions')) {
@@ -6167,7 +6164,9 @@ it('attaches files dropped on a proposal comment without activating the conversa
   const comment = requireElement(
     container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
   )
-  const dispatchFileEvent = (type: 'dragenter' | 'dragover' | 'drop') => {
+  const dispatchFileEvent = (
+    type: 'dragenter' | 'dragleave' | 'dragover' | 'drop',
+  ) => {
     const event = new Event(type, { bubbles: true, cancelable: true })
     Object.defineProperty(event, 'dataTransfer', { value: dataTransfer })
     act(() => {
@@ -6178,11 +6177,16 @@ it('attaches files dropped on a proposal comment without activating the conversa
 
   const dragEnter = dispatchFileEvent('dragenter')
   const targetAfterDragEnter = container.querySelector(
-    '.conversation-drop-target',
+    '.chat-proposal-card .file-drop-indicator',
   )
+  const dragLeave = dispatchFileEvent('dragleave')
+  const targetAfterDragLeave = container.querySelector(
+    '.chat-proposal-card .file-drop-indicator',
+  )
+  dispatchFileEvent('dragenter')
   const dragOver = dispatchFileEvent('dragover')
   const targetAfterDragOver = container.querySelector(
-    '.conversation-drop-target',
+    '.chat-proposal-card .file-drop-indicator',
   )
   const drop = dispatchFileEvent('drop')
   expect(
@@ -6196,9 +6200,11 @@ it('attaches files dropped on a proposal comment without activating the conversa
 
   const snapshot = () => ({
     dragEnterPrevented: dragEnter.defaultPrevented,
+    dragLeavePrevented: dragLeave.defaultPrevented,
     dragOverPrevented: dragOver.defaultPrevented,
     dropPrevented: drop.defaultPrevented,
     targetAfterDragEnter: targetAfterDragEnter?.textContent ?? null,
+    targetAfterDragLeave: targetAfterDragLeave?.textContent ?? null,
     targetAfterDragOver: targetAfterDragOver?.textContent ?? null,
     targetAfterDrop:
       container.querySelector('.conversation-drop-target')?.textContent ?? null,
@@ -6218,10 +6224,12 @@ it('attaches files dropped on a proposal comment without activating the conversa
   })
   expect(snapshot()).toEqual({
     dragEnterPrevented: true,
+    dragLeavePrevented: false,
     dragOverPrevented: true,
     dropPrevented: true,
-    targetAfterDragEnter: null,
-    targetAfterDragOver: null,
+    targetAfterDragEnter: 'Drop files to attach',
+    targetAfterDragLeave: null,
+    targetAfterDragOver: 'Drop files to attach',
     targetAfterDrop: null,
     commentAttachmentNames: ['dropped.png'],
     composerAttachmentNames: [],
