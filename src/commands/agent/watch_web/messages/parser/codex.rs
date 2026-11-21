@@ -340,20 +340,22 @@ impl CodexParserState {
                 match item.get("type").and_then(Value::as_str) {
                     Some("UserMessage") => {
                         if let Some(text) = item.get("content").and_then(value_text) {
+                            let queued_prompt_id =
+                                super::super::queued_prompt::id_from_content(&text)
+                                    .map(str::to_owned);
                             let content_without_id =
                                 super::super::queued_prompt::strip_id_marker(&text);
                             if let Some((tag, body)) =
                                 super::super::tagged_message::tagged_body(&content_without_id)
+                                && (!super::super::action_event::is_vibe_mode_tag(tag)
+                                    || queued_prompt_id.is_some())
                                 && let Some(event_text) =
                                     super::super::action_event::event_text(tag, body)
                             {
                                 effects.push(CodexEffect::ArmyknifeEvent {
                                     text: CodexText::new(event_text)?,
                                     timestamp,
-                                    queued_prompt_id: super::super::queued_prompt::id_from_content(
-                                        &text,
-                                    )
-                                    .map(str::to_owned),
+                                    queued_prompt_id,
                                 });
                             } else {
                                 effects.push(CodexEffect::UserMessage {
@@ -422,13 +424,26 @@ impl CodexParserState {
                         rewind_id,
                     } => {
                         tools.flush_into(&mut items);
-                        append_user_text_with_rewind_id(
-                            &mut items,
-                            text.decode()?,
-                            parent,
-                            *timestamp,
-                            rewind_id.clone(),
-                        );
+                        let text = text.decode()?;
+                        if super::super::tagged_message::tagged_body(&text).is_some_and(
+                            |(tag, _)| super::super::action_event::is_vibe_mode_tag(tag),
+                        ) {
+                            items.push(ChatItem::User {
+                                text,
+                                from: None,
+                                timestamp: timestamp.map(|timestamp| timestamp.to_rfc3339()),
+                                rewind_id: rewind_id.clone(),
+                                queued_prompt_id: None,
+                            });
+                        } else {
+                            append_user_text_with_rewind_id(
+                                &mut items,
+                                text,
+                                parent,
+                                *timestamp,
+                                rewind_id.clone(),
+                            );
+                        }
                     }
                     CodexEffect::ArmyknifeEvent {
                         text,
@@ -1169,6 +1184,26 @@ mod tests {
                 text:
                     "<armyknife-vibe-mode-on>Here is user-authored text.</armyknife-vibe-mode-on>"
                         .to_owned(),
+                timestamp: Some("2026-06-01T12:05:00+00:00".to_owned()),
+                from: None,
+                queued_prompt_id: None,
+            }],
+        );
+    }
+
+    #[test]
+    fn keeps_an_unqueued_vibe_notice_as_a_user_message() {
+        let transcript = indoc! {r#"
+            {"type":"turn_context","payload":{"turn_id":"fixture-turn-id"}}
+            {"type":"event_msg","timestamp":"2026-06-01T12:05:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":"<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>"}}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None).unwrap(),
+            vec![ChatItem::User {
+                rewind_id: Some("fixture-turn-id".to_owned()),
+                text: "<armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>"
+                    .to_owned(),
                 timestamp: Some("2026-06-01T12:05:00+00:00".to_owned()),
                 from: None,
                 queued_prompt_id: None,

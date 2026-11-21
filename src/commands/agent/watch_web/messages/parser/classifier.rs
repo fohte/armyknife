@@ -62,8 +62,12 @@ pub(super) fn classify_inbound(
         .and_then(Value::as_str)
         == Some("human")
     {
-        return MessageKind::User {
-            text: marked_user_body(text, user_marker).unwrap_or_else(|| text.to_owned()),
+        return match marked_user_body(text, user_marker) {
+            Some(body) if is_vibe_mode_action_message(&body) => marked_user_message_body(body),
+            Some(text) => MessageKind::User { text },
+            None => MessageKind::User {
+                text: text.to_owned(),
+            },
         };
     }
 
@@ -330,6 +334,11 @@ pub(super) fn marked_user_body(text: &str, marker: Option<&str>) -> Option<Strin
     message.has_user_marker.then_some(message.body)
 }
 
+fn is_vibe_mode_action_message(body: &str) -> bool {
+    let body_without_id = super::super::queued_prompt::strip_id_marker(body);
+    tagged_body(&body_without_id).is_some_and(|(tag, _)| action_event::is_vibe_mode_tag(tag))
+}
+
 fn marked_or_peer_message(text: &str, marker: Option<&str>) -> Option<MessageKind> {
     let message = extract_peer_message(text, marker)?;
     if message.has_user_marker_in_body || (message.sender_id.is_none() && message.has_user_marker) {
@@ -344,15 +353,22 @@ fn marked_or_peer_message(text: &str, marker: Option<&str>) -> Option<MessageKin
 }
 
 fn marked_user_message_body(body: String) -> MessageKind {
+    let queued_prompt_id = super::super::queued_prompt::id_from_content(&body).map(str::to_owned);
     let body_without_id = super::super::queued_prompt::strip_id_marker(&body);
     match tagged_body(&body_without_id)
         .and_then(|(tag, event_body)| action_event::event_text(tag, event_body))
     {
-        Some(text) => MessageKind::Event {
-            kind: EventKind::Armyknife,
-            text,
-            failed: false,
-        },
+        Some(text) => {
+            let text = match queued_prompt_id {
+                Some(message_id) => super::super::queued_prompt::add_id_marker(&text, &message_id),
+                None => text,
+            };
+            MessageKind::Event {
+                kind: EventKind::Armyknife,
+                text,
+                failed: false,
+            }
+        }
         _ => MessageKind::User { text: body },
     }
 }
@@ -384,6 +400,22 @@ mod tests {
 
     #[rstest]
     #[case::human_user(json!({"type":"user","origin":{"kind":"human"}}), "Please continue.", Some("fixture-marker"), MessageKind::User { text: "Please continue.".to_owned() })]
+    #[case::human_vibe_notice_is_an_event(
+        json!({"type":"user","origin":{"kind":"human"}}),
+        indoc! {"
+            ⟦armyknife-user:fixture-marker-violet⟧
+            This message was sent by the human user in armyknife watch-web, either as a message or an action notification.
+            <armyknife-vibe-mode-on>watch-web からユーザーが vibe mode を on にしました。</armyknife-vibe-mode-on>
+            <!-- armyknife-queued-prompt-id:fixture-message-teal -->
+        "},
+        Some("⟦armyknife-user:fixture-marker-violet⟧"),
+        MessageKind::Event {
+            kind: EventKind::Armyknife,
+            text: "Vibe mode turned on\n<!-- armyknife-queued-prompt-id:fixture-message-teal -->"
+                .to_owned(),
+            failed: false,
+        },
+    )]
     #[case::human_tagged_text_stays_user(json!({"type":"user","origin":{"kind":"human"}}), "<task-notification>Human supplied text.</task-notification>", None, MessageKind::User { text: "<task-notification>Human supplied text.</task-notification>".to_owned() })]
     #[case::human_peer_envelope_stays_user(json!({"type":"user","origin":{"kind":"human"}}), HUMAN_PEER_ENVELOPE, None, MessageKind::User { text: HUMAN_PEER_ENVELOPE.to_owned() })]
     #[case::unrelated_peer(
@@ -471,7 +503,7 @@ mod tests {
             <!-- armyknife-queued-prompt-id:fixture-message-cyan -->
         "},
         Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
-        MessageKind::Event { kind: EventKind::Armyknife, text: "Vibe mode turned on".to_owned(), failed: false },
+        MessageKind::Event { kind: EventKind::Armyknife, text: "Vibe mode turned on\n<!-- armyknife-queued-prompt-id:fixture-message-cyan -->".to_owned(), failed: false },
     )]
     #[case::marked_vibe_mode_off_is_an_event(
         json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
@@ -482,7 +514,7 @@ mod tests {
             <!-- armyknife-queued-prompt-id:fixture-message-amber -->
         "},
         Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
-        MessageKind::Event { kind: EventKind::Armyknife, text: "Vibe mode turned off".to_owned(), failed: false },
+        MessageKind::Event { kind: EventKind::Armyknife, text: "Vibe mode turned off\n<!-- armyknife-queued-prompt-id:fixture-message-amber -->".to_owned(), failed: false },
     )]
     #[case::marked_vibe_tag_with_user_text_stays_user(
         json!({"type":"user","origin":{"kind":"peer","from":"unknown"}}),
