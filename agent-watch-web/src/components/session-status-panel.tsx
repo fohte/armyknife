@@ -35,8 +35,10 @@ export function SessionStatusPanel({
     .map((tab) => `${tab.id}:${tab.label}:${String(tab.count)}`)
     .join('|')
   const activeTab = visibleTabs.find((tab) => tab.id === activeTabId)
+  const panelRef = useRef<HTMLElement>(null)
   const tabListRef = useRef<HTMLDivElement>(null)
   const activeTabRef = useRef<HTMLButtonElement>(null)
+  const backButtonRef = useRef<HTMLButtonElement>(null)
   const [hasHiddenTabs, setHasHiddenTabs] = useState({
     left: false,
     right: false,
@@ -90,8 +92,56 @@ export function SessionStatusPanel({
     }
   }, [updateHiddenTabs, visibleTabSignature])
 
+  useEffect(() => {
+    if (!mobilePresentation) return
+    const previouslyFocused = document.activeElement
+    const panel = panelRef.current
+    if (panel === null) return
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return
+      const focusableElements = Array.from(
+        panel.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((element) => element.getClientRects().length > 0)
+      const first = focusableElements[0]
+      const last = focusableElements.at(-1)
+      if (first === undefined || last === undefined) {
+        event.preventDefault()
+        panel.focus()
+        return
+      }
+
+      const focusIsOutsidePanel = !panel.contains(document.activeElement)
+      if (
+        (event.shiftKey &&
+          (document.activeElement === first || focusIsOutsidePanel)) ||
+        (!event.shiftKey &&
+          (document.activeElement === last || focusIsOutsidePanel))
+      ) {
+        event.preventDefault()
+        const focusTarget = event.shiftKey ? last : first
+        focusTarget.focus()
+      }
+    }
+
+    backButtonRef.current?.focus()
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      if (
+        previouslyFocused instanceof HTMLElement &&
+        previouslyFocused.isConnected
+      ) {
+        previouslyFocused.focus()
+      }
+    }
+  }, [mobilePresentation])
+
   return (
     <aside
+      ref={panelRef}
       id="session-status-panel"
       className={`session-status-panel${mobilePresentation ? ' session-status-panel--mobile' : ''}`}
       aria-label="Session status panel"
@@ -100,10 +150,12 @@ export function SessionStatusPanel({
       }
       role={mobilePresentation ? 'dialog' : undefined}
       aria-modal={mobilePresentation || undefined}
+      tabIndex={mobilePresentation ? -1 : undefined}
     >
       {mobilePresentation ? (
         <header className="session-status-panel-mobile-header">
           <Button
+            ref={backButtonRef}
             className="session-status-panel-back"
             type="button"
             variant="plain"

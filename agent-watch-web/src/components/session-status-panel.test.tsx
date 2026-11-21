@@ -138,6 +138,7 @@ it('keeps overflowing tabs selectable and scrolls the active tab beside the clos
   const tabList = container.querySelector<HTMLElement>('[role="tablist"]')
   act(() => {
     if (tabList !== null) tabList.scrollLeft = 300
+    tabList?.dispatchEvent(new Event('scroll'))
     root?.render(
       <SessionStatusPanel
         tabs={tabs.map((tab) => ({ ...tab }))}
@@ -148,6 +149,10 @@ it('keeps overflowing tabs selectable and scrolls the active tab beside the clos
     )
   })
   const userScrollPreserved = tabList?.scrollLeft === 300
+  const manualScrollFades = {
+    left: tabList?.parentElement?.classList.contains('has-hidden-tabs-left'),
+    right: tabList?.parentElement?.classList.contains('has-hidden-tabs-right'),
+  }
 
   const lastTab = container.querySelector<HTMLButtonElement>(
     '#session-status-tab-view-8',
@@ -181,6 +186,7 @@ it('keeps overflowing tabs selectable and scrolls the active tab beside the clos
     tabCount: container.querySelectorAll('[role="tab"]').length,
     lastTabSelectable: onTabChange.mock.calls,
     userScrollPreserved,
+    manualScrollFades,
     tabListOverflows:
       (container.querySelector<HTMLElement>('[role="tablist"]')?.scrollWidth ??
         0) >
@@ -193,6 +199,7 @@ it('keeps overflowing tabs selectable and scrolls the active tab beside the clos
     tabCount: 8,
     lastTabSelectable: [['view-8']],
     userScrollPreserved: true,
+    manualScrollFades: { left: true, right: true },
     tabListOverflows: true,
     rightwardScroll: {
       hasScrolledRight: true,
@@ -274,7 +281,47 @@ it('closes the status panel from its tab bar', () => {
   expect(onClose.mock.calls).toEqual([[]])
 })
 
-it('shows the mobile page heading and returns to the conversation', () => {
+it('shows the mobile page heading and focuses its back action', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionStatusPanel
+        tabs={[
+          { id: 'running', label: 'Running', count: 1, content: 'Running' },
+        ]}
+        activeTabId="running"
+        onTabChange={vi.fn()}
+        onClose={() => undefined}
+        mobilePresentation
+      />,
+    )
+  })
+
+  const backButton = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Back to the conversation"]',
+  )
+  const snapshot = () => ({
+    heading: container.querySelector('h1')?.textContent,
+    dialog: container
+      .querySelector('[role="dialog"]')
+      ?.getAttribute('aria-modal'),
+    tabLabel: container.querySelector('[role="tab"]')?.textContent,
+    backButtonVisible: backButton !== null,
+    backButtonFocused: document.activeElement === backButton,
+    closeButtonVisible:
+      container.querySelector('.session-status-panel-close') !== null,
+  })
+  expect(snapshot()).toEqual({
+    heading: 'Session status',
+    dialog: 'true',
+    tabLabel: 'Running1',
+    backButtonVisible: true,
+    backButtonFocused: true,
+    closeButtonVisible: false,
+  })
+})
+
+it('returns to the conversation when the mobile back action is pressed', () => {
   const onClose = vi.fn()
   root = createRoot(container)
   act(() => {
@@ -291,27 +338,68 @@ it('shows the mobile page heading and returns to the conversation', () => {
     )
   })
 
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Back to the conversation"]',
+      )
+      ?.click()
+  })
+  expect(onClose.mock.calls).toEqual([[]])
+})
+
+it('keeps keyboard focus inside the mobile status page', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionStatusPanel
+        tabs={[
+          { id: 'running', label: 'Running', count: 1, content: 'Running' },
+        ]}
+        activeTabId="running"
+        onTabChange={vi.fn()}
+        onClose={() => undefined}
+        mobilePresentation
+      />,
+    )
+  })
+
   const backButton = container.querySelector<HTMLButtonElement>(
     '[aria-label="Back to the conversation"]',
   )
-  const snapshot = () => ({
-    heading: container.querySelector('h1')?.textContent,
-    dialog: container
-      .querySelector('[role="dialog"]')
-      ?.getAttribute('aria-modal'),
-    tabLabel: container.querySelector('[role="tab"]')?.textContent,
-    backButtonVisible: backButton !== null,
-    closeButtonVisible:
-      container.querySelector('.session-status-panel-close') !== null,
+  const tab = container.querySelector<HTMLButtonElement>('[role="tab"]')
+  const focusedElements: string[] = []
+  const recordFocus = () => {
+    focusedElements.push(
+      document.activeElement === backButton
+        ? 'back'
+        : document.activeElement === tab
+          ? 'tab'
+          : 'outside',
+    )
+  }
+  recordFocus()
+  act(() => {
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Tab',
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
   })
-  expect(snapshot()).toEqual({
-    heading: 'Session status',
-    dialog: 'true',
-    tabLabel: 'Running1',
-    backButtonVisible: true,
-    closeButtonVisible: false,
+  recordFocus()
+  act(() => {
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'Tab',
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
   })
+  recordFocus()
 
-  act(() => backButton?.click())
-  expect(onClose.mock.calls).toEqual([[]])
+  expect(focusedElements).toEqual(['back', 'tab', 'back'])
 })
