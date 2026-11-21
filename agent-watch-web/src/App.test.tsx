@@ -1999,7 +1999,9 @@ it('ignores desktop keyboard shortcuts at the mobile breakpoint', () => {
 
   const snapshot = () => ({
     selectedTitle: readSelectedTitle(),
-    laterMenuCount: container.querySelectorAll('.later-menu').length,
+    laterMenuCount: container.querySelectorAll(
+      '.later-menu, .later-menu--mobile',
+    ).length,
     boardViewCount: container.querySelectorAll('.board-view').length,
   })
   expect(snapshot()).toEqual({
@@ -2133,9 +2135,11 @@ it('opens Later for the session shown in a mobile conversation', async () => {
     menuTitle: container.querySelector('.later-menu-mobile-session-title')
       ?.textContent,
     menuLabel: container
-      .querySelector('.later-menu')
+      .querySelector('.later-menu--mobile')
       ?.getAttribute('aria-label'),
-    menuRole: container.querySelector('.later-menu')?.getAttribute('role'),
+    menuRole: container
+      .querySelector('.later-menu--mobile')
+      ?.getAttribute('role'),
   })
   expect(snapshot()).toEqual({
     initialConversationState: {
@@ -2174,7 +2178,7 @@ it('closes the mobile Later menu with Escape', async () => {
   })
 
   const snapshot = () => ({
-    menuCount: container.querySelectorAll('.later-menu').length,
+    menuCount: container.querySelectorAll('.later-menu--mobile').length,
     escapePrevented: escapeEvent?.defaultPrevented,
   })
   expect(snapshot()).toEqual({ menuCount: 0, escapePrevented: true })

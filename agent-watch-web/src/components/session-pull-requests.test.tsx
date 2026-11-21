@@ -655,7 +655,7 @@ it('closes an unrelated menu when a toast receives a pointerdown', async () => {
   })
 
   const snapshot = () => ({
-    laterMenuVisible: container.querySelector('.later-menu') !== null,
+    laterMenuVisible: container.querySelector('.later-menu--mobile') !== null,
     toastVisible:
       container.querySelector(
         '.async-action-toast-stack .async-action-item',

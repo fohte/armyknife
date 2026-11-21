@@ -1,0 +1,48 @@
+.mobile-sheet-overlay {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  background: rgb(0 0 0 / 55%);
+}
+
+.story-mobile-layout .mobile-sheet-overlay {
+  position: absolute;
+}
+
+.mobile-sheet {
+  position: relative;
+  width: 100%;
+  max-height: 100%;
+  box-sizing: border-box;
+  overflow: auto;
+  border-top: 1px solid var(--aw-border-control);
+  padding-bottom: max(20px, env(safe-area-inset-bottom));
+  background: var(--aw-bg-popover);
+  color: var(--aw-text-primary);
+  box-shadow: 0 -12px 36px rgb(0 0 0 / 30%);
+}
+
+.mobile-sheet-overlay[data-presentation='fullscreen'] {
+  align-items: stretch;
+  background: var(--aw-bg-app);
+}
+
+.mobile-sheet--fullscreen {
+  display: flex;
+  height: 100%;
+  min-height: 100dvh;
+  max-height: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  border: 0;
+  padding-top: max(8px, env(safe-area-inset-top));
+  padding-bottom: max(30px, env(safe-area-inset-bottom));
+  background: var(--aw-bg-app);
+  box-shadow: none;
+}
+
+.story-mobile-layout .mobile-sheet--fullscreen {
+  min-height: 0;
+}

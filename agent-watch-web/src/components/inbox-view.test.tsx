@@ -494,7 +494,7 @@ it('shows the iPhone filter as a full-screen dialog and applies its query', () =
     onFilterQueryChange,
     onFilterDialogOpenChange,
   })
-  const dialog = container.querySelector('.inbox-filter-dialog')
+  const dialog = container.querySelector('.inbox-filter-mobile-dialog')
 
   act(() => {
     container
@@ -503,15 +503,15 @@ it('shows the iPhone filter as a full-screen dialog and applies its query', () =
   })
 
   const snapshot = () => ({
-    mobile: container
-      .querySelector('.inbox-filter-overlay')
-      ?.getAttribute('data-mobile'),
+    presentation: container
+      .querySelector('.mobile-sheet-overlay')
+      ?.getAttribute('data-presentation'),
     dialogRole: dialog?.getAttribute('role'),
     appliedQuery: onFilterQueryChange.mock.calls,
     openChanges: onFilterDialogOpenChange.mock.calls,
   })
   expect(snapshot()).toEqual({
-    mobile: 'true',
+    presentation: 'fullscreen',
     dialogRole: 'dialog',
     appliedQuery: [['project:web-app']],
     openChanges: [[false]],
@@ -522,7 +522,9 @@ it('keeps keyboard focus inside the iPhone filter dialog', () => {
   renderInbox({ isMobile: true })
   const openButton =
     container.querySelector<HTMLButtonElement>('.inbox-filter-open')
-  const dialog = container.querySelector<HTMLElement>('.inbox-filter-dialog')
+  const dialog = container.querySelector<HTMLElement>(
+    '.inbox-filter-mobile-dialog',
+  )
   const input = container.querySelector<HTMLInputElement>(
     '[aria-label="Inbox filter query"]',
   )
@@ -543,7 +545,7 @@ it('keeps keyboard focus inside the iPhone filter dialog', () => {
     openButton.click()
   })
   const activeDialog = container.querySelector<HTMLElement>(
-    '.inbox-filter-dialog',
+    '.inbox-filter-mobile-dialog',
   )
   const activeInput = container.querySelector<HTMLInputElement>(
     '[aria-label="Inbox filter query"]',
@@ -571,7 +573,8 @@ it('keeps keyboard focus inside the iPhone filter dialog', () => {
   const snapshot = () => ({
     inputFocusedOnOpen,
     focusReturnedInsideDialog,
-    dialogClosed: container.querySelector('.inbox-filter-dialog') === null,
+    dialogClosed:
+      container.querySelector('.inbox-filter-mobile-dialog') === null,
     focusRestored: document.activeElement === openButton,
   })
   expect(snapshot()).toEqual({
