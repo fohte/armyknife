@@ -107,6 +107,7 @@ impl ApiError {
                 crate::shared::cleanup::WorktreeProcessGuardError::ActiveProcesses {
                     worktree_path,
                     process_list,
+                    ..
                 } => format!(
                     "Worktree '{}' contains running processes: {process_list}. Stop them and retry, or close the session while keeping the worktree.",
                     worktree_path.display(),
@@ -179,7 +180,7 @@ mod tests {
     fn close_dirty_worktree_errors_have_a_code_and_no_unavailable_force_option() {
         let error = ApiError::close(anyhow::Error::new(
             crate::shared::worktree::DirtyWorktreeError::new(std::path::PathBuf::from(
-                "/worktrees/dirty",
+                "/fictional/worktree-dirty",
             )),
         ));
 
@@ -187,7 +188,7 @@ mod tests {
             (error.status, error.message, error.code),
             (
                 StatusCode::CONFLICT,
-                "Worktree contains uncommitted changes or untracked files: /worktrees/dirty; commit or move them before closing".to_string(),
+                "Worktree contains uncommitted changes or untracked files: /fictional/worktree-dirty; commit or move them before closing".to_string(),
                 Some("dirty_worktree"),
             ),
         );
@@ -197,8 +198,12 @@ mod tests {
     fn close_process_guard_errors_offer_a_keep_worktree_retry() {
         let error = ApiError::close(anyhow::Error::new(
             crate::shared::cleanup::WorktreeProcessGuardError::ActiveProcesses {
-                worktree_path: std::path::PathBuf::from("/worktrees/busy"),
+                worktree_path: std::path::PathBuf::from("/fictional/worktree-busy"),
                 process_list: "42 (editor)".to_string(),
+                processes: vec![crate::infra::process::ProcessInPath {
+                    pid: 42,
+                    comm: "editor".to_string(),
+                }],
             },
         ));
 
@@ -206,7 +211,7 @@ mod tests {
             (error.status, error.message, error.code),
             (
                 StatusCode::CONFLICT,
-                "Worktree '/worktrees/busy' contains running processes: 42 (editor). Stop them and retry, or close the session while keeping the worktree.".to_string(),
+                "Worktree '/fictional/worktree-busy' contains running processes: 42 (editor). Stop them and retry, or close the session while keeping the worktree.".to_string(),
                 Some("worktree_process_guard"),
             ),
         );
@@ -216,7 +221,7 @@ mod tests {
     fn close_process_inspection_errors_offer_a_keep_worktree_retry() {
         let error = ApiError::close(anyhow::Error::new(
             crate::shared::cleanup::WorktreeProcessGuardError::InspectionUnavailable {
-                worktree_path: std::path::PathBuf::from("/worktrees/uncheckable"),
+                worktree_path: std::path::PathBuf::from("/fictional/worktree-uncheckable"),
             },
         ));
 
@@ -224,7 +229,7 @@ mod tests {
             (error.status, error.message, error.code),
             (
                 StatusCode::CONFLICT,
-                "Could not inspect processes in worktree '/worktrees/uncheckable'. Close the session while keeping the worktree, then retry.".to_string(),
+                "Could not inspect processes in worktree '/fictional/worktree-uncheckable'. Close the session while keeping the worktree, then retry.".to_string(),
                 Some("worktree_process_guard"),
             ),
         );

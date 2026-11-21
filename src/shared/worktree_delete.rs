@@ -14,12 +14,47 @@ use crate::shared::worktree::{
 use crate::shared::worktree_error::WmError;
 
 pub(crate) struct WorktreeDeletePlan {
-    main_repo: GitRepo,
-    worktree_name: String,
-    branch_name: Option<String>,
-    worktree_path: PathBuf,
+    target: WorktreeDeleteTarget,
     merge_status: Option<MergeStatus>,
     force: bool,
+}
+
+pub(crate) struct WorktreeDeleteTarget {
+    pub(crate) main_repo: GitRepo,
+    pub(crate) worktree_name: String,
+    pub(crate) branch_name: Option<String>,
+    pub(crate) worktree_path: PathBuf,
+}
+
+pub(crate) struct MergeGuardStatus {
+    pub(crate) branch: String,
+    pub(crate) status: MergeStatus,
+    pub(crate) should_cleanup: bool,
+}
+
+pub(crate) fn resolve_merge_guard_branch(
+    repo: &GitRepo,
+    branch_name: Option<&str>,
+) -> Option<String> {
+    resolve_merge_guard_branch_with(branch_name, |branch| repo.local_branch_exists(branch))
+}
+
+fn resolve_merge_guard_branch_with(
+    branch_name: Option<&str>,
+    branch_exists: impl FnOnce(&str) -> bool,
+) -> Option<String> {
+    branch_name
+        .filter(|branch| branch_exists(branch))
+        .map(str::to_string)
+}
+
+pub(crate) fn classify_merge_guard_status(branch: String, status: MergeStatus) -> MergeGuardStatus {
+    let should_cleanup = status.should_cleanup();
+    MergeGuardStatus {
+        branch,
+        status,
+        should_cleanup,
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -51,35 +86,50 @@ pub(crate) async fn prepare(
     force: bool,
     unmerged_policy: UnmergedWorktreePolicy,
 ) -> Result<WorktreeDeletePlan> {
-    let repo = GitRepo::open_at(worktree_path).map_err(|_| WmError::NotInGitRepo)?;
-    let main_repo = get_main_repo(&repo)?;
+    let target = resolve_target(worktree_path)?;
 
-    let worktree_path = repo.workdir().to_path_buf();
-    let worktree_path_str = worktree_path.to_string_lossy();
-    let worktree_name = find_worktree_name(&main_repo, &worktree_path_str)?;
-    let branch_name = get_worktree_branch(&main_repo, &worktree_name);
+    ensure_clean_for_deletion(&target.worktree_path, force)?;
 
-    ensure_clean_for_deletion(&worktree_path, force)?;
-
-    let merge_status =
-        check_merge_status(&main_repo, branch_name.as_deref(), force, unmerged_policy).await?;
+    let merge_status = check_merge_status(
+        &target.main_repo,
+        target.branch_name.as_deref(),
+        force,
+        unmerged_policy,
+    )
+    .await?;
 
     Ok(WorktreeDeletePlan {
-        main_repo,
-        worktree_name,
-        branch_name,
-        worktree_path,
+        target,
         merge_status,
         force,
     })
 }
 
-pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Result<()> {
-    let WorktreeDeletePlan {
+pub(crate) fn resolve_target(worktree_path: &Path) -> Result<WorktreeDeleteTarget> {
+    let repo = GitRepo::open_at(worktree_path).map_err(|_| WmError::NotInGitRepo)?;
+    let main_repo = get_main_repo(&repo)?;
+    let worktree_path = repo.workdir().to_path_buf();
+    let worktree_path_str = worktree_path.to_string_lossy();
+    let worktree_name = find_worktree_name(&main_repo, &worktree_path_str)?;
+    let branch_name = get_worktree_branch(&main_repo, &worktree_name);
+
+    Ok(WorktreeDeleteTarget {
         main_repo,
         worktree_name,
         branch_name,
         worktree_path,
+    })
+}
+
+pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Result<()> {
+    let WorktreeDeletePlan {
+        target:
+            WorktreeDeleteTarget {
+                main_repo,
+                worktree_name,
+                branch_name,
+                worktree_path,
+            },
         merge_status,
         force,
     } = plan;
@@ -230,7 +280,7 @@ async fn check_merge_status(
         |branch| repo.local_branch_exists(branch),
         move |branch| {
             let branch = branch.to_string();
-            async move { get_merge_status_for_repo(&repo_for_status, &branch).await }
+            async move { get_merge_status_for_branch(&repo_for_status, &branch).await }
         },
         || {
             let stdin = io::stdin();
@@ -246,6 +296,25 @@ async fn check_merge_status(
     .await
 }
 
+pub(crate) async fn get_merge_status_for_branch(repo: &GitRepo, branch: &str) -> MergeStatus {
+    get_merge_status_for_repo(repo, branch).await
+}
+
+async fn inspect_merge_guard_status_with<F, G, Fut>(
+    branch_name: Option<&str>,
+    branch_exists: F,
+    get_status: G,
+) -> Option<MergeGuardStatus>
+where
+    F: FnOnce(&str) -> bool,
+    G: FnOnce(&str) -> Fut,
+    Fut: std::future::Future<Output = MergeStatus>,
+{
+    let branch = resolve_merge_guard_branch_with(branch_name, branch_exists)?;
+    let status = get_status(&branch).await;
+    Some(classify_merge_guard_status(branch, status))
+}
+
 async fn check_merge_status_with<F, G, Fut>(
     branch_name: Option<&str>,
     force: bool,
@@ -259,12 +328,18 @@ where
     G: FnOnce(&str) -> Fut,
     Fut: std::future::Future<Output = MergeStatus>,
 {
-    let Some(branch) = branch_name.filter(|branch| branch_exists(branch)) else {
+    let Some(merge_guard_status) =
+        inspect_merge_guard_status_with(branch_name, branch_exists, get_status).await
+    else {
         return Ok(None);
     };
+    let MergeGuardStatus {
+        branch,
+        status: merge_status,
+        should_cleanup,
+    } = merge_guard_status;
 
-    let merge_status = get_status(branch).await;
-    if !merge_status.should_cleanup() && !force {
+    if !should_cleanup && !force {
         if unmerged_policy == UnmergedWorktreePolicy::Reject {
             return Err(UnmergedWorktreeError::new(branch, merge_status.reason()).into());
         }
@@ -368,7 +443,7 @@ mod tests {
             |branch| {
                 assert_eq!(branch, "feature");
                 std::future::ready(MergeStatus::Merged {
-                    reason: "PR #42 merged".to_string(),
+                    reason: "fictional change merged".to_string(),
                 })
             },
             || Some(true),
@@ -381,7 +456,7 @@ mod tests {
             (
                 Some("feature".to_string()),
                 Some(MergeStatus::Merged {
-                    reason: "PR #42 merged".to_string(),
+                    reason: "fictional change merged".to_string(),
                 }),
             ),
         );

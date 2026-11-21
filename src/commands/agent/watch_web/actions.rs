@@ -458,16 +458,23 @@ mod tests {
                 CloseChecks::from_observations(
                     PathBuf::from("/fictional/worktree"),
                     vec!["src/fictional.rs".to_string()],
-                    Some((
-                        Some("feature/fictional".to_string()),
-                        Some(crate::infra::git::MergeStatus::NotMerged {
+                    Some("feature/fictional".to_string()),
+                    Some(crate::shared::worktree_delete::classify_merge_guard_status(
+                        "feature/fictional".to_string(),
+                        crate::infra::git::MergeStatus::NotMerged {
                             reason: "pull request is open".to_string(),
-                        }),
+                        },
                     )),
-                    Some(vec![crate::infra::process::ProcessInPath {
-                        pid: 12345,
-                        comm: "fictional-worker".to_string(),
-                    }]),
+                    Some(Err(
+                        crate::shared::cleanup::WorktreeProcessGuardError::ActiveProcesses {
+                            worktree_path: PathBuf::from("/fictional/worktree"),
+                            process_list: "12345 (fictional-worker)".to_string(),
+                            processes: vec![crate::infra::process::ProcessInPath {
+                                pid: 12345,
+                                comm: "fictional-worker".to_string(),
+                            }],
+                        },
+                    )),
                 )
             })
         })
@@ -722,6 +729,10 @@ mod tests {
                             crate::shared::cleanup::WorktreeProcessGuardError::ActiveProcesses {
                                 worktree_path: PathBuf::from("/fictional/worktree"),
                                 process_list: "12345 (fictional-worker)".to_string(),
+                                processes: vec![crate::infra::process::ProcessInPath {
+                                    pid: 12345,
+                                    comm: "fictional-worker".to_string(),
+                                }],
                             },
                         ),
                         FakeCloseFailure::UnmergedWorktree => anyhow::Error::new(

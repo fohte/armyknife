@@ -4,10 +4,11 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::infra::git::cmd::run_git;
-use crate::infra::git::{GitRepo, MergeStatus, get_merge_status_for_repo};
 use crate::infra::process::ProcessInPath;
 use crate::infra::process::find_non_shell_processes_in_path;
+use crate::shared::cleanup::{self, WorktreeProcessGuardError};
+use crate::shared::worktree;
+use crate::shared::worktree_delete::{self, MergeGuardStatus, WorktreeDeleteTarget};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,98 +31,113 @@ struct CloseProcess {
 impl CloseChecks {
     pub(super) async fn inspect(session_path: &Path) -> Self {
         let session_path = session_path.to_path_buf();
-        let repo_path = session_path.clone();
-        let repo = tokio::task::spawn_blocking(move || GitRepo::open_at(&repo_path).ok())
-            .await
-            .ok()
-            .flatten();
-        let worktree_path = repo
-            .as_ref()
-            .map(|repo| repo.workdir().to_path_buf())
-            .unwrap_or_else(|| session_path.to_path_buf());
+        let target_path = session_path.clone();
+        let target = tokio::task::spawn_blocking(move || {
+            let target = worktree_delete::resolve_target(&target_path).ok()?;
+            let branch = worktree_delete::resolve_merge_guard_branch(
+                &target.main_repo,
+                target.branch_name.as_deref(),
+            );
+            Some((target, branch))
+        })
+        .await
+        .ok()
+        .flatten();
+        let Some((target, branch)) = target else {
+            return Self::inspect_without_target(session_path).await;
+        };
+
+        Self::inspect_target(target, branch).await
+    }
+
+    async fn inspect_target(target: WorktreeDeleteTarget, branch: Option<String>) -> Self {
+        let worktree_path = target.worktree_path.clone();
+        let repo = target.main_repo;
         Self::inspect_with(
             worktree_path,
-            changed_files,
-            move |_| {
-                let runtime = tokio::runtime::Handle::current();
-                async move {
-                    tokio::task::spawn_blocking(move || {
-                        runtime.block_on(async move {
-                            match repo {
-                                Some(repo) => match repo.current_branch() {
-                                    Ok(branch) if branch != "HEAD" => {
-                                        let status = tokio::time::timeout(
-                                            Duration::from_secs(5),
-                                            get_merge_status_for_repo(&repo, &branch),
-                                        )
-                                        .await
-                                        .ok();
-                                        Some((Some(branch), status))
-                                    }
-                                    _ => None,
-                                },
-                                None => None,
-                            }
-                        })
-                    })
-                    .await
-                    .ok()
-                    .flatten()
-                }
+            branch,
+            |path| worktree::uncommitted_files(path).unwrap_or_default(),
+            move |branch| async move {
+                tokio::time::timeout(
+                    Duration::from_secs(5),
+                    worktree_delete::get_merge_status_for_branch(&repo, &branch),
+                )
+                .await
+                .ok()
+                .map(|status| worktree_delete::classify_merge_guard_status(branch, status))
             },
-            find_non_shell_processes_in_path,
+            |path| cleanup::check_process_guard(path, false, find_non_shell_processes_in_path),
         )
         .await
     }
 
-    async fn inspect_with<Files, Branch, BranchFuture, Processes>(
+    async fn inspect_without_target(worktree_path: PathBuf) -> Self {
+        Self::inspect_with(
+            worktree_path,
+            None,
+            |path| worktree::uncommitted_files(path).unwrap_or_default(),
+            |_| async { None },
+            |path| cleanup::check_process_guard(path, false, find_non_shell_processes_in_path),
+        )
+        .await
+    }
+
+    async fn inspect_with<Files, Merge, MergeFuture, Processes>(
         worktree_path: PathBuf,
+        branch: Option<String>,
         inspect_files: Files,
-        inspect_branch: Branch,
-        inspect_processes: Processes,
+        inspect_merge_status: Merge,
+        inspect_process_guard: Processes,
     ) -> Self
     where
-        Files: FnOnce(&Path) -> Vec<String>,
-        Branch: FnOnce(&Path) -> BranchFuture,
-        BranchFuture: Future<Output = Option<(Option<String>, Option<MergeStatus>)>>,
-        Processes: FnOnce(&Path) -> Option<Vec<ProcessInPath>> + Send + 'static,
-        Files: Send + 'static,
+        Files: FnOnce(&Path) -> Vec<String> + Send + 'static,
+        Merge: FnOnce(String) -> MergeFuture,
+        MergeFuture: Future<Output = Option<MergeGuardStatus>>,
+        Processes:
+            FnOnce(&Path) -> Result<Vec<ProcessInPath>, WorktreeProcessGuardError> + Send + 'static,
     {
-        let files_path = worktree_path.clone();
-        let files = tokio::task::spawn_blocking(move || inspect_files(&files_path))
+        let inspection_path = worktree_path.clone();
+        let files_and_processes = tokio::task::spawn_blocking(move || {
+            let files = inspect_files(&inspection_path);
+            let processes = inspect_process_guard(&inspection_path);
+            (files, processes)
+        });
+        let merge_status = match branch.clone() {
+            Some(branch) => inspect_merge_status(branch).await,
+            None => None,
+        };
+        let (files, processes) = files_and_processes
             .await
+            .map(|(files, processes)| (files, Some(processes)))
             .unwrap_or_default();
-        let branch_status = inspect_branch(&worktree_path).await;
-        let processes_path = worktree_path.clone();
-        let process_inspection =
-            tokio::task::spawn_blocking(move || inspect_processes(&processes_path))
-                .await
-                .ok()
-                .flatten();
 
-        Self::from_observations(worktree_path, files, branch_status, process_inspection)
+        Self::from_observations(worktree_path, files, branch, merge_status, processes)
     }
 
     pub(super) fn from_observations(
         worktree_path: PathBuf,
         files: Vec<String>,
-        branch_status: Option<(Option<String>, Option<MergeStatus>)>,
-        process_inspection: Option<Vec<ProcessInPath>>,
+        branch: Option<String>,
+        merge_status: Option<MergeGuardStatus>,
+        process_inspection: Option<Result<Vec<ProcessInPath>, WorktreeProcessGuardError>>,
     ) -> Self {
-        let (branch, merged, reason) = match branch_status {
-            Some((branch, status)) => match status {
-                Some(status) => {
-                    let merged = status.is_merged();
-                    let reason = (!merged).then(|| status.reason().to_string());
-                    (branch, Some(merged), reason)
-                }
-                None => (branch, None, None),
-            },
-            None => (None, None, None),
+        let (branch, merged, reason) = match merge_status {
+            Some(status) => {
+                let reason = (!status.should_cleanup).then(|| status.status.reason().to_string());
+                (Some(status.branch), Some(status.should_cleanup), reason)
+            }
+            None => (branch, None, None),
         };
-        let process_inspection_unavailable = process_inspection.is_none();
-        let processes = process_inspection
-            .unwrap_or_default()
+        let (processes, process_inspection_unavailable) = match process_inspection {
+            Some(Ok(processes)) => (processes, false),
+            Some(Err(WorktreeProcessGuardError::ActiveProcesses { processes, .. })) => {
+                (processes, false)
+            }
+            Some(Err(WorktreeProcessGuardError::InspectionUnavailable { .. })) | None => {
+                (Vec::new(), true)
+            }
+        };
+        let processes = processes
             .into_iter()
             .map(|process| CloseProcess {
                 pid: process.pid,
@@ -141,35 +157,10 @@ impl CloseChecks {
     }
 }
 
-fn changed_files(worktree_path: &Path) -> Vec<String> {
-    let Ok(status) = run_git(
-        worktree_path,
-        ["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
-    ) else {
-        return Vec::new();
-    };
-    parse_changed_files(&status)
-}
-
-fn parse_changed_files(status: &str) -> Vec<String> {
-    let mut records = status.split('\0');
-    let mut files = Vec::new();
-    while let Some(record) = records.next() {
-        if record.len() < 4 {
-            continue;
-        }
-        let status_code = &record[..2];
-        files.push(record[3..].to_string());
-        if status_code.contains('R') || status_code.contains('C') {
-            let _ = records.next();
-        }
-    }
-    files
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infra::git::MergeStatus;
     use serde_json::json;
 
     #[test]
@@ -177,16 +168,21 @@ mod tests {
         let checks = CloseChecks::from_observations(
             PathBuf::from("/fictional/worktree"),
             vec!["src/fictional.rs".to_string()],
-            Some((
-                Some("feature/fictional".to_string()),
-                Some(MergeStatus::NotMerged {
+            Some("feature/fictional".to_string()),
+            Some(worktree_delete::classify_merge_guard_status(
+                "feature/fictional".to_string(),
+                MergeStatus::NotMerged {
                     reason: "pull request is open".to_string(),
-                }),
+                },
             )),
-            Some(vec![ProcessInPath {
-                pid: 12345,
-                comm: "fictional-worker".to_string(),
-            }]),
+            Some(Err(WorktreeProcessGuardError::ActiveProcesses {
+                worktree_path: PathBuf::from("/fictional/worktree"),
+                process_list: "12345 (fictional-worker)".to_string(),
+                processes: vec![ProcessInPath {
+                    pid: 12345,
+                    comm: "fictional-worker".to_string(),
+                }],
+            })),
         );
 
         assert_eq!(
@@ -203,11 +199,32 @@ mod tests {
         );
     }
 
-    #[test]
-    fn parse_changed_files_handles_untracked_and_renamed_paths() {
+    #[rstest::rstest]
+    #[case::merged(crate::infra::git::MergeStatus::Merged { reason: "fictional change merged".to_string() })]
+    #[case::closed(crate::infra::git::MergeStatus::Closed { reason: "fictional change closed".to_string() })]
+    fn merged_uses_the_worktree_cleanup_decision(#[case] status: MergeStatus) {
+        let checks = CloseChecks::from_observations(
+            PathBuf::from("/fictional/worktree"),
+            Vec::new(),
+            Some("feature/fictional".to_string()),
+            Some(worktree_delete::classify_merge_guard_status(
+                "feature/fictional".to_string(),
+                status,
+            )),
+            Some(Ok(Vec::new())),
+        );
+
         assert_eq!(
-            parse_changed_files("?? src/new.rs\0R  src/renamed.rs\0src/old.rs\0"),
-            vec!["src/new.rs", "src/renamed.rs"],
+            serde_json::to_value(checks).unwrap(),
+            json!({
+                "path": "/fictional/worktree",
+                "files": [],
+                "branch": "feature/fictional",
+                "merged": true,
+                "reason": null,
+                "processes": [],
+                "processInspectionUnavailable": false,
+            }),
         );
     }
 
@@ -216,6 +233,7 @@ mod tests {
         let checks = CloseChecks::from_observations(
             PathBuf::from("/fictional/detached-worktree"),
             Vec::new(),
+            None,
             None,
             None,
         );
@@ -239,8 +257,9 @@ mod tests {
         let checks = CloseChecks::from_observations(
             PathBuf::from("/fictional/worktree"),
             Vec::new(),
-            Some((Some("feature/fictional".to_string()), None)),
-            Some(Vec::new()),
+            Some("feature/fictional".to_string()),
+            None,
+            Some(Ok(Vec::new())),
         );
 
         assert_eq!(
@@ -270,27 +289,32 @@ mod tests {
         let processes_flag = Arc::clone(&processes_checked);
         let checks = CloseChecks::inspect_with(
             PathBuf::from("/fictional/worktree"),
+            Some("feature/fictional".to_string()),
             move |_| {
                 files_flag.store(true, Ordering::SeqCst);
                 vec!["src/fictional.rs".to_string()]
             },
-            move |_| {
+            move |branch| {
                 branch_flag.store(true, Ordering::SeqCst);
-                async {
-                    Some((
-                        Some("feature/fictional".to_string()),
-                        Some(MergeStatus::NotMerged {
+                async move {
+                    Some(worktree_delete::classify_merge_guard_status(
+                        branch,
+                        MergeStatus::NotMerged {
                             reason: "pull request is open".to_string(),
-                        }),
+                        },
                     ))
                 }
             },
-            move |_| {
+            move |path| {
                 processes_flag.store(true, Ordering::SeqCst);
-                Some(vec![ProcessInPath {
-                    pid: 12345,
-                    comm: "fictional-worker".to_string(),
-                }])
+                Err(WorktreeProcessGuardError::ActiveProcesses {
+                    worktree_path: path.to_path_buf(),
+                    process_list: "12345 (fictional-worker)".to_string(),
+                    processes: vec![ProcessInPath {
+                        pid: 12345,
+                        comm: "fictional-worker".to_string(),
+                    }],
+                })
             },
         )
         .await;

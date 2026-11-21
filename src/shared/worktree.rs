@@ -31,9 +31,66 @@ pub fn ensure_clean_for_deletion(
     worktree_path: &std::path::Path,
     force: bool,
 ) -> anyhow::Result<()> {
-    ensure_clean_for_deletion_with(worktree_path, force, |path| {
-        run_git(path, ["status", "--porcelain", "--untracked-files=normal"])
+    ensure_clean_for_deletion_with(worktree_path, force, status_from_git)
+}
+
+pub(crate) fn uncommitted_files(worktree_path: &std::path::Path) -> anyhow::Result<Vec<String>> {
+    uncommitted_files_with_status(worktree_path)
+}
+
+fn uncommitted_files_with_status(worktree_path: &std::path::Path) -> anyhow::Result<Vec<String>> {
+    uncommitted_files_with(worktree_path, status_from_git)
+}
+
+fn status_from_git(worktree_path: &std::path::Path) -> anyhow::Result<String> {
+    run_git(
+        worktree_path,
+        ["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
+    )
+}
+
+fn uncommitted_files_with(
+    worktree_path: &std::path::Path,
+    status: impl FnOnce(&std::path::Path) -> anyhow::Result<String>,
+) -> anyhow::Result<Vec<String>> {
+    worktree_changes_with(worktree_path, status).map(|changes| changes.files)
+}
+
+struct WorktreeChanges {
+    files: Vec<String>,
+    is_dirty: bool,
+}
+
+fn worktree_changes_with(
+    worktree_path: &std::path::Path,
+    status: impl FnOnce(&std::path::Path) -> anyhow::Result<String>,
+) -> anyhow::Result<WorktreeChanges> {
+    if !worktree_path.is_dir() {
+        return Ok(WorktreeChanges {
+            files: Vec::new(),
+            is_dirty: false,
+        });
+    }
+    status(worktree_path).map(|status| WorktreeChanges {
+        is_dirty: !status.is_empty(),
+        files: parse_uncommitted_files(&status),
     })
+}
+
+fn parse_uncommitted_files(status: &str) -> Vec<String> {
+    let mut records = status.split('\0');
+    let mut files = Vec::new();
+    while let Some(record) = records.next() {
+        if record.len() < 4 {
+            continue;
+        }
+        let status_code = &record[..2];
+        files.push(record[3..].to_string());
+        if status_code.contains('R') || status_code.contains('C') {
+            let _ = records.next();
+        }
+    }
+    files
 }
 
 fn ensure_clean_for_deletion_with(
@@ -45,7 +102,7 @@ fn ensure_clean_for_deletion_with(
         return Ok(());
     }
 
-    if !status(worktree_path)?.is_empty() {
+    if worktree_changes_with(worktree_path, status)?.is_dirty {
         return Err(DirtyWorktreeError::new(worktree_path.to_path_buf()).into());
     }
 
@@ -58,13 +115,7 @@ pub(crate) fn delete_worktree_if_clean(
     before_delete: impl FnOnce() -> anyhow::Result<()>,
     delete: impl FnOnce() -> anyhow::Result<bool>,
 ) -> anyhow::Result<bool> {
-    delete_worktree_if_clean_with(
-        worktree_path,
-        force,
-        |path| run_git(path, ["status", "--porcelain", "--untracked-files=normal"]),
-        before_delete,
-        delete,
-    )
+    delete_worktree_if_clean_with(worktree_path, force, status_from_git, before_delete, delete)
 }
 
 fn delete_worktree_if_clean_with(
@@ -287,10 +338,10 @@ mod tests {
 
     #[rstest]
     #[case::clean_without_force("", false, true, (true, false, true, true, true))]
-    #[case::tracked_change_without_force(" M tracked.txt\n", false, true, (false, true, true, false, false))]
-    #[case::untracked_file_without_force("?? scratch.txt\n", false, true, (false, true, true, false, false))]
-    #[case::untracked_file_with_force("?? scratch.txt\n", true, true, (true, false, false, true, true))]
-    #[case::missing_worktree_skips_status("?? scratch.txt\n", false, false, (true, false, false, true, true))]
+    #[case::tracked_change_without_force(" M tracked.txt\0", false, true, (false, true, true, false, false))]
+    #[case::untracked_file_without_force("?? scratch.txt\0", false, true, (false, true, true, false, false))]
+    #[case::untracked_file_with_force("?? scratch.txt\0", true, true, (true, false, false, true, true))]
+    #[case::missing_worktree_skips_status("?? scratch.txt\0", false, false, (true, false, false, true, true))]
     fn delete_worktree_checks_status_before_removal(
         #[case] status: &str,
         #[case] force: bool,
@@ -338,6 +389,20 @@ mod tests {
                 removed.get()
             ),
             expected,
+        );
+    }
+
+    #[test]
+    fn uncommitted_files_use_the_status_paths_including_renames() {
+        let directory = tempfile::tempdir().expect("temporary worktree should be created");
+        let files = uncommitted_files_with(directory.path(), |_| {
+            Ok(" M src/changed.rs\0R  src/renamed.rs\0src/old.rs\0?? src/new.rs\0".into())
+        })
+        .expect("status should be parsed");
+
+        assert_eq!(
+            files,
+            vec!["src/changed.rs", "src/renamed.rs", "src/new.rs",],
         );
     }
 
