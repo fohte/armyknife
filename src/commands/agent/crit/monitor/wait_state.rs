@@ -5,6 +5,7 @@ use anyhow::{Context, Result, bail};
 
 use super::super::url::parse_port;
 use crate::commands::agent::store;
+use crate::commands::agent::types::Session;
 use crate::infra::external_tool::ExternalTool;
 use crate::infra::process;
 
@@ -57,6 +58,27 @@ pub(super) fn set_crit_wait_state(port: u16, waiting: Option<bool>) -> Result<()
     set_crit_wait_state_in(&store::sessions_dir()?, port, waiting)
 }
 
+pub(super) fn reconcile_registered_session(port: u16, session_id: &str) -> Result<()> {
+    let waiting = match super::daemon_status::crit_pid_for_port(port)
+        .and_then(|pid| {
+            pid.with_context(|| format!("crit status did not report a daemon on port {port}"))
+        })
+        .and_then(|pid| crit_client_waiting_on_port(port, pid))
+    {
+        Ok(waiting) => Some(waiting),
+        Err(error) => {
+            tracing::warn!(
+                event = "agent.crit.monitor.client_check_failed",
+                port,
+                error = %error,
+            );
+            None
+        }
+    };
+
+    set_crit_wait_state_for_session(&store::sessions_dir()?, session_id, port, waiting)
+}
+
 pub(super) fn set_crit_wait_state_if_changed(
     previous_waiting: &mut Option<Option<bool>>,
     waiting: Option<bool>,
@@ -87,28 +109,47 @@ fn set_crit_wait_state_in(sessions_dir: &Path, port: u16, waiting: Option<bool>)
         let Some(mut session) = lock.load()? else {
             continue;
         };
-        let mut changed = false;
-        for url in session
-            .crit_urls
-            .iter()
-            .filter(|url| parse_port(url).ok() == Some(port))
-        {
-            match waiting {
-                Some(true) | None => changed |= session.crit_not_waiting_urls.remove(url),
-                Some(false) => changed |= session.crit_not_waiting_urls.insert(url.clone()),
-            }
-        }
-        if changed {
+        if set_session_waiting_state(&mut session, port, waiting) {
             lock.save(&session)?;
         }
     }
     Ok(())
 }
 
+fn set_crit_wait_state_for_session(
+    sessions_dir: &Path,
+    session_id: &str,
+    port: u16,
+    waiting: Option<bool>,
+) -> Result<()> {
+    let lock = store::lock_session_for_update(sessions_dir, session_id)?;
+    let Some(mut session) = lock.load()? else {
+        return Ok(());
+    };
+    if set_session_waiting_state(&mut session, port, waiting) {
+        lock.save(&session)?;
+    }
+    Ok(())
+}
+
+fn set_session_waiting_state(session: &mut Session, port: u16, waiting: Option<bool>) -> bool {
+    let mut changed = false;
+    for url in session
+        .crit_urls
+        .iter()
+        .filter(|url| parse_port(url).ok() == Some(port))
+    {
+        match waiting {
+            Some(true) | None => changed |= session.crit_not_waiting_urls.remove(url),
+            Some(false) => changed |= session.crit_not_waiting_urls.insert(url.clone()),
+        }
+    }
+    changed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent::types::Session;
     use indoc::indoc;
     use rstest::rstest;
 
@@ -169,6 +210,32 @@ mod tests {
             (vec![None, Some(false), Some(true)], Some(Some(true))),
         );
         Ok(())
+    }
+
+    #[test]
+    fn failed_crit_wait_state_update_retries_the_same_observation() {
+        let mut previous_waiting = None;
+        let mut calls = 0;
+        let first = set_crit_wait_state_if_changed(&mut previous_waiting, Some(false), |_| {
+            calls += 1;
+            bail!("temporary storage failure")
+        });
+        let failed_state = previous_waiting;
+        let second = set_crit_wait_state_if_changed(&mut previous_waiting, Some(false), |_| {
+            calls += 1;
+            Ok(())
+        });
+
+        assert_eq!(
+            (
+                first.is_err(),
+                failed_state,
+                second.is_ok(),
+                calls,
+                previous_waiting,
+            ),
+            (true, None, true, 2, Some(Some(false))),
+        );
     }
 
     #[test]
@@ -245,6 +312,54 @@ mod tests {
                 ["http://localhost:48761/crit/review".to_string()]
                     .into_iter()
                     .collect(),
+            ),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn registered_session_state_reconciles_without_scanning_other_sessions() -> Result<()> {
+        let sessions_dir = tempfile::TempDir::new()?;
+        let registered: Session = serde_json::from_value(serde_json::json!({
+            "session_id": "fixture-registered",
+            "cwd": "/fixture-worktree",
+            "status": "waiting_input",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "crit_urls": ["http://localhost:48761/crit/review"]
+        }))?;
+        let other: Session = serde_json::from_value(serde_json::json!({
+            "session_id": "fixture-other",
+            "cwd": "/another-fixture-worktree",
+            "status": "waiting_input",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "crit_urls": ["http://localhost:48761/crit/review"]
+        }))?;
+        store::save_session_to(sessions_dir.path(), &registered)?;
+        store::save_session_to(sessions_dir.path(), &other)?;
+
+        set_crit_wait_state_for_session(
+            sessions_dir.path(),
+            &registered.session_id,
+            48761,
+            Some(false),
+        )?;
+        let updated = store::load_session_from(sessions_dir.path(), &registered.session_id)?
+            .context("registered session should remain available")?;
+        let unchanged = store::load_session_from(sessions_dir.path(), &other.session_id)?
+            .context("other session should remain available")?;
+
+        assert_eq!(
+            (
+                updated.crit_not_waiting_urls,
+                unchanged.crit_not_waiting_urls,
+            ),
+            (
+                ["http://localhost:48761/crit/review".to_string()]
+                    .into_iter()
+                    .collect(),
+                Default::default(),
             ),
         );
         Ok(())

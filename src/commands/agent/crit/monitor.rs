@@ -1,6 +1,7 @@
 //! Detached cleanup worker for crit review daemons.
 
 mod daemon_status;
+mod start;
 mod wait_state;
 
 use std::collections::BTreeMap;
@@ -22,6 +23,7 @@ use crate::infra::tmux;
 use crate::shared::log::short_run_id;
 
 use self::daemon_status::crit_pid_for_port;
+pub(super) use self::start::ensure_started;
 use self::wait_state::{
     crit_client_waiting_on_port, set_crit_wait_state, set_crit_wait_state_if_changed,
 };
@@ -52,54 +54,6 @@ pub struct MonitorArgs {
     /// Reservation marker claimed by the process that launched this worker.
     #[arg(long)]
     reservation: String,
-}
-
-pub(super) fn ensure_started(port: u16, session: Option<&Session>) -> Result<()> {
-    let marker = marker_path(port)?;
-    let Some(reservation) = claim_marker(&marker)? else {
-        return Ok(());
-    };
-    let pane_id = session
-        .and_then(|session| session.tmux_info.as_ref().map(|info| info.pane_id.as_str()))
-        .unwrap_or_default();
-    let session_id = session.map(|session| session.session_id.as_str());
-
-    let result = (|| {
-        let pid = crit_pid_for_port(port)?
-            .with_context(|| format!("crit status did not report a daemon on port {port}"))?;
-        let executable =
-            std::env::current_exe().context("failed to resolve the armyknife executable")?;
-        let mut args = vec![
-            "agent".to_string(),
-            "crit".to_string(),
-            "monitor".to_string(),
-            format!("--port={port}"),
-            format!("--pid={pid}"),
-            format!("--reservation={reservation}"),
-        ];
-        if let Some(session_id) = session_id {
-            args.push(format!("--session={session_id}"));
-        }
-        if !pane_id.is_empty() {
-            args.push(format!("--pane={pane_id}"));
-        }
-
-        let worker_pid =
-            process::spawn_detached_with_pid(&executable, args, Some(Path::new("/")), &[])
-                .context("failed to spawn crit lifecycle monitor")?;
-        tracing::info!(
-            event = "agent.crit.monitor.started",
-            port,
-            worker_pid,
-            session = session_id.unwrap_or("none"),
-        );
-        Ok(())
-    })();
-
-    if result.is_err() {
-        remove_marker_if_equals(&marker, &reservation);
-    }
-    result
 }
 
 pub(super) fn run(args: &MonitorArgs) -> Result<()> {
