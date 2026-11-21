@@ -1296,7 +1296,7 @@ it('posts a message when randomUUID is unavailable', async () => {
   })
   const fetcher = vi.fn<typeof fetch>((input, init) => {
     const url = requestUrl(input)
-    if (url.endsWith('/messages?limit=100')) {
+    if (url.includes('/messages?')) {
       return Promise.resolve(jsonResponse(messagesResponse([])))
     }
     if (url.endsWith('/actions')) {
