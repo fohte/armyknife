@@ -51,7 +51,7 @@ pub(super) fn resume_thread_with_retry(
                 return Ok((response, response_notifications));
             }
             Err(error) => {
-                if !is_rollout_not_found_rejection(&error, thread_id) {
+                if !is_retryable_rollout_rejection(&error, thread_id) {
                     if rollout_rejection_count > 0 {
                         log_retry_summary(
                             thread_id,
@@ -75,6 +75,10 @@ pub(super) fn resume_thread_with_retry(
     }
 }
 
+fn is_retryable_rollout_rejection(error: &RequestError, thread_id: &str) -> bool {
+    is_rollout_not_found_rejection(error, thread_id) || is_empty_rollout_rejection(error, thread_id)
+}
+
 fn is_rollout_not_found_rejection(error: &RequestError, thread_id: &str) -> bool {
     let expected_message = format!("no rollout found for thread id {thread_id}");
     matches!(
@@ -82,6 +86,19 @@ fn is_rollout_not_found_rejection(error: &RequestError, thread_id: &str) -> bool
         RequestError::Rejected(rejection)
             if rejection.code == Some(-32600)
                 && rejection.message.as_deref() == Some(expected_message.as_str())
+    )
+}
+
+fn is_empty_rollout_rejection(error: &RequestError, thread_id: &str) -> bool {
+    matches!(
+        error,
+        RequestError::Rejected(rejection)
+            if rejection.code == Some(-32603)
+                && rejection.message.as_deref().is_some_and(|message| {
+                    message.contains("failed to read session metadata ")
+                        && message.ends_with(" is empty")
+                        && message.contains(thread_id)
+                })
     )
 }
 
