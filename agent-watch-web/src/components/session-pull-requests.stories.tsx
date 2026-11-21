@@ -66,6 +66,14 @@ const otherPullRequests: PullRequest[] = [
   },
 ]
 
+const allMergedPullRequests: PullRequest[] = [
+  { ...currentBranchPullRequest, state: 'Merged' },
+  ...otherPullRequests.map((pullRequest) => ({
+    ...pullRequest,
+    state: 'Merged' as const,
+  })),
+]
+
 const meta = {
   component: SessionPullRequests,
   args: {
@@ -109,16 +117,36 @@ export const MorePullRequestsAreAvailable: Story = {
 }
 
 export const AllPullRequestsAreMerged: Story = {
-  name: 'The header dims the pull request icon when all pull requests are merged',
+  name: 'The desktop header hides the CI dot when all pull requests are merged.',
   args: {
-    pullRequests: [
-      { ...currentBranchPullRequest, state: 'Merged' },
-      ...otherPullRequests.map((pullRequest) => ({
-        ...pullRequest,
-        state: 'Merged' as const,
-      })),
-    ],
+    pullRequests: allMergedPullRequests,
   },
+}
+
+export const AllPullRequestsAreMergedOnMobile: Story = {
+  name: 'The mobile header hides the CI dot when all pull requests are merged.',
+  args: {
+    pullRequests: allMergedPullRequests,
+    isMobile: true,
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="conversation-pane"
+        data-mobile="true"
+        style={{
+          position: 'relative',
+          height: 120,
+          background: 'var(--aw-bg-app)',
+          color: 'var(--aw-text-primary)',
+        }}
+      >
+        <div className="mobile-conversation-header-actions">
+          <Story />
+        </div>
+      </div>
+    ),
+  ],
 }
 
 export const ChecksAreWaiting: Story = {
