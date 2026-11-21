@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.816](https://github.com/fohte/armyknife/compare/v0.1.815...v0.1.816) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** hide CI dots for merged PRs ([#2019](https://github.com/fohte/armyknife/issues/2019)) ([b9b3855](https://github.com/fohte/armyknife/commit/b9b3855b34ffcb3a2139d0187dd728ec8afef657))
+
 ## [0.1.815](https://github.com/fohte/armyknife/compare/v0.1.814...v0.1.815) (2026-11-21)
 
 
