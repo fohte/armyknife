@@ -1,7 +1,12 @@
-import { act } from 'react'
+import { act, useEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { page } from 'vitest/browser'
 
+import {
+  AsyncActionFeedbackProvider,
+  useAsyncActionStarter,
+} from '#async-action-feedback'
 import { buildBoardProjects } from '#board-model'
 import { BoardView } from '#components/board-view'
 import type { Session } from '#types'
@@ -51,6 +56,44 @@ function renderBoard(
         onNewSession={() => undefined}
         onSelectSession={() => undefined}
       />,
+    )
+  })
+}
+
+function renderPhoneBoardWithActivity() {
+  function PhoneBoardWithActivity() {
+    const startAsyncAction = useAsyncActionStarter(() => undefined)
+
+    useEffect(() => {
+      startAsyncAction({
+        kind: 'merge',
+        sessionId: 'example-session',
+        sessionTitle: 'Example session',
+        pullRequestNumber: 42,
+        run: () => new Promise(() => undefined),
+      })
+    }, [startAsyncAction])
+
+    return (
+      <BoardView
+        projects={buildBoardProjects([completedSession])}
+        loaded
+        error={null}
+        hideQuietProjects={false}
+        isMobile
+        onHideQuietProjectsChange={() => undefined}
+        onNewSession={() => undefined}
+        onSelectSession={() => undefined}
+      />
+    )
+  }
+
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <AsyncActionFeedbackProvider>
+        <PhoneBoardWithActivity />
+      </AsyncActionFeedbackProvider>,
     )
   })
 }
@@ -196,6 +239,44 @@ it('keeps the quiet-project control as a labeled native checkbox', () => {
     label: 'Hide quiet projects (1)',
     changeCalls: [[true]],
   })
+})
+
+it('keeps the phone Board title and quiet-project control apart', async () => {
+  await page.viewport(375, 844)
+  container.style.cssText = 'display: flex; width: 375px; height: 844px'
+  renderPhoneBoardWithActivity()
+
+  const title = container.querySelector<HTMLElement>('.board-header-title')
+  const quietToggle = container.querySelector<HTMLElement>(
+    '.board-quiet-toggle',
+  )
+  const activityButton = container.querySelector(
+    '.async-action-activity-button',
+  )
+  if (title === null || quietToggle === null || activityButton === null) {
+    throw new Error('Expected the phone Board heading and filter to render')
+  }
+
+  const titleRect = title.getBoundingClientRect()
+  const quietToggleRect = quietToggle.getBoundingClientRect()
+  const headingRect = title.querySelector('h1')?.getBoundingClientRect()
+  if (headingRect === undefined) {
+    throw new Error('Expected the phone Board title to render')
+  }
+
+  const layoutSnapshot = () => ({
+    headingAndFilterDoNotOverlap:
+      headingRect.right <= quietToggleRect.left ||
+      headingRect.bottom <= quietToggleRect.top ||
+      quietToggleRect.right <= headingRect.left ||
+      quietToggleRect.bottom <= headingRect.top,
+    filterWrapsBelowTitle: quietToggleRect.top >= titleRect.bottom,
+  })
+  expect(layoutSnapshot()).toEqual({
+    headingAndFilterDoNotOverlap: true,
+    filterWrapsBelowTitle: true,
+  })
+  await page.viewport(1280, 800)
 })
 
 it('shows the primary task and the count of other linked tasks on a card', () => {

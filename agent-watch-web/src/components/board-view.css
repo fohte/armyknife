@@ -271,6 +271,7 @@
 .board-view.is-mobile .board-header-main {
   display: flex;
   min-width: 0;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
