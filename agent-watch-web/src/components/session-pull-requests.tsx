@@ -152,6 +152,8 @@ export function SessionPullRequests({
   const contentRef = useRef<HTMLElement>(null)
   const actionFeedback = useOptionalAsyncActionFeedback()
   const currentPullRequest = getRepresentativePullRequest(pullRequests)
+  const hasPullRequests =
+    pullRequests.length > 0 && currentPullRequest !== undefined
   const allMerged = pullRequests.every(
     (pullRequest) => pullRequest.state === 'Merged',
   )
@@ -165,7 +167,12 @@ export function SessionPullRequests({
 
   useEffect(() => {
     const setToastBottomOffset = actionFeedback?.setToastBottomOffset
-    if (!isMobile || !open || setToastBottomOffset === undefined) {
+    if (
+      !isMobile ||
+      !open ||
+      !hasPullRequests ||
+      setToastBottomOffset === undefined
+    ) {
       setToastBottomOffset?.(null)
       return
     }
@@ -191,9 +198,9 @@ export function SessionPullRequests({
       window.removeEventListener('resize', updateOffset)
       setToastBottomOffset(null)
     }
-  }, [actionFeedback?.setToastBottomOffset, isMobile, open])
+  }, [actionFeedback?.setToastBottomOffset, hasPullRequests, isMobile, open])
 
-  if (pullRequests.length === 0 || currentPullRequest === undefined) return null
+  if (!hasPullRequests) return null
 
   const groups = pullRequestGroups(pullRequests)
   const content = (

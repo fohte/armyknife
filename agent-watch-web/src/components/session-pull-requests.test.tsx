@@ -2,6 +2,7 @@ import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
+import { AsyncActionFeedbackProvider } from '#async-action-feedback'
 import { SessionPullRequests } from '#components/session-pull-requests'
 import type { PullRequest } from '#types'
 
@@ -52,6 +53,44 @@ const openPullRequestElsewhere: PullRequest = {
 
 let container: HTMLDivElement
 let root: Root | null = null
+const innerHeightDescriptor = Object.getOwnPropertyDescriptor(
+  window,
+  'innerHeight',
+)
+
+function ToastOffsetHarness() {
+  const [open, setOpen] = useState(false)
+  const [sessionPullRequests, setSessionPullRequests] = useState(pullRequests)
+  return (
+    <AsyncActionFeedbackProvider>
+      <button
+        className="remove-pull-requests"
+        onClick={() => {
+          setSessionPullRequests([])
+        }}
+        type="button"
+      >
+        Remove pull requests
+      </button>
+      <SessionPullRequests
+        pullRequests={sessionPullRequests}
+        repo="example-org/example-repo"
+        isMobile
+        open={open}
+        onMerge={(pullRequest) => {
+          setSessionPullRequests((current) =>
+            current.filter(
+              (candidate) => candidate.number !== pullRequest.number,
+            ),
+          )
+        }}
+        isMerging={() => false}
+        isMergeSuccessful={() => false}
+        onOpenChange={setOpen}
+      />
+    </AsyncActionFeedbackProvider>
+  )
+}
 
 function PullRequestHarness({
   isMobile,
@@ -141,6 +180,12 @@ afterEach(() => {
   if (root !== null) act(() => root?.unmount())
   root = null
   container.remove()
+  if (innerHeightDescriptor === undefined) {
+    Reflect.deleteProperty(window, 'innerHeight')
+  } else {
+    Object.defineProperty(window, 'innerHeight', innerHeightDescriptor)
+  }
+  vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
 
@@ -402,6 +447,87 @@ it('keeps the Merge button outlined and readable while merging', () => {
     color: 'rgb(113, 113, 122)',
     opacity: '1',
   })
+})
+
+it('updates the phone toast offset with sheet geometry and clears stale offsets', () => {
+  let sheetTop = 500
+  Object.defineProperty(window, 'innerHeight', {
+    configurable: true,
+    value: 844,
+  })
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+    function (this: HTMLElement) {
+      return this.classList.contains('session-pr-list')
+        ? new DOMRect(0, sheetTop, 320, 300)
+        : new DOMRect()
+    },
+  )
+
+  act(() => {
+    root?.render(<ToastOffsetHarness />)
+  })
+  const trigger = container.querySelector<HTMLButtonElement>(
+    '.session-pr-trigger',
+  )
+  const stack = container.querySelector<HTMLElement>(
+    '.async-action-toast-stack',
+  )
+  if (trigger === null) throw new Error('Expected pull request trigger')
+  if (stack === null) throw new Error('Expected toast host')
+
+  const offsets: Array<{ bottom: string; maxHeight: string }> = []
+  const recordOffset = () => {
+    offsets.push({
+      bottom: stack.style.bottom,
+      maxHeight: stack.style.maxHeight,
+    })
+  }
+
+  act(() => {
+    trigger.click()
+  })
+  recordOffset()
+
+  sheetTop = 460
+  Object.defineProperty(window, 'innerHeight', {
+    configurable: true,
+    value: 800,
+  })
+  act(() => {
+    window.dispatchEvent(new Event('resize'))
+  })
+  recordOffset()
+
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.session-pr-close')?.click()
+  })
+  recordOffset()
+
+  act(() => {
+    trigger.click()
+  })
+  recordOffset()
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.remove-pull-requests')?.click()
+  })
+  recordOffset()
+
+  expect(offsets).toEqual([
+    {
+      bottom: '352px',
+      maxHeight: 'calc(100dvh - 368px)',
+    },
+    {
+      bottom: '348px',
+      maxHeight: 'calc(100dvh - 364px)',
+    },
+    { bottom: '', maxHeight: '' },
+    {
+      bottom: '348px',
+      maxHeight: 'calc(100dvh - 364px)',
+    },
+    { bottom: '', maxHeight: '' },
+  ])
 })
 
 it('lists a merged current-branch pull request only in Merged', () => {
