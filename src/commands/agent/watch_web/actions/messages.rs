@@ -46,6 +46,12 @@ pub(super) struct MessageRequest {
     attachments: Vec<attachments::Request>,
     #[serde(default)]
     images: Vec<attachments::LegacyImageRequest>,
+    #[serde(default, rename = "messageId")]
+    message_id: Option<String>,
+}
+
+fn is_valid_message_id(message_id: &str) -> bool {
+    matches!(uuid::Uuid::parse_str(message_id), Ok(parsed) if parsed.to_string() == message_id)
 }
 
 pub(super) async fn send_message(
@@ -68,10 +74,33 @@ pub(super) async fn send_message(
         return Err(ApiError::bad_request("message must not be empty"));
     }
 
+    let message_id = request
+        .message_id
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    if !is_valid_message_id(&message_id) {
+        return Err(ApiError::bad_request("invalid message ID"));
+    }
+
     let attachments = attachments::validate(request.attachments, request.images)
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let sessions_dir =
         resolve_sessions_dir(state.sessions_dir.clone()).map_err(ApiError::internal)?;
+    let session_id = session.session_id.clone();
+    let message_id_exists = run_blocking({
+        let sessions_dir = sessions_dir.clone();
+        let message_id = message_id.clone();
+        move || {
+            store::watch_web_queued_prompt_message_id_exists_from(
+                &sessions_dir,
+                &session_id,
+                &message_id,
+            )
+        }
+    })
+    .await?;
+    if message_id_exists {
+        return Err(ApiError::conflict("message ID has already been used"));
+    }
     let marker = if session.engine == Engine::Claude {
         let session_id = session.session_id.clone();
         let sessions_dir = sessions_dir.clone();
@@ -108,7 +137,7 @@ pub(super) async fn send_message(
         sessions_dir,
         session,
         marker,
-        message_id: None,
+        message_id: Some(message_id),
         queued_content,
         message_content: content,
         queued_attachments,
@@ -340,8 +369,18 @@ fn send_via_peer_notify(
 
 #[cfg(test)]
 mod tests {
-    use super::send_via_peer_notify;
+    use rstest::rstest;
+
+    use super::{is_valid_message_id, send_via_peer_notify};
     use crate::commands::agent::peer::notify;
+
+    #[rstest]
+    #[case::canonical_uuid("11111111-1111-4111-8111-111111111111", true)]
+    #[case::malformed("not-a-uuid", false)]
+    #[case::noncanonical_case("AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA", false)]
+    fn validates_message_ids(#[case] message_id: &str, #[case] expected: bool) {
+        assert_eq!(is_valid_message_id(message_id), expected);
+    }
 
     #[test]
     fn live_message_adapter_forwards_session_and_content_to_peer_notify() {

@@ -89,6 +89,9 @@ function requestFor(operation: SessionOperation) {
         path: 'messages',
         body: {
           content: operation.content,
+          ...(operation.queuedPromptId === undefined
+            ? {}
+            : { messageId: operation.queuedPromptId }),
           ...(operation.attachments === undefined
             ? {}
             : { attachments: operation.attachments }),
@@ -319,6 +322,9 @@ export function createSessionOperation(
               requiredString('_operationId') ??
               `message-${String(++nextMessageOperationId)}`,
             content: payload['content'],
+            ...(typeof payload['_queuedPromptId'] === 'string'
+              ? { queuedPromptId: payload['_queuedPromptId'] }
+              : {}),
             ...(Array.isArray(payload['attachments'])
               ? { attachments: payload['attachments'] }
               : {}),

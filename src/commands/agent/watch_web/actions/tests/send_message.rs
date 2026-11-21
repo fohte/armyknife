@@ -75,6 +75,61 @@ async fn send_message_forwards_nonempty_content_unchanged(action_context: Action
 
 #[rstest]
 #[tokio::test]
+async fn send_message_rejects_a_reused_message_id(action_context: ActionContext) {
+    action_context.save_session(&session("sample-session"));
+    let request = json!({
+        "content": "Continue the investigation.",
+        "messageId": "11111111-1111-4111-8111-111111111111",
+    });
+    let first_response = action_context
+        .router()
+        .oneshot(post("/sessions/sample-session/messages", request.clone()))
+        .await
+        .unwrap();
+    let first_snapshot = response_snapshot(first_response, &action_context).await;
+    let second_response = action_context
+        .router()
+        .oneshot(post("/sessions/sample-session/messages", request))
+        .await
+        .unwrap();
+    let actual = (
+        first_snapshot,
+        response_snapshot(second_response, &action_context).await,
+        normalized_queued_prompts(&action_context, "sample-session", None),
+    );
+
+    assert_eq!(
+        actual,
+        (
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true, "queuedPromptId": "<message-id>" },
+                "calls": [{
+                    "kind": "message",
+                    "sessionId": "sample-session",
+                    "content": "Continue the investigation.",
+                }],
+            }),
+            json!({
+                "status": StatusCode::CONFLICT.as_u16(),
+                "body": { "error": "message ID has already been used" },
+                "calls": [{
+                    "kind": "message",
+                    "sessionId": "sample-session",
+                    "content": "Continue the investigation.",
+                }],
+            }),
+            json!([{
+                "id": "<prompt-id>",
+                "content": "Continue the investigation.",
+                "sentAt": "<sent-at>",
+            }]),
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn send_message_keeps_a_newer_prompt_timestamp(action_context: ActionContext) {
     action_context.save_session(&session("sample-session"));
     let later_prompt_at = Utc::now() + chrono::Duration::minutes(1);

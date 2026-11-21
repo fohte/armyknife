@@ -490,6 +490,7 @@ async fn list_sessions<S: SessionSource>(
                 .collect::<Vec<_>>();
 
             let turn = turn_kinds.get(session.session_id.as_str()).copied();
+            let is_waiting_for_crit_review = turn == Some(UserTurnKind::Crit);
             let interrupted = interrupted_session_ids.contains(&session.session_id);
             let display_status = session.display_status();
             let has_running_background_task = display_status == DisplayStatus::Background;
@@ -560,7 +561,10 @@ async fn list_sessions<S: SessionSource>(
                 } else {
                     SessionActivityStatus::Stopped
                 },
-                waiting_reason: if waiting {
+                waiting_reason: if agent_is_waiting
+                    && (category_when_not_later == SessionCategory::InProgress
+                        || is_waiting_for_crit_review)
+                {
                     session
                         .agent_status
                         .as_ref()
@@ -617,7 +621,7 @@ async fn list_sessions<S: SessionSource>(
                 pull_request,
                 pull_requests: session_pull_requests,
                 crit_url,
-                is_waiting_for_crit_review: turn == Some(UserTurnKind::Crit),
+                is_waiting_for_crit_review,
                 web_uis,
                 later_until: state.and_then(|state| state.later_until),
                 is_today: state.is_some_and(|state| state.is_today),
@@ -2817,6 +2821,59 @@ mod tests {
         expected["sessions"][0]["activityStatus"] = serde_json::json!("waiting");
         expected["sessions"][0]["waitingReason"] =
             serde_json::json!("waiting for an external build");
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_route_exposes_the_reason_for_a_waiting_crit_review(
+        mut source: TestSessionSource,
+    ) {
+        source.sessions[0].status = SessionStatus::Stopped;
+        source.sessions[0]
+            .pending_bg_task_ids
+            .insert("fixture-task-id".to_string());
+        source.sessions[0].crit_urls = vec!["https://crit.example/review/1".to_string()];
+        source.sessions[0].agent_status = Some(AgentStatus {
+            kind: "external_wait".to_string(),
+            note: "Review the retry policy changes".to_string(),
+        });
+        source.agent_statuses.insert(
+            "external_wait".to_string(),
+            AgentStatusConfig {
+                state: AgentStatusState::Waiting,
+            },
+        );
+        source.web_states[0].later_until = None;
+
+        let mut expected = expected_response(
+            "needs_action",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: Some("Review"),
+                category_when_not_later: "needs_action",
+                is_paused: false,
+                unread: false,
+                crit_url: Some("https://crit.example/review/1"),
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["waitingReason"] =
+            serde_json::json!("Review the retry policy changes");
+        expected["sessions"][0]["isWaitingForCritReview"] = serde_json::json!(true);
+        expected["sessions"][0]["webUis"] = serde_json::json!([{
+            "name": "crit",
+            "url": "https://crit.example/review/1"
+        }]);
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }

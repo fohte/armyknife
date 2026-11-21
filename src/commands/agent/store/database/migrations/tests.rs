@@ -100,6 +100,39 @@ fn adds_one_time_permission_approvals_to_version_twenty_five_database(
 }
 
 #[rstest]
+fn adds_queued_prompt_message_id_index_to_version_twenty_six_database(
+    database_fixture: DatabaseFixture,
+) {
+    let DatabaseFixture {
+        temp_dir,
+        mut connection,
+    } = database_fixture;
+    Migrations::from_slice(&MIGRATION_ENTRIES[..26])
+        .to_latest(&mut connection)
+        .expect("version twenty six schema should be created");
+    drop(connection);
+
+    let connection = super::super::open_connection(temp_dir.path())
+        .expect("version twenty six database should migrate to the queued prompt index");
+    let actual = connection
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'index'
+                    AND name = 'watch_web_queued_prompt_session_message_id'
+            )",
+            [],
+            |row| row.get::<_, bool>(0),
+        )
+        .expect("queued prompt message ID index should be queryable");
+    let actual_user_version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .expect("database migration version should be readable");
+
+    assert_eq!((actual, actual_user_version), (true, current_version()));
+}
+
+#[rstest]
 fn adds_permission_request_mailbox_to_version_nine_database(database_fixture: DatabaseFixture) {
     let DatabaseFixture {
         temp_dir,
