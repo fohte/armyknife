@@ -135,31 +135,50 @@ it.each([
   {
     name: 'shows the reason while waiting for a Crit review',
     isWaitingForCritReview: true,
+    kind: 'Review',
     waitingReason: 'Review the retry policy changes',
     preview: 'Review the retry policy changes',
   },
   {
     name: 'keeps the existing preview when the Crit wait has no reason',
     isWaitingForCritReview: true,
+    kind: 'Review',
     waitingReason: null,
     preview: 'Should retries stop after three attempts?',
   },
   {
     name: 'keeps the existing preview when a reason is not for a Crit wait',
     isWaitingForCritReview: false,
+    kind: 'Review',
     waitingReason: 'Review the retry policy changes',
     preview: 'Should retries stop after three attempts?',
   },
   {
     name: 'keeps the existing preview when the Crit wait reason is blank',
     isWaitingForCritReview: true,
+    kind: 'Review',
     waitingReason: '  ',
     preview: 'Should retries stop after three attempts?',
   },
-])('$name', ({ isWaitingForCritReview, waitingReason, preview }) => {
+  {
+    name: 'keeps the Todo preview while a Crit review waits',
+    isWaitingForCritReview: true,
+    kind: 'Todo',
+    waitingReason: 'Review the retry policy changes',
+    preview: 'Should retries stop after three attempts?',
+  },
+  {
+    name: 'keeps the Proposal preview while a Crit review waits',
+    isWaitingForCritReview: true,
+    kind: 'Proposal',
+    waitingReason: 'Review the retry policy changes',
+    preview: 'Should retries stop after three attempts?',
+  },
+])('$name', ({ isWaitingForCritReview, kind, waitingReason, preview }) => {
   renderRow('full', {
     ...session,
     isWaitingForCritReview,
+    kind,
     waitingReason,
   })
 

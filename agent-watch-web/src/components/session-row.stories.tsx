@@ -78,6 +78,7 @@ export const CritReviewWaitShowsItsReason: Story = {
     density: 'full',
     session: {
       ...session,
+      kind: 'Review',
       isWaitingForCritReview: true,
       waitingReason: 'Review the retry policy changes',
     },
@@ -90,8 +91,22 @@ export const CritReviewWaitWithoutReasonKeepsItsPreview: Story = {
     density: 'full',
     session: {
       ...session,
+      kind: 'Review',
       isWaitingForCritReview: true,
       waitingReason: null,
+    },
+  },
+}
+
+export const CritReviewWaitKeepsPendingTodoPreview: Story = {
+  name: 'A pending todo keeps its preview during a Crit review wait',
+  args: {
+    density: 'full',
+    session: {
+      ...session,
+      kind: 'Todo',
+      isWaitingForCritReview: true,
+      waitingReason: 'Review the retry policy changes',
     },
   },
 }

@@ -116,6 +116,7 @@ export function SessionRow({
       : null
   const critReviewReason =
     session.isWaitingForCritReview === true &&
+    session.kind === 'Review' &&
     (session.waitingReason?.trim().length ?? 0) > 0
       ? session.waitingReason
       : null
