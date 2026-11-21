@@ -22,6 +22,7 @@ mod answer_question;
 mod api_error;
 mod bang_commands;
 mod close;
+mod close_checks;
 mod decisions;
 mod interrupt_locks;
 mod keyed_mutex_registry;
@@ -65,6 +66,11 @@ pub(super) fn router(message_loaders: RouteLoaders) -> Router {
         resume_locks: KeyedMutexRegistry::default(),
         resume_pending: resume::PendingSessionResumes::default(),
         message_loaders,
+        close_checks_inspector: Arc::new(|session, stop_and_close| {
+            Box::pin(
+                async move { close_checks::CloseChecks::inspect(&session, stop_and_close).await },
+            )
+        }),
     })
 }
 
@@ -141,6 +147,7 @@ struct ActionState {
     sessions_dir: Option<PathBuf>,
     attachment_dir: Option<PathBuf>,
     runtime: Arc<dyn ActionRuntime>,
+    close_checks_inspector: CloseChecksInspector,
     vibe_config: VibeConfigLoader,
     repo_identity: RepoIdentityResolver,
     message_loaders: RouteLoaders,
@@ -155,6 +162,11 @@ struct ActionState {
 
 type RepoIdentityResolver = Arc<dyn Fn(&Path) -> Option<(String, String)> + Send + Sync>;
 type VibeConfigLoader = Arc<dyn Fn() -> Config + Send + Sync>;
+type CloseChecksInspector = Arc<
+    dyn Fn(Session, bool) -> Pin<Box<dyn Future<Output = close_checks::CloseChecks> + Send>>
+        + Send
+        + Sync,
+>;
 
 #[derive(Clone)]
 struct CommandResult {
@@ -438,8 +450,47 @@ mod tests {
     use tempfile::TempDir;
     use tower::ServiceExt;
 
+    use super::close_checks::CloseChecks;
     use super::*;
     use crate::commands::agent::types::{MAIN_THREAD_AGENT_KEY, TmuxInfo};
+
+    fn test_close_checks_inspector() -> CloseChecksInspector {
+        Arc::new(|session, filter_stopped_agent| {
+            Box::pin(async move {
+                let worktree_path = PathBuf::from("/fictional/worktree");
+                let process_inspection = close_checks::check_process_guard_for_close(
+                    &worktree_path,
+                    &session,
+                    filter_stopped_agent,
+                    |session| (session.session_id == "sample-session").then_some(12345),
+                    |_| {
+                        Some(vec![
+                            crate::infra::process::ProcessInPath {
+                                pid: 12345,
+                                comm: "fictional-agent".to_string(),
+                            },
+                            crate::infra::process::ProcessInPath {
+                                pid: 23456,
+                                comm: "fictional-worker".to_string(),
+                            },
+                        ])
+                    },
+                );
+                CloseChecks::from_observations(
+                    worktree_path,
+                    vec!["src/fictional.rs".to_string()],
+                    Some("feature/fictional".to_string()),
+                    Some(crate::shared::worktree_delete::classify_merge_guard_status(
+                        "feature/fictional".to_string(),
+                        crate::infra::git::MergeStatus::NotMerged {
+                            reason: "pull request is open".to_string(),
+                        },
+                    )),
+                    Some(process_inspection),
+                )
+            })
+        })
+    }
 
     #[path = "send_message.rs"]
     mod send_message;
@@ -471,6 +522,14 @@ mod tests {
     #[path = "merge_pull_request.rs"]
     mod merge_pull_request;
 
+    #[derive(Clone)]
+    enum FakeCloseFailure {
+        DirtyWorktree,
+        ActiveProcesses,
+        UnmergedWorktree,
+        Operation(String),
+    }
+
     struct FakeRuntime {
         calls: Mutex<Vec<Value>>,
         message_error: Mutex<Option<String>>,
@@ -491,7 +550,7 @@ mod tests {
         pane_command: Mutex<Option<String>>,
         pane_has_agent_process: Mutex<bool>,
         pane_command_matches: Mutex<bool>,
-        close_unmerged_worktree: Mutex<bool>,
+        close_error: Mutex<Option<FakeCloseFailure>>,
         sessions_dir: Mutex<Option<PathBuf>>,
         command_result: Mutex<Option<CommandResult>>,
         merge_error: Mutex<Option<String>>,
@@ -516,7 +575,7 @@ mod tests {
                 pane_command: Mutex::new(Some("claude".to_string())),
                 pane_has_agent_process: Mutex::new(true),
                 pane_command_matches: Mutex::new(true),
-                close_unmerged_worktree: Mutex::new(false),
+                close_error: Mutex::new(None),
                 sessions_dir: Mutex::new(None),
                 command_result: Mutex::new(None),
                 merge_error: Mutex::new(None),
@@ -661,7 +720,7 @@ mod tests {
             keep_worktree: bool,
             stop_and_close: bool,
         ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
-            let fail_for_unmerged_worktree = *self.close_unmerged_worktree.lock().unwrap();
+            let close_error = self.close_error.lock().unwrap().clone();
             let sessions_dir = self.sessions_dir.lock().unwrap().clone();
             let session_id = session.session_id.clone();
             self.calls.lock().unwrap().push(json!({
@@ -671,12 +730,31 @@ mod tests {
                 "stopAndClose": stop_and_close,
             }));
             Box::pin(async move {
-                if fail_for_unmerged_worktree {
-                    return Err(crate::shared::worktree_delete::UnmergedWorktreeError::new(
-                        "sample-branch",
-                        "not merged",
-                    )
-                    .into());
+                if let Some(error) = close_error {
+                    return Err(match error {
+                        FakeCloseFailure::DirtyWorktree => {
+                            anyhow::Error::new(crate::shared::worktree::DirtyWorktreeError::new(
+                                PathBuf::from("/fictional/worktree"),
+                            ))
+                        }
+                        FakeCloseFailure::ActiveProcesses => anyhow::Error::new(
+                            crate::shared::cleanup::WorktreeProcessGuardError::ActiveProcesses {
+                                worktree_path: PathBuf::from("/fictional/worktree"),
+                                process_list: "23456 (fictional-worker)".to_string(),
+                                processes: vec![crate::infra::process::ProcessInPath {
+                                    pid: 23456,
+                                    comm: "fictional-worker".to_string(),
+                                }],
+                            },
+                        ),
+                        FakeCloseFailure::UnmergedWorktree => anyhow::Error::new(
+                            crate::shared::worktree_delete::UnmergedWorktreeError::new(
+                                "sample-branch",
+                                "not merged",
+                            ),
+                        ),
+                        FakeCloseFailure::Operation(error) => anyhow::anyhow!(error),
+                    });
                 }
                 if let Some(sessions_dir) = sessions_dir {
                     store::update_session_in(&sessions_dir, &session_id, |stored| {
@@ -749,6 +827,7 @@ mod tests {
                 sessions_dir: Some(self.temp_dir.path().join("sessions")),
                 attachment_dir: Some(self.temp_dir.path().join("attachments")),
                 runtime: self.runtime.clone(),
+                close_checks_inspector: test_close_checks_inspector(),
                 vibe_config: Arc::new(vibe_config),
                 repo_identity: Arc::new(repo_identity),
                 proposal_answer_locks: ProposalAnswerLocks::default(),
@@ -767,6 +846,7 @@ mod tests {
                 sessions_dir: Some(self.temp_dir.path().join("sessions")),
                 attachment_dir: Some(self.temp_dir.path().join("attachments")),
                 runtime: self.runtime.clone(),
+                close_checks_inspector: test_close_checks_inspector(),
                 vibe_config: Arc::new(Config::default),
                 repo_identity: Arc::new(|_| None),
                 proposal_answer_locks: ProposalAnswerLocks::default(),
@@ -789,6 +869,7 @@ mod tests {
                 sessions_dir: Some(self.temp_dir.path().join("sessions")),
                 attachment_dir: Some(self.temp_dir.path().join("attachments")),
                 runtime: self.runtime.clone(),
+                close_checks_inspector: test_close_checks_inspector(),
                 vibe_config: Arc::new(Config::default),
                 repo_identity: Arc::new(|_| None),
                 proposal_answer_locks: proposal_answer_locks.clone(),
@@ -874,7 +955,19 @@ mod tests {
         }
 
         fn set_close_unmerged_worktree(&self, value: bool) {
-            *self.runtime.close_unmerged_worktree.lock().unwrap() = value;
+            if value {
+                *self.runtime.close_error.lock().unwrap() =
+                    Some(FakeCloseFailure::UnmergedWorktree);
+            }
+        }
+
+        fn set_close_error(&self, error: impl Into<String>) {
+            *self.runtime.close_error.lock().unwrap() =
+                Some(FakeCloseFailure::Operation(error.into()));
+        }
+
+        fn set_close_guard_error(&self, error: FakeCloseFailure) {
+            *self.runtime.close_error.lock().unwrap() = Some(error);
         }
 
         fn set_after_message(&self, callback: impl FnOnce() + Send + 'static) {
@@ -2622,7 +2715,137 @@ mod tests {
                 "body": {
                     "error": "Branch `sample-branch` is not merged (not merged); close the session while keeping its worktree to continue",
                     "code": "unmerged_worktree",
+                    "checks": {
+                        "path": "/fictional/worktree",
+                        "files": ["src/fictional.rs"],
+                        "branch": "feature/fictional",
+                        "merged": false,
+                        "reason": "pull request is open",
+                        "processes": [
+                            { "pid": 12345, "name": "fictional-agent" },
+                            { "pid": 23456, "name": "fictional-worker" },
+                        ],
+                        "processInspectionUnavailable": false,
+                    },
                 },
+                "calls": [{
+                    "kind": "close",
+                    "sessionId": "sample-session",
+                    "keepWorktree": false,
+                    "stopAndClose": false,
+                }],
+            }),
+        );
+    }
+
+    #[rstest]
+    #[case::dirty_worktree(
+        FakeCloseFailure::DirtyWorktree,
+        false,
+        false,
+        "Worktree contains uncommitted changes or untracked files: /fictional/worktree; commit or move them before closing",
+        "dirty_worktree"
+    )]
+    #[case::active_processes(
+        FakeCloseFailure::ActiveProcesses,
+        false,
+        false,
+        "Worktree '/fictional/worktree' contains running processes: 23456 (fictional-worker). Stop them and retry, or close the session while keeping the worktree.",
+        "worktree_process_guard"
+    )]
+    #[case::stop_and_close_dirty_preflight_keeps_the_session_agent(
+        FakeCloseFailure::DirtyWorktree,
+        true,
+        false,
+        "Worktree contains uncommitted changes or untracked files: /fictional/worktree; commit or move them before closing",
+        "dirty_worktree"
+    )]
+    #[case::stop_and_close_unmerged_preflight_keeps_the_session_agent(
+        FakeCloseFailure::UnmergedWorktree,
+        true,
+        false,
+        "Branch `sample-branch` is not merged (not merged); close the session while keeping its worktree to continue",
+        "unmerged_worktree"
+    )]
+    #[case::stop_and_close_process_guard_filters_the_stopped_agent(
+        FakeCloseFailure::ActiveProcesses,
+        true,
+        true,
+        "Worktree '/fictional/worktree' contains running processes: 23456 (fictional-worker). Stop them and retry, or close the session while keeping the worktree.",
+        "worktree_process_guard"
+    )]
+    #[tokio::test]
+    async fn close_returns_all_checks_for_each_guard_failure(
+        action_context: ActionContext,
+        #[case] failure: FakeCloseFailure,
+        #[case] stop_and_close: bool,
+        #[case] filter_stopped_agent: bool,
+        #[case] expected_error: &str,
+        #[case] expected_code: &str,
+    ) {
+        action_context.save_session(&session("sample-session"));
+        action_context.set_close_guard_error(failure);
+
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/close",
+                json!({ "stopAndClose": stop_and_close }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::CONFLICT.as_u16(),
+                "body": {
+                    "error": expected_error,
+                    "code": expected_code,
+                    "checks": {
+                        "path": "/fictional/worktree",
+                        "files": ["src/fictional.rs"],
+                        "branch": "feature/fictional",
+                        "merged": false,
+                        "reason": "pull request is open",
+                        "processes": if filter_stopped_agent {
+                            json!([{ "pid": 23456, "name": "fictional-worker" }])
+                        } else {
+                            json!([
+                                { "pid": 12345, "name": "fictional-agent" },
+                                { "pid": 23456, "name": "fictional-worker" },
+                            ])
+                        },
+                        "processInspectionUnavailable": false,
+                    },
+                },
+                "calls": [{
+                    "kind": "close",
+                    "sessionId": "sample-session",
+                    "keepWorktree": false,
+                    "stopAndClose": stop_and_close,
+                }],
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn close_errors_without_a_guard_do_not_include_checks(action_context: ActionContext) {
+        action_context.save_session(&session("sample-session"));
+        action_context.set_close_error("synthetic close operation failure");
+
+        let response = action_context
+            .router()
+            .oneshot(post_empty("/sessions/sample-session/close"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::CONFLICT.as_u16(),
+                "body": { "error": "synthetic close operation failure" },
                 "calls": [{
                     "kind": "close",
                     "sessionId": "sample-session",

@@ -3,11 +3,14 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
+use super::close_checks::CloseChecks;
+
 #[derive(Debug)]
 pub struct ApiError {
     status: StatusCode,
     pub(super) message: String,
     code: Option<&'static str>,
+    checks: Option<Box<CloseChecks>>,
 }
 
 impl ApiError {
@@ -16,6 +19,7 @@ impl ApiError {
             status: StatusCode::BAD_REQUEST,
             message: message.into(),
             code: None,
+            checks: None,
         }
     }
 
@@ -24,6 +28,7 @@ impl ApiError {
             status: StatusCode::NOT_FOUND,
             message: "session not found".to_string(),
             code: None,
+            checks: None,
         }
     }
 
@@ -32,6 +37,7 @@ impl ApiError {
             status: StatusCode::NOT_FOUND,
             message: "decision not found".to_string(),
             code: None,
+            checks: None,
         }
     }
 
@@ -40,6 +46,7 @@ impl ApiError {
             status: StatusCode::CONFLICT,
             message: message.into(),
             code: None,
+            checks: None,
         }
     }
 
@@ -48,6 +55,7 @@ impl ApiError {
             status: StatusCode::BAD_GATEWAY,
             message: error.to_string(),
             code: None,
+            checks: None,
         }
     }
 
@@ -56,6 +64,17 @@ impl ApiError {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message: error.to_string(),
             code: None,
+            checks: None,
+        }
+    }
+
+    pub(super) fn needs_close_checks(&self) -> bool {
+        self.code.is_some()
+    }
+
+    pub(super) fn set_close_checks(&mut self, checks: CloseChecks) {
+        if self.needs_close_checks() {
+            self.checks = Some(Box::new(checks));
         }
     }
 
@@ -77,6 +96,7 @@ impl ApiError {
                     dirty_worktree.worktree_path().display(),
                 ),
                 code: Some("dirty_worktree"),
+                checks: None,
             };
         }
 
@@ -87,6 +107,7 @@ impl ApiError {
                 crate::shared::cleanup::WorktreeProcessGuardError::ActiveProcesses {
                     worktree_path,
                     process_list,
+                    ..
                 } => format!(
                     "Worktree '{}' contains running processes: {process_list}. Stop them and retry, or close the session while keeping the worktree.",
                     worktree_path.display(),
@@ -102,6 +123,7 @@ impl ApiError {
                 status: StatusCode::CONFLICT,
                 message,
                 code: Some("worktree_process_guard"),
+                checks: None,
             };
         }
 
@@ -112,15 +134,21 @@ impl ApiError {
             status: StatusCode::CONFLICT,
             message: error.to_string(),
             code,
+            checks: None,
         }
     }
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let body = match self.code {
-            Some(code) => json!({ "error": self.message, "code": code }),
-            None => json!({ "error": self.message }),
+        let body = match (self.code, self.checks) {
+            (Some(code), Some(checks)) => json!({
+                "error": self.message,
+                "code": code,
+                "checks": checks,
+            }),
+            (Some(code), None) => json!({ "error": self.message, "code": code }),
+            (None, _) => json!({ "error": self.message }),
         };
         (self.status, Json(body)).into_response()
     }
@@ -152,7 +180,7 @@ mod tests {
     fn close_dirty_worktree_errors_have_a_code_and_no_unavailable_force_option() {
         let error = ApiError::close(anyhow::Error::new(
             crate::shared::worktree::DirtyWorktreeError::new(std::path::PathBuf::from(
-                "/worktrees/dirty",
+                "/fictional/worktree-dirty",
             )),
         ));
 
@@ -160,7 +188,7 @@ mod tests {
             (error.status, error.message, error.code),
             (
                 StatusCode::CONFLICT,
-                "Worktree contains uncommitted changes or untracked files: /worktrees/dirty; commit or move them before closing".to_string(),
+                "Worktree contains uncommitted changes or untracked files: /fictional/worktree-dirty; commit or move them before closing".to_string(),
                 Some("dirty_worktree"),
             ),
         );
@@ -170,8 +198,12 @@ mod tests {
     fn close_process_guard_errors_offer_a_keep_worktree_retry() {
         let error = ApiError::close(anyhow::Error::new(
             crate::shared::cleanup::WorktreeProcessGuardError::ActiveProcesses {
-                worktree_path: std::path::PathBuf::from("/worktrees/busy"),
+                worktree_path: std::path::PathBuf::from("/fictional/worktree-busy"),
                 process_list: "42 (editor)".to_string(),
+                processes: vec![crate::infra::process::ProcessInPath {
+                    pid: 42,
+                    comm: "editor".to_string(),
+                }],
             },
         ));
 
@@ -179,7 +211,7 @@ mod tests {
             (error.status, error.message, error.code),
             (
                 StatusCode::CONFLICT,
-                "Worktree '/worktrees/busy' contains running processes: 42 (editor). Stop them and retry, or close the session while keeping the worktree.".to_string(),
+                "Worktree '/fictional/worktree-busy' contains running processes: 42 (editor). Stop them and retry, or close the session while keeping the worktree.".to_string(),
                 Some("worktree_process_guard"),
             ),
         );
@@ -189,7 +221,7 @@ mod tests {
     fn close_process_inspection_errors_offer_a_keep_worktree_retry() {
         let error = ApiError::close(anyhow::Error::new(
             crate::shared::cleanup::WorktreeProcessGuardError::InspectionUnavailable {
-                worktree_path: std::path::PathBuf::from("/worktrees/uncheckable"),
+                worktree_path: std::path::PathBuf::from("/fictional/worktree-uncheckable"),
             },
         ));
 
@@ -197,7 +229,7 @@ mod tests {
             (error.status, error.message, error.code),
             (
                 StatusCode::CONFLICT,
-                "Could not inspect processes in worktree '/worktrees/uncheckable'. Close the session while keeping the worktree, then retry.".to_string(),
+                "Could not inspect processes in worktree '/fictional/worktree-uncheckable'. Close the session while keeping the worktree, then retry.".to_string(),
                 Some("worktree_process_guard"),
             ),
         );
