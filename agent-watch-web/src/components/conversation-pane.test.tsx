@@ -1297,7 +1297,7 @@ it('posts a message when randomUUID is unavailable', async () => {
   })
   const fetcher = vi.fn<typeof fetch>((input, init) => {
     const url = requestUrl(input)
-    if (url.endsWith('/messages?limit=100')) {
+    if (url.includes('/messages?')) {
       return Promise.resolve(jsonResponse(messagesResponse([])))
     }
     if (url.endsWith('/actions')) {
@@ -5456,12 +5456,14 @@ it('opens and closes the existing status panel over the mobile conversation', as
   await act(async () => {
     for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
+  const toggle = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.mobile-conversation-status-toggle',
+    ),
+  )
+  toggle.focus()
   act(() => {
-    requireElement(
-      container.querySelector<HTMLButtonElement>(
-        '.mobile-conversation-status-toggle',
-      ),
-    ).click()
+    toggle.click()
   })
 
   const opened = {
@@ -5470,17 +5472,21 @@ it('opens and closes the existing status panel over the mobile conversation', as
       ?.textContent,
     decisionHeading: container.querySelector('.decisions-panel-header h2')
       ?.textContent,
+    backButtonFocused:
+      document.activeElement ===
+      container.querySelector('.session-status-panel-back'),
   }
   act(() => {
     requireElement(
       container.querySelector<HTMLButtonElement>(
-        '.mobile-session-status-overlay .session-status-panel-close',
+        '.mobile-session-status-overlay .session-status-panel-back',
       ),
     ).click()
   })
   const closed = {
     overlay: container.querySelector('.mobile-session-status-overlay') !== null,
     conversation: container.querySelector('.conversation-pane') !== null,
+    focusRestored: document.activeElement === toggle,
   }
 
   const snapshot = () => ({ opened, closed })
@@ -5489,8 +5495,9 @@ it('opens and closes the existing status panel over the mobile conversation', as
       overlay: true,
       selectedTab: 'Decisions1',
       decisionHeading: 'Decisions in this session',
+      backButtonFocused: true,
     },
-    closed: { overlay: false, conversation: true },
+    closed: { overlay: false, conversation: true, focusRestored: true },
   })
 })
 
@@ -6157,7 +6164,9 @@ it('attaches files dropped on a proposal comment without activating the conversa
   const comment = requireElement(
     container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
   )
-  const dispatchFileEvent = (type: 'dragenter' | 'dragover' | 'drop') => {
+  const dispatchFileEvent = (
+    type: 'dragenter' | 'dragleave' | 'dragover' | 'drop',
+  ) => {
     const event = new Event(type, { bubbles: true, cancelable: true })
     Object.defineProperty(event, 'dataTransfer', { value: dataTransfer })
     act(() => {
@@ -6168,11 +6177,16 @@ it('attaches files dropped on a proposal comment without activating the conversa
 
   const dragEnter = dispatchFileEvent('dragenter')
   const targetAfterDragEnter = container.querySelector(
-    '.conversation-drop-target',
+    '.chat-proposal-card .file-drop-indicator',
   )
+  const dragLeave = dispatchFileEvent('dragleave')
+  const targetAfterDragLeave = container.querySelector(
+    '.chat-proposal-card .file-drop-indicator',
+  )
+  dispatchFileEvent('dragenter')
   const dragOver = dispatchFileEvent('dragover')
   const targetAfterDragOver = container.querySelector(
-    '.conversation-drop-target',
+    '.chat-proposal-card .file-drop-indicator',
   )
   const drop = dispatchFileEvent('drop')
   expect(
@@ -6186,9 +6200,11 @@ it('attaches files dropped on a proposal comment without activating the conversa
 
   const snapshot = () => ({
     dragEnterPrevented: dragEnter.defaultPrevented,
+    dragLeavePrevented: dragLeave.defaultPrevented,
     dragOverPrevented: dragOver.defaultPrevented,
     dropPrevented: drop.defaultPrevented,
     targetAfterDragEnter: targetAfterDragEnter?.textContent ?? null,
+    targetAfterDragLeave: targetAfterDragLeave?.textContent ?? null,
     targetAfterDragOver: targetAfterDragOver?.textContent ?? null,
     targetAfterDrop:
       container.querySelector('.conversation-drop-target')?.textContent ?? null,
@@ -6208,10 +6224,12 @@ it('attaches files dropped on a proposal comment without activating the conversa
   })
   expect(snapshot()).toEqual({
     dragEnterPrevented: true,
+    dragLeavePrevented: false,
     dragOverPrevented: true,
     dropPrevented: true,
-    targetAfterDragEnter: null,
-    targetAfterDragOver: null,
+    targetAfterDragEnter: 'Drop files to attach',
+    targetAfterDragLeave: null,
+    targetAfterDragOver: 'Drop files to attach',
     targetAfterDrop: null,
     commentAttachmentNames: ['dropped.png'],
     composerAttachmentNames: [],

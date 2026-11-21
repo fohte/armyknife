@@ -6,13 +6,15 @@ import { useId, useMemo, useState } from 'react'
 
 import {
   AttachmentPreviewList,
-  createAttachmentInputHandlers,
+  handleAttachmentPaste,
 } from '#components/attachment-preview-list'
 import { CollapsibleText } from '#components/collapsible-text'
+import { FileDropIndicator } from '#components/file-drop-indicator'
 import { MarkdownMessage } from '#components/markdown-message'
 import type { EncodedAttachment } from '#components/use-attachments'
 import { useAttachments } from '#components/use-attachments'
 import { cardDraftStorageKey, useDraft } from '#components/use-composer-draft'
+import { useFileDrop } from '#components/use-file-drop'
 
 type TodoCardProps = {
   seq?: number
@@ -67,6 +69,11 @@ export function TodoCard({
   )
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isFoldPending, setIsFoldPending] = useState(false)
+  const { isFileDragActive, ...fileDropHandlers } = useFileDrop(
+    attachmentState.onPasteFiles,
+    !isSubmitting,
+    true,
+  )
   const currentResolution = resolution ?? resolutionLocally
   const isResolved = currentResolution !== null
 
@@ -224,20 +231,23 @@ export function TodoCard({
           Browser storage is unavailable. Drafts may not survive a page reload.
         </p>
       ) : null}
-      <textarea
-        id={commentId}
-        className="chat-todo-comment"
-        rows={2}
-        value={comment}
-        disabled={isSubmitting}
-        {...createAttachmentInputHandlers(
-          attachmentState.onPasteFiles,
-          !isSubmitting,
-        )}
-        onChange={(event) => {
-          updateDraft(event.currentTarget.value)
-        }}
-      />
+      <div className="chat-card-comment-drop-zone">
+        {isFileDragActive ? <FileDropIndicator /> : null}
+        <textarea
+          id={commentId}
+          className="chat-todo-comment"
+          rows={2}
+          value={comment}
+          disabled={isSubmitting}
+          onPaste={(event) => {
+            handleAttachmentPaste(event, attachmentState.onPasteFiles)
+          }}
+          {...fileDropHandlers}
+          onChange={(event) => {
+            updateDraft(event.currentTarget.value)
+          }}
+        />
+      </div>
       <AttachmentPreviewList
         attachments={attachmentState.attachments}
         {...(isSubmitting

@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.1.832](https://github.com/fohte/armyknife/compare/v0.1.831...v0.1.832) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show task-linked PRs ([#2052](https://github.com/fohte/armyknife/issues/2052)) ([53b7cce](https://github.com/fohte/armyknife/commit/53b7cce023d7a26ac25f4e40c5b49a6e59b5e722))
+
+## [0.1.831](https://github.com/fohte/armyknife/compare/v0.1.830...v0.1.831) (2026-11-21)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** add vibeMode to tree story ([#2057](https://github.com/fohte/armyknife/issues/2057)) ([d26ae92](https://github.com/fohte/armyknife/commit/d26ae9294c591678c2a3c7552d32bcb6dc2ea0d8))
+
+## [0.1.830](https://github.com/fohte/armyknife/compare/v0.1.829...v0.1.830) (2026-11-21)
+
+
+### Features
+
+* **agent-watch-web:** add iPhone status page ([#2032](https://github.com/fohte/armyknife/issues/2032)) ([4e7b62f](https://github.com/fohte/armyknife/commit/4e7b62fc5e204214b2e997d06d07f474bcf5412b))
+
 ## [0.1.829](https://github.com/fohte/armyknife/compare/v0.1.828...v0.1.829) (2026-11-21)
 
 
