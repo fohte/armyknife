@@ -163,7 +163,13 @@ export function SessionPullRequests({
       ? ''
       : `${allMerged ? `All ${String(pullRequests.length)} pull requests are merged. ` : ''}PR #${String(currentPullRequest.number)}: ${currentPullRequest.title ?? 'Untitled pull request'}, ${currentPullRequest.state.toLowerCase()}, ${ciStateLabel(currentPullRequest.ciState)}${additionalCount > 0 ? `. ${String(additionalCount)} more PR${additionalCount === 1 ? '' : 's'} from this session` : ''}`
 
-  useDismissableLayer(open, onOpenChange, [triggerRef, contentRef])
+  useDismissableLayer(
+    open,
+    onOpenChange,
+    isMobile && actionFeedback !== null
+      ? [triggerRef, contentRef, actionFeedback.toastRef]
+      : [triggerRef, contentRef],
+  )
 
   useEffect(() => {
     const setToastBottomOffset = actionFeedback?.setToastBottomOffset

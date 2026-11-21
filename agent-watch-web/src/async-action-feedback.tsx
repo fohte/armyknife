@@ -1,5 +1,5 @@
 import { err, ok, type Result } from 'neverthrow'
-import type { ReactNode } from 'react'
+import type { ReactNode, RefObject } from 'react'
 import {
   createContext,
   useCallback,
@@ -69,6 +69,7 @@ type AsyncActionRetryUpdate = Pick<
 type AsyncActionFeedbackValue = {
   actions: readonly AsyncAction[]
   toastIds: readonly number[]
+  toastRef: RefObject<HTMLDivElement | null>
   activityOpen: boolean
   toastBottomOffset: number | null
   setToastBottomOffset: (offset: number | null) => void
@@ -106,6 +107,7 @@ export function AsyncActionFeedbackProvider({
     number[]
   >([])
   const [selectedActionId, setSelectedActionId] = useState<number | null>(null)
+  const toastRef = useRef<HTMLDivElement>(null)
   const nextId = useRef(0)
   const runs = useRef(new Map<number, () => Promise<AsyncActionOutcome>>())
   const retryHandlers = useRef(
@@ -319,6 +321,7 @@ export function AsyncActionFeedbackProvider({
       value={{
         actions,
         toastIds,
+        toastRef,
         activityOpen,
         toastBottomOffset,
         setToastBottomOffset,
@@ -340,6 +343,7 @@ export function AsyncActionFeedbackProvider({
       <AsyncActionFeedbackHost
         actions={actions}
         toastIds={toastIds}
+        toastRef={toastRef}
         activityOpen={activityOpen}
         toastBottomOffset={toastBottomOffset}
         selectedActionId={selectedActionId}

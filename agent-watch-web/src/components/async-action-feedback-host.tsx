@@ -1,11 +1,14 @@
 import '#components/async-action-feedback-host.css'
 
+import type { RefObject } from 'react'
+
 import type { AsyncAction } from '#async-action-feedback'
 import { AsyncActionItem } from '#components/async-action-item'
 
 type AsyncActionFeedbackHostProps = {
   actions: readonly AsyncAction[]
   toastIds: readonly number[]
+  toastRef?: RefObject<HTMLDivElement | null>
   activityOpen: boolean
   toastBottomOffset: number | null
   selectedActionId: number | null
@@ -26,6 +29,7 @@ function timeLabel(timestamp: number) {
 export function AsyncActionFeedbackHost({
   actions,
   toastIds,
+  toastRef,
   activityOpen,
   toastBottomOffset,
   selectedActionId,
@@ -47,8 +51,8 @@ export function AsyncActionFeedbackHost({
   return (
     <>
       <div
+        ref={toastRef}
         className="async-action-toast-stack"
-        data-dismissable-layer-branch=""
         aria-live="polite"
         style={
           toastBottomOffset === null

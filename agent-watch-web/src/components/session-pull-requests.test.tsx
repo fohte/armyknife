@@ -6,6 +6,7 @@ import {
   AsyncActionFeedbackProvider,
   useAsyncActionStarter,
 } from '#async-action-feedback'
+import { LaterMenu } from '#components/later-menu'
 import { SessionPullRequests } from '#components/session-pull-requests'
 import type { PullRequest } from '#types'
 
@@ -97,6 +98,7 @@ function ToastOffsetHarness() {
 
 function ToastDismissContents() {
   const [open, setOpen] = useState(false)
+  const [laterMenuOpen, setLaterMenuOpen] = useState(false)
   const startAsyncAction = useAsyncActionStarter(() => undefined)
   return (
     <>
@@ -119,6 +121,15 @@ function ToastDismissContents() {
       >
         Start failed merge
       </button>
+      <button
+        className="open-later-menu"
+        onClick={() => {
+          setLaterMenuOpen(true)
+        }}
+        type="button"
+      >
+        Open Later menu
+      </button>
       <SessionPullRequests
         pullRequests={pullRequests}
         repo="example-org/example-repo"
@@ -129,6 +140,20 @@ function ToastDismissContents() {
         isMergeSuccessful={() => false}
         onOpenChange={setOpen}
       />
+      {laterMenuOpen ? (
+        <LaterMenu
+          sessionTitle="Fixture session"
+          isLater={false}
+          laterTimes={null}
+          laterTimesError
+          isSubmitting={false}
+          onSelect={() => undefined}
+          onBackNow={() => undefined}
+          onClose={() => {
+            setLaterMenuOpen(false)
+          }}
+        />
+      ) : null}
     </>
   )
 }
@@ -607,6 +632,36 @@ it('keeps the phone pull request sheet open when scrolling a toast', async () =>
     dialogVisible: container.querySelector('.session-pr-list--mobile') !== null,
   })
   expect(snapshot()).toEqual({ expanded: 'true', dialogVisible: true })
+})
+
+it('closes an unrelated menu when a toast receives a pointerdown', async () => {
+  act(() => {
+    root?.render(<ToastDismissHarness />)
+  })
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>('.start-failed-merge')?.click()
+    await Promise.resolve()
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.open-later-menu')?.click()
+  })
+
+  const toast = container.querySelector<HTMLElement>(
+    '.async-action-toast-stack .async-action-item',
+  )
+  if (toast === null) throw new Error('Expected a failed merge toast')
+  act(() => {
+    toast.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+  })
+
+  const snapshot = () => ({
+    laterMenuVisible: container.querySelector('.later-menu') !== null,
+    toastVisible:
+      container.querySelector(
+        '.async-action-toast-stack .async-action-item',
+      ) !== null,
+  })
+  expect(snapshot()).toEqual({ laterMenuVisible: false, toastVisible: true })
 })
 
 it('lists a merged current-branch pull request only in Merged', () => {
