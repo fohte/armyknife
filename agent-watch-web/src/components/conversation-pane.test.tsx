@@ -636,6 +636,7 @@ function treeNode(
     elapsedSeconds: 0,
     task: null,
     repo: session.repo,
+    vibeMode: { mode: 'disabled' },
     decisionCount: 0,
     pullRequest: null,
   }
@@ -1398,6 +1399,7 @@ it('loads and shows the session tree from the tree endpoint', async () => {
       elapsedSeconds: 20,
       task: null,
       repo: session.repo,
+      vibeMode: { mode: 'disabled' },
       decisionCount: 0,
       pullRequest: null,
     },
@@ -1412,6 +1414,7 @@ it('loads and shows the session tree from the tree endpoint', async () => {
       elapsedSeconds: 8,
       task: null,
       repo: session.repo,
+      vibeMode: { mode: 'disabled' },
       decisionCount: 0,
       pullRequest: null,
     },
