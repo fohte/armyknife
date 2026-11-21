@@ -3184,12 +3184,15 @@ it('stops the close batch and reports the failed session', async () => {
   const snapshot = () => ({
     error:
       container.querySelector('.load-message.is-error')?.textContent ?? null,
+    toast: container.querySelector('.async-action-toast-stack')?.textContent,
     closeUrls: fetchMock.mock.calls
       .map(([request]) => requestUrl(request))
       .filter((url) => url.endsWith('/close')),
   })
   expect(snapshot()).toEqual({
     error: null,
+    toast:
+      'Close failedUnarchivable sessionCould not close Unarchivable session.Retry',
     closeUrls: ['/api/sessions/session-failed-close/close'],
   })
 })
@@ -3303,12 +3306,15 @@ it('closes all Done sessions from the Inbox heading and reports failures', async
   const snapshot = () => ({
     error:
       container.querySelector('.load-message.is-error')?.textContent ?? null,
+    toast: container.querySelector('.async-action-toast-stack')?.textContent,
     closeUrls: fetchMock.mock.calls
       .map(([request]) => requestUrl(request))
       .filter((url) => url.endsWith('/close')),
   })
   expect(snapshot()).toEqual({
     error: null,
+    toast:
+      'Close failedUnarchivable sessionCould not close Unarchivable session.Retry',
     closeUrls: ['/api/sessions/session-failed-close/close'],
   })
 })

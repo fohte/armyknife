@@ -9,7 +9,6 @@ export {
   isSessionListOperation,
   isSessionOperationConfirmed,
   requiresStateConfirmation,
-  shouldOfferKeepWorktreeRetry,
 } from '#session-operation-state'
 export {
   type SessionOperation,
