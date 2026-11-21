@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.840](https://github.com/fohte/armyknife/compare/v0.1.839...v0.1.840) (2026-11-21)
+
+
+### Features
+
+* **agent-watch-web:** add iPhone Inbox actions ([#2073](https://github.com/fohte/armyknife/issues/2073)) ([24f38c6](https://github.com/fohte/armyknife/commit/24f38c62b001cea7e4d30e8ce4f0b90d67718cc3))
+
 ## [0.1.839](https://github.com/fohte/armyknife/compare/v0.1.838...v0.1.839) (2026-11-21)
 
 

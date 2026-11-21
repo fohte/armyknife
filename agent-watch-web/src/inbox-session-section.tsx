@@ -10,6 +10,9 @@ export function renderInboxSessionSection({
   selectedId,
   onSelect,
   isMobile,
+  onLater,
+  onCloseSession,
+  onOpenActions,
   className = '',
   onCloseAll,
   closeAllDisabled,
@@ -23,6 +26,9 @@ export function renderInboxSessionSection({
   className?: string
   onCloseAll?: () => void
   closeAllDisabled?: boolean
+  onLater?: ((id: string) => void) | undefined
+  onCloseSession?: ((id: string) => void) | undefined
+  onOpenActions?: ((session: Session) => void) | undefined
 }) {
   return (
     <section className={`session-section ${className}`} aria-label={title}>
@@ -50,6 +56,9 @@ export function renderInboxSessionSection({
               selectedId={selectedId}
               onSelect={onSelect}
               isMobile={isMobile}
+              onLater={onLater}
+              onCloseSession={onCloseSession}
+              onOpenActions={onOpenActions}
             />
           ))}
         </ul>

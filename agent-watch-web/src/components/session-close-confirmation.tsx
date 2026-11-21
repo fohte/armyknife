@@ -27,6 +27,7 @@ export function SessionCloseConfirmation({
       confirmLabel={copy.confirmLabel}
       confirmVariant="danger"
       mobile={mobile}
+      trapFocus={mobile}
       onCancel={onCancel}
       onConfirm={onConfirm}
     >

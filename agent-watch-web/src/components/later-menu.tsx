@@ -3,6 +3,7 @@ import '#components/later-today.css'
 import { Button } from '@fohte/ui/button'
 import { useRef } from 'react'
 
+import { MobileSheet } from '#components/mobile-sheet'
 import { useDismissableLayer } from '#components/use-dismissable-layer'
 import {
   LATER_PRESET_OPTIONS,
@@ -19,6 +20,7 @@ type LaterMenuProps = {
   onSelect: (preset: LaterPreset) => void
   onBackNow: () => void
   onClose: () => void
+  isMobile?: boolean
 }
 
 export function LaterMenu({
@@ -30,28 +32,35 @@ export function LaterMenu({
   onSelect,
   onBackNow,
   onClose,
+  isMobile = false,
 }: LaterMenuProps) {
   const menuRef = useRef<HTMLElement>(null)
   useDismissableLayer(
-    true,
+    !isMobile,
     (open) => {
       if (!open && !isSubmitting) onClose()
     },
     [menuRef],
   )
 
-  return (
-    <div className="later-menu-overlay">
-      <section
-        aria-label={`Later: ${sessionTitle}`}
-        className="later-menu"
-        role="menu"
-        ref={menuRef}
-      >
+  const content = (
+    <>
+      {isMobile ? (
+        <>
+          <h2>Later</h2>
+          <p className="later-menu-mobile-session-title">{sessionTitle}</p>
+        </>
+      ) : (
         <p className="later-menu-title">
           Later:{' '}
           <span className="later-menu-session-title">{sessionTitle}</span>
         </p>
+      )}
+      <div
+        className="later-menu-options"
+        aria-label={isMobile ? 'Bring it back' : undefined}
+        role={isMobile ? 'menu' : undefined}
+      >
         {LATER_PRESET_OPTIONS.map((option) => (
           <Button
             key={option.preset}
@@ -74,31 +83,69 @@ export function LaterMenu({
               {laterTimes?.[option.preset].when ??
                 (laterTimesError ? 'Unavailable' : 'Loading…')}
             </span>
-            <kbd>{option.key}</kbd>
+            {isMobile ? null : <kbd>{option.key}</kbd>}
           </Button>
         ))}
-        {laterTimesError ? (
-          <p className="later-menu-error" role="alert">
-            Could not load return times.
-          </p>
-        ) : null}
-        {isLater ? (
-          <Button
-            type="button"
-            variant="plain"
-            role="menuitem"
-            aria-label={`Back now: ${sessionTitle}`}
-            disabled={isSubmitting}
-            className="later-menu-option later-menu-reset cursor-pointer"
-            onClick={onBackNow}
-          >
-            Back now
-          </Button>
-        ) : null}
-        <div className="later-menu-divider" aria-hidden="true" />
-        <p className="later-menu-note">
-          New activity in the session also brings it back.
+      </div>
+      {laterTimesError ? (
+        <p className="later-menu-error" role="alert">
+          Could not load return times.
         </p>
+      ) : null}
+      {isLater ? (
+        <Button
+          type="button"
+          variant="plain"
+          role="menuitem"
+          aria-label={`Back now: ${sessionTitle}`}
+          disabled={isSubmitting}
+          className="later-menu-option later-menu-reset cursor-pointer"
+          onClick={onBackNow}
+        >
+          Back now
+        </Button>
+      ) : null}
+      <div className="later-menu-divider" aria-hidden="true" />
+      <p className="later-menu-note">
+        New activity in the session also brings it back.
+      </p>
+      {isMobile ? (
+        <Button
+          type="button"
+          variant="plain"
+          className="later-menu-cancel"
+          disabled={isSubmitting}
+          onClick={onClose}
+        >
+          Cancel
+        </Button>
+      ) : null}
+    </>
+  )
+
+  if (isMobile) {
+    return (
+      <MobileSheet
+        canDismiss={!isSubmitting}
+        className="later-menu--mobile"
+        focusContainer
+        label="Later"
+        onClose={onClose}
+      >
+        {content}
+      </MobileSheet>
+    )
+  }
+
+  return (
+    <div className="later-menu-overlay">
+      <section
+        aria-label={`Later: ${sessionTitle}`}
+        className="later-menu"
+        role="menu"
+        ref={menuRef}
+      >
+        {content}
       </section>
     </div>
   )
