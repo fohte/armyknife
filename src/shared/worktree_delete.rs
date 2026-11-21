@@ -18,8 +18,9 @@ use crate::shared::worktree_error::WmError;
 
 pub(crate) struct WorktreeDeletePlan {
     target: WorktreeDeleteTarget,
-    merge_status: Option<MergeStatus>,
+    merge_guard_status: Option<MergeGuardStatus>,
     force: bool,
+    unmerged_policy: UnmergedWorktreePolicy,
 }
 
 pub(crate) struct WorktreeDeleteTarget {
@@ -29,10 +30,12 @@ pub(crate) struct WorktreeDeleteTarget {
     pub(crate) worktree_path: PathBuf,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct MergeGuardStatus {
     pub(crate) branch: String,
     pub(crate) status: MergeStatus,
     pub(crate) should_cleanup: bool,
+    empty_branch: bool,
 }
 
 pub(crate) fn resolve_merge_guard_branch(
@@ -66,12 +69,14 @@ fn classify_merge_guard_status_with(
     status: MergeStatus,
     branch_has_commits_ahead: impl FnOnce(&str) -> Result<bool>,
 ) -> MergeGuardStatus {
-    let should_cleanup = status.should_cleanup()
-        || branch_has_commits_ahead(&branch).is_ok_and(|has_commits| !has_commits);
+    let empty_branch = !status.should_cleanup()
+        && branch_has_commits_ahead(&branch).is_ok_and(|has_commits| !has_commits);
+    let should_cleanup = status.should_cleanup() || empty_branch;
     MergeGuardStatus {
         branch,
         status,
         should_cleanup,
+        empty_branch,
     }
 }
 
@@ -113,7 +118,7 @@ pub(crate) async fn prepare(
 
     ensure_clean_for_deletion(&target.worktree_path, force)?;
 
-    let merge_status = check_merge_status(
+    let merge_guard_status = check_merge_status(
         &target.main_repo,
         target.branch_name.as_deref(),
         force,
@@ -123,8 +128,9 @@ pub(crate) async fn prepare(
 
     Ok(WorktreeDeletePlan {
         target,
-        merge_status,
+        merge_guard_status,
         force,
+        unmerged_policy,
     })
 }
 
@@ -153,8 +159,9 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
                 branch_name,
                 worktree_path,
             },
-        merge_status,
+        merge_guard_status,
         force,
+        unmerged_policy,
     } = plan;
     let worktree_path_str = worktree_path.to_string_lossy();
 
@@ -163,7 +170,9 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
     // Must complete before cleanup_worktree_by_name below: it deletes this
     // worktree's session records and, when the command runs from the
     // worktree's own pane, kills the very pane this process is running in.
-    let merged = merge_status.as_ref().is_some_and(MergeStatus::is_merged);
+    let merged = merge_guard_status
+        .as_ref()
+        .is_some_and(|status| status.status.is_merged());
     if let Some(branch) = branch_name.as_deref()
         && merged
     {
@@ -176,6 +185,38 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
         &worktree_path_str,
         skip_hooks,
     );
+
+    if !force
+        && let Some(merge_guard_status) = merge_guard_status.as_ref()
+        && merge_guard_status.empty_branch
+        && let Some(branch) = branch_name.as_deref()
+    {
+        let stdin = io::stdin();
+        let stdout = io::stdout();
+        let result = ensure_empty_branch_still_safe(
+            branch,
+            &merge_guard_status.status,
+            unmerged_policy,
+            |branch| branch_has_commits_ahead_of_main(&main_repo, branch),
+            || {
+                confirm_with_terminal(
+                    "Delete anyway? [y/N] ",
+                    &mut stdin.lock(),
+                    &mut stdout.lock(),
+                    || stdin.is_terminal(),
+                )
+            },
+        );
+        if let Err(error) = result {
+            if hook_ran {
+                eprintln!(
+                    "note: the pre-worktree-delete hook already ran before this failure; \
+                     any process it stopped will not be restarted automatically"
+                );
+            }
+            return Err(error);
+        }
+    }
 
     let result = cleanup::cleanup_worktree_by_name(
         &main_repo,
@@ -294,7 +335,7 @@ async fn check_merge_status(
     branch_name: Option<&str>,
     force: bool,
     unmerged_policy: UnmergedWorktreePolicy,
-) -> Result<Option<MergeStatus>> {
+) -> Result<Option<MergeGuardStatus>> {
     let repo_for_status = repo.clone();
     let repo_for_classification = repo.clone();
     check_merge_status_with_classifier(
@@ -367,6 +408,7 @@ where
         confirm,
     )
     .await
+    .map(|status| status.map(|status| status.status))
 }
 
 async fn check_merge_status_with_classifier<F, G, Fut, C>(
@@ -377,7 +419,7 @@ async fn check_merge_status_with_classifier<F, G, Fut, C>(
     get_status: G,
     classify: C,
     confirm: impl FnOnce() -> Option<bool>,
-) -> Result<Option<MergeStatus>>
+) -> Result<Option<MergeGuardStatus>>
 where
     F: FnOnce(&str) -> bool,
     G: FnOnce(&str) -> Fut,
@@ -389,33 +431,54 @@ where
     else {
         return Ok(None);
     };
-    let MergeGuardStatus {
-        branch,
-        status: merge_status,
-        should_cleanup,
-    } = merge_guard_status;
-
-    if !should_cleanup && !force {
-        if unmerged_policy == UnmergedWorktreePolicy::Reject {
-            return Err(UnmergedWorktreeError::new(branch, merge_status.reason()).into());
-        }
-        eprintln!(
-            "Warning: Branch '{}' is not merged ({})",
-            branch,
-            merge_status.reason()
-        );
-        match confirm() {
-            Some(true) => {}
-            Some(false) => return Err(WmError::Cancelled.into()),
-            None => {
-                return Err(anyhow::anyhow!(
-                    "Cancelled: stdin is not a terminal; input was not accepted as confirmation."
-                ));
-            }
-        }
+    if !merge_guard_status.should_cleanup && !force {
+        require_unmerged_approval(
+            &merge_guard_status.branch,
+            &merge_guard_status.status,
+            unmerged_policy,
+            confirm,
+        )?;
     }
 
-    Ok(Some(merge_status))
+    Ok(Some(merge_guard_status))
+}
+
+fn ensure_empty_branch_still_safe(
+    branch: &str,
+    status: &MergeStatus,
+    unmerged_policy: UnmergedWorktreePolicy,
+    branch_has_commits_ahead: impl FnOnce(&str) -> Result<bool>,
+    confirm: impl FnOnce() -> Option<bool>,
+) -> Result<()> {
+    if matches!(branch_has_commits_ahead(branch), Ok(false)) {
+        return Ok(());
+    }
+
+    require_unmerged_approval(branch, status, unmerged_policy, confirm)
+}
+
+fn require_unmerged_approval(
+    branch: &str,
+    status: &MergeStatus,
+    unmerged_policy: UnmergedWorktreePolicy,
+    confirm: impl FnOnce() -> Option<bool>,
+) -> Result<()> {
+    if unmerged_policy == UnmergedWorktreePolicy::Reject {
+        return Err(UnmergedWorktreeError::new(branch, status.reason()).into());
+    }
+
+    eprintln!(
+        "Warning: Branch '{}' is not merged ({})",
+        branch,
+        status.reason()
+    );
+    match confirm() {
+        Some(true) => Ok(()),
+        Some(false) => Err(WmError::Cancelled.into()),
+        None => Err(anyhow::anyhow!(
+            "Cancelled: stdin is not a terminal; input was not accepted as confirmation."
+        )),
+    }
 }
 
 pub(crate) fn confirm_with_terminal<R: BufRead, W: Write>(
@@ -508,8 +571,88 @@ mod tests {
         .map_err(|error| error.to_string());
 
         assert_eq!(
-            (merge_guard_status.should_cleanup, result),
-            (true, Ok(Some(no_pr_status()))),
+            (merge_guard_status, result),
+            (
+                MergeGuardStatus {
+                    branch: "feature".to_string(),
+                    status: no_pr_status(),
+                    should_cleanup: true,
+                    empty_branch: true,
+                },
+                Ok(Some(MergeGuardStatus {
+                    branch: "feature".to_string(),
+                    status: no_pr_status(),
+                    should_cleanup: true,
+                    empty_branch: true,
+                })),
+            ),
+        );
+    }
+
+    #[test]
+    fn open_pr_with_no_commits_ahead_is_cleanup_eligible() {
+        let status = MergeStatus::NotMerged {
+            reason: "fictional pull request is open".to_string(),
+        };
+
+        let result =
+            classify_merge_guard_status_with("feature".to_string(), status.clone(), |_| Ok(false));
+
+        assert_eq!(
+            result,
+            MergeGuardStatus {
+                branch: "feature".to_string(),
+                status,
+                should_cleanup: true,
+                empty_branch: true,
+            },
+        );
+    }
+
+    #[rstest]
+    #[case::still_empty(UnmergedWorktreePolicy::Confirm, Some(false), Ok(()))]
+    #[case::new_commit_cancels_non_tty(
+        UnmergedWorktreePolicy::Confirm,
+        Some(true),
+        Err("Cancelled: stdin is not a terminal; input was not accepted as confirmation.".to_string()),
+    )]
+    #[case::unresolved_base_cancels_non_tty(
+        UnmergedWorktreePolicy::Confirm,
+        None,
+        Err("Cancelled: stdin is not a terminal; input was not accepted as confirmation.".to_string()),
+    )]
+    #[case::watch_rejects_new_commit(
+        UnmergedWorktreePolicy::Reject,
+        Some(true),
+        Err("Branch `feature` is not merged (No PR found); close the session while keeping its worktree to continue".to_string()),
+    )]
+    #[case::watch_rejects_unresolved_base(
+        UnmergedWorktreePolicy::Reject,
+        None,
+        Err("Branch `feature` is not merged (No PR found); close the session while keeping its worktree to continue".to_string()),
+    )]
+    fn deletion_rechecks_empty_branch_before_cleanup(
+        #[case] unmerged_policy: UnmergedWorktreePolicy,
+        #[case] branch_has_commits_ahead: Option<bool>,
+        #[case] expected: std::result::Result<(), String>,
+    ) {
+        let mut queried_branch = None;
+        let result = ensure_empty_branch_still_safe(
+            "feature",
+            &no_pr_status(),
+            unmerged_policy,
+            |branch| {
+                queried_branch = Some(branch.to_string());
+                branch_has_commits_ahead
+                    .ok_or_else(|| anyhow::anyhow!("base branch cannot be resolved"))
+            },
+            || None,
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, queried_branch),
+            (expected, Some("feature".to_string()))
         );
     }
 
