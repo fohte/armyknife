@@ -3830,7 +3830,7 @@ it('posts a proposal answer to its sequence route and refreshes the conversation
       body: '{"choice":1,"comment":null,"attachments":[{"name":"screen.png","mimeType":"image/png","size":5,"data":"aW1hZ2U="}]}',
     },
     placeholder: 'Message session',
-    status: 'Proposal · chose B',
+    status: 'Proposal · chose Show the choice earlier',
   })
 })
 
